@@ -603,12 +603,13 @@ rtk rg -n "MINIQMT_EXECUTION_RUNTIME|get_miniqmt_execution_runtime_kind\(\{\}\)|
 - 偏差拦截: 无。
 
 
-## 2026-06-23 Phase 5 self-audit checkpoint - shadow reconciliation dry-run replay (2026-06-23T05:30:26.334590+00:00)
 
-- ????: Phase 5 ??/???? + ????????? `MiniQMTShadowReconciler` / `MiniQMTShadowParallelRunner` / `MiniQMTShadowEventLoopAdapter` / `MiniQMTShadowCompilerAdapter` / dry-run no-broker gateway?A/B ??? replay ????? child order ?/?/?/status?trade?cash?positions???? `SHADOW_RECONCILIATION_REPORTED` runtime event + runtime metadata ????fatal drift loud `MINIQMT_SHADOW_RECONCILIATION_FATAL`?
-- ????: ADR 0002?`docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` ?3(???9 TDX ??)??7??8??9 Phase5??9.x??10?Phase0 seam contract????????? Phase5 shadow/dry-run????????????
+## 2026-06-23 Phase 5 self-audit checkpoint - shadow reconciliation dry-run replay (rewritten ASCII 2026-06-23T05:37:55.873741+00:00)
 
-### ?10 grep guard output
+- Deliverable: Phase 5 shadow/parallel run and automatic reconciliation. Added `MiniQMTShadowReconciler`, `MiniQMTShadowParallelRunner`, `MiniQMTShadowEventLoopAdapter`, `MiniQMTShadowCompilerAdapter`, and a no-broker-mutation dry-run gateway. A/B receive the same input stream and reconcile child order count/price/quantity/status, trades, cash, and positions. Reports persist as `SHADOW_RECONCILIATION_REPORTED` runtime events plus runtime metadata. Fatal drift is loud with `MINIQMT_SHADOW_RECONCILIATION_FATAL`.
+- Design reread: ADR 0002; `docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` section 3 including rule 9 TDX isolation, section 7 shadow mode, section 8 scenario matrix, section 9 Phase 5 gate, section 9.x drift blockers, section 10 grep guards, and Phase0 seam contract. This checkpoint does only Phase5 shadow/dry-run work; it does not switch traffic, start services, or place real orders.
+
+### Section 10 grep guard output
 
 ```text
 rtk python -c "... event_loop gateway return [] count ..."
@@ -626,10 +627,10 @@ rtk git diff --name-only -- backend/execution_algos/vnpy_style
 <empty>
 
 rtk rg -n "JsonFileMiniQMTExecutionRuntimeRepository|uses_qmt_strategy_authority|strategy_ledger_repository" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
-JsonFile remains repository/export/restart-test compatibility only; event_loop client injects qmt_strategy ledger and Phase2 tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
+JsonFile remains only repository/export/restart-test compatibility. event_loop client injects qmt_strategy ledger and tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
 
 rtk rg -n "is_open_like_order_status|is_terminal_order_status|is_partial_order_status|STATUS_OPEN_LIKE|STATUS_PART_SUCC|STATUS_CANCELLED|STATUS_FILLED|STATUS_REJECTED" backend/services/miniqmt_execution_runtime backend/tests/miniqmt_execution_runtime
-runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates for broker numeric status classification; shadow uses qmt_strategy constants only to build dry-run broker snapshots and does not add hard-coded numeric forks.
+runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates for broker numeric status classification. shadow uses qmt_strategy constants only to build dry-run broker snapshots and does not add hard-coded numeric forks.
 
 rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
 .. [100%]
@@ -656,23 +657,22 @@ passed
 
 ### Self questions
 
-1. ???????, ???????/?? timer? ?: A adapter ?? `MiniQMTExecutionRuntime` ? `create_vnpy_algo_instance` + `on_tick`/`record_trade_event`/`record_order_event`/`record_disconnect_event`/`recover` ???????timer ??????? explicit `timer`/`algo_timer` ????? range(_timer_iterations) synthetic loop?B adapter ??? shadow ? compiler ?????
-2. ???????? durable OMS? ?: ??shadow ???? runtime repository ????? runtime metadata?A replay ?? runtime OMS??? JSON OMS ?? event_loop ???
-3. ??? B ??????? ?: ???? `MINIQMT_EXECUTION_RUNTIME` compiler ??????`backend/execution_algos/vnpy_style/` diff ???
-4. ???? TDX ??? ?: ??MiniQMT runtime/tests grep `fetch_tdx_realtime_quotes|TDX_REALTIME` ? 0?shadow tick ???????????? TDX?
-5. ???????? ?: ???? Phase5 test ?? ?8 full_fill?partial_55_stream?delay?reject?cancel?disconnect?restart_recovery?A/B adapter ??? replay ??? diff child orders/trades/cash/positions?fatal drift loud ? durable?
+1. Is this truly event-driven rather than a one-shot query or synthetic timer loop? Yes. The A adapter uses runtime `create_vnpy_algo_instance`, `on_tick`, `record_trade_event`, `record_order_event`, `record_disconnect_event`, and `recover`. Timer events are consumed only when the input stream explicitly contains `timer`/`algo_timer`; no `range(_timer_iterations)` loop is used in event_loop replay.
+2. Did I create a second non-durable OMS? No. Shadow reports are persisted into runtime events and runtime metadata. A replay still uses the runtime OMS path; no JSON file OMS is authoritative for event_loop.
+3. Did I change B or fork the algo core? No. Compiler default flag tests pass and `backend/execution_algos/vnpy_style/` diff is empty.
+4. Did I introduce TDX market data? No. MiniQMT runtime/tests grep for `fetch_tdx_realtime_quotes|TDX_REALTIME` is zero. Shadow tick input is caller-provided and does not import TDX.
+5. Is shadow doing real reconciliation? Yes. Phase5 tests cover full_fill, partial_55_stream, delay, reject, cancel, disconnect, and restart_recovery. A/B same-input dry-run replay is diffed across child orders, trades, cash, and positions; fatal drift is loud and durable.
 
 ### Deviation intercept
 
-- ????: ?? Phase5 ??????? snapshot/echo adapter????????????? A/B?????????? `MiniQMTShadowEventLoopAdapter` + `MiniQMTShadowCompilerAdapter`?? runtime event-loop replay ?? compiler preview replay??? ?8 ?????????
+- Intercepted one deviation before commit: the first Phase5 draft had static snapshot/echo adapters, which was insufficient evidence for same-input A/B replay. It was replaced with `MiniQMTShadowEventLoopAdapter` plus `MiniQMTShadowCompilerAdapter` real replay, and the section 8 scenario matrix tests were added.
 
+## 2026-06-23 Final PR gate self-audit - Phase 4/5 after rebase (rewritten ASCII 2026-06-23T05:37:55.873761+00:00)
 
-## 2026-06-23 Final PR gate self-audit - Phase 4/5 after rebase (2026-06-23T05:35:01.090243+00:00)
+- Deliverable: final Phase4/5 PR gate after rebasing on latest `origin/main`. The branch includes the merged P0 MiniQMT no-TDX chain from main. This PR keeps scope to Phase4 RiskEngine/kill-switch and Phase5 shadow reconciliation.
+- Design reread: ADR 0002; durable design section 3 including rule 9, section 4.5 RiskEngine, section 7 shadow mode, section 8 scenarios, section 9 Phase4/5 gates, section 9.x drift blockers, and section 10 grep guards. No services were started/restarted, no production DB/DDL was touched, and no gray switch was enabled.
 
-- ????: rebase latest `origin/main` ???? Phase 4/5 PR gate?????? P0 MiniQMT ? TDX ?????? PR ??? Phase4 RiskEngine/kill-switch ? Phase5 shadow reconciliation scope?
-- ????: ADR 0002?`docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` ?3(???9 TDX ??)??4.5??7??8??9 Phase4/5??9.x??10??????/????????? DB/DDL??????
-
-### ?10 grep guard output
+### Section 10 grep guard output
 
 ```text
 rtk python -c "... event_loop gateway return [] count ..."
@@ -690,10 +690,10 @@ rtk git diff --name-only -- backend/execution_algos/vnpy_style
 <empty>
 
 JsonFile OMS guard:
-JsonFileMiniQMTExecutionRuntimeRepository remains compatibility/restart-test repository only; event_loop client injects qmt_strategy ledger and tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
+JsonFileMiniQMTExecutionRuntimeRepository remains compatibility/restart-test repository only. event_loop client injects qmt_strategy ledger and tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
 
 Status predicate guard:
-runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates (`is_open_like_order_status`/`is_terminal_order_status`/`is_partial_order_status`) for broker numeric status classification; no new broker status literal fork.
+runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates (`is_open_like_order_status`/`is_terminal_order_status`/`is_partial_order_status`) for broker numeric status classification. No new broker status literal fork.
 
 flag inert evidence:
 rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
@@ -726,12 +726,12 @@ Ran 5 sessions successfully: paper_v2_l3; l0; paper_v2_backend (665 passed, 1 sk
 
 ### Self questions
 
-1. ???????, ???????/?? timer? ?: Phase4 hooks ?? runtime events/pre-submit?Phase5 A adapter replay ???? runtime `on_tick`/`record_trade_event`/`record_order_event`/`record_disconnect_event`/`recover`???? `range(_timer_iterations)`?
-2. ???????? durable OMS? ?: ??A replay ?? runtime OMS/qmt_strategy seam?shadow reconciliation report ???? runtime event stream + runtime metadata???? OMS ???
-3. ??? B ??????? ?: ???? compiler flag inert tests ???`backend/execution_algos/vnpy_style/` diff ???
-4. ???? TDX ??? ?: ??MiniQMT runtime/tests TDX grep ? 0???? rebase ? main ????9/P0 ?????
-5. ???????? ?: ???8 full fill / partial 55 / delay / reject / cancel / disconnect / restart recovery ??? A/B same-input dry-run replay?fatal drift ? loud ? durable?
+1. Is this truly event-driven rather than a one-shot query or synthetic timer loop? Yes. Phase4 hooks run on runtime events/pre-submit. Phase5 A replay uses runtime event APIs and no `range(_timer_iterations)`.
+2. Did I create a second non-durable OMS? No. A replay uses runtime OMS/qmt_strategy seam; shadow reports are runtime events/metadata and not OMS authority.
+3. Did I change B or fork the algo core? No. Default compiler flag inert tests pass and `backend/execution_algos/vnpy_style/` diff is empty.
+4. Did I introduce TDX market data? No. MiniQMT runtime/tests TDX grep is 0; main now includes the rule9/P0 no-TDX fix chain.
+5. Is shadow doing real reconciliation? Yes. Section 8 full fill, partial 55, delay, reject, cancel, disconnect, and restart recovery pass A/B same-input dry-run replay; fatal drift is loud and durable.
 
 ### Deviation intercept
 
-- ???? 1 ?: Phase5 ???? snapshot/echo adapter ?????????? A/B???? event_loop adapter + compiler adapter ?? replay ??? ?8 ??????
+- Intercepted one deviation in this turn: the Phase5 static snapshot/echo draft was replaced by event_loop adapter + compiler adapter replay and section 8 matrix tests before final commit.
