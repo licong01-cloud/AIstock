@@ -313,6 +313,11 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "nightly-discovery-hypothesis" in workflow
     assert "llm-hypotheses.json" in workflow
     assert "selected-plans.json" in workflow
+    assert "Build Nightly LLM design drift audit" in workflow
+    assert "scripts/nightly_design_drift_audit.py --json" in workflow
+    assert "--invoke-llm `\n            --run-id" in workflow
+    assert "design-drift-audit.json" in workflow
+    assert "design-drift-audit.md" in workflow
     assert 'nightly_discovery_input_pack.py `\n            --run-id "${{ github.run_id }}"' in workflow
     assert '--codegraph-freshness-json "$outDir/codegraph-freshness.json"' in workflow
     assert "Build Nightly BugCandidate draft queue" in workflow

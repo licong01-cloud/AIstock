@@ -47,6 +47,7 @@ PROMPT_EVALUATION_SCHEMA_VERSION = "aistock_validation_llm_prompt_evaluation_v1"
 GUARDED_ROLLOUT_SCHEMA_VERSION = "aistock_validation_llm_guarded_rollout_v1"
 LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION = "aistock_llm_invocation_evidence_v1"
 ADVISORY_LLM_PURPOSES = {"test_plan_advice", "nightly_scheduler_advice", "nightly_discovery_hypothesis"}
+NON_PLAN_ADVISORY_LLM_PURPOSES = {"design_drift_audit"}
 FORBIDDEN_FRONTEND_PORTS = {3000}
 FORBIDDEN_MARKET_DATA_PORTS = {19080}
 SHELL_COMMAND_FIELDS = {"command", "shell_command", "nox_command", "run_command"}
@@ -612,6 +613,10 @@ def invoke_provider_json(
                     _parse_json_value_response(content or ""),
                     purpose=purpose,
                 )
+            elif purpose in NON_PLAN_ADVISORY_LLM_PURPOSES:
+                payload = parse_json_response(content or "")
+                if not _no_shell_commands(payload):
+                    raise ProviderAdapterError("provider advice must not contain shell command fields")
             else:
                 payload = parse_json_response(content or "")
             break

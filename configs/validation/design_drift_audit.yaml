@@ -1,0 +1,159 @@
+﻿schema_version: aistock_design_drift_audit_config_v1
+purpose: Nightly warning-only audit that compares approved design docs with compact code evidence.
+defaults:
+  max_design_chars_per_doc: 2400
+  max_code_files_per_module: 24
+  max_code_excerpt_chars_per_file: 1200
+  max_findings: 40
+policy:
+  warning_only: true
+  candidate_only: true
+  source_modifications_allowed: false
+  official_bug_creation_allowed: false
+  github_issue_creation_allowed: false
+  manual_analysis_required_before_bug_registration: true
+modules:
+  - module: miniqmt_execution_runtime
+    risk: P1
+    design_docs:
+      - docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md
+      - docs/adr/0002-miniqmt-execution-runtime-event-loop-target-architecture.md
+      - docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md
+    code_paths:
+      - backend/services/miniqmt_execution_runtime
+      - backend/services/trading_core
+      - backend/services/qmt_strategy_ledger
+      - backend/tests/miniqmt_execution_runtime
+      - backend/tests/trading_core
+    requirement_keywords:
+      - MiniQMTExecutionRuntime
+      - event loop
+      - vn.py
+      - order-id mapping
+      - durable OMS
+      - qmt_strategy ledger
+    expected_code_markers:
+      - MiniQMTExecutionRuntime
+      - MiniQMTExecutionEventLoop
+      - ExecutionAlgoInstance
+      - order_id
+      - qmt_strategy
+      - reconciliation
+    drift_risk_markers:
+      - stateless
+      - per-tick compiler
+      - fallback runtime
+      - temporary MiniQMT path
+      - no event loop
+  - module: validation_llm_pipeline
+    risk: P1
+    design_docs:
+      - docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md
+      - docs/architecture/aistock_nightly_active_bug_discovery_design_20260618.md
+      - docs/architecture/aistock_codegraph_nightly_freshness_design_20260602.md
+    code_paths:
+      - scripts/llm_provider_adapter.py
+      - scripts/nightly_adaptive_scheduler.py
+      - scripts/nightly_discovery_input_pack.py
+      - scripts/nightly_discovery_plans.py
+      - scripts/nightly_bug_candidate_queue.py
+      - scripts/code_intelligence_adapter.py
+      - backend/services/validation
+      - backend/tests/scripts/test_llm_provider_adapter.py
+      - backend/tests/scripts/test_nightly_adaptive_scheduler.py
+    requirement_keywords:
+      - DeepSeek
+      - CodeGraph
+      - Understand Anything
+      - plan_key
+      - warning_only
+      - candidate
+    expected_code_markers:
+      - deepseek_api
+      - warning_only
+      - candidate_only
+      - code_intelligence_refs
+      - selected_plan_keys
+      - production_actions_allowed
+    drift_risk_markers:
+      - full repo scan
+      - source_code_patches
+      - '"production_actions_allowed": true'
+      - '"github_issue_creation_allowed": true'
+  - module: issue_workflow
+    risk: P1
+    design_docs:
+      - docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md
+      - docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md
+    code_paths:
+      - scripts/aistock_issue_workflow.py
+      - scripts/issue_flow.py
+      - .codex/skills/fix-aistock-issue
+      - backend/tests/scripts/test_aistock_issue_workflow.py
+      - backend/tests/scripts/test_issue_flow.py
+    requirement_keywords:
+      - isolated worktree
+      - close-sync
+      - cleanup
+      - Context Pack
+      - compact stdout
+    expected_code_markers:
+      - create-worktree
+      - close-sync
+      - cleanup-after-merge
+      - code_intelligence
+      - output-format
+    drift_risk_markers:
+      - reset --hard
+      - git clean
+      - root checkout
+  - module: research_assistant
+    risk: P2
+    design_docs:
+      - docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md
+      - docs/architecture/research_assistant_unified_mcp_natural_language_orchestration_design_20260527.md
+    code_paths:
+      - backend/services/research_assistant
+      - backend/tests/research_assistant
+    requirement_keywords:
+      - MCP
+      - memory_tree
+      - graph_context
+      - agent_teams
+      - evidence
+    expected_code_markers:
+      - select_memory_branches
+      - graph_context
+      - assert_tool_in_catalog
+      - agent_teams
+      - evidence_refs
+    drift_risk_markers:
+      - placeholder
+      - bypass catalog
+      - direct DB read
+  - module: qe_archive
+    risk: P2
+    design_docs:
+      - docs/architecture/qe_realtime_experiment_warehouse_top_level_design_20260502.md
+      - docs/architecture/qe_realtime_experiment_warehouse_detailed_design_20260502.md
+      - docs/architecture/qe_archive_manual_ingestion_selection_design_20260519.md
+    code_paths:
+      - backend/services/qe_archive
+      - backend/services/quantevolver
+      - backend/tests/qe_archive
+      - backend/tests/quantevolver
+    requirement_keywords:
+      - warehouse
+      - archive
+      - lineage
+      - metrics
+      - factor
+    expected_code_markers:
+      - qe_archive
+      - lineage
+      - metrics
+      - artifact
+    drift_risk_markers:
+      - TODO
+      - temporary
+      - fallback
