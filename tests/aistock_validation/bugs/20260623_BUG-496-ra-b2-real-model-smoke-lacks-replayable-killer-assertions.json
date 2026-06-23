@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-496",
-  "closed_at": null,
+  "closed_at": "2026-06-23T11:16:02Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -22,14 +22,20 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260623-a736f28b7a34",
       "timestamp": "2026-06-23T07:12:10.941522Z"
+    },
+    {
+      "action": "closed_after_source_pr_merge",
+      "actor": "codex",
+      "note": "Source PR #1545 squash-merged at 0f83cd4c1e5c08de62a229fda9e2b23a9ace311f; GitHub Issue #1531 is closed with status:fixed; BUG JSON marked closed in the single close-sync PR. No services started, no production DB touched, no DDL executed.",
+      "timestamp": "2026-06-23T11:16:02Z"
     }
   ],
   "evidence_uris": [],
   "expected": "With DEEPSEEK_API_KEY and a running RA backend, scripts/research_assistant_real_model_smoke.py executes the B2 killer assertions and passes or fails loudly; without the key it exits 77 with a clear missing-key reason and never fake-passes.",
   "first_seen_at": "2026-06-23T07:12:10.941527Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0f83cd4c1e5c08de62a229fda9e2b23a9ace311f",
+  "fixed_at": "2026-06-23T11:13:29.750588Z",
   "github_issue_number": 1531,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1531",
   "last_seen_at": "2026-06-23T07:12:10.941527Z",
@@ -50,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -70,5 +76,6 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1545"
 }
