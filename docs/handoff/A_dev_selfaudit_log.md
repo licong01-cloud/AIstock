@@ -665,3 +665,73 @@ passed
 ### Deviation intercept
 
 - ????: ?? Phase5 ??????? snapshot/echo adapter????????????? A/B?????????? `MiniQMTShadowEventLoopAdapter` + `MiniQMTShadowCompilerAdapter`?? runtime event-loop replay ?? compiler preview replay??? ?8 ?????????
+
+
+## 2026-06-23 Final PR gate self-audit - Phase 4/5 after rebase (2026-06-23T05:35:01.090243+00:00)
+
+- ????: rebase latest `origin/main` ???? Phase 4/5 PR gate?????? P0 MiniQMT ? TDX ?????? PR ??? Phase4 RiskEngine/kill-switch ? Phase5 shadow reconciliation scope?
+- ????: ADR 0002?`docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md` ?3(???9 TDX ??)??4.5??7??8??9 Phase4/5??9.x??10??????/????????? DB/DDL??????
+
+### ?10 grep guard output
+
+```text
+rtk python -c "... event_loop gateway return [] count ..."
+event_loop_gateway_return_empty_list_count= 0
+
+rtk python -c "... event_loop core range(_timer_iterations) count ..."
+event_loop_core_range_timer_iterations_count= 0
+all_timer_iteration_refs=
+<none>
+
+rtk python -c "... TDX guard count ..."
+tdx_in_miniqmt_runtime_tests_count= 0
+
+rtk git diff --name-only -- backend/execution_algos/vnpy_style
+<empty>
+
+JsonFile OMS guard:
+JsonFileMiniQMTExecutionRuntimeRepository remains compatibility/restart-test repository only; event_loop client injects qmt_strategy ledger and tests assert event_loop uses_qmt_strategy_authority=True while compiler stays false.
+
+Status predicate guard:
+runtime.py/oms.py/client.py/shadow.py continue through BUG-470 predicates (`is_open_like_order_status`/`is_terminal_order_status`/`is_partial_order_status`) for broker numeric status classification; no new broker status literal fork.
+
+flag inert evidence:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.. [100%]
+2 passed in 1.28s
+```
+
+### Validation evidence after rebase
+
+```text
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/ -q
+...................................................................... [100%]
+70 passed in 1.60s
+
+rtk python -m ruff check backend/services/miniqmt_execution_runtime/risk.py backend/services/miniqmt_execution_runtime/runtime.py backend/services/miniqmt_execution_runtime/models.py backend/services/miniqmt_execution_runtime/shadow.py backend/services/miniqmt_execution_runtime/__init__.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase4_risk_engine.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py
+All checks passed!
+
+rtk git diff --check
+passed
+
+rtk python -m nox -s l0
+Session l0 was successful.
+
+rtk python -m nox -s validation_module_registry_l0
+8 passed; Module ownership scan completed: files=12, mapped=12, unmapped=0, ambiguous=0; session successful.
+
+rtk cmd /c "set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3"
+Ran 5 sessions successfully: paper_v2_l3; l0; paper_v2_backend (665 passed, 1 skipped, 1 deselected); paper_v2_data_quality; data_quality_deep (10 passed, 21 skipped).
+```
+
+### Self questions
+
+1. ???????, ???????/?? timer? ?: Phase4 hooks ?? runtime events/pre-submit?Phase5 A adapter replay ???? runtime `on_tick`/`record_trade_event`/`record_order_event`/`record_disconnect_event`/`recover`???? `range(_timer_iterations)`?
+2. ???????? durable OMS? ?: ??A replay ?? runtime OMS/qmt_strategy seam?shadow reconciliation report ???? runtime event stream + runtime metadata???? OMS ???
+3. ??? B ??????? ?: ???? compiler flag inert tests ???`backend/execution_algos/vnpy_style/` diff ???
+4. ???? TDX ??? ?: ??MiniQMT runtime/tests TDX grep ? 0???? rebase ? main ????9/P0 ?????
+5. ???????? ?: ???8 full fill / partial 55 / delay / reject / cancel / disconnect / restart recovery ??? A/B same-input dry-run replay?fatal drift ? loud ? durable?
+
+### Deviation intercept
+
+- ???? 1 ?: Phase5 ???? snapshot/echo adapter ?????????? A/B???? event_loop adapter + compiler adapter ?? replay ??? ?8 ??????
