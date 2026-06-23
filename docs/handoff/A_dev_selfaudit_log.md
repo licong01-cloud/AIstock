@@ -735,3 +735,62 @@ Ran 5 sessions successfully: paper_v2_l3; l0; paper_v2_backend (665 passed, 1 sk
 ### Deviation intercept
 
 - Intercepted one deviation in this turn: the Phase5 static snapshot/echo draft was replaced by event_loop adapter + compiler adapter replay and section 8 matrix tests before final commit.
+
+## 2026-06-23 Phase 6 self-audit checkpoint - scoped gray switch evidence gate
+
+- Deliverable: Phase 6 gray/canary control plane. Added `MiniQMTGraySwitchController` with per `portfolio_id`/`strategy_slot_id` overrides, durable audit events for switch/rollback apply/reject, SIM-only live gate, exact-scope no-fatal shadow evidence gate, and explicit in-flight ambiguity rejection that requires operator reset/cancel before switching. Global default remains `compiler`; unswitched scopes resolve to compiler.
+- Design reread: ADR 0002; durable design section 3 hard rules including rule 9 MiniQMT no-TDX; section 7 shadow/gray/rollback; section 9 Phase6/9.x drift blockers; section 10 grep guards; Phase0 seam contract. This checkpoint starts no service, places no real order, and does not touch production DB/DDL.
+
+Grep/static guards:
+
+```text
+rtk python -c "... scan event_loop core for range(_timer_iterations) ..."
+event_loop_core_range_timer_iterations_count= 0
+
+rtk python -c "... scan QmtClientMiniQMTEventLoopGateway segment for return [] ..."
+event_loop_gateway_return_empty_list_count= 0
+
+rtk python -c "... scan MiniQMT runtime/tests for fetch_tdx_realtime_quotes|TDX_REALTIME ..."
+miniqmt_event_loop_tdx_guard_count= 0
+
+rtk git diff --name-only -- backend/execution_algos/vnpy_style
+<empty>
+
+rtk python -c "... scan gray/runtime/oms/shadow for JsonFile authority references ..."
+<empty in gray/runtime/oms/shadow; existing repository/export/test references remain compatibility/restart-test only>
+
+Status predicates:
+Phase6 gray code uses `MiniQMTChildOrderStatus` enum terminal set for in-flight checks and does not add new broker numeric/text status classifiers. Existing runtime/oms/shadow broker status handling continues through `is_open_like_order_status` / `is_terminal_order_status` / `is_partial_order_status`.
+
+Flag inert evidence:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.......                                                                  [100%]
+7 passed in 1.05s
+```
+
+Validation:
+
+```text
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -q
+.....                                                                    [100%]
+5 passed in 1.06s
+
+rtk python -m ruff check backend/services/miniqmt_execution_runtime/gray.py backend/services/miniqmt_execution_runtime/models.py backend/services/miniqmt_execution_runtime/__init__.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py
+All checks passed!
+
+rtk git diff --check
+<no output; exit 0>
+```
+
+Self questions:
+
+1. Is this truly event-driven rather than one-shot query or synthetic timer? Yes. The shadow prerequisite uses Phase5 same-input durable replay through event_loop/compiler adapters, and the gray switch controller only consumes persisted shadow report metadata; it adds no timer loop or submit-then-query behavior.
+2. Did I create a second non-durable OMS? No. Gray state is runtime metadata plus append-only runtime events; it is not an OMS authority and does not replace `qmt_strategy`/runtime OMS.
+3. Did I change B or fork the algo core? No. Default `MINIQMT_EXECUTION_RUNTIME` remains compiler; unswitched scopes resolve compiler; `backend/execution_algos/vnpy_style/` diff is empty.
+4. Did I introduce TDX in MiniQMT/event_loop? No. TDX guard count is 0 for MiniQMT runtime and MiniQMT runtime tests.
+5. Is gray truly portfolio/strategy-slot scoped and rollback capable? Yes. Tests cover exact-scope switch, unswitched scope staying compiler, rollback to compiler, wrong-scope evidence rejection, missing/fatal evidence rejection, and in-flight ambiguity rejection until operator reset.
+6. Did I switch without same-scope shadow evidence or touch LIVE? No. Missing/fatal/wrong-scope evidence and LIVE/LIVE_PENDING_APPROVAL are loud rejects with reason_code; no live path is enabled.
+
+Deviation intercepts:
+
+- None in this checkpoint.
