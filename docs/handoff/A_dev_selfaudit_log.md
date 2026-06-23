@@ -794,3 +794,58 @@ Self questions:
 Deviation intercepts:
 
 - None in this checkpoint.
+
+## 2026-06-23 Phase 7 self-audit checkpoint - B fallback evaluation
+
+- Deliverable: Phase 7 evaluation doc `docs/architecture/miniqmt_phase7_b_fallback_retirement_evaluation_20260623.md`. Decision: keep B/compiler as explicit fallback and default; do not delete B in this phase. The doc records explicit rollback semantics, no-silent rejection cases, retirement criteria, and remaining live/canary gates.
+- Design reread: ADR 0002; durable design section 7 shadow/gray/rollback; section 9 Phase7 gate; section 9.x no simplified implementation; section 10 grep guards. This checkpoint is documentation/evaluation only and does not switch traffic, start services, or touch production DB/DDL.
+
+Grep/static guards:
+
+```text
+rtk python -c "... scan event_loop core for range(_timer_iterations) ..."
+event_loop_core_range_timer_iterations_count= 0
+
+rtk python -c "... scan QmtClientMiniQMTEventLoopGateway segment for return [] ..."
+event_loop_gateway_return_empty_list_count= 0
+
+rtk python -c "... scan MiniQMT runtime/tests for fetch_tdx_realtime_quotes|TDX_REALTIME ..."
+miniqmt_event_loop_tdx_guard_count= 0
+
+rtk git diff --name-only -- backend/execution_algos/vnpy_style
+<empty>
+
+JsonFile OMS authority:
+No new JsonFile usage in Phase7 doc or gray controller. Existing references remain repository/export/restart-test compatibility only; no event_loop OMS authority use was added.
+
+Status predicates:
+No product code change in this checkpoint. Phase6 gray controller uses enum terminal states for in-flight checks and does not add broker status literal classifiers; existing broker numeric status handling remains in runtime/oms/shadow predicate paths.
+
+Flag inert evidence:
+rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py::test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py::test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert -q
+.......                                                                  [100%]
+7 passed in 1.61s
+```
+
+Validation:
+
+```text
+rtk python -m ruff check backend/services/miniqmt_execution_runtime/gray.py backend/services/miniqmt_execution_runtime/models.py backend/services/miniqmt_execution_runtime/__init__.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py
+All checks passed!
+
+rtk git diff --check
+<no output; exit 0>
+```
+
+Self questions:
+
+1. Is this truly event-driven rather than one-shot query or synthetic timer? Yes. Phase7 adds no runtime execution path and preserves Phase6/Phase5 gates.
+2. Did I create a second non-durable OMS? No. The doc explicitly states gray metadata/events are not OMS authority and B remains fallback.
+3. Did I change B or fork the algo core? No. This checkpoint only adds a doc; `backend/execution_algos/vnpy_style/` diff is empty.
+4. Did I introduce TDX in MiniQMT/event_loop? No. TDX guard count is 0.
+5. Is gray truly portfolio/strategy-slot scoped and rollback capable? Yes. The doc binds fallback semantics to per-scope overrides and durable rollback events, not global default mutation.
+6. Did I switch without same-scope shadow evidence or touch LIVE? No. The doc keeps LIVE blocked until separate admission gates pass.
+
+Deviation intercepts:
+
+- None in this checkpoint.
