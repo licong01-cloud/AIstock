@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -287,6 +287,135 @@ def _coerce_llm_findings(raw: dict[str, Any]) -> list[dict[str, Any]]:
         ))
     return findings
 
+def _parse_ymd(value: Any, *, field: str, index: int) -> date:
+    text = str(value or "").strip()
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise SilentDegradationAuditError(
+            f"suppressions[{index}].{field} must be YYYY-MM-DD"
+        ) from exc
+
+def _normalize_code_ref_path(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    while ":" in text:
+        head, sep, tail = text.rpartition(":")
+        if sep and tail.isdigit():
+            text = head
+            continue
+        break
+    return text.lstrip("./").lower()
+
+def _code_ref_overlaps(suppression_ref: str, finding_ref: str) -> bool:
+    suppression_path = _normalize_code_ref_path(suppression_ref)
+    finding_path = _normalize_code_ref_path(finding_ref)
+    if not suppression_path or not finding_path:
+        return False
+    if suppression_path == finding_path:
+        return True
+    suppression_prefix = suppression_path.rstrip("/") + "/"
+    finding_prefix = finding_path.rstrip("/") + "/"
+    return finding_path.startswith(suppression_prefix) or suppression_path.startswith(finding_prefix)
+
+def _validated_suppressions(config: dict[str, Any], *, audit_date: date) -> list[dict[str, Any]]:
+    if "suppressions" not in config:
+        return []
+    raw_suppressions = config.get("suppressions") or []
+    if not isinstance(raw_suppressions, list):
+        raise SilentDegradationAuditError("suppressions must be a list when configured")
+    suppressions: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_suppressions):
+        if not isinstance(raw, dict):
+            raise SilentDegradationAuditError(f"suppressions[{index}] must be a mapping")
+        module = str(raw.get("module") or "").strip()
+        reason = str(raw.get("reason") or "").strip()
+        dismissed_by = str(raw.get("dismissed_by") or "").strip()
+        dismissed_at = str(raw.get("dismissed_at") or "").strip()
+        finding_id = str(raw.get("finding_id") or "").strip()
+        title_contains = str(raw.get("title_contains") or "").strip()
+        code_refs_raw = raw.get("code_refs_any") or []
+        if not module:
+            raise SilentDegradationAuditError(f"suppressions[{index}].module is required")
+        if not reason:
+            raise SilentDegradationAuditError(f"suppressions[{index}].reason is required")
+        if not dismissed_by:
+            raise SilentDegradationAuditError(f"suppressions[{index}].dismissed_by is required")
+        if not dismissed_at:
+            raise SilentDegradationAuditError(f"suppressions[{index}].dismissed_at is required")
+        if code_refs_raw and not isinstance(code_refs_raw, list):
+            raise SilentDegradationAuditError(f"suppressions[{index}].code_refs_any must be a list")
+        code_refs_any = [str(item).strip() for item in code_refs_raw if str(item).strip()]
+        if not finding_id and not code_refs_any:
+            raise SilentDegradationAuditError(
+                f"suppressions[{index}] must include finding_id or code_refs_any"
+            )
+        _parse_ymd(dismissed_at, field="dismissed_at", index=index)
+        expires_at = str(raw.get("expires_at") or "").strip()
+        expires_date = _parse_ymd(expires_at, field="expires_at", index=index) if expires_at else None
+        suppressions.append(
+            {
+                "index": index,
+                "module": module,
+                "finding_id": finding_id,
+                "code_refs_any": code_refs_any,
+                "title_contains": title_contains,
+                "reason": reason,
+                "dismissed_by": dismissed_by,
+                "dismissed_at": dismissed_at,
+                "expires_at": expires_at or None,
+                "active": expires_date is None or expires_date >= audit_date,
+            }
+        )
+    return suppressions
+
+def _suppression_matches(finding: dict[str, Any], suppression: dict[str, Any]) -> bool:
+    if not suppression.get("active"):
+        return False
+    if str(finding.get("module") or "") != suppression["module"]:
+        return False
+    title_contains = suppression.get("title_contains")
+    if title_contains and title_contains.lower() not in str(finding.get("title") or "").lower():
+        return False
+    finding_id = str(finding.get("finding_id") or "")
+    finding_id_matches = bool(suppression.get("finding_id")) and finding_id == suppression["finding_id"]
+    finding_code_refs = [str(item) for item in finding.get("code_refs") or []]
+    code_ref_matches = any(
+        _code_ref_overlaps(suppression_ref, finding_ref)
+        for suppression_ref in suppression.get("code_refs_any") or []
+        for finding_ref in finding_code_refs
+    )
+    return finding_id_matches or code_ref_matches
+
+def apply_suppressions(
+    findings: list[dict[str, Any]],
+    config: dict[str, Any],
+    *,
+    audit_date: date | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    suppressions = _validated_suppressions(
+        config,
+        audit_date=audit_date or datetime.now(timezone.utc).date(),
+    )
+    if not suppressions:
+        return findings, []
+    active_findings: list[dict[str, Any]] = []
+    suppressed_findings: list[dict[str, Any]] = []
+    for finding in findings:
+        matched = next((item for item in suppressions if _suppression_matches(finding, item)), None)
+        if matched is None:
+            active_findings.append(finding)
+            continue
+        suppressed = dict(finding)
+        suppressed["suppressed_by"] = {
+            "reason": matched["reason"],
+            "dismissed_by": matched["dismissed_by"],
+            "dismissed_at": matched["dismissed_at"],
+            "expires_at": matched["expires_at"],
+            "matched_suppression_index": matched["index"],
+        }
+        suppressed_findings.append(suppressed)
+    return active_findings, suppressed_findings
+
 def _prompt_messages(
     review_targets: list[dict[str, Any]],
     *,
@@ -408,7 +537,15 @@ def build_audit(
             if not fallback_on_llm_error:
                 raise SilentDegradationAuditError(str(exc)) from exc
             llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="silent_degradation_audit_live_provider_failed_fallback", error=exc)
+    findings, suppressed_findings = apply_suppressions(findings, config)
     workflow_gate = "warning" if findings else "ready"
+    no_candidate_reason = None
+    if not findings:
+        no_candidate_reason = (
+            "all_candidate_findings_suppressed"
+            if suppressed_findings
+            else "no_silent_degradation_suggestion_crossed_threshold"
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": utc_now(),
@@ -430,7 +567,8 @@ def build_audit(
         "manual_analysis_required_before_bug_registration": True,
         "review_targets": review_targets,
         "findings": findings,
-        "summary": {"review_target_count": len(review_targets), "finding_count": len(findings), "llm_summary": llm_summary, "no_candidate_reason": None if findings else "no_silent_degradation_suggestion_crossed_threshold"},
+        "suppressed_findings": suppressed_findings,
+        "summary": {"review_target_count": len(review_targets), "finding_count": len(findings), "suppressed_count": len(suppressed_findings), "llm_summary": llm_summary, "no_candidate_reason": no_candidate_reason},
         "llm_invocation_evidence": llm_evidence,
         "side_effects": {"readonly": True, "writes_source": False, "writes_bug_json": False, "writes_github_issue": False, "writes_database": False, "production_actions_allowed": False},
         "production_gates": PRODUCTION_GATES,
@@ -471,6 +609,7 @@ def public_artifact(payload: dict[str, Any]) -> dict[str, Any]:
         "manual_analysis_required_before_bug_registration": True,
         "review_targets": compact_targets,
         "findings": payload.get("findings") or [],
+        "suppressed_findings": payload.get("suppressed_findings") or [],
         "summary": payload.get("summary") or {},
         "llm_invoked": llm_summary.get("invoked"),
         "llm_invocation_evidence": llm_summary,
@@ -491,6 +630,7 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     findings = payload.get("findings") if isinstance(payload.get("findings"), list) else []
+    suppressed_findings = payload.get("suppressed_findings") if isinstance(payload.get("suppressed_findings"), list) else []
     llm_invoked = bool((payload.get("llm_invocation_evidence") or {}).get("invoked"))
     lines = [
         "# Nightly LLM Silent Degradation Audit",
@@ -499,6 +639,7 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
         f"- llm_invoked: `{llm_invoked}`",
         f"- checked_modules: `{len(payload.get('review_targets') or [])}`",
         f"- finding_count: `{len(findings)}`",
+        f"- suppressed_count: `{len(suppressed_findings)}`",
         "- side_effects: `readonly; suggestions only; no source changes; no BUG or GitHub Issue writes`",
         "",
     ]
@@ -522,6 +663,22 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
                 lines.append(f"  - code_refs: {joined_code_refs}")
     else:
         lines.append("- None. No silent degradation suggestion crossed the advisory threshold.")
+    lines.extend(["", "## Suppressed Findings", ""])
+    if suppressed_findings:
+        for item in suppressed_findings[:20]:
+            suppressed_by = item.get("suppressed_by") if isinstance(item.get("suppressed_by"), dict) else {}
+            lines.append(
+                f"- `{item.get('finding_id')}` {item.get('severity')}: {item.get('title')} "
+                f"(module={item.get('module')}, matched_suppression_index={suppressed_by.get('matched_suppression_index')})"
+            )
+            reason = str(suppressed_by.get("reason") or "").strip()
+            if reason:
+                lines.append(f"  - reason: {reason[:280]}")
+            expires_at = suppressed_by.get("expires_at")
+            if expires_at:
+                lines.append(f"  - expires_at: {expires_at}")
+    else:
+        lines.append("- None.")
     lines.extend([
         "",
         "## Production Gates",
@@ -643,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
             "workflow_gate": audit["workflow_gate"],
             "review_target_count": audit["summary"]["review_target_count"],
             "finding_count": audit["summary"]["finding_count"],
+            "suppressed_count": audit["summary"].get("suppressed_count", 0),
             "warning_only": audit["warning_only"],
             "llm_invoked": audit["llm_invocation_evidence"]["invoked"],
             "artifact": args.output,

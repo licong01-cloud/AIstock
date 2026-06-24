@@ -8,7 +8,12 @@ import yaml
 from scripts import nightly_silent_degradation_audit as audit
 
 
-def _write_config(root: Path, *, silent_markers: list[str] | None = None) -> Path:
+def _write_config(
+    root: Path,
+    *,
+    silent_markers: list[str] | None = None,
+    suppressions: list[dict] | None = None,
+) -> Path:
     config = {
         "schema_version": "aistock_silent_degradation_audit_config_v1",
         "defaults": {
@@ -28,6 +33,8 @@ def _write_config(root: Path, *, silent_markers: list[str] | None = None) -> Pat
             }
         ],
     }
+    if suppressions is not None:
+        config["suppressions"] = suppressions
     path = root / "configs" / "validation" / "silent_degradation_audit.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
@@ -93,6 +100,20 @@ def _write_fixture(root: Path, *, source_text: str) -> None:
     code = root / "backend" / "services" / "demo_runtime" / "runtime.py"
     code.parent.mkdir(parents=True, exist_ok=True)
     code.write_text(source_text, encoding="utf-8")
+
+
+def _demo_suppression(**overrides) -> dict:
+    suppression = {
+        "module": "demo_runtime",
+        "code_refs_any": ["backend/services/demo_runtime/runtime.py"],
+        "title_contains": "silent degradation",
+        "reason": "manual false-positive review",
+        "dismissed_by": "tier2-review",
+        "dismissed_at": "2026-06-24",
+        "expires_at": "2099-12-31",
+    }
+    suppression.update(overrides)
+    return suppression
 
 
 def test_silent_degradation_audit_deterministic_ready_when_markers_exist(tmp_path: Path) -> None:
@@ -172,6 +193,157 @@ def test_silent_degradation_audit_detects_risk_marker_as_candidate_only(tmp_path
     assert finding["source"] == "deterministic_silent_degradation_marker_check"
     assert finding["why_this_is_not_normal_fallback"]
     assert finding["official_bug_created"] is False
+
+
+def test_silent_degradation_audit_suppresses_matching_finding_and_ready_gate(tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="class DurableRuntime:\n    EventLoop = object\n    def run(self):\n        return []  # fallback empty success\n",
+    )
+    config_path = _write_config(
+        tmp_path,
+        silent_markers=["return []"],
+        suppressions=[_demo_suppression()],
+    )
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deterministic",
+        modules=["demo_runtime"],
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["findings"] == []
+    assert payload["summary"]["finding_count"] == 0
+    assert payload["summary"]["suppressed_count"] == 1
+    suppressed = payload["suppressed_findings"][0]
+    assert suppressed["module"] == "demo_runtime"
+    assert suppressed["suppressed_by"]["reason"] == "manual false-positive review"
+    assert suppressed["suppressed_by"]["matched_suppression_index"] == 0
+
+
+def test_silent_degradation_audit_keeps_nonmatching_suppression_as_warning(tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="class DurableRuntime:\n    EventLoop = object\n    def run(self):\n        return []  # fallback empty success\n",
+    )
+    config_path = _write_config(
+        tmp_path,
+        silent_markers=["return []"],
+        suppressions=[
+            _demo_suppression(module="other_runtime"),
+            _demo_suppression(code_refs_any=["backend/services/other_runtime/runtime.py"]),
+        ],
+    )
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deterministic",
+        modules=["demo_runtime"],
+    )
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["summary"]["finding_count"] == 1
+    assert payload["summary"]["suppressed_count"] == 0
+    assert payload["suppressed_findings"] == []
+
+
+def test_silent_degradation_audit_expired_suppression_is_inactive(tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="class DurableRuntime:\n    EventLoop = object\n    def run(self):\n        return []  # fallback empty success\n",
+    )
+    config_path = _write_config(
+        tmp_path,
+        silent_markers=["return []"],
+        suppressions=[_demo_suppression(expires_at="2026-01-01")],
+    )
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deterministic",
+        modules=["demo_runtime"],
+    )
+
+    assert payload["workflow_gate"] == "warning"
+    assert len(payload["findings"]) == 1
+    assert payload["suppressed_findings"] == []
+
+
+def test_silent_degradation_audit_configured_miniqmt_sda_2d29_is_suppressed() -> None:
+    config = audit.read_yaml(audit.DEFAULT_CONFIG_PATH)
+    finding = audit.make_finding(
+        module="miniqmt_execution_runtime",
+        severity="P1",
+        title="MiniQMT runtime 缺 fail-closed",
+        suspected_silent_degradation="manual candidate",
+        reference_refs=["docs/architecture/miniqmt_durable_execution_runtime_design_20260623.md"],
+        code_refs=["backend/services/miniqmt_execution_runtime/runtime.py:845"],
+        confidence=0.7,
+        source="unit_test",
+    )
+    finding["finding_id"] = "SDA-2d2969408339"
+
+    findings, suppressed_findings = audit.apply_suppressions(
+        [finding],
+        config,
+        audit_date=audit.date(2026, 6, 24),
+    )
+
+    assert findings == []
+    assert len(suppressed_findings) == 1
+    assert suppressed_findings[0]["suppressed_by"]["dismissed_by"] == "tier2-review"
+    assert suppressed_findings[0]["suppressed_by"]["expires_at"] == "2026-09-24"
+
+
+def test_silent_degradation_audit_invalid_suppression_without_match_key_raises(tmp_path: Path) -> None:
+    _write_fixture(tmp_path, source_text="class DurableRuntime:\n    EventLoop = object\n")
+    config_path = _write_config(
+        tmp_path,
+        suppressions=[
+            {
+                "module": "demo_runtime",
+                "reason": "invalid",
+                "dismissed_by": "tier2-review",
+                "dismissed_at": "2026-06-24",
+            }
+        ],
+    )
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    try:
+        audit.build_audit(
+            root=tmp_path,
+            config_path=config_path,
+            llm_config_path=llm_config,
+            prompt_pack_path=prompt_pack,
+            provider="deterministic",
+            modules=["demo_runtime"],
+        )
+    except audit.SilentDegradationAuditError as exc:
+        assert "finding_id or code_refs_any" in str(exc)
+    else:
+        raise AssertionError("invalid suppression must raise")
 
 
 def test_silent_degradation_audit_rejects_llm_action_fields(monkeypatch, tmp_path: Path) -> None:
@@ -283,6 +455,66 @@ def test_silent_degradation_audit_cli_writes_public_artifacts(tmp_path: Path, ca
     assert '"check": "nightly-silent-degradation-audit"' in stdout
     assert artifact["public_artifact"] is True
     assert artifact["candidate_only"] is True
+    assert "suppressed_findings" in artifact
     assert artifact["source_modifications_allowed"] is False
     assert artifact["review_targets"][0]["silent_degradation_hit_count"] == 0
     assert "Nightly LLM Silent Degradation Audit" in markdown.read_text(encoding="utf-8")
+
+
+def test_silent_degradation_audit_public_artifact_includes_suppressed_findings() -> None:
+    payload = {
+        "schema_version": audit.SCHEMA_VERSION,
+        "generated_at": "2026-06-24T00:00:00Z",
+        "run_id": "unit",
+        "commit": "abc",
+        "branch": "test",
+        "provider": "deterministic",
+        "model": "deterministic",
+        "effective_provider": "deterministic",
+        "effective_model": "deterministic",
+        "llm_gate": "degraded",
+        "workflow_gate": "ready",
+        "review_targets": [],
+        "findings": [],
+        "suppressed_findings": [
+            {
+                "finding_id": "SDA-test",
+                "module": "demo_runtime",
+                "title": "suppressed",
+                "suppressed_by": {"reason": "manual review"},
+            }
+        ],
+        "summary": {"review_target_count": 0, "finding_count": 0, "suppressed_count": 1},
+        "llm_invocation_evidence": {"invoked": False},
+        "side_effects": {},
+        "production_gates": audit.PRODUCTION_GATES,
+    }
+
+    artifact = audit.public_artifact(payload)
+
+    assert artifact["suppressed_findings"][0]["finding_id"] == "SDA-test"
+
+
+def test_silent_degradation_audit_no_suppressions_keeps_existing_behavior(tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="class DurableRuntime:\n    EventLoop = object\n    def run(self):\n        return []  # fallback empty success\n",
+    )
+    config_path = _write_config(tmp_path, silent_markers=["return []"])
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deterministic",
+        modules=["demo_runtime"],
+    )
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["summary"]["finding_count"] == 1
+    assert payload["summary"]["suppressed_count"] == 0
+    assert payload["suppressed_findings"] == []

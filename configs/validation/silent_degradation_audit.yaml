@@ -12,6 +12,18 @@ policy:
   official_bug_creation_allowed: false
   github_issue_creation_allowed: false
   manual_analysis_required_before_bug_registration: true
+suppressions:
+  - module: miniqmt_execution_runtime
+    finding_id: SDA-2d2969408339
+    code_refs_any:
+      - backend/services/miniqmt_execution_runtime/runtime.py
+      - backend/services/miniqmt_execution_runtime/client.py
+      - backend/services/miniqmt_execution_runtime/gateway.py
+    title_contains: fail-closed
+    reason: "Tier2 manual review 2026-06-24: per-order fail-closed-and-loud (explicit error_code + REJECTED/accepted=False + exception detail); not silent degradation."
+    dismissed_by: tier2-review
+    dismissed_at: "2026-06-24"
+    expires_at: "2026-09-24"
 modules:
   - module: miniqmt_execution_runtime
     risk: P1
