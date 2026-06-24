@@ -1,0 +1,103 @@
+{
+  "actual": "After BUG-506 was merged, running the new full repo hygiene audit from the synced canonical root hung for more than 10 minutes and produced no artifact directory:\n\npython F:\\Dev\\AIstock\\scripts\\repo_hygiene_orphan_audit.py --root F:\\Dev\\AIstock --output-dir F:\\Dev\\AIstock\\tmp\\validation\\code-intelligence\\manual-repo-hygiene-20260624 --json\n\nThe process had to be stopped manually. This means the Nightly hygiene check can stall the nightly lane on the real repository root even though tests passed in scoped cases. Root cause likely includes scanning untracked root artifacts/worktree residue and/or expensive full-history reference/commit indexing. The audit must stay read-only, bounded, and deterministic.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260624_BUG-508-repo-hygiene-orphan-audit-hangs-on-canonical-root-full-scan.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/repo_hygiene_orphan_audit.py",
+    "backend/tests/scripts/test_repo_hygiene_orphan_audit.py",
+    ".github/workflows/nightly.yml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-508",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T03:10:18.088751Z",
+  "description": "After BUG-506 was merged, running the new full repo hygiene audit from the synced canonical root hung for more than 10 minutes and produced no artifact directory:\n\npython F:\\Dev\\AIstock\\scripts\\repo_hygiene_orphan_audit.py --root F:\\Dev\\AIstock --output-dir F:\\Dev\\AIstock\\tmp\\validation\\code-intelligence\\manual-repo-hygiene-20260624 --json\n\nThe process had to be stopped manually. This means the Nightly hygiene check can stall the nightly lane on the real repository root even though tests passed in scoped cases. Root cause likely includes scanning untracked root artifacts/worktree residue and/or expensive full-history reference/commit indexing. The audit must stay read-only, bounded, and deterministic.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-542be110e5d0",
+      "timestamp": "2026-06-24T03:10:18.088747Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "repo_hygiene_orphan_audit must complete on the canonical root within a bounded time, write only ignored tmp/validation/code-intelligence artifacts, and never scan generated/runtime directories, adjacent worktrees, .git internals, .venv/conda envs, large DB/cache/model artifacts, or untracked non-repo handoff debris unless explicitly requested. Nightly should fail with compact diagnostics if budget is exceeded rather than hanging.",
+  "first_seen_at": "2026-06-24T03:10:18.088751Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1571,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1571",
+  "last_seen_at": "2026-06-24T03:10:18.088751Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Repo hygiene orphan audit hangs on canonical root full scan",
+  "trigger_condition": {
+    "fingerprint": "542be110e5d0c85476a074eb",
+    "source_event_id": "FE-20260624-542be110e5d0"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/worktree",
+    "ui_routes": [
+      "/worktree"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

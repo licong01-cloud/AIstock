@@ -681,6 +681,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           conda run -n AIstock python scripts/repo_hygiene_orphan_audit.py --json `
             --run-id "${{ github.run_id }}" `
+            --scan-mode tracked `
+            --max-seconds 300 `
             --output-dir $outDir `
             --output "$outDir/repo-hygiene-orphan-audit.json" `
             --markdown-output "$outDir/repo-hygiene-orphan-audit.md" `
