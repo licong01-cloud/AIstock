@@ -75,6 +75,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
     return path
 
 
+def _write_repo_client_entrypoints(root: Path) -> None:
+    (root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
+    (root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (root / ".codex" / "skills" / "verify-aistock-feature").mkdir(parents=True)
+    (root / ".codex" / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
+    (root / ".claude" / "commands").mkdir(parents=True)
+    (root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
+
+
 def _fetched_origin_payload() -> dict[str, Any]:
     return {
         "status": "fetched",
@@ -1362,10 +1372,7 @@ def test_doctor_warns_when_bug_allocator_lags_github(
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
-    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1428,10 +1435,7 @@ def test_doctor_warns_for_invalid_unrelated_worktree_allocator(
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
-    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -5887,7 +5891,7 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
 
     quickstart = Path("docs/standards/aistock_issue_workflow_quickstart.md").read_text(encoding="utf-8")
     assert "AIstock Issue Workflow Quickstart" in quickstart
-    assert "鎸夎鑼冧慨澶?BUG-112" in quickstart
+    assert "按规范修复 BUG-112" in quickstart
     assert "????" not in quickstart
     assert "doctor" in quickstart
     assert "submit-bug" in quickstart
@@ -5901,7 +5905,8 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
     assert "aistock_issue_workflow.py doctor" in claude_command
 
     design = Path("docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").read_text(encoding="utf-8")
-    assert "鏅鸿兘楠岃瘉骞冲彴璁捐瀹炴柦鏂规 v2.0" in design
+    assert "AIstock Issue / Feature / CI-CD" in design
+    assert "v2.0" in design
     assert "Codex / Claude Code / Cursor" in design
     assert "????" not in design
 
