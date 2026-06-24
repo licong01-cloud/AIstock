@@ -38,7 +38,8 @@ budget:
   response:
     reserved_ratio: 0.10
     min_reserved_tokens: 4096
-    max_tokens: 1600
+    # DeepSeek V4 max output; provider length stops fail loud instead of returning a silent partial answer.
+    max_tokens: 384000
   overflow_action_order:
     - compact_old_history
     - retrieve_key_facts

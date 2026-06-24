@@ -3120,6 +3120,72 @@ def test_mode_router_is_runtime_config_driven() -> None:
 
 
 
+def test_default_chat_completion_budget_uses_provider_max_for_long_answers() -> None:
+    svc = _chat_service()
+    config = svc.active_runtime_config()
+
+    plan = svc.context_budget_planner.plan(
+        model_profile={"capabilities_json": {"context_window_tokens": 1_048_576}},
+        runtime_config=config,
+        current_user_message="国城矿业跌停原因、未来走势和基本面三维综合分析",
+    )
+
+    assert config["model_context"]["fallback_context_window_tokens"] == 1_048_576
+    assert config["budget"]["response"]["max_tokens"] == 384000
+    assert plan.llm_max_tokens == 384000
+    assert plan.response_reserved_tokens == 384000
+
+
+def test_chat_turn_preserves_complete_long_raw_api_response() -> None:
+    class LongAnswerLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            long_text = (
+                "国城矿业三维分析：跌停原因需要同时看行情、资金和消息面。"
+                "基本面部分关注收入质量、利润率、资产负债和行业地位。"
+                "未来走势部分只讨论驱动、情景和风险，不给方向预测。"
+            ) * 30 + "收尾结论：以上分析完整结束。"
+            return LlmCallResult(
+                content=long_text,
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = LongAnswerLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="请直接回答国城矿业跌停原因、未来走势和基本面，不调用工具。", dialogue_mode_override="dialogue"))
+    text = result["assistant_message"]["content_text"]
+
+    assert fake.calls[0]["max_tokens"] == 384000
+    assert "跌停原因" in text
+    assert "基本面" in text
+    assert "未来走势" in text
+    assert text.endswith("收尾结论：以上分析完整结束。")
+    assert len(text) > 1800
+
+
+def test_chat_turn_reports_provider_length_stop_loudly() -> None:
+    class LengthStoppedLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            raise RuntimeError("llm_completion_truncated: provider returned finish_reason=length")
+
+    fake = LengthStoppedLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="请综合分析国城矿业跌停原因、未来趋势和基本面", dialogue_mode_override="dialogue"))
+    text = result["assistant_message"]["content_text"]
+
+    assert fake.calls[0]["max_tokens"] == 384000
+    assert "reason_code=llm_completion_truncated" in text
+    assert "stage=llm_completion" in text
+    assert "llm_completion_truncated" in text
+    assert result["cards"]["error_card"]["error"]["message"].startswith("llm_completion_truncated")
+
+
 def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)

@@ -138,6 +138,10 @@ def validate_runtime_config_payload(payload: dict[str, Any], path: Path | str) -
         total += number
     if total > 1.5:
         raise ValueError("runtime context budget ratios are unexpectedly high")
+    response_cfg = payload["budget"]["response"]
+    response_max_tokens = response_cfg.get("max_tokens")
+    if response_max_tokens is not None and int(response_max_tokens) <= 0:
+        raise ValueError("budget.response.max_tokens must be positive when configured")
     if str(payload["compaction"]["worker"].get("tools_enabled")).lower() != "false":
         raise ValueError("compaction.worker.tools_enabled must be false")
     execution_defaults = payload["execution"]

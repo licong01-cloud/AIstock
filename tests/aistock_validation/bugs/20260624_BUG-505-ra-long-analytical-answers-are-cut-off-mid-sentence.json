@@ -11,7 +11,10 @@
     "frontend/src/app/research-assistant/chat/page.tsx",
     "frontend/src/components/research-assistant/AssistantShared.tsx",
     "tests/aistock_validation/bugs/20260624_BUG-505-ra-long-analytical-answers-are-cut-off-mid-sentence.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "configs/research_assistant/runtime_context.yaml",
+    "backend/services/research_assistant/context_budget.py",
+    "backend/services/research_assistant/runtime_config.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-505",
@@ -29,6 +32,30 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260624-5ea99da8a474",
       "timestamp": "2026-06-23T16:59:11.106122Z"
+    },
+    {
+      "timestamp": "2026-06-23T17:13:41.381659Z",
+      "actor": "codex",
+      "action": "scope_expanded_for_response_budget_cap_investigation",
+      "note": "Expanded scope to runtime_context.yaml, context_budget.py, and runtime_config.py after evidence showed RA LLM max_tokens is sourced from YAML budget.response.max_tokens through context_budget; llm_client.py is not present and ResearchAssistantLlmClient lives in service.py."
+    },
+    {
+      "timestamp": "2026-06-23T17:27:46.728042Z",
+      "actor": "codex",
+      "action": "truncation_layer_evidence_collected",
+      "note": "Pre-fix evidence: configs/research_assistant/runtime_context.yaml budget.response.max_tokens=1600; context_budget.py maps it directly to ContextBudgetPlan.llm_max_tokens; service.py passes llm_max_tokens to ResearchAssistantLlmClient.complete/litellm.completion for chat and ReAct synthesis. Scoped frontend grep found no chat main-bubble content_text slice/truncate; AssistantShared truncation only affects diagnostic/detail humanized fields. DEEPSEEK_API_KEY is absent, so real-model smoke must loud-skip 77 until user supplies a key."
+    },
+    {
+      "timestamp": "2026-06-24T05:35:58.815522Z",
+      "actor": "codex",
+      "action": "implementation_completed",
+      "note": "Raised configs/research_assistant/runtime_context.yaml budget.response.max_tokens from 1600 to 384000 (DeepSeek V4 provider maximum output); ContextBudgetPlanner now reserves the configured response max in response_reserved_tokens; LLM calls omit max_tokens only when config is null and fail loud on provider finish_reason=length with reason_code=llm_completion_truncated/stage=llm_completion; added chat preservation, truncation-loudness, and smoke completeness tests."
+    },
+    {
+      "timestamp": "2026-06-24T05:35:58.815539Z",
+      "actor": "codex",
+      "action": "validation_completed",
+      "note": "Validation evidence: targeted pytest backend/tests/research_assistant/test_service.py::test_default_chat_completion_budget_uses_provider_max_for_long_answers backend/tests/research_assistant/test_service.py::test_chat_turn_preserves_complete_long_raw_api_response backend/tests/research_assistant/test_service.py::test_chat_turn_reports_provider_length_stop_loudly backend/tests/scripts/test_research_assistant_real_model_smoke.py -q => 11 passed; test_react_tool_loop.py => 10 passed; nox l0 => passed; research_assistant_backend => 334 passed; research_assistant_mcp_contract => 38 passed; validation_module_registry_l0 => 8 passed; ra_phase0_baseline => 334 passed; ra_phase5_agent_teams => 13 passed; ra_phase7_full_accept => successful (backend 334 passed, frontend Playwright 4+8 passed, crosscheck/catalog/ownership passed); ruff changed Python files => passed; git diff --check => passed; real-model smoke loud-skipped because DEEPSEEK_API_KEY missing with fake_pass=false/status=skipped."
     }
   ],
   "evidence_uris": [],
@@ -54,7 +81,8 @@
     "research_assistant_mcp_contract",
     "ra_phase7_full_accept",
     "ra_phase0_baseline",
-    "ra_phase5_agent_teams"
+    "ra_phase5_agent_teams",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

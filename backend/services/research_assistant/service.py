@@ -1401,7 +1401,7 @@ class ResearchAssistantLlmClient:
         messages: list[dict[str, str]],
         model_profile: dict[str, Any],
         temperature: float,
-        max_tokens: int,
+        max_tokens: int | None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         tool_registry: dict[str, dict[str, str]] | None = None,
@@ -1430,18 +1430,27 @@ class ResearchAssistantLlmClient:
         if tools:
             completion_kwargs["tools"] = tools
             completion_kwargs["tool_choice"] = tool_choice or "auto"
-        response = litellm.completion(model=model_id, messages=provider_messages, temperature=temperature, max_tokens=max_tokens, **completion_kwargs)
+        if max_tokens is not None:
+            completion_kwargs["max_tokens"] = max_tokens
+        response = litellm.completion(model=model_id, messages=provider_messages, temperature=temperature, **completion_kwargs)
         duration_ms = int((perf_counter() - start) * 1000)
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         content = str(message.content or "").strip()
         tool_calls = _extract_litellm_tool_calls(message, tool_registry)
         usage_raw = getattr(response, "usage", None)
         usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
+        finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
+        if finish_reason == "length":
+            raise RuntimeError(
+                "llm_completion_truncated: provider returned finish_reason=length; "
+                "Research Assistant refuses to return a silent mid-sentence partial answer"
+            )
         if not content and not tool_calls:
             raise RuntimeError("assistant LLM returned empty content")
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, tool_calls=tool_calls)
 
-    def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int) -> LlmCallResult:
+    def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int | None) -> LlmCallResult:
         return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
 
 
@@ -1858,14 +1867,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @classmethod
     def _chat_turn_unexpected_error_payload(cls, exc: BaseException) -> dict[str, Any]:
+        message = str(exc)
+        reason_code = "llm_completion_truncated" if message.startswith("llm_completion_truncated") else "chat_turn_unexpected_error"
+        stage = "llm_completion" if reason_code == "llm_completion_truncated" else "chat_turn"
         return {
-            "reason_code": "chat_turn_unexpected_error",
-            "code": "chat_turn_unexpected_error",
-            "stage": "chat_turn",
+            "reason_code": reason_code,
+            "code": reason_code,
+            "stage": stage,
             "server_key": None,
             "tool_name": None,
             "exception_type": type(exc).__name__,
-            "message": str(exc),
+            "message": message,
         }
 
     @staticmethod
