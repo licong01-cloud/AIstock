@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-517",
-  "closed_at": null,
+  "closed_at": "2026-06-24T18:01:38.317810Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -37,16 +37,22 @@
     {
       "action": "scope_expanded_for_actual_frontend_tests",
       "actor": "codex",
-      "timestamp": "2026-06-24T14:40:00Z",
-      "note": "Added actual Playwright test paths for audit route/nav and Phase 7 tasks/trace route assertions; initial generated scope had frontend/tests/research-assistant.spec.ts but the repo stores the spec under frontend/tests/research-assistant/."
+      "note": "Added actual Playwright test paths for audit route/nav and Phase 7 tasks/trace route assertions; initial generated scope had frontend/tests/research-assistant.spec.ts but the repo stores the spec under frontend/tests/research-assistant/.",
+      "timestamp": "2026-06-24T14:40:00Z"
+    },
+    {
+      "action": "close_sync_finalize",
+      "actor": "codex",
+      "timestamp": "2026-06-24T18:01:38.317810Z",
+      "note": "PR #1616 merged at 1780bf84d779eae1cdc80ec643e5195247fddea2 after green CI; Issue #1607 closed with status:fixed; production gates noop."
     }
   ],
   "evidence_uris": [],
   "expected": "Research Assistant exposes one 审计 nav entry with tabs 任务/Trace/Agent运行/外部Agent; old routes redirect to /research-assistant/audit?tab=... and keep all existing functionality.",
   "first_seen_at": "2026-06-24T14:33:21.213984Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-517-ra-audit-pages-should-be-consolidated-into-one-a-20260624",
+  "fix_commit": "1780bf84d779eae1cdc80ec643e5195247fddea2",
+  "fixed_at": "2026-06-24T18:00:58.884724Z",
   "github_issue_number": 1607,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1607",
   "last_seen_at": "2026-06-24T14:33:21.213984Z",
@@ -54,6 +60,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1616",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -68,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -116,6 +123,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "CI 17/0 green after rebase; frontend-only RA audit consolidation; Tier2 PASS; no backend changes"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -128,5 +138,6 @@
       "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "merge_commit": "1780bf84d779eae1cdc80ec643e5195247fddea2"
 }
