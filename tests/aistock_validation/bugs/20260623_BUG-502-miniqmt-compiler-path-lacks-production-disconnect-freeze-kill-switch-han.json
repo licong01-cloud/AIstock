@@ -1,0 +1,76 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-502",
+  "title": "[P1][MiniQMT] compiler path lacks production disconnect freeze kill-switch handling",
+  "module": "paper_v2",
+  "severity": "P1",
+  "risk_area": "bug",
+  "status": "validation_passed",
+  "description": "Compiler/MiniQMTSim path lacks production disconnect freeze, kill-switch, alert, reconnect and reconcile handling.",
+  "actual": "Compiler/MiniQMTSim path lacks production disconnect freeze, kill-switch, alert, reconnect and reconcile handling.",
+  "expected": "Disconnect must freeze new submits with loud reason_code and telemetry; reconnect must reconcile before recovery; no silent continuation.",
+  "reproduce_command": "rtk rg -n disconnect backend/infra/qmt_client.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/services/qmt_strategy_ledger backend/services/simulation_runtime backend/routers/qmt.py",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260623_BUG-502-miniqmt-compiler-path-lacks-production-disconnect-freeze-kill-switch-han.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-502-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md"
+  ],
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "non_goals": [
+    "Do not start, stop, or restart services.",
+    "Do not apply production DB/DDL.",
+    "Do not unlock MiniQMT LIVE trading."
+  ],
+  "github_issue_number": 1552,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1552",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "ui_issue": false,
+  "created_at": "2026-06-23T11:41:00Z",
+  "first_seen_at": "2026-06-23T11:41:00Z",
+  "last_seen_at": "2026-06-23T11:41:00Z",
+  "events": [
+    {
+      "action": "reconstructed_source_bug_json",
+      "actor": "codex",
+      "note": "Reconstructed from GitHub issue body because registry intake state referenced missing source_bug_json.",
+      "timestamp": "2026-06-23T17:56:55.076734+00:00"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "note": "Added MiniQMTSim and qmt_strategy_ledger managed-order disconnect freeze plus reconnect-reconcile gate; validation passed locally; PR pending creation.",
+      "timestamp": "2026-06-24T03:55:00Z"
+    }
+  ],
+  "fix_branch": "bug/BUG-502-p1-miniqmt-compiler-path-lacks-production-discon-20260624",
+  "workflow_gate": "ready_for_tier2_review",
+  "pr_url": null,
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (130 passed)",
+    "rtk python -m ruff check backend/services/paper_trading_v2/broker/minqmtsim.py backend/services/qmt_strategy_ledger/order_service.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ]
+}

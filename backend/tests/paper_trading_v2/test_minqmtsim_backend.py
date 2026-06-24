@@ -175,11 +175,15 @@ class FakeQMTClient:
         connect_ok: bool = True,
         next_order_id: int = 10001,
         mode: str = "SIM",
+        fail_order_query: bool = False,
+        fail_trade_query: bool = False,
     ) -> None:
         self.connected = connected
         self.connect_ok = connect_ok
         self.next_order_id = next_order_id
         self.mode = mode
+        self.fail_order_query = fail_order_query
+        self.fail_trade_query = fail_trade_query
         self.place_calls: list[dict] = []
         self.cancel_calls: list[str] = []
         self.last_order_diagnostic: dict | None = None
@@ -257,10 +261,14 @@ class FakeQMTClient:
 
     def get_orders(self, cancelable_only: bool = False):
         self.order_query_calls += 1
+        if self.fail_order_query:
+            raise QMTNotAvailableError("simulated order snapshot unavailable")
         return list(self.orders)
 
     def get_trades(self):
         self.trade_query_calls += 1
+        if self.fail_trade_query:
+            raise QMTNotAvailableError("simulated trade snapshot unavailable")
         return list(self.trades)
 
     def get_account_info(self):
@@ -302,6 +310,25 @@ class TimeoutQMTClient(FakeQMTClient):
             "timeout_policy": "bounded_order_submit_ack_wait",
         }
         raise QMTNotAvailableError("miniQMT order submit timed out after 2.0s")
+
+
+class DisconnectingQMTClient(FakeQMTClient):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.fail_next_submit = True
+
+    def place_order(self, **kwargs):
+        if not self.fail_next_submit:
+            return super().place_order(**kwargs)
+        self.fail_next_submit = False
+        self.connected = False
+        self.place_calls.append(kwargs)
+        self.last_order_diagnostic = {
+            "schema_version": "qmt_order_submit_diagnostic_v1",
+            "accepted": False,
+            "classification": "broker_disconnected",
+        }
+        raise QMTNotAvailableError("simulated miniQMT disconnect during submit")
 
 
 class NoopRefreshAudit:
@@ -631,6 +658,64 @@ def test_place_order_timeout_is_connectivity_error_with_diagnostic() -> None:
     assert client.order_query_calls == 1
     assert client.trade_query_calls == 1
     assert client.place_calls[0]["stock_code"] == "000001.SZ"
+
+
+def test_minqmtsim_disconnect_freezes_new_submit_before_broker_call() -> None:
+    client = DisconnectingQMTClient(connect_ok=False)
+    backend = _backend(client=client)
+
+    with pytest.raises(BrokerConnectivityError) as first_exc:
+        backend.submit_order_intent(_legacy_diagnostic_intent())
+
+    assert first_exc.value.context["reason_code"] == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert len(client.place_calls) == 1
+    status = backend.disconnect_freeze_status()
+    assert status["frozen"] is True
+    assert status["freeze"]["reason_code"] == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+
+    with pytest.raises(BrokerConnectivityError) as frozen_exc:
+        backend.submit_order_intent(_legacy_diagnostic_intent(symbol="000002.SZ"))
+
+    assert frozen_exc.value.context["reason_code"] == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert frozen_exc.value.context["alert"]["reason_code"] == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert frozen_exc.value.context["recovery"]["stage"] == "BROKER_STILL_DISCONNECTED"
+    assert len(client.place_calls) == 1
+
+
+def test_minqmtsim_reconnect_reconciles_before_clearing_disconnect_freeze() -> None:
+    client = DisconnectingQMTClient(connect_ok=False)
+    backend = _backend(client=client)
+
+    with pytest.raises(BrokerConnectivityError):
+        backend.submit_order_intent(_legacy_diagnostic_intent())
+
+    client.connect_ok = True
+    handle = backend.submit_order_intent(_legacy_diagnostic_intent(symbol="000002.SZ"))
+
+    assert handle.backend_id == "minqmt_sim"
+    assert client.order_query_calls == 2  # initial native probe + reconnect reconcile
+    assert client.trade_query_calls == 2
+    assert len(client.place_calls) == 2
+    status = backend.disconnect_freeze_status()
+    assert status["frozen"] is False
+    assert status["last_recovery"]["reason_code"] == "MINIQMT_BROKER_RECONNECTED_RECONCILED"
+    assert status["last_recovery"]["orders_snapshot_count"] >= 0
+
+
+def test_minqmtsim_reconnect_reconcile_failure_keeps_freeze_without_submit() -> None:
+    client = DisconnectingQMTClient(connect_ok=True, fail_order_query=True)
+    backend = _backend(client=client)
+
+    with pytest.raises(BrokerConnectivityError):
+        backend.submit_order_intent(_legacy_diagnostic_intent())
+
+    with pytest.raises(BrokerConnectivityError) as exc_info:
+        backend.submit_order_intent(_legacy_diagnostic_intent(symbol="000002.SZ"))
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED"
+    assert exc_info.value.context["recovery"]["stage"] == "RECONNECT_RECONCILE_FAILED"
+    assert backend.disconnect_freeze_status()["frozen"] is True
+    assert len(client.place_calls) == 1
 
 
 def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:

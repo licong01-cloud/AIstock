@@ -399,6 +399,11 @@ class FakeManagedOrderBroker:
         order_ids: list[int] | None = None,
         positions: list[dict[str, Any]] | None = None,
         quotes: dict[str, dict[str, Any]] | None = None,
+        connected: bool = True,
+        connect_ok: bool = True,
+        fail_next_place: bool = False,
+        fail_order_query: bool = False,
+        fail_trade_query: bool = False,
     ) -> None:
         self.order_ids = list(order_ids or [])
         self.positions = (
@@ -407,11 +412,37 @@ class FakeManagedOrderBroker:
             else [{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
         )
         self.quotes = dict(quotes or {})
+        self.connected = connected
+        self.connect_ok = connect_ok
+        self.fail_next_place = fail_next_place
+        self.fail_order_query = fail_order_query
+        self.fail_trade_query = fail_trade_query
         self.place_order_payloads = []
         self.full_tick_calls: list[list[str]] = []
+        self.order_query_calls = 0
+        self.trade_query_calls = 0
+
+    def status(self):
+        return {"connected": self.connected, "mode": "SIM", "provider": "fake"}
+
+    def connect(self):
+        self.connected = bool(self.connect_ok)
+        return self.connected, "connected" if self.connected else "connect failed"
 
     def get_positions(self):
         return list(self.positions)
+
+    def get_orders(self, cancelable_only: bool = False):
+        self.order_query_calls += 1
+        if self.fail_order_query:
+            raise RuntimeError("simulated broker order snapshot unavailable")
+        return []
+
+    def get_trades(self):
+        self.trade_query_calls += 1
+        if self.fail_trade_query:
+            raise RuntimeError("simulated broker trade snapshot unavailable")
+        return []
 
     def get_full_tick(self, symbols):
         self.full_tick_calls.append(list(symbols))
@@ -419,6 +450,10 @@ class FakeManagedOrderBroker:
 
     def place_order(self, **kwargs):
         self.place_order_payloads.append(kwargs)
+        if self.fail_next_place:
+            self.fail_next_place = False
+            self.connected = False
+            raise RuntimeError("simulated miniQMT disconnect during submit")
         order_id = self.order_ids.pop(0) if self.order_ids else 900000000 + len(self.place_order_payloads)
         return order_id, "accepted" if order_id > 0 else "rejected by fake broker"
 
@@ -462,6 +497,118 @@ class FailingQmtSnapshotClient(FakeQmtSnapshotClient):
         if self.fail:
             raise RuntimeError(self.error_message)
         return super().get_orders(cancelable_only=cancelable_only)
+
+
+def _qmt_account(repo: InMemoryQmtStrategyLedgerRepository, *, account_id: str, strategy_name: str) -> None:
+    repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=f"strategy_{strategy_name}",
+            strategy_name=strategy_name,
+            display_name=strategy_name,
+            account_id=account_id,
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+
+
+def _managed_buy_request(*, account_id: str, strategy_name: str, order_remark: str) -> ManagedOrderRequest:
+    return ManagedOrderRequest(
+        account_id=account_id,
+        strategy_name=strategy_name,
+        symbol="000001.SZ",
+        side="BUY",
+        order_type=BUY_ORDER_TYPE,
+        quantity=100,
+        price_type=5,
+        price=Decimal("10"),
+        order_remark=order_remark,
+        trade_date=TRADE_DATE,
+        mode="SIM",
+    )
+
+
+def test_miniqmt_managed_order_disconnect_freezes_until_reconnect_reconcile() -> None:
+    account_id = "QMT_DISCONNECT_ACCOUNT"
+    strategy_name = "DisconnectFreezeStrategy"
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    _qmt_account(qmt_repo, account_id=account_id, strategy_name=strategy_name)
+    broker = FakeManagedOrderBroker(fail_next_place=True, connect_ok=False)
+    service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+
+    first = service.submit_batch(
+        [_managed_buy_request(account_id=account_id, strategy_name=strategy_name, order_remark="freeze-first")]
+    )
+
+    assert first.success is False
+    assert first.results[0].broker_called is True
+    assert first.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert service.broker_disconnect_freeze_status()["frozen"] is True
+    assert len(broker.place_order_payloads) == 1
+
+    frozen = service.submit_batch(
+        [_managed_buy_request(account_id=account_id, strategy_name=strategy_name, order_remark="freeze-blocked")]
+    )
+
+    assert frozen.success is False
+    assert frozen.results[0].broker_called is False
+    assert frozen.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert frozen.results[0].preflight.primary_error.context["recovery"]["stage"] == "BROKER_STILL_DISCONNECTED"
+    assert len(broker.place_order_payloads) == 1
+
+    broker.connect_ok = True
+    recovered = service.submit_batch(
+        [_managed_buy_request(account_id=account_id, strategy_name=strategy_name, order_remark="freeze-recovered")]
+    )
+
+    assert recovered.success is True
+    assert recovered.results[0].broker_called is True
+    assert broker.order_query_calls >= 1
+    assert broker.trade_query_calls >= 1
+    assert len(broker.place_order_payloads) == 2
+    status = service.broker_disconnect_freeze_status()
+    assert status["frozen"] is False
+    assert status["last_recovery"]["reason_code"] == "MINIQMT_BROKER_RECONNECTED_RECONCILED"
+
+
+def test_miniqmt_managed_order_reconnect_reconcile_failure_keeps_freeze_without_submit() -> None:
+    account_id = "QMT_RECONNECT_FAIL_ACCOUNT"
+    strategy_name = "DisconnectFreezeReconcileFailStrategy"
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    _qmt_account(qmt_repo, account_id=account_id, strategy_name=strategy_name)
+    broker = FakeManagedOrderBroker(fail_next_place=True, connect_ok=True, fail_order_query=True)
+    service = QmtManagedOrderService(
+        repository=qmt_repo,
+        broker=broker,  # type: ignore[arg-type]
+        calendar_provider=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+
+    first = service.submit_batch(
+        [_managed_buy_request(account_id=account_id, strategy_name=strategy_name, order_remark="freeze-first")]
+    )
+    assert first.success is False
+    assert first.results[0].broker_called is True
+    assert first.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+
+    frozen = service.submit_batch(
+        [_managed_buy_request(account_id=account_id, strategy_name=strategy_name, order_remark="freeze-blocked")]
+    )
+
+    assert frozen.success is False
+    assert frozen.results[0].broker_called is False
+    error = frozen.results[0].preflight.primary_error
+    assert error.code == "MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED"
+    assert error.context["recovery"]["stage"] == "RECONNECT_RECONCILE_FAILED"
+    assert service.broker_disconnect_freeze_status()["frozen"] is True
+    assert broker.order_query_calls == 1
+    assert broker.trade_query_calls == 0
+    assert len(broker.place_order_payloads) == 1
 
 
 class FakePaperRepository:
