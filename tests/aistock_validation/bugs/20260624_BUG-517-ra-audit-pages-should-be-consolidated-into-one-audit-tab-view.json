@@ -13,7 +13,9 @@
     "frontend/src/app/research-assistant/external-agents/page.tsx",
     "frontend/tests/research-assistant.spec.ts",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260624_BUG-517-ra-audit-pages-should-be-consolidated-into-one-audit-tab-view.json"
+    "tests/aistock_validation/bugs/20260624_BUG-517-ra-audit-pages-should-be-consolidated-into-one-audit-tab-view.json",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "frontend/tests/research-assistant/phase7-frontend-acceptance.spec.ts"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-517",
@@ -31,6 +33,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260624-a984bf21c2b5",
       "timestamp": "2026-06-24T14:33:21.213980Z"
+    },
+    {
+      "action": "scope_expanded_for_actual_frontend_tests",
+      "actor": "codex",
+      "timestamp": "2026-06-24T14:40:00Z",
+      "note": "Added actual Playwright test paths for audit route/nav and Phase 7 tasks/trace route assertions; initial generated scope had frontend/tests/research-assistant.spec.ts but the repo stores the spec under frontend/tests/research-assistant/."
     }
   ],
   "evidence_uris": [],

@@ -8,11 +8,10 @@ import "./research-assistant.css";
 
 const TABS: Array<{ href: string; label: string; aliases?: string[] }> = [
   { href: "/research-assistant/chat", label: "对话", aliases: ["/research-assistant"] },
-  { href: "/research-assistant/tasks", label: "任务" },
   { href: "/research-assistant/memory", label: "记忆" },
   { href: "/research-assistant/graph", label: "图谱" },
   { href: "/research-assistant/approvals", label: "审批" },
-  { href: "/research-assistant/trace", label: "Trace" },
+  { href: "/research-assistant/audit", label: "审计" },
   { href: "/research-assistant/settings", label: "设置" },
 ];
 
