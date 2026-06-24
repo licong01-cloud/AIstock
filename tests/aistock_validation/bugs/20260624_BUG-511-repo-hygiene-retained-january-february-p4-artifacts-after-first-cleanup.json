@@ -2,7 +2,12 @@
   "actual": "Four old generated JSON/parquet artifacts remain tracked as P4 delete candidates after BUG-510.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260624_BUG-511-repo-hygiene-retained-january-february-p4-artifacts-after-first-cleanup.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "factors_ui/instrument_format_analysis.json",
+    "git_ignore_folder/factor_implementation_source_data_test/test_static_factors.parquet",
+    "git_ignore_folder/factor_implementation_source_data_test/test_static_factors_schema.json",
+    "git_ignore_folder/factor_implementation_source_data_test/test_validation_report.json",
+    "tests/aistock_validation/history/repo_hygiene/BUG-511_p4_factor_qe_artifact_cleanup_manifest_20260624.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-511",
@@ -13,7 +18,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-24T07:07:23.776289Z",
-  "description": "Four old generated JSON/parquet artifacts remain tracked as P4 delete candidates after BUG-510.",
+  "description": "Four old generated JSON/parquet artifacts remain tracked as P4 delete candidates after BUG-510. User confirmed the January/February 2026 P4 artifacts can be deleted directly.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
