@@ -52,6 +52,8 @@ _CAPACITY_RESIDUAL_ERROR_CODES = frozenset(
     }
 )
 _ACCOUNT_GROUP_CASH_OVERCOMMIT_CODE = "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+_PRE_TRADE_RISK_CONFIG_KEY = "miniqmt_pre_trade_risk"
+_PRE_TRADE_RISK_ENABLED_KEY = "miniqmt_pre_trade_risk_enabled"
 _CASH_SHRINK_REASON_KEY = "miniqmt_cash_preflight_shrink_reason"
 
 
@@ -273,6 +275,14 @@ class QmtManagedOrderService:
                     {"available_cash": float(account.cash), "required_cash": float(freeze_amount)},
                 )
             )
+        errors.extend(
+            _pre_trade_risk_errors(
+                request=request,
+                account=account,
+                estimated_notional=estimated_notional,
+                freeze_amount=freeze_amount,
+            )
+        )
         if account and request.order_type == SELL_ORDER_TYPE:
             lots = self._repository.list_position_lots(account.strategy_id, symbol=request.symbol)
             pending_intents = self._repository.list_open_sell_intents(
@@ -1765,6 +1775,7 @@ def _account_group_cash_overcommit_error(
             "effective_account_group_cash_limit": float(effective_account_group_cash_limit),
             "batch_required_cash": float(batch_required_cash),
             "overcommit_cash": float(batch_required_cash - effective_account_group_cash_limit),
+            "gate": "account_group_cash_hard_gate",
             "affected_buy_orders": [
                 {
                     "strategy_name": request.strategy_name,
@@ -1777,6 +1788,299 @@ def _account_group_cash_overcommit_error(
                 for request in affected_orders
             ],
             "next_action": "reduce account-group buy demand or increase account-group buying power before submit",
+        },
+    )
+
+
+def _pre_trade_risk_errors(
+    *,
+    request: ManagedOrderRequest,
+    account: VirtualAccount | None,
+    estimated_notional: Decimal,
+    freeze_amount: Decimal,
+) -> list[OrderPreflightError]:
+    config, config_errors = _pre_trade_risk_config(account=account, request=request)
+    if config_errors:
+        return config_errors
+    if not config:
+        return []
+
+    errors: list[OrderPreflightError] = []
+    context_base = {
+        "risk_layer": "miniqmt_pre_trade",
+        "account_id": request.account_id,
+        "strategy_name": request.strategy_name,
+        "symbol": request.symbol,
+        "order_remark": request.order_remark,
+        "mode": request.mode,
+    }
+
+    if _risk_bool(config.get("kill_switch_active") or config.get("submit_kill_switch") or config.get("kill_switch")):
+        errors.append(
+            OrderPreflightError(
+                "PRE_TRADE_KILL_SWITCH_ACTIVE",
+                "MiniQMT pre-trade risk kill-switch rejected order before broker submit",
+                {**context_base, "next_action": "disable the submit-time kill-switch only after operator risk review"},
+            )
+        )
+
+    collar = _risk_section(config, "price_collar")
+    if _section_enabled(collar):
+        collar_error = _price_collar_error(request=request, section=collar, context_base=context_base)
+        if collar_error is not None:
+            errors.append(collar_error)
+
+    fat_finger = _risk_section(config, "fat_finger")
+    if _section_enabled(fat_finger):
+        errors.extend(
+            _fat_finger_errors(
+                request=request,
+                section=fat_finger,
+                estimated_notional=estimated_notional,
+                context_base=context_base,
+            )
+        )
+
+    buying_power = _risk_section(config, "buying_power")
+    if request.order_type == BUY_ORDER_TYPE and _section_enabled(buying_power):
+        errors.extend(
+            _buying_power_errors(
+                request=request,
+                account=account,
+                section=buying_power,
+                freeze_amount=freeze_amount,
+                context_base=context_base,
+            )
+        )
+
+    return errors
+
+
+def _pre_trade_risk_config(
+    *,
+    account: VirtualAccount | None,
+    request: ManagedOrderRequest,
+) -> tuple[dict[str, Any] | None, list[OrderPreflightError]]:
+    raw_sources = [
+        ("account.risk_config", (account.risk_config or {}).get(_PRE_TRADE_RISK_CONFIG_KEY) if account is not None else None),
+        ("request.metadata", request.metadata.get(_PRE_TRADE_RISK_CONFIG_KEY)),
+    ]
+    config: dict[str, Any] = {}
+    errors: list[OrderPreflightError] = []
+    for source, raw in raw_sources:
+        if raw in (None, ""):
+            continue
+        if isinstance(raw, bool):
+            config["enabled"] = raw
+            continue
+        if not isinstance(raw, dict):
+            errors.append(_risk_config_error(request, source=source, field=_PRE_TRADE_RISK_CONFIG_KEY, value=raw))
+            continue
+        config.update(raw)
+
+    explicit_enabled = request.metadata.get(_PRE_TRADE_RISK_ENABLED_KEY)
+    if explicit_enabled not in (None, ""):
+        config["enabled"] = explicit_enabled
+
+    if errors:
+        return None, errors
+    if not _risk_bool(config.get("enabled")):
+        return None, []
+    return config, []
+
+
+def _risk_section(config: dict[str, Any], key: str) -> dict[str, Any]:
+    raw = config.get(key)
+    if raw is None:
+        return {}
+    if isinstance(raw, bool):
+        return {"enabled": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {"enabled": True, "invalid_value": raw, "invalid_field": key}
+
+
+def _section_enabled(section: dict[str, Any]) -> bool:
+    if not section:
+        return False
+    if section.get("invalid_field"):
+        return True
+    return _risk_bool(section.get("enabled", True))
+
+
+def _price_collar_error(
+    *,
+    request: ManagedOrderRequest,
+    section: dict[str, Any],
+    context_base: dict[str, Any],
+) -> OrderPreflightError | None:
+    if section.get("invalid_field"):
+        return _risk_config_error(request, source="pre_trade_risk.price_collar", field=str(section["invalid_field"]), value=section.get("invalid_value"))
+    min_price = _risk_decimal(section.get("min_price"), field="price_collar.min_price", request=request)
+    max_price = _risk_decimal(section.get("max_price"), field="price_collar.max_price", request=request)
+    reference_price = _risk_decimal(section.get("reference_price"), field="price_collar.reference_price", request=request)
+    max_deviation_pct = _risk_decimal(section.get("max_deviation_pct"), field="price_collar.max_deviation_pct", request=request)
+    parse_errors = [value for value in (min_price, max_price, reference_price, max_deviation_pct) if isinstance(value, OrderPreflightError)]
+    if parse_errors:
+        return parse_errors[0]
+    if reference_price is not None and max_deviation_pct is not None:
+        pct = max_deviation_pct / Decimal("100") if max_deviation_pct > 1 else max_deviation_pct
+        min_price = min_price or (reference_price * (Decimal("1") - pct))
+        max_price = max_price or (reference_price * (Decimal("1") + pct))
+    if min_price is None and max_price is None:
+        return _risk_config_error(
+            request,
+            source="pre_trade_risk.price_collar",
+            field="min_price|max_price|reference_price+max_deviation_pct",
+            value=section,
+        )
+    if request.price <= Decimal("0"):
+        return None
+    if (min_price is not None and request.price < min_price) or (max_price is not None and request.price > max_price):
+        return OrderPreflightError(
+            "PRE_TRADE_PRICE_COLLAR_REJECT",
+            "MiniQMT pre-trade price collar rejected order before broker submit",
+            {
+                **context_base,
+                "price": float(request.price),
+                "min_price": float(min_price) if min_price is not None else None,
+                "max_price": float(max_price) if max_price is not None else None,
+                "reference_price": float(reference_price) if reference_price is not None else None,
+                "next_action": "rebuild execution plan with a price inside the configured collar",
+            },
+        )
+    return None
+
+
+def _fat_finger_errors(
+    *,
+    request: ManagedOrderRequest,
+    section: dict[str, Any],
+    estimated_notional: Decimal,
+    context_base: dict[str, Any],
+) -> list[OrderPreflightError]:
+    if section.get("invalid_field"):
+        return [_risk_config_error(request, source="pre_trade_risk.fat_finger", field=str(section["invalid_field"]), value=section.get("invalid_value"))]
+    errors: list[OrderPreflightError] = []
+    max_quantity = _risk_int(section.get("max_quantity"), field="fat_finger.max_quantity", request=request)
+    max_notional = _risk_decimal(section.get("max_notional"), field="fat_finger.max_notional", request=request)
+    if isinstance(max_quantity, OrderPreflightError):
+        errors.append(max_quantity)
+    elif max_quantity is not None and request.quantity > max_quantity:
+        errors.append(
+            OrderPreflightError(
+                "PRE_TRADE_FAT_FINGER_QUANTITY",
+                "MiniQMT pre-trade fat-finger quantity limit rejected order before broker submit",
+                {**context_base, "quantity": request.quantity, "max_quantity": max_quantity, "next_action": "split or resize the child order below max_quantity"},
+            )
+        )
+    if isinstance(max_notional, OrderPreflightError):
+        errors.append(max_notional)
+    elif max_notional is not None and estimated_notional > max_notional:
+        errors.append(
+            OrderPreflightError(
+                "PRE_TRADE_FAT_FINGER_NOTIONAL",
+                "MiniQMT pre-trade fat-finger notional limit rejected order before broker submit",
+                {
+                    **context_base,
+                    "estimated_notional": float(estimated_notional),
+                    "max_notional": float(max_notional),
+                    "next_action": "split or resize the child order below max_notional",
+                },
+            )
+        )
+    return errors
+
+
+def _buying_power_errors(
+    *,
+    request: ManagedOrderRequest,
+    account: VirtualAccount | None,
+    section: dict[str, Any],
+    freeze_amount: Decimal,
+    context_base: dict[str, Any],
+) -> list[OrderPreflightError]:
+    if section.get("invalid_field"):
+        return [_risk_config_error(request, source="pre_trade_risk.buying_power", field=str(section["invalid_field"]), value=section.get("invalid_value"))]
+    available = _risk_decimal(section.get("available_buying_power"), field="buying_power.available_buying_power", request=request)
+    if isinstance(available, OrderPreflightError):
+        return [available]
+    if available is None:
+        if account is None:
+            return [_risk_config_error(request, source="pre_trade_risk.buying_power", field="available_buying_power", value=None)]
+        available = account.cash
+    if freeze_amount > available:
+        return [
+            OrderPreflightError(
+                "PRE_TRADE_BUYING_POWER_REJECT",
+                "MiniQMT pre-trade buying-power check rejected order before broker submit",
+                {
+                    **context_base,
+                    "available_buying_power": float(available),
+                    "required_cash": float(freeze_amount),
+                    "next_action": "reduce buy quantity or refresh account-group buying power before submit",
+                },
+            )
+        ]
+    return []
+
+
+def _risk_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "enabled", "active"}
+
+
+def _risk_decimal(value: Any, *, field: str, request: ManagedOrderRequest) -> Decimal | OrderPreflightError | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason=str(exc))
+    if parsed < Decimal("0"):
+        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative")
+    return parsed
+
+
+def _risk_int(value: Any, *, field: str, request: ManagedOrderRequest) -> int | OrderPreflightError | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason=str(exc))
+    if parsed < 0:
+        return _risk_config_error(request, source="miniqmt_pre_trade_risk", field=field, value=value, reason="must be non-negative")
+    return parsed
+
+
+def _risk_config_error(
+    request: ManagedOrderRequest,
+    *,
+    source: str,
+    field: str,
+    value: Any,
+    reason: str | None = None,
+) -> OrderPreflightError:
+    return OrderPreflightError(
+        "PRE_TRADE_RISK_CONFIG_INVALID",
+        "MiniQMT pre-trade risk config is invalid; order rejected before broker submit",
+        {
+            "risk_layer": "miniqmt_pre_trade",
+            "account_id": request.account_id,
+            "strategy_name": request.strategy_name,
+            "symbol": request.symbol,
+            "order_remark": request.order_remark,
+            "source": source,
+            "field": field,
+            "value": repr(value),
+            "reason": reason or "invalid pre-trade risk config value",
+            "next_action": "fix the pre-trade risk config before enabling submit",
         },
     )
 
