@@ -3,7 +3,9 @@
   "allowed_write_scope": [
     "backend/routers/quantevolver_evolution.py",
     "tests/aistock_validation/bugs/20260624_BUG-518-bug-518-p1-customevoloopconfig-drops-model-params-and-silently-downgrade.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/unified_engine/test_custom_evo_mutation_routes.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-518",
@@ -44,7 +46,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "qe_read_l3"
+    "qe_read_l3",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
