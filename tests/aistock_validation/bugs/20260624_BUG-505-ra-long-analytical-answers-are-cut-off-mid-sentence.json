@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-505",
-  "closed_at": null,
+  "closed_at": "2026-06-24T14:04:15Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -56,12 +56,18 @@
       "actor": "codex",
       "note": "Validation evidence: targeted pytest backend/tests/research_assistant/test_service.py::test_default_chat_completion_budget_uses_provider_max_for_long_answers backend/tests/research_assistant/test_service.py::test_chat_turn_preserves_complete_long_raw_api_response backend/tests/research_assistant/test_service.py::test_chat_turn_reports_provider_length_stop_loudly backend/tests/scripts/test_research_assistant_real_model_smoke.py -q => 11 passed; test_react_tool_loop.py => 10 passed; nox l0 => passed; research_assistant_backend => 334 passed; research_assistant_mcp_contract => 38 passed; validation_module_registry_l0 => 8 passed; ra_phase0_baseline => 334 passed; ra_phase5_agent_teams => 13 passed; ra_phase7_full_accept => successful (backend 334 passed, frontend Playwright 4+8 passed, crosscheck/catalog/ownership passed); ruff changed Python files => passed; git diff --check => passed; real-model smoke loud-skipped because DEEPSEEK_API_KEY missing with fake_pass=false/status=skipped.",
       "timestamp": "2026-06-24T05:35:58.815539Z"
+    },
+    {
+      "action": "final_close_sync_metadata",
+      "actor": "codex",
+      "timestamp": "2026-06-24T14:04:15Z",
+      "note": "close-sync PR #1600 merged; Issue #1561 closed with status:fixed"
     }
   ],
   "evidence_uris": [],
   "expected": "Research Assistant returns complete long analytical answers for multidimensional stock questions, including all requested dimensions and a closing conclusion; no silent mid-sentence truncation. If any safety limit is ever hit, it must be loud and explicit.",
   "first_seen_at": "2026-06-23T16:59:11.106126Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-505-ra-long-analytical-answers-are-cut-off-mid-sente-20260624",
   "fix_commit": "e6ffb273f4d5707a6b47064eaadee73678138a02",
   "fixed_at": "2026-06-24T13:35:20.894983Z",
   "github_issue_number": 1561,
@@ -88,7 +94,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
