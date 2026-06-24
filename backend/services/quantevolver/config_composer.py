@@ -35,6 +35,158 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
+_GENERAL_PTNN_LTR_HP_KEYS = {
+    "ltr_loss_mode",
+    "topk_train_k",
+    "ltr_temperature",
+    "ltr_gate_temperature",
+    "ltr_relevance_mode",
+    "ltr_relevance_bins",
+    "ltr_min_group_size",
+    "ltr_fail_on_degenerate_group",
+}
+
+
+def _bool_param(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"reason_code={reason_code}: {name} must be a positive integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise ValueError(f"reason_code={reason_code}: {name} must be a positive integer, got {value!r}")
+    return parsed
+
+
+def _validate_positive_float_param(value: Any, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise ValueError(f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}")
+    return parsed
+
+
+def _finalize_general_ptnn_ltr_routing(
+    *,
+    model_class: str,
+    model_module: str,
+    model_kwargs: Dict[str, Any],
+    model_dataset_cls: str,
+    model_name: str,
+) -> tuple[str, str, Dict[str, Any]]:
+    """Switch opt-in GeneralPTNN listwise requests to the AIstock LTR adapter."""
+
+    if model_class not in _GENERAL_PTNN_MODEL_CLASSES:
+        return model_class, model_module, model_kwargs
+
+    updated_kwargs = dict(model_kwargs)
+    requested_mode = str(updated_kwargs.get("ltr_loss_mode") or updated_kwargs.get("loss") or "mse").strip()
+    if updated_kwargs.get("loss") == "approx_ndcg_at_k":
+        requested_mode = "approx_ndcg_at_k"
+    if requested_mode not in {"mse", "approx_ndcg_at_k"}:
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_loss_mode: "
+            f"model={model_name} requested unsupported ltr_loss_mode={requested_mode!r}"
+        )
+
+    if requested_mode == "mse":
+        updated_kwargs["loss"] = "mse"
+        for ltr_key in _GENERAL_PTNN_LTR_HP_KEYS:
+            updated_kwargs.pop(ltr_key, None)
+        return "GeneralPTNN", "qlib.contrib.model.pytorch_general_nn", updated_kwargs
+
+    if model_dataset_cls != "TSDatasetH":
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_requires_timeseries_dataset: "
+            f"model={model_name} requested ltr_loss_mode={requested_mode!r} with dataset={model_dataset_cls}"
+        )
+
+    updated_kwargs["ltr_loss_mode"] = "approx_ndcg_at_k"
+    updated_kwargs["loss"] = "approx_ndcg_at_k"
+    updated_kwargs["topk_train_k"] = _validate_positive_int_param(
+        updated_kwargs.get("topk_train_k", 25),
+        name="topk_train_k",
+        reason_code="general_ptnn_ltr_invalid_topk_train_k",
+    )
+    updated_kwargs["ltr_temperature"] = _validate_positive_float_param(
+        updated_kwargs.get("ltr_temperature", 1.0),
+        name="ltr_temperature",
+    )
+    updated_kwargs["ltr_gate_temperature"] = _validate_positive_float_param(
+        updated_kwargs.get("ltr_gate_temperature", 1.0),
+        name="ltr_gate_temperature",
+    )
+    updated_kwargs["ltr_relevance_mode"] = updated_kwargs.get("ltr_relevance_mode", "cross_section_quantile")
+    if updated_kwargs["ltr_relevance_mode"] != "cross_section_quantile":
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_loss_mode: "
+            f"model={model_name} requested unsupported ltr_relevance_mode={updated_kwargs['ltr_relevance_mode']!r}"
+        )
+    updated_kwargs["ltr_relevance_bins"] = _validate_positive_int_param(
+        updated_kwargs.get("ltr_relevance_bins", 5),
+        name="ltr_relevance_bins",
+        reason_code="general_ptnn_ltr_invalid_relevance_bins",
+    )
+    if int(updated_kwargs["ltr_relevance_bins"]) < 2:
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_relevance_bins: "
+            f"ltr_relevance_bins must be >= 2, got {updated_kwargs['ltr_relevance_bins']!r}"
+        )
+    updated_kwargs["ltr_min_group_size"] = _validate_positive_int_param(
+        updated_kwargs.get("ltr_min_group_size", updated_kwargs["topk_train_k"]),
+        name="ltr_min_group_size",
+        reason_code="general_ptnn_ltr_invalid_topk_train_k",
+    )
+    updated_kwargs["ltr_fail_on_degenerate_group"] = _bool_param(
+        updated_kwargs.get("ltr_fail_on_degenerate_group", True)
+    )
+    if not updated_kwargs["ltr_fail_on_degenerate_group"]:
+        raise ValueError(
+            "reason_code=ltr_degenerate_relevance: "
+            "ltr_fail_on_degenerate_group=false is not supported for QE listwise LTR"
+        )
+    logger.info(
+        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR topk_train_k=%s relevance_bins=%s",
+        model_name,
+        updated_kwargs["topk_train_k"],
+        updated_kwargs["ltr_relevance_bins"],
+    )
+    return "AIStockGeneralPTNNLTR", "aistock_models.general_ptnn_ltr", updated_kwargs
+
+
+def _conf_uses_general_ptnn_ltr_adapter(conf_yaml: str) -> bool:
+    return "module_path: aistock_models.general_ptnn_ltr" in conf_yaml
+
+
+def _general_ptnn_ltr_adapter_sources() -> dict[str, Path]:
+    package_dir = AISTOCK_PROJECT_ROOT / "aistock_models" / "aistock_models"
+    sources = {
+        "aistock_models/__init__.py": package_dir / "__init__.py",
+        "aistock_models/general_ptnn_ltr.py": package_dir / "general_ptnn_ltr.py",
+    }
+    missing = [str(path) for path in sources.values() if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "reason_code=general_ptnn_ltr_adapter_missing: "
+            f"required adapter source files are missing: {missing}"
+        )
+    return sources
 
 
 def _win_to_wsl_guess(path: Path) -> str:
@@ -1440,6 +1592,12 @@ class ConfigComposer:
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
+        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
+            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+                target = exp_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(source_path, target)
 
         # 如果策略使用自定义源码，复制到实验目录
         if strategy_info and strategy_info.get("source_code"):
@@ -1451,9 +1609,10 @@ class ConfigComposer:
         # 生成WSL命令（直接使用 qe_workspace WSL路径）
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         prediction_store_base_url = self._prediction_store_base_url()
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
@@ -1768,6 +1927,9 @@ class ConfigComposer:
         # 5) model.py（自定义模型）
         if model_info and model_info.get("code_text"):
             experiment_files["model.py"] = self._build_model_py_content(model_info)
+        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
+            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+                experiment_files[rel_path] = source_path.read_text(encoding="utf-8")
 
         # 6) custom_strategy.py（自定义策略）
         if strategy_info and strategy_info.get("source_code"):
@@ -1784,7 +1946,7 @@ class ConfigComposer:
         _, auto_core_parts = self._build_auto_wsl_command_parts(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             train_only=train_only,
@@ -1796,10 +1958,11 @@ class ConfigComposer:
             task_id=task_id,
             loop_index=loop_index,
         )
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             mode="auto",
             backtest_freq=backtest_freq,
@@ -2455,6 +2618,11 @@ class ConfigComposer:
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
+        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
+            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+                target = exp_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target)
 
         # 如果策略使用自定义源码
         if strategy_info and strategy_info.get("source_code"):
@@ -2466,9 +2634,10 @@ class ConfigComposer:
         # 生成WSL命令
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         prediction_store_base_url = self._prediction_store_base_url()
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
@@ -2581,6 +2750,20 @@ class ConfigComposer:
                     "persistent_workers": False,
                     "pt_model_uri": "model.model_cls",
                 }
+                if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
+                    model_kwargs.update(
+                        {
+                            "ltr_loss_mode": thp.get("ltr_loss_mode", "approx_ndcg_at_k"),
+                            "loss": thp.get("loss", "approx_ndcg_at_k"),
+                            "topk_train_k": thp.get("topk_train_k", 25),
+                            "ltr_temperature": thp.get("ltr_temperature", 1.0),
+                            "ltr_gate_temperature": thp.get("ltr_gate_temperature", 1.0),
+                            "ltr_relevance_mode": thp.get("ltr_relevance_mode", "cross_section_quantile"),
+                            "ltr_relevance_bins": thp.get("ltr_relevance_bins", 5),
+                            "ltr_min_group_size": thp.get("ltr_min_group_size", thp.get("topk_train_k", 25)),
+                            "ltr_fail_on_degenerate_group": thp.get("ltr_fail_on_degenerate_group", True),
+                        }
+                    )
 
                 # 快速训练模式：训练时间缩短到20%
                 if quick_train:
@@ -2851,7 +3034,7 @@ class ConfigComposer:
         _PTNN_HP_KEYS = {
             "n_epochs", "lr", "early_stop", "batch_size", "weight_decay",
             "optimizer",
-        }
+        } | _GENERAL_PTNN_LTR_HP_KEYS
         # NOTE: hidden_size, num_layers, dropout 是模型架构参数，属于 pt_model_kwargs，
         # 由模型源码 (model.py) 硬编码，不能作为 GeneralPTNN.__init__() 的顶层参数传入。
         _SEED_ALIAS_KEYS = {"random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"}
@@ -2922,7 +3105,7 @@ class ConfigComposer:
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
             hp_keys = set()
-            if model_class in ("GeneralPTNN",):
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 hp_keys = _PTNN_HP_KEYS
             elif model_class in ("LGBModel",):
                 hp_keys = _LGB_HP_KEYS
@@ -2943,7 +3126,7 @@ class ConfigComposer:
                 if key in custom_params:
                     val = custom_params[key]
                     # 确保 GeneralPTNN 的 lr 和 weight_decay 是数值类型
-                    if model_class == "GeneralPTNN" and key in ("lr", "weight_decay") and isinstance(val, str):
+                    if model_class in _GENERAL_PTNN_MODEL_CLASSES and key in ("lr", "weight_decay") and isinstance(val, str):
                         val = float(val)
                     model_hp_overrides[key] = val
             if model_hp_overrides:
@@ -2963,6 +3146,14 @@ class ConfigComposer:
             if set(custom_params.keys()) - set(filtered_params.keys()):
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
+
+        model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
+            model_class=model_class,
+            model_module=model_module,
+            model_kwargs=model_kwargs,
+            model_dataset_cls=model_dataset_cls,
+            model_name=str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class),
+        )
 
         strategy_kwargs["signal"] = "<PRED>"
 
@@ -3403,7 +3594,7 @@ class ConfigComposer:
         if model_kwargs:
             lines.append("        kwargs:")
             pt_model_kwargs = None
-            if model_class == "GeneralPTNN":
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 pt_model_kwargs = model_kwargs.get("pt_model_kwargs")
                 if pt_model_kwargs is not None:
                     pt_model_kwargs = dict(pt_model_kwargs)
@@ -3418,7 +3609,7 @@ class ConfigComposer:
                 else:
                     lines.append(f"            {k}: {v}")
             # 自定义模型和内置 PTNN 模型都需要 pt_model_kwargs
-            if model_class == "GeneralPTNN":
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 if pt_model_kwargs is None and use_custom_model:
                     pt_model_kwargs = {"num_features": "{{ num_features }}"}
                     if model_type_tag == "TimeSeries":
@@ -3439,7 +3630,7 @@ class ConfigComposer:
                     lines.append('            }')
 
         # 数据集配置
-        if model_class == "GeneralPTNN":
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES:
             lines.append("    dataset:")
             lines.append(f'        class: {model_dataset_cls}')
             lines.append("        module_path: qlib.data.dataset")
@@ -3461,7 +3652,7 @@ class ConfigComposer:
         lines.append(f"                train: [{data_split['train_start']}, {data_split['train_end']}]")
         lines.append(f"                valid: [{data_split['valid_start']}, {data_split['valid_end']}]")
         lines.append(f"                test: [{data_split['test_start']}, {data_split['test_end']}]")
-        if model_class == "GeneralPTNN" and model_step_len:
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES and model_step_len:
             lines.append(f"            step_len: {model_step_len}")
 
         # record

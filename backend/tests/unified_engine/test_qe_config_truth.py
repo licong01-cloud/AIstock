@@ -1319,6 +1319,120 @@ def test_score_weighted_v2_filters_archive_seed_metadata_from_strategy_kwargs():
     assert parsed["qe_runtime"]["seed_policy"] == "fixed"
 
 
+def _custom_timeseries_lstm_model_info(training_hp=None):
+    return {
+        "model_id": "__seed_LSTM_10D_hs64_d02__",
+        "model_name": "LSTM_10D_hs64_d02",
+        "model_type": "TimeSeries",
+        "model_hyperparameters": {"hidden_size": 64, "num_layers": 1, "dropout": 0.2},
+        "model_training_hyperparameters": training_hp or {
+            "n_epochs": 200,
+            "lr": 0.001,
+            "batch_size": 4096,
+            "early_stop": 20,
+            "weight_decay": 0.001,
+        },
+        "code_text": "class LSTMModel: pass\nmodel_cls = LSTMModel\n",
+    }
+
+
+def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
+    yaml_text = _base_yaml(model_info=_custom_timeseries_lstm_model_info())
+
+    assert "class: GeneralPTNN" in yaml_text
+    assert "module_path: qlib.contrib.model.pytorch_general_nn" in yaml_text
+    assert "loss: mse" in yaml_text
+    assert "ltr_loss_mode" not in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+
+
+def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={
+            "ltr_loss_mode": "approx_ndcg_at_k",
+            "topk_train_k": "25",
+            "ltr_temperature": "0.8",
+            "ltr_gate_temperature": "1.2",
+            "ltr_relevance_bins": "7",
+            "ltr_min_group_size": "25",
+        },
+    )
+
+    assert "class: AIStockGeneralPTNNLTR" in yaml_text
+    assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
+    assert "loss: approx_ndcg_at_k" in yaml_text
+    assert "ltr_loss_mode: approx_ndcg_at_k" in yaml_text
+    assert "topk_train_k: 25" in yaml_text
+    assert "ltr_temperature: 0.8" in yaml_text
+    assert "ltr_gate_temperature: 1.2" in yaml_text
+    assert "ltr_relevance_bins: 7" in yaml_text
+    assert "ltr_min_group_size: 25" in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+    strategy_section = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
+    assert "ltr_loss_mode" not in strategy_section
+    assert "topk_train_k" not in strategy_section
+
+
+def test_general_ptnn_ltr_invalid_config_fails_fast():
+    with pytest.raises(ValueError, match="general_ptnn_ltr_invalid_loss_mode"):
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            custom_params={"ltr_loss_mode": "listmle"},
+        )
+
+    with pytest.raises(ValueError, match="general_ptnn_ltr_invalid_topk_train_k"):
+        _base_yaml(
+            model_info=_custom_timeseries_lstm_model_info(),
+            custom_params={"ltr_loss_mode": "approx_ndcg_at_k", "topk_train_k": 0},
+        )
+
+    with pytest.raises(ValueError, match="general_ptnn_ltr_requires_timeseries_dataset"):
+        _base_yaml(
+            model_info={**_custom_timeseries_lstm_model_info(), "model_type": "Tabular"},
+            custom_params={"ltr_loss_mode": "approx_ndcg_at_k"},
+        )
+
+
+def test_general_ptnn_ltr_in_memory_payload_includes_adapter_files(monkeypatch):
+    composer = ConfigComposer()
+    monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        composer,
+        "_get_model_info",
+        lambda *_args, **_kwargs: _custom_timeseries_lstm_model_info(),
+    )
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=["Alpha001"],
+        model_id="__seed_LSTM_10D_hs64_d02__",
+        strategy_id="score_weighted_topk_v2",
+        data_split=DATA_SPLIT,
+        custom_params={"ltr_loss_mode": "approx_ndcg_at_k", "topk_train_k": 25},
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    files = result["experiment_files"]
+    assert "aistock_models/__init__.py" in files
+    assert "aistock_models/general_ptnn_ltr.py" in files
+    assert "class AIStockGeneralPTNNLTR" in files["aistock_models/general_ptnn_ltr.py"]
+    assert "export PYTHONPATH=" in result["wsl_command"]
+
+
 def test_seed_ensemble_day_backtest_packages_minute_runner(monkeypatch):
     composer = ConfigComposer()
     monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
