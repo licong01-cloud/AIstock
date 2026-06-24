@@ -332,6 +332,14 @@ class QmtManagedOrderService:
         )
 
     def submit_order(self, request: ManagedOrderRequest) -> ManagedOrderSubmitResult:
+        broker_freeze_error = self._broker_disconnect_preflight_error(request=request, stage="SUBMIT_ORDER")
+        if broker_freeze_error is not None:
+            failed_preflight = replace(
+                self.preview_order(request),
+                allowed=False,
+                errors=(broker_freeze_error,),
+            )
+            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
         preflight = self.preview_order(request)
         if not preflight.allowed:
             return ManagedOrderSubmitResult(
@@ -344,14 +352,6 @@ class QmtManagedOrderService:
             )
         if self._broker is None:
             raise ValueError("broker is required for submit_order")
-        broker_freeze_error = self._broker_disconnect_preflight_error(request=request, stage="SUBMIT_ORDER")
-        if broker_freeze_error is not None:
-            failed_preflight = replace(
-                preflight,
-                allowed=False,
-                errors=preflight.errors + (broker_freeze_error,),
-            )
-            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
         account = self._account_by_strategy_name(request.account_id, request.strategy_name)
 
         broker_can_sell = None
@@ -453,17 +453,6 @@ class QmtManagedOrderService:
 
     def submit_batch(self, requests: list[ManagedOrderRequest]) -> ManagedBatchSubmitResult:
         requests = _batch_submission_order(requests)
-        requests = _shrink_near_cash_overshoot_requests(requests, preview_order=self.preview_order)
-        batch_id = _batch_id_for_requests(requests)
-        deferred_batch = self._existing_dependent_buy_batch(batch_id)
-        if deferred_batch is not None:
-            return self._retry_dependent_buy_batch(batch_id, requests, deferred_batch)
-        deferred_batch = self._find_dependent_buy_batch_by_logical_key(requests)
-        if deferred_batch is not None:
-            return self._retry_dependent_buy_batch(deferred_batch.batch_id, _requests_from_batch(deferred_batch), deferred_batch)
-        retry_result = self._existing_batch_result(batch_id, len(requests))
-        if retry_result is not None:
-            return retry_result
         broker_freeze_error = self._broker_disconnect_preflight_error(request=requests[0], stage="SUBMIT_BATCH")
         if broker_freeze_error is not None:
             preflight_items = []
@@ -473,10 +462,11 @@ class QmtManagedOrderService:
                     replace(
                         preflight,
                         allowed=False,
-                        errors=preflight.errors + (_broker_freeze_error_for_request(broker_freeze_error, request),),
+                        errors=(_broker_freeze_error_for_request(broker_freeze_error, request),),
                     )
                 )
             preflight_results = tuple(preflight_items)
+            batch_id = _batch_id_for_requests(requests)
             results = tuple(
                 ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", preflight, False)
                 for preflight in preflight_results
@@ -506,6 +496,17 @@ class QmtManagedOrderService:
                 compensation_required=False,
                 compensation_hint=None,
             )
+        requests = _shrink_near_cash_overshoot_requests(requests, preview_order=self.preview_order)
+        batch_id = _batch_id_for_requests(requests)
+        deferred_batch = self._existing_dependent_buy_batch(batch_id)
+        if deferred_batch is not None:
+            return self._retry_dependent_buy_batch(batch_id, requests, deferred_batch)
+        deferred_batch = self._find_dependent_buy_batch_by_logical_key(requests)
+        if deferred_batch is not None:
+            return self._retry_dependent_buy_batch(deferred_batch.batch_id, _requests_from_batch(deferred_batch), deferred_batch)
+        retry_result = self._existing_batch_result(batch_id, len(requests))
+        if retry_result is not None:
+            return retry_result
 
         preflight_results = tuple(self._batch_preflight(requests))
         hard_preflight_failed = any(

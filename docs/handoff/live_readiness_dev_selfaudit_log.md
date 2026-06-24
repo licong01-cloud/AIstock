@@ -1,4 +1,4 @@
-﻿# MiniQMT LIVE Readiness Dev Self-Audit Log
+# MiniQMT LIVE Readiness Dev Self-Audit Log
 
 ## BUG-501 - 2026-06-24
 
