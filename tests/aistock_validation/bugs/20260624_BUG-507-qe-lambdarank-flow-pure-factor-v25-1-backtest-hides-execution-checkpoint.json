@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
     "tests/aistock_validation/bugs/20260624_BUG-507-qe-lambdarank-flow-pure-factor-v25-1-backtest-hides-execution-checkpoint.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/p2_ltr_lambdarank_diagnostics_and_improvement_plan_20260624.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-507",
@@ -24,7 +25,10 @@
     }
   ],
   "evidence_uris": [
-    "qe_20260624_011723_6df8 Loop3 remote run.log lines around EarlyPlanNetEnhanced state_dict mismatch; design doc docs/analysis/p2_ltr_lambdarank_diagnostics_and_improvement_plan_20260624.md"
+    "qe_20260624_011723_6df8 Loop3 remote run.log lines around EarlyPlanNetEnhanced state_dict mismatch; design doc docs/analysis/p2_ltr_lambdarank_diagnostics_and_improvement_plan_20260624.md",
+    "docs/analysis/p2_ltr_lambdarank_diagnostics_and_improvement_plan_20260624.md",
+    "https://github.com/licong01-cloud/AIstock/issues/1569",
+    "https://github.com/licong01-cloud/AIstock/issues/1570"
   ],
   "expected": "QE should fail loud before or during backtest with a concrete reason_code such as execution_model_checkpoint_shape_mismatch, including node_id, workspace, execution model path, factor dimension, current model shape and checkpoint shape; compatible FLOW LambdaRank runs should either complete metrics or be rejected by preflight.",
   "first_seen_at": "2026-06-24T02:44:39.624261Z",
@@ -69,5 +73,12 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "validation_evidence": [
+    "rtk python -X utf8 -c git-diff-check-origin-main-head -> passed",
+    "rtk python -X utf8 -c json-loads-BUG-507 -> passed",
+    "changed-file RA path scan for research-assistant|assistant_|research_ -> no matches",
+    "rtk python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "rtk python scripts/issue_flow.py pr-check --base origin/main --head HEAD --enforce-p0-p1-evidence -> scope_check passed, p0p1_evidence_gate passed"
+  ]
 }
