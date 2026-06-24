@@ -1775,7 +1775,7 @@ def _account_group_cash_overcommit_error(
             "effective_account_group_cash_limit": float(effective_account_group_cash_limit),
             "batch_required_cash": float(batch_required_cash),
             "overcommit_cash": float(batch_required_cash - effective_account_group_cash_limit),
-            "risk_layer": "miniqmt_pre_trade",
+            "gate": "account_group_cash_hard_gate",
             "affected_buy_orders": [
                 {
                     "strategy_name": request.strategy_name,

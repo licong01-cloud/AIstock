@@ -8,12 +8,12 @@ QmtManagedOrderService is the compiler/B-side MiniQMT submit boundary used by ma
 
 - Add an inert-by-default miniqmt_pre_trade_risk layer in order_service.py so existing SIM behavior is unchanged unless the compiler/runtime explicitly opts in through account/request risk config.
 - Implement loud preflight errors with stable reason codes: PRE_TRADE_KILL_SWITCH_ACTIVE, PRE_TRADE_PRICE_COLLAR_REJECT, PRE_TRADE_FAT_FINGER_QUANTITY, PRE_TRADE_FAT_FINGER_NOTIONAL, PRE_TRADE_BUYING_POWER_REJECT, and PRE_TRADE_RISK_CONFIG_INVALID.
-- Keep BUG-501 ACCOUNT_GROUP_CASH_OVERCOMMIT as the account-group buying-power aggregate gate, and tag it as the same pre-trade risk layer without converting it into BUG-478 capacity-residual semantics.
+- Keep BUG-501 ACCOUNT_GROUP_CASH_OVERCOMMIT as the always-on account-group aggregate cash hard gate, independent from the BUG-500 flag-gated per-order pre-trade risk layer, and do not convert it into BUG-478 capacity-residual semantics.
 - Do not change MiniQMT LIVE locks, service/runtime state, LocalSim, or production DB/DDL.
 
 ## Acceptance Assertions
 
 - New unit tests reject collar, fat-finger, buying-power, and kill-switch cases before broker submit.
 - A disabled/default risk config stays inert and permits otherwise risk-shaped SIM test orders.
-- BUG-501 account-group overcommit tests remain green on the stacked base.
+- BUG-501 account-group overcommit tests remain green after rebase, with ACCOUNT_GROUP_CASH_OVERCOMMIT reported as the account-group hard gate rather than the flag-gated miniqmt_pre_trade layer.
 - production_ddl_gate: noop

@@ -390,6 +390,18 @@ def test_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slot
         for error in item.preflight.errors
         if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
     } == {"ag_minqmt_62266303_sim"}
+    assert {
+        error.context["gate"]
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    } == {"account_group_cash_hard_gate"}
+    assert all(
+        "risk_layer" not in error.context
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    )
 
 
 def test_submit_batch_allows_account_group_cash_fit_across_strategy_slots() -> None:
