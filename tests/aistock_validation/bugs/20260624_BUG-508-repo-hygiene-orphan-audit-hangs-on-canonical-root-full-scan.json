@@ -29,8 +29,8 @@
   "expected": "repo_hygiene_orphan_audit must complete on the canonical root within a bounded time, write only ignored tmp/validation/code-intelligence artifacts, and never scan generated/runtime directories, adjacent worktrees, .git internals, .venv/conda envs, large DB/cache/model artifacts, or untracked non-repo handoff debris unless explicitly requested. Nightly should fail with compact diagnostics if budget is exceeded rather than hanging.",
   "first_seen_at": "2026-06-24T03:10:18.088751Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "70e15f5b1a9cd3744f715e180998b1446daa511e",
+  "fixed_at": "2026-06-24T03:46:13.698733Z",
   "github_issue_number": 1571,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1571",
   "last_seen_at": "2026-06-24T03:10:18.088751Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1573",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -84,6 +85,18 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_repo_hygiene_orphan_audit.py backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/test_validation_catalog_integrity.py -q -> passed (70 passed)",
+    "python scripts/repo_hygiene_orphan_audit.py --root F:\\Dev\\AIstock --output-dir F:\\Dev\\AIstock\\tmp\\validation\\code-intelligence\\manual-repo-hygiene-BUG-508-fixed --json --max-seconds 300 -> passed (workflow_gate=ready, scan_mode=tracked, elapsed_seconds=1.636, candidate_count=1121, delete_candidate_count=9)",
+    "python -m ruff check scripts/repo_hygiene_orphan_audit.py backend/tests/scripts/test_repo_hygiene_orphan_audit.py -> passed",
+    "python -m ruff format --check scripts/repo_hygiene_orphan_audit.py backend/tests/scripts/test_repo_hygiene_orphan_audit.py -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-508 --changed-file scripts/repo_hygiene_orphan_audit.py --module validation -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_workflow_automation -> passed (281 passed)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_center_backend -> passed (458 passed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
