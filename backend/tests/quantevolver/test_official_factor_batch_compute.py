@@ -9,6 +9,7 @@ import time
 import pandas as pd
 import pytest
 
+from backend.services.quantevolver import official_factor_batch_compute_service as official_batch_svc
 from backend.services.quantevolver.backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 from backend.services.quantevolver import offline_code_text_factor_executor as executor_mod
 from backend.services.quantevolver.offline_code_text_factor_executor import FactorExecutionResult
@@ -778,7 +779,12 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
     service._universe_service = _Universe()
     service._load_factor_ids = lambda: {}
     service._resolve_qlib_bin_path = lambda qlib_bin_path: None
-    service._record_error_meta = lambda *args, **kwargs: None
+    error_meta_calls: list[tuple[object, ...]] = []
+    resource_deferred_meta_calls: list[tuple[object, ...]] = []
+    service._record_error_meta = lambda *args, **kwargs: error_meta_calls.append(args)
+    service._record_resource_deferred_meta = (
+        lambda *args, **kwargs: resource_deferred_meta_calls.append(args)
+    )
 
     compute_calls: list[list[str]] = []
 
@@ -825,11 +831,14 @@ def test_compute_aborts_remaining_batches_after_resource_gate_failure(monkeypatc
     assert result["runtime_validation"]["checks"]["resource_gate_ok"] is False
     assert result["runtime_validation"]["failure_summary"][RESOURCE_GATE_FAILED] == 4
     assert any(event["type"] == "resource_gate_abort" for event in events)
+    assert error_meta_calls == []
+    assert [call[0] for call in resource_deferred_meta_calls] == ["factor_a", "factor_b"]
 
 
 def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     from backend.services.quantevolver import official_factor_batch_compute_service as svc
     from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+    from backend.services.quantevolver import qe_eval_v2_qlib_reader as qlib_reader
 
     factors = [
         {"factor_name": "factor_a", "code_text": "result = 1"},
@@ -861,6 +870,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     service._write_single_atomic = lambda name, df: tmp_path / f"{name}.parquet"
     service._update_meta_atomic = lambda *args, **kwargs: None
     service._result_drain_chunk_size = lambda: 1
+    close_cache_clears: list[str] = []
 
     live_frames: list[str] = []
     max_live_frames = 0
@@ -908,6 +918,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(engine, "prepare_shared_context", lambda **kwargs: {"ctx": True})
     monkeypatch.setattr(engine, "compute_single_factor_metrics", _metrics)
+    monkeypatch.setattr(qlib_reader, "clear_close_cache", lambda: close_cache_clears.append("cleared"))
     service._compute_batch_frames = _compute_batch_frames
     service._drain_success_frames = _tracked_drain
     service._metric_writer = lambda: _MetricWriter()
@@ -927,6 +938,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     assert result["success_count"] == 3
     assert metric_calls == ["factor_a", "factor_b", "factor_c"]
     assert max_live_frames == 1
+    assert close_cache_clears == ["cleared"]
 
 
 def test_compute_reuses_worker_precomputed_metrics(monkeypatch, tmp_path):
@@ -1130,3 +1142,78 @@ def test_error_meta_update_does_not_blank_top_level_meta(monkeypatch, tmp_path):
     assert meta["data_start"] == "2018-08-01"
     assert meta["data_end"] == "2026-04-30"
     assert meta["factors"]["factor_bad"]["status"] == "error"
+
+
+def test_resource_gate_deferred_meta_preserves_existing_ok_meta(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    meta_path = tmp_path / "_meta.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "data_start": "2018-08-01",
+                "data_end": "2026-04-30",
+                "factors": {
+                    "factor_a": {
+                        "status": "ok",
+                        "computed_at": "2026-06-24T00:00:00+00:00",
+                        "date_range": "2018-08-01~2026-04-30",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_META_PATH", meta_path)
+    events: list[dict[str, object]] = []
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = events.append
+
+    service._record_resource_deferred_meta(
+        "factor_a",
+        "result = 1",
+        f"{RESOURCE_GATE_FAILED}: available_memory_below_minimum",
+    )
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["factors"]["factor_a"]["status"] == "ok"
+    assert "error" not in meta["factors"]["factor_a"]
+    assert events[-1]["type"] == "resource_deferred_meta_preserved"
+    assert events[-1]["previous_status"] == "ok"
+
+
+def test_worker_dataframe_spill_uses_temp_parquet_instead_of_queue_frame(tmp_path):
+    result = FactorExecutionResult(
+        factor_name="factor_a",
+        success=True,
+        dataframe=_base_df()[["close"]].rename(columns={"close": "value"}),
+    )
+
+    official_batch_svc._spill_worker_dataframe(result, "factor_a", str(tmp_path))
+
+    assert result.dataframe is None
+    frame_path = getattr(result, "dataframe_path")
+    assert os.path.exists(frame_path)
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+
+    loaded = service._consume_worker_dataframe(result)
+
+    assert loaded["value"].tolist() == [1.0, 2.0, 3.0, 4.0]
+    assert not os.path.exists(frame_path)
+
+
+def test_prepare_shared_context_does_not_retain_raw_close_df(monkeypatch):
+    from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
+
+    monkeypatch.setattr(engine, "read_close_prices", lambda *args, **kwargs: _base_df())
+
+    ctx = engine.prepare_shared_context(
+        qlib_bin_path=None,
+        start_date="2018-08-01",
+        end_date="2018-08-02",
+        load_suspend_d=False,
+        load_st_pit_mask=False,
+    )
+
+    assert "close_df" not in ctx
+    assert list(ctx["close_unstacked"].columns) == ["000001.SZ", "000002.SZ"]

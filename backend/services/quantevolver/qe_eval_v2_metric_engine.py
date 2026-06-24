@@ -659,6 +659,7 @@ def prepare_shared_context(
     logger.info(f"Close prices loaded: {len(close_df)} rows, {time.time()-t0:.1f}s")
 
     close_unstacked = close_df["close"].unstack(level="instrument")
+    del close_df
 
     fwd_ret_mats: dict[str, pd.DataFrame] = {}
     for period_name, shift_n in HOLDING_PERIODS.items():
@@ -699,7 +700,6 @@ def prepare_shared_context(
 
     return {
         "close_unstacked": close_unstacked,
-        "close_df": close_df,
         "fwd_ret_mats": fwd_ret_mats,
         "dates": dates,
         "data_start": data_start,
