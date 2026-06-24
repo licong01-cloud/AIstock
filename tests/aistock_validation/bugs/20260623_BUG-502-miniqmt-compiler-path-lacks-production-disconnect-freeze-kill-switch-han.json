@@ -5,7 +5,7 @@
   "module": "paper_v2",
   "severity": "P1",
   "risk_area": "bug",
-  "status": "validation_passed",
+  "status": "fixed",
   "description": "Compiler/MiniQMTSim path lacks production disconnect freeze, kill-switch, alert, reconnect and reconcile handling.",
   "actual": "Compiler/MiniQMTSim path lacks production disconnect freeze, kill-switch, alert, reconnect and reconcile handling.",
   "expected": "Disconnect must freeze new submits with loud reason_code and telemetry; reconnect must reconcile before recovery; no silent continuation.",
@@ -48,7 +48,7 @@
   "ui_issue": false,
   "created_at": "2026-06-23T11:41:00Z",
   "first_seen_at": "2026-06-23T11:41:00Z",
-  "last_seen_at": "2026-06-24T09:03:41Z",
+  "last_seen_at": "2026-06-24T09:47:59Z",
   "events": [
     {
       "action": "reconstructed_source_bug_json",
@@ -79,10 +79,16 @@
       "actor": "codex",
       "action": "scope_expanded_for_rebase_tier2",
       "note": "Added qmt_strategy_ledger preflight regression test to allowed_write_scope after BUG-502 was rebased onto main containing BUG-501 and BUG-500; CI PR Quality had correctly detected the missing scoped test path."
+    },
+    {
+      "timestamp": "2026-06-24T09:47:59Z",
+      "actor": "codex",
+      "action": "close_sync_after_merge",
+      "note": "Source PR #1575 squash-merged at cdd8056742cd678324ca1ee9c221da436ed2860b; BUG JSON marked fixed and GitHub Issue #1552 closed. No services started, no production DB touched, no DDL executed."
     }
   ],
   "fix_branch": "bug/BUG-502-p1-miniqmt-compiler-path-lacks-production-discon-20260624",
-  "workflow_gate": "ready_for_tier2_review",
+  "workflow_gate": "close_synced",
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1575",
   "validation_evidence": [
     "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_preflight.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (167 passed)",
@@ -91,5 +97,8 @@
     "rtk python -m nox -s l0 -> passed",
     "rtk python -m nox -s validation_module_registry_l0 -> passed",
     "rtk cmd /c set AISTOCK_HOSTED_CI=1 and set PAPER_V2_L3_SKIP_UI=1 and python -m nox -s paper_v2_l3 -> passed"
-  ]
+  ],
+  "fixed_at": "2026-06-24T09:47:59Z",
+  "fix_commit": "cdd8056742cd678324ca1ee9c221da436ed2860b",
+  "pr_number": 1575
 }
