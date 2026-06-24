@@ -34,8 +34,8 @@
   "expected": "资源门禁只应阻止后续重算，不应覆盖已有 ok 元数据；成功因子结果应尽快落盘/释放，避免父进程和 Queue 持有多份完整 DataFrame；任务结束应清理可释放的大缓存，同时保持既有 workers 并行度和计算结果一致性。",
   "first_seen_at": "2026-06-24T13:34:20.971760Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "66a2d755c7779631715bde96248769050a3b17e4",
+  "fixed_at": "2026-06-24T15:43:03.971830Z",
   "github_issue_number": 1599,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1599",
   "last_seen_at": "2026-06-24T13:34:20.971760Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1605",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "a12419a868898973344d1f96",
     "source_event_id": "FE-20260624-a12419a86889"
   },
+  "validation_evidence": [
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -> 33 passed, 1 skipped; python -m nox -s l0 -> passed; python -m nox -s validation_module_registry_l0 -> passed; QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed (UI subgate skipped: no user-owned 8011 backend); python -m nox -s qe_data_contract_backend -> passed; code_intelligence_adapter verify-clients BUG-515 quantevolver -> PASS; ruff changed Python files -> passed; git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

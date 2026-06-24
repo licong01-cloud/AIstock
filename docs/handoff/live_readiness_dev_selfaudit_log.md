@@ -23,3 +23,12 @@
 - Loud failures / reason_code: yes. Disconnect and reconnect-reconcile failures return loud reason codes, including MINIQMT_BROKER_DISCONNECTED_FREEZE and MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED; no silent fallback was introduced.
 - Allowed scope: within BUG-502 allowed_write_scope; no production service, DB, or DDL action was performed.
 - Production gates: production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop.
+
+## BUG-516 - 2026-06-24
+
+- 无 suppressions 段零变化: yes. `apply_suppressions()` returns original findings and empty `suppressed_findings` when config omits the section; regression test covers this.
+- 被抑制项留痕可见: yes. Suppressed findings are retained in payload/public JSON and markdown under `suppressed_findings`, with reason, reviewer, dismissal date, expiry, and matched index.
+- 匹配结构化: yes. Matching requires module equality plus exact finding_id or code_refs path-prefix overlap, with optional title guard; it is not finding-id-only.
+- 过期兜底: yes. Expired `expires_at` suppressions are inactive and the candidate reappears in `findings`.
+- Allowed scope: yes. Changes are limited to BUG-516 allowed_write_scope.
+- Production gates: production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop. No services were restarted and no production DB/DDL was touched.
