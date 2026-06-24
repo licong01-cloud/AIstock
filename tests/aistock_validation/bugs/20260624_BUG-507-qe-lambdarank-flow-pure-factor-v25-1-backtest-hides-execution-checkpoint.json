@@ -1,0 +1,73 @@
+{
+  "actual": "Loop3 reports failed with experiment_id=null and no metrics. Remote run.log shows RuntimeError: Error(s) in loading state_dict for EarlyPlanNetEnhanced, unexpected gap_embedding.weight, and mlp shape mismatches from checkpoint shape [128,21]/[210,*].",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "tests/aistock_validation/bugs/20260624_BUG-507-qe-lambdarank-flow-pure-factor-v25-1-backtest-hides-execution-checkpoint.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-507",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T02:44:39.624261Z",
+  "description": "Loop3 reports failed with experiment_id=null and no metrics. Remote run.log shows RuntimeError: Error(s) in loading state_dict for EarlyPlanNetEnhanced, unexpected gap_embedding.weight, and mlp shape mismatches from checkpoint shape [128,21]/[210,*].",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-d620022f4a39",
+      "timestamp": "2026-06-24T02:44:39.624258Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20260624_011723_6df8 Loop3 remote run.log lines around EarlyPlanNetEnhanced state_dict mismatch; design doc docs/analysis/p2_ltr_lambdarank_diagnostics_and_improvement_plan_20260624.md"
+  ],
+  "expected": "QE should fail loud before or during backtest with a concrete reason_code such as execution_model_checkpoint_shape_mismatch, including node_id, workspace, execution model path, factor dimension, current model shape and checkpoint shape; compatible FLOW LambdaRank runs should either complete metrics or be rejected by preflight.",
+  "first_seen_at": "2026-06-24T02:44:39.624261Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1569,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1569",
+  "last_seen_at": "2026-06-24T02:44:39.624261Z",
+  "module": "qe",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect rdagent-node1:/home/lc999/projects/RD-Agent-main/qe_workspace/qe_20260624_011723_6df8/Loop3/run.log or rerun FLOW_ACCEL 7-factor disable_alpha158=true with model_id=__seed_LambdaMART_20D__, execution_algo=V25_1_SMALL_CAP, seed=42.",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe"
+  ],
+  "title": "QE LambdaRank FLOW pure-factor V25_1 backtest hides execution checkpoint shape mismatch",
+  "trigger_condition": {
+    "fingerprint": "d620022f4a3985cdf53f2bf3",
+    "source_event_id": "FE-20260624-d620022f4a39"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
