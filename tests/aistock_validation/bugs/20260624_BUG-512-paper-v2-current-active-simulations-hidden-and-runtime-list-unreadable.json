@@ -42,8 +42,8 @@
   "expected": "The current/active simulation card must show active LocalSim/MiniQMT portfolios even when their latest session failed or is not tickable, with human-readable status such as today failed, latest session status, failure reason, trade date, broker, strategy/package name, and recovery hint. Runtime/audit tables should use human-readable business labels as primary text and keep IDs/hashes only as secondary tooltip/detail data.",
   "first_seen_at": "2026-06-24T09:07:25.779826Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "148667b421eb997ccca545a748ef8beeded48b15",
+  "fixed_at": "2026-06-24T11:06:11.138293Z",
   "github_issue_number": 1589,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1589",
   "last_seen_at": "2026-06-24T09:07:25.779826Z",
@@ -51,6 +51,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1597",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -120,6 +121,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 12 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_ops_api.py -> passed",
+    "cd frontend && rtk npm exec tsc -- --noEmit --incremental false -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk cmd /c set PAPER_V2_SKIP_REALTIME=1 && set PAPER_V2_E2E_SKIP_REALTIME=1 && set PAPER_V2_E2E_TRADE_DATE=2026-06-02 && python -m nox -s paper_v2_l3 -> 6 sessions successful; paper_v2_ui 27 passed, 1 skipped; paper_v2_backend 682 passed, 1 skipped, 2 xfailed",
+    "PR #1597 CI checks -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
