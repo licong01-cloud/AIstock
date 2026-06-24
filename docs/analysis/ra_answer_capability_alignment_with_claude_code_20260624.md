@@ -100,7 +100,21 @@ RA 当前这 4 条**都被框架接管了一部分**——下面 6 条改进就�
 
 每条任务通用要求:独立 worktree;注册 BUG + allowed_write_scope + issue;PR Closes;scope_passed 再推;窗口先打 RA chat 抓被拦/被截时的 reason_code + collected_results 取证再改;补对应单测 + 真实风格输出验收(非仅 fake LLM);nox l0 + research_assistant_backend + research_assistant_mcp_contract + ra_phase7_full_accept(隔离端口)+ ruff 绿;phase7/Playwright 用隔离端口禁复用。红线:不启停服务、不连生产 DB、不执行 DDL。
 
+### 5.1 长期记忆 + 知识图谱:不在改动面,且必须确保不回退
+**架构事实(取证 2026-06-24)**:① 知识图谱 `graph_context.expand_neighbors` = 纯 SQL 确定性图遍历(seed→邻居 bounded hops),无 embedding、无 LLM;② 长期记忆 `memory_tree`/`memory_curator` = 关键词/tree_path 规则匹配,`build_context_pack` 在 chat 前组装记忆+图谱子图注入 LLM 上下文(#1421 已证)。
+**B9 六条全在"工具选择+答案校验+提示词"层,记忆/图谱在"上下文组装+检索"层,两层不交叉**。§3.1/§3.2 反而强化图谱使用(提示词引导跨模块先查图)。
+**强制护栏(写进 T1-T5 每条)**:
+- `graph_context.py` / `memory_tree.py` / `memory_curator.py` / `build_context_pack` **不得**进任何 T1-T5 的 allowed_write_scope。
+- 验收加回归断言:跨模块问题(QE→策略包→Paper v2)仍能 seed 图谱子图进 LLM(复用 LIVE 验证);记忆注入链路不回退。
+
+### 5.2 性能:RA 比 Claude Code 慢的根因 + B9 顺带提速
+**根因(取证 react_grounding.py:1342)**:`for iteration in range(1, max_tool_iterations+1): turn = model_complete(...)` —— ReAct 循环**每轮串行调一次 LLM**,深度问题 max_tool_iterations=10 → 最坏 10 次串行往返;且 guard 打回(citation_failure 等)触发 `_evidence_guard_retry_directive` 让 LLM **重生成**=额外往返。**非 DeepSeek 单次慢,是框架强制的多轮串行 + guard 打回重试。** build_context_pack(记忆/图谱)是 SQL,占比小。
+**B9 顺带治慢**:§3.4 模型自决停止→不跑满10轮;§3.3 guard 退回事实警察→减误杀打回;§3.1/§3.2 模型一轮规划多工具→减轮数。
+**额外提速 follow-up(T6,可选,本纲领后)**:① 并行工具调用——一轮内多个只读工具并行调而非串行(Claude Code 即如此,单点最大提速);② guard 改"先校验缺什么一次性补"而非"打回整段重生成"。
+
 ## 6. 验收(纲领级,防回退到框架主导/闸门误杀)
+
+0. **记忆/图谱不回退**:跨模块问题仍 seed 图谱子图进 LLM 上下文;长期记忆注入链路正常(见 §5.1)。
 
 1. **自主多工具**:个股全方位问题 → 模型自选并调齐多个只读工具(行情/历史≥60日/资金流/基本面/技术/联网),非框架钉死、非只调一两个。
 2. **事实型不误杀**:QE "前 10 loop 收益+模型" 类查询 → 正常返回结构化清单 + 每行来源/日期 + not_verified 风险标注,**不再被 guard 拦死**。
