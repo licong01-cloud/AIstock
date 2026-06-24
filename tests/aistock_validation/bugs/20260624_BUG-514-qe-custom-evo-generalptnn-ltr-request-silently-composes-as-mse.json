@@ -2,6 +2,7 @@
   "actual": "Requests in custom_params and model_params both compose to qlib.contrib.model.pytorch_general_nn.GeneralPTNN loss=mse with no ltr_loss_mode/topk_train_k; training log reports loss_type mse and metrics match MSE baseline.",
   "allowed_write_scope": [
     "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260624_BUG-514-qe-custom-evo-generalptnn-ltr-request-silently-composes-as-mse.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -22,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260624-87d054da3daa",
       "timestamp": "2026-06-24T09:50:13.990701Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Scope expanded during fix: root cause is Path 4 build_config_from_custom_evo_loop dropping loop_config.model_params before ConfigComposer.",
+      "timestamp": "2026-06-24T10:00:00Z"
     }
   ],
   "evidence_uris": [

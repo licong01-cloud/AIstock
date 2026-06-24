@@ -423,6 +423,14 @@ def _slice_yaml_between(yaml_text: str, start_marker: str, end_marker: str) -> s
     return yaml_text[start:end]
 
 
+def _parse_conf_yaml_with_jinja_placeholders(yaml_text: str):
+    rendered_for_assert = (
+        yaml_text.replace("{{ num_features }}", "44")
+        .replace("{{ num_timesteps }}", "20")
+    )
+    return yaml.safe_load(rendered_for_assert)
+
+
 def test_v25_execution_algo_generates_v25_inner_strategy():
     yaml_text = _base_yaml(
         execution_algo="V25_TWO_STAGE",
@@ -877,6 +885,100 @@ def test_custom_evo_builder_accepts_persisted_factor_list():
     assert cfg.backtest_only is True
     assert cfg.model_source_task_id == "qe_source"
     assert cfg.model_source_loop_index == 26
+
+
+def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypatch):
+    composer = ConfigComposer()
+    monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        composer,
+        "_get_model_info",
+        lambda *_args, **_kwargs: _custom_timeseries_lstm_model_info(),
+    )
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+
+    cfg = build_config_from_custom_evo_loop(
+        {
+            "factor_list": ["alpha_a"],
+            "model_id": "__seed_LSTM_10D_hs64_d02__",
+            "strategy_id": "score_weighted_topk_v2",
+            "data_split": DATA_SPLIT,
+            "label_horizon": 20,
+            "runtime_flags": {"random_seed": 42},
+            "model_params": {
+                "ltr_loss_mode": "approx_ndcg_at_k",
+                "topk_train_k": 25,
+                "ltr_temperature": 0.8,
+            },
+        },
+        {},
+        experiment_name="custom-evo-ltr",
+    )
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=cfg.factor_names,
+        model_id=cfg.model_id,
+        strategy_id=cfg.strategy_id,
+        data_split=cfg.data_split,
+        custom_params=cfg.build_custom_params(),
+        experiment_name=cfg.experiment_name,
+        skip_db_save=True,
+        execution_algo=cfg.execution_algo,
+        execution_algo_params=cfg.execution_algo_params,
+        strategy_params=cfg.build_strategy_params(),
+        node_id=cfg.node_id,
+        callback_url="http://127.0.0.1:8001",
+        task_id="qe_custom_ltr",
+        loop_index=1,
+    )
+
+    yaml_text = result["experiment_files"]["conf.yaml"]
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+    model_cfg = parsed["task"]["model"]
+    model_kwargs = model_cfg["kwargs"]
+    assert model_cfg["class"] == "AIStockGeneralPTNNLTR"
+    assert model_cfg["module_path"] == "aistock_models.general_ptnn_ltr"
+    assert model_kwargs["loss"] == "approx_ndcg_at_k"
+    assert model_kwargs["ltr_loss_mode"] == "approx_ndcg_at_k"
+    assert model_kwargs["topk_train_k"] == 25
+    assert model_kwargs["ltr_temperature"] == 0.8
+    assert "aistock_models/general_ptnn_ltr.py" in result["experiment_files"]
+    strategy_kwargs = parsed["port_analysis_config"]["strategy"]["kwargs"]
+    assert "ltr_loss_mode" not in strategy_kwargs
+    assert "topk_train_k" not in strategy_kwargs
+
+
+@pytest.mark.parametrize(
+    "bad_patch",
+    [
+        {"custom_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
+        {"ltr_loss_mode": "approx_ndcg_at_k"},
+        {"strategy_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
+    ],
+)
+def test_custom_evo_general_ptnn_ltr_misplaced_request_fails_loud(bad_patch):
+    loop = {
+        "factor_list": ["alpha_a"],
+        "model_id": "__seed_LSTM_10D_hs64_d02__",
+        "strategy_id": "score_weighted_topk_v2",
+        "data_split": DATA_SPLIT,
+        "label_horizon": 20,
+    }
+    loop.update(bad_patch)
+
+    with pytest.raises(ValueError, match="reason_code=ltr_loss_mode_injection_failed"):
+        build_config_from_custom_evo_loop(loop, {"node_id": "wsl2-5080"}, experiment_name="bad-ltr")
 
 
 def test_qe_loop_retry_mode_normalization():
@@ -1374,6 +1476,19 @@ def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
     assert "topk_train_k" not in strategy_section
 
 
+def test_general_ptnn_ltr_loss_alias_selects_adapter():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={"loss": "approx_ndcg_at_k", "topk_train_k": 25},
+    )
+
+    assert "class: AIStockGeneralPTNNLTR" in yaml_text
+    assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
+    assert "loss: approx_ndcg_at_k" in yaml_text
+    strategy_section = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
+    assert "loss: approx_ndcg_at_k" not in strategy_section
+
+
 def test_general_ptnn_ltr_invalid_config_fails_fast():
     with pytest.raises(ValueError, match="general_ptnn_ltr_invalid_loss_mode"):
         _base_yaml(
@@ -1390,6 +1505,18 @@ def test_general_ptnn_ltr_invalid_config_fails_fast():
     with pytest.raises(ValueError, match="general_ptnn_ltr_requires_timeseries_dataset"):
         _base_yaml(
             model_info={**_custom_timeseries_lstm_model_info(), "model_type": "Tabular"},
+            custom_params={"ltr_loss_mode": "approx_ndcg_at_k"},
+        )
+
+
+def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse():
+    with pytest.raises(ValueError, match="reason_code=ltr_loss_mode_injection_failed"):
+        _base_yaml(
+            model_info={
+                "model_id": "lgbm",
+                "model_name": "lgbm",
+                "model_type": "LGBM",
+            },
             custom_params={"ltr_loss_mode": "approx_ndcg_at_k"},
         )
 
