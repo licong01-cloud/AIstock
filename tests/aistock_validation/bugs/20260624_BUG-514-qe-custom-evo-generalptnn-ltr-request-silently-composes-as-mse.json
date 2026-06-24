@@ -37,8 +37,8 @@
   "expected": "custom_evo loop can explicitly pass ltr_loss_mode=approx_ndcg_at_k through compose so conf.yaml routes to aistock_models.general_ptnn_ltr.AIStockGeneralPTNNLTR with LTR params, or fails loud with reason_code=ltr_loss_mode_injection_failed.",
   "first_seen_at": "2026-06-24T09:50:13.990705Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "81473947bc1070aca154950788ba1fc757c8cea1",
+  "fixed_at": "2026-06-24T13:34:53.972082Z",
   "github_issue_number": 1593,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1593",
   "last_seen_at": "2026-06-24T09:50:13.990705Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1596",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -66,6 +67,12 @@
     "fingerprint": "87d054da3daaafe61a7bc441",
     "source_event_id": "FE-20260624-87d054da3daa"
   },
+  "validation_evidence": [
+    "rtk conda run -n AIstock python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -q -> 79 passed",
+    "rtk conda run -n AIstock python -m nox -s l0 -> successful",
+    "rtk conda run -n AIstock python -m nox -s validation_module_registry_l0 -> successful",
+    "rtk cmd /c set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& set QE_READ_L3_SKIP_UI=1&& conda run -n AIstock python -m nox -s qe_read_l3 -> successful"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
