@@ -179,7 +179,9 @@ test.beforeEach(async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("request", (request) => {
     const url = request.url();
-    if (url.includes(":8001") || url.includes(":3000") || url.includes(":19080")) forbiddenRequests.push(url);
+    const path = new URL(url).pathname;
+    const isMockedAlertRequest = path.startsWith("/api/ingestion/alerts/");
+    if (!isMockedAlertRequest && (url.includes(":8001") || url.includes(":3000") || url.includes(":19080"))) forbiddenRequests.push(url);
   });
 
   await page.route("**/api/v1/research-assistant/**", async (route) => {
@@ -258,7 +260,7 @@ test("Phase 7 memory tree renders project and personal branches with context pac
 });
 
 test("Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, and approval blockers", async ({ page }) => {
-  await page.goto("/research-assistant/tasks");
+  await page.goto("/research-assistant/audit?tab=tasks");
 
   await expect(page.getByTestId("ra-agent-teams-view")).toBeVisible();
   await expect(page.getByTestId("ra-agent-teams-view")).toContainText("2 workers");
@@ -272,7 +274,7 @@ test("Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, an
 });
 
 test("Phase 7 Trace page carries worker process instead of hiding failures", async ({ page }) => {
-  await page.goto("/research-assistant/trace");
+  await page.goto("/research-assistant/audit?tab=trace");
 
   await expect(page.getByTestId("ra-agent-teams-view")).toBeVisible();
   await expect(page.getByTestId("ra-agent-teams-view")).toContainText("risk_worker:approval_required");

@@ -506,5 +506,30 @@ test("Research Assistant retired workbench redirects to the single chat entry", 
   await expect(nav.locator('a[href="/research-assistant"]')).toHaveCount(0);
   await expect(nav.locator('a[href="/research-assistant/workbench"]')).toHaveCount(0);
   await expect(nav.getByRole("link", { name: "工作台" })).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/audit"]')).toHaveCount(1);
+  await expect(nav.locator('a[href="/research-assistant/tasks"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/trace"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/agent-runs"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/external-agents"]')).toHaveCount(0);
   await expect(browserPage.locator("body")).not.toContainText("本地数据 MCP 工作台");
+});
+
+test("Research Assistant audit legacy routes redirect to the consolidated audit tabs", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: page([]) }) });
+  });
+
+  const cases = [
+    ["/research-assistant/tasks", "tasks", "Task Ledger"],
+    ["/research-assistant/trace", "trace", "Trace Events"],
+    ["/research-assistant/agent-runs", "agent-runs", "Agent 运行审计"],
+    ["/research-assistant/external-agents", "external-agents", "External Agent Connector"],
+  ] as const;
+
+  for (const [legacyPath, tab, expectedText] of cases) {
+    await browserPage.goto(legacyPath);
+    await expect(browserPage).toHaveURL(new RegExp(`/research-assistant/audit\\?tab=${tab}$`));
+    await expect(browserPage.getByRole("heading", { name: "研究助理审计" })).toBeVisible();
+    await expect(browserPage.getByText(expectedText).first()).toBeVisible();
+  }
 });
