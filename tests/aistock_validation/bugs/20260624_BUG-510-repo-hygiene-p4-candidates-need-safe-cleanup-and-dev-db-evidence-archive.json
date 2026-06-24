@@ -2,7 +2,17 @@
   "actual": "The repo hygiene orphan audit identified nine P4/delete candidates. After manual triage, four are low-risk tracked runtime/dependency residue that can be deleted, two dev DB apply evidence files should be archived instead of deleted, and factor-data/factors_ui candidates should remain for a separate domain-specific review. This cleanup must happen in an isolated worktree and must not touch production runtime, DB, or unrelated modules.\n\nLow-risk delete candidates:\n- backend/requirements.torch.txt\n- log/2026-02-05_15-09-16-645141/LITELLM_SETTINGS/52996/2026-02-05_15-09-32-957955.pkl\n- log/2026-02-05_15-12-21-893866/LITELLM_SETTINGS/52712/2026-02-05_15-12-34-026809.pkl\n- monitoring/textfile_collector/task_verify.txt\n\nArchive candidates:\n- scripts/dev_db/phase2_pre_apply_baseline_20260510.txt\n- scripts/dev_db/phase2_post_apply_validation_20260510.txt\n\nDo not delete in this BUG:\n- git_ignore_folder/factor_implementation_source_data_test/*\n- factors_ui/instrument_format_analysis.json",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260624_BUG-510-repo-hygiene-p4-candidates-need-safe-cleanup-and-dev-db-evidence-archive.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/requirements.torch.txt",
+    "log/2026-02-05_15-09-16-645141/LITELLM_SETTINGS/52996/2026-02-05_15-09-32-957955.pkl",
+    "log/2026-02-05_15-12-21-893866/LITELLM_SETTINGS/52712/2026-02-05_15-12-34-026809.pkl",
+    "monitoring/textfile_collector/task_verify.txt",
+    "scripts/dev_db/phase2_pre_apply_baseline_20260510.txt",
+    "scripts/dev_db/phase2_post_apply_validation_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_phase2_pre_apply_baseline_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_phase2_post_apply_validation_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_p4_cleanup_manifest_20260624.md",
+    ".gitignore"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-510",
