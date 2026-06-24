@@ -467,7 +467,22 @@ python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1
 - 例外条件：用户明确要求暂不提交、暂不合入、保留在独立分支，或设计文档绑定未完成代码实现且存在生产风险。例外必须在最终报告中说明。
 - 边界：本规则只覆盖文档/设计交付。运行时代码、DB migration、调度器、生产数据修复、策略资产修改仍必须走独立开发分支、自动化流水线、用户确认后再合入 Main。
 
-### 15.5 覆盖率目标
+
+<a id="rule-feature-workflow-001"></a>
+### 15.5 [FEATURE-WORKFLOW-001] 新功能设计驱动开发流程
+
+- 严重等级：P1。
+- 适用范围：新增用户可见能力、跨模块能力、架构/流水线能力、生产运行路径、DB/API/UI/MCP 契约变化，以及用户明确要求按设计方案执行的功能开发。不替代 BUG 流程；BUG 修复继续使用 issue workflow。
+- 分级执行：`F0` 为低风险小功能或文档/流程补强，可使用轻量 Feature Card；`F1` 为标准单模块功能，必须有标准设计文档；`F2` 为跨模块、高风险或生产关键功能，必须有完整架构设计、契约、发布/回滚和验收方案。
+- 设计位置：F0 可在 `docs/analysis/`、`docs/handoff/` 或 PR body 中保留轻量 Feature Card；F1/F2 必须在 `docs/architecture/` 或任务明确批准的项目文档目录中提交设计文档，且不得放入根目录或临时输出目录。
+- 设计验收索引：所有 F0/F1/F2 都必须列出稳定编号的 `Design Acceptance Index`（如 `F-001`），后续实现、测试、PR 和最终汇报只引用编号，避免反复注入全文导致 token 浪费。
+- 设计验收矩阵：合入前必须逐项给出 `design_item`、`implementation_refs`、`test_or_evidence`、`status`、`gap_or_exception`。未获用户明确批准的 `partial`、`todo`、`gap`、`blocked`、`后续补齐` 不得请求合入。
+- 禁止开发漂移：不得把简化版、POC、mock-only、静态成功、无真实 API/DB/UI 路径、静默兜底或“文档对齐现实”描述为完成。发现设计不可实现时必须停止并请求用户确认范围调整。
+- 轻量化原则：不得为 F0/F1 强制建立复杂注册表、长 JSON、全量代码扫描或重复重跑昂贵验证；优先使用设计验收索引、变更文件 lint、目标测试、`git diff --check`、必要 nox session 和最小充分证据。
+- 合入规则：F1/F2 PR 必须在正文或提交证据中包含设计路径、验收矩阵摘要、验证命令、生产门禁；CI 通过不等于设计验收通过。若存在生产 DDL 或依赖变化，按生产门禁执行。
+- CLI 辅助：`scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` 可用于合入前检查必需章节、验收矩阵、未批准缺口和简化交付措辞；该工具只输出紧凑摘要，失败时输出可操作 finding。
+
+### 15.6 覆盖率目标
 
 - 新增/修改 Python 代码 line coverage 目标 >= 80%。
 - 新增/修改 Python 代码 branch coverage 目标 >= 70%。
