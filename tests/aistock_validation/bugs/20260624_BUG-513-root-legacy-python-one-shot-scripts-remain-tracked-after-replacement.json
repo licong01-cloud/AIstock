@@ -1,112 +1,118 @@
-﻿{
-    "actual":  "Root-level tracked Python one-shot scripts such as create_tables.py, run_migration.py, and export_index_tdx_to_qlib_bin.py are historical entrypoints already identified by legacy inventory as deprecated/delete-candidate. They increase root clutter and may confuse Codex/Claude scans. First cleanup should only remove confirmed low-risk one-shot legacy scripts that have no current runtime imports, while preserving active root modules still imported by routers/services. Acceptance: remove or archive only the safe first batch, keep root/main clean, no production runtime/DB touch, run targeted import/static validation and root legacy inventory check. Scoped reference checks found only legacy inventory/dead-code docs and this BUG record for the first-batch files; active root modules imported by routers/services were left untouched.",
-    "allowed_write_scope":  [
-                                "tests/aistock_validation/bugs/20260624_BUG-513-root-legacy-python-one-shot-scripts-remain-tracked-after-replacement.json",
-                                "tests/aistock_validation/bugs/.bug_id_allocator.json",
-                                "create_tables.py",
-                                "run_migration.py",
-                                "export_index_tdx_to_qlib_bin.py",
-                                "docs/analysis/aistock_legacy_inventory_baseline_20260504.md"
-                            ],
-    "assigned_agent":  null,
-    "bug_id":  "BUG-513",
-    "closed_at":  null,
-    "closure_requirements":  [
-                                 "Fix the observed behavior.",
-                                 "Run required verification plans.",
-                                 "Keep BUG JSON and GitHub Issue synchronized."
-                             ],
-    "created_at":  "2026-06-24T09:36:11.837697Z",
-    "description":  "Root-level tracked Python one-shot scripts such as create_tables.py, run_migration.py, and export_index_tdx_to_qlib_bin.py are historical entrypoints already identified by legacy inventory as deprecated/delete-candidate. They increase root clutter and may confuse Codex/Claude scans. First cleanup should only remove confirmed low-risk one-shot legacy scripts that have no current runtime imports, while preserving active root modules still imported by routers/services. Acceptance: remove or archive only the safe first batch, keep root/main clean, no production runtime/DB touch, run targeted import/static validation and root legacy inventory check.",
-    "events":  [
-                   {
-                       "action":  "promote_candidate_to_bug",
-                       "actor":  "issue_flow",
-                       "note":  "Promoted from IC-20260624-81e08388000a",
-                       "timestamp":  "2026-06-24T09:36:11.837692Z"
-                   }
-               ],
-    "evidence_uris":  [
-                          "docs/analysis/aistock_legacy_inventory_baseline_20260504.md",
-                          "create_tables.py removed: root one-shot catalog DDL helper, no runtime imports found",
-                          "run_migration.py removed: root one-shot rdagent candidate migration helper, no runtime imports found",
-                          "export_index_tdx_to_qlib_bin.py removed: root one-shot index export helper, no runtime imports found"
-                      ],
-    "expected":  "Confirmed low-risk tracked root one-shot legacy scripts are removed or formally archived while active root modules still imported by routers/services remain untouched.",
-    "first_seen_at":  "2026-06-24T09:36:11.837697Z",
-    "fix_branch":  null,
-    "fix_commit":  null,
-    "fixed_at":  null,
-    "github_issue_number":  1590,
-    "github_issue_url":  "https://github.com/licong01-cloud/AIstock/issues/1590",
-    "last_seen_at":  "2026-06-24T09:36:11.837697Z",
-    "module":  "validation",
-    "non_goals":  [
-                      "Do not restart production runtime services without explicit approval."
-                  ],
-    "production_backend_dependency_gate":  "noop",
-    "production_ddl_gate":  "noop",
-    "production_frontend_dependency_gate":  "noop",
-    "reproduce_command":  "Read docs/analysis/aistock_legacy_inventory_baseline_20260504.md and run scoped references for create_tables.py, run_migration.py, export_index_tdx_to_qlib_bin.py; these root scripts are historical one-shot entries and should not stay in active root if no current runtime imports exist.",
-    "required_verification":  [
-                                  "l0",
-                                  "validation_center_backend",
-                                  "validation_module_registry_l0"
-                              ],
-    "risk_area":  "bug",
-    "schema_version":  "aistock_validation_bug_v1",
-    "severity":  "P2",
-    "status":  "open",
-    "suspected_modules":  [
-                              "validation"
-                          ],
-    "title":  "Root legacy Python one-shot scripts remain tracked after replacement",
-    "trigger_condition":  {
-                              "fingerprint":  "81e08388000a861ec9e775a4",
-                              "source_event_id":  "FE-20260624-81e08388000a"
-                          },
-    "ui_intake_hints":  {
-                            "labels":  [
-                                           "bug",
-                                           "ui",
-                                           "module:validation",
-                                           "type:bug"
-                                       ],
-                            "recommended_verification":  [
-                                                             "l0"
-                                                         ],
-                            "reproduce_required":  true,
-                            "reproduce_template":  [
-                                                       "Open the affected AIstock page/route.",
-                                                       "Perform the visible user action that currently fails or looks wrong.",
-                                                       "Verify the expected visible state, table, dialog, or form behavior."
-                                                   ],
-                            "schema_version":  "aistock_ui_issue_intake_hints_v1",
-                            "scope_source":  "inferred_from_module_route_and_changed_files",
-                            "ui_component_scope":  [
-
-                                                   ],
-                            "ui_issue":  true,
-                            "ui_route":  "/delete-candidate",
-                            "ui_routes":  [
-                                              "/delete-candidate"
-                                          ],
-                            "visual_acceptance_required":  true
-                        },
-    "verification_run_id":  null,
-    "workflow_efficiency_recommendations":  {
-                                                "batch_candidate":  true,
-                                                "compact_success_output":  true,
-                                                "docs_only_merge_with_related_code":  true,
-                                                "full_json_on_failure_only":  true,
-                                                "recommendations":  [
-                                                                        "Use compact success output; request full JSON only for failures or diagnostics.",
-                                                                        "Run targeted validation first, then final gates once the patch is stable.",
-                                                                        "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
-                                                                        "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
-                                                                        "Keep validation_center_backend only when the changed files actually affect Validation Center."
-                                                                    ],
-                                                "schema_version":  "aistock_workflow_efficiency_recommendations_v1"
-                                            },
-    "workflow_gate":  "open"
+{
+  "actual": "Root-level tracked Python one-shot scripts such as create_tables.py, run_migration.py, and export_index_tdx_to_qlib_bin.py are historical entrypoints already identified by legacy inventory as deprecated/delete-candidate. They increase root clutter and may confuse Codex/Claude scans. First cleanup should only remove confirmed low-risk one-shot legacy scripts that have no current runtime imports, while preserving active root modules still imported by routers/services. Acceptance: remove or archive only the safe first batch, keep root/main clean, no production runtime/DB touch, run targeted import/static validation and root legacy inventory check. Scoped reference checks found only legacy inventory/dead-code docs and this BUG record for the first-batch files; active root modules imported by routers/services were left untouched.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260624_BUG-513-root-legacy-python-one-shot-scripts-remain-tracked-after-replacement.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "create_tables.py",
+    "run_migration.py",
+    "export_index_tdx_to_qlib_bin.py",
+    "docs/analysis/aistock_legacy_inventory_baseline_20260504.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-513",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T09:36:11.837697Z",
+  "description": "Root-level tracked Python one-shot scripts such as create_tables.py, run_migration.py, and export_index_tdx_to_qlib_bin.py are historical entrypoints already identified by legacy inventory as deprecated/delete-candidate. They increase root clutter and may confuse Codex/Claude scans. First cleanup should only remove confirmed low-risk one-shot legacy scripts that have no current runtime imports, while preserving active root modules still imported by routers/services. Acceptance: remove or archive only the safe first batch, keep root/main clean, no production runtime/DB touch, run targeted import/static validation and root legacy inventory check.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-81e08388000a",
+      "timestamp": "2026-06-24T09:36:11.837692Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/aistock_legacy_inventory_baseline_20260504.md",
+    "create_tables.py removed: root one-shot catalog DDL helper, no runtime imports found",
+    "run_migration.py removed: root one-shot rdagent candidate migration helper, no runtime imports found",
+    "export_index_tdx_to_qlib_bin.py removed: root one-shot index export helper, no runtime imports found"
+  ],
+  "expected": "Confirmed low-risk tracked root one-shot legacy scripts are removed or formally archived while active root modules still imported by routers/services remain untouched.",
+  "first_seen_at": "2026-06-24T09:36:11.837697Z",
+  "fix_branch": null,
+  "fix_commit": "bdab3f3564032f2261bd20cb773872cfa92b62b1",
+  "fixed_at": "2026-06-24T09:58:29.730181Z",
+  "github_issue_number": 1590,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1590",
+  "last_seen_at": "2026-06-24T09:36:11.837697Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1591",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read docs/analysis/aistock_legacy_inventory_baseline_20260504.md and run scoped references for create_tables.py, run_migration.py, export_index_tdx_to_qlib_bin.py; these root scripts are historical one-shot entries and should not stay in active root if no current runtime imports exist.",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Root legacy Python one-shot scripts remain tracked after replacement",
+  "trigger_condition": {
+    "fingerprint": "81e08388000a861ec9e775a4",
+    "source_event_id": "FE-20260624-81e08388000a"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/delete-candidate",
+    "ui_routes": [
+      "/delete-candidate"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_center_backend -> passed (458 passed)",
+    "GitHub PR checks -> passed (17/17)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "open"
 }
