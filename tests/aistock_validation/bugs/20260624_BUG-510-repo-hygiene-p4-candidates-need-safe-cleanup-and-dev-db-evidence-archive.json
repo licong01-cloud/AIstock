@@ -36,8 +36,8 @@
   "expected": "Low-risk residue files are removed from git, dev DB evidence is moved to a durable archive path with a short manifest, and the factor-data/factors_ui candidates are left untouched with their timestamps reported for later review. Validation stays lightweight: reference check, git diff --check, guardrail_changed_files, and targeted audit rerun.",
   "first_seen_at": "2026-06-24T06:30:10.716368Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1e36588f7ee68a70b14096305ebf810696e2756",
+  "fixed_at": "2026-06-24T06:46:51.523790Z",
   "github_issue_number": 1580,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1580",
   "last_seen_at": "2026-06-24T06:30:10.716368Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1581",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -91,6 +92,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "rg reference checks for deleted/archived paths -> passed (0 refs outside BUG-510 manifest)",
+    "git diff --cached --check -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python scripts/repo_hygiene_orphan_audit.py --root <worktree> --output-dir tmp/validation/code-intelligence/BUG-510-after-cleanup --json --max-seconds 300 -> passed (P4 delete_candidate_count=3)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
