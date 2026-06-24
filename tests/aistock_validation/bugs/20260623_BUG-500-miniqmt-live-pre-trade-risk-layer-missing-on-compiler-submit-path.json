@@ -70,6 +70,12 @@
       "actor": "codex",
       "note": "Rebased BUG-500 branch on origin/main after BUG-501 merge; skipped duplicate BUG-501 commits and kept ACCOUNT_GROUP_CASH_OVERCOMMIT as always-on account_group_cash_hard_gate distinct from flag-gated miniqmt_pre_trade risk layer. Supersedes closed PR #1566.",
       "timestamp": "2026-06-24T06:39:00Z"
+    },
+    {
+      "action": "pr_reopened_on_main",
+      "actor": "codex",
+      "note": "Opened PR #1582 against main after PR #1566 was auto-closed by source base branch deletion; supersedes #1566.",
+      "timestamp": "2026-06-24T06:45:00Z"
     }
   ],
   "fix_branch": "bug/BUG-500-p0-miniqmt-live-pre-trade-risk-layer-missing-on-20260624",
@@ -100,8 +106,8 @@
       "result": "passed"
     }
   ],
-  "pr_url": "pending_new_pr_after_rebase_on_main",
-  "pr_number": null,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1582",
+  "pr_number": 1582,
   "supersedes_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1566",
   "supersedes_pr_number": 1566
 }
