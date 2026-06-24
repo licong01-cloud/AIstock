@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-509",
-  "closed_at": null,
+  "closed_at": "2026-06-24T14:04:15Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -33,6 +33,12 @@
       "actor": "codex",
       "note": "Implemented deterministic stock-depth evidence coverage: full stock_analysis data surface plus external web seed, >=60 trading-day kline args, max_tool_iterations=10, stock-depth grounding coverage guard, and real-model smoke assertions. Validation passed: targeted pytest 25 passed; nox l0 passed; research_assistant_backend 338 passed; research_assistant_mcp_contract 38 passed; ra_phase7_full_accept passed; ra_phase0_baseline 338 passed; ra_phase5_agent_teams 13 passed; validation_module_registry_l0 8 passed; ruff/diff-check passed. Real-model smoke loud-skipped because DEEPSEEK_API_KEY missing (fake_pass=false). No services/production DB/DDL touched.",
       "timestamp": "2026-06-24T09:43:12.771149Z"
+    },
+    {
+      "action": "final_close_sync_metadata",
+      "actor": "codex",
+      "timestamp": "2026-06-24T14:04:15Z",
+      "note": "replacement PR #1602 merged for closed stacked PR #1595; close-sync PR #1603 merged; Issue #1577 closed with status:fixed"
     }
   ],
   "evidence_uris": [],
@@ -64,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
