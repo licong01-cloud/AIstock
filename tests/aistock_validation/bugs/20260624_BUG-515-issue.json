@@ -1,0 +1,78 @@
+{
+  "actual": "内存低于阈值时触发 memory_gate_failed: available_memory_below_minimum，并把若干因子 _meta.json 标为 error；官方缓存统计因此把有效启用因子从 575 降为 570。代码审计还发现父进程批内保留多个成功 DataFrame、Queue 跨进程复制完整 DataFrame、metrics_ctx 保留未使用 close_df。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/services/quantevolver/qe_eval_v2_qlib_reader.py",
+    "backend/services/quantevolver/backtest_base_data_memory_cache.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
+    "tests/aistock_validation/bugs/20260624_BUG-515-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-515",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T13:34:20.971760Z",
+  "description": "内存低于阈值时触发 memory_gate_failed: available_memory_below_minimum，并把若干因子 _meta.json 标为 error；官方缓存统计因此把有效启用因子从 575 降为 570。代码审计还发现父进程批内保留多个成功 DataFrame、Queue 跨进程复制完整 DataFrame、metrics_ctx 保留未使用 close_df。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-a12419a86889",
+      "timestamp": "2026-06-24T13:34:20.971756Z"
+    }
+  ],
+  "evidence_uris": [
+    "本地审计：official_factor_batch_compute_service.py pending_success_frames/Queue/resource gate；qe_eval_v2_metric_engine.py prepare_shared_context close_df"
+  ],
+  "expected": "资源门禁只应阻止后续重算，不应覆盖已有 ok 元数据；成功因子结果应尽快落盘/释放，避免父进程和 Queue 持有多份完整 DataFrame；任务结束应清理可释放的大缓存，同时保持既有 workers 并行度和计算结果一致性。",
+  "first_seen_at": "2026-06-24T13:34:20.971760Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1599,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1599",
+  "last_seen_at": "2026-06-24T13:34:20.971760Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "运行官方因子全量计算，观察 runtime_validation.resource_failures / memory_samples 以及 rdagent_assets/factor_values/_meta.json 是否出现 memory_gate_failed status=error",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方因子全量计算内存峰值过高且资源门禁会污染缓存元数据",
+  "trigger_condition": {
+    "fingerprint": "a12419a868898973344d1f96",
+    "source_event_id": "FE-20260624-a12419a86889"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

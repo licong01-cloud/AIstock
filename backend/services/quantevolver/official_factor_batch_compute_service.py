@@ -7,6 +7,8 @@ import json
 import multiprocessing
 import os
 import queue
+import shutil
+import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -342,10 +344,31 @@ class OfficialFactorBatchComputeService:
                         "error_type": "unexpected_execution_result",
                     })
                     return
+                spill_error = getattr(exec_result, "worker_dataframe_spill_error", None)
+                if spill_error:
+                    self._emit(
+                        "worker_dataframe_spill_fallback",
+                        task_id=task_id,
+                        batch_id=batch_id,
+                        factor_name=name,
+                        error=spill_error,
+                    )
+                if exec_result.success and exec_result.dataframe is None and getattr(exec_result, "dataframe_path", None):
+                    try:
+                        exec_result.dataframe = self._consume_worker_dataframe(exec_result)
+                    except Exception as exc:
+                        exec_result = FactorExecutionResult(
+                            factor_name=name,
+                            success=False,
+                            elapsed_sec=exec_result.elapsed_sec,
+                            error=f"{type(exc).__name__}: {exc}",
+                            error_type="factor_worker_dataframe_load_failed",
+                        )
                 if not exec_result.success or exec_result.dataframe is None:
                     fail_count += 1
                     err = exec_result.error or "unknown"
-                    if exec_result.error_type == RESOURCE_GATE_FAILED and not batch_resource_failure_recorded:
+                    resource_gate_failed = exec_result.error_type == RESOURCE_GATE_FAILED
+                    if resource_gate_failed and not batch_resource_failure_recorded:
                         resource_failures.append({
                             "phase": "during_batch",
                             "task_id": task_id,
@@ -366,7 +389,10 @@ class OfficialFactorBatchComputeService:
                         "error": err,
                         "error_type": exec_result.error_type or "unknown",
                     })
-                    self._record_error_meta(name, row.get("code_text"), err)
+                    if resource_gate_failed:
+                        self._record_resource_deferred_meta(name, row.get("code_text"), err)
+                    else:
+                        self._record_error_meta(name, row.get("code_text"), err)
                     return
                 df = exec_result.dataframe.reindex(eligible_index)
                 exec_result.dataframe = None
@@ -455,6 +481,12 @@ class OfficialFactorBatchComputeService:
                             path=str(path),
                             error=str(unlink_exc),
                         )
+                pending_success_frames.clear()
+                pending_success_meta.clear()
+                FactorValueLoader.invalidate_single_cache()
+                self._clear_metric_reader_caches(task_id=task_id)
+                self._active_meta_context = None
+                gc.collect()
                 raise
 
             FactorValueLoader.invalidate_single_cache()
@@ -508,6 +540,7 @@ class OfficialFactorBatchComputeService:
 
         if metrics_ctx is not None:
             del metrics_ctx
+        self._clear_metric_reader_caches(task_id=task_id)
         del base_cache
         self._active_meta_context = None
         gc.collect()
@@ -665,7 +698,7 @@ class OfficialFactorBatchComputeService:
             batch_id=batch_id,
         )
         success_delta = 0
-        for frame in list(frames):
+        for frame_index, frame in enumerate(frames):
             if len(frame) == 2:
                 name, df = frame  # type: ignore[misc]
                 metric_result = None
@@ -730,6 +763,8 @@ class OfficialFactorBatchComputeService:
                 "error": None,
             })
             success_delta += 1
+            frames[frame_index] = (name, pd.DataFrame(), None, None)
+            del df, metric_result
         return success_delta
 
     def _compute_parent_metrics_for_frames(
@@ -746,7 +781,7 @@ class OfficialFactorBatchComputeService:
             return {}
 
         missing: list[tuple[str, pd.DataFrame]] = []
-        for frame in list(frames):
+        for frame in frames:
             if len(frame) == 2:
                 name, df = frame  # type: ignore[misc]
                 metric_result = None
@@ -904,6 +939,7 @@ class OfficialFactorBatchComputeService:
     ) -> dict[str, FactorExecutionResult]:
         ctx = multiprocessing.get_context("fork")
         result_queue = ctx.Queue()
+        worker_frame_dir = self._create_worker_frame_dir(task_id=task_id, batch_id=batch_id)
         pending = list(batch)
         running: dict[str, dict[str, Any]] = {}
         results: dict[str, FactorExecutionResult] = {}
@@ -945,6 +981,7 @@ class OfficialFactorBatchComputeService:
                             metrics_ctx,
                             compute_single_factor_metrics,
                             eligible_index,
+                            str(worker_frame_dir) if worker_frame_dir else None,
                         ),
                         name=f"official-factor-{name[:32]}",
                     )
@@ -1066,6 +1103,8 @@ class OfficialFactorBatchComputeService:
                 result_queue.join_thread()
             except Exception:
                 pass
+            if worker_frame_dir is not None:
+                shutil.rmtree(worker_frame_dir, ignore_errors=True)
         return results
 
     def _drain_factor_results(
@@ -1090,6 +1129,22 @@ class OfficialFactorBatchComputeService:
                         error=f"unexpected factor worker result type: {type(result).__name__}",
                         error_type="factor_worker_result_invalid",
                     )
+                elif (
+                    result_handler is None
+                    and result.success
+                    and result.dataframe is None
+                    and getattr(result, "dataframe_path", None)
+                ):
+                    try:
+                        result.dataframe = self._consume_worker_dataframe(result)
+                    except Exception as exc:
+                        result = FactorExecutionResult(
+                            factor_name=name,
+                            success=False,
+                            elapsed_sec=result.elapsed_sec,
+                            error=f"{type(exc).__name__}: {exc}",
+                            error_type="factor_worker_dataframe_load_failed",
+                        )
                 if result_handler is not None:
                     result_handler(name, result)
                 else:
@@ -1286,6 +1341,65 @@ class OfficialFactorBatchComputeService:
         tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(OFFICIAL_FACTOR_CACHE_META_PATH)
 
+    def _create_worker_frame_dir(self, *, task_id: str | None, batch_id: str | None) -> Path | None:
+        configured = os.getenv("AISTOCK_OFFICIAL_FACTOR_WORKER_TMP_DIR")
+        try:
+            root = Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "aistock_official_factor_frames"
+            root.mkdir(parents=True, exist_ok=True)
+            prefix = _safe_worker_tmp_prefix(task_id=task_id, batch_id=batch_id)
+            return Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+        except Exception as exc:  # noqa: BLE001 - fall back to Queue transfer rather than failing compute.
+            self._emit(
+                "worker_frame_dir_unavailable",
+                task_id=task_id,
+                batch_id=batch_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
+
+    def _consume_worker_dataframe(self, exec_result: FactorExecutionResult) -> pd.DataFrame:
+        frame_path_raw = getattr(exec_result, "dataframe_path", None)
+        if not frame_path_raw:
+            raise ValueError("worker result did not include dataframe_path")
+        frame_path = Path(str(frame_path_raw))
+        try:
+            return pd.read_parquet(frame_path)
+        finally:
+            try:
+                frame_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _record_resource_deferred_meta(self, factor_name: str, code_text: str | None, error: str) -> None:
+        """Resource gates are run-level deferrals, not factor correctness failures."""
+        try:
+            meta = self._load_meta()
+            entry = (meta.get("factors") or {}).get(factor_name)
+            previous_status = entry.get("status") if isinstance(entry, dict) else None
+        except Exception:
+            previous_status = None
+        self._emit(
+            "resource_deferred_meta_preserved",
+            factor_name=factor_name,
+            previous_status=previous_status,
+            error=str(error)[:500],
+            code_hash=_code_hash(str(code_text or "")),
+        )
+
+    def _clear_metric_reader_caches(self, *, task_id: str) -> None:
+        try:
+            from .qe_eval_v2_qlib_reader import clear_close_cache
+
+            clear_close_cache()
+            self._emit("metric_reader_cache_cleared", task_id=task_id, cache="close_prices")
+        except Exception as exc:  # noqa: BLE001 - cache cleanup must not mask compute results.
+            self._emit(
+                "metric_reader_cache_clear_failed",
+                task_id=task_id,
+                cache="close_prices",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
     def _metric_writer(self):
         from .factor_official_evaluation_service import FactorOfficialEvaluationService
 
@@ -1470,6 +1584,7 @@ def _factor_process_worker(
     metrics_ctx: Any | None = None,
     compute_single_factor_metrics: Any | None = None,
     eligible_index: pd.Index | pd.MultiIndex | None = None,
+    worker_frame_dir: str | None = None,
 ) -> None:
     try:
         result = _compute_factor_with_optional_metrics(
@@ -1480,6 +1595,7 @@ def _factor_process_worker(
             compute_single_factor_metrics,
             eligible_index,
         )
+        _spill_worker_dataframe(result, factor_name, worker_frame_dir)
     except Exception as exc:
         result = FactorExecutionResult(
             factor_name=factor_name,
@@ -1519,6 +1635,35 @@ def _compute_factor_with_optional_metrics(
     except Exception as exc:  # noqa: BLE001 - parent records an explicit fallback event.
         setattr(result, "official_metric_error", f"{type(exc).__name__}: {exc}")
     return result
+
+
+def _spill_worker_dataframe(
+    result: FactorExecutionResult,
+    factor_name: str,
+    worker_frame_dir: str | None,
+) -> None:
+    if worker_frame_dir is None or not result.success or result.dataframe is None:
+        return
+    try:
+        frame_dir = Path(worker_frame_dir)
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        path = frame_dir / f"{_safe_filename_part(factor_name)}.{uuid.uuid4().hex}.parquet"
+        result.dataframe.to_parquet(path, engine="pyarrow", compression="snappy")
+        setattr(result, "dataframe_path", str(path))
+        setattr(result, "dataframe_rows", int(len(result.dataframe)))
+        result.dataframe = None
+    except Exception as exc:  # noqa: BLE001 - parent can still receive the in-memory result.
+        setattr(result, "worker_dataframe_spill_error", f"{type(exc).__name__}: {exc}")
+
+
+def _safe_worker_tmp_prefix(*, task_id: str | None, batch_id: str | None) -> str:
+    raw = "_".join(str(part) for part in (task_id, batch_id) if part) or "official_factor"
+    return f"{_safe_filename_part(raw)[:80]}_"
+
+
+def _safe_filename_part(value: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(value))
+    return safe.strip("._-") or "factor"
 
 
 def _resource_snapshot(extra_pids: Iterable[int] | None = None, *, fast: bool = False) -> ResourceSnapshot:

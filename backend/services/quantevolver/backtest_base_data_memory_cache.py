@@ -74,15 +74,19 @@ class BacktestBaseDataMemoryCache:
                 df = parquet_reader(path)
             else:
                 raise RuntimeError(f"unsupported base data file: {name}")
+            sliced_df = cache._slice_by_date(df)
+            original_rows = int(len(df))
+            original_columns = int(len(df.columns)) if hasattr(df, "columns") else 0
+            del df
             cache.read_counts[name] = cache.read_counts.get(name, 0) + 1
             cache.entries[name] = BaseDataEntry(
                 name=name,
                 path=path,
-                dataframe=cache._slice_by_date(df),
+                dataframe=sliced_df,
                 elapsed_sec=round(time.time() - t0, 3),
                 size_mb=round(path.stat().st_size / 1024 / 1024, 3),
-                rows=int(len(df)),
-                columns=int(len(df.columns)) if hasattr(df, "columns") else 0,
+                rows=original_rows,
+                columns=original_columns,
                 sha256_16=_file_sha256_16(path),
             )
         if not cache.entries:
@@ -132,12 +136,12 @@ class BacktestBaseDataMemoryCache:
                 level = "datetime" if "datetime" in df.index.names else 0
                 dates = pd.to_datetime(df.index.get_level_values(level), errors="coerce")
                 mask = (dates >= pd.Timestamp(self.start_date)) & (dates <= pd.Timestamp(self.end_date))
-                return df.loc[mask].copy(deep=False)
+                return _copy_slice_releasing_parent(df, mask)
             for col in ("datetime", "trade_date", "date"):
                 if col in df.columns:
                     dates = pd.to_datetime(df[col], errors="coerce")
                     mask = (dates >= pd.Timestamp(self.start_date)) & (dates <= pd.Timestamp(self.end_date))
-                    return df.loc[mask].copy(deep=False)
+                    return _copy_slice_releasing_parent(df, mask)
         except Exception:
             return df.copy(deep=False)
         return df.copy(deep=False)
@@ -149,3 +153,10 @@ def _file_sha256_16(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()[:16]
+
+
+def _copy_slice_releasing_parent(df: pd.DataFrame, mask: Any) -> pd.DataFrame:
+    sliced = df.loc[mask]
+    if len(sliced) < len(df):
+        return sliced.copy(deep=True)
+    return sliced.copy(deep=False)
