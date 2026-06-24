@@ -243,10 +243,16 @@ def test_list_runs_returns_business_summary_and_filters(
     payload = response.json()
     assert payload["summary"]["run_count"] == 1
     assert payload["summary"]["by_broker_backend"] == {"local_sim": 1}
-    assert payload["runs"][0]["run_id"] == run_id
-    assert payload["runs"][0]["execution_plan_id"]
-    assert payload["runs"][0]["stage_counts"]["execution_plan_intent_count"] == 1
-    assert payload["runs"][0]["strategy_performance"]["nav"] == 1.0
+    run = payload["runs"][0]
+    assert run["run_id"] == run_id
+    assert run["execution_plan_id"]
+    assert run["stage_counts"]["execution_plan_intent_count"] == 1
+    assert run["strategy_performance"]["nav"] == 1.0
+    assert run["display"]["status_label"] == "\u6267\u884c\u8ba1\u5212\u5df2\u751f\u6210"
+    assert run["display"]["broker_label"] == "LocalSim \u672c\u5730\u6a21\u62df"
+    assert run["display"]["strategy_label"] == "Ops"
+    assert run["display"]["selection_label"] == "\u9009\u51fa 1 \u53ea\u5019\u9009"
+    assert run["display"]["execution_plan_label"] == "\u4ea4\u6613\u610f\u56fe 1 / \u5df2\u63d0\u4ea4 0 / \u5931\u8d25 0"
 
 
 def test_run_and_execution_plan_detail_include_traceability(

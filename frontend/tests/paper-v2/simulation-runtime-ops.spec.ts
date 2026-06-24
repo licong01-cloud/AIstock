@@ -358,10 +358,13 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("ENABLED");
   await expect(page.getByTestId("sim-runtime-provider-mode")).toContainText("production");
 
-  await expect(page.getByText("strategy_local_ops", { exact: true })).toBeVisible();
-  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("ag_minqmt_62266303_sim");
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("slot_strategy_miniqmt_ops");
+  await expect(page.getByText("策略实例：Local Ops")).toBeVisible();
+  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
+  await expect(page.getByText("选出 2 只候选").first()).toBeVisible();
+  await expect(page.getByText("交易意图 2 / 已提交 0 / 失败 0")).toBeVisible();
+  await expect(page.getByText("交易意图 2 / 已提交 2 / 失败 0")).toBeVisible();
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT 62266303 SIM");
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT Ops");
   await page.getByTestId(`sim-runtime-run-detail-${LOCAL_RUN_ID}`).click();
   await expect(page.getByTestId("sim-runtime-selected-run-id")).toContainText(LOCAL_RUN_ID);
   await expect(page.getByTestId("sim-runtime-selected-evidence-id")).toContainText("dse_local_ops");
@@ -372,8 +375,8 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByTestId("sim-runtime-selected-order-fill-errors")).toContainText("orders");
 
   await page.getByTestId("sim-runtime-backend-filter").selectOption("minqmt_sim");
-  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
-  await expect(page.getByText("strategy_local_ops", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
+  await expect(page.getByText("策略实例：Local Ops")).toHaveCount(0);
 
   expect(writeMethods).toEqual([]);
   expect(pageErrors).toEqual([]);

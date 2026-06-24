@@ -12,7 +12,7 @@ import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { hmmTrainingApi, paperV2Api, strategyPackageApi } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
-import { parseRunningSummaryItem, type RunningPortfolioSummary } from "@/lib/paper-v2/running-summary";
+import { activeSimulationState, brokerBackendLabel, isCurrentActiveSimulation, parseRunningSummaryItem, sessionErrorMessage, type RunningPortfolioSummary } from "@/lib/paper-v2/running-summary";
 import type { DataSource, ExecutionPolicy, HmmConfig, JsonObject, PaperPortfolio, PaperSessionMode, PaperSessionProgress, StrategyPackage } from "@/lib/paper-v2/types";
 
 function daysAgoIso(days: number): string {
@@ -27,7 +27,6 @@ const SESSION_MODE_OPTIONS: Array<{ value: PaperSessionMode; label: string; desc
   { value: "LIVE_ONLY", label: "完全实时运行", description: "不做历史追赶，直接创建 TDX 实时分钟线会话。" },
 ];
 const LIVE_TICK_SETTLED_STATUSES = ["LIVE_WAITING_FOR_BAR", "LIVE_WAITING_NEXT_TRADING_DAY", "SUCCEEDED", "FAILED", "STOPPED"];
-const CURRENT_RUNNING_BROKERS = new Set(["local_sim", "minqmt_sim"]);
 const RUNNING_SUMMARY_PAGE_SIZE = 50;
 
 function todayStamp(): string {
@@ -43,27 +42,26 @@ function defaultPortfolioName(packageName?: string): string {
   return packageName ? `${packageName}-${stamp}-模拟盘` : `模拟盘-${stamp}`;
 }
 
-function isCurrentRunningSimulation(row: RunningPortfolioSummary): boolean {
-  const broker = String(row.portfolio.broker_backend || "local_sim").toLowerCase();
-  const status = String(row.portfolio.status || "").toUpperCase();
-  return status === "RUNNING" && CURRENT_RUNNING_BROKERS.has(broker) && row.operability?.has_tickable_session === true;
-}
-
 function historyStatusHint(row: PaperPortfolio, activeIds: Set<string>): string {
   const status = String(row.status || "").toUpperCase();
-  if (status === "RUNNING" && !activeIds.has(row.portfolio_id)) {
-    return "状态残留/无可推进会话";
-  }
+  if (activeIds.has(row.portfolio_id)) return "当前激活";
+  if (status === "RUNNING") return "非 LocalSim/MiniQMT 或缺少运行摘要";
   if (status === "PAUSED") return "已暂停/历史记录";
   if (status === "READY") return "已创建未运行";
   if (["COMPLETED", "FAILED", "RETIRED"].includes(status)) return "历史记录";
   return "历史/待检查";
 }
 
+function ActiveStateBadge({ row }: { row: RunningPortfolioSummary }) {
+  const state = activeSimulationState(row);
+  return <span className={`pv2-badge pv2-badge-${state.badgeTone}`} title={state.hint}>{state.label}</span>;
+}
+
+
 async function loadRunningSummaryRows(): Promise<{ summaries: RunningPortfolioSummary[]; pagination: JsonObject }> {
   const params = {
     pageSize: RUNNING_SUMMARY_PAGE_SIZE,
-    statuses: ["RUNNING"],
+    statuses: ["RUNNING", "PAUSED"],
     snapshotLimit: 5,
     positionLimit: 5,
   };
@@ -310,10 +308,11 @@ export default function PaperV2PortfoliosPage() {
   const pageStart = (portfolioPageSafe - 1) * portfolioPageSize;
   const portfolioTotal = Number(portfolioPagination.total || portfolios.length);
   const pageRangeStart = portfolioTotal ? pageStart + 1 : 0;
-  const currentRunningRows = runningSummaries.filter(isCurrentRunningSimulation);
-  const currentRunningIds = new Set(currentRunningRows.map((row) => row.portfolio.portfolio_id));
-  const visiblePortfolios = portfolios.filter((row) => !currentRunningIds.has(row.portfolio_id));
+  const currentActiveRows = runningSummaries.filter(isCurrentActiveSimulation);
+  const currentActiveIds = new Set(currentActiveRows.map((row) => row.portfolio.portfolio_id));
+  const visiblePortfolios = portfolios.filter((row) => !currentActiveIds.has(row.portfolio_id));
   const runningRecordTotal = Number(runningPagination.total || runningSummaries.length);
+  const currentNeedsRecoveryCount = currentActiveRows.filter((row) => ["danger", "warning"].includes(activeSimulationState(row).badgeTone)).length;
   const selectedPortfolioCount = Object.values(selectedPortfolioIds).filter(Boolean).length;
 
   const workflowSteps = paperV2WorkflowSteps({
@@ -321,7 +320,7 @@ export default function PaperV2PortfoliosPage() {
     hasSelectionEnabledPackage: packages.length > 0,
     hasPaperEnabledPackage: packages.length > 0,
     hasSelectionRun: false,
-    hasPortfolio: portfolioTotal > 0 || currentRunningRows.length > 0,
+    hasPortfolio: portfolioTotal > 0 || currentActiveRows.length > 0,
     hasReadyRun: false,
   }, "portfolio");
 
@@ -376,22 +375,24 @@ export default function PaperV2PortfoliosPage() {
       </SectionCard>
 
       <SectionCard
-        title="当前运行中模拟盘"
-        eyebrow={loading ? "加载中" : `${currentRunningRows.length} 个可推进 / ${runningRecordTotal} 个 RUNNING 记录`}
+        title="当前激活模拟盘"
+        eyebrow={loading ? "加载中" : `${currentActiveRows.length} 个激活 / ${currentNeedsRecoveryCount} 个需恢复 / ${runningRecordTotal} 个 RUNNING/PAUSED 记录`}
         action={<button className="pv2-button" onClick={load} type="button">刷新</button>}
       >
         <NoticePanel title="当前运行判定" tone="info">
-          这里只展示状态为 RUNNING、Broker 为 LocalSim/MiniQMT 且存在 scheduler 可推进会话的模拟盘；READY、PAUSED、COMPLETED、FAILED、RETIRED，以及没有可推进会话的 RUNNING 状态残留，统一进入下方历史记录。
+          这里展示状态仍为 RUNNING/PAUSED 且 Broker 为 LocalSim/MiniQMT 的当前激活模拟盘；即使最近会话失败或没有 scheduler 可推进会话，也保留在当前列表并标记“当日失败/需恢复”。READY、COMPLETED、FAILED、RETIRED 等非激活状态进入下方历史记录。
         </NoticePanel>
         <PaperTable
-          rows={currentRunningRows}
-          empty="暂无正在运行的 LocalSim/MiniQMT 模拟盘。"
+          rows={currentActiveRows}
+          empty="暂无当前激活的 LocalSim/MiniQMT 模拟盘。"
           columns={[
             { key: "name", header: "名称", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
             { key: "status", header: "模拟盘状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
-            { key: "broker", header: "Broker", render: ({ portfolio }) => portfolio.broker_backend || "local_sim" },
+            { key: "broker", header: "Broker", render: ({ portfolio }) => brokerBackendLabel(portfolio.broker_backend) },
+            { key: "operatorState", header: "当日状态", render: (row) => <ActiveStateBadge row={row} /> },
             { key: "session", header: "最近会话", render: (row) => row.latestSession ? <><StatusBadge status={row.latestSession.mode} /> <StatusBadge status={row.latestSession.status} /></> : <span className="pv2-muted">无会话</span> },
             { key: "tickable", header: "可推进会话", render: (row) => String(row.operability?.tickable_session_count ?? 0) },
+            { key: "reason", header: "失败/恢复提示", render: (row) => <span title={sessionErrorMessage(row)}>{sessionErrorMessage(row) || activeSimulationState(row).hint}</span> },
             { key: "run", header: "最近运行", render: (row) => row.latestRun ? <>{row.latestRun.trade_date} / <StatusBadge status={row.latestRun.status} /></> : <span className="pv2-muted">尚未运行</span> },
             { key: "actions", header: "操作", render: ({ portfolio }) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${portfolio.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(portfolio.portfolio_id, portfolio.status === "PAUSED" ? "resume" : "pause")} type="button">{portfolio.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(portfolio.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}
@@ -427,7 +428,7 @@ export default function PaperV2PortfoliosPage() {
             } },
             { key: "cash", header: "初始资金", render: (row) => formatCompact(row.initial_cash) },
             { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },
-            { key: "bucket", header: "归类", render: (row) => historyStatusHint(row, currentRunningIds) },
+            { key: "bucket", header: "归类", render: (row) => historyStatusHint(row, currentActiveIds) },
             { key: "start", header: "开始", render: (row) => row.start_date },
             { key: "actions", header: "操作", render: (row) => <div className="pv2-row-actions"><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/run-console`}>运行控制台</Link><Link className="pv2-link-button" href={`/paper-v2/portfolios/${row.portfolio_id}/ledger`}>账本</Link><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, row.status === "PAUSED" ? "resume" : "pause")} type="button">{row.status === "PAUSED" ? "恢复" : "暂停"}</button><button className="pv2-link-button" onClick={() => lifecycle(row.portfolio_id, "retire")} type="button">退役</button></div> },
           ]}
