@@ -33,8 +33,8 @@
   "expected": "Confirmed January/February P4 delete candidates are removed from the tracked repo with no references and root main stays clean.",
   "first_seen_at": "2026-06-24T07:07:23.776289Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7ec118b61234e20b8805156f860819f4b40a0855",
+  "fixed_at": "2026-06-24T07:27:15.759803Z",
   "github_issue_number": 1584,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1584",
   "last_seen_at": "2026-06-24T07:07:23.776289Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1585",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -62,6 +63,15 @@
     "fingerprint": "0d714b3b3172aa76caf5d465",
     "source_event_id": "FE-20260624-0d714b3b3172"
   },
+  "validation_evidence": [
+    "git diff --cached --check -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_center_backend -> passed (458 passed)",
+    "python scripts/repo_hygiene_orphan_audit.py --root . --output-dir tmp/validation/code-intelligence/BUG-511-after-cleanup --json --max-seconds 300 -> passed (delete_candidate_count=0)",
+    "PR #1585 CI -> passed (17 passed, 3 non-blocking, 0 failed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
