@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import subprocess
@@ -33,9 +33,13 @@ def test_repo_hygiene_audit_classifies_without_mutating_repo(tmp_path: Path) -> 
     _write(tmp_path / "backend" / "services" / "used.py", "def run():\n    return 1\n")
     _init_repo(tmp_path)
 
-    before = subprocess.run(["git", "-C", str(tmp_path), "status", "--short"], text=True, capture_output=True, check=True).stdout
-    payload = audit.build_audit(tmp_path)
-    after = subprocess.run(["git", "-C", str(tmp_path), "status", "--short"], text=True, capture_output=True, check=True).stdout
+    before = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--short"], text=True, capture_output=True, check=True
+    ).stdout
+    payload = audit.build_audit(tmp_path, scan_mode="tracked-and-untracked")
+    after = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--short"], text=True, capture_output=True, check=True
+    ).stdout
 
     rows = {row["path"]: row for row in payload["rows"]}
     assert before == after == ""
@@ -58,6 +62,55 @@ def test_repo_hygiene_audit_classifies_without_mutating_repo(tmp_path: Path) -> 
     assert rows["empty_orphan_dir"]["risk_level"] == "P4"
     assert rows["empty_orphan_dir"]["suggested_action"] == "delete_candidate"
     assert rows["backend/services/used.py"]["reference_count"] >= 1
+
+
+def test_repo_hygiene_default_scan_uses_git_tracked_files_only(tmp_path: Path) -> None:
+    _write(tmp_path / "scripts" / "tracked_debug.py", "print('tracked')\n")
+    _init_repo(tmp_path)
+    _write(tmp_path / "root_runtime_dump.json", '{"runtime": true}\n')
+    (tmp_path / ".rtk" / "cache").mkdir(parents=True)
+    _write(tmp_path / ".rtk" / "cache" / "tool_state.json", "{}\n")
+    _write(tmp_path / "frontend" / ".next-dev-3000" / "trace.json", "{}\n")
+
+    payload = audit.build_audit(tmp_path)
+    rows = {row["path"]: row for row in payload["rows"]}
+
+    assert payload["scan_mode"] == "tracked"
+    assert "scripts/tracked_debug.py" in rows
+    assert "root_runtime_dump.json" not in rows
+    assert ".rtk/cache/tool_state.json" not in rows
+    assert "frontend/.next-dev-3000/trace.json" not in rows
+
+
+def test_repo_hygiene_opt_in_untracked_scan_still_excludes_runtime_dirs(tmp_path: Path) -> None:
+    _write(tmp_path / "scripts" / "tracked_debug.py", "print('tracked')\n")
+    _init_repo(tmp_path)
+    _write(tmp_path / "root_runtime_dump.json", '{"runtime": true}\n')
+    _write(tmp_path / "frontend" / ".next-dev-3000" / "trace.json", "{}\n")
+
+    payload = audit.build_audit(tmp_path, scan_mode="tracked-and-untracked")
+    rows = {row["path"]: row for row in payload["rows"]}
+
+    assert "root_runtime_dump.json" in rows
+    assert rows["root_runtime_dump.json"]["risk_level"] == "P4"
+    assert "frontend/.next-dev-3000/trace.json" not in rows
+
+
+def test_repo_hygiene_budget_failure_returns_compact_json(tmp_path: Path, capsys, monkeypatch) -> None:
+    _write(tmp_path / "scripts" / "orphan.py", "VALUE = 1\n")
+    _init_repo(tmp_path)
+
+    def _raise_budget(*args, **kwargs):
+        raise audit.AuditBudgetExceeded("repo hygiene audit exceeded 1s during reference indexing")
+
+    monkeypatch.setattr(audit, "build_audit", _raise_budget)
+    rc = audit.main(["--root", str(tmp_path), "--output-dir", str(tmp_path / "out"), "--json", "--max-seconds", "1"])
+
+    assert rc == 2
+    compact = json.loads(capsys.readouterr().out)
+    assert compact["workflow_gate"] == "blocked"
+    assert compact["audit_key"] == "repo_hygiene_orphan_audit"
+    assert "reference indexing" in compact["error"]
 
 
 def test_repo_hygiene_audit_writes_json_markdown_and_csv(tmp_path: Path) -> None:

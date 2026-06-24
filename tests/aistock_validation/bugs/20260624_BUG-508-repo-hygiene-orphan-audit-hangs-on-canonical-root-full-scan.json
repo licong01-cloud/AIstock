@@ -2,7 +2,10 @@
   "actual": "After BUG-506 was merged, running the new full repo hygiene audit from the synced canonical root hung for more than 10 minutes and produced no artifact directory:\n\npython F:\\Dev\\AIstock\\scripts\\repo_hygiene_orphan_audit.py --root F:\\Dev\\AIstock --output-dir F:\\Dev\\AIstock\\tmp\\validation\\code-intelligence\\manual-repo-hygiene-20260624 --json\n\nThe process had to be stopped manually. This means the Nightly hygiene check can stall the nightly lane on the real repository root even though tests passed in scoped cases. Root cause likely includes scanning untracked root artifacts/worktree residue and/or expensive full-history reference/commit indexing. The audit must stay read-only, bounded, and deterministic.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260624_BUG-508-repo-hygiene-orphan-audit-hangs-on-canonical-root-full-scan.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/repo_hygiene_orphan_audit.py",
+    "backend/tests/scripts/test_repo_hygiene_orphan_audit.py",
+    ".github/workflows/nightly.yml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-508",
