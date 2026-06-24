@@ -383,6 +383,7 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_module_ownership_scan.py",
         "scripts/issue_flow.py",
         "scripts/aistock_issue_workflow.py",
+        "scripts/aistock_feature_workflow.py",
         "scripts/ci_failure_issue_summary.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
@@ -408,6 +409,7 @@ def l0(session: nox.Session) -> None:
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_feature_workflow.py",
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/services/validation/plan_catalog.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
@@ -2212,7 +2214,9 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "backend/services/validation/file_ownership.py",
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_ui_target_catalog.py",
+        "backend/tests/scripts/test_aistock_feature_workflow.py",
         "scripts/aistock_module_ownership_scan.py",
+        "scripts/aistock_feature_workflow.py",
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "noxfile.py",
@@ -2229,6 +2233,7 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "backend/services/validation/file_ownership.py",
         "backend/services/validation/ui_target_catalog.py",
         "scripts/aistock_module_ownership_scan.py",
+        "scripts/aistock_feature_workflow.py",
         external=True,
     )
     _run_pytest(

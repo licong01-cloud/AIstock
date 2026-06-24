@@ -432,6 +432,24 @@ rules:
         - 'except\s+Exception[^\n]*:\s*(?:\n\s*){0,4}return\s+(?:\[\]|\{\}|None|True|False|0)(?:\s|$)'
     baseline_policy: block_new_only
     remediation: Print structured diagnostic context and exit non-zero; do not hide failure in one-off scripts.
+  - rule_id: FEATURE-WORKFLOW-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
+    title: New feature development requires tiered design, design acceptance matrix, and anti-drift verification
+    severity: P1
+    category: agent_efficiency
+    enabled: true
+    checker:
+      type: manual_review
+      required_evidence:
+        - feature_tier_declared
+        - design_doc_or_feature_card_path
+        - design_acceptance_index
+        - design_acceptance_matrix
+        - no_unapproved_simplified_or_drift_delivery
+        - targeted_validation_and_production_gates
+    baseline_policy: manual_review_only
+    remediation: Use scripts/aistock_feature_workflow.py validate for F0/F1/F2 feature artifacts and resolve unapproved gaps before merge.
+
   - rule_id: CONTEXT-BUDGET-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-context-budget-001
     title: Context and prompt injection must be tiered, compact, and task-scoped
@@ -499,6 +517,10 @@ manual_review_controls:
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-std-sync-001
     severity: P1
     title: Human-readable standard and machine-readable YAML must be updated in the same versioned change.
+  - control_id: FEATURE-WORKFLOW-001
+    standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-feature-workflow-001
+    severity: P1
+    title: New features must use the F0/F1/F2 design workflow, include a Design Acceptance Index and acceptance matrix, and reject unapproved drift or simplified delivery before merge.
   - control_id: CONTEXT-BUDGET-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-context-budget-001
     severity: P1
