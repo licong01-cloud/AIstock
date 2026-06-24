@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -1214,8 +1214,11 @@ def test_doctor_reports_ready_when_client_entries_exist(
     (isolated_workflow_root / "backend" / "validation_app.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
     (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature").mkdir(parents=True)
+    (isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
     (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1223,9 +1226,12 @@ def test_doctor_reports_ready_when_client_entries_exist(
     codex_home = isolated_workflow_root / "codex_home"
     (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
     (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    (codex_home / "skills" / "verify-aistock-feature").mkdir(parents=True)
+    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
     claude_home = isolated_workflow_root / "claude_home"
     (claude_home / "commands").mkdir(parents=True)
     (claude_home / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    (claude_home / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
@@ -1614,9 +1620,13 @@ def test_doctor_reports_stale_global_skill_manifest(
     repo_skill = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
     repo_skill.mkdir(parents=True)
     (repo_skill / "SKILL.md").write_text("repo skill", encoding="utf-8")
+    repo_feature_skill = isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature"
+    repo_feature_skill.mkdir(parents=True)
+    (repo_feature_skill / "SKILL.md").write_text("repo feature skill", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
     (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    (isolated_workflow_root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("feature claude", encoding="utf-8")
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1625,8 +1635,15 @@ def test_doctor_reports_stale_global_skill_manifest(
     global_skill = codex_home / "skills" / "fix-aistock-issue"
     global_skill.mkdir(parents=True)
     (global_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
+    global_feature_skill = codex_home / "skills" / "verify-aistock-feature"
+    global_feature_skill.mkdir(parents=True)
+    (global_feature_skill / "SKILL.md").write_text("repo feature skill", encoding="utf-8")
+    claude_home = isolated_workflow_root / "claude_home"
+    (claude_home / "commands").mkdir(parents=True)
+    (claude_home / "commands" / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    (claude_home / "commands" / "aistock-feature-workflow.md").write_text("feature claude", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    monkeypatch.setenv("CLAUDE_HOME", str(isolated_workflow_root / "claude_home"))
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
     monkeypatch.setattr(
         workflow,
@@ -2745,12 +2762,17 @@ def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
 def test_install_client_plan_can_copy_global_codex_skill(
     isolated_workflow_root: Path,
 ) -> None:
-    source = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
-    source.mkdir(parents=True)
-    (source / "SKILL.md").write_text("skill", encoding="utf-8")
+    source = isolated_workflow_root / ".codex" / "skills"
+    issue_source = source / "fix-aistock-issue"
+    feature_source = source / "verify-aistock-feature"
+    issue_source.mkdir(parents=True)
+    feature_source.mkdir(parents=True)
+    (issue_source / "SKILL.md").write_text("issue skill", encoding="utf-8")
+    (feature_source / "SKILL.md").write_text("feature skill", encoding="utf-8")
     claude = isolated_workflow_root / ".claude" / "commands"
     claude.mkdir(parents=True)
-    (claude / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
+    (claude / "fix-aistock-issue.md").write_text("issue command", encoding="utf-8")
+    (claude / "aistock-feature-workflow.md").write_text("feature command", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
     claude_home = isolated_workflow_root / "claude_home"
 
@@ -2760,8 +2782,12 @@ def test_install_client_plan_can_copy_global_codex_skill(
 
     applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home), claude_home=str(claude_home))
     assert applied["workflow_gate"] == "installed"
-    assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "skill"
-    assert (claude_home / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8") == "claude"
+    assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "issue skill"
+    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").read_text(encoding="utf-8") == "feature skill"
+    assert (claude_home / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8") == "issue command"
+    assert (claude_home / "commands" / "aistock-feature-workflow.md").read_text(encoding="utf-8") == "feature command"
+    assert applied["client_manifest_after"]["codex_feature_skill_status"] == "current"
+    assert applied["client_manifest_after"]["claude_feature_command_status"] == "current"
 
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:
@@ -5861,7 +5887,7 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
 
     quickstart = Path("docs/standards/aistock_issue_workflow_quickstart.md").read_text(encoding="utf-8")
     assert "AIstock Issue Workflow Quickstart" in quickstart
-    assert "按规范修复 BUG-112" in quickstart
+    assert "鎸夎鑼冧慨澶?BUG-112" in quickstart
     assert "????" not in quickstart
     assert "doctor" in quickstart
     assert "submit-bug" in quickstart
@@ -5875,7 +5901,7 @@ def test_repo_skill_and_quickstart_are_parseable() -> None:
     assert "aistock_issue_workflow.py doctor" in claude_command
 
     design = Path("docs/architecture/aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").read_text(encoding="utf-8")
-    assert "智能验证平台设计实施方案 v2.0" in design
+    assert "鏅鸿兘楠岃瘉骞冲彴璁捐瀹炴柦鏂规 v2.0" in design
     assert "Codex / Claude Code / Cursor" in design
     assert "????" not in design
 

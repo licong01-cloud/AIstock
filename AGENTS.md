@@ -2,6 +2,15 @@
 
 ## Architecture Overview
 
+
+## Agent Workflow Entrypoints
+
+- All Codex and Claude Code sessions should read `docs/codex_project_memory.md` plus the active standard when the task touches architecture, backend, frontend, data pipeline, trading, issue workflow, CI/CD, or production-adjacent work.
+- BUG fixes use `scripts/aistock_issue_workflow.py`; do not hand-write BUG JSON or skip GitHub sync.
+- New non-trivial features use `FEATURE-WORKFLOW-001`: classify `F0`/`F1`/`F2`, keep a stable `Design Acceptance Index`, maintain a design acceptance matrix, and run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` before PR or merge.
+- Never report simplified, POC, mock-only, static-success, partial, or silent-fallback delivery as complete unless the user explicitly approved the deviation and the acceptance matrix records it.
+
+
 3-tier full-stack A-share quantitative trading platform.
 
 **3 Services (start_all_ai_stock.bat):**

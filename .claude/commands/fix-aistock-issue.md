@@ -34,6 +34,11 @@ If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or
 
 Use graph-first context before broad searches. After `run --mode plan`, read the task card's Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg` or source reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise treat UA as warning-only and continue with CodeGraph plus allowed scope.
 
+
+## Non-BUG feature requests
+
+If the user is asking for a new feature or architecture/capability development rather than a BUG/GitHub Issue fix, switch to `.claude/commands/aistock-feature-workflow.md` and apply `FEATURE-WORKFLOW-001`. Do not create BUG JSON just to deliver a normal feature unless the user explicitly asks.
+
 ## Submit/Register BUG workflow
 
 For a new BUG report, create the GitHub-linked BUG record through the orchestrator instead of hand-writing JSON:

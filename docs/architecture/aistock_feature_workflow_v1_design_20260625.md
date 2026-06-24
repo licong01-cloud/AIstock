@@ -43,6 +43,7 @@ Feature Workflow v1 由三部分组成：
 - F-005: 测试覆盖有效 F0/F2、缺失章节、未批准缺口、批准偏差、简化交付措辞和紧凑输出。
 - F-006: nox/ownership 纳入新脚本和测试，确保后续流水线可识别该工具。
 - F-007: 本变更无 DDL、无依赖变更、无服务重启。
+- F-008: Codex 和 Claude Code 的项目级入口都能发现并执行 Feature Workflow v1。
 
 ## Implementation Plan
 
@@ -71,6 +72,7 @@ Feature Workflow v1 由三部分组成：
 | F-005 | backend/tests/scripts/test_aistock_feature_workflow.py | pytest targeted suite | verified | - |
 | F-006 | noxfile.py; tests/aistock_validation/catalog/file_ownership.yaml | nox validation_module_registry_l0; nox l0 | verified | - |
 | F-007 | docs/architecture/aistock_feature_workflow_v1_design_20260625.md | production gates report | verified | - |
+| F-008 | AGENTS.md; AGENTS.override.md; docs/codex_project_memory.md; .codex/skills/verify-aistock-feature/SKILL.md; .claude/commands/aistock-feature-workflow.md | client entrypoint review + skill validation | verified | - |
 
 ## Rollout / Rollback
 

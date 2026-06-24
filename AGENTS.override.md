@@ -9,6 +9,7 @@ This file is for Codex only.
 - Before architecture analysis, backend changes, frontend changes, data pipeline changes, or trading-related changes, read docs/codex_project_memory.md first.
 - Keep future Codex-specific notes in docs/codex_project_memory.md, not in AGENTS.md.
 - Before reporting a design-driven feature as complete, requesting merge, or closing an issue, perform the DESIGN-COMPLIANCE-001 item-by-item review from `docs/standards/aistock_development_standard_v1.5_20260523.md`; do not deliver unapproved simplified, subset, POC, placeholder, mock-only, or partial implementations as complete.
+- For non-trivial new features, follow `FEATURE-WORKFLOW-001`: classify `F0`/`F1`/`F2`, keep a `Design Acceptance Index`, and run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` before reporting ready for PR or merge.
 
 ## Project Snapshot
 
