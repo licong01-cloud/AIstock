@@ -34,8 +34,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-23T17:55:22.054320Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9267b5648422e95bead8e55f2ca6dcf8bb6ca940",
+  "fixed_at": "2026-06-24T02:37:25.439145Z",
   "github_issue_number": 1564,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1564",
   "last_seen_at": "2026-06-23T17:55:22.054320Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1567",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -89,6 +90,15 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_repo_hygiene_orphan_audit.py backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/test_validation_catalog_integrity.py -q -> passed (67 passed)",
+    "python scripts/repo_hygiene_orphan_audit.py --root <worktree> --output-dir tmp/validation/code-intelligence/BUG-506-check2 --json -> passed (workflow_gate=ready, candidate_count=967, delete_candidate_count=18)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_workflow_automation -> passed",
+    "python -m nox -s validation_center_backend -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
