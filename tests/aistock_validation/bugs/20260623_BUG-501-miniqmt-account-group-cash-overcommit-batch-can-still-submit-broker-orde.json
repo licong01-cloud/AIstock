@@ -1,0 +1,101 @@
+{
+  "schema_version": "aistock_validation_bug_v1",
+  "bug_id": "BUG-501",
+  "title": "[P0][MiniQMT] account-group cash overcommit batch can still submit broker order",
+  "module": "qmt_strategy_ledger",
+  "severity": "P0",
+  "risk_area": "bug",
+  "status": "pr_open",
+  "description": "Batch preflight can submit a broker order even when same account-group aggregate cash demand exceeds buying power.",
+  "actual": "Batch preflight can submit a broker order even when same account-group aggregate cash demand exceeds buying power.",
+  "expected": "Same account-group overcommit batch must deterministically reject before any broker call, with ACCOUNT_GROUP_CASH_OVERCOMMIT reason_code.",
+  "reproduce_command": "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_preflight.py::test_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slots -q",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "tests/aistock_validation/bugs/20260623_BUG-501-miniqmt-account-group-cash-overcommit-batch-can-still-submit-broker-orde.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-501-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md"
+  ],
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "non_goals": [
+    "Do not start, stop, or restart services.",
+    "Do not apply production DB/DDL.",
+    "Do not unlock MiniQMT LIVE trading."
+  ],
+  "github_issue_number": 1551,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1551",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "noop",
+  "ui_issue": false,
+  "created_at": "2026-06-23T11:41:00Z",
+  "first_seen_at": "2026-06-23T11:41:00Z",
+  "last_seen_at": "2026-06-23T18:12:38Z",
+  "events": [
+    {
+      "action": "reconstructed_source_bug_json",
+      "actor": "codex",
+      "note": "Reconstructed from GitHub issue body because registry intake state referenced missing source_bug_json.",
+      "timestamp": "2026-06-23T17:56:55.076734+00:00"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Implemented account-group pre-broker overcommit rejection with ACCOUNT_GROUP_CASH_OVERCOMMIT; PR pending Tier2.",
+      "timestamp": "2026-06-23T18:12:38.331406+00:00"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #1565 for Tier2; not merged or close-synced.",
+      "timestamp": "2026-06-23T18:21:44.852356+00:00"
+    }
+  ],
+  "fix_branch": "bug/BUG-501-p0-miniqmt-account-group-cash-overcommit-batch-c-20260624",
+  "validation_evidence": [
+    {
+      "command": "BUG-501 reproduce pytest before fix",
+      "result": "failed_before_fix broker.place_order_calls==1"
+    },
+    {
+      "command": "rtk python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_preflight.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py -q",
+      "result": "passed 31 passed"
+    },
+    {
+      "command": "rtk python -m ruff check changed files",
+      "result": "passed"
+    },
+    {
+      "command": "rtk git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "rtk python -m nox -s l0",
+      "result": "passed"
+    },
+    {
+      "command": "rtk python -m nox -s validation_module_registry_l0",
+      "result": "passed"
+    },
+    {
+      "command": "rtk cmd /c set AISTOCK_HOSTED_CI=1 and PAPER_V2_L3_SKIP_UI=1 then python -m nox -s paper_v2_l3",
+      "result": "passed"
+    }
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1565",
+  "pr_number": 1565
+}
