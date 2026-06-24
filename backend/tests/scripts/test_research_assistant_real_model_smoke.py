@@ -41,9 +41,9 @@ def test_real_model_smoke_loud_skips_when_deepseek_key_missing(tmp_path: Path) -
     assert output.exists()
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["bug_id"] == "BUG-496"
-    assert payload["related_bug_ids"] == ["BUG-436", "BUG-496", "BUG-505"]
+    assert payload["related_bug_ids"] == ["BUG-436", "BUG-496", "BUG-505", "BUG-509"]
     assert payload["acceptance_source"] == "B2/#1504 design killer assertions"
-    assert len(payload["assertion_manifest"]) == 6
+    assert len(payload["assertion_manifest"]) == 7
     assert payload["fake_pass"] is False
     assert payload["status"] == "skipped"
     assert payload["reason_code"] == "deepseek_api_key_missing"
@@ -111,6 +111,8 @@ def test_b2_parse_args_defaults_expose_all_killer_assertion_messages() -> None:
     assert "风险" in args.b2_specificity_first_message
     assert "驱动" in args.b2_specificity_second_message
     assert "qe_template_create" in args.b2_write_message
+    assert "000688" in args.b509_stock_depth_message
+    assert "60" in args.b509_stock_depth_message
 
 
 
@@ -130,3 +132,47 @@ def test_b505_parse_args_defaults_expose_long_answer_message() -> None:
     args = smoke.parse_args([])
 
     assert "Bottom-line" in args.b505_long_answer_message
+
+
+def test_b509_stock_depth_tool_set_assertion_rejects_missing_web() -> None:
+    tool_sets = {
+        "function_registry": [f"{server}/{tool}" for server, tool in smoke.B509_STOCK_DEPTH_EXECUTABLE_TOOLS - {("aistock-external-research", "external_research_search_web")}],
+        "executable": [f"{server}/{tool}" for server, tool in smoke.B509_STOCK_DEPTH_EXECUTABLE_TOOLS],
+        "read_only_executable": [f"{server}/{tool}" for server, tool in smoke.B509_STOCK_DEPTH_EXECUTABLE_TOOLS],
+        "function_registry_equals_read_only_executable": False,
+    }
+
+    with pytest.raises(smoke.SmokeFailure) as excinfo:
+        smoke._assert_b509_tool_sets(tool_sets)  # noqa: SLF001
+
+    assert excinfo.value.reason_code == "b509_stock_depth_tool_refs_missing"
+    assert "aistock-external-research/external_research_search_web" in excinfo.value.details["missing_from_function_registry"]
+
+
+def test_b509_stock_depth_category_assertion_requires_core_dimensions() -> None:
+    with pytest.raises(smoke.SmokeFailure) as excinfo:
+        smoke._assert_stock_depth_categories(  # noqa: SLF001
+            {
+                ("aistock-stock-analysis", "stock_analysis_get_quote"),
+                ("aistock-stock-analysis", "stock_analysis_get_kline"),
+                ("aistock-external-research", "external_research_search_web"),
+            },
+            label="unit stock depth",
+        )
+
+    assert excinfo.value.reason_code == "b509_stock_depth_required_categories_missing"
+    assert "fund_flow" in excinfo.value.details["missing_categories"]
+    assert "fundamental" in excinfo.value.details["missing_categories"]
+
+
+def test_b509_stock_depth_tool_count_assertion_rejects_underuse() -> None:
+    with pytest.raises(smoke.SmokeFailure) as excinfo:
+        smoke._assert_tool_ref_count_at_least(  # noqa: SLF001
+            {("aistock-stock-analysis", "stock_analysis_get_quote")},
+            minimum=smoke.B509_STOCK_DEPTH_MIN_TOOL_EXECUTIONS,
+            reason_code="too_few",
+            label="unit stock depth",
+        )
+
+    assert excinfo.value.reason_code == "too_few"
+    assert excinfo.value.details["minimum"] == 8
