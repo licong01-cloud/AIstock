@@ -473,6 +473,7 @@ export type SimulationRuntimeRunSummary = JsonObject & {
   fills?: JsonObject[];
   errors?: JsonObject[];
   audit?: JsonObject;
+  display?: JsonObject;
 };
 
 export type SimulationRuntimePlanSummary = JsonObject & {

@@ -60,7 +60,8 @@
     "paper_v2_l3",
     "frontend_tsc",
     "paper_v2_ui",
-    "paper_v2_backend"
+    "paper_v2_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

@@ -89,6 +89,7 @@ function runningSummary(portfolio: JsonObject, hasTickableSession: boolean): Jso
       status: hasTickableSession ? "LIVE_WAITING_FOR_BAR" : "FAILED",
       phase: hasTickableSession ? "LIVE" : "DONE",
       start_date: portfolio.start_date,
+      last_error: hasTickableSession ? null : { message: "ST PIT risk policy universe is not ready" },
     },
     operability: {
       tickable_session_count: hasTickableSession ? 1 : 0,
@@ -168,20 +169,22 @@ test("Portfolio page separates current LocalSim/MiniQMT runs from history and us
   await expect(launchSection.locator("input, select, button").first()).toBeVisible();
   await expect.poll(async () => launchSection.evaluate((node) => node.parentElement?.classList.contains("pv2-grid-main") || false)).toBe(false);
 
-  const currentSection = page.locator("section").filter({ hasText: "当前运行中模拟盘" });
+  const currentSection = page.locator("section").filter({ hasText: "当前激活模拟盘" });
   await expect(currentSection).toContainText("Active LocalSim");
   await expect(currentSection).toContainText("Active MiniQMT");
+  await expect(currentSection).toContainText("Stale Running History");
+  await expect(currentSection).toContainText("当日失败 / 需恢复");
+  await expect(currentSection).toContainText("ST PIT risk policy universe is not ready");
   await expect(currentSection).not.toContainText("Ready History");
   await expect(currentSection).not.toContainText("Completed History");
   await expect(currentSection).not.toContainText("Failed MiniQMT History");
-  await expect(currentSection).not.toContainText("Stale Running History");
 
   const historySection = page.locator("section").filter({ hasText: "历史模拟盘记录" });
   await expect(historySection).toContainText("Ready History");
   await expect(historySection).toContainText("Completed History");
   await expect(historySection).toContainText("Failed MiniQMT History");
-  await expect(historySection).toContainText("Stale Running History");
-  await expect(historySection).toContainText("状态残留/无可推进会话");
+  await expect(historySection).not.toContainText("Stale Running History");
+  await expect(historySection).not.toContainText("状态残留/无可推进会话");
   await expect(historySection).not.toContainText("Active LocalSim");
   await expect(historySection).not.toContainText("Active MiniQMT");
 });

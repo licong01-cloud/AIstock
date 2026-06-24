@@ -28,6 +28,16 @@ TERMINAL_RUN_STATUSES = frozenset(
 )
 
 
+HUMAN_RUN_STATUS_LABELS = {
+    SimulationDailyRunStatus.PLANNING_EXECUTION: "\u6267\u884c\u8ba1\u5212\u5df2\u751f\u6210",
+    SimulationDailyRunStatus.INTRADAY_RUNNING: "\u76d8\u4e2d\u8fd0\u884c\u4e2d",
+    SimulationDailyRunStatus.SUCCEEDED: "\u5df2\u5b8c\u6210 / \u65e0\u5f85\u5904\u7406\u9519\u8bef",
+    SimulationDailyRunStatus.FAILED_RETRYABLE: "\u5f53\u65e5\u5931\u8d25 / \u53ef\u91cd\u8bd5",
+    SimulationDailyRunStatus.FAILED_TERMINAL: "\u7ec8\u6b62\u5931\u8d25",
+    SimulationDailyRunStatus.CANCELLED: "\u5df2\u53d6\u6d88",
+}
+
+
 class SimulationRuntimeOpsService:
     """Expose business-readable runtime state without triggering trading actions."""
 
@@ -218,6 +228,53 @@ class SimulationRuntimeOpsService:
             "capacity_residual_failed_intents": sum(int(item.get("failed_intents") or 0) for item in capacity_residual),
         }
 
+    @staticmethod
+    def _readable_identifier(value: str | None) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+        ignored = {"strategy", "simrun", "srr", "simbind", "dse", "plan", "pkg", "ag", "slot"}
+        words: list[str] = []
+        for part in raw.replace("-", "_").split("_"):
+            if not part or part.lower() in ignored:
+                continue
+            lower = part.lower()
+            if lower == "local":
+                words.append("Local")
+            elif lower in {"miniqmt", "minqmt"}:
+                words.append("MiniQMT")
+            elif lower == "qmt":
+                words.append("QMT")
+            elif lower == "sim":
+                words.append("SIM")
+            elif lower == "ops":
+                words.append("Ops")
+            elif len(part) == 8 and part.isdigit() and part.startswith(("19", "20")):
+                words.append(f"{part[:4]}-{part[4:6]}-{part[6:]}")
+            else:
+                words.append(part[:1].upper() + part[1:])
+        return " ".join(words) or raw[:12]
+
+    def _run_display(self, run: SimulationDailyRun, stage_counts: dict[str, int]) -> dict[str, Any]:
+        target_count = int(stage_counts.get("target_count") or 0)
+        intent_count = int(stage_counts.get("execution_plan_intent_count") or stage_counts.get("order_intent_count") or 0)
+        submitted = int(stage_counts.get("submitted_intents") or 0)
+        failed = int(stage_counts.get("failed_intents") or 0)
+        broker_label = "MiniQMT \u6a21\u62df\u76d8" if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM else "LocalSim \u672c\u5730\u6a21\u62df"
+        account_label = self._readable_identifier(run.account_group_id) if run.account_group_id else "\u672c\u5730\u6a21\u62df\u8d26\u6237"
+        slot_label = self._readable_identifier(run.strategy_slot_id) if run.strategy_slot_id else "\u9ed8\u8ba4\u7b56\u7565\u69fd"
+        return {
+            "run_title": f"{run.trade_date.isoformat()} - {HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value)}",
+            "status_label": HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value),
+            "broker_label": broker_label,
+            "strategy_label": self._readable_identifier(run.strategy_id),
+            "package_label": f"\u7b56\u7565\u5305 {self._readable_identifier(run.package_id)}",
+            "account_slot_label": f"{account_label} / {slot_label}",
+            "selection_label": f"\u9009\u51fa {target_count} \u53ea\u5019\u9009",
+            "execution_plan_label": f"\u4ea4\u6613\u610f\u56fe {intent_count} / \u5df2\u63d0\u4ea4 {submitted} / \u5931\u8d25 {failed}",
+            "stage_label": f"\u9009\u80a1 {target_count} / \u610f\u56fe {intent_count} / \u5df2\u63d0\u4ea4 {submitted} / \u5931\u8d25 {failed}",
+        }
+
     def _run_summary(self, run: SimulationDailyRun) -> dict[str, Any]:
         stage_counts = self._stage_counts(run.run_payload_json)
         broker_context = self._broker_context(run)
@@ -252,6 +309,7 @@ class SimulationRuntimeOpsService:
             "status": run.status.value,
             "last_stage": str(run.run_payload_json.get("last_stage") or run.status.value),
             "stage_counts": stage_counts,
+            "display": self._run_display(run, stage_counts),
             "broker_context": broker_context,
             "strategy_performance": self._strategy_performance(run),
             "reconciliation_context": reconciliation_context,

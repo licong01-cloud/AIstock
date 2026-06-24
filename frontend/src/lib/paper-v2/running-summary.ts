@@ -12,6 +12,9 @@ export type RunningPortfolioSummary = {
 };
 
 export const ACTIVE_RUNNING_STATUSES = ["RUNNING", "PAUSED"];
+export const CURRENT_ACTIVE_SIMULATION_BROKERS = ["local_sim", "minqmt_sim"];
+
+const CURRENT_ACTIVE_SIMULATION_BROKER_SET = new Set(CURRENT_ACTIVE_SIMULATION_BROKERS);
 
 export const RUNNING_STATUS_OPTIONS = [
   { value: "ACTIVE", label: "运行/暂停" },
@@ -94,6 +97,69 @@ export function packageName(portfolio: PaperPortfolio): string {
 
 export function packageSource(portfolio: PaperPortfolio): string {
   return String(portfolio.frozen_manifest?.["source_id"] || portfolio.frozen_manifest?.["run_id"] || portfolio.package_id || "-");
+}
+
+export function brokerBackendLabel(value: unknown): string {
+  const backend = String(value || "local_sim").toLowerCase();
+  if (backend === "minqmt_sim") return "MiniQMT 模拟盘";
+  if (backend === "local_sim") return "LocalSim 本地模拟";
+  return String(value || "-");
+}
+
+export function isCurrentActiveSimulation(row: RunningPortfolioSummary): boolean {
+  const broker = String(row.portfolio.broker_backend || "local_sim").toLowerCase();
+  const status = String(row.portfolio.status || "").toUpperCase();
+  return ACTIVE_RUNNING_STATUSES.includes(status) && CURRENT_ACTIVE_SIMULATION_BROKER_SET.has(broker);
+}
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function errorText(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (!isObject(value)) return "";
+  const nested = isObject(value.error) ? value.error : {};
+  return firstText(
+    value.message,
+    value.detail,
+    value.error_message,
+    nested.message,
+    value.error_code,
+    value.code,
+  );
+}
+
+export function sessionErrorMessage(row: RunningPortfolioSummary): string {
+  const sessionError = errorText(row.latestSession?.last_error);
+  if (sessionError) return sessionError;
+  const runError = errorText((row.latestRun as unknown as JsonObject | undefined)?.error || (row.latestRun as unknown as JsonObject | undefined)?.error_json);
+  if (runError) return runError;
+  return firstText(row.operability?.remediation_hint);
+}
+
+export function activeSimulationState(row: RunningPortfolioSummary): { label: string; hint: string; badgeTone: "success" | "danger" | "warning" | "info" | "neutral" } {
+  const portfolioStatus = String(row.portfolio.status || "").toUpperCase();
+  const sessionStatus = String(row.latestSession?.status || row.operability?.latest_session_status || "").toUpperCase();
+  const hasTickableSession = row.operability?.has_tickable_session === true;
+  const noOperableSession = row.operability?.no_operable_session === true;
+  const message = sessionErrorMessage(row);
+  if (portfolioStatus === "PAUSED") {
+    return { label: "已暂停 / 激活保留", hint: message || "模拟盘仍属于当前激活集合，可恢复后继续运行。", badgeTone: "info" };
+  }
+  if (sessionStatus === "FAILED") {
+    return { label: "当日失败 / 需恢复", hint: message || "最近会话失败，仍保留在当前激活模拟盘便于排障。", badgeTone: "danger" };
+  }
+  if (noOperableSession) {
+    return { label: "无可推进会话 / 需恢复", hint: message || "模拟盘处于激活状态，但没有 scheduler 可推进会话。", badgeTone: "warning" };
+  }
+  if (hasTickableSession) {
+    return { label: "可推进", hint: "存在 scheduler 可推进会话。", badgeTone: "success" };
+  }
+  return { label: "激活中 / 待检查", hint: message || "模拟盘状态仍为激活，但缺少可推进会话证据。", badgeTone: "warning" };
 }
 
 export function runningScenario(row: RunningPortfolioSummary): { label: string; hint: string } {
