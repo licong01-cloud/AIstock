@@ -1,0 +1,108 @@
+{
+  "actual": "Add a read-only Nightly check item repo_hygiene_orphan_audit. It should scan the repository for suspicious orphan or legacy assets such as unreferenced code files, obsolete debug/backfill scripts, misplaced documents, temporary CSV/JSON/log/dump/checkpoint files, empty directories, duplicate/legacy remnants, and retired code. The Nightly job must generate tiered reports and candidate remediation lists, but must not delete files or mutate source/business state. Risk tiers must protect migrations, BUG JSON, standards, CI/nox/workflows, production config, registered MCP/tools/routers, and other dynamic entrypoints. Candidate cleanup must require human-reviewed PRs; only low-risk metadata/report generation is automated.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260624_BUG-506-nightly-repo-hygiene-orphan-audit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/nightly.yml",
+    "scripts/code_intelligence_adapter.py",
+    "scripts/repo_hygiene_orphan_audit.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "backend/tests/scripts/test_repo_hygiene_orphan_audit.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-506",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T17:55:22.054320Z",
+  "description": "Add a read-only Nightly check item repo_hygiene_orphan_audit. It should scan the repository for suspicious orphan or legacy assets such as unreferenced code files, obsolete debug/backfill scripts, misplaced documents, temporary CSV/JSON/log/dump/checkpoint files, empty directories, duplicate/legacy remnants, and retired code. The Nightly job must generate tiered reports and candidate remediation lists, but must not delete files or mutate source/business state. Risk tiers must protect migrations, BUG JSON, standards, CI/nox/workflows, production config, registered MCP/tools/routers, and other dynamic entrypoints. Candidate cleanup must require human-reviewed PRs; only low-risk metadata/report generation is automated.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-b8e312476d6e",
+      "timestamp": "2026-06-23T17:55:22.054315Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-23T17:55:22.054320Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1564,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1564",
+  "last_seen_at": "2026-06-23T17:55:22.054320Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly repo hygiene orphan audit",
+  "trigger_condition": {
+    "fingerprint": "b8e312476d6ea739445a344c",
+    "source_event_id": "FE-20260624-b8e312476d6e"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/backfill",
+    "ui_routes": [
+      "/backfill"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

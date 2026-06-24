@@ -1358,6 +1358,7 @@ def build_llm_value_summary(
     rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
     design_drift = _read_json_object(artifact_dir / "design-drift-audit.json")
     silent_degradation = _read_json_object(artifact_dir / "silent-degradation-audit.json")
+    repo_hygiene = _read_json_object(artifact_dir / "repo-hygiene-orphan-audit.json")
     ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
     discovery_manifest = _read_json_object(artifact_dir / "discovery-plans" / "manifest.json")
     bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
@@ -1473,6 +1474,8 @@ def build_llm_value_summary(
         warnings.append("LLM design drift audit artifact is missing.")
     if not silent_degradation:
         warnings.append("LLM silent degradation audit artifact is missing.")
+    if not repo_hygiene:
+        warnings.append("Repo hygiene orphan audit artifact is missing.")
     artifact_refs = {
         "codegraph_freshness_json": _artifact_ref(artifact_dir / "codegraph-freshness.json", root),
         "codegraph_freshness_md": _artifact_ref(artifact_dir / "codegraph-freshness.md", root),
@@ -1494,6 +1497,9 @@ def build_llm_value_summary(
         "design_drift_audit_markdown": _artifact_ref(artifact_dir / "design-drift-audit.md", root),
         "silent_degradation_audit_json": _artifact_ref(artifact_dir / "silent-degradation-audit.json", root),
         "silent_degradation_audit_markdown": _artifact_ref(artifact_dir / "silent-degradation-audit.md", root),
+        "repo_hygiene_orphan_audit_json": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.json", root),
+        "repo_hygiene_orphan_audit_markdown": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.md", root),
+        "repo_hygiene_orphan_audit_csv": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.csv", root),
     }
     codegraph_refs = _unique_refs(
         artifact_refs["codegraph_freshness_json"],
@@ -1653,6 +1659,32 @@ def build_llm_value_summary(
             "artifact_ref": artifact_refs["silent_degradation_audit_json"],
             "markdown_ref": artifact_refs["silent_degradation_audit_markdown"],
         },
+        "repo_hygiene_orphan_audit": {
+            "workflow_gate": repo_hygiene.get("workflow_gate"),
+            "candidate_only": repo_hygiene.get("candidate_only"),
+            "cleanup_requires_human_pr": repo_hygiene.get("cleanup_requires_human_pr"),
+            "total_scanned": (repo_hygiene.get("summary") or {}).get("total_scanned")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "candidate_count": (repo_hygiene.get("summary") or {}).get("candidate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "review_count": (repo_hygiene.get("summary") or {}).get("review_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "relocate_count": (repo_hygiene.get("summary") or {}).get("relocate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "archive_count": (repo_hygiene.get("summary") or {}).get("archive_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "delete_candidate_count": (repo_hygiene.get("summary") or {}).get("delete_candidate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "artifact_ref": artifact_refs["repo_hygiene_orphan_audit_json"],
+            "markdown_ref": artifact_refs["repo_hygiene_orphan_audit_markdown"],
+            "csv_ref": artifact_refs["repo_hygiene_orphan_audit_csv"],
+        },
         "prompt_evaluation": {
             "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
             "case_count": prompt_eval.get("case_count") or prompt_metrics.get("case_count"),
@@ -1686,6 +1718,11 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         else {}
     )
     metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
+    repo_hygiene = (
+        payload.get("repo_hygiene_orphan_audit")
+        if isinstance(payload.get("repo_hygiene_orphan_audit"), dict)
+        else {}
+    )
     feedback = metrics.get("candidate_feedback") if isinstance(metrics.get("candidate_feedback"), dict) else {}
     refs = payload.get("artifact_refs") if isinstance(payload.get("artifact_refs"), dict) else {}
     allowed_plan_keys = ",".join(llm.get("allowed_plan_keys") or []) or "none"
@@ -1721,6 +1758,7 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
         f"- design_drift_audit: `targets={design_drift.get('review_target_count') or 0}, findings={design_drift.get('finding_count') or 0}, candidate_only={bool(design_drift.get('candidate_only'))}`",
         f"- silent_degradation_audit: `targets={silent_degradation.get('review_target_count') or 0}, findings={silent_degradation.get('finding_count') or 0}, candidate_only={bool(silent_degradation.get('candidate_only'))}`",
+        f"- repo_hygiene_orphan_audit: `scanned={repo_hygiene.get('total_scanned') or 0}, candidates={repo_hygiene.get('candidate_count') or 0}, delete_candidates={repo_hygiene.get('delete_candidate_count') or 0}, human_pr={bool(repo_hygiene.get('cleanup_requires_human_pr'))}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
         f"- guarded_rollout: `mode={rollout.get('mode') or 'unknown'}, can_enhance={rollout.get('llm_can_enhance_issue')}`",
         "",
@@ -1737,6 +1775,8 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
         f"- design_drift_audit: `{refs.get('design_drift_audit_markdown') or refs.get('design_drift_audit_json') or 'missing'}`",
         f"- silent_degradation_audit: `{refs.get('silent_degradation_audit_markdown') or refs.get('silent_degradation_audit_json') or 'missing'}`",
+        f"- repo_hygiene_orphan_audit: `{refs.get('repo_hygiene_orphan_audit_markdown') or refs.get('repo_hygiene_orphan_audit_json') or 'missing'}`",
+        f"- repo_hygiene_orphan_audit_csv: `{refs.get('repo_hygiene_orphan_audit_csv') or 'missing'}`",
         "",
         "This is a compact value summary. Raw JSON artifacts stay in the uploaded artifact bundle and are not inlined in the Nightly summary.",
     ]
