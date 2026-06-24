@@ -39,8 +39,8 @@
   "expected": "Individual-stock depth analysis feeds the LLM an executable set containing all 7 stock_analysis tools plus external_research search/fetch, uses enough tool iterations, requests >=60 trading-day K line history, grounds at least market/history/fund-flow/fundamental dimensions plus web evidence, and fail-closed explicitly when required data sources are missing.",
   "first_seen_at": "2026-06-24T05:45:13.684149Z",
   "fix_branch": "bug/BUG-509-ra-stock-depth-analysis-underuses-available-stoc-20260624",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6262db57b6b366fa5a3d82cebd41c96a6d5fe1fd",
+  "fixed_at": "2026-06-24T13:59:29.182071Z",
   "github_issue_number": 1577,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1577",
   "last_seen_at": "2026-06-24T05:45:13.684149Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1602",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -72,6 +73,9 @@
     "fingerprint": "07eec4ba675e8788366f06c6",
     "source_event_id": "FE-20260624-07eec4ba675e"
   },
+  "validation_evidence": [
+    "#1602 replacement for closed stacked PR #1595; required checks green before squash merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
