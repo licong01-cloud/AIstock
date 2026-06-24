@@ -640,11 +640,13 @@ rules:
   - rule_id: codex_project_instructions
     priority: 85
     include:
+      - AGENTS.md
       - AGENTS.override.md
       - docs/codex_project_memory.md
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/fix-aistock-issue.md
+      - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards
     impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs

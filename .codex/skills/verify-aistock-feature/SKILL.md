@@ -21,6 +21,19 @@ Read these files before planning or running validation:
 
 Do not modify `AGENTS.md`.
 
+
+## New Feature Workflow Entry Point
+
+For non-trivial new features, architecture changes, cross-module capabilities, production paths, or UI/API/DB/MCP contract changes, apply `FEATURE-WORKFLOW-001` before implementation:
+
+1. Classify the feature as `F0`, `F1`, or `F2`.
+2. Keep the approved design or Feature Card in the project docs path required by the tier.
+3. Use stable `Design Acceptance Index` ids such as `F-001`; refer to ids instead of repeatedly loading the full design.
+4. Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2`.
+5. Do not report ready if any acceptance matrix row has an unapproved gap, simplified/POC/mock-only/static success, partial implementation, or silent fallback.
+
+Use the BUG workflow only when the task is a BUG/GitHub Issue fix; do not force new feature delivery through BUG JSON unless the user explicitly asks.
+
 ## Workflow
 
 1. Classify impact: frontend, backend API, repository/DB, data pipeline, QE/RD-Agent, StrategyPackage, Selection Center, Paper Trading v2, HMM, execution algorithm, UI, or protected assets.

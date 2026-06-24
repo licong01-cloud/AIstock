@@ -713,7 +713,9 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             compact["client_manifest"] = _pick(
                 payload["client_manifest"],
                 "codex_skill_status",
+                "codex_feature_skill_status",
                 "claude_command_status",
+                "claude_feature_command_status",
                 "restart_recommended",
             )
         if "h7_code_intelligence" in payload:
@@ -5818,44 +5820,94 @@ def _mcp_config_snapshot() -> dict[str, Any]:
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
-    repo_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
-    global_skill = codex_home / "skills" / "fix-aistock-issue"
-    repo_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
-    global_claude = claude_home / "commands" / "fix-aistock-issue.md"
+    repo_issue_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
+    repo_feature_skill = REPO_ROOT / ".codex" / "skills" / "verify-aistock-feature"
+    global_issue_skill = codex_home / "skills" / "fix-aistock-issue"
+    global_feature_skill = codex_home / "skills" / "verify-aistock-feature"
+    repo_issue_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    repo_feature_claude = REPO_ROOT / ".claude" / "commands" / "aistock-feature-workflow.md"
+    global_issue_claude = claude_home / "commands" / "fix-aistock-issue.md"
+    global_feature_claude = claude_home / "commands" / "aistock-feature-workflow.md"
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
     repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
-    repo_skill_sha = _sha256_tree(repo_skill)
-    global_skill_sha = _sha256_tree(global_skill)
-    claude_sha = _sha256_file(repo_claude)
-    global_claude_sha = _sha256_file(global_claude)
+    issue_skill_sha = _sha256_tree(repo_issue_skill)
+    feature_skill_sha = _sha256_tree(repo_feature_skill)
+    global_issue_skill_sha = _sha256_tree(global_issue_skill)
+    global_feature_skill_sha = _sha256_tree(global_feature_skill)
+    issue_claude_sha = _sha256_file(repo_issue_claude)
+    feature_claude_sha = _sha256_file(repo_feature_claude)
+    global_issue_claude_sha = _sha256_file(global_issue_claude)
+    global_feature_claude_sha = _sha256_file(global_feature_claude)
     cli_sha = _sha256_file(cli)
-    codex_status = "missing_global"
-    if repo_skill_sha and global_skill_sha:
-        codex_status = "current" if repo_skill_sha == global_skill_sha else "stale"
-    elif repo_skill_sha and not global_skill_sha:
-        codex_status = "missing_global"
-    elif not repo_skill_sha:
-        codex_status = "missing_repo_skill"
+
+    def _tree_status(repo_sha: str | None, global_sha: str | None) -> str:
+        if repo_sha and global_sha:
+            return "current" if repo_sha == global_sha else "stale"
+        if repo_sha and not global_sha:
+            return "missing_global"
+        return "missing_repo_skill"
+
+    def _file_status(repo_sha: str | None, global_sha: str | None) -> str:
+        if repo_sha and global_sha:
+            return "current" if repo_sha == global_sha else "stale_global"
+        if repo_sha and not global_sha:
+            return "missing_global"
+        return "missing_repo"
+
+    def _combined_status(statuses: Iterable[str], *, missing_repo_status: str, stale_status: str) -> str:
+        values = list(statuses)
+        if any(value == missing_repo_status for value in values):
+            return missing_repo_status
+        if any(value.startswith("stale") for value in values):
+            return stale_status
+        if any(value == "missing_global" for value in values):
+            return "missing_global"
+        return "current"
+
+    issue_skill_status = _tree_status(issue_skill_sha, global_issue_skill_sha)
+    feature_skill_status = _tree_status(feature_skill_sha, global_feature_skill_sha)
+    issue_claude_status = _file_status(issue_claude_sha, global_issue_claude_sha)
+    feature_claude_status = _file_status(feature_claude_sha, global_feature_claude_sha)
+    codex_status = _combined_status(
+        [issue_skill_status, feature_skill_status],
+        missing_repo_status="missing_repo_skill",
+        stale_status="stale",
+    )
+    claude_status = _combined_status(
+        [issue_claude_status, feature_claude_status],
+        missing_repo_status="missing_repo",
+        stale_status="stale_global",
+    )
     return {
         "schema_version": "aistock_issue_workflow_client_manifest_v1",
         "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
         "workflow_cli_sha256": cli_sha,
-        "codex_skill_sha256": repo_skill_sha,
-        "global_codex_skill_sha256": global_skill_sha,
-        "claude_command_sha256": claude_sha,
-        "global_claude_command_sha256": global_claude_sha,
+        "codex_skill_sha256": issue_skill_sha,
+        "global_codex_skill_sha256": global_issue_skill_sha,
+        "codex_feature_skill_sha256": feature_skill_sha,
+        "global_codex_feature_skill_sha256": global_feature_skill_sha,
+        "claude_command_sha256": issue_claude_sha,
+        "global_claude_command_sha256": global_issue_claude_sha,
+        "claude_feature_command_sha256": feature_claude_sha,
+        "global_claude_feature_command_sha256": global_feature_claude_sha,
         "codex_skill_status": codex_status,
-        "claude_command_status": "current"
-        if claude_sha and global_claude_sha == claude_sha
-        else ("stale_global" if claude_sha and global_claude_sha else ("missing_global" if claude_sha else "missing_repo")),
+        "codex_issue_skill_status": issue_skill_status,
+        "codex_feature_skill_status": feature_skill_status,
+        "claude_command_status": claude_status,
+        "claude_issue_command_status": issue_claude_status,
+        "claude_feature_command_status": feature_claude_status,
         "paths": {
-            "repo_codex_skill": str(repo_skill),
-            "global_codex_skill": str(global_skill),
-            "claude_command": str(repo_claude),
-            "global_claude_command": str(global_claude),
+            "repo_codex_skill": str(repo_issue_skill),
+            "global_codex_skill": str(global_issue_skill),
+            "repo_codex_feature_skill": str(repo_feature_skill),
+            "global_codex_feature_skill": str(global_feature_skill),
+            "claude_command": str(repo_issue_claude),
+            "global_claude_command": str(global_issue_claude),
+            "claude_feature_command": str(repo_feature_claude),
+            "global_claude_feature_command": str(global_feature_claude),
             "workflow_cli": str(cli),
         },
-        "restart_recommended": codex_status != "current" or (claude_sha and global_claude_sha != claude_sha),
+        "restart_recommended": codex_status != "current" or claude_status != "current",
         "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
     }
 
@@ -5999,29 +6051,49 @@ def build_client_install_plan(
     codex_home: str | None = None,
     claude_home: str | None = None,
 ) -> dict[str, Any]:
-    source_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
-    source_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    source_issue_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
+    source_feature_skill = REPO_ROOT / ".codex" / "skills" / "verify-aistock-feature"
+    source_issue_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
+    source_feature_claude = REPO_ROOT / ".claude" / "commands" / "aistock-feature-workflow.md"
     target_home = Path(codex_home) if codex_home else _codex_home()
-    target_skill = target_home / "skills" / "fix-aistock-issue"
+    target_issue_skill = target_home / "skills" / "fix-aistock-issue"
+    target_feature_skill = target_home / "skills" / "verify-aistock-feature"
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
-    target_claude = target_claude_home / "commands" / "fix-aistock-issue.md"
+    target_issue_claude = target_claude_home / "commands" / "fix-aistock-issue.md"
+    target_feature_claude = target_claude_home / "commands" / "aistock-feature-workflow.md"
     blocking: list[str] = []
-    if not source_skill.exists():
-        blocking.append(f"missing repo Codex skill: {source_skill}")
-    if not source_claude.exists():
-        blocking.append(f"missing repo Claude Code command: {source_claude}")
+    if not source_issue_skill.exists():
+        blocking.append(f"missing repo Codex issue skill: {source_issue_skill}")
+    if not source_feature_skill.exists():
+        blocking.append(f"missing repo Codex feature skill: {source_feature_skill}")
+    if not source_issue_claude.exists():
+        blocking.append(f"missing repo Claude Code issue command: {source_issue_claude}")
+    if not source_feature_claude.exists():
+        blocking.append(f"missing repo Claude Code feature command: {source_feature_claude}")
     actions = [
         {
-            "action": "sync_global_codex_skill",
-            "source": str(source_skill),
-            "target": str(target_skill),
-            "safe": not blocking,
+            "action": "sync_global_codex_issue_skill",
+            "source": str(source_issue_skill),
+            "target": str(target_issue_skill),
+            "safe": source_issue_skill.exists() and not blocking,
         },
         {
-            "action": "verify_claude_code_command",
-            "source": str(source_claude),
-            "target": str(target_claude),
-            "safe": source_claude.exists(),
+            "action": "sync_global_codex_feature_skill",
+            "source": str(source_feature_skill),
+            "target": str(target_feature_skill),
+            "safe": source_feature_skill.exists() and not blocking,
+        },
+        {
+            "action": "sync_claude_code_issue_command",
+            "source": str(source_issue_claude),
+            "target": str(target_issue_claude),
+            "safe": source_issue_claude.exists() and not blocking,
+        },
+        {
+            "action": "sync_claude_code_feature_command",
+            "source": str(source_feature_claude),
+            "target": str(target_feature_claude),
+            "safe": source_feature_claude.exists() and not blocking,
         },
     ]
     payload = {
@@ -6038,15 +6110,25 @@ def build_client_install_plan(
     if apply:
         if blocking:
             raise WorkflowError("; ".join(blocking))
-        if target_skill.exists():
-            shutil.rmtree(target_skill)
-        target_skill.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source_skill, target_skill)
-        target_claude.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_claude, target_claude)
+        for source, target in (
+            (source_issue_skill, target_issue_skill),
+            (source_feature_skill, target_feature_skill),
+        ):
+            if target.exists():
+                shutil.rmtree(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, target)
+        target_issue_claude.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_issue_claude, target_issue_claude)
+        shutil.copy2(source_feature_claude, target_feature_claude)
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
-        payload["installed"] = [{"target": str(target_skill)}, {"target": str(target_claude)}]
+        payload["installed"] = [
+            {"target": str(target_issue_skill)},
+            {"target": str(target_feature_skill)},
+            {"target": str(target_issue_claude)},
+            {"target": str(target_feature_claude)},
+        ]
         payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
     manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
     _write_json(

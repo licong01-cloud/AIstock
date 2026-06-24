@@ -47,6 +47,16 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
 - Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
 
+
+## Feature Workflow Rules
+
+- New non-trivial features use `FEATURE-WORKFLOW-001` in the active development standard; BUG fixes continue to use the issue workflow.
+- Classify feature work before implementation: `F0` lightweight Feature Card, `F1` standard single-module design, `F2` cross-module or production-critical architecture design.
+- F0/F1/F2 feature work must keep a stable `Design Acceptance Index` and a pre-merge design acceptance matrix.
+- Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` for the feature artifact.
+- Do not report completion or request merge when the matrix has an unapproved gap, simplified/POC/mock-only/static delivery, or silent fallback.
+- Codex uses `.codex/skills/verify-aistock-feature/SKILL.md`; Claude Code uses `.claude/commands/aistock-feature-workflow.md` for the same feature workflow entrypoint.
+
 ## Issue Workflow Rules
 
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint for submitting, fixing, triaging, batching, finishing, closing, syncing, or resuming AIstock BUG/GitHub Issues.
