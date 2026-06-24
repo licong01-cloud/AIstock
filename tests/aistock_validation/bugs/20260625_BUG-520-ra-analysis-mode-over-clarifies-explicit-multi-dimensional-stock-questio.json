@@ -2,7 +2,9 @@
   "actual": "RA asks a broad clarification like which dimension to look at first even when the entity and requested dimensions are clear.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260625_BUG-520-ra-analysis-mode-over-clarifies-explicit-multi-dimensional-stock-questio.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "prompt_packs/research_assistant/main/nodes/mode.analysis.md",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-520",
@@ -20,6 +22,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260625-21c072c2b5fc",
       "timestamp": "2026-06-24T18:34:27.713731Z"
+    },
+    {
+      "action": "scope_expanded_for_prompt_authority_fix",
+      "actor": "codex",
+      "note": "User-specified fix is prompt-only in mode.analysis.md (YAML authority, reload effective); service.py/react_grounding remain out of scope.",
+      "timestamp": "2026-06-24T18:43:00Z"
+    },
+    {
+      "action": "scope_expanded_for_prompt_checksum_pin",
+      "actor": "codex",
+      "note": "Updated the RA DB-direct parity characterization checksum pin for the intended mode.analysis prompt text change; no service.py/react_grounding logic changed.",
+      "timestamp": "2026-06-24T18:53:34Z"
     }
   ],
   "evidence_uris": [],
@@ -43,7 +57,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
