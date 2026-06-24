@@ -41,6 +41,12 @@ from backend.services.research_assistant.service import (
     ResearchAssistantCatalogNotReadyError,
     ResearchAssistantRuntimeConfigInvalidError,
     ResearchAssistantService,
+    STOCK_DEPTH_EXTERNAL_TOOL_NAMES,
+    STOCK_DEPTH_HISTORY_PERIOD,
+    STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS,
+    STOCK_DEPTH_MIN_TOOL_EXECUTIONS,
+    STOCK_DEPTH_REQUIRED_TOOL_REFS,
+    STOCK_DEPTH_STOCK_TOOL_NAMES,
 )
 from backend.services.research_assistant.runtime_config import (
     RuntimeConfigCapabilityValidationError,
@@ -3184,6 +3190,93 @@ def test_chat_turn_reports_provider_length_stop_loudly() -> None:
     assert "stage=llm_completion" in text
     assert "llm_completion_truncated" in text
     assert result["cards"]["error_card"]["error"]["message"].startswith("llm_completion_truncated")
+
+
+def test_bug_509_stock_depth_offered_tools_equal_full_executable_data_surface() -> None:
+    svc = _chat_service()
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.STOCK_ANALYSIS_REQUEST,
+        confidence=0.95,
+        mode_reason="stock_depth",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    _specs, registry = svc._agentic_function_tools(mode_decision)
+    offered = {
+        (str(item["server_key"]), str(item["tool_name"]))
+        for item in registry.values()
+        if isinstance(item, dict)
+    }
+    executable = {
+        (entry.server_key, entry.tool_name)
+        for entry in svc._react_tool_catalog_entries(capability_backed_only=True)
+        if entry.side_effect_level == "read_only"
+    }
+
+    assert set(STOCK_DEPTH_REQUIRED_TOOL_REFS) <= offered
+    assert set(STOCK_DEPTH_REQUIRED_TOOL_REFS) <= executable
+    assert offered == executable
+
+
+def test_bug_509_stock_depth_route_seeds_all_stock_reads_plus_web_and_60_day_kline() -> None:
+    svc = _chat_service()
+    message = "stock depth all-round fundamental future trend analysis for 000688"
+    route = svc._with_agentic_route_candidates(
+        message,
+        {
+            "domain": "stock_analysis",
+            "server_key": "aistock-stock-analysis",
+            "tool_name": "stock_analysis_get_quote",
+            "side_effect": "read_only",
+            "confidence": 0.95,
+        },
+    )
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.STOCK_ANALYSIS_REQUEST,
+        confidence=0.95,
+        mode_reason="stock_depth",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    seeds = svc._seeded_react_tool_calls({"mcp_route_decision": route}, mode_decision)
+    seed_pairs = {(seed.server_key, seed.tool_name) for seed in seeds}
+    expected_seed_pairs = {
+        *{("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES},
+        ("aistock-external-research", "external_research_search_web"),
+    }
+    stock_seed_payloads = [seed.payload_json for seed in seeds if seed.server_key == "aistock-stock-analysis"]
+    react_config = svc._react_grounding_config(svc.active_runtime_config(), user_message=message)
+    react_messages = svc._react_messages_for_agentic_synthesis(
+        [{"role": "user", "content": message}],
+        user_message=message,
+        route_seeds=seeds,
+        route_candidates=route["route_candidates"],
+        graph_context={},
+    )
+    directive = json.loads(str(react_messages[-1]["content"]))
+
+    assert route["agentic_route_policy"]["allow_multi_tool"] is True
+    assert expected_seed_pairs <= seed_pairs
+    assert len(seed_pairs) >= 8
+    assert all(payload.get("symbol") == "000688" for payload in stock_seed_payloads)
+    assert all(payload.get("period") == STOCK_DEPTH_HISTORY_PERIOD for payload in stock_seed_payloads)
+    assert all(payload.get("min_trading_days") == STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS for payload in stock_seed_payloads)
+    assert len(seed_pairs) >= STOCK_DEPTH_MIN_TOOL_EXECUTIONS
+    assert react_config.max_tool_iterations >= 10
+    stock_policy = directive["individual_stock_depth_analysis_policy"]
+    assert set(stock_policy["required_stock_tools"]) == set(STOCK_DEPTH_STOCK_TOOL_NAMES)
+    assert set(stock_policy["required_external_tools"]) == set(STOCK_DEPTH_EXTERNAL_TOOL_NAMES)
+    assert stock_policy["minimum_kline_trading_days"] == 60
 
 
 def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None:

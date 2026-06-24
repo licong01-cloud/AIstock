@@ -201,6 +201,39 @@ INFORMATION_QUERY_TERMS = (
     "\u8d8b\u52bf",
     "\u5206\u6790",
 )
+STOCK_DEPTH_QUERY_TERMS = (
+    "stock depth",
+    "all-round",
+    "comprehensive",
+    "future trend",
+    "recent trend",
+    "\u4e09\u7ef4",
+    "\u7efc\u5408",
+    "\u5168\u65b9\u4f4d",
+    "\u6df1\u5ea6",
+)
+STOCK_DEPTH_DIMENSION_TERMS = (
+    "limit down",
+    "fundamental",
+    "fundamentals",
+    "\u8dcc\u505c",
+    "\u57fa\u672c\u9762",
+    "\u57fa\u672c\u60c5\u51b5",
+    "\u8fd1\u671f\u8d70\u52bf",
+    "\u672a\u6765\u8d8b\u52bf",
+    "\u884c\u4e1a\u5730\u4f4d",
+    "\u8d44\u91d1",
+    "\u8d22\u52a1",
+    "\u6280\u672f",
+    "fund flow",
+    "financial",
+    "technical",
+    "industry",
+)
+STOCK_DEPTH_REQUIRED_CATEGORIES = ("market", "history", "fund_flow", "fundamental")
+STOCK_DEPTH_MIN_REQUIRED_CATEGORIES = 4
+STOCK_DEPTH_MIN_TOOL_EXECUTIONS = 8
+STOCK_ANALYSIS_SERVER_KEY = "aistock-stock-analysis"
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -388,11 +421,17 @@ def _hostname_is_stub(hostname: str | None) -> bool:
 
 
 def _text_contains_stub_host(text: str) -> bool:
-    parsed = urlparse(text)
+    try:
+        parsed = urlparse(text)
+    except ValueError:
+        parsed = urlparse("")
     if _hostname_is_stub(parsed.hostname):
         return True
     if "://" not in text:
-        parsed = urlparse(f"//{text}")
+        try:
+            parsed = urlparse(f"//{text}")
+        except ValueError:
+            parsed = urlparse("")
         if _hostname_is_stub(parsed.hostname):
             return True
     lowered = text.lower()
@@ -452,6 +491,141 @@ def _is_external_research_result(result: McpToolResult) -> bool:
 
 def _has_business_evidence(collected_results: list[McpToolResult]) -> bool:
     return any(_is_business_source_result(result) and _result_has_evidence_items(result) for result in collected_results)
+
+
+def _is_stock_depth_query(config: ReactGroundingConfig) -> bool:
+    text = str(config.user_message or "")
+    lower = text.lower()
+    has_depth_focus = "stock depth" in lower or "\u6df1\u5ea6" in text
+    dimension_hits = {term for term in STOCK_DEPTH_DIMENSION_TERMS if term.lower() in lower}
+    has_limit_down_triplet = (
+        ("limit down" in lower or "\u8dcc\u505c" in text)
+        and ("future" in lower or "\u672a\u6765" in text)
+        and ("fundamental" in lower or "\u57fa\u672c\u9762" in text or "\u57fa\u672c\u60c5\u51b5" in text)
+    )
+    has_stock_depth_phrase = "stock depth" in lower and ("fundamental" in lower or "future" in lower)
+    return (has_depth_focus and len(dimension_hits) >= 2) or has_limit_down_triplet or has_stock_depth_phrase
+
+
+def _stock_depth_category_for_dataset(dataset: str) -> str | None:
+    normalized = dataset.strip().lower()
+    if normalized == "quote":
+        return "market"
+    if normalized == "kline":
+        return "history"
+    if normalized == "fund_flow":
+        return "fund_flow"
+    if normalized in {"financials", "quarterly", "fundamentals"}:
+        return "fundamental"
+    if normalized == "technicals":
+        return "technicals"
+    if normalized == "margin_financing":
+        return "margin"
+    return None
+
+
+def _stock_depth_section_has_evidence(section: dict[str, Any]) -> bool:
+    status = _normalize_status(str(section.get("status") or "ok"))
+    if status in {"blocked", "degraded", "failed", "failure", "error"}:
+        return False
+    if isinstance(section.get("items"), list) and section["items"]:
+        return True
+    try:
+        if int(section.get("total") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(section.get("source_refs") and section.get("as_of"))
+
+
+def _stock_depth_section_has_real_external_evidence(section: dict[str, Any]) -> bool:
+    source_blob = json.dumps(
+        {
+            "source": section.get("source"),
+            "source_refs": section.get("source_refs"),
+            "items": section.get("items"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    lowered = source_blob.lower()
+    if not ("external_research" in lowered or "external-research" in lowered):
+        return False
+    if any(marker in lowered for marker in EXTERNAL_RESEARCH_STUB_MARKERS):
+        return False
+    return not _text_contains_stub_host(source_blob)
+
+
+def _stock_depth_evidence_coverage(collected_results: list[McpToolResult]) -> dict[str, Any]:
+    categories: set[str] = set()
+    tools: set[str] = set()
+    evidence_units: set[str] = set()
+    external_research = False
+    for result in collected_results:
+        if not _is_success_result(result):
+            continue
+        if result.server_key == EXTERNAL_RESEARCH_SERVER_KEY:
+            tools.add(f"{result.server_key}/{result.tool_name}")
+        elif result.server_key == STOCK_ANALYSIS_SERVER_KEY:
+            tools.add(f"{result.server_key}/{result.tool_name}")
+        if not _result_has_evidence_items(result):
+            continue
+        if result.server_key == EXTERNAL_RESEARCH_SERVER_KEY:
+            external_research = True
+        payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+        sections = _payload_section_dicts(payload)
+        if not sections and payload.get("dataset"):
+            sections = [payload]
+        for section in sections:
+            if not _stock_depth_section_has_evidence(section):
+                continue
+            dataset = str(section.get("dataset") or "")
+            category = _stock_depth_category_for_dataset(dataset)
+            if category:
+                categories.add(category)
+                evidence_units.add(f"{result.server_key}/{result.tool_name}:{dataset}")
+            if _stock_depth_section_has_real_external_evidence(section):
+                external_research = True
+        if payload.get("response_mode") == "stock_analysis_evidence_card":
+            tools.add(f"{result.server_key}/{result.tool_name}")
+    missing = [category for category in STOCK_DEPTH_REQUIRED_CATEGORIES if category not in categories]
+    return {
+        "categories": sorted(categories),
+        "missing_categories": missing,
+        "external_research": external_research,
+        "tool_count": max(len(tools), len(evidence_units)),
+        "tools": sorted(tools),
+    }
+
+
+def _passes_stock_depth_required_evidence(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    if not _is_stock_depth_query(config):
+        return True
+    coverage = _stock_depth_evidence_coverage(collected_results)
+    return (
+        len(set(coverage["categories"]) & set(STOCK_DEPTH_REQUIRED_CATEGORIES)) >= STOCK_DEPTH_MIN_REQUIRED_CATEGORIES
+        and not coverage["missing_categories"]
+        and bool(coverage["external_research"])
+        and int(coverage["tool_count"]) >= STOCK_DEPTH_MIN_TOOL_EXECUTIONS
+    )
+
+
+def _render_stock_depth_missing_evidence_reply(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> str:
+    del config
+    coverage = _stock_depth_evidence_coverage(collected_results)
+    missing = list(coverage["missing_categories"])
+    if not coverage["external_research"]:
+        missing.append("external_research")
+    if int(coverage["tool_count"]) < STOCK_DEPTH_MIN_TOOL_EXECUTIONS:
+        missing.append(f"tool_count>={STOCK_DEPTH_MIN_TOOL_EXECUTIONS}")
+    attempted = ", ".join(coverage["tools"]) if coverage["tools"] else "none"
+    covered = ", ".join(coverage["categories"]) if coverage["categories"] else "none"
+    return (
+        "\u8bc1\u636e\u4e0d\u8db3\uff1a\u4e2a\u80a1\u6df1\u5ea6\u5206\u6790\u5fc5\u987b\u8986\u76d6"
+        "\u884c\u60c5\u3001>=60\u4ea4\u6613\u65e5\u5386\u53f2K\u7ebf\u3001\u8d44\u91d1\u6d41\u3001\u57fa\u672c\u9762\u5e76\u81f3\u5c11\u4e00\u6b21\u8054\u7f51\u8bc1\u636e\uff1b"
+        f"\u5df2\u8986\u76d6={covered}\uff1b\u7f3a\u5931={', '.join(missing)}\uff1b"
+        f"\u5df2\u5c1d\u8bd5\u5de5\u5177={attempted}\u3002reason_code=stock_depth_required_evidence_missing"
+    )
 
 
 def _has_empty_mcp_business_result(collected_results: list[McpToolResult]) -> bool:
@@ -990,6 +1164,19 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
         return decision
+    if config.evidence_required and collected_results and not _passes_stock_depth_required_evidence(config, collected_results):
+        decision = EvidenceGuardDecision(
+            False,
+            _render_stock_depth_missing_evidence_reply(config, collected_results),
+            "stock_depth_required_evidence_missing",
+            source_count,
+            as_of_count,
+        )
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and collected_results and _contains_forbidden_marker(text, config.forbidden_answer_markers):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: regenerated answer still matched a retired business template marker.", "post_guard_forbidden_answer_marker", source_count, as_of_count)
         if program_errors:
@@ -1195,6 +1382,9 @@ def run_react_grounding_loop(
             last_guard = guard
             trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
             citation_failure = guard.reason in {"missing_inline_tool_evidence", "unsourced_numeric_fact", "future_answer_boundary_missing", "multi_source_synthesis_missing"}
+            if not guard.allowed and guard.reason == "stock_depth_required_evidence_missing":
+                stopped_reason = "stock_depth_required_evidence_missing"
+                return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
             if not guard.allowed and citation_failure and iteration < config.max_tool_iterations and _evidence_citation_inventory(collected_results):
                 collected_results.append(
                     McpToolResult(
@@ -1297,7 +1487,20 @@ def run_react_grounding_loop(
                     result.summary = _render_program_error_summary(result.error_json)
             result.stable_call_id = call.stable_call_id
             iteration_results.append(result)
-        iteration_results.sort(key=lambda item: item.sorted_key())
+        if _is_stock_depth_query(config):
+            iteration_results.sort(
+                key=lambda item: (
+                    0
+                    if item.server_key == STOCK_ANALYSIS_SERVER_KEY
+                    else 1
+                    if item.server_key == EXTERNAL_RESEARCH_SERVER_KEY
+                    else 2,
+                    item.tool_name,
+                    item.stable_call_id or "",
+                )
+            )
+        else:
+            iteration_results.sort(key=lambda item: item.sorted_key())
         for result in iteration_results:
             collected_results.append(result)
             working_messages.append(tool_result_message(result))

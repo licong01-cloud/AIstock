@@ -12,6 +12,7 @@ from backend.services.research_assistant.react_grounding import (
     ReactGroundingConfig,
     ToolCatalogEntry,
     ToolGateDecision,
+    compose_with_evidence_guard,
     run_react_grounding_loop,
     tool_result_message,
 )
@@ -245,10 +246,47 @@ class _SectionOnlyStockProvider:
                     "summary": "quote evidence",
                 },
                 {
+                    "dataset": "kline",
+                    "source_refs": ["stock-ref:kline:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "one-year kline evidence",
+                },
+                {
+                    "dataset": "financials",
+                    "source_refs": ["stock-ref:financials:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "financial evidence",
+                },
+                {
                     "dataset": "fund_flow",
                     "source_refs": ["stock-ref:fund_flow:000688"],
                     "as_of": "2026-06-16",
                     "summary": "fund-flow evidence",
+                },
+                {
+                    "dataset": "quarterly",
+                    "source_refs": ["stock-ref:quarterly:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "quarterly evidence",
+                },
+                {
+                    "dataset": "margin_financing",
+                    "source_refs": ["stock-ref:margin:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "margin financing evidence",
+                },
+                {
+                    "dataset": "technicals",
+                    "source_refs": ["stock-ref:technicals:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "technical indicator evidence",
+                },
+                {
+                    "dataset": "fundamentals",
+                    "source": "external_research_provider",
+                    "source_refs": ["external-research:guocheng:000688"],
+                    "as_of": "2026-06-16",
+                    "summary": "external web fundamentals evidence",
                 },
             ],
         },
@@ -347,6 +385,88 @@ def test_bug_413_guard_violation_regenerates_with_exact_citation_options() -> No
     assert "stock-ref:quote:000688" in result.final_text
     assert any(step.get("evidence_guard_reason") == "missing_inline_tool_evidence" for step in result.trace_steps)
     assert any(step.get("repair") == "regenerate_with_evidence_citation_options" for step in result.trace_steps)
+
+
+def _bug_509_stock_result(sections: list[dict[str, Any]], *, tool_name: str = "stock_analysis_get_quote") -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name=tool_name,
+        status="succeeded",
+        payload_json={
+            "response_mode": "stock_analysis_evidence_card",
+            "source": "stock_analysis_read_adapter",
+            "source_refs": ["stock-ref:quote:000688"],
+            "as_of": "2026-06-16",
+            "sections": sections,
+        },
+        source_refs=["stock-ref:quote:000688"],
+        as_of="2026-06-16",
+        summary="stock depth evidence card",
+        executed=True,
+    )
+
+
+def test_bug_509_stock_depth_guard_blocks_undercovered_stock_answer() -> None:
+    result = _bug_509_stock_result(
+        [
+            {"dataset": "quote", "source_refs": ["stock-ref:quote:000688"], "as_of": "2026-06-16"},
+            {"dataset": "kline", "source_refs": ["stock-ref:kline:000688"], "as_of": "2026-06-16"},
+        ]
+    )
+
+    guard = compose_with_evidence_guard(
+        "Bottom-line: 000688 only has quote and kline evidence here. source stock-ref:quote:000688 as_of 2026-06-16.",
+        [result],
+        ReactGroundingConfig(max_tool_iterations=10, user_message="stock depth all-round fundamental analysis for 000688"),
+    )
+
+    assert guard.allowed is False
+    assert guard.reason == "stock_depth_required_evidence_missing"
+    assert "reason_code=stock_depth_required_evidence_missing" in guard.text
+    assert "external_research" in guard.text
+
+
+def test_bug_509_stock_depth_guard_accepts_full_stock_card_with_web_evidence() -> None:
+    results = [
+        _bug_509_stock_result([{"dataset": "quote", "source_refs": ["stock-ref:quote:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_quote"),
+        _bug_509_stock_result([{"dataset": "kline", "source_refs": ["stock-ref:kline:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_kline"),
+        _bug_509_stock_result([{"dataset": "technicals", "source_refs": ["stock-ref:technicals:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_technicals"),
+        _bug_509_stock_result([{"dataset": "fund_flow", "source_refs": ["stock-ref:fund_flow:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_fund_flow"),
+        _bug_509_stock_result([{"dataset": "financials", "source_refs": ["stock-ref:financials:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_financials"),
+        _bug_509_stock_result([{"dataset": "quarterly", "source_refs": ["stock-ref:quarterly:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_quarterly"),
+        _bug_509_stock_result([{"dataset": "margin_financing", "source_refs": ["stock-ref:margin:000688"], "as_of": "2026-06-16"}], tool_name="stock_analysis_get_margin_financing"),
+        McpToolResult(
+            server_key="aistock-external-research",
+            tool_name="external_research_search_web",
+            status="succeeded",
+            payload_json={
+                "items": [
+                    {
+                        "title": "Guocheng Mining business background",
+                        "url": "https://research.example.com/guocheng-mining",
+                        "source": "external_research_provider",
+                        "as_of": "2026-06-16",
+                        "evidence_ref": "external-research:guocheng:000688",
+                    }
+                ],
+                "source_refs": ["external-research:guocheng:000688"],
+                "as_of": "2026-06-16",
+            },
+            source_refs=["external-research:guocheng:000688"],
+            as_of="2026-06-16",
+            summary="web evidence",
+            executed=True,
+        ),
+    ]
+
+    guard = compose_with_evidence_guard(
+        "Bottom-line: 000688 has market, history, fund-flow and fundamental evidence. source stock-ref:quote:000688 as_of 2026-06-16.",
+        results,
+        ReactGroundingConfig(max_tool_iterations=10, user_message="stock depth all-round fundamental analysis for 000688"),
+    )
+
+    assert guard.allowed is True
+    assert guard.reason == "ok"
 
 
 class _LocalDataSyncProvider:
