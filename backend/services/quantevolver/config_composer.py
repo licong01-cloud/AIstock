@@ -60,6 +60,16 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    raw_mode = params.get("ltr_loss_mode")
+    if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
+        return True
+    raw_loss = params.get("loss")
+    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+
+
 def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
     try:
         parsed = int(value)
@@ -3033,7 +3043,7 @@ class ConfigComposer:
         # ── 模型超参键白名单（始终可用，供策略安全过滤引用） ──
         _PTNN_HP_KEYS = {
             "n_epochs", "lr", "early_stop", "batch_size", "weight_decay",
-            "optimizer",
+            "optimizer", "loss",
         } | _GENERAL_PTNN_LTR_HP_KEYS
         # NOTE: hidden_size, num_layers, dropout 是模型架构参数，属于 pt_model_kwargs，
         # 由模型源码 (model.py) 硬编码，不能作为 GeneralPTNN.__init__() 的顶层参数传入。
@@ -3147,13 +3157,26 @@ class ConfigComposer:
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
 
+        model_name_for_ltr = str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class)
         model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
             model_class=model_class,
             model_module=model_module,
             model_kwargs=model_kwargs,
             model_dataset_cls=model_dataset_cls,
-            model_name=str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class),
+            model_name=model_name_for_ltr,
         )
+        if _requests_general_ptnn_ltr(custom_params) and (
+            model_class != "AIStockGeneralPTNNLTR"
+            or model_module != "aistock_models.general_ptnn_ltr"
+            or model_kwargs.get("ltr_loss_mode") != "approx_ndcg_at_k"
+        ):
+            raise ValueError(
+                "reason_code=ltr_loss_mode_injection_failed: "
+                "custom_params requested GeneralPTNN LTR but composed model did not route to "
+                "AIStockGeneralPTNNLTR; set custom_evo loop.model_params.ltr_loss_mode for a "
+                "TimeSeries GeneralPTNN model. "
+                f"model_class={model_class!r} model_module={model_module!r}"
+            )
 
         strategy_kwargs["signal"] = "<PRED>"
 

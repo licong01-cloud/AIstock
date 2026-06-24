@@ -92,6 +92,73 @@ def _parse_json_field(value: Any) -> Any:
     return value
 
 
+_GENERAL_PTNN_LTR_CONFIG_KEYS = {
+    "ltr_loss_mode",
+    "topk_train_k",
+    "ltr_temperature",
+    "ltr_gate_temperature",
+    "ltr_relevance_mode",
+    "ltr_relevance_bins",
+    "ltr_min_group_size",
+    "ltr_fail_on_degenerate_group",
+    "loss",
+}
+
+
+def _parse_optional_dict_field(value: Any, *, field_name: str) -> dict[str, Any]:
+    parsed = _parse_json_field(value or {})
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"reason_code=ltr_loss_mode_injection_failed: {field_name} must be an object, "
+            f"got {type(parsed).__name__}"
+        )
+    return dict(parsed)
+
+
+def _requests_general_ptnn_ltr(params: dict[str, Any] | None) -> bool:
+    if not isinstance(params, dict):
+        return False
+    raw_mode = params.get("ltr_loss_mode")
+    if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
+        return True
+    raw_loss = params.get("loss")
+    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+
+
+def _reject_custom_evo_ltr_outside_model_params(
+    *,
+    loop_config: dict[str, Any],
+    strategy_params: dict[str, Any],
+    legacy_custom_params: dict[str, Any],
+) -> None:
+    """Path 4 accepts LTR model HP only under loop.model_params.
+
+    custom_evo historically ignored loop.custom_params/top-level model HP fields.
+    If a caller places an explicit non-MSE LTR request there, fail before compose
+    rather than silently producing GeneralPTNN+MSE.
+    """
+
+    offenders: list[str] = []
+    if _requests_general_ptnn_ltr(legacy_custom_params):
+        offenders.append("loop.custom_params")
+
+    top_level_ltr = {key: loop_config[key] for key in _GENERAL_PTNN_LTR_CONFIG_KEYS if key in loop_config}
+    if _requests_general_ptnn_ltr(top_level_ltr):
+        offenders.append("loop top-level LTR fields")
+
+    if _requests_general_ptnn_ltr(strategy_params):
+        offenders.append("loop.strategy_params")
+
+    if offenders:
+        raise ValueError(
+            "reason_code=ltr_loss_mode_injection_failed: "
+            "custom_evo GeneralPTNN LTR parameters must be set under loop.model_params; "
+            f"found explicit LTR request in {', '.join(offenders)}"
+        )
+
+
 def _extract_seed_to_runtime_flags(
     runtime_flags: dict[str, Any] | None,
     *sources: dict[str, Any] | None,
@@ -569,6 +636,19 @@ def build_config_from_custom_evo_loop(
     strategy_params: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("strategy_params") or {})
     )
+    model_params_base: dict[str, Any] = _parse_optional_dict_field(
+        loop_config.get("model_params"),
+        field_name="custom_evo_loop.model_params",
+    )
+    legacy_custom_params: dict[str, Any] = _parse_optional_dict_field(
+        loop_config.get("custom_params"),
+        field_name="custom_evo_loop.custom_params",
+    )
+    _reject_custom_evo_ltr_outside_model_params(
+        loop_config=loop_config,
+        strategy_params=strategy_params,
+        legacy_custom_params=legacy_custom_params,
+    )
     runtime_flags: dict[str, Any] = dict(
         _parse_json_field(loop_config.get("runtime_flags") or {})
     )
@@ -660,6 +740,7 @@ def build_config_from_custom_evo_loop(
         strategy_params=strategy_params or None,
         runtime_flags=runtime_flags or None,
         seed_ensemble=seed_ensemble,
+        model_params_base=model_params_base or None,
         backtest_only=backtest_only,
         model_source_task_id=model_source_task_id,
         model_source_loop_index=model_source_loop_index,
