@@ -19,6 +19,16 @@ class DummyScheduler:
 
     async def create_custom_evo_task(self, **kwargs):
         self.calls.append(("create", kwargs))
+        self.editable_config = {
+            "task_id": "new-custom-task",
+            "task_type": "custom_evo",
+            "node_id": kwargs.get("node_id"),
+            "node_parallelism": kwargs.get("node_parallelism") or {},
+            "loops": kwargs.get("loops_config") or [],
+            "status": "pending",
+            "editable": True,
+            "startable": not kwargs.get("auto_start", True),
+        }
         return "new-custom-task"
 
     async def rerun_custom_evo_loop(self, **kwargs):
@@ -55,12 +65,13 @@ class DummyScheduler:
         return {"submitted_loop_ids": []}
 
 
-def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None):
+def _loop(label="Loop A", node_id=None, stock_pool=None, random_seed=20260522, ensemble=None, model_params=None):
     runtime_flags = {"random_seed": random_seed} if random_seed is not None else None
     return qe.CustomEvoLoopConfig(
         label=label,
         factor_keys=["alpha_factor||catalog"],
         model_id="xgboost_v1",
+        model_params=model_params,
         execution_algo="CLOSE_PRICE",
         label_horizon=5,
         node_id=node_id,
@@ -105,6 +116,29 @@ def _patch_non_qe_dependencies(monkeypatch):
     monkeypatch.setattr(qe, "normalize_node_parallelism", fake_normalize_node_parallelism)
     monkeypatch.setattr(qe, "preflight_qe_nodes", fake_preflight_qe_nodes)
     monkeypatch.setattr(qe, "_sync_stock_pool_to_remote", lambda stock_pool, node: None)
+
+
+def test_custom_evo_loop_config_preserves_model_params_from_http_payload():
+    model_params = {
+        "ltr_loss_mode": "approx_ndcg_at_k",
+        "topk_train_k": 25,
+        "ltr_relevance_bins": 5,
+    }
+
+    cfg = qe.CustomEvoLoopConfig(
+        label="ltr",
+        factor_keys=["alpha_factor||catalog"],
+        model_id="__seed_LSTM_10D_hs64_d02__",
+        model_params=model_params,
+        strategy_params={"topk": 25},
+        execution_algo_params={"device": "cuda"},
+        runtime_flags={"random_seed": 42},
+    )
+    dumped = qe._model_to_dict(cfg)
+
+    assert dumped["model_params"] == model_params
+    assert dumped["strategy_params"] == {"topk": 25}
+    assert dumped["execution_algo_params"] == {"device": "cuda"}
 
 
 def test_custom_evo_rerun_route_requires_explicit_delete_confirmation(monkeypatch):
@@ -430,3 +464,36 @@ def test_custom_evo_clone_create_keeps_loop_nodes_and_parallelism(monkeypatch):
     loops_config = dummy.calls[0][1]["loops_config"]
     assert all(loop["strategy_params"]["risk_policy"]["enabled"] is True for loop in loops_config)
     assert all("force_exit" in loop["strategy_params"]["risk_policy"]["hard_actions"] for loop in loops_config)
+
+
+def test_custom_evo_create_and_readback_preserves_ltr_model_params(monkeypatch):
+    _patch_non_qe_dependencies(monkeypatch)
+    dummy = DummyScheduler()
+    monkeypatch.setattr(qe, "scheduler", dummy)
+    model_params = {
+        "ltr_loss_mode": "approx_ndcg_at_k",
+        "topk_train_k": 25,
+        "ltr_relevance_bins": 5,
+    }
+
+    req = qe.CustomEvolutionCreateRequest(
+        task_name="ltr task",
+        target_desc="preserve model params",
+        loops=[
+            _loop(
+                "ltr",
+                node_id="node-a",
+                model_params=model_params,
+                random_seed=42,
+            )
+        ],
+        node_parallelism={"node-a": 1},
+        auto_start=False,
+    )
+    result = asyncio.run(qe.create_custom_evolution_task(req, BackgroundTasks()))
+    readback = asyncio.run(qe.get_custom_evo_config(result["task_id"]))
+
+    assert dummy.calls[0][0] == "create"
+    persisted_loop = dummy.calls[0][1]["loops_config"][0]
+    assert persisted_loop["model_params"] == model_params
+    assert readback["data"]["loops"][0]["model_params"] == model_params

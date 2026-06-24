@@ -16,9 +16,11 @@ from fastapi import HTTPException
 from unittest.mock import AsyncMock
 
 from backend.routers.quantevolver_evolution import (
+    CustomEvoLoopConfig,
     EvolutionLoopRetryRequest,
     _hoist_runtime_metadata_from_strategy_params,
     _merge_strategy_runtime_flags,
+    _model_to_dict,
     _reject_nested_runtime_flags,
 )
 from backend.services.quantevolver import qe_evolution_service as qes
@@ -908,20 +910,24 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
     )
     monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
 
-    cfg = build_config_from_custom_evo_loop(
-        {
-            "factor_list": ["alpha_a"],
-            "model_id": "__seed_LSTM_10D_hs64_d02__",
-            "strategy_id": "score_weighted_topk_v2",
-            "data_split": DATA_SPLIT,
-            "label_horizon": 20,
-            "runtime_flags": {"random_seed": 42},
-            "model_params": {
+    loop_payload = _model_to_dict(
+        CustomEvoLoopConfig(
+            factor_keys=["alpha_a||catalog"],
+            model_id="__seed_LSTM_10D_hs64_d02__",
+            strategy_id="score_weighted_topk_v2",
+            data_split=DATA_SPLIT,
+            label_horizon=20,
+            runtime_flags={"random_seed": 42},
+            model_params={
                 "ltr_loss_mode": "approx_ndcg_at_k",
                 "topk_train_k": 25,
                 "ltr_temperature": 0.8,
             },
-        },
+        )
+    )
+
+    cfg = build_config_from_custom_evo_loop(
+        loop_payload,
         {},
         experiment_name="custom-evo-ltr",
     )
