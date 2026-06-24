@@ -8,6 +8,7 @@ guarded at the router layer by an explicit environment switch.
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
@@ -55,6 +56,12 @@ _ACCOUNT_GROUP_CASH_OVERCOMMIT_CODE = "ACCOUNT_GROUP_CASH_OVERCOMMIT"
 _PRE_TRADE_RISK_CONFIG_KEY = "miniqmt_pre_trade_risk"
 _PRE_TRADE_RISK_ENABLED_KEY = "miniqmt_pre_trade_risk_enabled"
 _CASH_SHRINK_REASON_KEY = "miniqmt_cash_preflight_shrink_reason"
+_BROKER_DISCONNECTED_FREEZE_CODE = "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+_BROKER_RECONNECT_RECONCILE_FAILED_CODE = "MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED"
+_BROKER_RECONNECTED_RECONCILED_CODE = "MINIQMT_BROKER_RECONNECTED_RECONCILED"
+_BROKER_DISCONNECT_FREEZE_LOCK = threading.RLock()
+_BROKER_DISCONNECT_FREEZE_BY_SCOPE: dict[tuple[str, str], dict[str, Any]] = {}
+_BROKER_DISCONNECT_RECOVERY_BY_SCOPE: dict[tuple[str, str], dict[str, Any]] = {}
 
 
 class ManagedOrderBroker(Protocol):
@@ -235,6 +242,8 @@ class QmtManagedOrderService:
         self._repository = repository
         self._broker = broker
         self._calendar_provider = calendar_provider or DbTradingCalendarProvider()
+        self._broker_disconnect_freeze: dict[str, Any] | None = None
+        self._last_broker_disconnect_recovery: dict[str, Any] | None = None
 
     def preview_order(self, request: ManagedOrderRequest) -> OrderPreflightResult:
         errors: list[OrderPreflightError] = []
@@ -323,6 +332,14 @@ class QmtManagedOrderService:
         )
 
     def submit_order(self, request: ManagedOrderRequest) -> ManagedOrderSubmitResult:
+        broker_freeze_error = self._broker_disconnect_preflight_error(request=request, stage="SUBMIT_ORDER")
+        if broker_freeze_error is not None:
+            failed_preflight = replace(
+                self.preview_order(request),
+                allowed=False,
+                errors=(broker_freeze_error,),
+            )
+            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
         preflight = self.preview_order(request)
         if not preflight.allowed:
             return ManagedOrderSubmitResult(
@@ -377,7 +394,20 @@ class QmtManagedOrderService:
             if freeze_applied:
                 self._release_cash_entry(account.strategy_id, request, preflight.freeze_amount, CashEntryType.UNFREEZE_REJECT, intent.intent_id)
             self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC))
-            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+            if not _is_broker_disconnect_exception(self._broker, exc):
+                return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+            freeze_error = self._mark_broker_disconnect_freeze(
+                request=request,
+                stage="SUBMIT_ORDER",
+                exc=exc,
+                intent_id=intent.intent_id,
+            )
+            failed_preflight = replace(
+                preflight,
+                allowed=False,
+                errors=preflight.errors + (freeze_error,),
+            )
+            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True)
 
         success = int(order_id or 0) > 0
         status = IntentSubmitStatus.ACCEPTED if success else IntentSubmitStatus.REJECTED
@@ -423,6 +453,49 @@ class QmtManagedOrderService:
 
     def submit_batch(self, requests: list[ManagedOrderRequest]) -> ManagedBatchSubmitResult:
         requests = _batch_submission_order(requests)
+        broker_freeze_error = self._broker_disconnect_preflight_error(request=requests[0], stage="SUBMIT_BATCH")
+        if broker_freeze_error is not None:
+            preflight_items = []
+            for request in requests:
+                preflight = self.preview_order(request)
+                preflight_items.append(
+                    replace(
+                        preflight,
+                        allowed=False,
+                        errors=(_broker_freeze_error_for_request(broker_freeze_error, request),),
+                    )
+                )
+            preflight_results = tuple(preflight_items)
+            batch_id = _batch_id_for_requests(requests)
+            results = tuple(
+                ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", preflight, False)
+                for preflight in preflight_results
+            )
+            self._upsert_batch_record(
+                batch_id=batch_id,
+                requests=requests,
+                status=OrderBatchStatus.PREFLIGHT_FAILED,
+                results=results,
+                metadata={
+                    "reason": "broker_disconnect_freeze",
+                    "reason_code": broker_freeze_error.code,
+                    "broker_called": False,
+                    "preflight_passed": False,
+                },
+                completed=True,
+            )
+            return ManagedBatchSubmitResult(
+                success=False,
+                batch_id=batch_id,
+                batch_status=OrderBatchStatus.PREFLIGHT_FAILED.value,
+                preflight_passed=False,
+                total=len(results),
+                succeeded=0,
+                failed=len(results),
+                results=results,
+                compensation_required=False,
+                compensation_hint=None,
+            )
         requests = _shrink_near_cash_overshoot_requests(requests, preview_order=self.preview_order)
         batch_id = _batch_id_for_requests(requests)
         deferred_batch = self._existing_dependent_buy_batch(batch_id)
@@ -587,6 +660,198 @@ class QmtManagedOrderService:
                 )
             )
         return ManagedCancelResult(success, intent.intent_id, request.qmt_order_id, message, True)
+
+    def broker_disconnect_freeze_status(self) -> dict[str, Any]:
+        with _BROKER_DISCONNECT_FREEZE_LOCK:
+            active_scopes = [
+                {"account_id": account_id, "mode": mode, "freeze": dict(freeze)}
+                for (account_id, mode), freeze in _BROKER_DISCONNECT_FREEZE_BY_SCOPE.items()
+            ]
+        return {
+            "schema_version": "miniqmt_managed_order_broker_disconnect_freeze_status_v1",
+            "frozen": self._broker_disconnect_freeze is not None or bool(active_scopes),
+            "freeze": dict(self._broker_disconnect_freeze) if self._broker_disconnect_freeze else None,
+            "last_recovery": dict(self._last_broker_disconnect_recovery)
+            if self._last_broker_disconnect_recovery
+            else None,
+            "active_scope_count": len(active_scopes),
+            "active_scopes": active_scopes,
+        }
+
+    def _broker_disconnect_preflight_error(
+        self,
+        *,
+        request: ManagedOrderRequest,
+        stage: str,
+    ) -> OrderPreflightError | None:
+        freeze = self._active_broker_disconnect_freeze(request)
+        if freeze is None:
+            return None
+        self._broker_disconnect_freeze = dict(freeze)
+        recovery = self._attempt_broker_disconnect_recovery(request=request, trigger=stage)
+        if recovery.get("recovered") is True:
+            return None
+        freeze = self._active_broker_disconnect_freeze(request) or self._broker_disconnect_freeze or {}
+        return OrderPreflightError(
+            str(recovery.get("reason_code") or _BROKER_DISCONNECTED_FREEZE_CODE),
+            "MiniQMT broker submit is frozen after disconnect until reconnect reconcile succeeds",
+            {
+                "reason_code": str(recovery.get("reason_code") or _BROKER_DISCONNECTED_FREEZE_CODE),
+                "stage": stage,
+                "account_id": request.account_id,
+                "strategy_name": request.strategy_name,
+                "symbol": request.symbol,
+                "order_remark": request.order_remark,
+                "disconnect_freeze": dict(freeze),
+                "recovery": recovery,
+                "alert": _managed_broker_disconnect_alert(freeze),
+                "broker_called": False,
+                "next_action": (
+                    "restore MiniQMT connectivity; the managed order service will query broker orders and trades "
+                    "before clearing the freeze"
+                ),
+            },
+        )
+
+    def _mark_broker_disconnect_freeze(
+        self,
+        *,
+        request: ManagedOrderRequest,
+        stage: str,
+        exc: BaseException,
+        intent_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> OrderPreflightError:
+        freeze = {
+            "schema_version": "miniqmt_managed_order_broker_disconnect_freeze_v1",
+            "reason_code": _BROKER_DISCONNECTED_FREEZE_CODE,
+            "stage": stage,
+            "account_id": request.account_id,
+            "strategy_name": request.strategy_name,
+            "symbol": request.symbol,
+            "order_remark": request.order_remark,
+            "intent_id": intent_id,
+            "batch_id": batch_id,
+            "mode": request.mode,
+            "trade_date": request.trade_date.isoformat(),
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "observed_at": datetime.now(UTC).isoformat(),
+            "broker_called": True,
+            "recovered": False,
+            "next_action": "MiniQMT new submits are frozen until broker reconnect and order/trade reconcile succeeds",
+        }
+        self._broker_disconnect_freeze = freeze
+        self._last_broker_disconnect_recovery = None
+        with _BROKER_DISCONNECT_FREEZE_LOCK:
+            _BROKER_DISCONNECT_FREEZE_BY_SCOPE[_broker_disconnect_scope(request)] = dict(freeze)
+            _BROKER_DISCONNECT_RECOVERY_BY_SCOPE.pop(_broker_disconnect_scope(request), None)
+        return OrderPreflightError(
+            _BROKER_DISCONNECTED_FREEZE_CODE,
+            "MiniQMT broker disconnected during submit; new submits are frozen",
+            {
+                "reason_code": _BROKER_DISCONNECTED_FREEZE_CODE,
+                "disconnect_freeze": dict(freeze),
+                "alert": _managed_broker_disconnect_alert(freeze),
+            },
+        )
+
+    def _attempt_broker_disconnect_recovery(
+        self,
+        *,
+        request: ManagedOrderRequest,
+        trigger: str,
+    ) -> dict[str, Any]:
+        if self._broker is None:
+            return self._record_broker_disconnect_recovery(
+                {
+                    "schema_version": "miniqmt_managed_order_broker_disconnect_recovery_v1",
+                    "recovered": False,
+                    "reason_code": _BROKER_RECONNECT_RECONCILE_FAILED_CODE,
+                    "stage": "BROKER_SERVICE_UNAVAILABLE",
+                    "trigger": trigger,
+                    "account_id": request.account_id,
+                    "strategy_name": request.strategy_name,
+                    "attempted_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        attempted_at = datetime.now(UTC).isoformat()
+        try:
+            status = _managed_broker_status(self._broker)
+            if bool(status.get("connected")) is not True:
+                connector = getattr(self._broker, "connect", None)
+                connect_attempt: dict[str, Any] | None = None
+                if callable(connector):
+                    ok, message = connector()
+                    connect_attempt = {"ok": bool(ok), "message": str(message or "")}
+                    status = _managed_broker_status(self._broker)
+                if bool(status.get("connected")) is not True:
+                    return self._record_broker_disconnect_recovery(
+                        {
+                            "schema_version": "miniqmt_managed_order_broker_disconnect_recovery_v1",
+                            "recovered": False,
+                            "reason_code": _BROKER_DISCONNECTED_FREEZE_CODE,
+                            "stage": "BROKER_STILL_DISCONNECTED",
+                            "trigger": trigger,
+                            "account_id": request.account_id,
+                            "strategy_name": request.strategy_name,
+                            "attempted_at": attempted_at,
+                            "status": status,
+                            "connect_attempt": connect_attempt,
+                        }
+                    )
+            get_orders = getattr(self._broker, "get_orders", None)
+            get_trades = getattr(self._broker, "get_trades", None)
+            if not callable(get_orders) or not callable(get_trades):
+                raise RuntimeError("broker does not expose get_orders/get_trades for reconnect reconcile")
+            orders = get_orders(cancelable_only=False) or []
+            trades = get_trades() or []
+        except Exception as exc:  # noqa: BLE001 - returned as loud preflight error.
+            return self._record_broker_disconnect_recovery(
+                {
+                    "schema_version": "miniqmt_managed_order_broker_disconnect_recovery_v1",
+                    "recovered": False,
+                    "reason_code": _BROKER_RECONNECT_RECONCILE_FAILED_CODE,
+                    "stage": "RECONNECT_RECONCILE_FAILED",
+                    "trigger": trigger,
+                    "account_id": request.account_id,
+                    "strategy_name": request.strategy_name,
+                    "attempted_at": attempted_at,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+        recovery = {
+            "schema_version": "miniqmt_managed_order_broker_disconnect_recovery_v1",
+            "recovered": True,
+            "reason_code": _BROKER_RECONNECTED_RECONCILED_CODE,
+            "stage": "RECONNECTED_RECONCILED",
+            "trigger": trigger,
+            "account_id": request.account_id,
+            "strategy_name": request.strategy_name,
+            "attempted_at": attempted_at,
+            "status": status,
+            "orders_snapshot_count": len(orders),
+            "trades_snapshot_count": len(trades),
+            "cleared_at": datetime.now(UTC).isoformat(),
+        }
+        scope = _broker_disconnect_scope(request)
+        with _BROKER_DISCONNECT_FREEZE_LOCK:
+            _BROKER_DISCONNECT_FREEZE_BY_SCOPE.pop(scope, None)
+            _BROKER_DISCONNECT_RECOVERY_BY_SCOPE[scope] = dict(recovery)
+        self._broker_disconnect_freeze = None
+        self._last_broker_disconnect_recovery = recovery
+        return dict(recovery)
+
+    def _record_broker_disconnect_recovery(self, recovery: dict[str, Any]) -> dict[str, Any]:
+        self._last_broker_disconnect_recovery = dict(recovery)
+        return dict(recovery)
+
+    @staticmethod
+    def _active_broker_disconnect_freeze(request: ManagedOrderRequest) -> dict[str, Any] | None:
+        with _BROKER_DISCONNECT_FREEZE_LOCK:
+            freeze = _BROKER_DISCONNECT_FREEZE_BY_SCOPE.get(_broker_disconnect_scope(request))
+        return dict(freeze) if freeze is not None else None
 
     def _resolve_account(self, request: ManagedOrderRequest, errors: list[OrderPreflightError]) -> VirtualAccount | None:
         if not request.account_id.strip():
@@ -920,6 +1185,14 @@ class QmtManagedOrderService:
             return ManagedOrderSubmitResult(False, None, None, "batch preflight failed", preflight, False)
         if self._broker is None:
             raise ValueError("broker is required for submit_order")
+        broker_freeze_error = self._broker_disconnect_preflight_error(request=request, stage="SUBMIT_BATCH_ORDER")
+        if broker_freeze_error is not None:
+            failed_preflight = replace(
+                preflight,
+                allowed=False,
+                errors=preflight.errors + (_broker_freeze_error_for_request(broker_freeze_error, request),),
+            )
+            return ManagedOrderSubmitResult(False, None, None, "broker connectivity preflight failed", failed_preflight, False)
         account = self._account_by_strategy_name(request.account_id, request.strategy_name)
         intent = self._create_intent(request, account, preflight, IntentSubmitStatus.SUBMITTED, batch_id=batch_id)
         freeze_applied = False
@@ -951,7 +1224,21 @@ class QmtManagedOrderService:
                     intent.intent_id,
                 )
             self._repository.set_order_intent_submit_status(intent.intent_id, IntentSubmitStatus.REJECTED, updated_at=datetime.now(UTC))
-            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+            if not _is_broker_disconnect_exception(self._broker, exc):
+                return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", preflight, True)
+            freeze_error = self._mark_broker_disconnect_freeze(
+                request=request,
+                stage="SUBMIT_BATCH_ORDER",
+                exc=exc,
+                intent_id=intent.intent_id,
+                batch_id=batch_id,
+            )
+            failed_preflight = replace(
+                preflight,
+                allowed=False,
+                errors=preflight.errors + (freeze_error,),
+            )
+            return ManagedOrderSubmitResult(False, intent.intent_id, None, f"broker exception: {exc!r}", failed_preflight, True)
 
         success = int(order_id or 0) > 0
         status = IntentSubmitStatus.ACCEPTED if success else IntentSubmitStatus.REJECTED
@@ -2125,6 +2412,69 @@ def _logical_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
         **_request_signature(request),
         "metadata": _logical_request_metadata(request.metadata),
     }
+
+
+def _managed_broker_status(broker: Any) -> dict[str, Any]:
+    status_fn = getattr(broker, "status", None)
+    if not callable(status_fn):
+        raise RuntimeError("broker does not expose status for reconnect freeze recovery")
+    status = status_fn()
+    if hasattr(status, "__dict__"):
+        return dict(status.__dict__)
+    if isinstance(status, dict):
+        return dict(status)
+    connected = getattr(status, "connected", None)
+    return {"connected": bool(connected), "repr": repr(status)}
+
+
+def _broker_disconnect_scope(request: ManagedOrderRequest) -> tuple[str, str]:
+    return request.account_id, request.mode
+
+
+def _is_broker_disconnect_exception(broker: Any, exc: BaseException) -> bool:
+    if getattr(exc, "error_code", None) == "BROKER_CONNECTIVITY_ERROR":
+        return True
+    if type(exc).__name__ in {"QMTNotAvailableError", "BrokerConnectivityError"}:
+        return True
+    status_fn = getattr(broker, "status", None)
+    if not callable(status_fn):
+        return False
+    try:
+        status = _managed_broker_status(broker)
+    except Exception:
+        return True
+    return bool(status.get("connected")) is False
+
+
+def _managed_broker_disconnect_alert(freeze: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "simulation_runtime_alert_v1",
+        "reason_code": str(freeze.get("reason_code") or _BROKER_DISCONNECTED_FREEZE_CODE),
+        "severity": "P1",
+        "message": "MiniQMT managed order service is frozen after broker disconnect; reconnect reconcile is required",
+        "source": "QmtManagedOrderService",
+        "account_id": freeze.get("account_id"),
+        "strategy_name": freeze.get("strategy_name"),
+        "symbol": freeze.get("symbol"),
+        "order_remark": freeze.get("order_remark"),
+        "observed_at": freeze.get("observed_at"),
+    }
+
+
+def _broker_freeze_error_for_request(
+    error: OrderPreflightError,
+    request: ManagedOrderRequest,
+) -> OrderPreflightError:
+    context = dict(error.context)
+    context.update(
+        {
+            "account_id": request.account_id,
+            "strategy_name": request.strategy_name,
+            "symbol": request.symbol,
+            "order_remark": request.order_remark,
+        }
+    )
+    return OrderPreflightError(error.code, error.message, context)
 
 
 def _stable_request_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

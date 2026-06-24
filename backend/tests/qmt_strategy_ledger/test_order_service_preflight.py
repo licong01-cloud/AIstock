@@ -550,3 +550,80 @@ def test_pre_trade_risk_buying_power_rejects_before_broker_call() -> None:
     assert result.preflight.primary_error.code == "PRE_TRADE_BUYING_POWER_REJECT"
     assert result.preflight.primary_error.context["available_buying_power"] == 9000.0
     assert broker.place_order_calls == 0
+
+
+class DisconnectingBroker(CountingBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.connected = True
+        self.fail_next_place = True
+        self.status_calls = 0
+        self.order_query_calls = 0
+        self.trade_query_calls = 0
+
+    def status(self) -> dict:
+        self.status_calls += 1
+        return {"connected": self.connected}
+
+    def connect(self) -> tuple[bool, str]:
+        return self.connected, "connected" if self.connected else "still disconnected"
+
+    def get_orders(self, cancelable_only: bool = False) -> list[dict]:
+        self.order_query_calls += 1
+        return []
+
+    def get_trades(self) -> list[dict]:
+        self.trade_query_calls += 1
+        return []
+
+    def place_order(self, **kwargs):
+        self.place_order_calls += 1
+        if not self.fail_next_place:
+            return 109, "accepted after reconnect"
+        self.fail_next_place = False
+        self.connected = False
+        error = RuntimeError("broker disconnected")
+        error.error_code = "BROKER_CONNECTIVITY_ERROR"
+        raise error
+
+
+def test_broker_disconnect_freeze_has_priority_over_pre_trade_and_cash_gates() -> None:
+    repo = _repo(cash=Decimal("1000"))
+    broker = DisconnectingBroker()
+    service = _service(repo, broker)
+
+    first = service.submit_batch([_buy_request(order_remark="disconnect-first", quantity=100, price=Decimal("10"))])
+    assert first.success is False
+    assert first.results[0].broker_called is True
+    assert first.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert broker.place_order_calls == 1
+
+    blocked = service.submit_batch(
+        [
+            _buy_request(
+                order_remark="disconnect-blocked",
+                quantity=1000,
+                price=Decimal("50"),
+                metadata={
+                    "miniqmt_pre_trade_risk": {
+                        "enabled": True,
+                        "kill_switch_active": True,
+                    }
+                },
+            )
+        ]
+    )
+
+    assert blocked.success is False
+    assert blocked.results[0].broker_called is False
+    assert blocked.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert [error.code for error in blocked.results[0].preflight.errors] == ["MINIQMT_BROKER_DISCONNECTED_FREEZE"]
+    assert blocked.results[0].preflight.primary_error.context["broker_called"] is False
+    assert broker.place_order_calls == 1
+
+    broker.connected = True
+    recovered = service.submit_batch([_buy_request(order_remark="disconnect-recovered", quantity=100, price=Decimal("10"))])
+    assert recovered.success is True
+    assert broker.order_query_calls >= 1
+    assert broker.trade_query_calls >= 1
+    assert broker.place_order_calls == 2

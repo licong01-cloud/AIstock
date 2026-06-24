@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -62,6 +63,9 @@ _ACCOUNT_GROUP_ALIASES = frozenset({_ACCOUNT_GROUP_SLOTS, "account_group", "stra
 _EXCLUSIVE_ACCOUNT_ALIASES = frozenset({_EXCLUSIVE_ACCOUNT, _EXCLUSIVE_ACCOUNT_LEGACY, "exclusive_account_phase1"})
 _SUPPORTED_ACCOUNT_MODES = sorted(_EXCLUSIVE_ACCOUNT_ALIASES | _ACCOUNT_GROUP_ALIASES)
 _CANONICAL_RUNTIME_OWNER = "MiniQMTExecutionRuntime"
+_DISCONNECT_FREEZE_REASON_CODE = "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+_RECONNECT_RECONCILE_FAILED_REASON_CODE = "MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED"
+_RECONNECTED_RECONCILED_REASON_CODE = "MINIQMT_BROKER_RECONNECTED_RECONCILED"
 
 
 class _OrderRecord:
@@ -148,6 +152,8 @@ class MiniQMTSimBackend(BrokerBackend):
         self._lock = threading.RLock()
         self._closed = False
         self._connected = False
+        self._disconnect_freeze: dict[str, Any] | None = None
+        self._last_disconnect_recovery: dict[str, Any] | None = None
         if auto_connect:
             self.ensure_connected()
 
@@ -254,9 +260,24 @@ class MiniQMTSimBackend(BrokerBackend):
                     miniqmt_order_id=None,
                     order_remark=order_remark,
                 )
+                freeze = self._freeze_disconnect(
+                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
+                    stage="ORDER_SUBMIT",
+                    message="MiniQMT broker disconnected during order submit; new submits are frozen until reconnect reconcile succeeds",
+                    context={
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "strategy_name": strategy_name,
+                        "order_remark": order_remark,
+                        "reason": str(exc),
+                        "native_reconcile": native_probe,
+                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
+                    },
+                )
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
                     context={
+                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
                         "intent_id": intent.intent_id,
                         "portfolio_id": self._portfolio_id,
                         "package_id": self._package_id,
@@ -265,6 +286,8 @@ class MiniQMTSimBackend(BrokerBackend):
                         "order_remark": order_remark,
                         "reason": str(exc),
                         "native_reconcile": native_probe,
+                        "disconnect_freeze": freeze,
+                        "alert": _disconnect_freeze_alert(freeze),
                         **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
                     },
                 ) from exc
@@ -500,6 +523,24 @@ class MiniQMTSimBackend(BrokerBackend):
         )
         return self._find_qmt_trades(record)
 
+    def disconnect_freeze_status(self) -> dict[str, Any]:
+        """Return MiniQMT disconnect freeze telemetry for monitors/API layers."""
+
+        with self._lock:
+            freeze = deepcopy(self._disconnect_freeze)
+            recovery = deepcopy(self._last_disconnect_recovery)
+        return {
+            "schema_version": "miniqmt_disconnect_freeze_status_v1",
+            "backend_id": self.backend_id,
+            "portfolio_id": self._portfolio_id,
+            "package_id": self._package_id,
+            "account_group_id": self._account_group_id,
+            "strategy_slot_id": self._strategy_slot_id,
+            "frozen": freeze is not None,
+            "freeze": freeze,
+            "last_recovery": recovery,
+        }
+
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._ensure_alive()
         sub_id = f"mqsub_{uuid4().hex}"
@@ -645,8 +686,34 @@ class MiniQMTSimBackend(BrokerBackend):
 
     def _ensure_ready_for_order(self, intent: OrderIntent) -> _OrderAttribution:
         self._ensure_alive()
+        self._ensure_disconnect_freeze_recovered_or_raise(intent=intent)
         if not self._connected:
-            self.ensure_connected()
+            try:
+                self.ensure_connected()
+            except BrokerConnectivityError as exc:
+                freeze = self._freeze_disconnect(
+                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
+                    stage="SUBMIT_PREFLIGHT_CONNECT",
+                    message="MiniQMT broker disconnected before order submit; new submits are frozen until reconnect reconcile succeeds",
+                    context={
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "reason": str(exc),
+                        "broker_error": exc.to_dict() if hasattr(exc, "to_dict") else None,
+                    },
+                )
+                raise BrokerConnectivityError(
+                    "MiniQMT broker submit is frozen because pre-submit connection probe failed",
+                    context={
+                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
+                        "backend_id": self.backend_id,
+                        "portfolio_id": self._portfolio_id,
+                        "package_id": self._package_id,
+                        "intent_id": intent.intent_id,
+                        "disconnect_freeze": freeze,
+                        "alert": _disconnect_freeze_alert(freeze),
+                    },
+                ) from exc
         if not self._is_legacy_account_mode:
             return self._account_group_attribution(intent)
         _reject_legacy_product_order_intent(intent, portfolio_id=self._portfolio_id, package_id=self._package_id)
@@ -719,6 +786,147 @@ class MiniQMTSimBackend(BrokerBackend):
             account_group_id=account_group_id,
             strategy_slot_id=strategy_slot_id,
         )
+
+    def _ensure_disconnect_freeze_recovered_or_raise(self, *, intent: OrderIntent | None = None) -> None:
+        with self._lock:
+            freeze = deepcopy(self._disconnect_freeze)
+        if freeze is None:
+            return
+        recovery = self._attempt_disconnect_recovery(trigger="submit_preflight", intent=intent)
+        if recovery.get("recovered") is True:
+            return
+        active_freeze = self.disconnect_freeze_status()["freeze"] or freeze
+        raise BrokerConnectivityError(
+            "MiniQMT broker submit is frozen after disconnect until reconnect reconcile succeeds",
+            context={
+                "reason_code": str(recovery.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
+                "backend_id": self.backend_id,
+                "portfolio_id": self._portfolio_id,
+                "package_id": self._package_id,
+                "account_group_id": self._account_group_id,
+                "strategy_slot_id": self._strategy_slot_id,
+                "intent_id": intent.intent_id if intent is not None else None,
+                "disconnect_freeze": active_freeze,
+                "recovery": recovery,
+                "alert": _disconnect_freeze_alert(active_freeze),
+                "next_action": (
+                    "restore MiniQMT connectivity, then rerun submit; the adapter will query broker "
+                    "orders and trades before clearing the freeze"
+                ),
+            },
+        )
+
+    def _freeze_disconnect(
+        self,
+        *,
+        reason_code: str,
+        stage: str,
+        message: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        freeze = {
+            "schema_version": "miniqmt_disconnect_freeze_v1",
+            "reason_code": reason_code,
+            "stage": stage,
+            "message": message,
+            "backend_id": self.backend_id,
+            "portfolio_id": self._portfolio_id,
+            "package_id": self._package_id,
+            "account_group_id": self._account_group_id,
+            "strategy_slot_id": self._strategy_slot_id,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "context": deepcopy(context),
+            "recovered": False,
+        }
+        with self._lock:
+            self._connected = False
+            self._disconnect_freeze = freeze
+        return deepcopy(freeze)
+
+    def _attempt_disconnect_recovery(self, *, trigger: str, intent: OrderIntent | None = None) -> dict[str, Any]:
+        attempted_at = datetime.now(UTC).isoformat()
+        try:
+            status = self._qmt_client.status()
+            status_payload = _status_to_dict(status)
+            if not bool(getattr(status, "connected", False)):
+                connector = getattr(self._qmt_client, "connect", None)
+                connect_payload: dict[str, Any] | None = None
+                if callable(connector):
+                    ok, message = connector()
+                    connect_payload = {"ok": bool(ok), "message": str(message or "")}
+                    status = self._qmt_client.status()
+                    status_payload = _status_to_dict(status)
+                if not bool(getattr(status, "connected", False)):
+                    return self._record_disconnect_recovery(
+                        {
+                            "schema_version": "miniqmt_disconnect_recovery_v1",
+                            "recovered": False,
+                            "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
+                            "stage": "BROKER_STILL_DISCONNECTED",
+                            "trigger": trigger,
+                            "intent_id": intent.intent_id if intent is not None else None,
+                            "attempted_at": attempted_at,
+                            "status": status_payload,
+                            "connect_attempt": connect_payload,
+                            "next_action": "restart or reconnect MiniQMT before retrying submit",
+                        }
+                    )
+            mode = str(getattr(status, "mode", "") or "").upper()
+            if mode != "SIM":
+                return self._record_disconnect_recovery(
+                    {
+                        "schema_version": "miniqmt_disconnect_recovery_v1",
+                        "recovered": False,
+                        "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
+                        "stage": "BROKER_MODE_INVALID",
+                        "trigger": trigger,
+                        "intent_id": intent.intent_id if intent is not None else None,
+                        "attempted_at": attempted_at,
+                        "status": status_payload,
+                        "mode": mode,
+                    }
+                )
+            orders = self._qmt_client.get_orders(cancelable_only=False) or []
+            trades = self._qmt_client.get_trades() or []
+        except Exception as exc:  # noqa: BLE001 - recovery failure is returned loudly to the caller.
+            return self._record_disconnect_recovery(
+                {
+                    "schema_version": "miniqmt_disconnect_recovery_v1",
+                    "recovered": False,
+                    "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
+                    "stage": "RECONNECT_RECONCILE_FAILED",
+                    "trigger": trigger,
+                    "intent_id": intent.intent_id if intent is not None else None,
+                    "attempted_at": attempted_at,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "next_action": "fix broker order/trade query connectivity before retrying submit",
+                }
+            )
+        recovery = {
+            "schema_version": "miniqmt_disconnect_recovery_v1",
+            "recovered": True,
+            "reason_code": _RECONNECTED_RECONCILED_REASON_CODE,
+            "stage": "RECONNECTED_RECONCILED",
+            "trigger": trigger,
+            "intent_id": intent.intent_id if intent is not None else None,
+            "attempted_at": attempted_at,
+            "status": status_payload,
+            "orders_snapshot_count": len(orders),
+            "trades_snapshot_count": len(trades),
+            "cleared_at": datetime.now(UTC).isoformat(),
+        }
+        with self._lock:
+            self._connected = True
+            self._disconnect_freeze = None
+            self._last_disconnect_recovery = recovery
+        return deepcopy(recovery)
+
+    def _record_disconnect_recovery(self, recovery: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._connected = False
+            self._last_disconnect_recovery = deepcopy(recovery)
+        return deepcopy(recovery)
 
     def _record_for(self, handle: OrderHandle) -> _OrderRecord:
         if handle.backend_id != self.backend_id:
@@ -1063,6 +1271,22 @@ def _status_to_dict(value: Any | None) -> dict[str, Any] | None:
     if isinstance(value, dict):
         return dict(value)
     return {"repr": repr(value)}
+
+
+def _disconnect_freeze_alert(freeze: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "simulation_runtime_alert_v1",
+        "reason_code": str(freeze.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
+        "severity": "P1",
+        "message": "MiniQMT broker submit is frozen after disconnect; reconnect reconcile is required before new submits",
+        "source": "MiniQMTSimBackend",
+        "backend_id": freeze.get("backend_id"),
+        "portfolio_id": freeze.get("portfolio_id"),
+        "package_id": freeze.get("package_id"),
+        "account_group_id": freeze.get("account_group_id"),
+        "strategy_slot_id": freeze.get("strategy_slot_id"),
+        "observed_at": freeze.get("observed_at"),
+    }
 
 
 def _int_or_none(value: Any) -> int | None:
