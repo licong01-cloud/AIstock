@@ -1,0 +1,135 @@
+{
+  "actual": "The current-running card filters to RUNNING plus broker local_sim/minqmt_sim plus has_tickable_session=true, so RUNNING portfolios with failed latest sessions disappear from the main card. The runtime list displays run_id, release_id/hash, binding_id/hash, selection evidence and execution plan IDs/hashes as primary columns, making the UI hard to understand for human operators.",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/simulation-runtime/page.tsx",
+    "frontend/src/lib/paper-v2/running-summary.ts",
+    "frontend/src/lib/paper-v2/types.ts",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/paper_trading_v2/live_dashboard.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/paper_trading_v2/test_running_summary.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260624_BUG-512-paper-v2-current-active-simulations-hidden-and-runtime-list-unreadable.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-512",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T09:07:25.779826Z",
+  "description": "The current-running card filters to RUNNING plus broker local_sim/minqmt_sim plus has_tickable_session=true, so RUNNING portfolios with failed latest sessions disappear from the main card. The runtime list displays run_id, release_id/hash, binding_id/hash, selection evidence and execution plan IDs/hashes as primary columns, making the UI hard to understand for human operators.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-939ec51febcf",
+      "timestamp": "2026-06-24T09:07:25.779820Z"
+    }
+  ],
+  "evidence_uris": [
+    "Local read-only check: /api/v1/paper-v2/running-summary?status=RUNNING returned portfolio live_loop1_tdx_20260518_recreated_codex with status RUNNING, latest_session.status FAILED, tickable_session_count 0, has_tickable_session false, last_error ST PIT risk policy universe is not ready."
+  ],
+  "expected": "The current/active simulation card must show active LocalSim/MiniQMT portfolios even when their latest session failed or is not tickable, with human-readable status such as today failed, latest session status, failure reason, trade date, broker, strategy/package name, and recovery hint. Runtime/audit tables should use human-readable business labels as primary text and keep IDs/hashes only as secondary tooltip/detail data.",
+  "first_seen_at": "2026-06-24T09:07:25.779826Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1589,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1589",
+  "last_seen_at": "2026-06-24T09:07:25.779826Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://localhost:3000/paper-v2/portfolios and http://localhost:3000/paper-v2/simulation-runtime; compare /api/v1/paper-v2/running-summary?status=RUNNING where portfolio.status=RUNNING but operability.has_tickable_session=false with the empty current-running card.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 current active simulations hidden and runtime list unreadable",
+  "trigger_condition": {
+    "fingerprint": "939ec51febcf3c74248fe1fb",
+    "source_event_id": "FE-20260624-939ec51febcf"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/portfolios/page.tsx",
+      "frontend/src/app/paper-v2/simulation-runtime/page.tsx",
+      "frontend/src/lib/paper-v2/running-summary.ts",
+      "frontend/src/lib/paper-v2/types.ts",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/services/paper_trading_v2/live_dashboard.py",
+      "backend/services/simulation_runtime/ops.py",
+      "backend/tests/paper_trading_v2/test_running_summary.py",
+      "backend/tests/simulation_runtime/test_ops_api.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/paper-v2/portfolios",
+    "ui_routes": [
+      "/paper-v2/portfolios",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
