@@ -41,9 +41,9 @@ def test_real_model_smoke_loud_skips_when_deepseek_key_missing(tmp_path: Path) -
     assert output.exists()
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["bug_id"] == "BUG-496"
-    assert payload["related_bug_ids"] == ["BUG-436", "BUG-496"]
+    assert payload["related_bug_ids"] == ["BUG-436", "BUG-496", "BUG-505"]
     assert payload["acceptance_source"] == "B2/#1504 design killer assertions"
-    assert len(payload["assertion_manifest"]) == 5
+    assert len(payload["assertion_manifest"]) == 6
     assert payload["fake_pass"] is False
     assert payload["status"] == "skipped"
     assert payload["reason_code"] == "deepseek_api_key_missing"
@@ -111,3 +111,22 @@ def test_b2_parse_args_defaults_expose_all_killer_assertion_messages() -> None:
     assert "风险" in args.b2_specificity_first_message
     assert "驱动" in args.b2_specificity_second_message
     assert "qe_template_create" in args.b2_write_message
+
+
+
+def test_b505_long_answer_completion_assertion_rejects_mid_sentence_tail() -> None:
+    section_text = " ".join(" ".join(group) for group in smoke.B505_LONG_ANSWER_SECTION_TERMS)
+    with pytest.raises(smoke.SmokeFailure) as excinfo:
+        smoke._assert_long_answer_complete(  # noqa: SLF001
+            ("Bottom-line: " + section_text + ". Detailed analysis body with enough content. ") * 20
+            + "unfinished tail",
+            label="unit long answer",
+        )
+
+    assert excinfo.value.reason_code == "b505_long_answer_incomplete_tail"
+
+
+def test_b505_parse_args_defaults_expose_long_answer_message() -> None:
+    args = smoke.parse_args([])
+
+    assert "Bottom-line" in args.b505_long_answer_message

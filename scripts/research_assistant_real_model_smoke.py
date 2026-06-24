@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 
 SCHEMA_VERSION = "aistock_research_assistant_real_model_smoke_v1"
 BUG_ID = "BUG-496"
-RELATED_BUG_IDS = ["BUG-436", "BUG-496"]
+RELATED_BUG_IDS = ["BUG-436", "BUG-496", "BUG-505"]
 SKIP_EXIT_CODE = 77
 FAIL_EXIT_CODE = 1
 PASS_EXIT_CODE = 0
@@ -119,12 +119,21 @@ B2_QE_REQUIRED_TERMS = ("QE", "graph_context", "LIVE")
 B2_QE_STRATEGY_TERMS = ("策略包", "Strategy Package", "strategy package")
 B2_QE_PAPER_TERMS = ("Paper v2", "paper_v2", "PaperV2")
 B2_STOCK_SYNTHESIS_TERMS = ("综合", "核心判断", "判断", "意味着", "同时", "但", "风险", "Bottom-line")
+B505_LONG_ANSWER_MIN_CHARS = 900
+B505_LONG_ANSWER_SECTION_TERMS = (
+    ("跌停", "原因"),
+    ("未来", "趋势"),
+    ("基本面",),
+)
+B505_COMPLETE_ENDING_MARKERS = ("。", "！", "？", ".", "!", "?", "）", ")", "】", "]")
+B505_COMPLETE_CLOSING_TERMS = ("收尾结论", "总结", "完整结束")
 B2_ASSERTION_MANIFEST = [
     "QE成果怎么利用 -> graph_context QE->Strategy Package->Paper v2 + multi-tool synthesis + bottom-line",
     "individual stock all-round question -> stock_analysis + external_research multi-tool synthesis + bottom-line",
     "future-looking question -> drivers/scenarios/risks/disclaimer, no directional prediction",
     "same seeded data with two different questions -> distinct question-specific answers, not one template",
     "write action -> approval card/preflight gate; no automatic write execution",
+    "long multidimensional stock analysis -> complete ending, all requested sections, no mid-sentence truncation",
 ]
 
 
@@ -310,6 +319,36 @@ def _assert_any_text_contains(
             reason_code,
             f"{label} missing any expected terms: {list(terms)}",
             details={"expected_any_terms": list(terms), "assistant_text_preview": _preview(text)},
+        )
+
+
+def _assert_long_answer_complete(text: str, *, label: str) -> None:
+    stripped = str(text or "").strip()
+    if len(stripped) < B505_LONG_ANSWER_MIN_CHARS:
+        raise SmokeFailure(
+            "b505_long_answer_too_short",
+            f"{label} was too short for a multidimensional analytical answer.",
+            details={"min_chars": B505_LONG_ANSWER_MIN_CHARS, "actual_chars": len(stripped), "assistant_text_preview": _preview(text)},
+        )
+    missing_sections = [
+        "/".join(group)
+        for group in B505_LONG_ANSWER_SECTION_TERMS
+        if not all(_normalize_for_match(term) in _normalize_for_match(stripped) for term in group)
+    ]
+    if missing_sections:
+        raise SmokeFailure(
+            "b505_long_answer_missing_requested_sections",
+            f"{label} missed requested analytical dimensions: {missing_sections}",
+            details={"missing_sections": missing_sections, "assistant_text_preview": _preview(text)},
+        )
+    tail = stripped[-80:]
+    has_sentence_end = stripped.endswith(B505_COMPLETE_ENDING_MARKERS)
+    has_closing_term = any(stripped.endswith(term) for term in B505_COMPLETE_CLOSING_TERMS)
+    if not has_sentence_end and not has_closing_term:
+        raise SmokeFailure(
+            "b505_long_answer_incomplete_tail",
+            f"{label} appears to end mid-sentence.",
+            details={"tail": tail, "assistant_text_preview": _preview(text)},
         )
 
 
@@ -973,6 +1012,27 @@ def run_b2_future_boundary_smoke(message: str) -> dict[str, Any]:
     }
 
 
+def run_b505_long_answer_completion_smoke(message: str) -> dict[str, Any]:
+    service, llm, result = _chat_with_seeded_data(message)
+    text = _assistant_text(result)
+
+    _assert_bottom_line(text, reason_code="b505_long_answer_bottom_line_missing", label="BUG-505 long-answer completion smoke")
+    _assert_long_answer_complete(text, label="BUG-505 long-answer completion smoke")
+    _assert_text_excludes(
+        text,
+        B2_FORBIDDEN_TEMPLATE_MARKERS,
+        reason_code="b505_long_answer_template_marker_present",
+        label="BUG-505 long-answer completion smoke",
+    )
+    _assert_no_forbidden_markers(result, markers=FORBIDDEN_CRASH_MARKERS, reason_code="b505_long_answer_forbidden_error_marker")
+    return {
+        "name": "BUG-505 long multidimensional stock answer completion",
+        "status": "passed",
+        "message": message,
+        **_call_summary(service, result, llm),
+    }
+
+
 def run_b2_question_specificity_smoke(first_message: str, second_message: str) -> dict[str, Any]:
     _first_service, first_llm, first_result = _chat_with_seeded_data(first_message)
     _second_service, second_llm, second_result = _chat_with_seeded_data(second_message)
@@ -1277,6 +1337,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--b505-long-answer-message",
+        default=(
+            "请综合分析国城矿业跌停原因、未来趋势和基本面："
+            "必须覆盖跌停原因、未来趋势、基本面三个维度，先给 Bottom-line，"
+            "再分段展开，最后给收尾结论；不要在句子中间截断。"
+        ),
+    )
+    parser.add_argument(
         "--a2-message",
         default=(
             "国城矿业基本情况、近期走势、未来趋势怎样？"
@@ -1335,6 +1403,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         report["checks"].append(run_b2_write_approval_smoke(args.b2_write_message))
+        report["checks"].append(run_b505_long_answer_completion_smoke(args.b505_long_answer_message))
         report["checks"].append(run_a2_smoke(args.a2_message))
         report["checks"].append(run_a1_smoke(args.a1_message))
     except SmokeFailure as exc:

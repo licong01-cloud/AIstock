@@ -26,7 +26,7 @@ class ContextBudgetPlan:
     compaction_allowed_by_config: bool
     compaction_max_output_tokens: int
     llm_temperature: float
-    llm_max_tokens: int
+    llm_max_tokens: int | None
     history_page_size: int
     history_max_pages: int
     history_include_roles: set[str]
@@ -75,7 +75,14 @@ class ContextBudgetPlanner:
         window = self._model_context_window(model_profile, runtime_config)
         safety = self._ratio_or_min(window, runtime_config["model_context"]["safety_buffer"])
         response_cfg = runtime_config["budget"]["response"]
-        response_reserved = max(int(window * float(response_cfg["reserved_ratio"])), int(response_cfg["min_reserved_tokens"]))
+        response_max_tokens = self._response_max_tokens(response_cfg)
+        response_reserved_candidates = [
+            int(window * float(response_cfg["reserved_ratio"])),
+            int(response_cfg["min_reserved_tokens"]),
+        ]
+        if response_max_tokens is not None:
+            response_reserved_candidates.append(response_max_tokens)
+        response_reserved = max(response_reserved_candidates)
         effective = max(1, window - safety - response_reserved)
         budget_cfg = runtime_config["budget"]
         prompt_budget = int(effective * float(budget_cfg["prompt_bundle"]["max_ratio"]))
@@ -122,13 +129,22 @@ class ContextBudgetPlanner:
             compaction_allowed_by_config=compaction_enabled,
             compaction_max_output_tokens=max(1, int(effective * float(worker["max_output_ratio"]))),
             llm_temperature=float(worker["temperature"]),
-            llm_max_tokens=int(response_cfg["max_tokens"]),
+            llm_max_tokens=response_max_tokens,
             history_page_size=int(runtime_config["history_fetch"]["page_size"]),
             history_max_pages=int(runtime_config["history_fetch"]["max_pages"]),
             history_include_roles={str(role) for role in runtime_config["history_fetch"]["include_roles"]},
             fresh_tail_min_messages=int(runtime_config["fresh_tail"]["min_messages"]),
             trace_response_preview_chars=int(runtime_config["trace"]["response_preview_chars"]),
         )
+
+    @staticmethod
+    def _response_max_tokens(config: dict[str, Any]) -> int | None:
+        if config.get("max_tokens") is None:
+            return None
+        value = int(config["max_tokens"])
+        if value <= 0:
+            raise ValueError("budget.response.max_tokens must be positive when configured")
+        return value
 
     @staticmethod
     def _model_context_window(model_profile: dict[str, Any], runtime_config: dict[str, Any]) -> int:
