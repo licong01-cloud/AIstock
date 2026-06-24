@@ -766,6 +766,65 @@ AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
     "不要编造事实、占位符、来源、日期或动作。"
 )
 
+STOCK_DEPTH_STOCK_TOOL_NAMES = (
+    "stock_analysis_get_quote",
+    "stock_analysis_get_kline",
+    "stock_analysis_get_financials",
+    "stock_analysis_get_quarterly",
+    "stock_analysis_get_margin_financing",
+    "stock_analysis_get_fund_flow",
+    "stock_analysis_get_technicals",
+)
+STOCK_DEPTH_EXTERNAL_TOOL_NAMES = (
+    "external_research_search_web",
+    "external_research_fetch_extract",
+)
+STOCK_DEPTH_REQUIRED_TOOL_REFS = (
+    *(("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES),
+    *(("aistock-external-research", tool_name) for tool_name in STOCK_DEPTH_EXTERNAL_TOOL_NAMES),
+)
+STOCK_DEPTH_SEEDED_TOOL_REFS = (
+    *(("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES),
+    ("aistock-external-research", "external_research_search_web"),
+)
+STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS = 60
+STOCK_DEPTH_HISTORY_PERIOD = "1y"
+STOCK_DEPTH_MIN_TOOL_EXECUTIONS = 8
+STOCK_DEPTH_SYMBOL_ALIASES = {
+    "\u56fd\u57ce\u77ff\u4e1a": "000688",
+}
+STOCK_DEPTH_FOCUS_TERMS = (
+    "stock depth",
+    "all-round",
+    "comprehensive",
+    "\u4e09\u7ef4",
+    "\u7efc\u5408",
+    "\u5168\u65b9\u4f4d",
+    "\u6df1\u5ea6",
+)
+STOCK_DEPTH_DIMENSION_TERMS = (
+    "limit down",
+    "fundamental",
+    "fundamentals",
+    "future trend",
+    "recent trend",
+    "\u4e2a\u80a1",
+    "\u80a1\u7968",
+    "\u8dcc\u505c",
+    "\u57fa\u672c\u9762",
+    "\u57fa\u672c\u60c5\u51b5",
+    "\u8fd1\u671f\u8d70\u52bf",
+    "\u672a\u6765\u8d8b\u52bf",
+    "\u884c\u4e1a\u5730\u4f4d",
+    "\u8d44\u91d1",
+    "\u8d22\u52a1",
+    "\u6280\u672f",
+    "fund flow",
+    "financial",
+    "technical",
+    "industry",
+)
+
 
 def _git_output(args: list[str]) -> str | None:
     try:
@@ -4797,6 +4856,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _agentic_route_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
         limit = min(6, max(1, self.configured_limit("graph_summary_paths")))
+        if self._is_stock_depth_analysis_request(user_message, route):
+            limit = max(limit, len(STOCK_DEPTH_SEEDED_TOOL_REFS))
         candidates: list[dict[str, Any]] = []
         lower = user_message.lower()
         graph_first_qe = "qe" in lower and self._should_prioritize_graph_context(user_message)
@@ -4830,6 +4891,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_list_packages", score=66, reason="strategy_package_candidate"))
                 candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_get_paper_readiness", score=64, reason="paper_v2_candidate"))
 
+        candidates.extend(self._stock_depth_route_candidates(user_message, route))
+
         canonical_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
             try:
@@ -4859,6 +4922,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return False
         if str(route.get("side_effect") or "read_only") != "read_only":
             return False
+        if self._is_stock_depth_analysis_request(user_message, route):
+            return True
         lower = user_message.lower()
         graph_first_qe = "qe" in lower and self._should_prioritize_graph_context(user_message)
         if graph_first_qe:
@@ -4888,6 +4953,89 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if str(candidate.get("side_effect") or "read_only") == "read_only"
         }
         return len(read_only_domains - {"", "general"}) >= 2
+
+    @staticmethod
+    def _contains_any_text(text: str, terms: tuple[str, ...]) -> bool:
+        lower = str(text or "").lower()
+        return any(term.lower() in lower for term in terms)
+
+    @classmethod
+    def _stock_depth_focus_matches(cls, user_message: str) -> bool:
+        text = str(user_message or "")
+        lower = text.lower()
+        has_depth_focus = "stock depth" in lower or "\u6df1\u5ea6" in text
+        dimension_hits = {term for term in STOCK_DEPTH_DIMENSION_TERMS if term.lower() in lower}
+        has_limit_down_triplet = (
+            ("limit down" in lower or "\u8dcc\u505c" in text)
+            and ("future" in lower or "\u672a\u6765" in text)
+            and ("fundamental" in lower or "\u57fa\u672c\u9762" in text or "\u57fa\u672c\u60c5\u51b5" in text)
+        )
+        has_stock_depth_phrase = "stock depth" in lower and ("fundamental" in lower or "future" in lower)
+        return (has_depth_focus and len(dimension_hits) >= 2) or has_limit_down_triplet or has_stock_depth_phrase
+
+    @classmethod
+    def _stock_symbol_from_user_message(cls, user_message: str) -> str | None:
+        text = str(user_message or "")
+        for alias, symbol in STOCK_DEPTH_SYMBOL_ALIASES.items():
+            if alias in text:
+                return symbol
+        match = re.search(r"\b(?:SH|SZ)?\s*(\d{6})(?:\.(?:SH|SZ))?\b", text, re.IGNORECASE)
+        return match.group(1) if match else None
+
+    @classmethod
+    def _is_stock_depth_analysis_request(cls, user_message: str, route: dict[str, Any] | None = None) -> bool:
+        route_domain = str((route or {}).get("domain") or "")
+        route_tool = str((route or {}).get("tool_name") or "")
+        stock_context = route_domain == "stock_analysis" or route_tool.startswith("stock_analysis_") or bool(cls._stock_symbol_from_user_message(user_message))
+        return bool(stock_context and cls._stock_depth_focus_matches(user_message))
+
+    @classmethod
+    def _stock_depth_tool_args(cls, user_message: str) -> dict[str, Any]:
+        args: dict[str, Any] = {
+            "period": STOCK_DEPTH_HISTORY_PERIOD,
+            "min_trading_days": STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS,
+            "limit": 20,
+        }
+        symbol = cls._stock_symbol_from_user_message(user_message)
+        if symbol:
+            args["symbol"] = symbol
+        return args
+
+    def _stock_depth_route_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
+        if not self._is_stock_depth_analysis_request(user_message, route):
+            return []
+        base_score = 99
+        candidates: list[dict[str, Any]] = []
+        for index, (server_key, tool_name) in enumerate(STOCK_DEPTH_SEEDED_TOOL_REFS):
+            candidate = dict(route)
+            candidate.update(
+                {
+                    "domain": "external_research" if server_key == "aistock-external-research" else "stock_analysis",
+                    "intent_value": DialogueIntent.STOCK_ANALYSIS_REQUEST.value,
+                    "server_key": server_key,
+                    "tool_name": tool_name,
+                    "side_effect": "read_only",
+                    "policy": "stock_depth_requires_full_read_only_data_surface",
+                    "candidate_score": base_score - index,
+                    "candidate_reason": "stock_depth_required_evidence",
+                    "stock_depth_required": True,
+                    "min_trading_days": STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS,
+                }
+            )
+            if tool_name == "stock_analysis_get_quote":
+                candidate["primary_route"] = True
+            tool_args = dict(candidate.get("tool_args") if isinstance(candidate.get("tool_args"), dict) else {})
+            tool_args.update(self._stock_depth_tool_args(user_message))
+            if server_key == "aistock-external-research":
+                tool_args.setdefault("query", str(user_message) + " 000688 Guocheng Mining limit-down reason fundamentals industry position news")
+                tool_args.setdefault("locale", "zh-CN")
+            candidate["tool_args"] = tool_args
+            candidate.update({key: value for key, value in tool_args.items() if key not in candidate})
+            try:
+                candidates.append(self._canonicalize_mcp_route(candidate))
+            except KeyError:
+                logger.warning("skip unavailable stock-depth route candidate: %s/%s", server_key, tool_name)
+        return candidates
 
     @staticmethod
     def _route_candidate_from_route(route: dict[str, Any], *, score: int, reason: str) -> dict[str, Any]:
@@ -5873,6 +6021,33 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "If citation_options are present, cite their exact source/as_of strings for the relevant facts.",
             ],
         }
+        if self._is_stock_depth_analysis_request(
+            user_message,
+            route_candidates[0] if route_candidates else {},
+        ):
+            directive["individual_stock_depth_analysis_policy"] = {
+                "required_stock_tools": list(STOCK_DEPTH_STOCK_TOOL_NAMES),
+                "required_external_tools": list(STOCK_DEPTH_EXTERNAL_TOOL_NAMES),
+                "minimum_kline_trading_days": STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS,
+                "preferred_kline_period": STOCK_DEPTH_HISTORY_PERIOD,
+                "required_dimensions": [
+                    "quote/current market only as starting point",
+                    "kline history of at least 60 trading days",
+                    "technicals",
+                    "fund_flow",
+                    "margin_financing",
+                    "financials",
+                    "quarterly",
+                    "external_research_search_web and fetch_extract for event/fundamental/industry context",
+                ],
+                "answer_policy": (
+                    "For individual-stock depth questions, gather the full read-only data surface before drawing conclusions. "
+                    "Do not treat a realtime quote or one-day K line as enough evidence. Start with 1-2 bottom-line sentences, "
+                    "then synthesize cited observations by dimension. Future-looking content must be drivers/scenarios/risks only, "
+                    "with no directional prediction and no investment advice. If a required data source is unavailable, say which one "
+                    "is missing with its reason_code instead of inventing facts."
+                ),
+            }
         react_messages.append({"role": "system", "content": json.dumps(directive, ensure_ascii=False, sort_keys=True)})
         return react_messages
 
@@ -5894,10 +6069,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         function_tool_registry: dict[str, dict[str, str]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
         route_seeds = self._seeded_react_tool_calls(cards, mode_decision)
-        if route_seeds and first_llm_result.tool_calls:
+        route_candidates = self._route_candidates_from_cards(cards)
+        stock_depth_seeded = any(candidate.get("stock_depth_required") for candidate in route_candidates)
+        if route_seeds and first_llm_result.tool_calls and not stock_depth_seeded:
             # Native function calls take precedence over legacy route seeding.
             route_seeds = []
-        route_candidates = self._route_candidates_from_cards(cards)
         graph_context = self._graph_context_from_context_pack(context_pack)
         react_messages = self._react_messages_for_agentic_synthesis(
             messages,
@@ -5988,7 +6164,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
         configured_iterations = int(cfg["max_tool_iterations"])
         return ReactGroundingConfig(
-            max_tool_iterations=max(configured_iterations, 6),
+            max_tool_iterations=max(configured_iterations, 10 if self._is_stock_depth_analysis_request(user_message) else 6),
             evidence_required=bool(cfg.get("evidence_required", True)),
             user_message=user_message,
             token_budget=int(cfg.get("token_budget") or token_budget) if (cfg.get("token_budget") or token_budget) else None,
@@ -6108,6 +6284,30 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 for candidate in candidates
                 if self._react_tool_call_from_route_candidate(candidate, mode_decision, stable_prefix="probe") is not None
             ]
+            stock_depth = [
+                candidate
+                for candidate in eligible_candidates
+                if candidate.get("stock_depth_required") or str(candidate.get("candidate_reason") or "") == "stock_depth_required_evidence"
+            ]
+            if stock_depth:
+                stock_keys = {("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES}
+                external_search_key = ("aistock-external-research", "external_research_search_web")
+                stock_selected = [
+                    candidate
+                    for candidate in stock_depth
+                    if (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or "")) in stock_keys
+                ]
+                external_selected = next(
+                    (
+                        candidate
+                        for candidate in stock_depth
+                        if (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or "")) == external_search_key
+                    ),
+                    None,
+                )
+                if external_selected is not None:
+                    stock_selected.append(external_selected)
+                return stock_selected
             return eligible_candidates or candidates[:1]
         return candidates[:1]
 
@@ -6210,7 +6410,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _react_grounding_card(react_result: Any) -> dict[str, Any]:
         tool_errors: list[dict[str, Any]] = []
         tool_results = list(getattr(react_result, "tool_results", []) or [])
+        executed_tools: list[dict[str, Any]] = []
+        seen_executed: set[tuple[str, str]] = set()
         for index, result in enumerate(tool_results):
+            if bool(getattr(result, "executed", False)) and str(getattr(result, "status", "")) in {"succeeded", "success", "ok"}:
+                executed_key = (str(getattr(result, "server_key", "")), str(getattr(result, "tool_name", "")))
+                if executed_key[0] and executed_key[1] and executed_key not in seen_executed:
+                    seen_executed.add(executed_key)
+                    executed_tools.append(
+                        {
+                            "server_key": executed_key[0],
+                            "tool_name": executed_key[1],
+                            "status": str(getattr(result, "status", "")),
+                        }
+                    )
             error = result.error_json if isinstance(result.error_json, dict) else {}
             reason_code = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "")
             if result.status in {"failed", "rejected"} and reason_code in ResearchAssistantService.PROGRAM_ERROR_REASON_CODES:
@@ -6235,6 +6448,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "tool_call_count": len(react_result.tool_calls),
             "tool_result_count": len(react_result.tool_results),
             "stopped_reason": react_result.stopped_reason,
+            "executed_tools": executed_tools,
             "tool_errors": tool_errors,
             "evidence_guard": {
                 "allowed": react_result.evidence_guard.allowed,
@@ -6381,7 +6595,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     def _populate_cards_from_tool_execution(self, cards: dict[str, Any], proposal: dict[str, Any], executed: dict[str, Any], result: McpToolResult) -> None:
         tool_event = executed.get("tool_event") if isinstance(executed.get("tool_event"), dict) else {}
         summary_result = tool_event.get("response_json") if isinstance(tool_event.get("response_json"), dict) else {}
-        cards["mcp_summary_result"] = summary_result
+        existing_summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
+        preserve_stock_summary = (
+            existing_summary.get("response_mode") == "stock_analysis_evidence_card"
+            and summary_result.get("response_mode") != "stock_analysis_evidence_card"
+            and result.server_key == "aistock-external-research"
+        )
+        if not preserve_stock_summary:
+            cards["mcp_summary_result"] = summary_result
         cards["mcp_result_cards"] = list(executed.get("human_cards") or [])
         cards["mcp_tool_event"] = {
             "tool_event_id": tool_event.get("tool_event_id"),

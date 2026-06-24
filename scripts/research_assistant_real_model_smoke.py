@@ -29,7 +29,7 @@ if str(ROOT) not in sys.path:
 
 SCHEMA_VERSION = "aistock_research_assistant_real_model_smoke_v1"
 BUG_ID = "BUG-496"
-RELATED_BUG_IDS = ["BUG-436", "BUG-496", "BUG-505"]
+RELATED_BUG_IDS = ["BUG-436", "BUG-496", "BUG-505", "BUG-509"]
 SKIP_EXIT_CODE = 77
 FAIL_EXIT_CODE = 1
 PASS_EXIT_CODE = 0
@@ -115,6 +115,34 @@ B2_STOCK_REQUIRED_TOOLS = {
     ("aistock-stock-analysis", "stock_analysis_get_quote"),
     ("aistock-external-research", "external_research_search_web"),
 }
+B509_STOCK_DEPTH_STOCK_TOOLS = {
+    ("aistock-stock-analysis", "stock_analysis_get_quote"),
+    ("aistock-stock-analysis", "stock_analysis_get_kline"),
+    ("aistock-stock-analysis", "stock_analysis_get_financials"),
+    ("aistock-stock-analysis", "stock_analysis_get_quarterly"),
+    ("aistock-stock-analysis", "stock_analysis_get_margin_financing"),
+    ("aistock-stock-analysis", "stock_analysis_get_fund_flow"),
+    ("aistock-stock-analysis", "stock_analysis_get_technicals"),
+}
+B509_STOCK_DEPTH_EXTERNAL_TOOLS = {
+    ("aistock-external-research", "external_research_search_web"),
+}
+B509_STOCK_DEPTH_EXECUTED_TOOLS = B509_STOCK_DEPTH_STOCK_TOOLS | B509_STOCK_DEPTH_EXTERNAL_TOOLS
+B509_STOCK_DEPTH_EXECUTABLE_TOOLS = B509_STOCK_DEPTH_EXECUTED_TOOLS | {
+    ("aistock-external-research", "external_research_fetch_extract"),
+}
+B509_STOCK_DEPTH_MIN_TOOL_EXECUTIONS = 8
+B509_STOCK_DEPTH_TOOL_CATEGORIES = {
+    ("aistock-stock-analysis", "stock_analysis_get_quote"): "market",
+    ("aistock-stock-analysis", "stock_analysis_get_kline"): "history",
+    ("aistock-stock-analysis", "stock_analysis_get_financials"): "fundamental",
+    ("aistock-stock-analysis", "stock_analysis_get_quarterly"): "fundamental",
+    ("aistock-stock-analysis", "stock_analysis_get_margin_financing"): "margin",
+    ("aistock-stock-analysis", "stock_analysis_get_fund_flow"): "fund_flow",
+    ("aistock-stock-analysis", "stock_analysis_get_technicals"): "technicals",
+    ("aistock-external-research", "external_research_search_web"): "external_research",
+}
+B509_STOCK_DEPTH_REQUIRED_CATEGORIES = {"market", "history", "fund_flow", "fundamental"}
 B2_QE_REQUIRED_TERMS = ("QE", "graph_context", "LIVE")
 B2_QE_STRATEGY_TERMS = ("策略包", "Strategy Package", "strategy package")
 B2_QE_PAPER_TERMS = ("Paper v2", "paper_v2", "PaperV2")
@@ -134,6 +162,7 @@ B2_ASSERTION_MANIFEST = [
     "same seeded data with two different questions -> distinct question-specific answers, not one template",
     "write action -> approval card/preflight gate; no automatic write execution",
     "long multidimensional stock analysis -> complete ending, all requested sections, no mid-sentence truncation",
+    "BUG-509 stock-depth question -> 7 stock_analysis reads + external_research + >=60-day kline coverage",
 ]
 
 
@@ -307,6 +336,40 @@ def _assert_tool_refs_present(
         )
 
 
+def _assert_tool_ref_count_at_least(
+    actual: set[tuple[str, str]],
+    *,
+    minimum: int,
+    reason_code: str,
+    label: str,
+) -> None:
+    if len(actual) < minimum:
+        raise SmokeFailure(
+            reason_code,
+            f"{label} executed too few tools: expected at least {minimum}, got {len(actual)}.",
+            details={"minimum": minimum, "actual_count": len(actual), "actual": [f"{server}/{tool}" for server, tool in sorted(actual)]},
+        )
+
+
+def _assert_stock_depth_categories(
+    executed_tools: set[tuple[str, str]],
+    *,
+    label: str,
+) -> None:
+    categories = {category for ref, category in B509_STOCK_DEPTH_TOOL_CATEGORIES.items() if ref in executed_tools}
+    missing = sorted(B509_STOCK_DEPTH_REQUIRED_CATEGORIES - categories)
+    if missing:
+        raise SmokeFailure(
+            "b509_stock_depth_required_categories_missing",
+            f"{label} did not cover required stock-depth evidence categories: {missing}",
+            details={
+                "missing_categories": missing,
+                "covered_categories": sorted(categories),
+                "executed_tools": [f"{server}/{tool}" for server, tool in sorted(executed_tools)],
+            },
+        )
+
+
 def _assert_any_text_contains(
     text: str,
     terms: tuple[str, ...] | list[str],
@@ -405,6 +468,43 @@ def _service_tool_event_refs(service: Any) -> set[tuple[str, str]]:
         if server and tool:
             refs.add((server, tool))
     return refs
+
+
+def _service_tool_event_payloads(service: Any) -> list[dict[str, Any]]:
+    try:
+        events = service.list_records("mcp_tool_events", limit=200)["items"]
+    except Exception:
+        return []
+    return [event for event in events if isinstance(event, dict)]
+
+
+def _assert_stock_depth_kline_window(service: Any, *, label: str) -> None:
+    kline_events = [
+        event
+        for event in _service_tool_event_payloads(service)
+        if str(event.get("status") or "") == "succeeded"
+        and str(event.get("server_key") or "") == "aistock-stock-analysis"
+        and str(event.get("tool_name") or "") == "stock_analysis_get_kline"
+    ]
+    if not kline_events:
+        raise SmokeFailure(
+            "b509_stock_depth_kline_event_missing",
+            f"{label} did not execute stock_analysis_get_kline.",
+            details={"events": _service_tool_event_payloads(service)},
+        )
+    request = kline_events[-1].get("request_json") if isinstance(kline_events[-1].get("request_json"), dict) else {}
+    tool_args = request.get("tool_args") if isinstance(request.get("tool_args"), dict) else {}
+    period = str(tool_args.get("period") or request.get("period") or "")
+    try:
+        min_trading_days = int(tool_args.get("min_trading_days") or request.get("min_trading_days") or 0)
+    except (TypeError, ValueError):
+        min_trading_days = 0
+    if period != "1y" or min_trading_days < 60:
+        raise SmokeFailure(
+            "b509_stock_depth_kline_window_too_short",
+            f"{label} did not request at least a 60-trading-day kline window.",
+            details={"period": period, "min_trading_days": min_trading_days, "request_json": request},
+        )
 
 
 def _result_summary(result: dict[str, Any]) -> dict[str, Any]:
@@ -580,6 +680,39 @@ def _tool_sets(service: Any, message: str) -> dict[str, Any]:
             if (server, tool) in function_registry and (server, tool) in executable
         ),
     }
+
+
+def _assert_b509_tool_sets(tool_sets: dict[str, Any]) -> None:
+    registry = {
+        tuple(item.split("/", 1))
+        for item in tool_sets["function_registry"]
+        if isinstance(item, str) and "/" in item
+    }
+    executable = {
+        tuple(item.split("/", 1))
+        for item in tool_sets["executable"]
+        if isinstance(item, str) and "/" in item
+    }
+    missing_registry = sorted(B509_STOCK_DEPTH_EXECUTABLE_TOOLS - registry)
+    missing_executable = sorted(B509_STOCK_DEPTH_EXECUTABLE_TOOLS - executable)
+    if missing_registry or missing_executable:
+        raise SmokeFailure(
+            "b509_stock_depth_tool_refs_missing",
+            "BUG-509 required stock_analysis/external_research refs are not both offered and executable.",
+            details={
+                "missing_from_function_registry": [f"{server}/{tool}" for server, tool in missing_registry],
+                "missing_from_executable": [f"{server}/{tool}" for server, tool in missing_executable],
+            },
+        )
+    if not tool_sets["function_registry_equals_read_only_executable"]:
+        raise SmokeFailure(
+            "b509_function_registry_not_equal_executable_read_only_set",
+            "Agent offered read-only tool registry does not equal the capability-backed executable read-only set.",
+            details={
+                "function_registry_count": len(tool_sets["function_registry"]),
+                "read_only_executable_count": len(tool_sets["read_only_executable"]),
+            },
+        )
 
 
 def _assert_a2_tool_sets(tool_sets: dict[str, Any]) -> None:
@@ -792,8 +925,8 @@ class SeededStockFacade:
         return _stock_envelope(dataset="quote", symbol=symbol, summary=f"{symbol} quote shows liquidity but no standalone direction signal.")
 
     def get_stock_kline_evidence(self, symbol: str, period: str = "1y", analysis_date: str | None = None) -> dict[str, Any]:
-        del period, analysis_date
-        return _stock_envelope(dataset="kline", symbol=symbol, summary=f"{symbol} kline needs trend confirmation and risk controls.")
+        del analysis_date
+        return _stock_envelope(dataset="kline", symbol=symbol, summary=f"{symbol} kline uses period={period}; minimum 60 trading days are required before trend judgement.")
 
     def get_stock_financials_evidence(self, symbol: str, analysis_date: str | None = None) -> dict[str, Any]:
         del analysis_date
@@ -812,14 +945,14 @@ class SeededStockFacade:
         return _stock_envelope(dataset="fund_flow", symbol=symbol, summary=f"{symbol} fund-flow evidence must be cross-checked with price and volume.")
 
     def get_stock_technicals_evidence(self, symbol: str, period: str = "1y", analysis_date: str | None = None) -> dict[str, Any]:
-        del period, analysis_date
-        return _stock_envelope(dataset="technicals", symbol=symbol, summary=f"{symbol} technicals are useful for scenarios, not a directional prediction.")
+        del analysis_date
+        return _stock_envelope(dataset="technicals", symbol=symbol, summary=f"{symbol} technicals use period={period}; useful for scenarios, not a directional prediction.")
 
 
 class SeededExternalResult:
     def __init__(self, *, query: str) -> None:
         self.query = query
-        self.url = f"https://example.org/ra-smoke/{sha_like(query)}"
+        self.url = f"https://ra-smoke.invalid/{sha_like(query)}"
 
     def compact(self, max_preview_chars: int = 800) -> dict[str, Any]:
         del max_preview_chars
@@ -1029,6 +1162,53 @@ def run_b505_long_answer_completion_smoke(message: str) -> dict[str, Any]:
         "name": "BUG-505 long multidimensional stock answer completion",
         "status": "passed",
         "message": message,
+        **_call_summary(service, result, llm),
+    }
+
+
+def run_b509_stock_depth_smoke(message: str) -> dict[str, Any]:
+    llm = _make_recording_llm_client()
+    service = _new_service(llm)
+    service.stock_analysis_facade_factory = SeededStockFacade
+    service.external_research_provider_factory = SeededExternalResearchProvider
+    tool_sets = _tool_sets(service, message)
+    _assert_b509_tool_sets(tool_sets)
+
+    from backend.services.research_assistant.models import ChatTurnRequest
+
+    result = service.chat_turn(ChatTurnRequest(message=message, dialogue_mode_override="analysis"))
+    text = _assistant_text(result)
+    executed_tools = _service_tool_event_refs(service) | _react_executed_tool_refs(result)
+
+    _assert_tool_refs_present(
+        executed_tools,
+        B509_STOCK_DEPTH_EXECUTED_TOOLS,
+        reason_code="b509_stock_depth_required_tools_missing",
+        label="BUG-509 stock-depth smoke",
+    )
+    _assert_tool_ref_count_at_least(
+        executed_tools,
+        minimum=B509_STOCK_DEPTH_MIN_TOOL_EXECUTIONS,
+        reason_code="b509_stock_depth_tool_count_below_threshold",
+        label="BUG-509 stock-depth smoke",
+    )
+    _assert_stock_depth_categories(executed_tools, label="BUG-509 stock-depth smoke")
+    _assert_stock_depth_kline_window(service, label="BUG-509 stock-depth smoke")
+    _assert_bottom_line(text, reason_code="b509_stock_depth_bottom_line_missing", label="BUG-509 stock-depth smoke")
+    _assert_long_answer_complete(text, label="BUG-509 stock-depth smoke")
+    _assert_text_excludes(
+        text,
+        B2_FORBIDDEN_TEMPLATE_MARKERS,
+        reason_code="b509_stock_depth_template_marker_present",
+        label="BUG-509 stock-depth smoke",
+    )
+    _assert_no_forbidden_markers(result, markers=FORBIDDEN_CRASH_MARKERS, reason_code="b509_stock_depth_forbidden_error_marker")
+    return {
+        "name": "BUG-509 stock-depth full data surface + web coverage",
+        "status": "passed",
+        "message": message,
+        "tool_sets": tool_sets,
+        "required_executed_tools": [f"{server}/{tool}" for server, tool in sorted(B509_STOCK_DEPTH_EXECUTED_TOOLS)],
         **_call_summary(service, result, llm),
     }
 
@@ -1345,6 +1525,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--b509-stock-depth-message",
+        default=(
+            "请对国城矿业 000688 跌停原因、未来趋势、基本面和行业地位做个股深度综合分析："
+            "必须使用全部 stock_analysis 只读数据源、至少 60 个交易日历史 K 线、技术指标、资金流向、融资融券、财务、季度、"
+            "并联网搜索事件/消息面；先给 Bottom-line，再分维度有源分析，最后给收尾结论，不构成投资建议。"
+        ),
+    )
+    parser.add_argument(
         "--a2-message",
         default=(
             "国城矿业基本情况、近期走势、未来趋势怎样？"
@@ -1404,6 +1592,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         report["checks"].append(run_b2_write_approval_smoke(args.b2_write_message))
         report["checks"].append(run_b505_long_answer_completion_smoke(args.b505_long_answer_message))
+        report["checks"].append(run_b509_stock_depth_smoke(args.b509_stock_depth_message))
         report["checks"].append(run_a2_smoke(args.a2_message))
         report["checks"].append(run_a1_smoke(args.a1_message))
     except SmokeFailure as exc:
