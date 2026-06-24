@@ -1,0 +1,75 @@
+{
+  "actual": "Four old generated JSON/parquet artifacts remain tracked as P4 delete candidates after BUG-510.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260624_BUG-511-repo-hygiene-retained-january-february-p4-artifacts-after-first-cleanup.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-511",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T07:07:23.776289Z",
+  "description": "Four old generated JSON/parquet artifacts remain tracked as P4 delete candidates after BUG-510.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-0d714b3b3172",
+      "timestamp": "2026-06-24T07:07:23.776286Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\\\Dev\\\\AIstock\\\\tests\\\\aistock_validation\\\\history\\\\repo_hygiene\\\\BUG-510_p4_cleanup_manifest_20260624.md"
+  ],
+  "expected": "Confirmed January/February P4 delete candidates are removed from the tracked repo with no references and root main stays clean.",
+  "first_seen_at": "2026-06-24T07:07:23.776289Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1584,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1584",
+  "last_seen_at": "2026-06-24T07:07:23.776289Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/repo_hygiene_orphan_audit.py --root F:\\\\Dev\\\\AIstock --output-dir tmp/validation/code-intelligence/BUG-510-final --json --max-seconds 300",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Repo hygiene retained January/February P4 artifacts after first cleanup",
+  "trigger_condition": {
+    "fingerprint": "0d714b3b3172aa76caf5d465",
+    "source_event_id": "FE-20260624-0d714b3b3172"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
