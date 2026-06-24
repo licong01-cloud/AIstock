@@ -118,7 +118,7 @@ trace:
   response_preview_chars: 500
 
 react_grounding:
-  max_tool_iterations: 4
+  max_tool_iterations: 10
   evidence_required: true
   placeholder_patterns:
     - "\bXX\b"
