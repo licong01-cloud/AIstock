@@ -1,0 +1,88 @@
+{
+  "actual": "RA asks a broad clarification like which dimension to look at first even when the entity and requested dimensions are clear.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260625_BUG-520-ra-analysis-mode-over-clarifies-explicit-multi-dimensional-stock-questio.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "prompt_packs/research_assistant/main/nodes/mode.analysis.md",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-520",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T18:34:27.713735Z",
+  "description": "RA asks a broad clarification like which dimension to look at first even when the entity and requested dimensions are clear.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-21c072c2b5fc",
+      "timestamp": "2026-06-24T18:34:27.713731Z"
+    },
+    {
+      "action": "scope_expanded_for_prompt_authority_fix",
+      "actor": "codex",
+      "note": "User-specified fix is prompt-only in mode.analysis.md (YAML authority, reload effective); service.py/react_grounding remain out of scope.",
+      "timestamp": "2026-06-24T18:43:00Z"
+    },
+    {
+      "action": "scope_expanded_for_prompt_checksum_pin",
+      "actor": "codex",
+      "note": "Updated the RA DB-direct parity characterization checksum pin for the intended mode.analysis prompt text change; no service.py/react_grounding logic changed.",
+      "timestamp": "2026-06-24T18:53:34Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "For explicit multi-dimensional analysis questions, RA should answer all requested dimensions with read-only evidence collection; clarification should be asked only for true ambiguity such as unclear entity or contradictory intent, and any clarification must be in Chinese.",
+  "first_seen_at": "2026-06-24T18:34:27.713735Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1621,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1621",
+  "last_seen_at": "2026-06-24T18:34:27.713735Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask Research Assistant: 国城矿业跌停原因、未来走势、基本面分别怎么看？",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA analysis mode over-clarifies explicit multi-dimensional stock questions",
+  "trigger_condition": {
+    "fingerprint": "21c072c2b5fc7bc2ebcec968",
+    "source_event_id": "FE-20260625-21c072c2b5fc"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
