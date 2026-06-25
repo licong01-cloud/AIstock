@@ -1,0 +1,84 @@
+{
+  "actual": "Grounding guard can reject a valid factual QE ranking answer with business reply synthesis did not pass grounding guard / Insufficient evidence even when leaderboard data is available.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
+    "tests/aistock_validation/bugs/20260625_BUG-521-ra-grounding-guard-misclassifies-factual-qe-ranking-list-as-missing-synt.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-521",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T18:34:37.032244Z",
+  "description": "Grounding guard can reject a valid factual QE ranking answer with business reply synthesis did not pass grounding guard / Insufficient evidence even when leaderboard data is available.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-2b23c0313946",
+      "timestamp": "2026-06-24T18:34:37.032240Z"
+    },
+    {
+      "timestamp": "2026-06-25T02:03:10.045946Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Reproduced factual QE ranking/list guard block as multi_source_synthesis_missing; added factual/ranking query classification, row-level source/as_of enforcement, not_verified risk-label enforcement, and retry directives. Validation: pytest backend/tests/research_assistant/test_react_grounding.py -q (10 passed); nox l0 passed; research_assistant_backend 344 passed; research_assistant_mcp_contract 38 passed; ra_phase7_full_accept passed after frontend npm ci and isolated 3011 validation server; validation_module_registry_l0 8 passed; git diff --check passed; ruff changed files passed. No services/production DB/DDL touched."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Factual/ranking QE top-N queries return a grounded structured list with inline source/as_of and not_verified risk labels; judgment-style questions still require synthesis; unsourced/placeholder/fabricated outputs remain blocked.",
+  "first_seen_at": "2026-06-24T18:34:37.032244Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1622,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1622",
+  "last_seen_at": "2026-06-24T18:34:37.032244Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "RA chat: 目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？",
+  "required_verification": [
+    "l0",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "research_assistant_backend",
+    "ra_phase7_full_accept",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA grounding guard misclassifies factual QE ranking list as missing synthesis",
+  "trigger_condition": {
+    "fingerprint": "2b23c03139466813c1e60788",
+    "source_event_id": "FE-20260625-2b23c0313946"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

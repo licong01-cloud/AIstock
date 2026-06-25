@@ -234,6 +234,73 @@ STOCK_DEPTH_REQUIRED_CATEGORIES = ("market", "history", "fund_flow", "fundamenta
 STOCK_DEPTH_MIN_REQUIRED_CATEGORIES = 4
 STOCK_DEPTH_MIN_TOOL_EXECUTIONS = 8
 STOCK_ANALYSIS_SERVER_KEY = "aistock-stock-analysis"
+FACTUAL_LIST_QUERY_TERMS = (
+    "leaderboard",
+    "ranking",
+    "rank",
+    "top",
+    "topn",
+    "top n",
+    "list",
+    "table",
+    "respectively",
+    "cagr",
+    "annualized",
+    "\u6392\u540d",
+    "\u699c",
+    "\u5217\u8868",
+    "\u6e05\u5355",
+    "\u8868\u683c",
+    "\u5206\u522b",
+    "\u5404\u81ea",
+    "\u5e74\u5316",
+    "\u6536\u76ca",
+)
+FACTUAL_LOOKUP_QUERY_TERMS = (
+    "what are",
+    "which",
+    "model",
+    "\u6a21\u578b",
+    "\u591a\u5c11",
+    "\u54ea\u4e9b",
+    "\u662f\u4ec0\u4e48",
+)
+JUDGEMENT_SYNTHESIS_QUERY_TERMS = (
+    "analysis",
+    "analyze",
+    "synthesize",
+    "comprehensive",
+    "all-round",
+    "trend",
+    "future",
+    "outlook",
+    "why",
+    "how",
+    "\u5206\u6790",
+    "\u7efc\u5408",
+    "\u5168\u65b9\u4f4d",
+    "\u600e\u4e48\u6837",
+    "\u600e\u4e48\u770b",
+    "\u4e3a\u4ec0\u4e48",
+    "\u539f\u56e0",
+    "\u8d70\u52bf",
+    "\u8d8b\u52bf",
+    "\u672a\u6765",
+)
+UNVERIFIED_VALUE_TERMS = ("not_verified", "not verified", "unverified", "\u672a\u9a8c\u8bc1")
+UNVERIFIED_RISK_TERMS = (
+    "risk",
+    "risky",
+    "do not treat",
+    "not real",
+    "not production",
+    "backtest",
+    "\u98ce\u9669",
+    "\u52ff\u5f53",
+    "\u4e0d\u80fd\u5f53",
+    "\u672a\u9a8c\u8bc1\u56de\u6d4b",
+    "\u771f\u5b9e\u6536\u76ca",
+)
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -900,6 +967,18 @@ def _payload_source_values(payload: dict[str, Any]) -> list[str]:
     return _dedupe_preserve_order(values)
 
 
+def _iter_nested_dicts(value: Any) -> list[dict[str, Any]]:
+    nested: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        nested.append(value)
+        for item in value.values():
+            nested.extend(_iter_nested_dicts(item))
+    elif isinstance(value, list):
+        for item in value:
+            nested.extend(_iter_nested_dicts(item))
+    return nested
+
+
 def _payload_as_of_values(payload: dict[str, Any]) -> list[str]:
     values: list[str] = []
     for key in ("as_of", "trade_date", "analysis_date", "report_period", "date", "indicator_date"):
@@ -918,6 +997,8 @@ def _known_source_values(collected_results: list[McpToolResult]) -> set[str]:
         values.extend(_payload_source_values(payload))
         for section in _payload_section_dicts(payload):
             values.extend(_payload_source_values(section))
+        for nested in _iter_nested_dicts(payload):
+            values.extend(_payload_source_values(nested))
     return set(_dedupe_preserve_order(values))
 
 
@@ -930,6 +1011,8 @@ def _known_as_of_values(collected_results: list[McpToolResult]) -> set[str]:
         values.extend(_payload_as_of_values(payload))
         for section in _payload_section_dicts(payload):
             values.extend(_payload_as_of_values(section))
+        for nested in _iter_nested_dicts(payload):
+            values.extend(_payload_as_of_values(nested))
     return set(_dedupe_preserve_order(values))
 
 
@@ -1006,6 +1089,22 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term.lower() in lowered for term in terms)
 
 
+def _is_factual_list_query(config: ReactGroundingConfig) -> bool:
+    question = str(config.user_message or "")
+    lowered = question.lower()
+    if re.search(r"\btop\s*\d+\b", lowered) or re.search(r"\btop\s*n\b", lowered):
+        return True
+    if re.search(r"\u524d\s*\d+\s*(?:\u4f4d|\u540d|\u4e2a|\u6761|loop|run)?", question):
+        return True
+    has_list_cue = _contains_any(question, FACTUAL_LIST_QUERY_TERMS)
+    has_lookup_cue = _contains_any(question, FACTUAL_LOOKUP_QUERY_TERMS)
+    if has_list_cue and has_lookup_cue:
+        return True
+    if _contains_any(question, JUDGEMENT_SYNTHESIS_QUERY_TERMS):
+        return False
+    return has_list_cue
+
+
 def _is_future_question(config: ReactGroundingConfig) -> bool:
     return _contains_any(config.user_message, config.future_answer_terms)
 
@@ -1028,6 +1127,8 @@ def _passes_future_answer_discipline(text: str, config: ReactGroundingConfig) ->
 
 
 def _requires_synthesis_answer(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
+    if _is_factual_list_query(config):
+        return False
     executed_tool_keys = {
         (item.server_key, item.tool_name)
         for item in collected_results
@@ -1062,6 +1163,60 @@ def _passes_multi_source_synthesis(text: str, config: ReactGroundingConfig, coll
     if any(term in lowered for term in ("bottom-line", "结论", "综合", "意味着", "路径", "下一步", "判断", "可以先", "优先")):
         return True
     return bool(_evidence_citation_inventory(collected_results))
+
+
+def _factual_list_data_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith(("source:", "sources:", "as_of:", "as of:", "\u6765\u6e90", "\u622a\u81f3")):
+            continue
+        if set(line.replace("|", "").replace(" ", "").replace(":", "")) <= {"-"}:
+            continue
+        table_or_list = "|" in line or re.match(r"^(?:[-*]|\d+[\).、])\s+", line) is not None
+        if table_or_list and _has_numeric_fact(line):
+            lines.append(line)
+    return lines
+
+
+def _passes_factual_list_row_citations(text: str, config: ReactGroundingConfig, known_sources: set[str], known_as_of: set[str]) -> bool:
+    if not _is_factual_list_query(config):
+        return True
+    data_lines = _factual_list_data_lines(text)
+    if not data_lines:
+        return True
+    return all(_has_inline_source(line, known_sources) and _has_inline_as_of(line, known_as_of) for line in data_lines)
+
+
+def _result_contains_unverified_value(result: McpToolResult) -> bool:
+    payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+    values = _iter_string_values(payload)
+    values.extend(str(item) for item in (result.summary, result.observation) if str(item or "").strip())
+    lowered = " ".join(values).lower()
+    return any(term in lowered for term in UNVERIFIED_VALUE_TERMS)
+
+
+def _has_unverified_evidence(collected_results: list[McpToolResult]) -> bool:
+    return any(_is_success_result(result) and _result_contains_unverified_value(result) for result in collected_results)
+
+
+def _mentions_unverified_risk(text: str) -> bool:
+    lowered = text.lower()
+    has_unverified_marker = any(term in lowered for term in UNVERIFIED_VALUE_TERMS)
+    has_risk_marker = any(term in lowered for term in UNVERIFIED_RISK_TERMS)
+    return has_unverified_marker and has_risk_marker
+
+
+def _passes_unverified_risk_labels(text: str) -> bool:
+    if not _mentions_unverified_risk(text):
+        return False
+    unverified_lines = [line.strip() for line in text.splitlines() if any(term in line.lower() for term in UNVERIFIED_VALUE_TERMS)]
+    if not unverified_lines:
+        return True
+    return all(any(term in line.lower() for term in UNVERIFIED_RISK_TERMS) for line in unverified_lines)
 
 
 def _status_counts_from_results(collected_results: list[McpToolResult]) -> dict[str, int]:
@@ -1129,6 +1284,19 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
         return decision
+    if config.evidence_required and collected_results and not _passes_factual_list_row_citations(text, config, known_sources, known_as_of):
+        decision = EvidenceGuardDecision(
+            False,
+            "Insufficient evidence: factual ranking/list rows require inline source/as_of.",
+            "factual_list_row_evidence_missing",
+            source_count,
+            as_of_count,
+        )
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
     if config.evidence_required and has_numbers and not (inline_source and inline_as_of):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: numeric facts require inline source/as_of.", "unsourced_numeric_fact", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
@@ -1152,6 +1320,19 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
         return decision
     if config.evidence_required and collected_results and not _passes_future_answer_discipline(text, config):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: future-looking answers require drivers, scenarios, risks, and no directional prediction.", "future_answer_boundary_missing", source_count, as_of_count)
+        if program_errors and _text_reports_program_error(text, program_errors):
+            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
+        return decision
+    if config.evidence_required and collected_results and _has_unverified_evidence(collected_results) and not _passes_unverified_risk_labels(text):
+        decision = EvidenceGuardDecision(
+            False,
+            "Insufficient evidence: unverified backtest or experimental data must carry an explicit risk label.",
+            "unverified_evidence_risk_label_missing",
+            source_count,
+            as_of_count,
+        )
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
@@ -1301,6 +1482,7 @@ def _evidence_guard_retry_directive(guard: EvidenceGuardDecision, failed_answer:
                     "for multi-section evidence cite the relevant section source/as_of token. "
                     "If reason_code is future_answer_boundary_missing, use drivers, scenarios, risks, and say you do not predict direction. "
                     "If reason_code is multi_source_synthesis_missing, give a bottom-line synthesis before details instead of listing tools. "
+                    "If reason_code is factual_list_row_evidence_missing, add the exact source/as_of token to every factual list or table row. If reason_code is unverified_evidence_risk_label_missing, label every not_verified row as unverified backtest or experimental data and warn not to treat it as real returns. "
                     "Do not invent placeholders, dates, sources, or new facts. "
                     "If the evidence is genuinely insufficient, say so with the reason."
                 ),
@@ -1381,7 +1563,14 @@ def run_react_grounding_loop(
             guard = compose_with_evidence_guard(turn.content, collected_results, config)
             last_guard = guard
             trace_steps.append({"iteration": iteration, "evidence_guard_allowed": guard.allowed, "evidence_guard_reason": guard.reason})
-            citation_failure = guard.reason in {"missing_inline_tool_evidence", "unsourced_numeric_fact", "future_answer_boundary_missing", "multi_source_synthesis_missing"}
+            citation_failure = guard.reason in {
+                "missing_inline_tool_evidence",
+                "unsourced_numeric_fact",
+                "factual_list_row_evidence_missing",
+                "future_answer_boundary_missing",
+                "multi_source_synthesis_missing",
+                "unverified_evidence_risk_label_missing",
+            }
             if not guard.allowed and guard.reason == "stock_depth_required_evidence_missing":
                 stopped_reason = "stock_depth_required_evidence_missing"
                 return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
