@@ -24,6 +24,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260625-4bc1ad0ddaf9",
       "timestamp": "2026-06-25T03:35:31.738261Z"
+    },
+    {
+      "action": "evidence_reproduced",
+      "actor": "codex",
+      "timestamp": "2026-06-25T07:05:31Z",
+      "note": "Before fix, read-only partial stock-depth evidence was blocked as fail-closed instead of degraded. Guard reason/stopped_reason=stock_depth_required_evidence_missing; collected read-only quote/kline/fund_flow evidence had real source/as_of, while other dimensions were missing."
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "timestamp": "2026-06-25T07:05:31Z",
+      "note": "Added side_effect_level propagation and read_only partial-evidence degradation. Degradation is gated by action mechanism metadata: all attempted calls/results must be read_only, no program/config errors, at least one sourced business evidence result, and anti-hallucination redlines still pass. No new question keyword/type classifier was added for the degradation decision; write/production_sensitive/program/config/placeholder/unsourced failures remain fail-closed."
+    },
+    {
+      "action": "validation",
+      "actor": "codex",
+      "timestamp": "2026-06-25T07:05:31Z",
+      "note": "Passed: targeted pytest test_react_grounding.py (14), targeted pytest test_service.py (110), ruff changed Python files, git diff --check, nox l0, validation_module_registry_l0, ra_phase0_baseline (349), ra_phase5_agent_teams (13), research_assistant_backend (349), research_assistant_mcp_contract (38), ra_phase7_full_accept (349 backend tests + frontend lint/build + Playwright 4/4 and 9/9 + crosscheck/catalog/ownership). No production service/DB/DDL touched; only nox-owned test port 3011 webServer teardown was stopped after Playwright tests completed to release the Windows runner."
     }
   ],
   "evidence_uris": [],

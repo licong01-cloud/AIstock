@@ -89,6 +89,7 @@ class McpToolResult:
     executed: bool = False
     blocked_reason: str | None = None
     stable_call_id: str = ""
+    side_effect_level: str = "read_only"
 
     def sorted_key(self) -> tuple[str, str, str]:
         return (self.server_key, self.tool_name, self.stable_call_id or "")
@@ -147,6 +148,10 @@ PROGRAM_ERROR_REASON_CODES = {
     "tool_execution_error",
     "data_source_unavailable",
     "tool_result_compaction_error",
+}
+READ_ONLY_PARTIAL_EVIDENCE_REASON_CODES = {
+    "stock_depth_required_evidence_missing",
+    "max_tool_iterations_exhausted",
 }
 SUCCESS_STATUSES = {"succeeded", "success", "ok"}
 EXTERNAL_RESEARCH_SERVER_KEY = "aistock-external-research"
@@ -359,7 +364,14 @@ def assert_tool_in_catalog(call: McpToolCall, catalog_entries: list[ToolCatalogE
     if entry is None:
         return ToolGateDecision(False, "reject_catalog", "tool_not_in_audited_catalog")
     if entry.status not in {"enabled", "ready", "approved"}:
-        return ToolGateDecision(False, "reject_catalog", f"tool_status_{entry.status}", catalog_entry=entry)
+        return ToolGateDecision(
+            False,
+            "reject_catalog",
+            f"tool_status_{entry.status}",
+            catalog_entry=entry,
+            risk_level=call.risk_level or entry.risk_level or "medium",
+            side_effect_level=call.side_effect_level or entry.side_effect_level or "read_only",
+        )
     risk_level = call.risk_level or entry.risk_level or "medium"
     side_effect_level = call.side_effect_level or entry.side_effect_level or "read_only"
     requires_approval = bool(entry.requires_approval) or risk_level in {"high", "production_sensitive"} or side_effect_level in {
@@ -695,6 +707,168 @@ def _render_stock_depth_missing_evidence_reply(config: ReactGroundingConfig, col
     )
 
 
+def _side_effect_level(value: str | None) -> str:
+    return str(value or "read_only")
+
+
+def _result_side_effect_level(result: McpToolResult) -> str:
+    return _side_effect_level(getattr(result, "side_effect_level", None))
+
+
+def _call_side_effect_level(call: McpToolCall) -> str:
+    return _side_effect_level(call.side_effect_level)
+
+
+def _is_read_only_result(result: McpToolResult) -> bool:
+    return _result_side_effect_level(result) == "read_only"
+
+
+def _all_attempted_actions_read_only(collected_calls: list[McpToolCall], collected_results: list[McpToolResult]) -> bool:
+    return all(_call_side_effect_level(call) == "read_only" for call in collected_calls) and all(
+        _result_side_effect_level(result) == "read_only" for result in collected_results
+    )
+
+
+def _read_only_business_evidence_results(collected_results: list[McpToolResult]) -> list[McpToolResult]:
+    return [
+        result
+        for result in collected_results
+        if _is_read_only_result(result)
+        and _is_business_source_result(result)
+        and _result_has_evidence_items(result)
+    ]
+
+
+def _read_only_gap_notes(reason: str, config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> list[str]:
+    del config
+    notes: list[str] = []
+    if reason == "stock_depth_required_evidence_missing":
+        coverage = _stock_depth_evidence_coverage(collected_results)
+        for category in coverage["missing_categories"]:
+            notes.append(f"missing stock-depth category: {category}")
+        if not coverage["external_research"]:
+            notes.append("missing external_research evidence")
+        if int(coverage["tool_count"]) < STOCK_DEPTH_MIN_TOOL_EXECUTIONS:
+            notes.append("missing required read-only tool breadth")
+    if reason == "max_tool_iterations_exhausted":
+        notes.append("model did not produce a final grounded synthesis before the tool loop stopped")
+    for result in collected_results:
+        if not _is_read_only_result(result) or not _is_business_source_result(result):
+            continue
+        if _is_empty_success_result(result):
+            notes.append(f"{result.server_key}/{result.tool_name} returned no evidence items")
+        elif _normalize_status(result.status) not in SUCCESS_STATUSES and result.blocked_reason:
+            notes.append(f"{result.server_key}/{result.tool_name} ended with status={result.status} reason={result.blocked_reason}")
+    return _dedupe_preserve_order(notes) or ["read-only evidence coverage is incomplete"]
+
+
+def _short_evidence_summary(result: McpToolResult) -> str:
+    summary = str(result.summary or result.observation or "").strip()
+    if not summary:
+        payload = result.payload_json if isinstance(result.payload_json, dict) else {}
+        response_mode = str(payload.get("response_mode") or "").strip()
+        dataset = str(payload.get("dataset") or "").strip()
+        mode = response_mode or dataset or "evidence returned"
+        summary = f"{mode}"
+    summary = " ".join(summary.split())
+    return summary[:220] + ("..." if len(summary) > 220 else "")
+
+
+def _render_read_only_partial_evidence_reply(
+    *,
+    candidate_text: str,
+    original_reason: str,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+    config: ReactGroundingConfig,
+) -> str:
+    candidate = strip_internal_chain(candidate_text)
+    candidate_lower = candidate.lower()
+    lines: list[str] = []
+    if candidate and "insufficient evidence" not in candidate_lower and "max tool iterations reached" not in candidate_lower:
+        lines.append(candidate)
+        lines.append("")
+        lines.append("Read-only partial evidence note:")
+    else:
+        lines.append("Read-only partial evidence note:")
+    lines.append("I can answer only the parts backed by collected read-only evidence; missing dimensions are explicit below.")
+    lines.append("For future-looking parts, drivers/scenarios/risks are incomplete; I do not predict direction.")
+    lines.append("Available read-only evidence:")
+    for result in _read_only_business_evidence_results(collected_results)[:6]:
+        pairs = _citation_pairs_for_result(result)
+        pair = pairs[0] if pairs else {
+            "source": (result.source_refs[0] if result.source_refs else "unknown"),
+            "as_of": str(result.as_of or "unknown"),
+        }
+        lines.append(
+            f"- {result.server_key}/{result.tool_name}: {_short_evidence_summary(result)}; "
+            f"source={pair['source']} as_of={pair['as_of']}"
+        )
+    lines.append("Missing / not covered:")
+    lines.extend(f"- {note}" for note in _read_only_gap_notes(original_reason, config, collected_results)[:8])
+    if _has_unverified_evidence(collected_results):
+        lines.append("- unverified backtest or experimental data is risky; do not treat it as real returns.")
+    attempted = ", ".join(_attempted_source_names(collected_calls, collected_results)) or "none"
+    lines.append(f"Attempted sources: {attempted}")
+    lines.append(f"reason_code=read_only_partial_evidence_degraded; original_reason={original_reason}")
+    return "\n".join(lines).strip()
+
+
+def _degraded_reply_preserves_redlines(
+    text: str,
+    *,
+    config: ReactGroundingConfig,
+    collected_results: list[McpToolResult],
+) -> bool:
+    known_sources = _known_source_values(collected_results)
+    known_as_of = _known_as_of_values(collected_results)
+    inline_source = _has_inline_source(text, known_sources)
+    inline_as_of = _has_inline_as_of(text, known_as_of)
+    if _contains_placeholder(text, config.placeholder_patterns):
+        return False
+    if _contains_forbidden_marker(text, config.forbidden_answer_markers):
+        return False
+    if config.evidence_required and collected_results and not (inline_source and inline_as_of):
+        return False
+    if config.evidence_required and _has_numeric_fact(text) and not (inline_source and inline_as_of):
+        return False
+    if not _passes_factual_list_row_citations(text, config, known_sources, known_as_of):
+        return False
+    if not _passes_future_answer_discipline(text, config):
+        return False
+    if _has_unverified_evidence(collected_results) and not _passes_unverified_risk_labels(text):
+        return False
+    return True
+
+
+def _read_only_partial_evidence_degradation(
+    *,
+    guard: EvidenceGuardDecision,
+    candidate_text: str,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+    config: ReactGroundingConfig,
+) -> EvidenceGuardDecision | None:
+    if guard.allowed or guard.reason not in READ_ONLY_PARTIAL_EVIDENCE_REASON_CODES:
+        return None
+    if _program_error_results(collected_results):
+        return None
+    if not _all_attempted_actions_read_only(collected_calls, collected_results):
+        return None
+    if not _read_only_business_evidence_results(collected_results):
+        return None
+    text = _render_read_only_partial_evidence_reply(
+        candidate_text=candidate_text,
+        original_reason=guard.reason,
+        collected_calls=collected_calls,
+        collected_results=collected_results,
+        config=config,
+    )
+    if not _degraded_reply_preserves_redlines(text, config=config, collected_results=collected_results):
+        return None
+    return EvidenceGuardDecision(True, text, "read_only_partial_evidence_degraded", guard.source_count, guard.as_of_count)
+
+
 def _has_empty_mcp_business_result(collected_results: list[McpToolResult]) -> bool:
     return any(
         _is_business_source_result(result)
@@ -823,6 +997,7 @@ def exception_result(call: McpToolCall, exc: BaseException, *, stage: str) -> Mc
         executed=False,
         blocked_reason=reason_code,
         stable_call_id=call.stable_call_id,
+        side_effect_level=_call_side_effect_level(call),
     )
 
 
@@ -894,6 +1069,7 @@ def tool_result_message(result: McpToolResult) -> dict[str, Any]:
         "server_key": result.server_key,
         "tool_name": result.tool_name,
         "status": result.status,
+        "side_effect_level": result.side_effect_level,
         "summary": result.summary,
         "source_refs": result.source_refs[:8],
         "as_of": result.as_of,
@@ -1403,6 +1579,7 @@ def rejection_result(call: McpToolCall, decision: ToolGateDecision) -> McpToolRe
             executed=False,
             blocked_reason="capability_not_found",
             stable_call_id=call.stable_call_id,
+            side_effect_level=_side_effect_level(call.side_effect_level or decision.side_effect_level),
         )
     return McpToolResult(
         server_key=call.server_key,
@@ -1413,6 +1590,7 @@ def rejection_result(call: McpToolCall, decision: ToolGateDecision) -> McpToolRe
         executed=False,
         blocked_reason=decision.reason,
         stable_call_id=call.stable_call_id,
+        side_effect_level=_side_effect_level(call.side_effect_level or decision.side_effect_level),
     )
 
 
@@ -1572,6 +1750,32 @@ def run_react_grounding_loop(
                 "unverified_evidence_risk_label_missing",
             }
             if not guard.allowed and guard.reason == "stock_depth_required_evidence_missing":
+                degraded_guard = _read_only_partial_evidence_degradation(
+                    guard=guard,
+                    candidate_text=turn.content,
+                    collected_calls=collected_calls,
+                    collected_results=collected_results,
+                    config=config,
+                )
+                if degraded_guard is not None:
+                    trace_steps.append(
+                        {
+                            "iteration": iteration,
+                            "degradation": "read_only_partial_evidence",
+                            "original_reason": guard.reason,
+                        }
+                    )
+                    return ReactGroundingResult(
+                        degraded_guard.text,
+                        working_messages,
+                        collected_calls,
+                        collected_results,
+                        trace_steps,
+                        degraded_guard,
+                        iteration,
+                        "read_only_partial_evidence_degraded",
+                        model_turns,
+                    )
                 stopped_reason = "stock_depth_required_evidence_missing"
                 return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
             if not guard.allowed and citation_failure and iteration < config.max_tool_iterations and _evidence_citation_inventory(collected_results):
@@ -1584,6 +1788,7 @@ def run_react_grounding_loop(
                         error_json={"code": guard.reason},
                         executed=False,
                         stable_call_id=f"guard_{iteration}",
+                        side_effect_level="read_only",
                     )
                 )
                 working_messages.append(_evidence_guard_retry_directive(guard, strip_internal_chain(turn.content), collected_results))
@@ -1635,6 +1840,7 @@ def run_react_grounding_loop(
                         error_json={"code": guard.reason},
                         executed=False,
                         stable_call_id=f"guard_{iteration}",
+                        side_effect_level="read_only",
                     )
                 )
                 working_messages.append(_retry_directive(collected_results[-1:]))
@@ -1643,6 +1849,7 @@ def run_react_grounding_loop(
         iteration_results: list[McpToolResult] = []
         for call in calls:
             collected_calls.append(call)
+            decision: ToolGateDecision | None = None
             try:
                 decision = assert_tool_in_catalog(call, catalog_entries)
                 if not decision.allowed:
@@ -1675,6 +1882,11 @@ def run_react_grounding_loop(
                     result.blocked_reason = "tool_result_compaction_error"
                     result.summary = _render_program_error_summary(result.error_json)
             result.stable_call_id = call.stable_call_id
+            result.side_effect_level = _side_effect_level(
+                (decision.side_effect_level if decision is not None else None)
+                or call.side_effect_level
+                or getattr(result, "side_effect_level", None)
+            )
             iteration_results.append(result)
         if _is_stock_depth_query(config):
             iteration_results.sort(
@@ -1734,4 +1946,22 @@ def run_react_grounding_loop(
         guard = last_guard
     else:
         guard = EvidenceGuardDecision(False, "Insufficient evidence: max tool iterations reached without reliable evidence.", "max_tool_iterations_exhausted", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+    if not guard.allowed and guard.reason in READ_ONLY_PARTIAL_EVIDENCE_REASON_CODES:
+        degraded_guard = _read_only_partial_evidence_degradation(
+            guard=guard,
+            candidate_text=final_text,
+            collected_calls=collected_calls,
+            collected_results=collected_results,
+            config=config,
+        )
+        if degraded_guard is not None:
+            trace_steps.append(
+                {
+                    "iteration": config.max_tool_iterations,
+                    "degradation": "read_only_partial_evidence",
+                    "original_reason": guard.reason,
+                }
+            )
+            guard = degraded_guard
+            stopped_reason = "read_only_partial_evidence_degraded"
     return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, config.max_tool_iterations, stopped_reason, model_turns)

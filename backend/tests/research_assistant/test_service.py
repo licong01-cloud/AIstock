@@ -3835,3 +3835,38 @@ def test_high_risk_reactive_overflow_fail_fast_after_configured_retries(tmp_path
     traces = svc.list_records("trace_events", filters={"status": "context_overflow_fail_fast"})
     assert segments["total"] == 1
     assert traces["total"] == 1
+
+
+def test_read_only_partial_evidence_degraded_reply_is_returned_by_compose_path() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.STOCK_ANALYSIS_REQUEST,
+        confidence=0.95,
+        mode_reason="read_only_partial_evidence",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    degraded_text = (
+        "Read-only partial evidence note: source=stock_quote:000688 as_of=2026-06-24. "
+        "Missing / not covered: external_research. reason_code=read_only_partial_evidence_degraded"
+    )
+    cards = {
+        "react_grounding": {
+            "stopped_reason": "read_only_partial_evidence_degraded",
+            "evidence_guard": {
+                "allowed": True,
+                "reason": "read_only_partial_evidence_degraded",
+                "source_count": 1,
+                "as_of_count": 1,
+            },
+            "tool_errors": [],
+        }
+    }
+
+    text = svc._compose_assistant_reply("stock depth question", degraded_text, cards, mode_decision)
+
+    assert text == degraded_text

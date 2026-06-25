@@ -7,6 +7,7 @@ from backend.services.research_assistant.react_grounding import (
     McpToolResult,
     ModelTurn,
     ReactGroundingConfig,
+    ToolCatalogEntry,
     ToolGateDecision,
     compose_with_evidence_guard,
     run_react_grounding_loop,
@@ -237,3 +238,263 @@ def test_multi_source_bottom_line_synthesis_is_allowed() -> None:
     assert decision.allowed is True
     assert decision.reason == "ok"
 
+
+
+def _stock_depth_partial_results() -> list[McpToolResult]:
+    return [
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_quote",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "quote",
+                        "source": "stock_quote:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"price": 10.2}],
+                    }
+                ]
+            },
+            source_refs=["stock_quote:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_kline",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "kline",
+                        "source": "stock_kline:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"close": 10.2}, {"close": 9.7}],
+                    }
+                ]
+            },
+            source_refs=["stock_kline:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_fund_flow",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "fund_flow",
+                        "source": "stock_fund_flow:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"net_inflow": 1200}],
+                    }
+                ]
+            },
+            source_refs=["stock_fund_flow:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_financials",
+            status="succeeded",
+            payload_json={"dataset": "financials", "source": "stock_financials:000688", "as_of": "2026-06-24", "items": []},
+            source_refs=["stock_financials:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+    ]
+
+
+def test_read_only_partial_stock_depth_evidence_degrades_with_sources_and_gaps() -> None:
+    class NoToolProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded partial read-only evidence should be enough to test degradation")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("read-only degradation must not use preflight")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content=(
+                "Bottom-line: available read-only evidence only covers market, history, and fund flow; "
+                "drivers/scenarios/risks are incomplete, and this is not a direction forecast or investment advice. "
+                "stock_quote:000688 as_of 2026-06-24; stock_kline:000688 as_of 2026-06-24; "
+                "stock_fund_flow:000688 as_of 2026-06-24."
+            ),
+            provider="fake",
+            model="fake-partial-stock-depth",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "stock depth analysis: limit down future trend and fundamental for 000688"}],
+        model_complete=model_complete,
+        mcp_provider=NoToolProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="stock depth analysis: limit down future trend and fundamental for 000688"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "read_only_partial_evidence_degraded"
+    assert result.stopped_reason == "read_only_partial_evidence_degraded"
+    assert "Insufficient evidence" not in result.final_text
+    assert "stock_quote:000688" in result.final_text
+    assert "2026-06-24" in result.final_text
+    assert "Missing / not covered" in result.final_text
+    assert "original_reason=stock_depth_required_evidence_missing" in result.final_text
+
+
+def test_non_read_only_partial_evidence_still_fails_closed() -> None:
+    class FakeProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("write action should not execute as read-only")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="preflight_required",
+                payload_json={"preflight_only": True},
+                source_refs=["preflight"],
+                as_of="2026-06-24",
+                executed=False,
+                blocked_reason="preflight_confirmation_required",
+                side_effect_level=decision.side_effect_level,
+            )
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+            provider="fake",
+            model="fake-write",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-write",
+                    tool_name="submit_order",
+                    stable_call_id="write_001",
+                    risk_level="high",
+                    side_effect_level="production_sensitive",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "submit the write action"}],
+        model_complete=model_complete,
+        mcp_provider=FakeProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-write",
+                tool_name="submit_order",
+                status="enabled",
+                risk_level="high",
+                side_effect_level="production_sensitive",
+                requires_approval=True,
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="submit the write action"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason != "read_only_partial_evidence_degraded"
+    assert "Insufficient evidence" in result.final_text
+
+
+def test_read_only_degradation_does_not_override_placeholder_redline() -> None:
+    class NoToolProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded evidence should be enough")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preflight should not run")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="XX% change; stock_quote:000688 as_of 2026-06-24.",
+            provider="fake",
+            model="fake-placeholder",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "stock depth analysis: limit down future trend and fundamental for 000688"}],
+        model_complete=model_complete,
+        mcp_provider=NoToolProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="stock depth analysis: limit down future trend and fundamental for 000688"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason.startswith("placeholder_blocked")
+
+
+def test_read_only_partial_degradation_is_based_on_side_effect_not_question_keywords() -> None:
+    class GenericReadProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={"source": "generic_read_source", "as_of": "2026-06-24", "items": [{"value": "available"}]},
+                source_refs=["generic_read_source"],
+                as_of="2026-06-24",
+                summary="one read-only evidence item is available",
+                executed=True,
+                side_effect_level=decision.side_effect_level,
+            )
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("read-only tool should execute without preflight")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-generic-read-only",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-generic-read",
+                    tool_name="generic_lookup",
+                    stable_call_id="generic_read_001",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "tell me about this arbitrary thing"}],
+        model_complete=model_complete,
+        mcp_provider=GenericReadProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-generic-read",
+                tool_name="generic_lookup",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="tell me about this arbitrary thing"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "read_only_partial_evidence_degraded"
+    assert "generic_read_source" in result.final_text
+    assert "original_reason=max_tool_iterations_exhausted" in result.final_text
