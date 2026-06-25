@@ -8,7 +8,7 @@ orders.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Mapping
@@ -35,6 +35,17 @@ _GRAY_SCOPE_METADATA_KEY = "gray_runtime_overrides"
 _LAST_GRAY_DECISION_METADATA_KEY = "last_gray_runtime_decision"
 _LAST_SHADOW_METADATA_KEY = "last_shadow_reconciliation"
 _DEFAULT_RUNTIME_CONFIG_HASH = "miniqmt_gray_switch"
+MINIQMT_GRAY_SHADOW_MIN_TRADING_DAYS = 1
+MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS = frozenset(
+    {
+        "full_fill",
+        "partial_55_stream",
+        "reject",
+        "cancel",
+        "disconnect",
+        "restart_recovery",
+    }
+)
 
 
 class MiniQMTGrayDecisionType(str, Enum):
@@ -80,6 +91,8 @@ class MiniQMTGraySwitchController:
     """Durable gray switch policy for one MiniQMT runtime repository."""
 
     repository: MiniQMTExecutionRuntimeRepository
+    shadow_min_trading_days: int = MINIQMT_GRAY_SHADOW_MIN_TRADING_DAYS
+    shadow_required_scenarios: frozenset[str] = MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS
 
     def resolve_runtime_kind(
         self,
@@ -203,7 +216,14 @@ class MiniQMTGraySwitchController:
             runtime_id=runtime_id,
             environ={MINIQMT_EXECUTION_RUNTIME_ENV: MiniQMTExecutionRuntimeKind.COMPILER.value},
         )
-        evidence = _shadow_evidence_for_scope(runtime, portfolio_id=portfolio_id, strategy_slot_id=strategy_slot_id)
+        evidence = _shadow_evidence_for_scope(
+            self.repository,
+            runtime,
+            portfolio_id=portfolio_id,
+            strategy_slot_id=strategy_slot_id,
+            min_trading_days=self.shadow_min_trading_days,
+            required_scenarios=self.shadow_required_scenarios,
+        )
         active_child_order_ids = [
             child.child_order_id
             for child in self.repository.list_child_orders(runtime_id, active_only=True)
@@ -245,7 +265,11 @@ class MiniQMTGraySwitchController:
                 shadow_report=evidence.report,
                 active_child_order_ids=active_child_order_ids,
                 active_algo_instance_ids=active_algo_instance_ids,
-                metadata={**dict(metadata or {}), "requested_reason": reason},
+                metadata={
+                    **dict(metadata or {}),
+                    "requested_reason": reason,
+                    **_shadow_evidence_metadata(evidence),
+                },
             )
             raise RuntimeError(_decision_error_message(decision))
 
@@ -267,7 +291,7 @@ class MiniQMTGraySwitchController:
             shadow_report=evidence.report,
             active_child_order_ids=active_child_order_ids,
             active_algo_instance_ids=active_algo_instance_ids,
-            metadata=dict(metadata or {}),
+            metadata={**dict(metadata or {}), **_shadow_evidence_metadata(evidence)},
         )
         return decision
 
@@ -344,29 +368,91 @@ class _ShadowEvidence:
     missing: bool
     fatal: bool
     scope_mismatch: bool
+    trading_days_insufficient: bool
+    scenario_coverage_missing: bool
+    required_trading_days: int
+    covered_trade_dates: list[str] = dataclass_field(default_factory=list)
+    required_scenarios: list[str] = dataclass_field(default_factory=list)
+    covered_scenarios: list[str] = dataclass_field(default_factory=list)
+    missing_scenarios: list[str] = dataclass_field(default_factory=list)
+    accepted_event_ids: list[str] = dataclass_field(default_factory=list)
+    accepted_reports: list[dict[str, Any]] = dataclass_field(default_factory=list)
+    fatal_event_ids: list[str] = dataclass_field(default_factory=list)
+    total_report_count: int = 0
+    scope_report_count: int = 0
 
 
 def _shadow_evidence_for_scope(
+    repository: MiniQMTExecutionRuntimeRepository,
     runtime: MiniQMTExecutionRuntimeRecord,
     *,
     portfolio_id: str,
     strategy_slot_id: str,
+    min_trading_days: int,
+    required_scenarios: frozenset[str],
 ) -> _ShadowEvidence:
-    raw_report = runtime.metadata.get(_LAST_SHADOW_METADATA_KEY)
-    if not isinstance(raw_report, dict):
-        return _ShadowEvidence(report=None, missing=True, fatal=False, scope_mismatch=False)
-    metadata = raw_report.get("metadata")
-    report_metadata = dict(metadata) if isinstance(metadata, dict) else {}
-    scope_ok = (
-        str(report_metadata.get("portfolio_id") or "").strip() == portfolio_id
-        and str(report_metadata.get("strategy_slot_id") or "").strip() == strategy_slot_id
+    min_trading_days = max(1, int(min_trading_days))
+    normalized_required_scenarios = frozenset(_normalize_scenario(item) for item in required_scenarios)
+    event_reports = _shadow_event_reports(repository, runtime.runtime_id)
+    if not event_reports:
+        return _empty_shadow_evidence(
+            report=_latest_shadow_metadata_report(runtime),
+            missing=True,
+            required_trading_days=min_trading_days,
+            required_scenarios=normalized_required_scenarios,
+        )
+
+    scoped_reports = [
+        report for report in event_reports if _report_scope_matches(report, portfolio_id=portfolio_id, strategy_slot_id=strategy_slot_id)
+    ]
+    if not scoped_reports:
+        return _empty_shadow_evidence(
+            report=event_reports[-1],
+            missing=False,
+            scope_mismatch=True,
+            required_trading_days=min_trading_days,
+            required_scenarios=normalized_required_scenarios,
+            total_report_count=len(event_reports),
+        )
+
+    fatal_reports = [report for report in scoped_reports if _report_has_fatal_difference(report)]
+    accepted_reports = [report for report in scoped_reports if not _report_has_fatal_difference(report)]
+    covered_trade_dates = sorted(
+        {
+            trade_date
+            for report in accepted_reports
+            for trade_date in [_report_trade_date(report)]
+            if trade_date
+        },
+        reverse=True,
     )
-    differences = raw_report.get("differences")
-    fatal = any(
-        isinstance(item, dict) and str(item.get("severity") or "").upper() == "FATAL"
-        for item in (differences if isinstance(differences, list) else [])
+    covered_scenarios = sorted(
+        {
+            scenario
+            for report in accepted_reports
+            for scenario in [_normalize_scenario(report.get("scenario"))]
+            if scenario
+        }
     )
-    return _ShadowEvidence(report=dict(raw_report), missing=False, fatal=fatal, scope_mismatch=not scope_ok)
+    missing_scenarios = sorted(normalized_required_scenarios - set(covered_scenarios))
+    return _ShadowEvidence(
+        report=accepted_reports[-1] if accepted_reports else scoped_reports[-1],
+        missing=False,
+        fatal=bool(fatal_reports),
+        scope_mismatch=False,
+        trading_days_insufficient=len(covered_trade_dates) < min_trading_days,
+        scenario_coverage_missing=bool(missing_scenarios),
+        required_trading_days=min_trading_days,
+        covered_trade_dates=covered_trade_dates,
+        required_scenarios=sorted(normalized_required_scenarios),
+        covered_scenarios=covered_scenarios,
+        missing_scenarios=missing_scenarios,
+        accepted_event_ids=[str(report.get("durable_event_id")) for report in accepted_reports],
+        accepted_reports=accepted_reports,
+        fatal_event_ids=[str(report.get("durable_event_id")) for report in fatal_reports],
+        total_report_count=len(event_reports),
+        scope_report_count=len(scoped_reports),
+    )
 
 
 def _first_rejection_reason(
@@ -394,6 +480,23 @@ def _first_rejection_reason(
             )
         if evidence.fatal:
             return "MINIQMT_GRAY_SHADOW_EVIDENCE_FATAL", "MiniQMT gray switch blocked by fatal A/B shadow drift"
+        if evidence.trading_days_insufficient:
+            return (
+                "MINIQMT_GRAY_SHADOW_TRADING_DAYS_INSUFFICIENT",
+                (
+                    "MiniQMT gray switch requires durable no-fatal shadow evidence for at least "
+                    f"{evidence.required_trading_days} distinct trade_date(s); "
+                    f"covered_trade_dates={evidence.covered_trade_dates}"
+                ),
+            )
+        if evidence.scenario_coverage_missing:
+            return (
+                "MINIQMT_GRAY_SHADOW_SCENARIO_COVERAGE_MISSING",
+                (
+                    "MiniQMT gray switch requires full shadow scenario coverage before event_loop canary; "
+                    f"missing_scenarios={evidence.missing_scenarios}"
+                ),
+            )
     if require_no_in_flight and (active_child_order_ids or active_algo_instance_ids):
         return (
             "MINIQMT_GRAY_IN_FLIGHT_AMBIGUOUS",
@@ -459,7 +562,7 @@ def _decision_error_message(decision: MiniQMTGrayDecision) -> str:
         "MiniQMT gray runtime decision rejected; "
         f"reason_code={decision.reason_code}, runtime_id={decision.runtime_id}, "
         f"portfolio_id={decision.portfolio_id}, strategy_slot_id={decision.strategy_slot_id}, "
-        f"decision_type={decision.decision_type.value}"
+        f"decision_type={decision.decision_type.value}, reason={decision.reason}"
     )
 
 
@@ -480,3 +583,124 @@ def _short_hash(parts: list[Any]) -> str:
 
     payload = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _shadow_event_reports(
+    repository: MiniQMTExecutionRuntimeRepository,
+    runtime_id: str,
+) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for event in repository.list_events(runtime_id):
+        if event.event_type != MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED:
+            continue
+        if not isinstance(event.payload, dict):
+            continue
+        report = dict(event.payload)
+        report["durable_event_id"] = str(report.get("durable_event_id") or event.event_id)
+        reports.append(report)
+    return reports
+
+
+def _latest_shadow_metadata_report(runtime: MiniQMTExecutionRuntimeRecord) -> dict[str, Any] | None:
+    raw_report = runtime.metadata.get(_LAST_SHADOW_METADATA_KEY)
+    return dict(raw_report) if isinstance(raw_report, dict) else None
+
+
+def _empty_shadow_evidence(
+    *,
+    report: dict[str, Any] | None,
+    missing: bool,
+    required_trading_days: int,
+    required_scenarios: frozenset[str],
+    scope_mismatch: bool = False,
+    total_report_count: int = 0,
+) -> _ShadowEvidence:
+    return _ShadowEvidence(
+        report=report,
+        missing=missing,
+        fatal=False,
+        scope_mismatch=scope_mismatch,
+        trading_days_insufficient=False,
+        scenario_coverage_missing=False,
+        required_trading_days=required_trading_days,
+        required_scenarios=sorted(required_scenarios),
+        total_report_count=total_report_count,
+    )
+
+
+def _report_scope_matches(
+    report: dict[str, Any],
+    *,
+    portfolio_id: str,
+    strategy_slot_id: str,
+) -> bool:
+    metadata = report.get("metadata")
+    report_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    return (
+        str(report_metadata.get("portfolio_id") or "").strip() == portfolio_id
+        and str(report_metadata.get("strategy_slot_id") or "").strip() == strategy_slot_id
+    )
+
+
+def _report_has_fatal_difference(report: dict[str, Any]) -> bool:
+    differences = report.get("differences")
+    return any(
+        isinstance(item, dict) and str(item.get("severity") or "").upper() == "FATAL"
+        for item in (differences if isinstance(differences, list) else [])
+    )
+
+
+def _report_trade_date(report: dict[str, Any]) -> str | None:
+    metadata = report.get("metadata")
+    report_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    raw = report_metadata.get("trade_date")
+    if isinstance(raw, datetime):
+        return raw.date().isoformat()
+    if isinstance(raw, date):
+        return raw.isoformat()
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError:
+        return text
+
+
+def _normalize_scenario(raw: Any) -> str:
+    return str(raw or "").strip().lower()
+
+
+def _shadow_evidence_metadata(evidence: _ShadowEvidence) -> dict[str, Any]:
+    accepted_reports = [
+        {
+            "event_id": str(report.get("durable_event_id") or ""),
+            "report_id": str(report.get("report_id") or ""),
+            "trade_date": _report_trade_date(report),
+            "scenario": _normalize_scenario(report.get("scenario")),
+            "source": _report_source(report),
+        }
+        for report in evidence.accepted_reports
+    ]
+    return {
+        "accepted_shadow_event_ids": [item["event_id"] for item in accepted_reports if item["event_id"]],
+        "shadow_evidence_gate": {
+            "required_trading_days": evidence.required_trading_days,
+            "covered_trade_dates": list(evidence.covered_trade_dates),
+            "required_scenarios": list(evidence.required_scenarios),
+            "covered_scenarios": list(evidence.covered_scenarios),
+            "missing_scenarios": list(evidence.missing_scenarios),
+            "accepted_reports": accepted_reports,
+            "fatal_shadow_event_ids": list(evidence.fatal_event_ids),
+            "total_report_count": evidence.total_report_count,
+            "scope_report_count": evidence.scope_report_count,
+        },
+    }
+
+
+def _report_source(report: dict[str, Any]) -> str:
+    metadata = report.get("metadata")
+    report_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    return str(report_metadata.get("source") or report_metadata.get("replay_source") or "real").strip() or "real"
