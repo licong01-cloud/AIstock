@@ -34,6 +34,8 @@ If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or
 
 Use graph-first context before broad searches. After `run --mode plan`, read the task card's Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg` or source reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise treat UA as warning-only and continue with CodeGraph plus allowed scope.
 
+For ordinary BUG fixes, do not read feature, module, architecture, or historical design documents by default. Load a design document only when the BUG/GitHub Issue explicitly cites it, the user asks for design/historical context, or `fast-path` classifies the task as T3 design/architecture.
+
 
 ## Non-BUG feature requests
 

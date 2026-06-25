@@ -1,0 +1,84 @@
+{
+  "actual": "Scope: validation.guardrails / issue workflow client prompts. BUG-fix workflows should stay lightweight by default. Ordinary BUG fixes must start from doctor, Context Pack, BUG JSON, allowed_write_scope, ownership catalog, and targeted code snippets. They should not read feature or architecture design documents unless the BUG explicitly cites a design, the user explicitly asks for historical/design context, or the task is classified as T3 architecture/design work. This change reduces token usage and avoids over-engineered repair paths while preserving feature-workflow design acceptance for real feature work.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "docs/codex_project_memory.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    "tests/aistock_validation/bugs/20260625_BUG-523-bug-fixes-should-not-read-design-docs-by-default.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-523",
+  "closed_at": null,
+  "closure_requirements": [
+    "BUG-fix client prompts and quickstart say design documents are opt-in, not default context.",
+    "Issue workflow context strategy lists feature/module/architecture design docs under avoid-by-default for T0/T1/T2 BUG fixes.",
+    "UI intake does not infer a visual route from plain design-document wording in workflow descriptions.",
+    "Run required validation plans and keep GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-25T02:35:17.130276Z",
+  "description": "Scope: validation.guardrails / issue workflow client prompts. BUG-fix workflows should stay lightweight by default. Ordinary BUG fixes must start from doctor, Context Pack, BUG JSON, allowed_write_scope, ownership catalog, and targeted code snippets. They should not read feature or architecture design documents unless the BUG explicitly cites a design, the user explicitly asks for historical/design context, or the task is classified as T3 architecture/design work. This change reduces token usage and avoids over-engineered repair paths while preserving feature-workflow design acceptance for real feature work.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-409b2ac37053",
+      "timestamp": "2026-06-25T02:35:17.130272Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Ordinary BUG fixes use Context Pack, BUG JSON, allowed_write_scope, ownership, graph summaries, and targeted snippets; design docs are loaded only when cited, user-requested, or T3.",
+  "first_seen_at": "2026-06-25T02:35:17.130276Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1627,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1627",
+  "last_seen_at": "2026-06-25T02:35:17.130276Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "BUG fixes should not read design docs by default",
+  "trigger_condition": {
+    "fingerprint": "409b2ac37053c87c3cda2920",
+    "source_event_id": "FE-20260625-409b2ac37053"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

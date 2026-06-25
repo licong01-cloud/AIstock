@@ -3213,7 +3213,12 @@ def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str]
     if changed_files and not any(path.startswith(("frontend/", "tests/e2e/", "playwright")) for path in normalized_paths):
         return False
     haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or "")]).lower()
-    return any(token.lower() in haystack for token in UI_KEYWORDS)
+    keywords = UI_KEYWORDS
+    if not changed_files:
+        # Text-only BUG reports often mention BUG JSON or paths such as
+        # "historical/design"; neither is enough to infer a visual UI issue.
+        keywords = tuple(token for token in UI_KEYWORDS if token.lower() != "json")
+    return any(token.lower() in haystack for token in keywords)
 
 
 def _ui_intake_hints(
@@ -4361,6 +4366,7 @@ def build_fast_path_plan(
         "avoid_by_default": [
             "archived standards",
             "old design notes",
+            "feature/module/architecture design documents unless the BUG cites them, the user asks, or the tier is T3",
             "full module restart plans",
             "full logs unless triage requires the failing excerpt",
         ],
@@ -4369,9 +4375,9 @@ def build_fast_path_plan(
     if tier == "T0":
         context_strategy["goal"] = "metadata-only or docs/registry fast path; do not load module history"
     elif tier == "T1":
-        context_strategy["goal"] = "single issue context pack plus targeted code snippets"
+        context_strategy["goal"] = "single issue Context Pack plus targeted code snippets; do not read design docs by default"
     elif tier == "T2":
-        context_strategy["goal"] = "shared same-module or multi-impact context with selected validation"
+        context_strategy["goal"] = "shared same-module or multi-impact context with selected validation; keep design docs opt-in"
     else:
         context_strategy["goal"] = "design/architecture review with broader acceptance evidence"
 
