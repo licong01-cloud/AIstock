@@ -1,0 +1,80 @@
+{
+  "actual": "MiniQMT shadow evidence is persisted only in runtime-state.json; canary operators have no read-only endpoint for shadow reports, fatal differences, or gray state.",
+  "allowed_write_scope": [
+    "backend/routers/simulation_runtime.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/tests/simulation_runtime/test_router_summary.py",
+    "docs/handoff/BUG-525-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md",
+    "tests/aistock_validation/bugs/20260625_BUG-525-miniqmt-shadow-gray-evidence-has-no-read-only-api-for-canary-operations.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-525",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-25T07:19:43.831673Z",
+  "description": "MiniQMT shadow evidence is persisted only in runtime-state.json; canary operators have no read-only endpoint for shadow reports, fatal differences, or gray state.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-97154fdd238f",
+      "timestamp": "2026-06-25T07:19:43.831668Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/miniqmt_event_loop_golive_readiness_2026-06-25.md#23d2"
+  ],
+  "expected": "Provide read-only APIs to query shadow reconciliation reports, fatal differences, runtime events, and gray state without mutating runtime or production DB.",
+  "first_seen_at": "2026-06-25T07:19:43.831673Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1635,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1635",
+  "last_seen_at": "2026-06-25T07:19:43.831673Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT shadow/gray evidence has no read-only API for canary operations",
+  "trigger_condition": {
+    "fingerprint": "97154fdd238ff99c6bacee23",
+    "source_event_id": "FE-20260625-97154fdd238f"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "ui_issue": false
+}
