@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-520",
-  "closed_at": null,
+  "closed_at": "2026-06-25T03:14:29Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -34,14 +34,20 @@
       "actor": "codex",
       "note": "Updated the RA DB-direct parity characterization checksum pin for the intended mode.analysis prompt text change; no service.py/react_grounding logic changed.",
       "timestamp": "2026-06-24T18:53:34Z"
+    },
+    {
+      "action": "closed_after_merge_metadata",
+      "actor": "codex",
+      "note": "Persist final BUG-520 closed status after source PR #1624 squash merge; production gates noop.",
+      "timestamp": "2026-06-25T03:14:29Z"
     }
   ],
   "evidence_uris": [],
   "expected": "For explicit multi-dimensional analysis questions, RA should answer all requested dimensions with read-only evidence collection; clarification should be asked only for true ambiguity such as unclear entity or contradictory intent, and any clarification must be in Chinese.",
   "first_seen_at": "2026-06-24T18:34:27.713735Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "bug/BUG-520-ra-analysis-mode-over-clarifies-explicit-multi-d-20260625",
+  "fix_commit": "7f0a4da97acbbeb57508a4d32af4ea8ebe78d412",
+  "fixed_at": "2026-06-25T03:20:52.026860Z",
   "github_issue_number": 1621,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1621",
   "last_seen_at": "2026-06-24T18:34:27.713735Z",
@@ -49,6 +55,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1624",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -72,6 +79,13 @@
     "fingerprint": "21c072c2b5fc7bc2ebcec968",
     "source_event_id": "FE-20260625-21c072c2b5fc"
   },
+  "validation_evidence": [
+    "CI required checks all green before squash merge",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (338 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
