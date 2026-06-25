@@ -52,6 +52,7 @@ from backend.services.trading_calendar_status import TradingCalendarStatusServic
 from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
+from .bridges import MiniQMTExecutionBridge
 from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
 from .models import (
     DailySelectionEvidence,
@@ -81,6 +82,7 @@ DEFAULT_SCHEDULER_APPROVAL_STATES = (
     SimulationBindingApprovalState.LIVE_APPROVED,
 )
 MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
+MINIQMT_SHADOW_ENABLED_ENV = "MINIQMT_SHADOW_ENABLED"
 
 DEFAULT_SCHEDULER_WINDOWS = (
     {"window_id": "pre_open", "label": "盘前", "start": "08:50", "end": "09:10", "action": "readiness"},
@@ -2098,6 +2100,12 @@ class SimulationLifecycleScheduler:
                 "execution": "submit_and_reconcile",
                 "post_close_reconcile": "post_close_terminalization",
             },
+            "miniqmt_shadow": {
+                "env_var": MINIQMT_SHADOW_ENABLED_ENV,
+                "enabled": _env_flag(MINIQMT_SHADOW_ENABLED_ENV, default=False),
+                "default": False,
+                "mode": "dry_run_no_broker_mutation",
+            },
         }
 
     def run_once(
@@ -3596,6 +3604,16 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
+        build_result = replace(
+            build_result,
+            run=self._run_miniqmt_shadow_reconciliation_before_submit(
+                binding=binding,
+                run=build_result.run,
+                plan=build_result.execution_plan,
+                context=context,
+                mode=mode,
+            ),
+        )
         try:
             execution = self.orchestrator.submit_execution_plan(
                 build_result=build_result,
@@ -3760,6 +3778,16 @@ class SimulationLifecycleScheduler:
             )
 
         sync_result = self._sync_before_submit(binding=binding, run=build_result.run, context=context)
+        build_result = replace(
+            build_result,
+            run=self._run_miniqmt_shadow_reconciliation_before_submit(
+                binding=binding,
+                run=build_result.run,
+                plan=build_result.execution_plan,
+                context=context,
+                mode=mode,
+            ),
+        )
         execution = self.orchestrator.submit_execution_plan(
             build_result=build_result,
             local_broker=context.local_broker,
@@ -4161,8 +4189,15 @@ class SimulationLifecycleScheduler:
                         binding=binding,
                         trade_date=trade_date,
                         default_data_source=data_source,
-                    ),
-                )
+                        ),
+                    )
+            run = self._run_miniqmt_shadow_reconciliation_before_submit(
+                binding=binding,
+                run=run,
+                plan=plan,
+                context=context,
+                mode=mode,
+            )
             try:
                 execution = self.orchestrator.submit_persisted_execution_plan(
                     run=run,
@@ -4737,6 +4772,144 @@ class SimulationLifecycleScheduler:
         if "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause_code or "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause:
             return "LOCAL_SIM_BOARD_LOT_VIOLATION"
         return "LOCAL_SIM_DETERMINISTIC_SUBMIT_REJECTED"
+
+    def _run_miniqmt_shadow_reconciliation_before_submit(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+        mode: str,
+    ) -> SimulationDailyRun:
+        if not self._should_run_miniqmt_shadow(binding=binding, mode=mode, plan=plan):
+            return run
+        try:
+            if context.managed_order_service is None:
+                raise RuntimeConfigInvalidError(
+                    "MiniQMT shadow reconciliation requires the same managed_order_service as B submit",
+                    context={
+                        "reason_code": "MINIQMT_SHADOW_MANAGED_ORDER_SERVICE_MISSING",
+                        "run_id": run.run_id,
+                        "binding_id": binding.binding_id,
+                        "strategy_id": binding.strategy_id,
+                        "trade_date": plan.target_trade_date.isoformat(),
+                    },
+                )
+            report = MiniQMTExecutionBridge(
+                managed_order_service=context.managed_order_service
+            ).run_shadow_reconciliation(
+                run=run,
+                plan=plan,
+                binding=binding,
+                mode=mode,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
+            )
+            return self.repository.update_simulation_daily_run(
+                run.run_id,
+                payload_patch={
+                    "miniqmt_shadow_reconciliation": {
+                        "schema_version": "miniqmt_shadow_reconciliation_v1",
+                        "status": "SUCCEEDED",
+                        "reason_code": "MINIQMT_SHADOW_RECONCILIATION_REPORTED",
+                        "env_var": MINIQMT_SHADOW_ENABLED_ENV,
+                        "report_id": report.report_id,
+                        "runtime_id": report.runtime_id,
+                        "durable_event_id": report.durable_event_id,
+                        "scenario": report.scenario.value,
+                        "difference_count": len(report.differences),
+                        "fatal_difference_count": len(report.fatal_differences),
+                        "broker_called": False,
+                        "broker_mutated": False,
+                        "b_submit_unaffected": True,
+                        "metadata": report.metadata,
+                    }
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - shadow is observation-only; persist loud failure and continue B submit.
+            reason_code = self._reason_code_from_exception(exc, default="MINIQMT_SHADOW_RECONCILIATION_FAILED")
+            raw_context = getattr(exc, "context", None)
+            failure = {
+                "schema_version": "miniqmt_shadow_reconciliation_v1",
+                "status": "FAILED_OBSERVATION_ONLY",
+                "reason_code": reason_code,
+                "env_var": MINIQMT_SHADOW_ENABLED_ENV,
+                "stage": "MINIQMT_SHADOW_RECONCILIATION_FAILED",
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "trade_date": plan.target_trade_date.isoformat(),
+                "execution_plan_id": plan.plan_id,
+                "account_group_id": str(
+                    plan.account_group_id
+                    or binding.account_group_id
+                    or binding.broker_account_id
+                    or binding.strategy_id
+                ),
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "context": _json_safe_preview(raw_context) if isinstance(raw_context, dict) else None,
+                "broker_called": False,
+                "broker_mutated": False,
+                "b_submit_unaffected": True,
+                "next_action": (
+                    "fix MiniQMT shadow runner input/runtime evidence; B submit remains broker-authoritative "
+                    "and continues because shadow is observation-only"
+                ),
+            }
+            alert = {
+                "schema_version": "simulation_runtime_alert_v1",
+                "severity": "warning",
+                "reason_code": reason_code,
+                "message": "MiniQMT shadow reconciliation failed before B submit; B submit continued",
+                "run_id": run.run_id,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "trade_date": plan.target_trade_date.isoformat(),
+                "broker_backend": binding.broker_backend.value,
+            }
+            updated = self.repository.update_simulation_daily_run(
+                run.run_id,
+                payload_patch={
+                    "miniqmt_shadow_reconciliation": failure,
+                    "simulation_alerts": self._append_simulation_alert(run, alert),
+                },
+            )
+            logger.warning("MiniQMT shadow reconciliation failed but B submit continues: %s", failure)
+            return updated
+
+    @staticmethod
+    def _should_run_miniqmt_shadow(
+        *,
+        binding: SimulationReleaseBinding,
+        mode: str,
+        plan: ExecutionPlan,
+    ) -> bool:
+        return (
+            _env_flag(MINIQMT_SHADOW_ENABLED_ENV, default=False)
+            and binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and str(mode or "SIM").strip().upper() == "SIM"
+            and bool(plan.intents)
+        )
+
+    @staticmethod
+    def _append_simulation_alert(run: SimulationDailyRun, alert: dict[str, Any]) -> list[dict[str, Any]]:
+        existing = run.run_payload_json.get("simulation_alerts")
+        alerts = [dict(item) for item in existing if isinstance(item, dict)] if isinstance(existing, list) else []
+        alerts.append(alert)
+        return alerts
+
+    @staticmethod
+    def _reason_code_from_exception(exc: BaseException, *, default: str) -> str:
+        context = getattr(exc, "context", None)
+        if isinstance(context, dict) and context.get("reason_code"):
+            return str(context["reason_code"])
+        marker = "reason_code="
+        message = str(exc)
+        if marker in message:
+            suffix = message.split(marker, 1)[1]
+            return suffix.split(",", 1)[0].split(";", 1)[0].split()[0].strip() or default
+        return default
 
     @staticmethod
     def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:

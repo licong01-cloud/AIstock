@@ -8,7 +8,9 @@
     "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
     "docs/handoff/miniqmt_event_loop_golive_readiness_2026-06-25.md",
     "tests/aistock_validation/bugs/20260625_BUG-522-miniqmt-event-loop-shadow-runner-not-wired-into-production-sim-scheduler.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-522-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-522",
@@ -48,7 +50,9 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -62,6 +66,7 @@
     "fingerprint": "8ac3b064cc6e025e9bf91bfd",
     "source_event_id": "FE-20260625-8ac3b064cc6e"
   },
+  "ui_issue": false,
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
