@@ -34,8 +34,8 @@
   "expected": "Provide read-only APIs to query shadow reconciliation reports, fatal differences, runtime events, and gray state without mutating runtime or production DB.",
   "first_seen_at": "2026-06-25T07:19:43.831673Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e85564f46f30485d24672d4a440318dfa77b43cd",
+  "fixed_at": "2026-06-25T08:21:50.203696Z",
   "github_issue_number": 1635,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1635",
   "last_seen_at": "2026-06-25T07:19:43.831673Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1637",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -64,6 +65,10 @@
     "fingerprint": "97154fdd238ff99c6bacee23",
     "source_event_id": "FE-20260625-97154fdd238f"
   },
+  "ui_issue": false,
+  "validation_evidence": [
+    "GitHub PR #1637 checks -> 17 passed / 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -75,6 +80,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "ui_issue": false
+  }
 }
