@@ -42,3 +42,11 @@
 - No simplified-shell regression: PASS. The hook uses `MiniQMTShadowParallelRunner` with event-loop and compiler adapters and does not turn A into the B compiler path.
 - Scope: PASS. BUG JSON allowed_write_scope was enriched for `docs/handoff/BUG-522-analysis.md` and this self-audit log; no LocalSim source was changed.
 - Production gates: `production_ddl_gate=noop`, `production_backend_dependency_gate=noop`, `production_frontend_dependency_gate=noop`.
+
+## 2026-06-25 BUG-525 D2 shadow/gray read-only API 自审
+
+- 默认行为：新增端点只读 `MiniQMTExecutionRuntimeRepository` / simulation run payload，不触发 scheduler tick、operator command、broker submit 或 JSON `_save()`。
+- A/B 边界：只读取 D1 已产 `SHADOW_RECONCILIATION_REPORTED` 与 `FAILED_OBSERVATION_ONLY`，不改变 B submit、submit_result_gate、pre-trade 三闸或 capacity residual。
+- no-silent-error：缺少必填 query 参数返回 `MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED`；runtime 不存在返回 `MINIQMT_RUNTIME_NOT_FOUND`；无证据返回 `count=0` 而不是伪造默认证据。
+- scope：改动限制在 BUG-525 allowed_write_scope；没有改 LocalSim、MiniQMT submit、shadow runner 或 gray controller 行为。
+- 只读验证：新增测试断言三个 GET 调用前后 `runtime-state.json` 字节不变。

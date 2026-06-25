@@ -32,6 +32,9 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
     def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None:
         ...
 
+    def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
+        ...
+
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
         ...
 
@@ -80,6 +83,9 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
 
     def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None:
         return self._runtimes.get(runtime_id)
+
+    def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
+        return sorted(self._runtimes.values(), key=lambda item: item.updated_at, reverse=True)
 
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
         existing = self._events.setdefault(event.runtime_id, [])

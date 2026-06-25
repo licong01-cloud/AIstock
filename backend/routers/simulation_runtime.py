@@ -45,6 +45,10 @@ def get_miniqmt_runtime_client() -> MiniQMTExecutionRuntimeClient:
     return MiniQMTExecutionRuntimeClient(repository=JsonFileMiniQMTExecutionRuntimeRepository(store_path))
 
 
+def get_miniqmt_runtime_repository() -> JsonFileMiniQMTExecutionRuntimeRepository:
+    return get_miniqmt_runtime_client().repository
+
+
 def get_miniqmt_gateway() -> QmtClientMiniQMTGateway:
     gateway_cls = (
         QmtClientMiniQMTEventLoopGateway
@@ -96,6 +100,20 @@ def _parse_status(raw: str | None) -> SimulationDailyRunStatus | None:
                 "context": {"status": raw},
             },
         ) from exc
+
+
+def _required_query_text(value: str | None, field_name: str) -> str:
+    raw = str(value or "").strip()
+    if raw:
+        return raw
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED",
+            "message": f"{field_name} is required",
+            "context": {"reason_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED", "field": field_name},
+        },
+    )
 
 
 def _require_operator_confirmation(command: OperatorCommand, confirm_text: str | None) -> None:
@@ -196,6 +214,75 @@ def get_live_admission_evidence(
             target_broker_backend=target_broker_backend,
         )
         return {"ok": True, **payload}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/miniqmt/shadow-evidence")
+def list_miniqmt_shadow_evidence(
+    trade_date: date | None = None,
+    portfolio_id: str | None = None,
+    strategy_slot_id: str | None = None,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    try:
+        if trade_date is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED",
+                    "message": "trade_date is required",
+                    "context": {"reason_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED", "field": "trade_date"},
+                },
+            )
+        payload = service.list_miniqmt_shadow_evidence(
+            runtime_repository=runtime_repository,
+            trade_date=trade_date,
+            portfolio_id=_required_query_text(portfolio_id, "portfolio_id"),
+            strategy_slot_id=_required_query_text(strategy_slot_id, "strategy_slot_id"),
+        )
+        return {"ok": True, **payload}
+    except HTTPException:
+        raise
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/miniqmt/runtime-events")
+def list_miniqmt_runtime_events(
+    runtime_id: str | None = None,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    try:
+        payload = service.list_miniqmt_runtime_events(
+            runtime_repository=runtime_repository,
+            runtime_id=_required_query_text(runtime_id, "runtime_id"),
+        )
+        return {"ok": True, **payload}
+    except HTTPException:
+        raise
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/miniqmt/gray-state")
+def get_miniqmt_gray_state(
+    portfolio_id: str | None = None,
+    strategy_slot_id: str | None = None,
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    try:
+        payload = service.get_miniqmt_gray_state(
+            runtime_repository=runtime_repository,
+            portfolio_id=_required_query_text(portfolio_id, "portfolio_id"),
+            strategy_slot_id=_required_query_text(strategy_slot_id, "strategy_slot_id"),
+        )
+        return {"ok": True, **payload}
+    except HTTPException:
+        raise
     except TradingCoreError as exc:
         _raise_http(exc)
 
