@@ -36,8 +36,8 @@
   "expected": "SIM scheduler constructs same-source shadow events around the B submit path, runs MiniQMTShadowParallelRunner, persists durable reconciliation evidence, defaults inert under MINIQMT_SHADOW_ENABLED=false, and A never touches broker.",
   "first_seen_at": "2026-06-24T18:50:32.553843Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a0818788288284b8893ff8362348c0fccb166f31",
+  "fixed_at": "2026-06-25T04:14:59.671496Z",
   "github_issue_number": 1623,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1623",
   "last_seen_at": "2026-06-24T18:50:32.553843Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1626",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -67,6 +68,9 @@
     "source_event_id": "FE-20260625-8ac3b064cc6e"
   },
   "ui_issue": false,
+  "validation_evidence": [
+    "pytest passed, ruff passed, l0 passed, validation_module_registry_l0 passed, paper_v2_l3 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
