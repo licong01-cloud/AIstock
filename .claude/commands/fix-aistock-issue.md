@@ -39,7 +39,7 @@ For ordinary BUG fixes, do not read feature, module, architecture, or historical
 
 ## Non-BUG feature requests
 
-If the user is asking for a new feature or architecture/capability development rather than a BUG/GitHub Issue fix, switch to `.claude/commands/aistock-feature-workflow.md` and apply `FEATURE-WORKFLOW-001`. Do not create BUG JSON just to deliver a normal feature unless the user explicitly asks.
+Switch to `.claude/commands/aistock-feature-workflow.md` only after the request is confirmed as real feature delivery or architecture/capability development, not BUG repair, workflow policy, docs, audit, cleanup, or analysis. Apply `FEATURE-WORKFLOW-001` only on that confirmed feature lane. Do not create BUG JSON just to deliver a normal feature unless the user explicitly asks.
 
 ## Submit/Register BUG workflow
 
