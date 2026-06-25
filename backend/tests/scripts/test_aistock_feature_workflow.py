@@ -196,7 +196,10 @@ def test_acceptance_matrix_with_unapproved_gap_fails(tmp_path: Path) -> None:
     workflow = _load_module()
     design = _write(
         tmp_path / "gap.md",
-        VALID_F1_DOC.replace("| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |", "| F-002 | scripts/aistock_feature_workflow.py | unit test | partial | follow later |"),
+        VALID_F1_DOC.replace(
+            "| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |",
+            "| F-002 | scripts/aistock_feature_workflow.py | unit test | partial | follow later |",
+        ),
     )
 
     result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
@@ -210,7 +213,10 @@ def test_user_approved_deviation_is_allowed(tmp_path: Path) -> None:
     workflow = _load_module()
     design = _write(
         tmp_path / "approved_gap.md",
-        VALID_F1_DOC.replace("| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |", "| F-002 | scripts/aistock_feature_workflow.py | unit test | approved_by_user | user approved deviation: deferred by scope |"),
+        VALID_F1_DOC.replace(
+            "| F-002 | scripts/aistock_feature_workflow.py | unit test | completed | - |",
+            "| F-002 | scripts/aistock_feature_workflow.py | unit test | approved_by_user | user approved deviation: deferred by scope |",
+        ),
     )
 
     result = workflow.validate_feature_artifacts(design_path=design, tier="F1")
@@ -244,3 +250,48 @@ def test_cli_compact_summary_has_no_raw_payload(tmp_path: Path, capsys) -> None:
     assert "findings" not in stdout
     assert "implementation_refs" not in stdout
 
+
+def test_classify_task_rejects_non_feature_maintenance_and_future_feature_text() -> None:
+    workflow = _load_module()
+
+    result = workflow.classify_feature_task(
+        "Please update the feature workflow docs for future feature wording, not a feature delivery task."
+    )
+
+    assert not result.is_feature_task
+    assert result.route == "issue_or_docs_workflow"
+    assert result.design_doc_policy == "do_not_read_feature_design_docs_by_default"
+    assert "docs_or_cleanup" in result.matched_signals or "future_reference" in result.matched_signals
+
+
+def test_classify_task_accepts_explicit_feature_delivery() -> None:
+    workflow = _load_module()
+
+    result = workflow.classify_feature_task(
+        "Implement a new feature delivery for the watchlist page with explicit user-visible capability."
+    )
+
+    assert result.is_feature_task
+    assert result.route == "feature_workflow"
+    assert result.design_doc_policy == "read_feature_design_only_after_feature_classification"
+    assert "explicit_new_feature" in result.matched_signals or "explicit_capability" in result.matched_signals
+
+
+def test_cli_classify_task_json_is_compact_and_routes_non_feature(capsys) -> None:
+    workflow = _load_module()
+
+    exit_code = workflow.main(
+        [
+            "classify-task",
+            "--text",
+            "Workflow policy update for future feature wording.",
+            "--format",
+            "json",
+        ]
+    )
+    payload = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert '"is_feature_task": false' in payload
+    assert '"route": "issue_or_docs_workflow"' in payload
+    assert '"design_doc_policy": "do_not_read_feature_design_docs_by_default"' in payload

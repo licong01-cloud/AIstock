@@ -441,6 +441,7 @@ rules:
     checker:
       type: manual_review
       required_evidence:
+        - confirmed_feature_delivery_scope
         - feature_tier_declared
         - design_doc_or_feature_card_path
         - design_acceptance_index

@@ -108,6 +108,33 @@ class ValidationFinding:
     path: str
 
 
+@dataclass(frozen=True)
+class FeatureTaskClassification:
+    is_feature_task: bool
+    route: str
+    design_doc_policy: str
+    reason: str
+    matched_signals: list[str]
+
+    def compact_summary(self) -> str:
+        state = "feature_task" if self.is_feature_task else "non_feature_task"
+        signals = ",".join(self.matched_signals) if self.matched_signals else "-"
+        return (
+            f"Feature workflow task classification: {state}\n"
+            f"route={self.route} design_doc_policy={self.design_doc_policy} "
+            f"reason={self.reason} signals={signals}"
+        )
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "is_feature_task": self.is_feature_task,
+            "route": self.route,
+            "design_doc_policy": self.design_doc_policy,
+            "reason": self.reason,
+            "matched_signals": self.matched_signals,
+        }
+
+
 @dataclass
 class FeatureValidationResult:
     tier: str
@@ -147,16 +174,66 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def classify_feature_task(text: str) -> FeatureTaskClassification:
+    normalized = _normalize_text(text)
+    signals: list[str] = []
+
+    non_feature_patterns = {
+        "bug_fix": r"\bbug-\d+\b|\bbug\b|修复|缺陷|问题|报错",
+        "issue_tracking": r"\bgithub issue\b|\bissue\b",
+        "workflow_or_policy": r"feature workflow|issue workflow|工作流|流程|规范|标准|规则|guardrail|policy",
+        "docs_or_cleanup": r"文档|设计文档读取|清理|归档|审计|复查|诊断|分析|postmortem",
+        "future_reference": r"future feature|future features|未来功能|后续功能",
+    }
+    for name, pattern in non_feature_patterns.items():
+        if re.search(pattern, normalized, re.IGNORECASE):
+            signals.append(name)
+
+    feature_patterns = {
+        "explicit_new_feature": r"\bnew feature\b|\bfeature development\b|新功能|新增[^，。；;]{0,40}功能",
+        "explicit_capability": r"\bnew capability\b|\bcross-module capability\b|新增[^，。；;]{0,40}能力|用户可见能力",
+        "implement_feature": r"\bimplement[^.。]{0,60}\bfeature\b|实现[^，。；;]{0,40}功能|开发[^，。；;]{0,40}功能",
+    }
+    feature_signals = [
+        name for name, pattern in feature_patterns.items() if re.search(pattern, normalized, re.IGNORECASE)
+    ]
+    signals.extend(feature_signals)
+
+    # Policy/workflow/doc/BUG tasks can mention "feature" without being feature delivery.
+    blocking_signals = {"bug_fix", "workflow_or_policy", "docs_or_cleanup", "future_reference"}
+    if any(signal in signals for signal in blocking_signals) or ("issue_tracking" in signals and not feature_signals):
+        return FeatureTaskClassification(
+            is_feature_task=False,
+            route="issue_or_docs_workflow",
+            design_doc_policy="do_not_read_feature_design_docs_by_default",
+            reason="request_is_not_feature_delivery",
+            matched_signals=signals,
+        )
+
+    if feature_signals:
+        return FeatureTaskClassification(
+            is_feature_task=True,
+            route="feature_workflow",
+            design_doc_policy="read_feature_design_only_after_feature_classification",
+            reason="explicit_feature_delivery_request",
+            matched_signals=signals,
+        )
+
+    return FeatureTaskClassification(
+        is_feature_task=False,
+        route="issue_or_docs_workflow",
+        design_doc_policy="do_not_read_feature_design_docs_by_default",
+        reason="no_explicit_feature_delivery_signal",
+        matched_signals=signals,
+    )
+
+
 def _normalize_cell(value: str) -> str:
     return value.strip().strip("`").strip()
 
 
 def _header_lines(markdown: str) -> list[str]:
-    return [
-        line.lstrip("#").strip()
-        for line in markdown.splitlines()
-        if line.lstrip().startswith("#")
-    ]
+    return [line.lstrip("#").strip() for line in markdown.splitlines() if line.lstrip().startswith("#")]
 
 
 def _has_section(headers: Iterable[str], aliases: tuple[str, ...]) -> bool:
@@ -226,10 +303,7 @@ def _line_is_guardrail_statement(line: str) -> bool:
     return any(
         marker in normalized
         for marker in ("禁止", "不得", "严禁", "not ", "never", "must not", "no simplified", "no mock")
-    ) or any(
-        marker in normalized
-        for marker in ("reject", "rejects", "failure", "失败", "拒绝")
-    )
+    ) or any(marker in normalized for marker in ("reject", "rejects", "failure", "失败", "拒绝"))
 
 
 def _find_simplified_completion_lines(markdown: str) -> list[str]:
@@ -349,9 +423,8 @@ def validate_feature_artifacts(
                     path=str(acceptance_path),
                 )
             )
-        if (
-            not any(marker in normalized_status for marker in PASS_STATUS_MARKERS)
-            and not _is_approved_status(status, gap)
+        if not any(marker in normalized_status for marker in PASS_STATUS_MARKERS) and not _is_approved_status(
+            status, gap
         ):
             result.findings.append(
                 ValidationFinding(
@@ -368,6 +441,14 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Validate AIstock feature design and design-acceptance artifacts.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    classify_parser = subparsers.add_parser(
+        "classify-task",
+        help="Classify whether a user request should enter Feature Workflow before reading feature designs.",
+    )
+    classify_input = classify_parser.add_mutually_exclusive_group(required=True)
+    classify_input.add_argument("--text")
+    classify_input.add_argument("--text-file", type=Path)
+    classify_parser.add_argument("--format", choices=("summary", "json"), default="summary")
     for command in ("validate", "pr-summary"):
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--design", required=True, type=Path)
@@ -397,6 +478,14 @@ def _print_result(result: FeatureValidationResult, *, output_format: str, comman
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.command == "classify-task":
+        text = args.text if args.text is not None else args.text_file.read_text(encoding="utf-8")
+        result = classify_feature_task(text)
+        if args.format == "json":
+            print(json.dumps(result.to_payload(), ensure_ascii=False, indent=2))
+        else:
+            print(result.compact_summary())
+        return 0
     try:
         result = validate_feature_artifacts(
             design_path=args.design,
