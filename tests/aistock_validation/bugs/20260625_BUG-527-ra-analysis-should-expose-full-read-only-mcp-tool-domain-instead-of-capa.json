@@ -5,7 +5,10 @@
     "backend/tests/research_assistant/test_service.py",
     "backend/tests/research_assistant/test_execution_closure.py",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
-    "tests/aistock_validation/bugs/20260625_BUG-527-ra-analysis-should-expose-full-read-only-mcp-tool-domain-instead-of-capa.json"
+    "tests/aistock_validation/bugs/20260625_BUG-527-ra-analysis-should-expose-full-read-only-mcp-tool-domain-instead-of-capa.json",
+    "backend/tests/research_assistant/test_config_authority_characterization.py",
+    "backend/tests/research_assistant/test_tool_catalog_gate.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-527",
@@ -23,6 +26,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260625-7e68b477d671",
       "timestamp": "2026-06-25T08:53:33.044552Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "timestamp": "2026-06-25T11:52:47.545425Z",
+      "note": "BUG-527 changes the read-only tool surface contract, so characterization and catalog gate tests must be updated with the service behavior."
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "timestamp": "2026-06-25T15:43:30.585573Z",
+      "note": "Implemented full read-only manifest MCP tool domain for RA agentic analysis/planning/preflight/execution while keeping capability-backed side-effect tools under preflight/approval and excluding manifest-only write tools. Added manifest read-only direct execution path with mcp_tool_events/trace_events/task_events audit; preserved save_evidence as preflight-only in dialogue/none mode via capability-backed side-effect catalog gate only (not exposed as function tool, not executed). Validation: targeted pytest 16 passed; research_assistant_backend nox 350 passed; research_assistant_mcp_contract nox 38 passed; l0 nox passed; validation_module_registry_l0 nox 8 passed; ruff passed; git diff --check passed. ra_phase7_full_accept failed on unrelated local dev Postgres 127.0.0.1:5433 connection refused in test_agent_teams_ddl_contract/test_qe_autonomy_ddl_contract; no production DB connected and no services/DDL run."
     }
   ],
   "evidence_uris": [],

@@ -148,6 +148,17 @@ def test_approved_tool_supply_and_mode_gating_snapshot() -> None:
         assert mode_cfg["raw_json_main_view"] is False
 
     tool_counts: dict[str, tuple[str, int, int]] = {}
+    manifest_read_only_count = sum(
+        1
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") == "read_only"
+    )
+    capability_backed_non_read_only_count = sum(
+        1
+        for tool in svc._capability_backed_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") != "read_only"
+    )
+    read_plus_capability_backed_actions = manifest_read_only_count + capability_backed_non_read_only_count
     for mode in DialogueMode:
         decision = svc._decide_dialogue_mode(
             "",
@@ -162,10 +173,10 @@ def test_approved_tool_supply_and_mode_gating_snapshot() -> None:
 
     assert tool_counts == {
         "dialogue": ("none", 0, 0),
-        "analysis": ("read_only", 78, 78),
-        "planning": ("draft_only", 109, 109),
-        "preflight": ("preflight", 109, 109),
-        "execution": ("approved_execution", 109, 109),
+        "analysis": ("read_only", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
+        "planning": ("draft_only", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
+        "preflight": ("preflight", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
+        "execution": ("approved_execution", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
         "audit": ("read_only", 0, 0),
         "recovery": ("read_only", 0, 0),
     }

@@ -97,7 +97,7 @@ def test_native_function_tool_calls_are_parsed_into_mcp_calls() -> None:
     assert calls[0].reason == "native_function_call:stock_analysis_get_quote"
 
 
-def test_agentic_function_tools_only_expose_capability_backed_manifest_tools() -> None:
+def test_agentic_function_tools_expose_full_read_only_manifest_domain() -> None:
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=object())
     svc.seed_catalogs()
     mode_decision = ModeDecision(
@@ -112,22 +112,37 @@ def test_agentic_function_tools_only_expose_capability_backed_manifest_tools() -
         visible_audit_default=False,
     )
 
-    manifest_pairs = {(str(tool.get("server_key")), str(tool.get("tool_name"))) for tool in svc._manifest_mcp_catalog_records()}
+    manifest_read_only_pairs = {
+        (str(tool.get("server_key")), str(tool.get("tool_name")))
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") == "read_only"
+    }
+    capability_backed_non_read_only_pairs = {
+        (str(tool.get("server_key")), str(tool.get("tool_name")))
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") != "read_only"
+        and (str(tool.get("server_key")), str(tool.get("tool_name"))) in svc._approved_capability_mcp_tool_refs()
+    }
     function_tools, registry = svc._agentic_function_tools(mode_decision)
     offered_pairs = {(mapping["server_key"], mapping["tool_name"]) for mapping in registry.values()}
     react_pairs = {
         (entry.server_key, entry.tool_name)
-        for entry in svc._react_tool_catalog_entries(capability_backed_only=True)
+        for entry in svc._react_tool_catalog_entries(mode_decision=mode_decision)
     }
 
-    uncovered_manifest_tool = ("aistock-local-data", "local_data_get_unack_alert_count")
+    manifest_only_read_tool = ("aistock-local-data", "local_data_get_unack_alert_count")
     covered_local_data_tool = ("aistock-local-data", "local_data_get_preset_daily_status")
-    assert uncovered_manifest_tool in manifest_pairs
-    assert covered_local_data_tool in manifest_pairs
-    assert uncovered_manifest_tool not in offered_pairs
-    assert uncovered_manifest_tool not in react_pairs
+    covered_save_tool = ("aistock-external-research", "external_research_save_evidence")
+    manifest_only_write_tool = ("aistock-paper-v2-stable", "advisory_create_program_confirmed")
+    assert manifest_only_read_tool in manifest_read_only_pairs
+    assert covered_local_data_tool in manifest_read_only_pairs
+    assert offered_pairs == react_pairs == manifest_read_only_pairs | capability_backed_non_read_only_pairs
+    assert manifest_only_read_tool in offered_pairs
+    assert manifest_only_read_tool in react_pairs
     assert covered_local_data_tool in offered_pairs
     assert covered_local_data_tool in react_pairs
+    assert covered_save_tool in offered_pairs
+    assert manifest_only_write_tool not in offered_pairs
     assert function_tools
 
 
