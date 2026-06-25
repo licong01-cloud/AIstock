@@ -30,8 +30,8 @@
   "expected": "Require same scope, at least N durable trade_date reports, minimum scenario coverage, no FATAL differences, no in-flight work, SIM mode, and traceable accepted event_ids before canary event_loop switch.",
   "first_seen_at": "2026-06-25T07:38:04.071560Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f8884beca7060519b413b4808d115671ce636eb6",
+  "fixed_at": "2026-06-25T09:58:05.857414Z",
   "github_issue_number": 1636,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1636",
   "last_seen_at": "2026-06-25T07:38:04.071560Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1643",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -85,6 +86,16 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "ui_issue": false,
+  "validation_evidence": [
+    "rtk git diff --check origin/main...HEAD -> passed",
+    "rtk python -m py_compile backend/services/miniqmt_execution_runtime/gray.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -> passed",
+    "rtk python -m ruff check backend/services/miniqmt_execution_runtime/gray.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -> passed",
+    "rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -q -> 8 passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c 'set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3' -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -98,6 +109,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "ui_issue": false
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
