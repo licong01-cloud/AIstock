@@ -943,6 +943,7 @@ def test_fast_path_classifies_ordinary_docs_as_docs_fast_t0(isolated_workflow_ro
     assert payload["validation"]["required_plans"] == []
     assert payload["context_strategy"]["max_initial_files"] == 4
     assert "archived standards" in payload["context_strategy"]["avoid_by_default"]
+    assert any("design documents" in item for item in payload["context_strategy"]["avoid_by_default"])
     assert payload["production_gates"]["ddl"] == "noop"
     assert payload["required_commands"] == []
 
@@ -969,7 +970,8 @@ def test_fast_path_classifies_workflow_script_as_t1(isolated_workflow_root: Path
 
     assert payload["task_tier"] == "T1"
     assert payload["file_categories"]["scripts/aistock_issue_workflow.py"] == "workflow"
-    assert payload["context_strategy"]["goal"] == "single issue context pack plus targeted code snippets"
+    assert payload["context_strategy"]["goal"] == "single issue Context Pack plus targeted code snippets; do not read design docs by default"
+    assert any("design documents" in item for item in payload["context_strategy"]["avoid_by_default"])
     assert payload["production_gates"] == {
         "ddl": "noop",
         "frontend_dependency": "noop",
@@ -6926,6 +6928,44 @@ def test_submit_bug_does_not_infer_ui_hints_from_workflow_script_text(
         bug_id="BUG-265",
         github_issue_number="765",
         github_issue_url="https://github.com/licong01-cloud/AIstock/issues/765",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=True,
+    )
+
+    assert payload["ui_intake_hints"] is None
+    assert "ui_intake_hints" not in payload["record"]
+
+
+def test_submit_bug_does_not_infer_ui_hints_from_bug_json_or_design_text(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 522})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="BUG fixes should not read design docs by default",
+        module="validation",
+        severity="P2",
+        description=(
+            "Ordinary BUG fixes start from BUG JSON and Context Pack. They should not read "
+            "historical/design notes unless the BUG explicitly cites them or the user asks."
+        ),
+        expected="No visual UI route is inferred from workflow context policy wording.",
+        actual="The description contains BUG JSON plus historical/design path-like text.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=[],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-523",
+        github_issue_number="1627",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/1627",
         create_github=False,
         apply=False,
         create_registry_worktree=False,

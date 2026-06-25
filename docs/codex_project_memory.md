@@ -44,6 +44,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
 - T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
 - Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
+- Ordinary BUG fixes do not read feature, module, architecture, or historical design documents by default; load them only when the BUG/GitHub Issue cites them, the user asks, or the task is T3 design/architecture.
 - Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
 - Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
 

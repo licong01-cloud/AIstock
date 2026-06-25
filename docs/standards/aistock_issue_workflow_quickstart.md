@@ -100,7 +100,7 @@ For Codex, Claude Code, Cursor, and other agents, context discovery should be ch
 - Read the workflow output, Context Pack, and `fix-ready.json` before searching code.
 - Use `allowed_write_scope` and `changed_files` as the initial search boundary.
 - Prefer `rg <pattern> <scoped-file-or-dir>` over broad repository scans; broaden only when the scoped search fails or the Context Pack is stale.
-- Do not load archived standards, old design notes, full logs, or module restart plans unless the current BUG explicitly needs that history.
+- Do not load archived standards, old design notes, full logs, module restart plans, or feature/module/architecture design documents unless the current BUG explicitly cites them, the user asks for that context, or `fast-path` classifies the work as `T3`.
 - Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
 
 Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
@@ -121,8 +121,8 @@ The output classifies the task as `T0`, `T1`, `T2`, or `T3`, returns selected va
 Fast-path intent:
 
 - `T0`: docs/client/registry metadata changes; use targeted context and changed-file/l0 validation only as selected.
-- `T1`: single BUG or single workflow/module code change; use Context Pack plus targeted snippets, not old module histories.
-- `T2`: critical or multi-impact/product scope; batch only compatible same-module work and share validation evidence carefully.
+- `T1`: single BUG or single workflow/module code change; use Context Pack plus targeted snippets, not old module histories or design documents.
+- `T2`: critical or multi-impact/product scope; batch only compatible same-module work, share validation evidence carefully, and keep design documents opt-in unless explicitly cited.
 - `T3`: design or architecture work; keep an acceptance matrix and broader review.
 
 Use `workflow-smoke` after workflow CLI/client changes, or before judging whether Codex/Claude can still follow the issue flow:
