@@ -24,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260625-2b23c0313946",
       "timestamp": "2026-06-24T18:34:37.032240Z"
+    },
+    {
+      "timestamp": "2026-06-25T02:03:10.045946Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Reproduced factual QE ranking/list guard block as multi_source_synthesis_missing; added factual/ranking query classification, row-level source/as_of enforcement, not_verified risk-label enforcement, and retry directives. Validation: pytest backend/tests/research_assistant/test_react_grounding.py -q (10 passed); nox l0 passed; research_assistant_backend 344 passed; research_assistant_mcp_contract 38 passed; ra_phase7_full_accept passed after frontend npm ci and isolated 3011 validation server; validation_module_registry_l0 8 passed; git diff --check passed; ruff changed files passed. No services/production DB/DDL touched."
     }
   ],
   "evidence_uris": [],
