@@ -295,3 +295,15 @@ def test_cli_classify_task_json_is_compact_and_routes_non_feature(capsys) -> Non
     assert '"is_feature_task": false' in payload
     assert '"route": "issue_or_docs_workflow"' in payload
     assert '"design_doc_policy": "do_not_read_feature_design_docs_by_default"' in payload
+
+
+def test_feature_entrypoint_prompts_keep_non_feature_tasks_off_feature_lane() -> None:
+    fix_command = (ROOT / ".claude" / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8")
+    feature_agent = (ROOT / ".codex" / "skills" / "verify-aistock-feature" / "agents" / "openai.yaml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "confirmed as real feature delivery" in fix_command
+    assert "workflow policy, docs, audit, cleanup, or analysis" in fix_command
+    assert "Use this skill only for confirmed AIstock feature delivery" in feature_agent
+    assert "BUG fixes, workflow policy work, docs cleanup, audits, or generic analysis" in feature_agent
