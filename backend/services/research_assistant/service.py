@@ -333,6 +333,139 @@ class _ServiceReactMcpProvider:
             if key not in payload or payload.get(key) in (None, "", [], {}):
                 payload[key] = value
 
+    def _execute_manifest_read_only_direct(
+        self,
+        *,
+        call: McpToolCall,
+        decision: ToolGateDecision,
+        payload: dict[str, Any],
+    ) -> McpToolResult:
+        tool, _server = self.service._resolve_mcp_catalog_tool(call.server_key, call.tool_name)
+        start = perf_counter()
+        try:
+            adapter_result = self.service._execute_loopback_tool(tool, payload)
+        except TimeoutError as exc:
+            adapter_result = {
+                "status": "failed",
+                "result_json": {},
+                "result_cards": [{"title": "Execution timeout", "summary": str(exc)}],
+                "artifact_refs": [],
+                "error_json": {"code": "timeout", "human_reason": str(exc), "exception_type": type(exc).__name__, "retryable": True},
+                "retry_count": 0,
+                "transport": "manifest_read_only_direct",
+            }
+        except Exception as exc:  # noqa: BLE001 - direct read failures must surface as tool errors, not crash chat.
+            adapter_result = {
+                "status": "failed",
+                "result_json": {},
+                "result_cards": [{"title": "Execution failed", "summary": str(exc)}],
+                "artifact_refs": [],
+                "error_json": {"code": "execution_failed", "human_reason": str(exc), "exception_type": type(exc).__name__, "retryable": False},
+                "retry_count": 0,
+                "transport": "manifest_read_only_direct",
+            }
+        duration_ms = int((perf_counter() - start) * 1000)
+        event_status = "succeeded" if str(adapter_result.get("status") or "succeeded") == "succeeded" else "failed"
+        result_cards = [dict(item) for item in (adapter_result.get("result_cards") or []) if isinstance(item, dict)]
+        summary_result = dict(adapter_result.get("result_json") or {})
+        error_json: dict[str, Any] = {}
+        if event_status == "failed":
+            raw_error = dict(adapter_result.get("error_json") or {})
+            error_json = self.service._normalize_tool_error_payload(
+                call,
+                {
+                    **raw_error,
+                    "message": raw_error.get("human_reason") or raw_error.get("message") or (result_cards[0].get("summary") if result_cards else "MCP execution failed."),
+                },
+                stage="tool_execution",
+            )
+        event = self.service.repository.create_record(
+            "mcp_tool_events",
+            {
+                "tool_event_id": new_id("mcptev"),
+                "task_id": self.task["task_id"],
+                "server_key": tool["server_key"],
+                "tool_name": tool["tool_name"],
+                "event_type": "execute",
+                "status": event_status,
+                "idempotency_key": sha256_json({"task_id": self.task["task_id"], "react_mcp_read": call.server_key, "tool_name": call.tool_name, "payload": payload}),
+                "request_json": payload,
+                "response_json": summary_result,
+                "error_json": error_json,
+                "action_proposal_id": None,
+                "approval_id": None,
+                "plan_digest": None,
+                "transport": str(adapter_result.get("transport") or "manifest_read_only_direct"),
+                "timeout_ms": int(self.service._execution_policy({"side_effect_level": "read_only"})["timeout_seconds"]) * 1000,
+                "attempt_index": 0,
+                "duration_ms": duration_ms,
+                "result_card_json": result_cards[0] if result_cards else {},
+                "artifact_refs": adapter_result.get("artifact_refs") or [],
+                "started_at": utc_now().isoformat(),
+                "completed_at": utc_now().isoformat(),
+            },
+        )
+        trace_payload: dict[str, Any] = {
+            "tool_event_id": event["tool_event_id"],
+            "human_cards": result_cards,
+            "source": "manifest_read_only_direct",
+            "catalog_reason": decision.reason,
+        }
+        if error_json:
+            trace_payload["error"] = error_json
+        trace = self.service.create_trace_event(
+            TraceEventCreate(
+                task_id=self.task["task_id"],
+                event_type="action_execute",
+                component="research_assistant.execution_gateway",
+                status=event_status,
+                duration_ms=duration_ms,
+                payload_json=trace_payload,
+            )
+        )
+        self.service.add_task_event(
+            self.task["task_id"],
+            TaskEventCreate(
+                event_type="mcp_done" if event_status == "succeeded" else "mcp_failed",
+                severity="info" if event_status == "succeeded" else "error",
+                message=f"Manifest read-only MCP execution {event_status}: {call.server_key}/{call.tool_name}",
+                payload_json={"tool_event_id": event["tool_event_id"], "trace_id": trace["trace_id"], "source": "manifest_read_only_direct"},
+            ),
+        )
+        result = McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status=event_status,
+            payload_json=summary_result,
+            source_refs=self.service._mcp_result_source_refs(summary_result, event),
+            as_of=self.service._mcp_result_as_of(summary_result),
+            artifact_refs=list(summary_result.get("artifact_refs") or event.get("artifact_refs") or []),
+            summary=json.dumps(self.service._compact_mcp_summary_for_cards(summary_result), ensure_ascii=False, sort_keys=True),
+            tool_event_id=event["tool_event_id"],
+            action_proposal_id=None,
+            preflight={"passed": True, "approval_required": False, "preflight_checks": ["manifest_read_only_catalog"]},
+            executed=event_status == "succeeded",
+            error_json=error_json,
+            side_effect_level=str(decision.side_effect_level or call.side_effect_level or "read_only"),
+        )
+        if error_json:
+            result.blocked_reason = str(error_json.get("reason_code") or error_json.get("code") or "tool_execution_error")
+            result.summary = self.service._render_tool_error_reply(error_json)
+        self.service._populate_cards_from_tool_execution(
+            self.cards,
+            {"action_proposal_id": None},
+            {
+                "status": event_status,
+                "executed": event_status == "succeeded",
+                "tool_event": event,
+                "trace_id": trace["trace_id"],
+                "human_cards": result_cards,
+                **({"error": error_json} if error_json else {}),
+            },
+            result,
+        )
+        return result
+
     def _route_for_call(self, call: McpToolCall) -> dict[str, Any]:
         route = self.cards.get("mcp_route_decision") if isinstance(self.cards.get("mcp_route_decision"), dict) else {}
         candidates = route.get("route_candidates") if isinstance(route.get("route_candidates"), list) else []
@@ -371,7 +504,12 @@ class _ServiceReactMcpProvider:
             }
             self._merge_route_defaults(payload, self.service._mcp_route_tool_args(route))
             payload.setdefault("limit", self.service._mcp_route_limit(route))
-            capability_key = self.service._capability_key_for_tool(call, route)
+            try:
+                capability_key = self.service._capability_key_for_tool(call, route)
+            except KeyError:
+                if str(decision.side_effect_level or call.side_effect_level or "read_only") == "read_only":
+                    return self._execute_manifest_read_only_direct(call=call, decision=decision, payload=payload)
+                raise
             proposal = self.service.create_action_proposal(
                 ActionProposalCreate(
                     task_id=self.task["task_id"],
@@ -5148,7 +5286,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self.semantic_tool_planner.plan(
                 user_message=user_message,
                 model_profile=model_profile,
-                tool_catalog=self._capability_backed_mcp_catalog_records(),
+                tool_catalog=self._agentic_mcp_catalog_records_for_mode(
+                    ModeDecision(
+                        mode=DialogueMode.ANALYSIS,
+                        intent_type=DialogueIntent.AMBIGUOUS_REQUEST,
+                        confidence=1.0,
+                        mode_reason="semantic_tool_planner_catalog",
+                        requires_tool=False,
+                        allowed_tool_side_effect="read_only",
+                        requires_user_confirmation=False,
+                        requires_approval=False,
+                        visible_audit_default=False,
+                    )
+                ),
             )
         except Exception:  # noqa: BLE001 - semantic planning is best-effort; legacy route keeps chat usable.
             logger.exception("semantic MCP tool planner failed; falling back to legacy route")
@@ -5318,19 +5468,41 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if self._mcp_ref_pair(tool.get("server_key"), tool.get("tool_name")) in executable_refs
         ]
 
-    def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
-        if mode_decision.mode not in {DialogueMode.PLANNING, DialogueMode.ANALYSIS, DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}:
-            return [], {}
-        if mode_decision.allowed_tool_side_effect == "none":
-            return [], {}
-        tools = self._capability_backed_mcp_catalog_records()
-        allowed: list[dict[str, Any]] = []
-        for tool in tools:
-            side_effect = str(tool.get("side_effect_level") or "read_only")
-            if mode_decision.allowed_tool_side_effect == "read_only" and side_effect != "read_only":
+    def _capability_backed_side_effect_mcp_catalog_records(self) -> list[dict[str, Any]]:
+        executable_refs = self._approved_capability_mcp_tool_refs()
+        records: list[dict[str, Any]] = []
+        for tool in self._manifest_mcp_catalog_records():
+            pair = self._mcp_ref_pair(tool.get("server_key"), tool.get("tool_name"))
+            if not pair or pair not in executable_refs:
                 continue
-            allowed.append(tool)
-        return function_calling_tools_for_mcp(allowed)
+            if str(tool.get("side_effect_level") or "read_only") == "read_only":
+                continue
+            records.append(tool)
+        return records
+
+    def _agentic_mcp_catalog_records_for_mode(self, mode_decision: ModeDecision) -> list[dict[str, Any]]:
+        if mode_decision.mode not in {DialogueMode.PLANNING, DialogueMode.ANALYSIS, DialogueMode.PREFLIGHT, DialogueMode.EXECUTION}:
+            return []
+        allowed_side_effect = str(mode_decision.allowed_tool_side_effect or "none")
+        if allowed_side_effect == "none":
+            return []
+
+        capability_backed_refs = self._approved_capability_mcp_tool_refs()
+        records: list[dict[str, Any]] = []
+        for tool in self._manifest_mcp_catalog_records():
+            pair = self._mcp_ref_pair(tool.get("server_key"), tool.get("tool_name"))
+            if not pair:
+                continue
+            side_effect = str(tool.get("side_effect_level") or "read_only")
+            if side_effect == "read_only":
+                records.append(tool)
+                continue
+            if pair in capability_backed_refs:
+                records.append(tool)
+        return records
+
+    def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+        return function_calling_tools_for_mcp(self._agentic_mcp_catalog_records_for_mode(mode_decision))
 
     @staticmethod
     def _looks_like_large_tool_payload(payload: dict[str, Any]) -> bool:
@@ -6132,11 +6304,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return self._grounded_route_fallback_tool_calls(cards, mode_decision)
 
         initial_tool_results = [graph_result] if (graph_result := self._graph_context_tool_result(graph_context)) else None
+        catalog_entries = self._react_tool_catalog_entries(mode_decision=mode_decision)
+        if (
+            not catalog_entries
+            and str(mode_decision.allowed_tool_side_effect or "none") == "none"
+            and (first_llm_result.tool_calls or extract_structured_tool_calls(first_llm_result.content))
+        ):
+            catalog_entries = self._react_tool_catalog_entries(capability_backed_side_effect_only=True)
         react_result = run_react_grounding_loop(
             messages=react_messages,
             model_complete=model_complete,
             mcp_provider=provider,
-            catalog_entries=self._react_tool_catalog_entries(capability_backed_only=True),
+            catalog_entries=catalog_entries,
             config=self._react_grounding_config(runtime_config, user_message=user_message, token_budget=budget_plan.effective_window_tokens),
             seeded_tool_calls=route_seeds or None,
             initial_tool_results=initial_tool_results,
@@ -6188,8 +6367,19 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     merged[key] = value
         return merged
 
-    def _react_tool_catalog_entries(self, *, capability_backed_only: bool = False) -> list[ToolCatalogEntry]:
-        tools = self._capability_backed_mcp_catalog_records() if capability_backed_only else self._manifest_mcp_catalog_records()
+    def _react_tool_catalog_entries(
+        self,
+        *,
+        capability_backed_only: bool = False,
+        capability_backed_side_effect_only: bool = False,
+        mode_decision: ModeDecision | None = None,
+    ) -> list[ToolCatalogEntry]:
+        if mode_decision is not None:
+            tools = self._agentic_mcp_catalog_records_for_mode(mode_decision)
+        elif capability_backed_side_effect_only:
+            tools = self._capability_backed_side_effect_mcp_catalog_records()
+        else:
+            tools = self._capability_backed_mcp_catalog_records() if capability_backed_only else self._manifest_mcp_catalog_records()
         return [
             ToolCatalogEntry(
                 server_key=str(tool.get("server_key") or ""),

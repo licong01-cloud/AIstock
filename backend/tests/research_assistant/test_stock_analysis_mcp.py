@@ -345,12 +345,23 @@ def test_a2_stock_research_tool_sets_are_provided_and_executable() -> None:
         for ref in capability.get("mcp_tool_refs", [])
         if isinstance(ref, dict)
     }
-    executable_entries = svc._react_tool_catalog_entries(capability_backed_only=True)
+    executable_entries = svc._react_tool_catalog_entries(mode_decision=mode_decision)
     executable = {(tool.server_key, tool.tool_name) for tool in executable_entries}
     read_only_executable = {
         (tool.server_key, tool.tool_name)
         for tool in executable_entries
         if tool.side_effect_level == "read_only"
+    }
+    manifest_read_only = {
+        (str(tool.get("server_key")), str(tool.get("tool_name")))
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") == "read_only"
+    }
+    capability_backed_non_read_only = {
+        (str(tool.get("server_key")), str(tool.get("tool_name")))
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") != "read_only"
+        and (str(tool.get("server_key")), str(tool.get("tool_name"))) in svc._approved_capability_mcp_tool_refs()
     }
     function_registry = {(item["server_key"], item["tool_name"]) for item in registry.values()}
 
@@ -361,10 +372,10 @@ def test_a2_stock_research_tool_sets_are_provided_and_executable() -> None:
         ("aistock-stock-analysis", "stock_analysis_get_financials"),
     }
     assert required <= available
-    assert required <= executable
     assert required <= function_registry
-    assert executable <= available
-    assert function_registry == read_only_executable
+    assert required <= executable
+    assert read_only_executable == manifest_read_only
+    assert executable == function_registry == manifest_read_only | capability_backed_non_read_only
 
 
 def test_stock_analysis_evidence_facade_endpoints_are_read_only_summary_envelopes() -> None:

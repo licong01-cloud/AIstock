@@ -2270,7 +2270,7 @@ def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
 
 
 
-def test_bug_412_local_data_agentic_tools_do_not_offer_uncovered_manifest_tool() -> None:
+def test_bug_412_local_data_agentic_tools_recover_from_manifest_only_read_tool() -> None:
     class LocalDataNativeToolLlmClient(FakeLlmClient):
         def __init__(self) -> None:
             super().__init__()
@@ -2347,7 +2347,7 @@ def test_bug_412_local_data_agentic_tools_do_not_offer_uncovered_manifest_tool()
     result = svc.chat_turn(ChatTurnRequest(message="\u6628\u5929\u7684\u672c\u5730\u6570\u636e\u540c\u6b65\u4efb\u52a1\u662f\u5426\u8fd0\u884c\u6b63\u5e38\uff1f"))
 
     offered = set().union(*fake.offered_tool_pairs)
-    assert ("aistock-local-data", "local_data_get_unack_alert_count") not in offered
+    assert ("aistock-local-data", "local_data_get_unack_alert_count") in offered
     assert ("aistock-local-data", "local_data_get_preset_daily_status") in offered
     text = result["assistant_message"]["content_text"]
     assert "approved capability not found" not in text
@@ -2356,10 +2356,10 @@ def test_bug_412_local_data_agentic_tools_do_not_offer_uncovered_manifest_tool()
     react_results = result["cards"]["react_grounding"]
     assert react_results["tool_call_count"] >= 2
     assert react_results["evidence_guard"]["allowed"] is True
-    assert react_results["tool_errors"][0]["reason_code"] == "capability_not_found"
-    assert react_results["tool_errors"][0]["catalog_reason"] == "tool_not_in_audited_catalog"
-    assert react_results["tool_errors"][0]["diagnostic_only"] is True
-    assert react_results["tool_errors"][0]["terminal_program_error"] is False
+    executed_pairs = {(item["server_key"], item["tool_name"]) for item in react_results["executed_tools"]}
+    assert ("aistock-local-data", "local_data_get_unack_alert_count") in executed_pairs
+    assert ("aistock-local-data", "local_data_get_preset_daily_status") in executed_pairs
+    assert react_results["tool_errors"] == []
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["tool_name"] == "local_data_get_preset_daily_status"
@@ -2478,7 +2478,7 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
     assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
 
 
-def test_bug_404_uncovered_manifest_tool_reports_capability_not_found_without_crashing() -> None:
+def test_bug_404_non_catalog_tool_reports_capability_not_found_without_crashing() -> None:
     class UncoveredToolLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -2492,7 +2492,7 @@ def test_bug_404_uncovered_manifest_tool_reports_capability_not_found_without_cr
                     tool_calls=[
                         McpToolCall(
                             server_key="aistock-local-data",
-                            tool_name="local_data_get_unack_alert_count",
+                            tool_name="local_data_unknown_manifest_tool",
                             payload_json={},
                             stable_call_id="call_uncovered_local_data",
                         )
@@ -2518,7 +2518,7 @@ def test_bug_404_uncovered_manifest_tool_reports_capability_not_found_without_cr
 
     text = result["assistant_message"]["content_text"]
     assert "reason_code=capability_not_found" in text
-    assert "aistock-local-data/local_data_get_unack_alert_count" in text
+    assert "aistock-local-data/local_data_unknown_manifest_tool" in text
     assert "approved capability not found for tool" in text
     assert "Insufficient evidence" not in text
     assert result["cards"]["mcp_execution_result"]["status"] == "failed"
@@ -3214,13 +3214,107 @@ def test_bug_509_stock_depth_offered_tools_equal_full_executable_data_surface() 
     }
     executable = {
         (entry.server_key, entry.tool_name)
-        for entry in svc._react_tool_catalog_entries(capability_backed_only=True)
+        for entry in svc._react_tool_catalog_entries(mode_decision=mode_decision)
         if entry.side_effect_level == "read_only"
+    }
+    all_executable = {
+        (entry.server_key, entry.tool_name)
+        for entry in svc._react_tool_catalog_entries(mode_decision=mode_decision)
+    }
+    manifest_read_only = {
+        (str(tool["server_key"]), str(tool["tool_name"]))
+        for tool in svc._manifest_mcp_catalog_records()
+        if str(tool.get("side_effect_level") or "read_only") == "read_only"
     }
 
     assert set(STOCK_DEPTH_REQUIRED_TOOL_REFS) <= offered
     assert set(STOCK_DEPTH_REQUIRED_TOOL_REFS) <= executable
-    assert offered == executable
+    assert executable == manifest_read_only
+    assert offered == all_executable
+
+
+def test_bug_527_read_only_domain_does_not_require_per_capability_seed() -> None:
+    class SurfaceService(ResearchAssistantService):
+        def _manifest_mcp_catalog_records(self) -> list[dict[str, object]]:
+            base = {
+                "server_key": "aistock-local-data",
+                "status": "enabled",
+                "risk_level": "low",
+                "requires_approval": False,
+                "input_schema_json": {"type": "object"},
+            }
+            return [
+                {**base, "tool_name": "read_backed", "side_effect_level": "read_only"},
+                {**base, "tool_name": "read_manifest_only", "side_effect_level": "read_only"},
+                {
+                    **base,
+                    "tool_name": "write_backed",
+                    "risk_level": "production_sensitive",
+                    "side_effect_level": "production_sensitive",
+                    "requires_approval": True,
+                },
+                {
+                    **base,
+                    "tool_name": "write_manifest_only",
+                    "risk_level": "production_sensitive",
+                    "side_effect_level": "production_sensitive",
+                    "requires_approval": True,
+                },
+            ]
+
+        def _approved_capability_mcp_tool_refs(self) -> set[tuple[str, str]]:
+            return {("aistock-local-data", "read_backed"), ("aistock-local-data", "write_backed")}
+
+    svc = SurfaceService(repository=InMemoryResearchAssistantRepository())
+    read_only_mode = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.AMBIGUOUS_REQUEST,
+        confidence=0.95,
+        mode_reason="read_only_surface",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    _specs, read_only_registry = svc._agentic_function_tools(read_only_mode)
+    offered_read_only = {(str(item["server_key"]), str(item["tool_name"])) for item in read_only_registry.values()}
+    callable_read_only = {
+        (entry.server_key, entry.tool_name)
+        for entry in svc._react_tool_catalog_entries(mode_decision=read_only_mode)
+        if entry.side_effect_level == "read_only"
+    }
+
+    assert callable_read_only == {
+        ("aistock-local-data", "read_backed"),
+        ("aistock-local-data", "read_manifest_only"),
+    }
+    assert offered_read_only == {
+        ("aistock-local-data", "read_backed"),
+        ("aistock-local-data", "read_manifest_only"),
+        ("aistock-local-data", "write_backed"),
+    }
+    analysis_registry = {(entry.server_key, entry.tool_name) for entry in svc._react_tool_catalog_entries(mode_decision=read_only_mode)}
+    assert ("aistock-local-data", "write_backed") in analysis_registry
+    assert ("aistock-local-data", "write_manifest_only") not in analysis_registry
+
+    preflight_mode = ModeDecision(
+        mode=DialogueMode.PREFLIGHT,
+        intent_type=DialogueIntent.AMBIGUOUS_REQUEST,
+        confidence=0.95,
+        mode_reason="preflight_surface",
+        requires_tool=True,
+        allowed_tool_side_effect="preflight",
+        requires_user_confirmation=True,
+        requires_approval=True,
+        visible_audit_default=True,
+    )
+    _specs, preflight_registry = svc._agentic_function_tools(preflight_mode)
+    offered_preflight = {(str(item["server_key"]), str(item["tool_name"])) for item in preflight_registry.values()}
+
+    assert ("aistock-local-data", "read_manifest_only") in offered_preflight
+    assert ("aistock-local-data", "write_backed") in offered_preflight
+    assert ("aistock-local-data", "write_manifest_only") not in offered_preflight
 
 
 def test_bug_509_stock_depth_route_seeds_all_stock_reads_plus_web_and_60_day_kline() -> None:
