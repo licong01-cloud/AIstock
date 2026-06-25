@@ -35,8 +35,8 @@
   "expected": "Ordinary BUG fixes use Context Pack, BUG JSON, allowed_write_scope, ownership, graph summaries, and targeted snippets; design docs are loaded only when cited, user-requested, or T3.",
   "first_seen_at": "2026-06-25T02:35:17.130276Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "01962f8ebbe784479144c7e98a504a2c05813c08",
+  "fixed_at": "2026-06-25T03:10:06.444571Z",
   "github_issue_number": 1627,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1627",
   "last_seen_at": "2026-06-25T02:35:17.130276Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1628",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -65,6 +66,15 @@
     "fingerprint": "409b2ac37053c87c3cda2920",
     "source_event_id": "FE-20260625-409b2ac37053"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py::test_fast_path_classifies_ordinary_docs_as_docs_fast_t0 backend/tests/scripts/test_aistock_issue_workflow.py::test_fast_path_classifies_workflow_script_as_t1 backend/tests/scripts/test_aistock_issue_workflow.py::test_submit_bug_does_not_infer_ui_hints_from_workflow_script_text backend/tests/scripts/test_aistock_issue_workflow.py::test_submit_bug_does_not_infer_ui_hints_from_bug_json_or_design_text backend/tests/scripts/test_submit_bug_ui_intake_hints_fill_scope_labels_and_compact_output -q -p no:cacheprovider -> passed",
+    "python -m ruff check scripts/aistock_issue_workflow.py backend/tests/scripts/test_aistock_issue_workflow.py -> passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --changed-file scripts/aistock_issue_workflow.py --module validation.guardrails --output-format summary -> passed",
+    "python -m nox -s validation_center_backend -> passed (459 passed)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
