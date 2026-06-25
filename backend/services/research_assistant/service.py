@@ -403,6 +403,7 @@ class _ServiceReactMcpProvider:
                     preflight=preflight["preflight"],
                     executed=False,
                     blocked_reason="preflight_blocked",
+                    side_effect_level=str(decision.side_effect_level or call.side_effect_level or "read_only"),
                 )
                 self.cards["mcp_execution_result"] = {
                     "auto_executed": False,
@@ -435,6 +436,7 @@ class _ServiceReactMcpProvider:
                 preflight=preflight["preflight"],
                 executed=bool(executed.get("executed")),
                 error_json=dict(executed.get("error") or {}),
+                side_effect_level=str(decision.side_effect_level or call.side_effect_level or "read_only"),
             )
             if result.status == "failed" and result.error_json:
                 result.error_json = self.service._normalize_tool_error_payload(
@@ -632,6 +634,7 @@ class _ServiceReactMcpProvider:
             executed=False,
             blocked_reason="preflight_confirmation_required",
             error_json=dict(preflight_payload.get("error") or {}),
+            side_effect_level=str(decision.side_effect_level or call.side_effect_level or "read_only"),
         )
 
 
@@ -1872,6 +1875,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             executed=False,
             blocked_reason=str(error["reason_code"]),
             stable_call_id=call.stable_call_id,
+            side_effect_level=str(call.side_effect_level or "read_only"),
         )
         if isinstance(cards, dict):
             cards["mcp_execution_result"] = {
@@ -3011,6 +3015,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 action_proposal_id=str(proposal["action_proposal_id"]),
                 executed=bool(executed.get("executed")),
                 error_json=dict(executed.get("error") or {}),
+                side_effect_level=str(proposal.get("side_effect_level") or payload.get("side_effect_level") or "confirmed_action"),
             )
             self._populate_cards_from_tool_execution(cards, proposal, executed, result)
             cards["mcp_execution_result"]["auto_executed"] = False
@@ -6422,6 +6427,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                             "server_key": executed_key[0],
                             "tool_name": executed_key[1],
                             "status": str(getattr(result, "status", "")),
+                            "side_effect_level": str(getattr(result, "side_effect_level", "read_only") or "read_only"),
                         }
                     )
             error = result.error_json if isinstance(result.error_json, dict) else {}
@@ -6438,6 +6444,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 item.setdefault("server_key", result.server_key)
                 item.setdefault("tool_name", result.tool_name)
                 item.setdefault("message", result.summary)
+                item.setdefault("side_effect_level", str(getattr(result, "side_effect_level", "read_only") or "read_only"))
                 item["terminal_program_error"] = terminal_program_error
                 if not terminal_program_error:
                     item["diagnostic_only"] = True
@@ -6772,7 +6779,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if (
             react_active
             and react_guard.get("allowed") is True
-            and react_guard.get("reason") == "ok"
+            and react_guard.get("reason") in {"ok", "read_only_partial_evidence_degraded"}
             and text
             and not self._is_insufficient_evidence_text(text)
             and not self._contains_agentic_template_marker(text)
