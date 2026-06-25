@@ -471,6 +471,7 @@ python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1
 <a id="rule-feature-workflow-001"></a>
 ### 15.5 [FEATURE-WORKFLOW-001] 新功能设计驱动开发流程
 
+- Scope clarification: FEATURE-WORKFLOW-001 applies only after a request is confirmed as real feature delivery. BUG fixes, workflow/policy/docs/audit/cleanup/analysis tasks stay on issue/docs lanes and must not read feature design docs by default.
 - 严重等级：P1。
 - 适用范围：新增用户可见能力、跨模块能力、架构/流水线能力、生产运行路径、DB/API/UI/MCP 契约变化，以及用户明确要求按设计方案执行的功能开发。不替代 BUG 流程；BUG 修复继续使用 issue workflow。
 - 分级执行：`F0` 为低风险小功能或文档/流程补强，可使用轻量 Feature Card；`F1` 为标准单模块功能，必须有标准设计文档；`F2` 为跨模块、高风险或生产关键功能，必须有完整架构设计、契约、发布/回滚和验收方案。

@@ -14,7 +14,7 @@ Read these files before planning or running validation:
 1. `AGENTS.override.md`
 2. `docs/codex_project_memory.md`
 3. `docs/standards/aistock_development_standard_v1.5_20260523.md`
-4. The approved feature design document, implementation plan, GitHub Issue / BUG JSON `closure_requirements`, and any explicit user acceptance points.
+4. The approved feature design document or implementation plan only after the task is confirmed as feature delivery; for BUG/GitHub Issue fixes, read the BUG JSON `closure_requirements` and explicit user acceptance points instead.
 5. `docs/architecture/aistock_result_oriented_testing_standard.md`, if present.
 6. `docs/architecture/aistock_testing_version_management_system_design_20260429.md`, if present.
 7. The impacted module matrix under `tests/aistock_validation/modules/`, if present.
@@ -24,7 +24,7 @@ Do not modify `AGENTS.md`.
 
 ## New Feature Workflow Entry Point
 
-For non-trivial new features, architecture changes, cross-module capabilities, production paths, or UI/API/DB/MCP contract changes, apply `FEATURE-WORKFLOW-001` before implementation:
+For non-trivial new feature delivery, architecture changes, cross-module capabilities, production paths, or UI/API/DB/MCP contract changes, apply `FEATURE-WORKFLOW-001` before implementation:
 
 1. Classify the feature as `F0`, `F1`, or `F2`.
 2. Keep the approved design or Feature Card in the project docs path required by the tier.
@@ -32,7 +32,7 @@ For non-trivial new features, architecture changes, cross-module capabilities, p
 4. Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2`.
 5. Do not report ready if any acceptance matrix row has an unapproved gap, simplified/POC/mock-only/static success, partial implementation, or silent fallback.
 
-Use the BUG workflow only when the task is a BUG/GitHub Issue fix; do not force new feature delivery through BUG JSON unless the user explicitly asks.
+Use the BUG workflow only when the task is a BUG/GitHub Issue fix; do not force new feature delivery through BUG JSON unless the user explicitly asks. If the request is workflow policy, docs cleanup, audit, generic analysis, or a non-feature maintenance task, stay off the feature lane and do not read feature design docs by default.
 
 ## Workflow
 
