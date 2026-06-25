@@ -1,0 +1,82 @@
+{
+  "actual": "Shadow adapter only has definitions/tests; SIM main scheduler produces no SHADOW_RECONCILIATION_REPORTED; runtime store shadow=0; canary require_shadow_evidence has no evidence source.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "docs/handoff/miniqmt_event_loop_golive_readiness_2026-06-25.md",
+    "tests/aistock_validation/bugs/20260625_BUG-522-miniqmt-event-loop-shadow-runner-not-wired-into-production-sim-scheduler.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-522-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-522",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T18:50:32.553843Z",
+  "description": "Shadow adapter only has definitions/tests; SIM main scheduler produces no SHADOW_RECONCILIATION_REPORTED; runtime store shadow=0; canary require_shadow_evidence has no evidence source.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-8ac3b064cc6e",
+      "timestamp": "2026-06-24T18:50:32.553840Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/miniqmt_event_loop_golive_readiness_2026-06-25.md"
+  ],
+  "expected": "SIM scheduler constructs same-source shadow events around the B submit path, runs MiniQMTShadowParallelRunner, persists durable reconciliation evidence, defaults inert under MINIQMT_SHADOW_ENABLED=false, and A never touches broker.",
+  "first_seen_at": "2026-06-24T18:50:32.553843Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1623,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1623",
+  "last_seen_at": "2026-06-24T18:50:32.553843Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT event_loop shadow runner not wired into production SIM scheduler (blocks A go-live shadow evidence)",
+  "trigger_condition": {
+    "fingerprint": "8ac3b064cc6e025e9bf91bfd",
+    "source_event_id": "FE-20260625-8ac3b064cc6e"
+  },
+  "ui_issue": false,
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -32,3 +32,13 @@
 - 过期兜底: yes. Expired `expires_at` suppressions are inactive and the candidate reappears in `findings`.
 - Allowed scope: yes. Changes are limited to BUG-516 allowed_write_scope.
 - Production gates: production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop. No services were restarted and no production DB/DDL was touched.
+
+## BUG-522 - 2026-06-25
+
+- Inert default: PASS. `MINIQMT_SHADOW_ENABLED` defaults false; regression asserts no shadow payload or `SHADOW_RECONCILIATION_REPORTED` event.
+- A no broker mutation: PASS. Shadow reports `broker_called=false` and `broker_mutated=false`; B remains the only broker-authoritative submit path.
+- Durable evidence fields: PASS. Shadow metadata contains `portfolio_id`, `strategy_slot_id`, `binding_id`, `run_id`, `trade_date`, `execution_plan_id`, and `account_group_id`.
+- Loud failure: PASS. Shadow errors persist `FAILED_OBSERVATION_ONLY` with `reason_code`, context, and `simulation_alert`; B submit continues.
+- No simplified-shell regression: PASS. The hook uses `MiniQMTShadowParallelRunner` with event-loop and compiler adapters and does not turn A into the B compiler path.
+- Scope: PASS. BUG JSON allowed_write_scope was enriched for `docs/handoff/BUG-522-analysis.md` and this self-audit log; no LocalSim source was changed.
+- Production gates: `production_ddl_gate=noop`, `production_backend_dependency_gate=noop`, `production_frontend_dependency_gate=noop`.

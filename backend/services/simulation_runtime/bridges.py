@@ -20,6 +20,15 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTPlanPreviewResult,
     MiniQMTRuntimeManagedBatchSubmitResult,
 )
+from backend.services.miniqmt_execution_runtime.shadow import (
+    MiniQMTShadowCompilerAdapter,
+    MiniQMTShadowEventLoopAdapter,
+    MiniQMTShadowInputEvent,
+    MiniQMTShadowParallelRunner,
+    MiniQMTShadowReconciliationReport,
+    MiniQMTShadowReconciler,
+    MiniQMTShadowScenario,
+)
 from backend.services.trading_core.errors import (
     BrokerUnavailableError,
     InvalidStateTransitionError,
@@ -272,6 +281,63 @@ class MiniQMTExecutionBridge:
             **vnpy_kwargs,
         )
 
+    def run_shadow_reconciliation(self, **kwargs: Any) -> MiniQMTShadowReconciliationReport:
+        mode = str(kwargs.get("mode") or "SIM").strip().upper()
+        if mode != "SIM":
+            raise LiveApprovalRequiredError(
+                "MiniQMT shadow reconciliation only runs for SIM mode",
+                context={"mode": mode, "reason_code": "MINIQMT_SHADOW_SIM_MODE_REQUIRED"},
+            )
+        plan = kwargs["plan"]
+        binding = kwargs["binding"]
+        run = kwargs.get("run")
+        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(
+            plan=plan,
+            binding=binding,
+            account_id=kwargs.get("account_id"),
+            strategy_name=kwargs.get("strategy_name"),
+            order_remark_prefix=kwargs.get("order_remark_prefix"),
+            price_type=int(kwargs.get("price_type") or 5),
+            mode=mode,
+            price_by_symbol=kwargs.get("price_by_symbol"),
+            quote_by_symbol=kwargs.get("quote_by_symbol"),
+        )
+        runtime_id = str(vnpy_kwargs["runtime_id"])
+        metadata = self._shadow_metadata(
+            plan=plan,
+            binding=binding,
+            vnpy_kwargs=vnpy_kwargs,
+            run_id=str(kwargs.get("run_id") or getattr(run, "run_id", "") or ""),
+        )
+        events = self._shadow_input_events(
+            parent_intents=vnpy_kwargs["parent_intents"],
+            policy_context=vnpy_kwargs["policy_context"],
+            quote_provider=vnpy_kwargs["quote_provider"],
+            plan=plan,
+            binding=binding,
+        )
+        runner = MiniQMTShadowParallelRunner(
+            reconciler=MiniQMTShadowReconciler(repository=self._runtime_client.repository)
+        )
+        return runner.run(
+            runtime_id=runtime_id,
+            scenario=MiniQMTShadowScenario.DELAY,
+            input_events=events,
+            event_loop_adapter=MiniQMTShadowEventLoopAdapter(
+                repository=self._runtime_client.repository,
+                runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
+                account_group_id=str(vnpy_kwargs["account_group_id"]),
+                trade_date=plan.target_trade_date,
+            ),
+            compiler_adapter=MiniQMTShadowCompilerAdapter(
+                repository=self._runtime_client.repository,
+                runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
+                account_group_id=str(vnpy_kwargs["account_group_id"]),
+                trade_date=plan.target_trade_date,
+            ),
+            metadata=metadata,
+        )
+
     def _managed_vnpy_request_factory(
         self,
         *,
@@ -346,6 +412,137 @@ class MiniQMTExecutionBridge:
             )
 
         return build
+
+    @staticmethod
+    def _shadow_metadata(
+        *,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+        vnpy_kwargs: dict[str, Any],
+        run_id: str,
+    ) -> dict[str, Any]:
+        policy_context = dict(vnpy_kwargs["policy_context"])
+        policy_json = policy_context.get("policy_json")
+        return {
+            "schema_version": "miniqmt_shadow_reconciliation_metadata_v1",
+            "source": "simulation_runtime_miniqmt_shadow_runner",
+            "shadow_mode": "dry_run_no_broker_mutation",
+            "portfolio_id": plan.portfolio_id,
+            "strategy_slot_id": str(vnpy_kwargs["strategy_slot_id"]),
+            "binding_id": binding.binding_id,
+            "run_id": run_id,
+            "trade_date": plan.target_trade_date.isoformat(),
+            "execution_plan_id": plan.plan_id,
+            "execution_plan_hash": plan.plan_hash,
+            "account_group_id": str(vnpy_kwargs["account_group_id"]),
+            "runtime_config_hash": str(vnpy_kwargs["runtime_config_hash"]),
+            "strategy_id": binding.strategy_id,
+            "package_id": plan.package_id,
+            "broker_backend": binding.broker_backend.value,
+            "validated_execution_policy_id": policy_context.get("validated_execution_policy_id"),
+            "policy_sha256": policy_context.get("policy_sha256"),
+            "policy_json": dict(policy_json) if isinstance(policy_json, dict) else {},
+        }
+
+    @staticmethod
+    def _shadow_input_events(
+        *,
+        parent_intents: list[OrderIntent],
+        policy_context: dict[str, Any],
+        quote_provider: Callable[[str], dict[str, Any] | None],
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+    ) -> list[MiniQMTShadowInputEvent]:
+        policy_json = policy_context.get("policy_json")
+        events: list[MiniQMTShadowInputEvent] = [
+            MiniQMTShadowInputEvent(
+                event_type="policy",
+                payload={
+                    "policy_json": dict(policy_json) if isinstance(policy_json, dict) else {},
+                    "validated_execution_policy_id": policy_context.get("validated_execution_policy_id"),
+                    "policy_sha256": policy_context.get("policy_sha256"),
+                    "source": "simulation_runtime_execution_plan",
+                },
+            )
+        ]
+        intent_by_id = {intent.intent_id: intent for intent in plan.intents}
+        decision_by_id = {decision.decision_id: decision for decision in plan.trading_rule_decisions}
+        for parent in parent_intents:
+            plan_intent = intent_by_id.get(parent.intent_id)
+            decision = decision_by_id.get(plan_intent.trading_rule_decision_id) if plan_intent is not None else None
+            events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="parent_intent",
+                    payload={
+                        "intent_id": parent.intent_id,
+                        "symbol": parent.symbol,
+                        "side": parent.side.value,
+                        "quantity": int(parent.quantity),
+                        "order_type": parent.order_type.value,
+                        "limit_price": parent.limit_price,
+                        "package_id": parent.package_id,
+                        "portfolio_id": parent.portfolio_id,
+                        "strategy_id": binding.strategy_id,
+                        "strategy_slot_id": binding.strategy_slot_id or binding.strategy_id,
+                        "metadata": dict(parent.metadata),
+                    },
+                )
+            )
+            events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="tick",
+                    payload=MiniQMTExecutionBridge._shadow_tick_payload(
+                        parent,
+                        quote_provider=quote_provider,
+                        plan_intent=plan_intent,
+                        decision=decision,
+                    ),
+                )
+            )
+        return events
+
+    @staticmethod
+    def _shadow_tick_payload(
+        intent: OrderIntent,
+        *,
+        quote_provider: Callable[[str], dict[str, Any] | None],
+        plan_intent: ExecutionPlanIntent | None,
+        decision: Any | None,
+    ) -> dict[str, Any]:
+        quote = quote_provider(intent.symbol)
+        if quote:
+            payload = dict(quote)
+            payload.setdefault("symbol", intent.symbol)
+            payload.setdefault("price", payload.get("last_price") or payload.get("ask_price_1") or payload.get("bid_price_1"))
+        else:
+            price = float(intent.limit_price or 0.0)
+            if price <= 0:
+                raise MarketDataUnavailableError(
+                    "MiniQMT shadow reconciliation requires quote or positive limit_price",
+                    context={
+                        "reason_code": "MINIQMT_SHADOW_QUOTE_MISSING",
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                    },
+                )
+            payload = {
+                "symbol": intent.symbol,
+                "price": price,
+                "last_price": price,
+                "bid_price_1": price,
+                "bid_volume_1": int(intent.quantity),
+                "ask_price_1": price,
+                "ask_volume_1": int(intent.quantity),
+                "source": "runtime_synthetic_limit_quote",
+            }
+        payload["source_execution_plan_intent_id"] = intent.intent_id
+        if plan_intent is not None:
+            payload["trading_rule_decision_id"] = plan_intent.trading_rule_decision_id
+        if decision is not None:
+            tradability = decision.price_limit_rule.get("pre_trade_tradability")
+            if isinstance(tradability, dict):
+                payload["pre_trade_tradability"] = dict(tradability)
+        return payload
 
     @staticmethod
     def _account_group_id(*, plan: ExecutionPlan, binding: SimulationReleaseBinding) -> str:

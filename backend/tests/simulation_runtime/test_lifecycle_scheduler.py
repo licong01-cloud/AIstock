@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -7,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import backend.services.simulation_runtime.bridges as simulation_bridges
 
 from backend.services.paper_trading_v2.models import PaperPortfolio
 from backend.services.paper_trading_v2.market_data import DailyStStatus, MinuteDataSource, MinuteExecutionMarketInput
@@ -69,6 +71,10 @@ from backend.services.strategy_package.models import (
 )
 from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
+from backend.services.miniqmt_execution_runtime import (
+    JsonFileMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionEventType,
+)
 
 
 TRADE_DATE = date(2026, 5, 21)
@@ -497,6 +503,258 @@ class FailingQmtSnapshotClient(FakeQmtSnapshotClient):
         if self.fail:
             raise RuntimeError(self.error_message)
         return super().get_orders(cancelable_only=cancelable_only)
+
+
+def _miniqmt_shadow_test_scheduler(*, candidates: list[SelectionCandidate] | None = None):
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_scheduler_qmt_shadow_000003",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_scheduler_qmt_shadow_000003",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker()
+    snapshot_client = FakeQmtSnapshotClient(
+        positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}]
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=candidates or _candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_qmt",
+                    current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
+                    current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+                    managed_order_service=QmtManagedOrderService(
+                        repository=qmt_repo,
+                        broker=broker,  # type: ignore[arg-type]
+                        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+                    ),
+                    qmt_ledger_repository=qmt_repo,
+                    qmt_sync_service=QmtStrategyLedgerSyncService(
+                        repository=qmt_repo,
+                        qmt_client=snapshot_client,
+                        account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+                        trade_date=TRADE_DATE,
+                        calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+                    ),
+                    qmt_reconciliation_service=QmtStrategyLedgerReconciliationService(repository=qmt_repo),
+                    broker_positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}],
+                )
+            }
+        ),
+    )
+    return scheduler, repo, broker, qmt_binding
+
+
+def _runtime_store_shadow_events(path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        dict(event)
+        for events in (payload.get("events") or {}).values()
+        for event in events
+        if event.get("event_type") == MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED.value
+    ]
+
+
+def test_scheduler_miniqmt_shadow_remains_inert_when_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_shadow_test_scheduler()
+    shadow_store = tmp_path / "miniqmt-shadow-disabled.json"
+    monkeypatch.delenv("MINIQMT_SHADOW_ENABLED", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(shadow_store))
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    assert submitted.submitted_count == 1
+    assert submitted.results[0].status == "RECONCILED"
+    assert submitted.results[0].run.run_payload_json["broker_called"] is True
+    assert "miniqmt_shadow_reconciliation" not in submitted.results[0].run.run_payload_json
+    assert _runtime_store_shadow_events(shadow_store) == []
+    assert len(broker.place_order_payloads) == len(submitted.results[0].execution_plan.intents)
+    assert qmt_binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+
+
+def test_scheduler_miniqmt_shadow_persists_durable_evidence_without_touching_broker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    board_lot_candidates = [
+        candidate.model_copy(update={"target_quantity": 200})
+        if candidate.symbol == "688001.SH"
+        else candidate
+        for candidate in _candidate_rows()
+    ]
+    scheduler, repo, broker, qmt_binding = _miniqmt_shadow_test_scheduler(candidates=board_lot_candidates)
+    shadow_store = tmp_path / "miniqmt-shadow-enabled.json"
+    monkeypatch.setenv("MINIQMT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(shadow_store))
+
+    observed: dict[str, Any] = {}
+    original = simulation_bridges.MiniQMTExecutionBridge.run_shadow_reconciliation
+
+    def _wrapped(self, **kwargs: Any):
+        observed["called"] = True
+        observed["binding_id"] = kwargs["binding"].binding_id
+        observed["plan_id"] = kwargs["plan"].plan_id
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliation", _wrapped)
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    assert observed["called"] is True
+    assert observed["binding_id"] == qmt_binding.binding_id
+    latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    assert latest_run is not None
+    shadow = latest_run.run_payload_json["miniqmt_shadow_reconciliation"]
+    assert shadow["status"] == "SUCCEEDED"
+    assert shadow["reason_code"] == "MINIQMT_SHADOW_RECONCILIATION_REPORTED"
+    assert shadow["broker_called"] is False
+    assert shadow["broker_mutated"] is False
+    assert shadow["b_submit_unaffected"] is True
+    assert shadow["metadata"]["portfolio_id"] == "portfolio_qmt"
+    assert shadow["metadata"]["binding_id"] == qmt_binding.binding_id
+    assert shadow["metadata"]["run_id"] == submitted.results[0].run.run_id
+    assert shadow["metadata"]["trade_date"] == TRADE_DATE.isoformat()
+    assert shadow["metadata"]["execution_plan_id"] == submitted.results[0].execution_plan.plan_id
+    assert shadow["metadata"]["account_group_id"] == "ag_minqmt_QMT_SIM_ACCOUNT_sim"
+    assert latest_run.run_payload_json["broker_called"] is True
+    assert latest_run.run_payload_json["strategy_performance"]["broker_backend"] == "minqmt_sim"
+    assert len(broker.place_order_payloads) == len(submitted.results[0].execution_plan.intents)
+
+    runtime_repo = JsonFileMiniQMTExecutionRuntimeRepository(shadow_store)
+    runtime = runtime_repo.get_runtime(shadow["runtime_id"])
+    assert runtime is not None
+    durable_event = next(
+        event
+        for event in runtime_repo.list_events(shadow["runtime_id"])
+        if event.event_type == MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED
+    )
+    assert durable_event.payload["metadata"]["portfolio_id"] == "portfolio_qmt"
+    assert durable_event.payload["metadata"]["binding_id"] == qmt_binding.binding_id
+    assert durable_event.payload["metadata"]["run_id"] == submitted.results[0].run.run_id
+    assert durable_event.payload["metadata"]["trade_date"] == TRADE_DATE.isoformat()
+    assert runtime.metadata["last_shadow_reconciliation"]["metadata"]["binding_id"] == qmt_binding.binding_id
+
+
+def test_scheduler_miniqmt_shadow_failure_is_loud_and_keeps_b_submit_running(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, _qmt_binding = _miniqmt_shadow_test_scheduler()
+    shadow_store = tmp_path / "miniqmt-shadow-failure.json"
+    monkeypatch.setenv("MINIQMT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(shadow_store))
+
+    def _raise_shadow(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeConfigInvalidError(
+            "forced MiniQMT shadow reconciliation failure",
+            context={
+                "reason_code": "MINIQMT_SHADOW_TEST_FAILURE",
+                "binding_id": kwargs["binding"].binding_id,
+                "strategy_id": kwargs["binding"].strategy_id,
+                "trade_date": kwargs["plan"].target_trade_date.isoformat(),
+            },
+        )
+
+    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliation", _raise_shadow)
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    assert submitted.submitted_count == 1
+    latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    assert latest_run is not None
+    failure = latest_run.run_payload_json["miniqmt_shadow_reconciliation"]
+    assert failure["status"] == "FAILED_OBSERVATION_ONLY"
+    assert failure["reason_code"] == "MINIQMT_SHADOW_TEST_FAILURE"
+    assert failure["b_submit_unaffected"] is True
+    assert failure["broker_called"] is False
+    assert failure["broker_mutated"] is False
+    assert latest_run.run_payload_json["broker_called"] is True
+    assert latest_run.run_payload_json["simulation_alerts"][-1]["reason_code"] == "MINIQMT_SHADOW_TEST_FAILURE"
+    assert _runtime_store_shadow_events(shadow_store) == []
+    assert len(broker.place_order_payloads) == len(submitted.results[0].execution_plan.intents)
+
+
+def test_scheduler_miniqmt_shadow_does_not_activate_for_local_sim_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _local_sim_context_with_real_broker(
+                    portfolio_id="portfolio_shared",
+                    release=release,
+                    paper_repository=paper_repo,
+                )
+            }
+        ),
+    )
+    shadow_store = tmp_path / "miniqmt-shadow-local.json"
+    monkeypatch.setenv("MINIQMT_SHADOW_ENABLED", "true")
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(shadow_store))
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+    )
+
+    assert submitted.submitted_count == 1
+    assert submitted.results[0].status == "SUBMITTED"
+    assert "miniqmt_shadow_reconciliation" not in submitted.results[0].run.run_payload_json
+    assert _runtime_store_shadow_events(shadow_store) == []
+    assert submitted.results[0].run.run_payload_json["broker_called"] is True
 
 
 def _qmt_account(repo: InMemoryQmtStrategyLedgerRepository, *, account_id: str, strategy_name: str) -> None:

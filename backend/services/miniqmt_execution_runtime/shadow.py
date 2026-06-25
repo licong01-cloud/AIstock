@@ -214,6 +214,7 @@ class MiniQMTShadowEventLoopAdapter:
             runtime_id=runtime.config.runtime_id,
             runtime_kind="event_loop",
             metadata={
+                "broker_called": False,
                 "broker_mutated": False,
                 "shadow_adapter": type(self).__name__,
                 "source_runtime_id": runtime_id,
@@ -279,6 +280,7 @@ class MiniQMTShadowCompilerAdapter:
             runtime_id=f"{runtime_id}_b",
             runtime_kind="compiler",
             metadata={
+                "broker_called": False,
                 "broker_mutated": False,
                 "shadow_adapter": type(self).__name__,
                 "source_runtime_id": runtime_id,

@@ -197,12 +197,27 @@ def test_phase5_shadow_parallel_runner_replays_design_scenarios_through_a_and_b_
         input_events=_real_replay_events(scenario),
         event_loop_adapter=MiniQMTShadowEventLoopAdapter(repository=repo),
         compiler_adapter=MiniQMTShadowCompilerAdapter(repository=repo),
-        metadata={"trade_date": date(2026, 6, 23).isoformat(), "account_group_id": "shadow_account"},
+        metadata={
+            "trade_date": date(2026, 6, 23).isoformat(),
+            "account_group_id": "shadow_account",
+            "portfolio_id": "portfolio_scope",
+            "strategy_slot_id": "slot_scope",
+            "binding_id": "binding_scope",
+            "run_id": "run_scope",
+            "execution_plan_id": "plan_scope",
+        },
     )
 
     assert report.fatal_differences == []
+    assert report.metadata["portfolio_id"] == "portfolio_scope"
+    assert report.metadata["strategy_slot_id"] == "slot_scope"
+    assert report.metadata["binding_id"] == "binding_scope"
+    assert report.metadata["run_id"] == "run_scope"
+    assert report.metadata["execution_plan_id"] == "plan_scope"
     assert report.a_runtime.metadata["broker_mutated"] is False
+    assert report.a_runtime.metadata["broker_called"] is False
     assert report.b_runtime.metadata["broker_mutated"] is False
+    assert report.b_runtime.metadata["broker_called"] is False
     assert repo.list_events(f"mqrt_shadow_replay_{scenario.value}")[-1].event_type == (
         MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED
     )
