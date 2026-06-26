@@ -1,0 +1,79 @@
+{
+  "actual": "create_vnpy_algo_instance(runtime.py:263-264)默认min_volume=100/volume_increment=100; shadow event_loop驱动器(shadow.py:526-546)建algo实例未按symbol传board-lot吃默认->科创板688/689买单floor到整百手(1215->1200/617->600); 2026-06-26三条shadow报告全FATAL reason_code=MINIQMT_SHADOW_CHILD_ORDER_QUANTITY_DRIFT(11+11+2笔全688 BUY)->D3硬门永拒canary",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "docs/handoff/",
+    "tests/aistock_validation/bugs/20260626_BUG-531-miniqmt-event-loop-create-vnpy-algo-instance-100-board-lot-shadow-floor.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-531",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-26T10:27:10.507785Z",
+  "description": "A方案(MiniQMT event_loop)上线canary前置D3.6。根因: create_vnpy_algo_instance (backend/services/miniqmt_execution_runtime/runtime.py:252-304) 形参 min_volume/volume_increment 默认硬编码 100/100(runtime.py:263-264), 不按 symbol 派生板块 board-lot 规则。shadow event_loop 驱动器 _drive_event_loop_runtime(shadow.py:526-546)建 algo 实例时只传 target_quantity, 未传 board-lot 参数 -> 吃默认 100/100 -> 科创板(688/689, 正确规则=最低200股之上按1股递增)买单被 floor 到整百手。对照: B(CompilerAdapter, client.py:342-347)每 intent 调 _board_lot_for_runtime (=board_lot.board_lot_rule, client.py:1180-1187)取科创板正确 (200,1) 传入, 故 B 的 1215 不动。证据(2026-06-26): runtime-state SHADOW_RECONCILIATION_REPORTED 3 条全 FATAL, differences 全 reason_code=MINIQMT_SHADOW_CHILD_ORDER_QUANTITY_DRIFT, 全 688 BUY(L16: A=300/300/200/300/500/200/200/1200/600/200/200 vs B=360/363/277/304/526/278/296/1215/617/202/258; L2: A=2100/300 vs B=2190/302), A 全 = floor(B/100)*100。规范唯一真值源已存在: backend/execution_algos/board_lot.py board_lot_rule(stock_id) 688/689->(200,1) / 300/301/302->(100,100) / 60/00->(100,100) / 未知 raise。\n\n修法(规范, 与 board_lot.py 共用唯一真值源): create_vnpy_algo_instance 当调用方未显式传 min_volume/volume_increment 时, 内部按 symbol 调 board_lot_rule 派生 (min_qty, increment) 作默认; 显式入参仍可 override(B 现有显式 (200,1)/(100,100) 与派生一致, 向后兼容)。一改同时修好 shadow-A 对账 + 让 D4 未来真实 A 提交路径天生正确。SNIPER 核(sniper_core.py)本身不取整, 取整在实例 min_volume/increment (runtime.py:284-285 存 / 1614-1618 读), 不涉 BaseExecutionAlgo._round_lot(SNIPER 是 vnpy_style 不继承)。\n\n性质澄清: 生产 A 策略提交主路径尚不存在(=D4 要建; runtime.py:1211/1333 两处 create_algo_instance 是 operator-command 撤单/flatten 非策略提交), 当前唯一用真实 intent 喂 event_loop 的是 shadow 驱动器。故本 bug 现表现为 shadow-A 对账 FATAL(D3 硬门永拒 canary), 同时是 D4 必须避开的坑。\n\n非 D3.6 范围(后续 D3.7): bridges.py:324 硬编码 scenario=DELAY 导致 shadow 只产 delay 一种场景, D3 要的 6 场景集(full_fill/partial_55_stream/reject/cancel/disconnect/restart_recovery)需另接生产侧场景注入。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260626-96653b114ae2",
+      "timestamp": "2026-06-26T10:27:10.507782Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A路径科创板买单数量=目标量(科创板>=200后1股增量,1215不floor)与B(client.py:342-347已正确调board_lot_rule得(200,1))一致->shadow对账无FATAL",
+  "first_seen_at": "2026-06-26T10:27:10.507785Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1656,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1656",
+  "last_seen_at": "2026-06-26T10:27:10.507785Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "不改 B(CompilerAdapter / client.py 已正确调 board_lot_rule)",
+    "不碰 LocalSim / 主板 100 手规则 / SELL 残股豁免逻辑",
+    "不做 scenario 注入(bridges.py DELAY 硬编码)= 后续 D3.7",
+    "不退化成简化壳 / 合成 timer / 假回款 / JSON 当权威 OMS",
+    "不引 TDX; 不触 broker(shadow 必须 dry_run_no_broker_mutation)"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/miniqmt/shadow-evidence?trade_date=2026-06-26&portfolio_id=codex_final_ms_l16_20260603&strategy_slot_id=codex_final_ms_l16_20260603 (fatal_count>0)",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT event_loop create_vnpy_algo_instance 默认主板100手未按科创板派生board-lot致shadow科创板买单系统性floor",
+  "trigger_condition": "shadow event_loop 对科创板(688/689)买单产 child order 时; 或 D4 切 event_loop 后真实 A 提交科创板买单时。",
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "ui_issue": false,
+  "candidate_type": "bug"
+}

@@ -26,11 +26,12 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.order_service import (
+    ManagedOrderRequest,
     ManagedOrderSubmitResult,
     OrderPreflightResult,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.trading_core.models import OrderSide
+from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 
 TRADE_DATE = date(2026, 6, 22)
@@ -68,6 +69,54 @@ def _submit_child(runtime: MiniQMTExecutionRuntime):
     child = runtime.submit_child_order(algo_instance_id=algo.algo_instance_id, quantity=100, price=10.0)
     assert child.broker_order_id is not None
     return algo, child
+
+
+def _submit_vnpy_child_order(
+    *,
+    symbol: str,
+    side: OrderSide,
+    target_quantity: int,
+    min_volume: int | None = None,
+    volume_increment: int | None = None,
+) -> tuple[
+    MiniQMTExecutionRuntime,
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    FakeMiniQMTGateway,
+]:
+    runtime, repo, gateway = _runtime(gateway=FakeMiniQMTGateway())
+    kwargs = {}
+    if min_volume is not None:
+        kwargs["min_volume"] = min_volume
+    if volume_increment is not None:
+        kwargs["volume_increment"] = volume_increment
+    runtime.create_vnpy_algo_instance(
+        parent_intent_id=f"intent_board_lot_{symbol}_{side.value}",
+        strategy_slot_id="slot_board_lot",
+        symbol=symbol,
+        side=side,
+        target_quantity=target_quantity,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+        metadata={
+            "runtime_child_context": {
+                "strategy_id": "strategy_board_lot",
+                "strategy_name": "slot_board_lot",
+                "order_remark": f"remark_board_lot_{symbol}_{side.value}",
+            },
+        },
+        **kwargs,
+    )
+    runtime.on_tick(
+        symbol=symbol,
+        price=10.0,
+        payload={
+            "bid_price_1": 10.0,
+            "bid_volume_1": max(target_quantity * 2, 1000),
+            "ask_price_1": 10.0,
+            "ask_volume_1": max(target_quantity * 2, 1000),
+        },
+    )
+    return runtime, repo, gateway
 
 
 def _preflight() -> OrderPreflightResult:
@@ -185,6 +234,126 @@ def test_runtime_client_managed_child_sync_uses_ledger_partial_status() -> None:
     assert updated.status == MiniQMTChildOrderStatus.PARTIALLY_FILLED
     assert updated.metadata["broker_synced_child_status"] == MiniQMTChildOrderStatus.PARTIALLY_FILLED.value
     assert updated.metadata["broker_order_ledger"]["order_status"] == STATUS_PART_SUCC
+
+
+@pytest.mark.parametrize("symbol", ["688001.SH", "689001.SH"])
+def test_vnpy_create_derives_star_market_board_lot_without_flooring(symbol: str) -> None:
+    _runtime_obj, repo, gateway = _submit_vnpy_child_order(
+        symbol=symbol,
+        side=OrderSide.BUY,
+        target_quantity=1215,
+    )
+
+    child = repo.list_child_orders("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    algo = repo.list_algo_instances("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    assert child.quantity == 1215
+    assert gateway.submitted_orders[0].quantity == 1215
+    assert algo.metadata["min_volume"] == 200
+    assert algo.metadata["volume_increment"] == 1
+
+
+@pytest.mark.parametrize("symbol", ["600000.SH", "000001.SZ", "300001.SZ", "301001.SZ"])
+def test_vnpy_create_keeps_main_and_chinext_hundred_share_board_lot(symbol: str) -> None:
+    _runtime_obj, repo, _gateway = _submit_vnpy_child_order(
+        symbol=symbol,
+        side=OrderSide.BUY,
+        target_quantity=1215,
+    )
+
+    child = repo.list_child_orders("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    algo = repo.list_algo_instances("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    assert child.quantity == 1200
+    assert algo.metadata["min_volume"] == 100
+    assert algo.metadata["volume_increment"] == 100
+
+
+def test_vnpy_create_keeps_star_market_sell_residual_exemption() -> None:
+    _runtime_obj, repo, _gateway = _submit_vnpy_child_order(
+        symbol="688001.SH",
+        side=OrderSide.SELL,
+        target_quantity=123,
+    )
+
+    child = repo.list_child_orders("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    assert child.quantity == 123
+
+
+@pytest.mark.parametrize("symbol", ["999999.SH", "ABC"])
+def test_vnpy_create_loudly_rejects_unknown_symbol_instead_of_defaulting_to_hundred_lot(symbol: str) -> None:
+    runtime, repo, _gateway = _runtime(gateway=FakeMiniQMTGateway())
+
+    with pytest.raises(RuntimeError, match="MINIQMT_EVENT_LOOP_BOARD_LOT_RULE_UNRESOLVED"):
+        runtime.create_vnpy_algo_instance(
+            parent_intent_id="intent_unknown_board_lot",
+            strategy_slot_id="slot_board_lot",
+            symbol=symbol,
+            side=OrderSide.BUY,
+            target_quantity=1215,
+            algo_code="SNIPER_MINIQMT",
+            limit_price=10.0,
+        )
+
+    assert repo.list_algo_instances(runtime.config.runtime_id, active_only=False) == []
+    assert repo.list_child_orders(runtime.config.runtime_id, active_only=False) == []
+
+
+def test_vnpy_create_respects_explicit_board_lot_override_for_compiler_path_compatibility() -> None:
+    _runtime_obj, repo, _gateway = _submit_vnpy_child_order(
+        symbol="688001.SH",
+        side=OrderSide.BUY,
+        target_quantity=1215,
+        min_volume=100,
+        volume_increment=100,
+    )
+
+    child = repo.list_child_orders("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    algo = repo.list_algo_instances("mqrt_bug470_order_lifecycle", active_only=False)[0]
+    assert child.quantity == 1200
+    assert algo.metadata["min_volume"] == 100
+    assert algo.metadata["volume_increment"] == 100
+
+
+def test_compiler_adapter_keeps_star_market_child_quantity_with_explicit_board_lot() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    client = MiniQMTExecutionRuntimeClient(repository=repo, runtime_kind="compiler")
+    intent = OrderIntent(
+        intent_id="intent_compiler_star_board_lot",
+        package_id="pkg_board_lot",
+        portfolio_id="portfolio_board_lot",
+        symbol="688001.SH",
+        side=OrderSide.BUY,
+        quantity=1215,
+        order_type=OrderType.LIMIT,
+        limit_price=10.0,
+        target_trade_date=TRADE_DATE,
+    )
+
+    build = client.build_managed_vnpy_order_requests(
+        parent_intents=[intent],
+        policy_context={"policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}},
+        account_group_id="ag_board_lot",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_board_lot",
+        runtime_id="mqrt_compiler_star_board_lot",
+        strategy_slot_id="slot_board_lot",
+        managed_request_factory=lambda child, index: ManagedOrderRequest(
+            account_id="ag_board_lot",
+            strategy_name=child.strategy_slot_id,
+            symbol=child.symbol,
+            side=child.side.value,
+            order_type=BUY_ORDER_TYPE,
+            quantity=child.quantity,
+            price_type=child.price_type,
+            price=Decimal(str(child.price)),
+            order_remark=f"remark_compiler_star_{index}",
+            trade_date=TRADE_DATE,
+            mode="SIM",
+        ),
+    )
+
+    child = repo.list_child_orders(build.runtime_evidence.runtime_id, active_only=False)[0]
+    assert child.quantity == 1215
+    assert build.requests[0].quantity == 1215
 
 
 def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient() -> None:

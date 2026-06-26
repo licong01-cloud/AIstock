@@ -61,3 +61,13 @@
 - B boundary and scope: PASS. order_service.py and simulation_runtime/scheduler.py were not modified; no LocalSim, TDX, service, operator command, production DB, or DDL action was touched.
 - Loud residual paths: PASS. Missing ledger authority, insufficient cash, terminal SELL without proceeds, and EOD residuals all persist explicit reason_code metadata/events.
 - Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.
+
+## BUG-531 - 2026-06-26
+
+- board-lot truth source: PASS. create_vnpy_algo_instance now derives missing vn.py lot params from board_lot_rule(symbol) and no longer hardcodes 100/100 for unknown callers.
+- STAR 688/689 no-floor: PASS. Regression covers BUY 1215 -> child 1215 for both 688 and 689; main/ChiNext remain 100-share increment.
+- Loud failure: PASS. Unknown/non-A-share symbols raise MINIQMT_EVENT_LOOP_BOARD_LOT_RULE_UNRESOLVED; incomplete/invalid explicit overrides raise stable reason codes instead of defaulting to 100.
+- B boundary: PASS. client.py was not modified; explicit compiler-path overrides still produce STAR child/request quantity 1215.
+- Shadow dry-run: PASS. Shadow A/B STAR intent reconciles with no MINIQMT_SHADOW_CHILD_ORDER_QUANTITY_DRIFT; metadata remains broker_called=false.
+- Scope: PASS. Changes stay in runtime.py, scoped MiniQMT runtime tests, docs/handoff, and BUG JSON. No LocalSim, TDX, scheduler, bridge scenario injection, service, DB, or DDL action was touched.
+- Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.
