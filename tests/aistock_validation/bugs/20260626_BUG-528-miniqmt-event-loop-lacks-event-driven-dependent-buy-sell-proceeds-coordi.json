@@ -1,0 +1,107 @@
+{
+  "actual": "A event_loop has no SELL trade callback driven coordinator to submit deferred BUY orders after same-batch SELL proceeds are durably reconciled. Expected: after on_trade SELL fill is recorded, use qmt_strategy ledger cash/trade facts as broker-authoritative source; submit corresponding deferred BUY only when real cash is sufficient; partial/unfilled/cancelled/EOD residual paths must be loud with reason_code; do not modify B scheduler/order_service polling loop.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/oms.py",
+    "backend/services/miniqmt_execution_runtime/gateway.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "docs/handoff/BUG-528-analysis.md",
+    "docs/handoff/sim_dependent_buy_failure_rootcause_2026-06-25.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md",
+    "tests/aistock_validation/bugs/20260626_BUG-528-miniqmt-event-loop-lacks-event-driven-dependent-buy-sell-proceeds-coordi.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-528",
+  "closed_at": null,
+  "closure_requirements": [
+    "Implement event_loop dependent-buy coordinator driven by SELL on_trade events, not by B scheduler polling.",
+    "Use qmt_strategy ledger facts as broker-authoritative source for cash/proceeds; do not estimate from JSON runtime store.",
+    "Keep partial fill, unfilled/cancelled, and EOD residual/failed paths loud with reason_code.",
+    "Do not modify order_service.py or simulation_runtime/scheduler.py B-specific retry logic.",
+    "Run required verification plans and create PR without merging."
+  ],
+  "created_at": "2026-06-26T02:31:26.309392Z",
+  "description": "A event_loop has no SELL trade callback driven coordinator to submit deferred BUY orders after same-batch SELL proceeds are durably reconciled. Expected: after on_trade SELL fill is recorded, use qmt_strategy ledger cash/trade facts as broker-authoritative source; submit corresponding deferred BUY only when real cash is sufficient; partial/unfilled/cancelled/EOD residual paths must be loud with reason_code; do not modify B scheduler/order_service polling loop.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260626-cf219af4e57e",
+      "timestamp": "2026-06-26T02:31:26.309387Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A event_loop submits dependent BUY only after broker-authoritative qmt_strategy ledger facts show same-batch SELL proceeds are durably available; partial/unfilled/cancelled/EOD residual paths are loud with reason_code; B scheduler/order_service polling loop remains unchanged.",
+  "first_seen_at": "2026-06-26T02:31:26.309392Z",
+  "fix_branch": "bug/BUG-528-miniqmt-event-loop-lacks-event-driven-dependent-20260626",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1647,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1647",
+  "last_seen_at": "2026-06-26T02:31:26.309392Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT event_loop lacks event-driven dependent-buy sell-proceeds coordinator (A go-live prerequisite)",
+  "trigger_condition": {
+    "fingerprint": "cf219af4e57ef1d54d6c4e0b",
+    "source_event_id": "FE-20260626-cf219af4e57e"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "module:miniqmt_execution_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix",
+  "ui_issue": false
+}

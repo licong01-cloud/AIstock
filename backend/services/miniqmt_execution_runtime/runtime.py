@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from backend.execution_algos.vnpy_style import (
@@ -304,12 +305,15 @@ class MiniQMTExecutionRuntime:
 
     def on_timer(self, *, timer_name: str, payload: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        timer_payload = {"timer_name": timer_name, **dict(payload or {})}
         event = self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.TIMER,
             source="runtime",
-            payload={"timer_name": timer_name, **dict(payload or {})},
+            payload=timer_payload,
         )
+        if _is_dependent_buy_eod_timer(timer_name):
+            self._mark_dependent_buy_eod_residuals(runtime.runtime_id, payload=timer_payload)
         if self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload):
             return event
         self._dispatch_timer_to_vnpy_algos(runtime.runtime_id)
@@ -577,6 +581,13 @@ class MiniQMTExecutionRuntime:
             child = self.oms.record_child_order(
                 child.model_copy(update={"status": child_status, "metadata": child_metadata})
             )
+            if child.side == OrderSide.SELL and child.status in _TERMINAL_CHILD_ORDER_STATUSES:
+                self._block_matching_dependent_buys_for_terminal_sell(
+                    runtime.runtime_id,
+                    sell_child=child,
+                    reason_code="MINIQMT_DEPENDENT_BUY_DEPENDENT_SELL_TERMINAL_WITHOUT_PROCEEDS",
+                    trigger_event="order_event",
+                )
             risk_triggered = self._evaluate_risk_after_event(
                 runtime.runtime_id,
                 event_type=event.event_type,
@@ -647,8 +658,23 @@ class MiniQMTExecutionRuntime:
                     },
                 }
             )
-            self.oms.record_trade_fill(updated_child, quantity=quantity, price=price, payload=payload)
+            trade_record, _trade_inserted = self.oms.record_trade_fill(
+                updated_child,
+                quantity=quantity,
+                price=price,
+                payload=payload,
+            )
+            if updated_child.side == OrderSide.SELL and trade_record is not None:
+                self.oms.settle_sell_trade_cash_once(trade_record)
             child = self.oms.record_child_order(updated_child)
+            if child.side == OrderSide.SELL:
+                self._try_release_deferred_buys_after_sell_trade(
+                    runtime.runtime_id,
+                    sell_child=child,
+                    trade_record=trade_record,
+                    quantity=quantity,
+                    price=price,
+                )
             risk_triggered = self._evaluate_risk_after_event(
                 runtime.runtime_id,
                 event_type=event.event_type,
@@ -1664,16 +1690,9 @@ class MiniQMTExecutionRuntime:
         cancelled_child_ids: set[str] = set()
         for action in actions:
             if action.action_type == VnpyActionType.SUBMIT:
-                child_metadata = {
-                    **dict(instance.metadata.get("runtime_child_context") or {}),
-                    "source": "runtime_owned_vnpy_algo",
-                    "vnpy_action_id": action.action_id,
-                    "vnpy_vt_orderid": action.vt_orderid,
-                    "vnpy_action_type": action.action_type.value,
-                    "vnpy_reason": action.reason,
-                    "source_attribution": instance.metadata.get("source_attribution"),
-                    "execution_algo_code": instance.algo_code,
-                }
+                if self._defer_dependent_buy_action_if_needed(instance, action):
+                    continue
+                child_metadata = self._child_metadata_for_vnpy_action(instance, action)
                 child = self.submit_child_order(
                     algo_instance_id=instance.algo_instance_id,
                     quantity=int(action.volume or 0),
@@ -1748,6 +1767,476 @@ class MiniQMTExecutionRuntime:
                     },
                 )
 
+    def _child_metadata_for_vnpy_action(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        action: VnpyAction,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self._child_metadata_for_vnpy_action_payload(
+            instance,
+            _vnpy_action_payload(action),
+            extra=extra,
+        )
+
+    def _child_metadata_for_vnpy_action_payload(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        action_payload: dict[str, Any],
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            **dict(instance.metadata.get("runtime_child_context") or {}),
+            "source": "runtime_owned_vnpy_algo",
+            "vnpy_action_id": action_payload.get("action_id"),
+            "vnpy_vt_orderid": action_payload.get("vt_orderid"),
+            "vnpy_action_type": action_payload.get("action_type"),
+            "vnpy_reason": action_payload.get("reason"),
+            "source_attribution": instance.metadata.get("source_attribution"),
+            "execution_algo_code": instance.algo_code,
+            **dict(extra or {}),
+        }
+
+    def _defer_dependent_buy_action_if_needed(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        action: VnpyAction,
+    ) -> bool:
+        latest = self._find_algo_instance(instance.runtime_id, instance.algo_instance_id) or instance
+        if latest.side != OrderSide.BUY:
+            return False
+        current_status = _optional_text(latest.metadata.get("dependent_buy_status"))
+        if current_status == _DEPENDENT_BUY_STATUS_RELEASED:
+            return False
+        if current_status in {
+            _DEPENDENT_BUY_STATUS_DEFERRED,
+            _DEPENDENT_BUY_STATUS_BLOCKED,
+            _DEPENDENT_BUY_STATUS_EOD_RESIDUAL,
+        }:
+            return True
+        try:
+            contract = _dependent_buy_contract(latest)
+        except RuntimeError as exc:
+            self._mark_dependent_buy_state(
+                latest,
+                status=_DEPENDENT_BUY_STATUS_BLOCKED,
+                reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_CONTRACT_INVALID"),
+                context={"error": f"{type(exc).__name__}: {exc}"},
+                terminal=True,
+            )
+            return True
+        if contract is None:
+            contract = self._infer_dependent_buy_contract(latest, action)
+        if contract is None:
+            return False
+        action_payload = _vnpy_action_payload(action)
+        self._mark_dependent_buy_state(
+            latest,
+            status=_DEPENDENT_BUY_STATUS_DEFERRED,
+            reason_code="MINIQMT_DEPENDENT_BUY_DEFERRED_WAITING_SELL_PROCEEDS",
+            context={
+                **contract,
+                "action": action_payload,
+                "broker_called": False,
+                "broker_mutated": False,
+            },
+            metadata_updates={
+                "dependent_buy": True,
+                "dependent_buy_action": action_payload,
+                "dependent_buy_required_cash": str(contract["required_cash"]),
+                "dependent_buy_strategy_id": contract["strategy_id"],
+                "dependent_sell_child_order_ids": list(contract["dependent_sell_child_order_ids"]),
+                "dependent_sell_parent_intent_ids": list(contract["dependent_sell_parent_intent_ids"]),
+                "dependent_sell_symbols": list(contract["dependent_sell_symbols"]),
+                "dependent_sell_order_remarks": list(contract["dependent_sell_order_remarks"]),
+                "dependent_buy_inferred": bool(contract.get("inferred")),
+            },
+        )
+        return True
+
+    def _infer_dependent_buy_contract(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        action: VnpyAction,
+    ) -> dict[str, Any] | None:
+        """Infer same-runtime SELL-proceeds dependency for A plans without B metadata."""
+
+        if instance.side != OrderSide.BUY:
+            return None
+        strategy_id = _optional_text(
+            instance.metadata.get("dependent_buy_strategy_id")
+            or dict(instance.metadata.get("runtime_child_context") or {}).get("strategy_id")
+            or instance.strategy_slot_id
+        )
+        if not strategy_id:
+            return None
+        required_cash = _optional_decimal(action.price) * Decimal(int(action.volume or 0)) if action.price else None
+        if required_cash is None or required_cash <= Decimal("0"):
+            return None
+        try:
+            available_cash = self.oms.authoritative_available_cash(strategy_id)
+        except RuntimeError:
+            return None
+        if available_cash >= required_cash:
+            return None
+        sell_children = [
+            child
+            for child in self.repository.list_child_orders(instance.runtime_id, active_only=True)
+            if child.side == OrderSide.SELL
+            and (
+                _optional_text(child.metadata.get("strategy_id")) == strategy_id
+                or child.strategy_slot_id == instance.strategy_slot_id
+            )
+        ]
+        if not sell_children:
+            return None
+        return {
+            "required_cash": required_cash,
+            "strategy_id": strategy_id,
+            "dependent_sell_child_order_ids": [child.child_order_id for child in sell_children],
+            "dependent_sell_parent_intent_ids": _unique(child.parent_intent_id for child in sell_children),
+            "dependent_sell_symbols": _unique(child.symbol for child in sell_children),
+            "dependent_sell_order_remarks": _unique(child.metadata.get("order_remark") for child in sell_children),
+            "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+            "inferred": True,
+            "available_cash_at_defer": available_cash,
+        }
+
+    def _try_release_deferred_buys_after_sell_trade(
+        self,
+        runtime_id: str,
+        *,
+        sell_child: MiniQMTChildOrder,
+        trade_record: Any | None,
+        quantity: int,
+        price: float,
+    ) -> None:
+        reserved_by_strategy: dict[str, Decimal] = {}
+        for instance in self._deferred_dependent_buy_instances(runtime_id):
+            try:
+                contract = _dependent_buy_contract(instance)
+            except RuntimeError as exc:
+                self._mark_dependent_buy_state(
+                    instance,
+                    status=_DEPENDENT_BUY_STATUS_BLOCKED,
+                    reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_CONTRACT_INVALID"),
+                    context={"error": f"{type(exc).__name__}: {exc}", "sell_child": _child_dependency_payload(sell_child)},
+                    terminal=True,
+                )
+                continue
+            if contract is None or not _dependent_buy_contract_matches_sell(contract, sell_child):
+                continue
+            strategy_id = str(contract["strategy_id"])
+            required_cash = _required_decimal(contract["required_cash"], field_name="dependent_buy_required_cash")
+            try:
+                available_cash = self.oms.authoritative_available_cash(strategy_id)
+            except RuntimeError as exc:
+                self._mark_dependent_buy_state(
+                    instance,
+                    status=_DEPENDENT_BUY_STATUS_DEFERRED,
+                    reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING"),
+                    context={
+                        "sell_child": _child_dependency_payload(sell_child),
+                        "trade_id": getattr(trade_record, "trade_id", None),
+                        "trigger_trade_quantity": int(quantity),
+                        "trigger_trade_price": float(price),
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "broker_called": False,
+                        "broker_mutated": False,
+                    },
+                )
+                continue
+            already_released_cash = self._released_dependent_buy_cash(runtime_id, strategy_id)
+            reserved_cash = already_released_cash + reserved_by_strategy.get(strategy_id, Decimal("0"))
+            effective_cash = available_cash - reserved_cash
+            if effective_cash < required_cash:
+                self._mark_dependent_buy_state(
+                    instance,
+                    status=_DEPENDENT_BUY_STATUS_DEFERRED,
+                    reason_code="MINIQMT_DEPENDENT_BUY_CASH_STILL_INSUFFICIENT",
+                    context={
+                        "sell_child": _child_dependency_payload(sell_child),
+                        "trade_id": getattr(trade_record, "trade_id", None),
+                        "trigger_trade_quantity": int(quantity),
+                        "trigger_trade_price": float(price),
+                        "strategy_id": strategy_id,
+                        "available_cash": str(available_cash),
+                        "already_released_cash": str(already_released_cash),
+                        "reserved_cash": str(reserved_cash),
+                        "effective_cash": str(effective_cash),
+                        "required_cash": str(required_cash),
+                        "cash_shortfall": str(required_cash - effective_cash),
+                        "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                        "broker_called": False,
+                        "broker_mutated": False,
+                    },
+                )
+                continue
+            child = self._submit_deferred_dependent_buy(
+                instance,
+                contract=contract,
+                available_cash=available_cash,
+                reserved_cash=reserved_cash,
+                trigger_context={
+                    "sell_child": _child_dependency_payload(sell_child),
+                    "trade_id": getattr(trade_record, "trade_id", None),
+                    "trigger_trade_quantity": int(quantity),
+                    "trigger_trade_price": float(price),
+                },
+            )
+            reserved_by_strategy[strategy_id] = reserved_by_strategy.get(strategy_id, Decimal("0")) + required_cash
+            self.events.append(
+                runtime_id=runtime_id,
+                event_type=MiniQMTExecutionEventType.ALGO_ACTION_EMITTED,
+                source="oms",
+                payload={
+                    "algo_instance_id": instance.algo_instance_id,
+                    "action_type": "DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
+                    "reason_code": "MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "broker_called": True,
+                    "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                },
+            )
+
+    def _submit_deferred_dependent_buy(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        *,
+        contract: dict[str, Any],
+        available_cash: Decimal,
+        reserved_cash: Decimal,
+        trigger_context: dict[str, Any],
+    ) -> MiniQMTChildOrder:
+        latest = self._find_algo_instance(instance.runtime_id, instance.algo_instance_id) or instance
+        action_payload = dict(latest.metadata.get("dependent_buy_action") or {})
+        if not action_payload:
+            raise RuntimeError(
+                "MiniQMT event-loop dependent BUY has no persisted vn.py action to release; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_ACTION_MISSING, algo_instance_id={latest.algo_instance_id}"
+            )
+        quantity = _required_positive_dependent_int(
+            action_payload.get("volume"),
+            field_name="dependent_buy_action.volume",
+        )
+        price = _required_positive_dependent_float(
+            action_payload.get("price"),
+            field_name="dependent_buy_action.price",
+        )
+        child = self.submit_child_order(
+            algo_instance_id=latest.algo_instance_id,
+            quantity=quantity,
+            price=price,
+            metadata=self._child_metadata_for_vnpy_action_payload(
+                latest,
+                action_payload,
+                extra={
+                    "dependent_buy_released": True,
+                    "dependent_buy_reason_code": "MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
+                    "dependent_buy_required_cash": str(contract["required_cash"]),
+                    "dependent_buy_available_cash": str(available_cash),
+                    "dependent_buy_reserved_cash": str(reserved_cash),
+                    "dependent_buy_cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                    "dependent_buy_trigger": dict(trigger_context),
+                },
+            ),
+        )
+        updated = self._mark_dependent_buy_state(
+            latest,
+            status=_DEPENDENT_BUY_STATUS_RELEASED,
+            reason_code="MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
+            context={
+                **trigger_context,
+                "released_child_order_id": child.child_order_id,
+                "broker_order_id": child.broker_order_id,
+                "available_cash": str(available_cash),
+                "reserved_cash": str(reserved_cash),
+                "required_cash": str(contract["required_cash"]),
+                "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                "broker_called": True,
+            },
+            metadata_updates={"dependent_buy_released_child_order_id": child.child_order_id},
+        )
+        core = self._ensure_vnpy_core(updated)
+        follow_up_actions = core.update_order(
+            VnpyOrderUpdate(
+                vt_orderid=str(action_payload.get("vt_orderid") or child.child_order_id),
+                active=child.status == MiniQMTChildOrderStatus.SUBMITTED,
+                traded=0,
+                price=child.price,
+                raw_status=child.status.value,
+                status_msg=str(child.metadata.get("gateway_message") or ""),
+                raw={
+                    "child_order_id": child.child_order_id,
+                    "broker_order_id": child.broker_order_id,
+                    "dependent_buy_release": True,
+                },
+            )
+        )
+        updated = self._persist_vnpy_core_state(updated, core)
+        self._handle_vnpy_actions(updated, follow_up_actions)
+        return child
+
+    def _block_matching_dependent_buys_for_terminal_sell(
+        self,
+        runtime_id: str,
+        *,
+        sell_child: MiniQMTChildOrder,
+        reason_code: str,
+        trigger_event: str,
+    ) -> None:
+        if sell_child.status == MiniQMTChildOrderStatus.FILLED:
+            return
+        for instance in self._deferred_dependent_buy_instances(runtime_id):
+            try:
+                contract = _dependent_buy_contract(instance)
+            except RuntimeError as exc:
+                self._mark_dependent_buy_state(
+                    instance,
+                    status=_DEPENDENT_BUY_STATUS_BLOCKED,
+                    reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_CONTRACT_INVALID"),
+                    context={"error": f"{type(exc).__name__}: {exc}", "sell_child": _child_dependency_payload(sell_child)},
+                    terminal=True,
+                )
+                continue
+            if contract is None or not _dependent_buy_contract_matches_sell(contract, sell_child):
+                continue
+            self._mark_dependent_buy_state(
+                instance,
+                status=_DEPENDENT_BUY_STATUS_BLOCKED,
+                reason_code=reason_code,
+                context={
+                    "trigger_event": trigger_event,
+                    "sell_child": _child_dependency_payload(sell_child),
+                    "broker_called": False,
+                    "broker_mutated": False,
+                },
+                terminal=True,
+            )
+
+    def _mark_dependent_buy_eod_residuals(self, runtime_id: str, *, payload: dict[str, Any]) -> None:
+        for instance in self._deferred_dependent_buy_instances(runtime_id):
+            try:
+                contract = _dependent_buy_contract(instance)
+            except RuntimeError as exc:
+                context: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"}
+            else:
+                context = dict(contract or {})
+                strategy_id = _optional_text(context.get("strategy_id"))
+                required_cash = _optional_decimal(context.get("required_cash"))
+                if strategy_id and required_cash is not None:
+                    try:
+                        available_cash = self.oms.authoritative_available_cash(strategy_id)
+                    except RuntimeError as exc:
+                        context.update(
+                            {
+                                "available_cash_error": f"{type(exc).__name__}: {exc}",
+                                "available_cash_reason_code": _reason_code_from_exception(
+                                    exc,
+                                    "MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING",
+                                ),
+                            }
+                        )
+                    else:
+                        context.update(
+                            {
+                                "available_cash": str(available_cash),
+                                "required_cash": str(required_cash),
+                                "cash_shortfall": str(max(required_cash - available_cash, Decimal("0"))),
+                                "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                            }
+                        )
+            self._mark_dependent_buy_state(
+                instance,
+                status=_DEPENDENT_BUY_STATUS_EOD_RESIDUAL,
+                reason_code="MINIQMT_DEPENDENT_BUY_EOD_RESIDUAL",
+                context={
+                    **context,
+                    "timer_payload": dict(payload),
+                    "broker_called": False,
+                    "broker_mutated": False,
+                },
+                terminal=True,
+            )
+
+    def _deferred_dependent_buy_instances(self, runtime_id: str) -> list[MiniQMTExecutionAlgoInstance]:
+        return [
+            instance
+            for instance in self.repository.list_algo_instances(runtime_id, active_only=True)
+            if instance.side == OrderSide.BUY
+            and _optional_text(instance.metadata.get("dependent_buy_status")) == _DEPENDENT_BUY_STATUS_DEFERRED
+        ]
+
+    def _released_dependent_buy_cash(self, runtime_id: str, strategy_id: str) -> Decimal:
+        reserved = Decimal("0")
+        for instance in self.repository.list_algo_instances(runtime_id, active_only=False):
+            if instance.side != OrderSide.BUY:
+                continue
+            if _optional_text(instance.metadata.get("dependent_buy_status")) != _DEPENDENT_BUY_STATUS_RELEASED:
+                continue
+            contract_strategy_id = _optional_text(
+                instance.metadata.get("dependent_buy_strategy_id")
+                or dict(instance.metadata.get("runtime_child_context") or {}).get("strategy_id")
+                or instance.strategy_slot_id
+            )
+            if contract_strategy_id != strategy_id:
+                continue
+            amount = _optional_decimal(instance.metadata.get("dependent_buy_required_cash"))
+            if amount is not None and amount > Decimal("0"):
+                reserved += amount
+        return reserved
+
+    def _mark_dependent_buy_state(
+        self,
+        instance: MiniQMTExecutionAlgoInstance,
+        *,
+        status: str,
+        reason_code: str,
+        context: dict[str, Any],
+        metadata_updates: dict[str, Any] | None = None,
+        terminal: bool = False,
+    ) -> MiniQMTExecutionAlgoInstance:
+        latest = self._find_algo_instance(instance.runtime_id, instance.algo_instance_id) or instance
+        metadata = dict(latest.metadata)
+        history = list(metadata.get("dependent_buy_history") or [])
+        entry = {
+            "status": status,
+            "reason_code": reason_code,
+            "context": _jsonable(context),
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        history.append(entry)
+        metadata.update(
+            {
+                "dependent_buy": True,
+                "dependent_buy_status": status,
+                "dependent_buy_reason_code": reason_code,
+                "dependent_buy_last_context": entry["context"],
+                "dependent_buy_history": history[-50:],
+                **dict(metadata_updates or {}),
+            }
+        )
+        update: dict[str, Any] = {"metadata": metadata}
+        if terminal:
+            update["status"] = MiniQMTAlgoInstanceStatus.FAILED
+        stored = self.oms.record_algo_instance(latest.model_copy(update=update))
+        self.events.append(
+            runtime_id=stored.runtime_id,
+            event_type=MiniQMTExecutionEventType.ALGO_ACTION_EMITTED,
+            source="oms",
+            payload={
+                "algo_instance_id": stored.algo_instance_id,
+                "action_type": "DEPENDENT_BUY_COORDINATOR_STATE",
+                "dependent_buy_status": status,
+                "reason_code": reason_code,
+                "context": entry["context"],
+            },
+        )
+        return stored
+
     def _vnpy_tick_from_payload(self, payload: dict[str, Any]) -> VnpyTick:
         required_quote_fields = ("bid_price_1", "bid_volume_1", "ask_price_1", "ask_volume_1")
         missing_fields = [
@@ -1809,6 +2298,259 @@ def _algo_terminal_status_from_child_orders(children: list[MiniQMTChildOrder]) -
     if MiniQMTChildOrderStatus.REJECTED in statuses:
         return MiniQMTAlgoInstanceStatus.FAILED
     return MiniQMTAlgoInstanceStatus.CANCELLED
+
+
+_DEPENDENT_BUY_STATUS_DEFERRED = "DEFERRED_WAITING_SELL_PROCEEDS"
+_DEPENDENT_BUY_STATUS_RELEASED = "RELEASED_SUBMITTED"
+_DEPENDENT_BUY_STATUS_BLOCKED = "BLOCKED_SELL_PROCEEDS_UNAVAILABLE"
+_DEPENDENT_BUY_STATUS_EOD_RESIDUAL = "EOD_RESIDUAL"
+
+
+def _dependent_buy_contract(instance: MiniQMTExecutionAlgoInstance) -> dict[str, Any] | None:
+    metadata = dict(instance.metadata or {})
+    child_context = dict(metadata.get("runtime_child_context") or {})
+    parent_metadata = dict(child_context.get("parent_intent_metadata") or {})
+    contract = _first_mapping(
+        metadata.get("dependent_buy_contract"),
+        child_context.get("dependent_buy_contract"),
+        parent_metadata.get("dependent_buy_contract"),
+    )
+    enabled = _truthy(
+        metadata.get("dependent_buy")
+        or child_context.get("dependent_buy")
+        or parent_metadata.get("dependent_buy")
+        or (contract is not None)
+    )
+    if not enabled:
+        return None
+
+    required_cash = _optional_decimal(
+        (contract or {}).get("required_cash")
+        or metadata.get("dependent_buy_required_cash")
+        or child_context.get("required_cash")
+        or child_context.get("freeze_amount")
+        or parent_metadata.get("required_cash")
+        or parent_metadata.get("freeze_amount")
+    )
+    if required_cash is None or required_cash <= Decimal("0"):
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy contract requires positive required_cash; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_REQUIRED_CASH_MISSING, algo_instance_id={instance.algo_instance_id}"
+        )
+
+    strategy_id = _optional_text(
+        (contract or {}).get("strategy_id")
+        or metadata.get("dependent_buy_strategy_id")
+        or child_context.get("strategy_id")
+        or parent_metadata.get("strategy_id")
+        or instance.strategy_slot_id
+    )
+    if not strategy_id:
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy contract requires strategy_id for qmt_strategy ledger cash; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_STRATEGY_ID_MISSING, algo_instance_id={instance.algo_instance_id}"
+        )
+
+    dependent_sell_child_order_ids = _string_list(
+        (contract or {}).get("dependent_sell_child_order_ids")
+        or metadata.get("dependent_sell_child_order_ids")
+        or child_context.get("dependent_sell_child_order_ids")
+        or parent_metadata.get("dependent_sell_child_order_ids")
+    )
+    dependent_sell_parent_intent_ids = _string_list(
+        (contract or {}).get("dependent_sell_parent_intent_ids")
+        or metadata.get("dependent_sell_parent_intent_ids")
+        or child_context.get("dependent_sell_parent_intent_ids")
+        or parent_metadata.get("dependent_sell_parent_intent_ids")
+    )
+    dependent_sell_symbols = _string_list(
+        (contract or {}).get("dependent_sell_symbols")
+        or metadata.get("dependent_sell_symbols")
+        or child_context.get("dependent_sell_symbols")
+        or parent_metadata.get("dependent_sell_symbols")
+    )
+    dependent_sell_order_remarks = _string_list(
+        (contract or {}).get("dependent_sell_order_remarks")
+        or metadata.get("dependent_sell_order_remarks")
+        or child_context.get("dependent_sell_order_remarks")
+        or parent_metadata.get("dependent_sell_order_remarks")
+    )
+    if not any(
+        [
+            dependent_sell_child_order_ids,
+            dependent_sell_parent_intent_ids,
+            dependent_sell_symbols,
+            dependent_sell_order_remarks,
+        ]
+    ):
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy contract requires at least one SELL dependency key; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_DEPENDENCY_MISSING, algo_instance_id={instance.algo_instance_id}"
+        )
+
+    return {
+        "required_cash": required_cash,
+        "strategy_id": strategy_id,
+        "dependent_sell_child_order_ids": dependent_sell_child_order_ids,
+        "dependent_sell_parent_intent_ids": dependent_sell_parent_intent_ids,
+        "dependent_sell_symbols": dependent_sell_symbols,
+        "dependent_sell_order_remarks": dependent_sell_order_remarks,
+        "cash_source": "qmt_strategy_ledger.virtual_account.cash",
+    }
+
+
+def _dependent_buy_matches_sell(instance: MiniQMTExecutionAlgoInstance, sell_child: MiniQMTChildOrder) -> bool:
+    contract = _dependent_buy_contract(instance)
+    if contract is None:
+        return False
+    return _dependent_buy_contract_matches_sell(contract, sell_child)
+
+
+def _dependent_buy_contract_matches_sell(contract: dict[str, Any], sell_child: MiniQMTChildOrder) -> bool:
+    if sell_child.child_order_id in contract["dependent_sell_child_order_ids"]:
+        return True
+    if sell_child.parent_intent_id in contract["dependent_sell_parent_intent_ids"]:
+        return True
+    if sell_child.symbol in contract["dependent_sell_symbols"]:
+        return True
+    order_remark = _optional_text(sell_child.metadata.get("order_remark"))
+    return bool(order_remark and order_remark in contract["dependent_sell_order_remarks"])
+
+
+def _child_dependency_payload(child: MiniQMTChildOrder) -> dict[str, Any]:
+    return {
+        "child_order_id": child.child_order_id,
+        "parent_intent_id": child.parent_intent_id,
+        "strategy_slot_id": child.strategy_slot_id,
+        "symbol": child.symbol,
+        "side": child.side.value,
+        "quantity": int(child.quantity),
+        "status": child.status.value,
+        "broker_order_id": child.broker_order_id,
+        "order_remark": _optional_text(child.metadata.get("order_remark")),
+    }
+
+
+def _vnpy_action_payload(action: VnpyAction) -> dict[str, Any]:
+    return {
+        "action_id": action.action_id,
+        "action_type": action.action_type.value,
+        "vt_orderid": action.vt_orderid,
+        "direction": action.direction.value if action.direction is not None else None,
+        "price": float(action.price or 0),
+        "volume": int(action.volume or 0),
+        "order_type": action.order_type.value,
+        "reason": action.reason,
+        "metadata": dict(action.metadata),
+    }
+
+
+def _is_dependent_buy_eod_timer(timer_name: str) -> bool:
+    normalized = str(timer_name or "").strip().upper()
+    return normalized in {
+        "EOD_DEPENDENT_BUY_SWEEP",
+        "MINIQMT_DEPENDENT_BUY_EOD_SWEEP",
+        "POST_CLOSE_DEPENDENT_BUY_SWEEP",
+    }
+
+
+def _reason_code_from_exception(exc: BaseException, default: str) -> str:
+    text = str(exc)
+    marker = "reason_code="
+    if marker in text:
+        tail = text.split(marker, 1)[1]
+        token = tail.split(",", 1)[0].split(";", 1)[0].split(" ", 1)[0].strip()
+        if token:
+            return token
+    return default
+
+
+def _first_mapping(*values: Any) -> dict[str, Any] | None:
+    for value in values:
+        if isinstance(value, dict):
+            return dict(value)
+    return None
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "on", "dependent", "deferred"}
+
+
+def _string_list(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        parts = [item.strip() for item in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        parts = [str(item).strip() for item in value]
+    else:
+        parts = [str(value).strip()]
+    return _unique(item for item in parts if item)
+
+
+def _optional_decimal(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite():
+        return None
+    return parsed
+
+
+def _required_decimal(value: Any, *, field_name: str) -> Decimal:
+    parsed = _optional_decimal(value)
+    if parsed is None:
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy coordinator received invalid decimal field; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_DECIMAL_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _required_positive_dependent_float(value: Any, *, field_name: str) -> float:
+    parsed = _optional_float(value)
+    if parsed is None or parsed <= 0 or not math.isfinite(parsed):
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy coordinator received invalid action price; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_ACTION_PRICE_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _required_positive_dependent_int(value: Any, *, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy coordinator received invalid action quantity; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_ACTION_QUANTITY_INVALID, field_name={field_name}, value={value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise RuntimeError(
+            "MiniQMT event-loop dependent-buy coordinator received non-positive action quantity; "
+            f"reason_code=MINIQMT_DEPENDENT_BUY_ACTION_QUANTITY_INVALID, field_name={field_name}, value={value!r}"
+        )
+    return parsed
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(item) for item in value]
+    return value
 
 
 def _child_status_from_broker_status_strict(status: str, *, broker_order_id: str | None) -> MiniQMTChildOrderStatus:
