@@ -1,6 +1,8 @@
 {
   "actual": "Nightly L3 + DR was blocked because the self-hosted Windows runner was offline. Manual recovery showed F:/Dev/github-actions-runner/aistock/start-aistock-runner-hidden.ps1 fails on this workstation when Get-CimInstance Win32_Process raises a critical error, and its Start-Process ArgumentList construction can become invalid. Expected: the runner start helper should use a robust process detection fallback compatible with Windows PowerShell 5.1, start run-aistock-runner-hidden.cmd without requiring CIM, and keep the runner online for scheduled nightly jobs. Acceptance: helper starts the runner from an offline/no-listener state, runner API reports online with self-hosted/windows labels, existing nightly workflow can be dispatched without runner-preflight failure, and production_ddl_gate is noop.",
   "allowed_write_scope": [
+    "scripts/start_aistock_github_runner.ps1",
+    "backend/tests/scripts/test_start_aistock_github_runner.py",
     "tests/aistock_validation/bugs/20260626_BUG-530-github-runner-hidden-start-script-fails-when-cim-is-unavailable.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -22,8 +24,10 @@
       "timestamp": "2026-06-26T10:03:09.303259Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "GitHub run 28231386363 runner-preflight succeeded after manual runner recovery; original outage issue #1646 was caused by offline self-hosted Windows runner."
+  ],
+  "expected": "A versioned runner start helper must start or report the self-hosted GitHub runner without relying on CIM/WMI, fail loudly when the runner wrapper is missing, and keep production gates noop.",
   "first_seen_at": "2026-06-26T10:03:09.303262Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -31,16 +35,17 @@
   "github_issue_number": 1654,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1654",
   "last_seen_at": "2026-06-26T10:03:09.303262Z",
-  "module": "validation",
+  "module": "validation.runner",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_aistock_github_runner.ps1 -InstallRoot <runner-root> -DryRun -Json",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "validation_center_backend"
   ],
   "risk_area": "bug",
@@ -48,7 +53,7 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "validation"
+    "validation.runner"
   ],
   "title": "GitHub runner hidden start script fails when CIM is unavailable",
   "trigger_condition": {
@@ -74,12 +79,10 @@
     "schema_version": "aistock_ui_issue_intake_hints_v1",
     "scope_source": "inferred_from_module_route_and_changed_files",
     "ui_component_scope": [],
-    "ui_issue": true,
-    "ui_route": "/Dev/github-actions-runner/aistock/start-aistock-runner-hidden.ps1",
-    "ui_routes": [
-      "/Dev/github-actions-runner/aistock/start-aistock-runner-hidden.ps1"
-    ],
-    "visual_acceptance_required": true
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
