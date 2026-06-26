@@ -12,6 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-533",
+  "candidate_type": "bug",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -32,8 +33,8 @@
   "expected": "生产SIM影子接线能产出全6场景集的durable SHADOW_RECONCILIATION_REPORTED(各场景同源真实intent+对应event序列), covered_scenarios覆盖required→D3硬门场景维度可达标(配合无FATAL+N>=1交易日)",
   "first_seen_at": "2026-06-26T16:35:58.988531Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e4cd76ee648581c3de9ff7a9d42e3961473ec950",
+  "fixed_at": "2026-06-26T18:23:10.264215Z",
   "github_issue_number": 1665,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1665",
   "last_seen_at": "2026-06-26T16:35:58.988531Z",
@@ -46,6 +47,7 @@
     "不退化简化壳/合成 timer/假回款/JSON 当权威; shadow 必须 dry_run 不触 broker",
     "synthetic 场景 event 序列必须从同源真实 intent 派生, 不得纯造假绕过对账"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1666",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,12 +60,21 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
   "title": "MiniQMT shadow 生产接线硬编码scenario=DELAY致只产单一场景 D3 canary硬门6场景集永不满足",
   "trigger_condition": "生产SIM影子接线产 SHADOW_RECONCILIATION_REPORTED 时只产单一 delay 场景; canary switch_to_event_loop require_shadow_evidence=True 校验场景覆盖时。",
+  "ui_issue": false,
+  "validation_evidence": [
+    "targeted pytest shadow+scheduler -> 107 passed",
+    "ruff changed files -> passed",
+    "git diff --check -> passed",
+    "nox l0 -> passed",
+    "nox validation_module_registry_l0 -> passed",
+    "nox paper_v2_l3 with AISTOCK_HOSTED_CI and PAPER_V2_L3_SKIP_UI -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -75,7 +86,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "ui_issue": false,
-  "candidate_type": "bug"
+  }
 }
