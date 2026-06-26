@@ -727,6 +727,13 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/llm-value-summary.md") {
             Get-Content -LiteralPath "$outDir/llm-value-summary.md"
           }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py llm-usage-summary `
+            --artifact-dir $outDir `
+            --output "$outDir/llm-usage-summary.json" `
+            --output-md "$outDir/llm-usage-summary.md"
+          if (Test-Path -LiteralPath "$outDir/llm-usage-summary.md") {
+            Get-Content -LiteralPath "$outDir/llm-usage-summary.md"
+          }
 
       - name: Upload code intelligence artifacts
         if: always()
@@ -809,6 +816,10 @@ jobs:
           - reason: \`code intelligence artifact not downloaded\`
 
           EOF
+          fi
+          LLM_USAGE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-usage-summary.md"
+          if [ -f "${LLM_USAGE_MD}" ]; then
+            cat "${LLM_USAGE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           fi
           ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
           DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
