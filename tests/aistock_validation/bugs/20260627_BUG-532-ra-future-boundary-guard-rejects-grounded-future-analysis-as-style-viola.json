@@ -2,7 +2,11 @@
   "actual": "Research Assistant react grounding future-boundary guard rejects a grounded, source-backed future/trend answer because it lacks hardcoded structure terms/disclaimer, replacing it with a generic English insufficient-evidence directive. B9 T7 requires future-boundary guard to act only as an anti-hallucination directional-prediction guard, not as a style/template police.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260627_BUG-532-ra-future-boundary-guard-rejects-grounded-future-analysis-as-style-viola.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/react_grounding.py",
+    "prompt_packs/research_assistant/main/nodes/mode.analysis.md",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-532",
@@ -20,6 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260627-518247ca2681",
       "timestamp": "2026-06-26T16:07:57.342190Z"
+    },
+    {
+      "action": "scope_expanded_for_b9_t7_future_boundary_fix",
+      "actor": "codex",
+      "note": "B9 T7 fix is limited to react grounding future-boundary mechanism, analysis-mode prompt guidance, and corresponding react_grounding tests; service.py remains out of scope.",
+      "timestamp": "2026-06-26T16:09:20Z"
+    },
+    {
+      "timestamp": "2026-06-26T16:30:02Z",
+      "actor": "codex",
+      "action": "scope_expanded_for_prompt_checksum_pin",
+      "note": "mode.analysis.md prompt guidance changes the declarative prompt checksum; update only the existing characterization pin so research_assistant_backend remains truthful."
     }
   ],
   "evidence_uris": [],

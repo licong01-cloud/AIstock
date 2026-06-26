@@ -1286,21 +1286,55 @@ def _is_future_question(config: ReactGroundingConfig) -> bool:
     return _contains_any(config.user_message, config.future_answer_terms)
 
 
+def _directional_marker_is_negated(lowered_text: str, marker_start: int) -> bool:
+    prefix = lowered_text[max(0, marker_start - 24) : marker_start]
+    compact_prefix = re.sub(r"[\s，,。；;：:、（）()\[\]{}\"'“”‘’]+$", "", prefix)
+    negation_cues = (
+        "不",
+        "不会",
+        "不能",
+        "无法",
+        "无从",
+        "难以",
+        "并非",
+        "不是",
+        "未",
+        "没有",
+        "not",
+        "no",
+        "never",
+        "cannot",
+        "can't",
+        "won't",
+        "without",
+        "do not",
+        "does not",
+        "did not",
+    )
+    return any(compact_prefix.endswith(cue) for cue in negation_cues)
+
+
+def _has_unnegated_future_directional_marker(text: str, config: ReactGroundingConfig) -> bool:
+    lowered = text.lower()
+    for marker in config.future_directional_markers:
+        marker_lower = marker.lower()
+        if not marker_lower:
+            continue
+        start = 0
+        while True:
+            index = lowered.find(marker_lower, start)
+            if index < 0:
+                break
+            if not _directional_marker_is_negated(lowered, index):
+                return True
+            start = index + len(marker_lower)
+    return False
+
+
 def _passes_future_answer_discipline(text: str, config: ReactGroundingConfig) -> bool:
     if not _is_future_question(config):
         return True
-    lowered = text.lower()
-    answer_mentions_future = _contains_any(
-        text,
-        ("未来", "预测", "预判", "会涨", "会跌", "上涨", "下跌", "forecast", "predict", "outlook", *config.future_directional_markers),
-    )
-    if not answer_mentions_future:
-        return True
-    if any(marker.lower() in lowered for marker in config.future_directional_markers):
-        return False
-    matched = sum(1 for term in config.future_required_terms if term.lower() in lowered)
-    no_prediction_boundary = any(term in lowered for term in ("不预测", "不做方向预测", "不构成投资建议", "not predict", "not investment advice"))
-    return matched >= 3 and no_prediction_boundary
+    return not _has_unnegated_future_directional_marker(text, config)
 
 
 def _requires_synthesis_answer(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
@@ -1496,7 +1530,7 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
         return decision
     if config.evidence_required and collected_results and not _passes_future_answer_discipline(text, config):
-        decision = EvidenceGuardDecision(False, "Insufficient evidence: future-looking answers require drivers, scenarios, risks, and no directional prediction.", "future_answer_boundary_missing", source_count, as_of_count)
+        decision = EvidenceGuardDecision(False, "Insufficient evidence: future-looking answers must not make directional price predictions.", "future_answer_boundary_missing", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:

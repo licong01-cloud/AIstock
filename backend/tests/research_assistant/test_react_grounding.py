@@ -26,15 +26,42 @@ def _result(tool_name: str, *, source: str, as_of: str) -> McpToolResult:
     )
 
 
-def test_future_answer_blocks_directional_prediction_without_driver_scenario_risk_boundary() -> None:
+def test_future_answer_allows_grounded_non_directional_answer_without_style_template() -> None:
     decision = compose_with_evidence_guard(
-        "明天一定会上涨；来源 stock_ref，截至 2026-06-17。",
+        "国城矿业未来更应观察成交和资金面是否延续，当前只读证据显示波动加大；来源 stock_ref，截至 2026-06-17。",
         [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
-        ReactGroundingConfig(max_tool_iterations=4, user_message="这只股票未来趋势如何？"),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业未来趋势怎样？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason != "future_answer_boundary_missing"
+    assert decision.reason == "ok"
+
+
+def test_future_answer_still_blocks_directional_prediction() -> None:
+    decision = compose_with_evidence_guard(
+        "国城矿业未来一个月将上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业未来趋势如何？"),
     )
 
     assert decision.allowed is False
     assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_future_answer_allows_negated_directional_marker_context() -> None:
+    decision = compose_with_evidence_guard(
+        "基于现有证据无法判断方向、不会上涨，也不会给出涨跌预测；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="国城矿业未来趋势如何？",
+            future_directional_markers=("上涨", "下跌"),
+        ),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
 
 
 def test_future_answer_allows_driver_scenario_risk_without_directional_prediction() -> None:
