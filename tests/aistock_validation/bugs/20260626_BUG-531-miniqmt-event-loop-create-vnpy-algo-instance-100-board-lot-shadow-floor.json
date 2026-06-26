@@ -11,6 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-531",
+  "candidate_type": "bug",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -31,8 +32,8 @@
   "expected": "A路径科创板买单数量=目标量(科创板>=200后1股增量,1215不floor)与B(client.py:342-347已正确调board_lot_rule得(200,1))一致->shadow对账无FATAL",
   "first_seen_at": "2026-06-26T10:27:10.507785Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d0462d748fe11ad2586440a81703cdca8a0a5a3b",
+  "fixed_at": "2026-06-26T16:21:44.285852Z",
   "github_issue_number": 1656,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1656",
   "last_seen_at": "2026-06-26T10:27:10.507785Z",
@@ -44,6 +45,7 @@
     "不退化成简化壳 / 合成 timer / 假回款 / JSON 当权威 OMS",
     "不引 TDX; 不触 broker(shadow 必须 dry_run_no_broker_mutation)"
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1658",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,12 +58,19 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
   "title": "MiniQMT event_loop create_vnpy_algo_instance 默认主板100手未按科创板派生board-lot致shadow科创板买单系统性floor",
   "trigger_condition": "shadow event_loop 对科创板(688/689)买单产 child order 时; 或 D4 切 event_loop 后真实 A 提交科创板买单时。",
+  "ui_issue": false,
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_runtime.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py -q -> 42 passed after rebase",
+    "rtk python -m ruff check backend/services/miniqmt_execution_runtime/runtime.py backend/services/miniqmt_execution_runtime/shadow.py backend/tests/miniqmt_execution_runtime/test_runtime.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py -> passed after rebase",
+    "rtk git diff --check origin/main...HEAD -> passed after rebase",
+    "rtk gh pr checks 1658 -> 17 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -73,7 +82,5 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  },
-  "ui_issue": false,
-  "candidate_type": "bug"
+  }
 }
