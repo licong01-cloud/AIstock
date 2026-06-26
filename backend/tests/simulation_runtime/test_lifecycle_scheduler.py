@@ -75,6 +75,7 @@ from backend.services.miniqmt_execution_runtime import (
     JsonFileMiniQMTExecutionRuntimeRepository,
     MiniQMTExecutionEventType,
 )
+from backend.services.miniqmt_execution_runtime.gray import _shadow_evidence_for_scope
 
 
 TRADE_DATE = date(2026, 5, 21)
@@ -623,15 +624,16 @@ def test_scheduler_miniqmt_shadow_persists_durable_evidence_without_touching_bro
     monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(shadow_store))
 
     observed: dict[str, Any] = {}
-    original = simulation_bridges.MiniQMTExecutionBridge.run_shadow_reconciliation
+    original = simulation_bridges.MiniQMTExecutionBridge.run_shadow_reconciliations
 
     def _wrapped(self, **kwargs: Any):
         observed["called"] = True
         observed["binding_id"] = kwargs["binding"].binding_id
         observed["plan_id"] = kwargs["plan"].plan_id
+        observed["scenarios"] = [scenario.value for scenario in kwargs["scenarios"]]
         return original(self, **kwargs)
 
-    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliation", _wrapped)
+    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliations", _wrapped)
 
     submitted = scheduler.run_once(
         trade_date=TRADE_DATE,
@@ -642,6 +644,15 @@ def test_scheduler_miniqmt_shadow_persists_durable_evidence_without_touching_bro
 
     assert observed["called"] is True
     assert observed["binding_id"] == qmt_binding.binding_id
+    expected_scenarios = {
+        "full_fill",
+        "partial_55_stream",
+        "reject",
+        "cancel",
+        "disconnect",
+        "restart_recovery",
+    }
+    assert set(observed["scenarios"]) == expected_scenarios
     latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
     assert latest_run is not None
     shadow = latest_run.run_payload_json["miniqmt_shadow_reconciliation"]
@@ -650,6 +661,8 @@ def test_scheduler_miniqmt_shadow_persists_durable_evidence_without_touching_bro
     assert shadow["broker_called"] is False
     assert shadow["broker_mutated"] is False
     assert shadow["b_submit_unaffected"] is True
+    assert shadow["report_count"] == 6
+    assert set(shadow["covered_scenarios"]) == expected_scenarios
     assert shadow["metadata"]["portfolio_id"] == "portfolio_qmt"
     assert shadow["metadata"]["binding_id"] == qmt_binding.binding_id
     assert shadow["metadata"]["run_id"] == submitted.results[0].run.run_id
@@ -663,16 +676,46 @@ def test_scheduler_miniqmt_shadow_persists_durable_evidence_without_touching_bro
     runtime_repo = JsonFileMiniQMTExecutionRuntimeRepository(shadow_store)
     runtime = runtime_repo.get_runtime(shadow["runtime_id"])
     assert runtime is not None
-    durable_event = next(
+    durable_events = [
         event
         for event in runtime_repo.list_events(shadow["runtime_id"])
         if event.event_type == MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED
-    )
-    assert durable_event.payload["metadata"]["portfolio_id"] == "portfolio_qmt"
-    assert durable_event.payload["metadata"]["binding_id"] == qmt_binding.binding_id
-    assert durable_event.payload["metadata"]["run_id"] == submitted.results[0].run.run_id
-    assert durable_event.payload["metadata"]["trade_date"] == TRADE_DATE.isoformat()
+    ]
+    assert {event.payload["scenario"] for event in durable_events} == expected_scenarios
+    assert len(durable_events) == 6
+    for event in durable_events:
+        metadata = event.payload["metadata"]
+        assert metadata["portfolio_id"] == "portfolio_qmt"
+        assert metadata["strategy_slot_id"] == qmt_binding.strategy_slot_id
+        assert metadata["binding_id"] == qmt_binding.binding_id
+        assert metadata["run_id"] == submitted.results[0].run.run_id
+        assert metadata["trade_date"] == TRADE_DATE.isoformat()
+        assert metadata["execution_plan_id"] == submitted.results[0].execution_plan.plan_id
+        assert metadata["account_group_id"] == "ag_minqmt_QMT_SIM_ACCOUNT_sim"
+        assert metadata["scenario"] == event.payload["scenario"]
+        assert event.payload["a_runtime"]["metadata"]["broker_called"] is False
+        assert event.payload["a_runtime"]["metadata"]["broker_mutated"] is False
+        assert event.payload["b_runtime"]["metadata"]["broker_called"] is False
+        assert event.payload["b_runtime"]["metadata"]["broker_mutated"] is False
     assert runtime.metadata["last_shadow_reconciliation"]["metadata"]["binding_id"] == qmt_binding.binding_id
+    evidence = _shadow_evidence_for_scope(
+        runtime_repo,
+        runtime,
+        portfolio_id="portfolio_qmt",
+        strategy_slot_id=qmt_binding.strategy_slot_id,
+        min_trading_days=1,
+        required_scenarios=frozenset(expected_scenarios),
+    )
+    assert set(evidence.covered_scenarios) == expected_scenarios
+    assert evidence.missing_scenarios == []
+    assert evidence.scenario_coverage_missing is False
+
+
+def test_miniqmt_shadow_bridge_requires_explicit_scenario_without_delay_fallback() -> None:
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        simulation_bridges.MiniQMTExecutionBridge._shadow_scenarios(None, None)
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_SHADOW_SCENARIO_REQUIRED"
 
 
 def test_scheduler_miniqmt_shadow_failure_is_loud_and_keeps_b_submit_running(
@@ -695,7 +738,7 @@ def test_scheduler_miniqmt_shadow_failure_is_loud_and_keeps_b_submit_running(
             },
         )
 
-    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliation", _raise_shadow)
+    monkeypatch.setattr(simulation_bridges.MiniQMTExecutionBridge, "run_shadow_reconciliations", _raise_shadow)
 
     submitted = scheduler.run_once(
         trade_date=TRADE_DATE,

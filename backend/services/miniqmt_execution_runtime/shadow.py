@@ -52,6 +52,16 @@ class MiniQMTShadowScenario(str, Enum):
     RESTART_RECOVERY = "restart_recovery"
 
 
+MINIQMT_SHADOW_CANARY_REQUIRED_SCENARIOS: tuple[MiniQMTShadowScenario, ...] = (
+    MiniQMTShadowScenario.FULL_FILL,
+    MiniQMTShadowScenario.PARTIAL_55_STREAM,
+    MiniQMTShadowScenario.REJECT,
+    MiniQMTShadowScenario.CANCEL,
+    MiniQMTShadowScenario.DISCONNECT,
+    MiniQMTShadowScenario.RESTART_RECOVERY,
+)
+
+
 class MiniQMTShadowLedgerSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -66,6 +76,153 @@ class MiniQMTShadowInputEvent(BaseModel):
 
     event_type: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+def build_miniqmt_shadow_scenario_replay_events(
+    input_events: Sequence[MiniQMTShadowInputEvent | dict[str, Any]],
+    *,
+    scenario: MiniQMTShadowScenario | str,
+) -> tuple[MiniQMTShadowInputEvent, ...]:
+    """Derive scenario events from the same parent intents used by production shadow."""
+
+    scenario_value = _coerce_shadow_scenario(scenario)
+    materialized_events = tuple(
+        event if isinstance(event, MiniQMTShadowInputEvent) else MiniQMTShadowInputEvent.model_validate(event)
+        for event in input_events
+    )
+    if scenario_value == MiniQMTShadowScenario.DELAY:
+        return materialized_events
+
+    parent_payloads = [
+        dict(event.payload)
+        for event in materialized_events
+        if event.event_type.strip().lower() == "parent_intent"
+    ]
+    if not parent_payloads:
+        raise RuntimeError(
+            "MiniQMT shadow scenario replay requires at least one parent_intent from the real execution plan; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_PARENT_INTENT_MISSING, "
+            f"scenario={scenario_value.value}"
+        )
+
+    if scenario_value == MiniQMTShadowScenario.DISCONNECT:
+        parent_ids = [_scenario_parent_intent_id(payload, scenario=scenario_value) for payload in parent_payloads]
+        return materialized_events + (
+            MiniQMTShadowInputEvent(
+                event_type="disconnect",
+                payload={
+                    "reason": "shadow broker disconnect",
+                    "reason_code": "MINIQMT_SHADOW_SCENARIO_DISCONNECT",
+                    "scenario": scenario_value.value,
+                    "affected_parent_intent_ids": parent_ids,
+                    "source": "same_intent_shadow_scenario_replay",
+                },
+            ),
+        )
+
+    tick_by_symbol = _scenario_tick_payload_by_symbol(materialized_events, scenario=scenario_value)
+    scenario_events: list[MiniQMTShadowInputEvent] = []
+    for parent in parent_payloads:
+        parent_intent_id = _scenario_parent_intent_id(parent, scenario=scenario_value)
+        symbol = _scenario_parent_symbol(parent, scenario=scenario_value, parent_intent_id=parent_intent_id)
+        quantity = _scenario_parent_quantity(parent, scenario=scenario_value, parent_intent_id=parent_intent_id)
+        price = _scenario_event_price(parent, tick_by_symbol=tick_by_symbol, scenario=scenario_value)
+        base_payload = {
+            "parent_intent_id": parent_intent_id,
+            "symbol": symbol,
+            "scenario": scenario_value.value,
+            "source": "same_intent_shadow_scenario_replay",
+        }
+        if scenario_value == MiniQMTShadowScenario.FULL_FILL:
+            scenario_events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="trade_fill",
+                    payload={
+                        **base_payload,
+                        "quantity": quantity,
+                        "price": price,
+                        "cumulative_quantity": quantity,
+                    },
+                )
+            )
+            continue
+        if scenario_value == MiniQMTShadowScenario.PARTIAL_55_STREAM:
+            partial_quantity = _scenario_partial_quantity(
+                quantity,
+                scenario=scenario_value,
+                parent_intent_id=parent_intent_id,
+            )
+            scenario_events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="partial_fill_55",
+                    payload={
+                        **base_payload,
+                        "quantity": partial_quantity,
+                        "price": price,
+                        "cumulative_quantity": partial_quantity,
+                    },
+                )
+            )
+            continue
+        if scenario_value == MiniQMTShadowScenario.REJECT:
+            scenario_events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="reject",
+                    payload={
+                        **base_payload,
+                        "reason_code": "MINIQMT_SHADOW_SCENARIO_REJECT",
+                    },
+                )
+            )
+            continue
+        if scenario_value == MiniQMTShadowScenario.CANCEL:
+            scenario_events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="cancel",
+                    payload={
+                        **base_payload,
+                        "reason_code": "MINIQMT_SHADOW_SCENARIO_CANCEL",
+                    },
+                )
+            )
+            continue
+        if scenario_value == MiniQMTShadowScenario.RESTART_RECOVERY:
+            partial_quantity = _scenario_partial_quantity(
+                quantity,
+                scenario=scenario_value,
+                parent_intent_id=parent_intent_id,
+            )
+            scenario_events.append(
+                MiniQMTShadowInputEvent(
+                    event_type="partial_fill_55",
+                    payload={
+                        **base_payload,
+                        "quantity": partial_quantity,
+                        "price": price,
+                        "cumulative_quantity": partial_quantity,
+                    },
+                )
+            )
+            continue
+        raise RuntimeError(
+            "MiniQMT shadow scenario replay reached unsupported scenario branch; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_UNSUPPORTED, "
+            f"scenario={scenario_value.value}"
+        )
+
+    if scenario_value == MiniQMTShadowScenario.RESTART_RECOVERY:
+        scenario_events.append(
+            MiniQMTShadowInputEvent(
+                event_type="restart_recovery",
+                payload={
+                    "reason": "process_restart",
+                    "reason_code": "MINIQMT_SHADOW_SCENARIO_RESTART_RECOVERY",
+                    "scenario": scenario_value.value,
+                    "source": "same_intent_shadow_scenario_replay",
+                },
+            )
+        )
+    return materialized_events + tuple(scenario_events)
 
 
 class MiniQMTShadowRuntimeSnapshot(BaseModel):
@@ -196,9 +353,10 @@ class MiniQMTShadowEventLoopAdapter:
         metadata: dict[str, Any],
     ) -> MiniQMTShadowRuntimeSnapshot:
         gateway = _RecordingShadowGateway()
+        adapter_runtime_id = _shadow_adapter_runtime_id(runtime_id, metadata=metadata, runtime_kind="a")
         runtime = MiniQMTExecutionRuntime(
             config=_runtime_config(
-                runtime_id=f"{runtime_id}_a",
+                runtime_id=adapter_runtime_id,
                 account_group_id=str(metadata.get("account_group_id") or self.account_group_id),
                 trade_date=_trade_date_from_metadata(metadata) or self.trade_date,
                 runtime_config_hash=str(metadata.get("runtime_config_hash") or self.runtime_config_hash),
@@ -249,6 +407,7 @@ class MiniQMTShadowCompilerAdapter:
             repository=self.repository,
             runtime_kind=MiniQMTExecutionRuntimeKind.COMPILER,
         )
+        adapter_runtime_id = _shadow_adapter_runtime_id(runtime_id, metadata=metadata, runtime_kind="b")
         trade_date = _trade_date_from_metadata(metadata) or self.trade_date
         parent_intents = _parent_intents_from_shadow_events(input_events, trade_date=trade_date)
         if not parent_intents:
@@ -264,7 +423,7 @@ class MiniQMTShadowCompilerAdapter:
             account_group_id=str(metadata.get("account_group_id") or self.account_group_id),
             trade_date=trade_date,
             runtime_config_hash=str(metadata.get("runtime_config_hash") or self.runtime_config_hash),
-            runtime_id=f"{runtime_id}_b",
+            runtime_id=adapter_runtime_id,
             strategy_slot_id=str(metadata.get("strategy_slot_id") or _DEFAULT_STRATEGY_SLOT_ID),
             managed_request_factory=_shadow_managed_request_factory(trade_date=trade_date),
             quote_provider=quote_provider,
@@ -272,12 +431,12 @@ class MiniQMTShadowCompilerAdapter:
         )
         _apply_terminal_shadow_events_to_repository(
             repository=self.repository,
-            runtime_id=f"{runtime_id}_b",
+            runtime_id=adapter_runtime_id,
             input_events=input_events,
         )
         return _snapshot_from_runtime_repository(
             repository=self.repository,
-            runtime_id=f"{runtime_id}_b",
+            runtime_id=adapter_runtime_id,
             runtime_kind="compiler",
             metadata={
                 "broker_called": False,
@@ -351,7 +510,7 @@ class MiniQMTShadowReconciler:
         b_runtime: MiniQMTShadowRuntimeSnapshot | dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTShadowReconciliationReport:
-        scenario_value = scenario if isinstance(scenario, MiniQMTShadowScenario) else MiniQMTShadowScenario(str(scenario))
+        scenario_value = _coerce_shadow_scenario(scenario)
         a_snapshot = _snapshot(a_runtime, runtime_kind="event_loop")
         b_snapshot = _snapshot(b_runtime, runtime_kind="compiler")
         report_id = f"mqrt_shadow_{runtime_id}_{scenario_value.value}"
@@ -414,7 +573,17 @@ class MiniQMTShadowReconciler:
             event_type=MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED,
             source="shadow",
             payload=report.model_dump(mode="json"),
-        )
+    )
+
+
+def _coerce_shadow_scenario(scenario: MiniQMTShadowScenario | str) -> MiniQMTShadowScenario:
+    try:
+        return scenario if isinstance(scenario, MiniQMTShadowScenario) else MiniQMTShadowScenario(str(scenario))
+    except ValueError as exc:
+        raise RuntimeError(
+            "MiniQMT shadow scenario is unsupported; "
+            f"reason_code=MINIQMT_SHADOW_SCENARIO_UNSUPPORTED, scenario={scenario!r}"
+        ) from exc
 
 
 def _snapshot(value: MiniQMTShadowRuntimeSnapshot | dict[str, Any], *, runtime_kind: str) -> MiniQMTShadowRuntimeSnapshot:
@@ -430,6 +599,12 @@ _DEFAULT_PACKAGE_ID = "shadow_package"
 _DEFAULT_PORTFOLIO_ID = "shadow_portfolio"
 _DEFAULT_SYMBOL = "000001.SZ"
 _DEFAULT_PRICE = 10.0
+
+
+def _shadow_adapter_runtime_id(runtime_id: str, *, metadata: dict[str, Any], runtime_kind: str) -> str:
+    scenario = str(metadata.get("scenario") or "default").strip().lower()
+    safe_scenario = "".join(char if char.isalnum() else "_" for char in scenario) or "default"
+    return f"{runtime_id}_{safe_scenario}_{runtime_kind}"
 
 
 @dataclass
@@ -726,6 +901,118 @@ def _normalized_tick_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "ask_volume_1": int(payload.get("ask_volume_1") or payload.get("volume") or 1000),
         **dict(payload),
     }
+
+
+def _scenario_parent_intent_id(payload: dict[str, Any], *, scenario: MiniQMTShadowScenario) -> str:
+    parent_intent_id = str(payload.get("intent_id") or payload.get("parent_intent_id") or "").strip()
+    if not parent_intent_id:
+        raise RuntimeError(
+            "MiniQMT shadow scenario replay requires parent_intent intent_id; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_PARENT_INTENT_ID_MISSING, "
+            f"scenario={scenario.value}"
+        )
+    return parent_intent_id
+
+
+def _scenario_parent_quantity(payload: dict[str, Any], *, scenario: MiniQMTShadowScenario, parent_intent_id: str) -> int:
+    quantity = int(payload.get("quantity") or payload.get("target_quantity") or 0)
+    if quantity <= 0:
+        raise RuntimeError(
+            "MiniQMT shadow scenario replay requires positive parent intent quantity; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_QUANTITY_INVALID, "
+            f"scenario={scenario.value}, parent_intent_id={parent_intent_id}, quantity={quantity}"
+        )
+    return quantity
+
+
+def _scenario_parent_symbol(payload: dict[str, Any], *, scenario: MiniQMTShadowScenario, parent_intent_id: str) -> str:
+    symbol = str(payload.get("symbol") or "").strip()
+    if not symbol:
+        raise RuntimeError(
+            "MiniQMT shadow scenario replay requires parent_intent symbol from the real execution plan; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_PARENT_SYMBOL_MISSING, "
+            f"scenario={scenario.value}, parent_intent_id={parent_intent_id}"
+        )
+    return symbol
+
+
+def _scenario_partial_quantity(
+    quantity: int,
+    *,
+    scenario: MiniQMTShadowScenario,
+    parent_intent_id: str,
+) -> int:
+    partial = min(55, max(1, quantity - 1))
+    if partial >= quantity:
+        raise RuntimeError(
+            "MiniQMT shadow partial scenario requires quantity greater than one share; "
+            "reason_code=MINIQMT_SHADOW_SCENARIO_PARTIAL_QUANTITY_INVALID, "
+            f"scenario={scenario.value}, parent_intent_id={parent_intent_id}, quantity={quantity}"
+        )
+    return partial
+
+
+def _scenario_tick_payload_by_symbol(
+    input_events: tuple[MiniQMTShadowInputEvent, ...],
+    *,
+    scenario: MiniQMTShadowScenario,
+) -> dict[str, dict[str, Any]]:
+    ticks: dict[str, dict[str, Any]] = {}
+    for event in input_events:
+        if event.event_type.strip().lower() != "tick":
+            continue
+        symbol = str(event.payload.get("symbol") or "").strip()
+        if not symbol:
+            raise RuntimeError(
+                "MiniQMT shadow scenario replay requires tick symbol from the real quote input; "
+                "reason_code=MINIQMT_SHADOW_SCENARIO_TICK_SYMBOL_MISSING, "
+                f"scenario={scenario.value}"
+            )
+        _scenario_payload_price(event.payload, scenario=scenario, parent_intent_id=symbol)
+        ticks[symbol] = dict(event.payload)
+    return ticks
+
+
+def _scenario_event_price(
+    parent: dict[str, Any],
+    *,
+    tick_by_symbol: dict[str, dict[str, Any]],
+    scenario: MiniQMTShadowScenario,
+) -> float:
+    parent_intent_id = _scenario_parent_intent_id(parent, scenario=scenario)
+    symbol = _scenario_parent_symbol(parent, scenario=scenario, parent_intent_id=parent_intent_id)
+    tick = tick_by_symbol.get(symbol, {})
+    if tick:
+        return _scenario_payload_price(
+            tick,
+            scenario=scenario,
+            parent_intent_id=parent_intent_id,
+        )
+    return _scenario_payload_price(
+        parent,
+        scenario=scenario,
+        parent_intent_id=parent_intent_id,
+    )
+
+
+def _scenario_payload_price(
+    payload: dict[str, Any],
+    *,
+    scenario: MiniQMTShadowScenario,
+    parent_intent_id: str,
+) -> float:
+    for key in ("price", "last_price", "ask_price_1", "bid_price_1", "limit_price"):
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        price = float(raw)
+        if price > 0:
+            return price
+    raise RuntimeError(
+        "MiniQMT shadow scenario replay requires a positive price from the same real intent/quote input; "
+        "reason_code=MINIQMT_SHADOW_SCENARIO_PRICE_MISSING, "
+        f"scenario={scenario.value}, parent_intent_id={parent_intent_id}"
+    )
 
 
 def _shadow_managed_request_factory(*, trade_date: date):

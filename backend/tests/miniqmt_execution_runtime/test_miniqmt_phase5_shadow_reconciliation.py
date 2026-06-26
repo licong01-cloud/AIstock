@@ -15,6 +15,9 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTShadowScenario,
     NoBrokerMutationMiniQMTShadowGateway,
 )
+from backend.services.miniqmt_execution_runtime.shadow import (
+    build_miniqmt_shadow_scenario_replay_events,
+)
 
 
 def _snapshot(
@@ -67,7 +70,7 @@ def _reconciler() -> tuple[MiniQMTShadowReconciler, InMemoryMiniQMTExecutionRunt
 
 
 def _real_replay_events(scenario: MiniQMTShadowScenario) -> list[MiniQMTShadowInputEvent]:
-    events = [
+    base_events = [
         MiniQMTShadowInputEvent(
             event_type="policy",
             payload={"policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}},
@@ -94,44 +97,7 @@ def _real_replay_events(scenario: MiniQMTShadowScenario) -> list[MiniQMTShadowIn
             },
         ),
     ]
-    if scenario == MiniQMTShadowScenario.FULL_FILL:
-        events.append(
-            MiniQMTShadowInputEvent(
-                event_type="trade_fill",
-                payload={"parent_intent_id": "intent_shadow_000001", "quantity": 100, "price": 9.99, "cumulative_quantity": 100},
-            )
-        )
-    elif scenario == MiniQMTShadowScenario.PARTIAL_55_STREAM:
-        events.append(
-            MiniQMTShadowInputEvent(
-                event_type="partial_fill_55",
-                payload={"parent_intent_id": "intent_shadow_000001", "quantity": 55, "price": 9.99, "cumulative_quantity": 55},
-            )
-        )
-    elif scenario == MiniQMTShadowScenario.REJECT:
-        events.append(MiniQMTShadowInputEvent(event_type="reject", payload={"parent_intent_id": "intent_shadow_000001"}))
-    elif scenario == MiniQMTShadowScenario.CANCEL:
-        events.append(MiniQMTShadowInputEvent(event_type="cancel", payload={"parent_intent_id": "intent_shadow_000001"}))
-    elif scenario == MiniQMTShadowScenario.DISCONNECT:
-        events.append(
-            MiniQMTShadowInputEvent(event_type="disconnect", payload={"reason": "shadow broker disconnect"})
-        )
-    elif scenario == MiniQMTShadowScenario.RESTART_RECOVERY:
-        events.extend(
-            [
-                MiniQMTShadowInputEvent(
-                    event_type="partial_fill_55",
-                    payload={
-                        "parent_intent_id": "intent_shadow_000001",
-                        "quantity": 55,
-                        "price": 9.99,
-                        "cumulative_quantity": 55,
-                    },
-                ),
-                MiniQMTShadowInputEvent(event_type="restart_recovery", payload={"reason": "process_restart"}),
-            ]
-        )
-    return events
+    return list(build_miniqmt_shadow_scenario_replay_events(base_events, scenario=scenario))
 
 
 class _EchoShadowAdapter:
@@ -275,6 +241,14 @@ def test_phase5_shadow_star_market_intent_uses_same_board_lot_without_quantity_d
     assert report.b_runtime.ledger.child_orders[0]["quantity"] == 1215
     assert report.a_runtime.metadata["broker_called"] is False
     assert report.b_runtime.metadata["broker_called"] is False
+
+
+def test_phase5_shadow_scenario_helper_rejects_unknown_scenario_loudly() -> None:
+    with pytest.raises(RuntimeError, match="MINIQMT_SHADOW_SCENARIO_UNSUPPORTED"):
+        build_miniqmt_shadow_scenario_replay_events(
+            [MiniQMTShadowInputEvent(event_type="parent_intent", payload={"intent_id": "intent_unknown"})],
+            scenario="not_a_shadow_scenario",
+        )
 
 
 def test_phase5_shadow_reconciliation_louds_on_child_order_count_drift_and_persists_report() -> None:

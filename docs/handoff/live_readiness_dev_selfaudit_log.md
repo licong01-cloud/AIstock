@@ -2,7 +2,7 @@
 
 ## BUG-501 - 2026-06-24
 
-- Reproduction red-to-green: yes. 	est_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slots failed before the fix with roker.place_order_calls == 1, then passed after the account-group preflight gate.
+- Reproduction red-to-green: yes. 	est_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slots failed before the fix with broker.place_order_calls == 1, then passed after the account-group preflight gate.
 - LocalSim / compiler B inert regression: no LocalSim files touched; BUG-501 only changes MiniQMT qmt_strategy_ledger batch preflight and tests. Compiler B LIVE remains locked; no runtime flags changed.
 - Loud failures / reason_code: yes. Offending account-group BUY intents now receive ACCOUNT_GROUP_CASH_OVERCOMMIT with account_group_id, cash limits, batch_required_cash, overcommit_cash, affected orders, and next_action.
 - Allowed scope: within BUG-501 allowed_write_scope only.
@@ -70,4 +70,14 @@
 - B boundary: PASS. client.py was not modified; explicit compiler-path overrides still produce STAR child/request quantity 1215.
 - Shadow dry-run: PASS. Shadow A/B STAR intent reconciles with no MINIQMT_SHADOW_CHILD_ORDER_QUANTITY_DRIFT; metadata remains broker_called=false.
 - Scope: PASS. Changes stay in runtime.py, scoped MiniQMT runtime tests, docs/handoff, and BUG JSON. No LocalSim, TDX, scheduler, bridge scenario injection, service, DB, or DDL action was touched.
+- Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.
+
+## BUG-533 - 2026-06-27
+
+- D3 gate unchanged: PASS. gray.py was not modified; tests prove durable reports make required scenario coverage complete instead of relaxing the gate.
+- Same-intent scenario derivation: PASS. Scenario replay events are built from production shadow parent_intent and tick input events; no pure synthetic bypass of reconciliation was introduced.
+- Shadow dry-run: PASS. Scheduler regression asserts every scenario report has A/B broker_called=false and broker_mutated=false; B submit remains broker-authoritative and still places its managed order payloads.
+- Helper extraction: PASS. The prior test-private scenario event construction is replaced with a production helper in shadow.py, and tests call that helper.
+- Loud failure: PASS. Unknown/invalid/empty scenarios fail with explicit MINIQMT_SHADOW_SCENARIO_* reason codes; no fallback to delay.
+- Scope: PASS. Changes stay in scoped MiniQMT shadow/bridge/scheduler files, scoped tests, docs/handoff, and BUG JSON; no LocalSim, TDX, client.py/CompilerAdapter-B, D4 switch, service, DB, or DDL action was touched.
 - Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.
