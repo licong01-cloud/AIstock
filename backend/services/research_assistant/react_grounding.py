@@ -1646,30 +1646,23 @@ def _retry_directive(results: list[McpToolResult]) -> dict[str, Any]:
     }
 
 
-def _evidence_guard_retry_directive(guard: EvidenceGuardDecision, failed_answer: str, collected_results: list[McpToolResult]) -> dict[str, Any]:
-    return {
-        "role": "system",
-        "content": json.dumps(
-            {
-                "type": "REACT_EVIDENCE_GUARD_REPAIR_DIRECTIVE",
-                "reason_code": guard.reason,
-                "failed_answer": failed_answer[:1800],
-                "instruction": (
-                    "Regenerate the final answer using only the existing TOOL_RESULT evidence. "
-                    "Cite exact citation_options.source and citation_options.as_of strings; "
-                    "for multi-section evidence cite the relevant section source/as_of token. "
-                    "If reason_code is future_answer_boundary_missing, use drivers, scenarios, risks, and say you do not predict direction. "
-                    "If reason_code is multi_source_synthesis_missing, give a bottom-line synthesis before details instead of listing tools. "
-                    "If reason_code is factual_list_row_evidence_missing, add the exact source/as_of token to every factual list or table row. If reason_code is unverified_evidence_risk_label_missing, label every not_verified row as unverified backtest or experimental data and warn not to treat it as real returns. "
-                    "Do not invent placeholders, dates, sources, or new facts. "
-                    "If the evidence is genuinely insufficient, say so with the reason."
-                ),
-                "citation_options": _evidence_citation_inventory(collected_results)[:12],
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
-    }
+def _remaining_fallback_tool_calls(
+    fallback_tool_calls: Callable[[], list[McpToolCall]] | None,
+    collected_calls: list[McpToolCall],
+) -> list[McpToolCall]:
+    calls = list(fallback_tool_calls() if fallback_tool_calls else [])
+    already_called = {(call.server_key, call.tool_name) for call in collected_calls}
+    return [call for call in calls if (call.server_key, call.tool_name) not in already_called]
+
+
+def _zero_evidence_fallback_tool_calls(
+    fallback_tool_calls: Callable[[], list[McpToolCall]] | None,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+) -> list[McpToolCall]:
+    if _has_business_evidence(collected_results):
+        return []
+    return _remaining_fallback_tool_calls(fallback_tool_calls, collected_calls)
 
 
 def run_react_grounding_loop(
@@ -1778,22 +1771,6 @@ def run_react_grounding_loop(
                     )
                 stopped_reason = "stock_depth_required_evidence_missing"
                 return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
-            if not guard.allowed and citation_failure and iteration < config.max_tool_iterations and _evidence_citation_inventory(collected_results):
-                collected_results.append(
-                    McpToolResult(
-                        server_key="evidence_guard",
-                        tool_name="compose_with_evidence_guard",
-                        status="failed",
-                        summary=guard.reason,
-                        error_json={"code": guard.reason},
-                        executed=False,
-                        stable_call_id=f"guard_{iteration}",
-                        side_effect_level="read_only",
-                    )
-                )
-                working_messages.append(_evidence_guard_retry_directive(guard, strip_internal_chain(turn.content), collected_results))
-                trace_steps.append({"iteration": iteration, "repair": "regenerate_with_evidence_citation_options", "reason": guard.reason})
-                continue
             if not guard.allowed and citation_failure and _has_terminal_summary_evidence(collected_results):
                 cited_text = _append_missing_evidence_citation(strip_internal_chain(turn.content), collected_results)
                 if cited_text:
@@ -1805,21 +1782,35 @@ def run_react_grounding_loop(
                         trace_steps.append({"iteration": iteration, "repair": "append_tool_evidence_citation_after_regeneration"})
                         return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, repaired_guard, iteration, stopped_reason, model_turns)
             if guard.allowed:
-                final_text = guard.text
-                stopped_reason = "final_answer"
-                return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
-            program_errors = _program_error_results(collected_results)
-            if program_errors:
+                zero_evidence_calls = _zero_evidence_fallback_tool_calls(fallback_tool_calls, collected_calls, collected_results)
+                if config.evidence_required and zero_evidence_calls:
+                    calls = zero_evidence_calls
+                    trace_steps.append(
+                        {
+                            "iteration": iteration,
+                            "fallback_tool_call_count": len(calls),
+                            "reason": "zero_evidence_answer_attempt",
+                        }
+                    )
+                else:
+                    final_text = guard.text
+                    stopped_reason = "final_answer"
+                    return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
+            elif program_errors := _program_error_results(collected_results):
                 explicit = _render_program_error_reply(program_errors)
                 error_guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
                 stopped_reason = "tool_error"
                 return ReactGroundingResult(explicit, working_messages, collected_calls, collected_results, trace_steps, error_guard, iteration, stopped_reason, model_turns)
-            fallback_calls = list(fallback_tool_calls() if fallback_tool_calls else [])
-            already_called = {(call.server_key, call.tool_name) for call in collected_calls}
-            fallback_calls = [call for call in fallback_calls if (call.server_key, call.tool_name) not in already_called]
-            if fallback_calls:
-                calls = fallback_calls
-                trace_steps.append({"iteration": iteration, "fallback_tool_call_count": len(calls), "reason": guard.reason})
+            elif zero_evidence_calls := _zero_evidence_fallback_tool_calls(fallback_tool_calls, collected_calls, collected_results):
+                calls = zero_evidence_calls
+                trace_steps.append(
+                    {
+                        "iteration": iteration,
+                        "fallback_tool_call_count": len(calls),
+                        "reason": "zero_evidence_answer_attempt",
+                        "evidence_guard_reason": guard.reason,
+                    }
+                )
             elif _should_force_external_research(config=config, collected_calls=collected_calls, collected_results=collected_results):
                 calls = [_external_research_web_fallback_call(config)]
                 trace_steps.append(
@@ -1831,20 +1822,8 @@ def run_react_grounding_loop(
                     }
                 )
             else:
-                collected_results.append(
-                    McpToolResult(
-                        server_key="evidence_guard",
-                        tool_name="compose_with_evidence_guard",
-                        status="failed",
-                        summary=guard.reason,
-                        error_json={"code": guard.reason},
-                        executed=False,
-                        stable_call_id=f"guard_{iteration}",
-                        side_effect_level="read_only",
-                    )
-                )
-                working_messages.append(_retry_directive(collected_results[-1:]))
-                continue
+                stopped_reason = guard.reason
+                return ReactGroundingResult(guard.text, working_messages, collected_calls, collected_results, trace_steps, guard, iteration, stopped_reason, model_turns)
 
         iteration_results: list[McpToolResult] = []
         for call in calls:

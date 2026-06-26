@@ -4,6 +4,8 @@
     "backend/services/research_assistant/react_grounding.py",
     "configs/research_assistant/runtime_context.yaml",
     "backend/tests/research_assistant/test_react_grounding.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py",
     "backend/tests/research_assistant/test_service.py",
     "tests/aistock_validation/bugs/20260626_BUG-529-ra-grounding-tool-loop-should-let-model-self-decide-stopping.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
@@ -24,6 +26,24 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260626-c55ec0600fea",
       "timestamp": "2026-06-26T04:03:59.938408Z"
+    },
+    {
+      "timestamp": "2026-06-26T04:20:00Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Added existing react tool-loop regression test file to allowed_write_scope because T5 changes the guard retry behavior asserted there."
+    },
+    {
+      "timestamp": "2026-06-26T04:35:00Z",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Added existing stock-analysis MCP regression test file because it asserted the guard-forced regeneration behavior retired by T5."
+    },
+    {
+      "timestamp": "2026-06-26T05:42:00Z",
+      "actor": "codex",
+      "action": "implementation",
+      "note": "Implemented B9 T5: max_tool_iterations is now a safety cap (24); removed guard-driven model regeneration; model early stop after evidence is accepted; zero-evidence answer attempts still trigger read-only fallback; anti-hallucination guard remains fail-closed. Added/updated react tool-loop and stock MCP regression tests. Validation: targeted pytest 36 passed; l0 passed; research_assistant_backend 353 passed; research_assistant_mcp_contract 38 passed; ra_phase0_baseline passed; ra_phase5_agent_teams passed; validation_module_registry_l0 8 passed; ruff passed; diff-check passed. ra_phase7_full_accept substeps passed through backend 353, frontend lint/build, phase7 Playwright 4/4, research-assistant Playwright 9/9, crosscheck/catalog/ownership; wrapper exited failed only after Playwright webServer cleanup hang requiring test-node cleanup, production ports untouched."
     }
   ],
   "evidence_uris": [],

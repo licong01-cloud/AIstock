@@ -118,7 +118,8 @@ trace:
   response_preview_chars: 500
 
 react_grounding:
-  max_tool_iterations: 10
+  # Safety cap only: the model may stop earlier once it has enough evidence.
+  max_tool_iterations: 24
   evidence_required: true
   placeholder_patterns:
     - "\bXX\b"

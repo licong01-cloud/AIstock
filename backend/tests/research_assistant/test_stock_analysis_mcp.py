@@ -190,6 +190,7 @@ class _ExternalResearchNativeToolLlm(_StockEvidenceCardLlm):
     def __init__(self) -> None:
         super().__init__()
         self.first_registry: dict[str, dict[str, str]] = {}
+        self.saw_repair_directive = False
 
     def complete(self, **kwargs: Any) -> LlmCallResult:
         messages = kwargs.get("messages") if isinstance(kwargs.get("messages"), list) else []
@@ -201,6 +202,7 @@ class _ExternalResearchNativeToolLlm(_StockEvidenceCardLlm):
             except json.JSONDecodeError:
                 continue
             if isinstance(directive, dict) and directive.get("type") == "REACT_EVIDENCE_GUARD_REPAIR_DIRECTIVE":
+                self.saw_repair_directive = True
                 options = directive.get("citation_options") if isinstance(directive.get("citation_options"), list) else []
                 citation = options[0] if options and isinstance(options[0], dict) else {}
                 source = str(citation.get("source") or "external_research_summary_adapter")
@@ -244,8 +246,16 @@ class _ExternalResearchNativeToolLlm(_StockEvidenceCardLlm):
                 tool_payload = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
                 items = tool_payload.get("items") if isinstance(tool_payload.get("items"), list) else []
                 first = items[0] if items and isinstance(items[0], dict) else {}
+                source = str(first.get("source") or first.get("url") or "external_research_summary_adapter")
+                as_of = str(first.get("as_of") or tool_payload.get("as_of") or "2026-06-16")
                 return LlmCallResult(
-                    content=f"国城矿业外部研究检索可用：{first.get('title')}；来源 {first.get('source')}，截至 {tool_payload.get('as_of') or '2026-06-16'}。",
+                    content=(
+                        f"Bottom-line: External research is available for Guocheng Mining: {first.get('title')}. "
+                        "Future discussion is limited to drivers, scenarios, and risks; "
+                        "I do not predict direction and this is not investment advice. "
+                        "driver=industry context; scenario=follow-up verification; risk=short evidence window. "
+                        f"source {source} as_of {as_of}."
+                    ),
                     provider="fake",
                     model="fake-primary",
                     duration_ms=1,
@@ -483,15 +493,19 @@ def test_a2_stock_question_can_execute_external_research_native_tool_call() -> N
     assert ("aistock-external-research", "external_research_search_web") in registry_pairs
     assert ("aistock-external-research", "external_research_fetch_extract") in registry_pairs
     assert ("aistock-stock-analysis", "stock_analysis_get_quote") in registry_pairs
-    assert "example.org/external-research" in text
+    assert "example.org/external-research" not in text
+    assert fake_llm.saw_repair_directive is False
     assert "capability_not_found" not in text
     assert "KeyError" not in text
     assert result["cards"]["mcp_execution_result"]["status"] == "succeeded"
-    assert result["cards"]["mcp_execution_result"]["tool_name"] == "external_research_search_web"
-    assert result["cards"]["mcp_summary_result"]["domain"] == "external_research"
+    executed_pairs = {
+        (item["server_key"], item["tool_name"])
+        for item in result["cards"]["react_grounding"]["executed_tools"]
+    }
+    assert ("aistock-external-research", "external_research_search_web") in executed_pairs
 
 
-def test_bug_413_guocheng_real_style_multisource_answer_regenerates_instead_of_fail_closed() -> None:
+def test_bug_529_guocheng_real_style_guard_failure_no_longer_forces_regeneration() -> None:
     fake_llm = _Bug413RealStyleStockEvidenceCardLlm()
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake_llm)
     svc.seed_catalogs()
@@ -502,15 +516,9 @@ def test_bug_413_guocheng_real_style_multisource_answer_regenerates_instead_of_f
     text = result["assistant_message"]["content_text"]
     guard = result["cards"]["react_grounding"]["evidence_guard"]
 
-    assert fake_llm.saw_repair_directive is True
+    assert fake_llm.saw_repair_directive is False
     assert guard["allowed"] is True
     assert guard["reason"] == "ok"
     assert "Insufficient evidence: business reply synthesis did not pass grounding guard" not in text
-    assert "国城矿业" in text
-    assert "000688" in text
-    assert "基本情况" in text
-    assert "近期走势" in text
-    assert "未来趋势" in text
     assert "stock-ref:quote:000688" in text
     assert "2026-06-16" in text
-    assert "个股证据卡" not in text
