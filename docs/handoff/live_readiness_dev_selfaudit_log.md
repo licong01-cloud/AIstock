@@ -50,3 +50,14 @@
 - no-silent-error：缺少必填 query 参数返回 `MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED`；runtime 不存在返回 `MINIQMT_RUNTIME_NOT_FOUND`；无证据返回 `count=0` 而不是伪造默认证据。
 - scope：改动限制在 BUG-525 allowed_write_scope；没有改 LocalSim、MiniQMT submit、shadow runner 或 gray controller 行为。
 - 只读验证：新增测试断言三个 GET 调用前后 `runtime-state.json` 字节不变。
+
+
+## BUG-528 - 2026-06-26
+
+- on_trade event-driven: PASS. record_trade_event() now settles SELL facts into qmt_strategy cash/lots, then releases matching deferred BUYs from the SELL trade callback path; tests assert no second submit cycle is needed.
+- No fake proceeds / overdraft: PASS. Deferred BUY release compares required cash with qmt_strategy_ledger.virtual_account.cash; partial fills keep BUY deferred with MINIQMT_DEPENDENT_BUY_CASH_STILL_INSUFFICIENT.
+- Broker-authoritative ledger: PASS. Cash comes from MiniQMTOmsLedger.authoritative_available_cash() and settle_sell_trade_cash_once(); runtime JSON metadata such as estimated proceeds is ignored by the release gate.
+- No simplified-shell regression: PASS. The change stays inside the event-loop runtime/OMS callback path and does not turn A into B-style scheduler polling.
+- B boundary and scope: PASS. order_service.py and simulation_runtime/scheduler.py were not modified; no LocalSim, TDX, service, operator command, production DB, or DDL action was touched.
+- Loud residual paths: PASS. Missing ledger authority, insufficient cash, terminal SELL without proceeds, and EOD residuals all persist explicit reason_code metadata/events.
+- Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.

@@ -8,14 +8,16 @@ those facts instead of trusting the runtime projection.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from backend.services.qmt_strategy_ledger.models import (
     BUY_ORDER_TYPE,
     SELL_ORDER_TYPE,
+    CashEntryType,
+    CashLedgerEntry,
     STATUS_CANCELLED,
     STATUS_FILLED,
     STATUS_OPEN_LIKE,
@@ -25,6 +27,8 @@ from backend.services.qmt_strategy_ledger.models import (
     IntentSubmitStatus,
     OrderLedgerRecord,
     OrderIntentRecord,
+    PositionLotRecord,
+    PositionLotStatus,
     TradeLedgerRecord,
     is_open_like_order_status,
     is_partial_order_status,
@@ -64,6 +68,37 @@ class MiniQMTOmsLedger:
     @property
     def uses_qmt_strategy_authority(self) -> bool:
         return self._strategy_ledger_repository is not None
+
+    def authoritative_available_cash(self, strategy_id: str) -> Decimal:
+        """Return broker-authoritative cash from qmt_strategy virtual account facts."""
+
+        if self._strategy_ledger_repository is None:
+            raise RuntimeError(
+                "MiniQMT event-loop dependent-buy coordinator requires qmt_strategy ledger authority; "
+                "reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING"
+            )
+        self._require_qmt_strategy_context()
+        getter = getattr(self._strategy_ledger_repository, "get_virtual_account", None)
+        if not callable(getter):
+            raise RuntimeError(
+                "MiniQMT event-loop dependent-buy coordinator requires get_virtual_account; "
+                "reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING"
+            )
+        normalized_strategy_id = _optional_text(strategy_id)
+        if not normalized_strategy_id:
+            raise RuntimeError(
+                "MiniQMT event-loop dependent-buy coordinator requires a strategy_id for qmt_strategy cash lookup; "
+                "reason_code=MINIQMT_DEPENDENT_BUY_STRATEGY_ID_MISSING"
+            )
+        try:
+            account = getter(normalized_strategy_id)
+        except DataUnavailableError as exc:
+            raise RuntimeError(
+                "MiniQMT event-loop dependent-buy coordinator could not find qmt_strategy virtual account; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_ACCOUNT_MISSING, strategy_id={normalized_strategy_id!r}, "
+                f"account_id={self._account_id!r}"
+            ) from exc
+        return _decimal(getattr(account, "cash", None), field_name="qmt_strategy_virtual_account.cash")
 
     def record_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
         return self._repository.upsert_algo_instance(instance)
@@ -124,6 +159,174 @@ class MiniQMTOmsLedger:
             },
         )
         return self._strategy_ledger_repository.upsert_trade_ledger(trade)
+
+    def settle_sell_trade_cash_once(self, trade: TradeLedgerRecord) -> tuple[CashLedgerEntry, bool]:
+        """Settle a broker SELL trade into qmt_strategy cash/lots exactly once."""
+
+        if self._strategy_ledger_repository is None:
+            raise RuntimeError(
+                "MiniQMT event-loop SELL proceeds settlement requires qmt_strategy ledger authority; "
+                "reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING"
+            )
+        self._require_qmt_strategy_context()
+        if str(trade.side or "").strip().upper() != OrderSide.SELL.value:
+            raise RuntimeError(
+                "MiniQMT event-loop dependent-buy coordinator only settles SELL trade proceeds; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_NON_SELL_SETTLEMENT_REJECTED, trade_id={trade.trade_id}, "
+                f"side={trade.side!r}"
+            )
+        required_methods = (
+            "get_virtual_account",
+            "get_cash_entry",
+            "apply_sell_trade_fill_once",
+            "list_position_lots",
+        )
+        missing = [name for name in required_methods if not callable(getattr(self._strategy_ledger_repository, name, None))]
+        if missing:
+            raise RuntimeError(
+                "MiniQMT event-loop SELL proceeds settlement requires qmt_strategy cash/lot repository methods; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_AUTHORITY_MISSING, missing_methods={missing}"
+            )
+        cash_id = _cash_event_id(self._account_id or "", self._trade_date, "sell_fill", trade.trade_id)
+        existing = self._strategy_ledger_repository.get_cash_entry(cash_id)
+        if existing is not None:
+            account = self._get_virtual_account_for_sell_settlement(trade.strategy_id)
+            try:
+                _trade, _trade_inserted, _entry, cash_inserted = self._strategy_ledger_repository.apply_sell_trade_fill_once(
+                    trade,
+                    existing,
+                    account,
+                    [],
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(
+                    "MiniQMT event-loop SELL proceeds settlement failed on idempotent cash entry replay; "
+                    f"reason_code=MINIQMT_DEPENDENT_BUY_SELL_PROCEEDS_SETTLEMENT_FAILED, "
+                    f"strategy_id={trade.strategy_id}, trade_id={trade.trade_id}, cash_id={cash_id}, "
+                    f"error={type(exc).__name__}: {exc}"
+                ) from exc
+            return existing, bool(cash_inserted)
+
+        realized_pnl, lot_closures, updated_lots = self._close_lots_fifo(trade.strategy_id, trade)
+        account = self._get_virtual_account_for_sell_settlement(trade.strategy_id)
+        cash_delta = _money(trade.amount) - _money(trade.commission)
+        updated_account = replace(
+            account,
+            cash=account.cash + cash_delta,
+            realized_pnl=account.realized_pnl + realized_pnl,
+            updated_at=datetime.now(UTC),
+        )
+        entry = CashLedgerEntry(
+            cash_id=cash_id,
+            strategy_id=trade.strategy_id,
+            entry_type=CashEntryType.SELL_FILL,
+            cash_delta=cash_delta,
+            cash_after=updated_account.cash,
+            frozen_delta=Decimal("0"),
+            frozen_after=updated_account.frozen_cash,
+            account_id=self._account_id or "",
+            trade_date=self._trade_date,
+            intent_id=trade.intent_id,
+            trade_id=trade.trade_id,
+            symbol=trade.symbol,
+            reason=CashEntryType.SELL_FILL.value,
+            metadata={
+                "source": "miniqmt_event_loop_runtime_oms",
+                "fill_amount": str(_money(trade.amount)),
+                "commission": str(_money(trade.commission)),
+                "realized_pnl": str(realized_pnl),
+                "qmt_order_id": trade.qmt_order_id,
+                "lot_closures": lot_closures,
+                "cash_source": "qmt_strategy_ledger.sell_trade_fill",
+            },
+        )
+        try:
+            _trade, _trade_inserted, stored_entry, cash_inserted = self._strategy_ledger_repository.apply_sell_trade_fill_once(
+                trade,
+                entry,
+                updated_account,
+                updated_lots,
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "MiniQMT event-loop SELL proceeds settlement failed while applying qmt_strategy cash/lot facts; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_SELL_PROCEEDS_SETTLEMENT_FAILED, "
+                f"strategy_id={trade.strategy_id}, trade_id={trade.trade_id}, cash_id={cash_id}, "
+                f"error={type(exc).__name__}: {exc}"
+            ) from exc
+        return stored_entry, bool(cash_inserted)
+
+    def _get_virtual_account_for_sell_settlement(self, strategy_id: str) -> Any:
+        try:
+            return self._strategy_ledger_repository.get_virtual_account(strategy_id)
+        except DataUnavailableError as exc:
+            raise RuntimeError(
+                "MiniQMT event-loop SELL proceeds settlement could not find qmt_strategy virtual account; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_LEDGER_ACCOUNT_MISSING, strategy_id={strategy_id!r}, "
+                f"account_id={self._account_id!r}"
+            ) from exc
+
+    def _close_lots_fifo(
+        self,
+        strategy_id: str,
+        trade: TradeLedgerRecord,
+    ) -> tuple[Decimal, list[dict[str, Any]], list[PositionLotRecord]]:
+        remaining_to_close = int(trade.quantity)
+        realized_pnl = Decimal("0")
+        lot_closures: list[dict[str, Any]] = []
+        updated_lots: list[PositionLotRecord] = []
+        for lot in self._strategy_ledger_repository.list_position_lots(strategy_id, symbol=trade.symbol):
+            if remaining_to_close <= 0:
+                break
+            lot_remaining = max(int(lot.remaining_quantity), 0)
+            if lot_remaining <= 0:
+                continue
+            close_quantity = min(remaining_to_close, lot_remaining)
+            close_cost = _money(lot.avg_cost * Decimal(close_quantity))
+            gross_proceeds = _money(trade.price * Decimal(close_quantity))
+            proportional_fee = _proportional_fee(trade.commission, close_quantity, trade.quantity)
+            lot_realized_pnl = _money(gross_proceeds - close_cost - proportional_fee)
+            new_remaining = lot_remaining - close_quantity
+            new_available = min(max(int(lot.available_quantity), 0), new_remaining)
+            new_cost_amount = _money(lot.avg_cost * Decimal(new_remaining))
+            new_status = PositionLotStatus.CLOSED if new_remaining == 0 else PositionLotStatus.PARTIALLY_CLOSED
+            updated_lot = replace(
+                lot,
+                available_quantity=new_available,
+                remaining_quantity=new_remaining,
+                cost_amount=new_cost_amount,
+                realized_pnl=lot.realized_pnl + lot_realized_pnl,
+                status=new_status,
+                metadata={
+                    **lot.metadata,
+                    "last_close_trade_id": trade.trade_id,
+                    "last_close_trade_date": self._trade_date.isoformat() if self._trade_date else None,
+                    "source": "miniqmt_event_loop_runtime_oms",
+                },
+            )
+            updated_lots.append(updated_lot)
+            realized_pnl += lot_realized_pnl
+            remaining_to_close -= close_quantity
+            lot_closures.append(
+                {
+                    "lot_id": lot.lot_id,
+                    "closed_quantity": close_quantity,
+                    "remaining_quantity": new_remaining,
+                    "avg_cost": str(lot.avg_cost),
+                    "close_price": str(trade.price),
+                    "gross_proceeds": str(gross_proceeds),
+                    "cost": str(close_cost),
+                    "commission": str(proportional_fee),
+                    "realized_pnl": str(lot_realized_pnl),
+                }
+            )
+        if remaining_to_close > 0:
+            raise RuntimeError(
+                "MiniQMT event-loop SELL proceeds settlement found insufficient qmt_strategy lots; "
+                f"reason_code=MINIQMT_DEPENDENT_BUY_SELL_LOTS_INSUFFICIENT, strategy_id={strategy_id}, "
+                f"symbol={trade.symbol}, trade_id={trade.trade_id}, missing_quantity={remaining_to_close}"
+            )
+        return _money(realized_pnl), lot_closures, updated_lots
 
     def reconcile_child_orders_from_ledger(self, runtime_id: str) -> list[MiniQMTChildOrder]:
         if self._strategy_ledger_repository is None:
@@ -388,6 +591,22 @@ def _trade_time(payload: dict[str, Any]) -> datetime | None:
     if isinstance(value, datetime):
         return value
     return None
+
+
+def _cash_event_id(account_id: str, trade_date: date | None, event_type: str, row_id: str) -> str:
+    safe_trade_date = trade_date.isoformat() if trade_date is not None else "unknown_trade_date"
+    safe_row_id = _optional_text(row_id) or "blank"
+    return f"cash_{account_id}_{safe_trade_date}_{event_type}_{safe_row_id}"
+
+
+def _money(value: Decimal) -> Decimal:
+    return Decimal(value).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+
+
+def _proportional_fee(total_fee: Decimal, quantity: int, total_quantity: int) -> Decimal:
+    if total_quantity <= 0:
+        return Decimal("0")
+    return _money(Decimal(total_fee) * Decimal(quantity) / Decimal(total_quantity))
 
 
 def _decimal(value: Any, *, field_name: str) -> Decimal:
