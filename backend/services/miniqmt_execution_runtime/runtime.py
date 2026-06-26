@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
+from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import (
     VnpyAction,
     VnpyActionType,
@@ -260,8 +261,8 @@ class MiniQMTExecutionRuntime:
         algo_code: str,
         limit_price: float,
         algo_config: dict[str, Any] | None = None,
-        min_volume: int = 100,
-        volume_increment: int = 100,
+        min_volume: int | None = None,
+        volume_increment: int | None = None,
         random_volume_provider: Callable[[int, int], float] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionAlgoInstance:
@@ -276,13 +277,18 @@ class MiniQMTExecutionRuntime:
         if not is_vnpy_style_algo(normalized_algo_code):
             raise RuntimeError(f"unsupported runtime-owned vn.py-style algo: {algo_code}")
         spec = get_vnpy_style_asset(normalized_algo_code)
+        resolved_min_volume, resolved_volume_increment = _resolve_vnpy_board_lot_params(
+            symbol=symbol,
+            min_volume=min_volume,
+            volume_increment=volume_increment,
+        )
         instance_metadata = {
             **dict(metadata or {}),
             "runtime_algo_family": "vnpy_style",
             "limit_price": float(limit_price),
             "algo_config": dict(algo_config or {}),
-            "min_volume": int(min_volume),
-            "volume_increment": int(volume_increment),
+            "min_volume": resolved_min_volume,
+            "volume_increment": resolved_volume_increment,
             "execution_asset_version": spec.version,
             "source_attribution": spec.metadata()["source_attribution"],
         }
@@ -1606,6 +1612,11 @@ class MiniQMTExecutionRuntime:
         if core is not None:
             return core
         metadata = dict(instance.metadata or {})
+        min_volume, volume_increment = _resolve_vnpy_board_lot_params(
+            symbol=instance.symbol,
+            min_volume=metadata.get("min_volume"),
+            volume_increment=metadata.get("volume_increment"),
+        )
         core = create_vnpy_style_core(
             algo_code=instance.algo_code,
             symbol=instance.symbol,
@@ -1614,8 +1625,8 @@ class MiniQMTExecutionRuntime:
             volume=int(instance.target_quantity),
             algo_config=dict(metadata.get("algo_config") or {}),
             algo_name=f"{instance.algo_code}_{instance.algo_instance_id}",
-            min_volume=int(metadata.get("min_volume") or 100),
-            volume_increment=int(metadata.get("volume_increment") or 100),
+            min_volume=min_volume,
+            volume_increment=volume_increment,
             random_volume_provider=self._vnpy_random_volume_providers.get(instance.algo_instance_id),
         )
         self._restore_vnpy_core_from_metadata(core, metadata)
@@ -2805,6 +2816,45 @@ def _order_price_type(order: dict[str, Any]) -> int:
         return int(order.get("price_type") or 11)
     except (TypeError, ValueError):
         return 11
+
+
+def _resolve_vnpy_board_lot_params(
+    *,
+    symbol: str,
+    min_volume: Any | None,
+    volume_increment: Any | None,
+) -> tuple[int, int]:
+    if min_volume is None and volume_increment is None:
+        try:
+            return tuple(map(int, board_lot_rule(symbol)))
+        except ValueError as exc:
+            raise RuntimeError(
+                "MiniQMT event_loop vn.py board-lot rule is unresolved for symbol; "
+                f"reason_code=MINIQMT_EVENT_LOOP_BOARD_LOT_RULE_UNRESOLVED, symbol={symbol!r}, "
+                f"reason={exc}"
+            ) from exc
+    if min_volume is None or volume_increment is None:
+        raise RuntimeError(
+            "MiniQMT event_loop vn.py board-lot override must provide both min_volume and volume_increment; "
+            "reason_code=MINIQMT_EVENT_LOOP_BOARD_LOT_OVERRIDE_INCOMPLETE, "
+            f"symbol={symbol!r}, min_volume={min_volume!r}, volume_increment={volume_increment!r}"
+        )
+    try:
+        resolved_min_volume = int(min_volume)
+        resolved_volume_increment = int(volume_increment)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT event_loop vn.py board-lot override must be integer values; "
+            "reason_code=MINIQMT_EVENT_LOOP_BOARD_LOT_OVERRIDE_INVALID, "
+            f"symbol={symbol!r}, min_volume={min_volume!r}, volume_increment={volume_increment!r}"
+        ) from exc
+    if resolved_min_volume <= 0 or resolved_volume_increment <= 0:
+        raise RuntimeError(
+            "MiniQMT event_loop vn.py board-lot override must be positive; "
+            "reason_code=MINIQMT_EVENT_LOOP_BOARD_LOT_OVERRIDE_INVALID, "
+            f"symbol={symbol!r}, min_volume={resolved_min_volume}, volume_increment={resolved_volume_increment}"
+        )
+    return resolved_min_volume, resolved_volume_increment
 
 
 def _required_positive_float(value: Any, name: str) -> float:

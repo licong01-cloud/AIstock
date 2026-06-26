@@ -223,6 +223,60 @@ def test_phase5_shadow_parallel_runner_replays_design_scenarios_through_a_and_b_
     )
 
 
+def test_phase5_shadow_star_market_intent_uses_same_board_lot_without_quantity_drift() -> None:
+    reconciler, repo = _reconciler()
+    runner = MiniQMTShadowParallelRunner(reconciler=reconciler)
+    input_events = [
+        MiniQMTShadowInputEvent(
+            event_type="policy",
+            payload={"policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}},
+        ),
+        MiniQMTShadowInputEvent(
+            event_type="parent_intent",
+            payload={
+                "intent_id": "intent_shadow_688001",
+                "symbol": "688001.SH",
+                "side": "BUY",
+                "quantity": 1215,
+                "limit_price": 10.0,
+            },
+        ),
+        MiniQMTShadowInputEvent(
+            event_type="tick",
+            payload={
+                "symbol": "688001.SH",
+                "price": 9.99,
+                "bid_price_1": 9.98,
+                "bid_volume_1": 3000,
+                "ask_price_1": 9.99,
+                "ask_volume_1": 3000,
+            },
+        ),
+    ]
+
+    report = runner.run(
+        runtime_id="mqrt_shadow_star_board_lot",
+        scenario=MiniQMTShadowScenario.DELAY,
+        input_events=input_events,
+        event_loop_adapter=MiniQMTShadowEventLoopAdapter(repository=repo),
+        compiler_adapter=MiniQMTShadowCompilerAdapter(repository=repo),
+        metadata={
+            "trade_date": date(2026, 6, 26).isoformat(),
+            "account_group_id": "shadow_account",
+            "portfolio_id": "portfolio_star",
+            "strategy_slot_id": "slot_star",
+        },
+    )
+
+    reason_codes = {item.reason_code for item in report.differences}
+    assert "MINIQMT_SHADOW_CHILD_ORDER_QUANTITY_DRIFT" not in reason_codes
+    assert report.fatal_differences == []
+    assert report.a_runtime.ledger.child_orders[0]["quantity"] == 1215
+    assert report.b_runtime.ledger.child_orders[0]["quantity"] == 1215
+    assert report.a_runtime.metadata["broker_called"] is False
+    assert report.b_runtime.metadata["broker_called"] is False
+
+
 def test_phase5_shadow_reconciliation_louds_on_child_order_count_drift_and_persists_report() -> None:
     reconciler, repo = _reconciler()
 
