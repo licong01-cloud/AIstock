@@ -30,8 +30,8 @@
   "expected": "A versioned runner start helper must start or report the self-hosted GitHub runner without relying on CIM/WMI, fail loudly when the runner wrapper is missing, and keep production gates noop.",
   "first_seen_at": "2026-06-26T10:03:09.303262Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cfae747c6b9cb3a142dda19a261c166709056388",
+  "fixed_at": "2026-06-26T10:42:16.878306Z",
   "github_issue_number": 1654,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1654",
   "last_seen_at": "2026-06-26T10:03:09.303262Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1655",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation.runner"
   ],
@@ -84,6 +85,14 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_start_aistock_github_runner.py -q -p no:cacheprovider -> 3 passed",
+    "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start_aistock_github_runner.ps1 -InstallRoot F:\\Dev\\github-actions-runner\\aistock -DryRun -Json -> status=already_running",
+    "python -m nox -s l0 -- scripts/start_aistock_github_runner.ps1 backend/tests/scripts/test_start_aistock_github_runner.py tests/aistock_validation/bugs/20260626_BUG-530-github-runner-hidden-start-script-fails-when-cim-is-unavailable.json -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed",
+    "python -m nox -s validation_center_backend -> 459 passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": true,
