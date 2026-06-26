@@ -1539,8 +1539,8 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert "discovery_plans: `executed=1, anomalies=0`" in markdown
     assert "bug_candidates: `candidates=2, high_value=1, issue_payload_drafts=1`" in markdown
     assert "candidate_feedback: `available=True, accepted=1, rejected=0, closed=0, pending=1`" in markdown
-    assert "design_drift_audit: `targets=5, findings=1, candidate_only=True`" in markdown
-    assert "silent_degradation_audit: `targets=6, findings=2, candidate_only=True`" in markdown
+    assert "design_drift_audit: `targets=5, findings=1, llm_gate=unknown, degraded=False, candidate_only=True`" in markdown
+    assert "silent_degradation_audit: `targets=6, findings=2, llm_gate=unknown, degraded=False, candidate_only=True`" in markdown
     assert "repo_hygiene_orphan_audit: `scanned=8, candidates=3, delete_candidates=1, human_pr=True`" in markdown
     assert "candidate_no_issue_reason: `no_high_value_actionable_candidates`" in markdown
     assert "bug-candidates/manifest.json" in markdown
@@ -1606,6 +1606,25 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
         ),
         encoding="utf-8",
     )
+    (artifact_dir / "design-drift-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_design_drift_audit_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_gate": "degraded",
+                "llm_invocation_evidence": {
+                    "invoked": False,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "reason": "design_drift_audit_live_provider_failed_fallback",
+                    "error_type": "ProviderAdapterError",
+                    "error_fingerprint": "abc123",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
     (artifact_dir / "llm-prompt-evaluation.json").write_text(
         json.dumps(
             {
@@ -1631,8 +1650,9 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
     assert payload["blocking_for_issue_workflow"] is False
     assert payload["limit_enforced"] is False
     assert payload["totals"]["invoked_count"] == 3
+    assert payload["totals"]["attempted_count"] == 4
     assert payload["totals"]["usage_available_count"] == 2
-    assert payload["totals"]["usage_missing_count"] == 1
+    assert payload["totals"]["usage_missing_count"] == 2
     assert payload["totals"]["prompt_units"] == 120
     assert payload["totals"]["completion_units"] == 48
     assert payload["totals"]["total_units"] == 168
@@ -1644,7 +1664,11 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
     missing = [item for item in payload["records"] if item["step"] == "silent_degradation_audit"][0]
     assert missing["usage_available"] is False
     assert missing["usage_missing_reason"] == "provider_usage_missing"
+    failed = [item for item in payload["records"] if item["step"] == "design_drift_audit"][0]
+    assert failed["attempted"] is True
+    assert failed["usage_missing_reason"] == "provider_error_or_fallback_without_usage"
     assert "LLM Token Usage Summary" in markdown
+    assert "attempted_steps: `4`" in markdown
     assert "limit_enforced: `False`" in markdown
     assert "total_units: `168`" in markdown
     assert "silent_degradation_audit" in markdown

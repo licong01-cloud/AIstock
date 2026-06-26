@@ -376,7 +376,51 @@ def test_silent_degradation_audit_rejects_llm_action_fields(monkeypatch, tmp_pat
 
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["llm_invocation_evidence"]["reason"] == "silent_degradation_audit_live_provider_failed_fallback"
+    assert payload["llm_gate"] == "degraded"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["findings"] == []
+    assert payload["summary"]["degraded_reason"] == "llm_provider_failed_no_marker_findings_emitted"
     assert payload["official_bug_creation_allowed"] is False
+
+
+def test_silent_degradation_audit_llm_failure_does_not_emit_marker_findings(monkeypatch, tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="class DurableRuntime:\n    EventLoop = object\n    def run(self):\n        return []\n",
+    )
+    config_path = _write_config(tmp_path, silent_markers=["return []"])
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+
+    def fake_invoke(*args, **kwargs):
+        raise audit.llm_adapter.ProviderAdapterError("provider output JSON schema invalid")
+
+    monkeypatch.setattr(audit.llm_adapter, "invoke_provider_json", fake_invoke)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deepseek_api",
+        modules=["demo_runtime"],
+        invoke_llm=True,
+    )
+    artifact = audit.public_artifact(payload)
+    markdown = tmp_path / "out" / "silent.md"
+    audit.write_markdown(markdown, payload)
+
+    assert payload["llm_gate"] == "degraded"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["findings"] == []
+    assert payload["summary"]["finding_count"] == 0
+    assert payload["summary"]["deterministic_signal_count"] >= 1
+    assert artifact["llm_invocation_evidence"]["error_type"] == "ProviderAdapterError"
+    assert artifact["llm_invocation_evidence"]["error_fingerprint"]
+    text = markdown.read_text(encoding="utf-8")
+    assert "LLM Audit Degraded" in text
+    assert "marker-only deterministic signals were not promoted" in text
 
 
 def test_silent_degradation_audit_uses_llm_output_instead_of_marker_templates(monkeypatch, tmp_path: Path) -> None:

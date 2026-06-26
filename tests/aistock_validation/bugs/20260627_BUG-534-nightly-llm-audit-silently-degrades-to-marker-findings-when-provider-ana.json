@@ -1,0 +1,82 @@
+{
+  "actual": "Run 28235538846 design-drift audit had llm_invoked=false after provider failure but still emitted 3 marker-only findings and nightly summary presented them as design_drift_audit findings.",
+  "allowed_write_scope": [
+    "scripts/nightly_design_drift_audit.py",
+    "scripts/nightly_silent_degradation_audit.py",
+    "scripts/code_intelligence_adapter.py",
+    "scripts/llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_design_drift_audit.py",
+    "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "tests/aistock_validation/bugs/20260627_BUG-534-nightly-llm-audit-silently-degrades-to-marker-findings-when-provider-ana.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-534",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-26T18:46:49.008095Z",
+  "description": "Run 28235538846 design-drift audit had llm_invoked=false after provider failure but still emitted 3 marker-only findings and nightly summary presented them as design_drift_audit findings.\n\nScope update: root cause also includes .github/workflows/nightly.yml retrying deterministic provider after semantic audit command failure, which overwrote provider-failure evidence and made marker-only findings look normal.\n\nScope update: public LLM invocation summaries must preserve sanitized error_type/error_fingerprint, so scripts/llm_provider_adapter.py is included for evidence propagation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260627-6dc2bc9a7675",
+      "timestamp": "2026-06-26T18:46:49.008092Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/28235538846"
+  ],
+  "expected": "Semantic LLM audits fail loud/degraded on provider failure, preserve sanitized error evidence, and never present marker-only fallback as normal design drift or silent degradation findings.",
+  "first_seen_at": "2026-06-26T18:46:49.008095Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1669,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1669",
+  "last_seen_at": "2026-06-26T18:46:49.008095Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/nightly_design_drift_audit.py --json --provider deepseek_api --invoke-llm --run-id 28235538846 --code-intelligence-json tmp/validation/code-intelligence/28235538846/code-intelligence-summary.json",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly LLM audit silently degrades to marker findings when provider analysis fails",
+  "trigger_condition": {
+    "fingerprint": "6dc2bc9a7675fb48e7db3ff8",
+    "source_event_id": "FE-20260627-6dc2bc9a7675"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
