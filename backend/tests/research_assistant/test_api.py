@@ -118,6 +118,15 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert chat_resp["cards"]["intent_type"] == "experiment_draft_request"
     assert chat_resp["cards"]["status_rail"][3]["label"] == "等待确认"
     assert chat_resp["cards"]["safety"]["no_materialize_before_confirmation"] is True
+    usage_events = client.get("/api/v1/research-assistant/llm-usage/events", params={"task_id": chat_resp["task"]["task_id"]}).json()["data"]
+    assert usage_events["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_events["prompt_text_retained"] is False
+    assert usage_events["total"] >= 1
+    assert usage_events["items"][0]["usage_status"] in {"recorded", "unavailable"}
+    usage_summary = client.get("/api/v1/research-assistant/llm-usage/summary", params={"task_id": chat_resp["task"]["task_id"]}).json()["data"]
+    assert usage_summary["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_summary["summary"]["call_count"] >= 1
+    assert usage_summary["events_page"]["items"]
 
     capability_resp = client.post(
         "/api/v1/research-assistant/chat/turn",

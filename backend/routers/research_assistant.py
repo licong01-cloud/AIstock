@@ -999,6 +999,66 @@ def list_trace_events(
         raise _map_error(exc) from exc
 
 
+@router.get("/llm-usage/events", response_model=ResearchAssistantResponse)
+def list_llm_usage_events(
+    trace_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    conversation_id: str | None = Query(None),
+    model: str | None = Query(None),
+    provider: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    offset: int = Query(0, ge=0),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(
+            service.list_llm_usage_events(
+                trace_id=trace_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                model=model,
+                provider=provider,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+                offset=offset,
+            )
+        )
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
+@router.get("/llm-usage/summary", response_model=ResearchAssistantResponse)
+def llm_usage_summary(
+    trace_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    conversation_id: str | None = Query(None),
+    model: str | None = Query(None),
+    provider: str | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    limit: int | None = Query(None, ge=1),
+    service: ResearchAssistantService = Depends(get_research_assistant_service),
+) -> ResearchAssistantResponse:
+    try:
+        return _success(
+            service.llm_usage_summary(
+                trace_id=trace_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                model=model,
+                provider=provider,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+            )
+        )
+    except Exception as exc:
+        raise _map_error(exc) from exc
+
+
 @router.get("/models/profiles", response_model=ResearchAssistantResponse)
 def list_model_profiles(service: ResearchAssistantService = Depends(get_research_assistant_service)) -> ResearchAssistantResponse:
     try:

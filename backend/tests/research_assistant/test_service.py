@@ -47,13 +47,15 @@ from backend.services.research_assistant.service import (
     STOCK_DEPTH_MIN_TOOL_EXECUTIONS,
     STOCK_DEPTH_REQUIRED_TOOL_REFS,
     STOCK_DEPTH_STOCK_TOOL_NAMES,
+    _calculate_litellm_cost,
+    _normalize_litellm_usage,
 )
 from backend.services.research_assistant.runtime_config import (
     RuntimeConfigCapabilityValidationError,
     load_runtime_config,
     validate_runtime_config_payload,
 )
-from backend.services.research_assistant.react_grounding import McpToolCall
+from backend.services.research_assistant.react_grounding import EvidenceGuardDecision, McpToolCall, ModelTurn, ReactGroundingResult
 
 
 class DialogueAwareFakeLlmClient:
@@ -3140,6 +3142,204 @@ def test_default_chat_completion_budget_uses_provider_max_for_long_answers() -> 
     assert config["budget"]["response"]["max_tokens"] == 384000
     assert plan.llm_max_tokens == 384000
     assert plan.response_reserved_tokens == 384000
+
+
+def test_llm_usage_normalizes_dict_and_object_usage_without_prompt_text() -> None:
+    class UsageObject:
+        prompt_tokens = 7
+        completion_tokens = 5
+        total_tokens = 12
+        completion_tokens_details = {"reasoning_tokens": 2}
+
+    dict_usage = _normalize_litellm_usage(
+        {"prompt_tokens": 10, "completion_tokens": 4, "prompt_tokens_details": {"cached_tokens": 3}},
+        litellm_module=None,
+        model_id="fake/model",
+        messages=[{"role": "user", "content": "private prompt"}],
+        tools=None,
+        content="private response",
+    )
+    object_usage = _normalize_litellm_usage(
+        UsageObject(),
+        litellm_module=None,
+        model_id="fake/model",
+        messages=[],
+        tools=None,
+        content="",
+    )
+
+    assert dict_usage["usage_source"] == "provider_reported"
+    assert dict_usage["total_tokens"] == 14
+    assert dict_usage["cache_read_input_tokens"] == 3
+    assert object_usage["usage_source"] == "litellm_usage_object"
+    assert object_usage["reasoning_tokens"] == 2
+    assert "private prompt" not in json.dumps(dict_usage, ensure_ascii=False)
+
+
+def test_llm_usage_missing_provider_usage_is_explicitly_estimated_or_unavailable() -> None:
+    class FakeLiteLlm:
+        def token_counter(self, **kwargs: object) -> int:
+            if kwargs.get("messages") is not None:
+                return 11
+            return 3
+
+        def cost_per_token(self, **_kwargs: object) -> tuple[float, float]:
+            return (0.001, 0.002)
+
+    estimated = _normalize_litellm_usage(
+        None,
+        litellm_module=FakeLiteLlm(),
+        model_id="fake/model",
+        messages=[{"role": "user", "content": "hello"}],
+        tools=[],
+        content="answer",
+    )
+    cost = _calculate_litellm_cost(
+        litellm_module=FakeLiteLlm(),
+        response=None,
+        model_id="fake/model",
+        normalized_usage=estimated,
+        duration_ms=9,
+    )
+    unavailable = _normalize_litellm_usage(
+        None,
+        litellm_module=None,
+        model_id="fake/model",
+        messages=[],
+        tools=None,
+        content="",
+    )
+
+    assert estimated["usage_status"] == "estimated"
+    assert estimated["usage_reason_code"] == "provider_usage_missing"
+    assert estimated["prompt_tokens"] == 11
+    assert estimated["completion_tokens"] == 3
+    assert cost["cost_status"] == "estimated"
+    assert cost["total_cost_usd"] == 0.003
+    assert unavailable["usage_status"] == "unavailable"
+    assert unavailable["usage_reason_code"] == "provider_usage_missing_litellm_unavailable"
+
+
+def test_chat_turn_writes_llm_usage_ledger_and_trace_cost_summary() -> None:
+    class UsageLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="source=fake_model as_of=2026-06-26 已完成回答。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=7,
+                usage={
+                    "prompt_tokens": 21,
+                    "completion_tokens": 9,
+                    "total_tokens": 30,
+                    "usage_status": "recorded",
+                    "usage_source": "provider_reported",
+                    "total_cost_usd": "0.0003000000",
+                    "cost_status": "recorded",
+                    "cost_source": "litellm_model_cost",
+                    "currency": "USD",
+                },
+                usage_event={
+                    "prompt_tokens": 21,
+                    "completion_tokens": 9,
+                    "total_tokens": 30,
+                    "usage_source": "provider_reported",
+                    "usage_status": "recorded",
+                    "prompt_tokens_estimated": False,
+                    "completion_tokens_estimated": False,
+                    "usage_raw_json": {"prompt_tokens": 21, "completion_tokens": 9, "total_tokens": 30},
+                    "prompt_cost_usd": "0.0002100000",
+                    "completion_cost_usd": "0.0000900000",
+                    "total_cost_usd": "0.0003000000",
+                    "currency": "USD",
+                    "cost_source": "litellm_model_cost",
+                    "cost_status": "recorded",
+                    "pricing_snapshot_json": {"model": "fake-primary"},
+                    "request_meta_json": {"message_count": 1, "prompt_text_retained": False},
+                    "response_meta_json": {"content_chars": 34, "prompt_text_retained": False},
+                },
+            )
+
+    svc = _chat_service(UsageLlmClient())
+    result = svc.chat_turn(ChatTurnRequest(message="请回答一个普通问题", dialogue_mode_override="dialogue"))
+    trace = svc.repository.get_record("trace_events", result["trace"]["trace_id"])
+    assert trace is not None
+    usage_page = svc.list_llm_usage_events(trace_id=trace["trace_id"])
+    usage_row = usage_page["items"][0]
+    summary = trace["cost_json"]["usage_summary"]
+
+    assert usage_page["total"] == 1
+    assert usage_row["trace_id"] == trace["trace_id"]
+    assert usage_row["task_id"] == result["task"]["task_id"]
+    assert usage_row["conversation_id"] == result["conversation"]["conversation_id"]
+    assert usage_row["prompt_tokens"] == 21
+    assert usage_row["completion_tokens"] == 9
+    assert usage_row["total_tokens"] == 30
+    assert usage_row["request_meta_json"]["prompt_text_retained"] is False
+    assert "请回答一个普通问题" not in json.dumps(usage_row, ensure_ascii=False)
+    assert summary["call_count"] == 1
+    assert summary["total_tokens"] == 30
+    assert trace["cost_json"]["usage_event_refs"] == [f"assistant_llm_usage_events:{usage_row['usage_event_id']}"]
+    assert trace["cost_json"]["source_of_truth"] == "assistant_llm_usage_events"
+
+
+def test_missing_fake_usage_is_recorded_as_explicit_unavailable_not_empty() -> None:
+    class MissingUsageLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="source=fake_model as_of=2026-06-26 已完成回答。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    svc = _chat_service(MissingUsageLlmClient())
+    result = svc.chat_turn(ChatTurnRequest(message="请回答一个普通问题", dialogue_mode_override="dialogue"))
+    usage = svc.list_llm_usage_events(trace_id=result["trace"]["trace_id"])["items"][0]
+
+    assert usage["usage_status"] == "unavailable"
+    assert usage["usage_reason_code"] == "llm_result_usage_missing"
+    assert usage["cost_status"] == "unavailable"
+    assert usage["cost_reason_code"] == "cost_not_calculated_for_injected_llm_result"
+    assert usage["usage_raw_json"]["reason_code"] == "llm_result_usage_missing"
+
+
+def test_llm_usage_summary_aggregates_multiple_react_model_turns() -> None:
+    svc = _chat_service(FakeLlmClient())
+    trace = svc.create_trace_event(TraceEventCreate(task_id="rat_usage", event_type="llm_call", component="pytest", status="ok"))
+    turn_a = McpToolCall(server_key="aistock-qe", tool_name="read", payload_json={}, stable_call_id="a")
+
+    react_result = ReactGroundingResult(
+        final_text="done",
+        messages=[],
+        tool_calls=[turn_a],
+        tool_results=[],
+        trace_steps=[],
+        evidence_guard=EvidenceGuardDecision(True, "done", "ok", 1, 1),
+        iterations=2,
+        stopped_reason="model_finished",
+        model_turns=[
+            ModelTurn(content="first", provider="fake", model="fake-primary", duration_ms=2, usage={"prompt_tokens": 10, "completion_tokens": 5, "usage_status": "recorded", "usage_source": "provider_reported"}),
+            ModelTurn(content="second", provider="fake", model="fake-primary", duration_ms=3, usage={"prompt_tokens": 20, "completion_tokens": 7, "usage_status": "estimated", "usage_source": "litellm_token_counter_estimated", "prompt_tokens_estimated": True}),
+        ],
+    )
+
+    cost_json = svc._record_llm_usage_events_for_trace(
+        trace=trace,
+        task_id="rat_usage",
+        conversation_id="conv_usage",
+        model_profile_id="model_primary_reasoner",
+        react_result=react_result,
+    )
+
+    assert cost_json["usage_summary"]["call_count"] == 2
+    assert cost_json["usage_summary"]["prompt_tokens"] == 30
+    assert cost_json["usage_summary"]["completion_tokens"] == 12
+    assert cost_json["usage_summary"]["estimated_usage_event_count"] == 1
+    assert len(cost_json["usage_event_refs"]) == 2
 
 
 def test_chat_turn_preserves_complete_long_raw_api_response() -> None:

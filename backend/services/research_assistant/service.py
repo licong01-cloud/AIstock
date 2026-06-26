@@ -15,7 +15,7 @@ import hashlib
 import subprocess
 import threading
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
 from time import perf_counter
@@ -1466,6 +1466,7 @@ class LlmCallResult:
     duration_ms: int
     usage: dict[str, Any]
     tool_calls: list[McpToolCall] | None = None
+    usage_event: dict[str, Any] | None = None
 
 
 def _litellm_message_content(value: Any) -> str:
@@ -1558,6 +1559,274 @@ def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, str]
     return sorted(calls, key=lambda call: call.sorted_key())
 
 
+def _safe_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _safe_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_jsonable(item) for item in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return _safe_jsonable(value.model_dump())
+        except Exception:  # noqa: BLE001 - preserve explicit unsupported object metadata below.
+            pass
+    if hasattr(value, "dict"):
+        try:
+            return _safe_jsonable(value.dict())
+        except Exception:  # noqa: BLE001 - preserve explicit unsupported object metadata below.
+            pass
+    attrs = {
+        key: getattr(value, key)
+        for key in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "reasoning_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+            "completion_tokens_details",
+            "prompt_tokens_details",
+        )
+        if hasattr(value, key)
+    }
+    if attrs:
+        return _safe_jsonable(attrs)
+    return {"unsupported_usage_object_type": type(value).__name__, "repr": repr(value)[:200]}
+
+
+def _usage_field(usage: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in usage:
+            return usage.get(key)
+    return None
+
+
+def _as_nonnegative_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def _usage_detail_value(usage: dict[str, Any], detail_key: str, *keys: str) -> int | None:
+    detail = usage.get(detail_key)
+    if isinstance(detail, dict):
+        return _as_nonnegative_int(_usage_field(detail, *keys))
+    return None
+
+
+def _response_choice_finish_reason(response: Any) -> str | None:
+    try:
+        choice = response.choices[0]
+    except Exception:
+        return None
+    return str(getattr(choice, "finish_reason", "") or "").strip() or None
+
+
+def _build_request_meta(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> dict[str, Any]:
+    return {
+        "message_count": len(messages),
+        "tool_schema_count": len(tools or []),
+        "estimated_input_chars": sum(len(_litellm_message_content(message.get("content"))) for message in messages),
+        "prompt_text_retained": False,
+    }
+
+
+def _build_response_meta(content: str, tool_calls: list[McpToolCall], *, finish_reason: str | None = None) -> dict[str, Any]:
+    return {
+        "content_chars": len(content or ""),
+        "tool_call_count": len(tool_calls),
+        "finish_reason": finish_reason,
+        "prompt_text_retained": False,
+    }
+
+
+def _estimate_tokens_with_litellm(*, litellm_module: Any, model_id: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, content: str) -> dict[str, Any]:
+    estimates: dict[str, Any] = {"usage_source": "litellm_token_counter_estimated", "usage_status": "estimated", "usage_reason_code": "provider_usage_missing"}
+    try:
+        prompt_tokens = litellm_module.token_counter(model=model_id, messages=messages, tools=tools or None)
+        estimates["prompt_tokens"] = _as_nonnegative_int(prompt_tokens)
+        estimates["prompt_tokens_estimated"] = True
+    except Exception as exc:  # noqa: BLE001 - expose estimate failure as reason_code.
+        estimates["prompt_tokens"] = None
+        estimates["prompt_tokens_estimated"] = False
+        estimates["usage_status"] = "unavailable"
+        estimates["usage_reason_code"] = f"provider_usage_missing_token_counter_failed:{type(exc).__name__}"
+    if content:
+        try:
+            completion_tokens = litellm_module.token_counter(model=model_id, text=content, count_response_tokens=True)
+            estimates["completion_tokens"] = _as_nonnegative_int(completion_tokens)
+            estimates["completion_tokens_estimated"] = True
+        except Exception:
+            estimates["completion_tokens"] = None
+            estimates["completion_tokens_estimated"] = False
+    else:
+        estimates["completion_tokens"] = 0
+        estimates["completion_tokens_estimated"] = True
+    prompt = estimates.get("prompt_tokens")
+    completion = estimates.get("completion_tokens")
+    estimates["total_tokens"] = prompt + completion if isinstance(prompt, int) and isinstance(completion, int) else None
+    return estimates
+
+
+def _normalize_litellm_usage(
+    usage_raw: Any,
+    *,
+    litellm_module: Any | None,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    content: str,
+) -> dict[str, Any]:
+    usage_json = _safe_jsonable(usage_raw)
+    usage = usage_json if isinstance(usage_json, dict) else {}
+    prompt_tokens = _as_nonnegative_int(_usage_field(usage, "prompt_tokens", "input_tokens"))
+    completion_tokens = _as_nonnegative_int(_usage_field(usage, "completion_tokens", "output_tokens"))
+    total_tokens = _as_nonnegative_int(_usage_field(usage, "total_tokens"))
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+    reasoning_tokens = _as_nonnegative_int(_usage_field(usage, "reasoning_tokens"))
+    if reasoning_tokens is None:
+        reasoning_tokens = _usage_detail_value(usage, "completion_tokens_details", "reasoning_tokens")
+    cache_creation = _as_nonnegative_int(_usage_field(usage, "cache_creation_input_tokens"))
+    if cache_creation is None:
+        cache_creation = _usage_detail_value(usage, "prompt_tokens_details", "cache_creation_input_tokens")
+    cache_read = _as_nonnegative_int(_usage_field(usage, "cache_read_input_tokens"))
+    if cache_read is None:
+        cache_read = _usage_detail_value(usage, "prompt_tokens_details", "cache_read_input_tokens", "cached_tokens")
+    has_tokens = any(value is not None for value in (prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cache_creation, cache_read))
+    if has_tokens:
+        usage_source = "provider_reported" if isinstance(usage_raw, dict) else "litellm_usage_object"
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "reasoning_tokens": reasoning_tokens,
+            "cache_creation_input_tokens": cache_creation,
+            "cache_read_input_tokens": cache_read,
+            "prompt_tokens_estimated": False,
+            "completion_tokens_estimated": False,
+            "usage_source": usage_source,
+            "usage_status": "recorded",
+            "usage_reason_code": None,
+            "usage_raw_json": usage,
+        }
+    if litellm_module is not None:
+        estimated = _estimate_tokens_with_litellm(litellm_module=litellm_module, model_id=model_id, messages=messages, tools=tools, content=content)
+        estimated.update(
+            {
+                "reasoning_tokens": None,
+                "cache_creation_input_tokens": None,
+                "cache_read_input_tokens": None,
+                "usage_raw_json": usage if usage else {"usage_missing": True, "raw_type": type(usage_raw).__name__},
+            }
+        )
+        return estimated
+    return {
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+        "reasoning_tokens": None,
+        "cache_creation_input_tokens": None,
+        "cache_read_input_tokens": None,
+        "prompt_tokens_estimated": False,
+        "completion_tokens_estimated": False,
+        "usage_source": "unavailable",
+        "usage_status": "unavailable",
+        "usage_reason_code": "provider_usage_missing_litellm_unavailable",
+        "usage_raw_json": usage if usage else {"usage_missing": True, "raw_type": type(usage_raw).__name__},
+    }
+
+
+def _calculate_litellm_cost(
+    *,
+    litellm_module: Any | None,
+    response: Any | None,
+    model_id: str,
+    normalized_usage: dict[str, Any],
+    duration_ms: int,
+) -> dict[str, Any]:
+    if litellm_module is None:
+        return {"cost_source": "unavailable", "cost_status": "unavailable", "cost_reason_code": "litellm_unavailable", "pricing_snapshot_json": {}}
+    prompt_tokens = int(normalized_usage.get("prompt_tokens") or 0)
+    completion_tokens = int(normalized_usage.get("completion_tokens") or 0)
+    if prompt_tokens == 0 and completion_tokens == 0:
+        return {"cost_source": "unavailable", "cost_status": "unavailable", "cost_reason_code": "usage_tokens_unavailable", "pricing_snapshot_json": {"model": model_id}}
+    try:
+        prompt_cost, completion_cost = litellm_module.cost_per_token(
+            model=model_id,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            response_time_ms=float(duration_ms),
+            usage_object=normalized_usage.get("usage_raw_json") if isinstance(normalized_usage.get("usage_raw_json"), dict) else None,
+        )
+        total_cost = float(prompt_cost or 0) + float(completion_cost or 0)
+        return {
+            "prompt_cost_usd": prompt_cost,
+            "completion_cost_usd": completion_cost,
+            "total_cost_usd": total_cost,
+            "currency": "USD",
+            "cost_source": "litellm_model_cost",
+            "cost_status": "estimated" if normalized_usage.get("usage_status") == "estimated" else "recorded",
+            "cost_reason_code": None,
+            "pricing_snapshot_json": {"model": model_id, "source": "litellm.cost_per_token"},
+        }
+    except Exception as cost_exc:
+        reason = f"litellm_cost_per_token_failed:{type(cost_exc).__name__}"
+        try:
+            total_cost = litellm_module.completion_cost(completion_response=response, model=model_id) if response is not None else None
+            return {
+                "prompt_cost_usd": None,
+                "completion_cost_usd": None,
+                "total_cost_usd": total_cost,
+                "currency": "USD",
+                "cost_source": "litellm_model_cost",
+                "cost_status": "estimated" if normalized_usage.get("usage_status") == "estimated" else "recorded",
+                "cost_reason_code": None,
+                "pricing_snapshot_json": {"model": model_id, "source": "litellm.completion_cost", "split_cost_unavailable_reason": reason},
+            }
+        except Exception as fallback_exc:  # noqa: BLE001 - record concrete no-silent cost failure.
+            return {
+                "prompt_cost_usd": None,
+                "completion_cost_usd": None,
+                "total_cost_usd": None,
+                "currency": "USD",
+                "cost_source": "unavailable",
+                "cost_status": "unavailable",
+                "cost_reason_code": f"{reason};completion_cost_failed:{type(fallback_exc).__name__}",
+                "pricing_snapshot_json": {"model": model_id, "source": "litellm", "error": str(fallback_exc)[:200]},
+            }
+
+
+def _llm_usage_summary_dict(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "prompt_tokens": payload.get("prompt_tokens"),
+        "completion_tokens": payload.get("completion_tokens"),
+        "total_tokens": payload.get("total_tokens"),
+        "reasoning_tokens": payload.get("reasoning_tokens"),
+        "cache_creation_input_tokens": payload.get("cache_creation_input_tokens"),
+        "cache_read_input_tokens": payload.get("cache_read_input_tokens"),
+        "prompt_tokens_estimated": bool(payload.get("prompt_tokens_estimated")),
+        "completion_tokens_estimated": bool(payload.get("completion_tokens_estimated")),
+        "usage_source": payload.get("usage_source"),
+        "usage_status": payload.get("usage_status"),
+        "usage_reason_code": payload.get("usage_reason_code"),
+        "prompt_cost_usd": payload.get("prompt_cost_usd"),
+        "completion_cost_usd": payload.get("completion_cost_usd"),
+        "total_cost_usd": payload.get("total_cost_usd"),
+        "currency": payload.get("currency") or "USD",
+        "cost_source": payload.get("cost_source"),
+        "cost_status": payload.get("cost_status"),
+        "cost_reason_code": payload.get("cost_reason_code"),
+    }
+
+
 
 
 def _default_workflow_capabilities() -> list[dict[str, Any]]:
@@ -1639,8 +1908,33 @@ class ResearchAssistantLlmClient:
         content = str(message.content or "").strip()
         tool_calls = _extract_litellm_tool_calls(message, tool_registry)
         usage_raw = getattr(response, "usage", None)
-        usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
         finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
+        normalized_usage = _normalize_litellm_usage(
+            usage_raw,
+            litellm_module=litellm,
+            model_id=model_id,
+            messages=provider_messages,
+            tools=tools,
+            content=content,
+        )
+        cost = _calculate_litellm_cost(
+            litellm_module=litellm,
+            response=response,
+            model_id=model_id,
+            normalized_usage=normalized_usage,
+            duration_ms=duration_ms,
+        )
+        usage_event = {
+            **normalized_usage,
+            **cost,
+            "provider": provider,
+            "model": model_id,
+            "litellm_model": model_id,
+            "duration_ms": duration_ms,
+            "request_meta_json": _build_request_meta(provider_messages, tools),
+            "response_meta_json": _build_response_meta(content, tool_calls, finish_reason=finish_reason or None),
+        }
+        usage = _llm_usage_summary_dict(usage_event)
         if finish_reason == "length":
             raise RuntimeError(
                 "llm_completion_truncated: provider returned finish_reason=length; "
@@ -1648,7 +1942,7 @@ class ResearchAssistantLlmClient:
             )
         if not content and not tool_calls:
             raise RuntimeError("assistant LLM returned empty content")
-        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, tool_calls=tool_calls)
+        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, usage_event=usage_event, tool_calls=tool_calls)
 
     def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int | None) -> LlmCallResult:
         return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
@@ -3617,6 +3911,268 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         view["direct_github_create_performed"] = False
         return view
 
+    def list_llm_usage_events(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        conversation_id: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        filters = {
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "model": model,
+            "provider": provider,
+        }
+        resolved_limit = int(limit) if limit is not None else self.configured_limit("api_list_llm_usage_events")
+        if resolved_limit < 1:
+            raise ValueError("limit must be positive")
+        max_limit = self.configured_limit("api_list_max_page_size")
+        if resolved_limit > max_limit:
+            raise ValueError(f"limit exceeds configured api_list_max_page_size: {max_limit}")
+        if hasattr(self.repository, "list_llm_usage_events"):
+            page = self.repository.list_llm_usage_events(
+                filters=filters,
+                date_from=date_from,
+                date_to=date_to,
+                limit=resolved_limit,
+                offset=offset,
+            )
+        else:
+            page = self.repository.list_records("llm_usage_events", filters=filters, limit=resolved_limit, offset=offset)
+        page.setdefault("source_of_truth", "assistant_llm_usage_events")
+        page.setdefault("prompt_text_retained", False)
+        return page
+
+    def llm_usage_summary(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        conversation_id: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        page = self.list_llm_usage_events(
+            trace_id=trace_id,
+            task_id=task_id,
+            conversation_id=conversation_id,
+            model=model,
+            provider=provider,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit or self.configured_limit("api_list_llm_usage_events"),
+        )
+        filters = {
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "model": model,
+            "provider": provider,
+        }
+        summary = (
+            self.repository.summarize_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to)
+            if hasattr(self.repository, "summarize_llm_usage_events")
+            else self._llm_usage_summary_from_events(page["items"])
+        )
+        return {
+            "schema_version": "aistock_research_assistant_llm_usage_summary_v1",
+            "source_of_truth": "assistant_llm_usage_events",
+            "filters": {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "conversation_id": conversation_id,
+                "model": model,
+                "provider": provider,
+                "date_from": date_from,
+                "date_to": date_to,
+            },
+            "summary": summary,
+            "events_page": page,
+        }
+
+    @staticmethod
+    def _usage_event_from_turn(
+        turn: ModelTurn,
+        *,
+        trace_id: str,
+        task_id: str,
+        conversation_id: str,
+        model_profile_id: str | None,
+        call_group_id: str,
+        call_index: int,
+    ) -> dict[str, Any]:
+        payload = dict(turn.usage_event or {})
+        usage = dict(turn.usage or {})
+        if not payload:
+            prompt_tokens = _as_nonnegative_int(usage.get("prompt_tokens"))
+            completion_tokens = _as_nonnegative_int(usage.get("completion_tokens"))
+            total_tokens = _as_nonnegative_int(usage.get("total_tokens"))
+            if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+                total_tokens = prompt_tokens + completion_tokens
+            has_usage = any(value is not None for value in (prompt_tokens, completion_tokens, total_tokens))
+            payload = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "reasoning_tokens": _as_nonnegative_int(usage.get("reasoning_tokens")),
+                "cache_creation_input_tokens": _as_nonnegative_int(usage.get("cache_creation_input_tokens")),
+                "cache_read_input_tokens": _as_nonnegative_int(usage.get("cache_read_input_tokens")),
+                "prompt_tokens_estimated": bool(usage.get("prompt_tokens_estimated")),
+                "completion_tokens_estimated": bool(usage.get("completion_tokens_estimated")),
+                "usage_source": str(usage.get("usage_source") or ("provider_reported" if has_usage else "unavailable")),
+                "usage_status": str(usage.get("usage_status") or ("recorded" if has_usage else "unavailable")),
+                "usage_reason_code": usage.get("usage_reason_code") if has_usage else "llm_result_usage_missing",
+                "usage_raw_json": usage if usage else {"usage_missing": True, "reason_code": "llm_result_usage_missing"},
+                "cost_source": str(usage.get("cost_source") or "unavailable"),
+                "cost_status": str(usage.get("cost_status") or "unavailable"),
+                "cost_reason_code": usage.get("cost_reason_code") or "cost_not_calculated_for_injected_llm_result",
+                "currency": str(usage.get("currency") or "USD"),
+                "pricing_snapshot_json": {"source": "injected_llm_result", "cost_calculated": False},
+                "request_meta_json": {"prompt_text_retained": False, "source": "injected_llm_result"},
+                "response_meta_json": _build_response_meta(turn.content, list(turn.tool_calls or [])),
+            }
+        payload.setdefault("provider", turn.provider)
+        payload.setdefault("model", turn.model)
+        payload.setdefault("litellm_model", turn.model)
+        payload.setdefault("component", "research_assistant.llm")
+        payload.setdefault("phase", "react_iteration")
+        payload.setdefault("duration_ms", turn.duration_ms)
+        payload.setdefault("currency", "USD")
+        payload.setdefault("request_meta_json", {"prompt_text_retained": False})
+        payload.setdefault("response_meta_json", _build_response_meta(turn.content, list(turn.tool_calls or [])))
+        payload.setdefault("pricing_snapshot_json", {})
+        payload.setdefault("usage_raw_json", usage if usage else {})
+        return {
+            "usage_event_id": new_id("llmu"),
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "call_group_id": call_group_id,
+            "call_index": call_index,
+            "model_profile_id": model_profile_id,
+            **payload,
+        }
+
+    def _record_llm_usage_events_for_trace(
+        self,
+        *,
+        trace: dict[str, Any],
+        task_id: str,
+        conversation_id: str,
+        model_profile_id: str | None,
+        react_result: ReactGroundingResult,
+    ) -> dict[str, Any]:
+        turns = [
+            turn
+            for turn in react_result.model_turns
+            if turn.provider != "route_seed" and (turn.usage_event or turn.usage or turn.duration_ms or turn.model)
+        ]
+        recorded: list[dict[str, Any]] = []
+        for index, turn in enumerate(turns, start=1):
+            row = self._usage_event_from_turn(
+                turn,
+                trace_id=str(trace["trace_id"]),
+                task_id=task_id,
+                conversation_id=conversation_id,
+                model_profile_id=model_profile_id,
+                call_group_id=task_id,
+                call_index=index,
+            )
+            row["phase"] = "initial_chat" if index == 1 else "react_iteration"
+            recorded.append(self.repository.create_record("llm_usage_events", row))
+        summary = self._llm_usage_summary_from_events(recorded)
+        return {
+            "usage_summary": summary,
+            "usage_event_refs": [f"assistant_llm_usage_events:{row['usage_event_id']}" for row in recorded],
+            "source_of_truth": "assistant_llm_usage_events",
+            "prompt_text_retained": False,
+        }
+
+    def _record_llm_usage_accounting_failure(
+        self,
+        *,
+        trace_id: str,
+        task_id: str,
+        exc: BaseException,
+    ) -> dict[str, Any]:
+        reason = {
+            "status": "failed",
+            "reason_code": "llm_usage_accounting_failed",
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+            "source_of_truth": "assistant_llm_usage_events",
+            "prompt_text_retained": False,
+        }
+        logger.exception("Research Assistant LLM usage accounting failed: trace_id=%s task_id=%s", trace_id, task_id)
+        self.add_task_event(
+            task_id,
+            TaskEventCreate(
+                event_type="llm_usage_accounting_failed",
+                severity="warning",
+                message=f"LLM usage accounting failed: {type(exc).__name__}: {exc}",
+                payload_json={"trace_id": trace_id, **reason},
+            ),
+        )
+        return {"usage_summary": reason, "source_of_truth": "assistant_llm_usage_events", "usage_event_refs": []}
+
+    @staticmethod
+    def _llm_usage_summary_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+        totals = {
+            "call_count": len(events),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "reasoning_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "estimated_usage_event_count": 0,
+            "unavailable_usage_event_count": 0,
+            "unavailable_cost_event_count": 0,
+            "failed_cost_event_count": 0,
+            "total_cost_usd": 0.0,
+            "currency": "USD",
+            "usage_status": "recorded" if events else "unavailable",
+            "cost_status": "recorded" if events else "unavailable",
+        }
+        cost_available = False
+        for event in events:
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens", "reasoning_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+                totals[key] += int(event.get(key) or 0)
+            if event.get("prompt_tokens_estimated") or event.get("completion_tokens_estimated") or event.get("usage_status") == "estimated":
+                totals["estimated_usage_event_count"] += 1
+            if event.get("usage_status") in {"unavailable", "failed"}:
+                totals["unavailable_usage_event_count"] += 1
+            if event.get("cost_status") == "unavailable":
+                totals["unavailable_cost_event_count"] += 1
+            if event.get("cost_status") == "failed":
+                totals["failed_cost_event_count"] += 1
+            if event.get("total_cost_usd") is not None:
+                cost_available = True
+                totals["total_cost_usd"] += float(event.get("total_cost_usd") or 0)
+        if totals["unavailable_usage_event_count"]:
+            totals["usage_status"] = "unavailable"
+        elif totals["estimated_usage_event_count"]:
+            totals["usage_status"] = "estimated"
+        if totals["failed_cost_event_count"]:
+            totals["cost_status"] = "failed"
+        elif totals["unavailable_cost_event_count"]:
+            totals["cost_status"] = "unavailable"
+        elif not cost_available:
+            totals["cost_status"] = "unavailable"
+        totals["total_cost_usd"] = f"{totals['total_cost_usd']:.10f}" if cost_available else None
+        return totals
+
     @staticmethod
     def _default_query_limit_key(kind: str) -> str:
         if kind == "mcp_tools":
@@ -4303,9 +4859,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                         "stopped_reason": react_result.stopped_reason,
                     },
                 },
-                cost_json={"usage": llm_result.usage},
+                cost_json={"usage_summary": {"status": "pending"}, "source_of_truth": "assistant_llm_usage_events"},
             )
         )
+        try:
+            cost_json = self._record_llm_usage_events_for_trace(
+                trace=trace,
+                task_id=task["task_id"],
+                conversation_id=conversation_id,
+                model_profile_id=model_profile["model_profile_id"],
+                react_result=react_result,
+            )
+        except Exception as exc:  # noqa: BLE001 - no silent accounting failure; chat answer still returns.
+            cost_json = self._record_llm_usage_accounting_failure(trace_id=trace["trace_id"], task_id=task["task_id"], exc=exc)
+        trace = self.repository.update_record("trace_events", trace["trace_id"], {"cost_json": cost_json})
         cards["context_health"] = context_health
         cards["runtime_code"] = self.runtime_code_visibility()
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
@@ -6271,6 +6838,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     model=first_llm_result.model,
                     duration_ms=first_llm_result.duration_ms,
                     usage=first_llm_result.usage,
+                    usage_event=first_llm_result.usage_event,
                     tool_calls=list(first_llm_result.tool_calls or []),
                 )
             first_turn_consumed = True
@@ -6289,6 +6857,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                usage_event=result.usage_event,
                 tool_calls=list(result.tool_calls or []),
             )
 
@@ -6328,6 +6897,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             model=first_llm_result.model,
             duration_ms=first_llm_result.duration_ms,
             usage=first_llm_result.usage,
+            usage_event=first_llm_result.usage_event,
         )
         grounded_llm_result = LlmCallResult(
             content=react_result.final_text,
@@ -6446,6 +7016,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     model=first_llm_result.model,
                     duration_ms=first_llm_result.duration_ms,
                     usage=first_llm_result.usage,
+                    usage_event=first_llm_result.usage_event,
                     tool_calls=list(first_llm_result.tool_calls or []),
                 )
             ],

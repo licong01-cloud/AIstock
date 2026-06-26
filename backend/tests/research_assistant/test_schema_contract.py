@@ -84,6 +84,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_reports",
         "assistant_agenda_items",
         "assistant_trace_events",
+        "assistant_llm_usage_events",
     }:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
@@ -103,6 +104,7 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     assert "COMMENT ON TABLE assistant_reflection_cards" in sql
     assert "COMMENT ON TABLE assistant_prompt_lab_runs" in sql
     assert "COMMENT ON TABLE assistant_skill_library" in sql
+    assert "COMMENT ON TABLE assistant_llm_usage_events" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -351,6 +353,50 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
     )
     _assert_columns(
         table_columns,
+        "llm_usage_events",
+        {
+            "usage_event_id": "llmu_x",
+            "trace_id": "trace_x",
+            "task_id": "rat_x",
+            "conversation_id": "conv_x",
+            "message_id": "msg_x",
+            "call_group_id": "rat_x",
+            "call_index": 1,
+            "phase": "initial_chat",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-chat",
+            "model_profile_id": "model_x",
+            "litellm_model": "deepseek/deepseek-chat",
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "reasoning_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "prompt_tokens_estimated": False,
+            "completion_tokens_estimated": False,
+            "usage_source": "provider_reported",
+            "usage_status": "recorded",
+            "usage_reason_code": "provider_usage_missing",
+            "prompt_cost_usd": "0.0001000000",
+            "completion_cost_usd": "0.0000500000",
+            "total_cost_usd": "0.0001500000",
+            "currency": "USD",
+            "cost_source": "litellm_model_cost",
+            "cost_status": "recorded",
+            "cost_reason_code": "pricing_missing",
+            "pricing_snapshot_json": {"model": "deepseek/deepseek-chat"},
+            "usage_raw_json": {"prompt_tokens": 100},
+            "request_meta_json": {"message_count": 2, "prompt_text_retained": False},
+            "response_meta_json": {"content_chars": 40, "prompt_text_retained": False},
+            "duration_ms": 1200,
+            "started_at": "2099-12-31T00:00:00+00:00",
+            "completed_at": "2099-12-31T00:00:01+00:00",
+        },
+    )
+    _assert_columns(
+        table_columns,
         "temp_memories",
         {"temp_memory_id": "tmpmem_x", "task_id": "rat_x", "stream_id": None, "memory_type": "task_state", "content_json": {}, "content_text": "progress", "evidence_refs": [], "confidence": 0.5, "expires_at": "2099-12-31T00:00:00+00:00", "model_profile_id": "model", "created_by_model_profile_id": "model"},
     )
@@ -388,3 +434,17 @@ def test_bug439_repair_capability_registry_migration_is_narrow_and_reversible() 
     assert "DROP" not in forward.upper()
     assert "Capability Registry" in rollback
     assert "UPDATE assistant_capabilities" not in rollback
+
+
+def test_llm_usage_accounting_migration_contract_and_privacy() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/011_llm_usage_accounting.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/011_llm_usage_accounting.rollback.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS assistant_llm_usage_events" in forward
+    assert "COMMENT ON TABLE assistant_llm_usage_events" in forward
+    assert "CREATE INDEX IF NOT EXISTS idx_aluer_completed_at" in forward
+    assert "CONSTRAINT ck_aluer_usage_status" in forward
+    assert "prompt_text" not in _table_columns(forward, "assistant_llm_usage_events")
+    assert "message_text" not in _table_columns(forward, "assistant_llm_usage_events")
+    assert "DROP TABLE IF EXISTS assistant_llm_usage_events" in rollback
+    assert "assistant_llm_usage_events" in TABLES["llm_usage_events"]["table"]

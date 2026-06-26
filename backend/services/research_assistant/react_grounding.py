@@ -103,6 +103,7 @@ class ModelTurn:
     duration_ms: int
     usage: dict[str, Any] = field(default_factory=dict)
     tool_calls: list[McpToolCall] = field(default_factory=list)
+    usage_event: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
