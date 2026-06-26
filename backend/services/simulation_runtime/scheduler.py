@@ -4796,15 +4796,29 @@ class SimulationLifecycleScheduler:
                         "trade_date": plan.target_trade_date.isoformat(),
                     },
                 )
-            report = MiniQMTExecutionBridge(
+            reports = MiniQMTExecutionBridge(
                 managed_order_service=context.managed_order_service
-            ).run_shadow_reconciliation(
+            ).run_shadow_reconciliations(
                 run=run,
                 plan=plan,
                 binding=binding,
                 mode=mode,
                 price_by_symbol=context.price_by_symbol or context.current_prices,
+                scenarios=MiniQMTExecutionBridge.required_canary_shadow_scenarios(),
             )
+            scenario_summaries = [
+                {
+                    "report_id": report.report_id,
+                    "runtime_id": report.runtime_id,
+                    "durable_event_id": report.durable_event_id,
+                    "scenario": report.scenario.value,
+                    "difference_count": len(report.differences),
+                    "fatal_difference_count": len(report.fatal_differences),
+                    "metadata": report.metadata,
+                }
+                for report in reports
+            ]
+            report = reports[-1]
             return self.repository.update_simulation_daily_run(
                 run.run_id,
                 payload_patch={
@@ -4813,6 +4827,10 @@ class SimulationLifecycleScheduler:
                         "status": "SUCCEEDED",
                         "reason_code": "MINIQMT_SHADOW_RECONCILIATION_REPORTED",
                         "env_var": MINIQMT_SHADOW_ENABLED_ENV,
+                        "report_count": len(reports),
+                        "reports": scenario_summaries,
+                        "covered_scenarios": [item["scenario"] for item in scenario_summaries],
+                        "durable_event_ids": [item["durable_event_id"] for item in scenario_summaries],
                         "report_id": report.report_id,
                         "runtime_id": report.runtime_id,
                         "durable_event_id": report.durable_event_id,

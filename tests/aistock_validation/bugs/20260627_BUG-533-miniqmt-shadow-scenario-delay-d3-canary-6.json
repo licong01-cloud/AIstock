@@ -1,0 +1,81 @@
+{
+  "actual": "bridges.py:324 run_shadow_reconciliation 硬编码 scenario=MiniQMTShadowScenario.DELAY 无参数化入口; 生产SIM接线(scheduler.py:4801调用侧)只跑一次→shadow报告scenario恒为delay; gray.py:429-436 covered_scenarios从accepted report.scenario派生→恒={delay}; required(gray.py:39-48 MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS={full_fill,partial_55_stream,reject,cancel,disconnect,restart_recovery})永不满足→canary切event_loop永被MINIQMT_GRAY_SHADOW_SCENARIO_COVERAGE_MISSING拒",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "docs/handoff/",
+    "tests/aistock_validation/bugs/20260627_BUG-533-miniqmt-shadow-scenario-delay-d3-canary-6.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-533",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-26T16:35:58.988531Z",
+  "description": "A方案(MiniQMT event_loop)上线canary前置D3.7(D3.6 lotting已合)。根因: 生产SIM影子接线只产单一 scenario=delay, 导致D3 canary硬门的6场景集覆盖维度永不满足。\n\n证据链(file:line 为 origin/main HEAD b4cbb795 附近): (1) bridges.py 的 MiniQMTExecutionBridge.run_shadow_reconciliation(约324行)硬编码 scenario=MiniQMTShadowScenario.DELAY, 无参数化入口。(2) 生产SIM接线 scheduler.py(约4801调用侧)每次只调一次 run_shadow_reconciliation。(3) 故 durable SHADOW_RECONCILIATION_REPORTED 的 scenario 字段恒为 delay。(4) gray.py:429-436 covered_scenarios 从 accepted report.scenario 派生 → 恒={delay}。(5) gray.py:39-48 MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS={full_fill,partial_55_stream,reject,cancel,disconnect,restart_recovery} 永不被覆盖 → switch_to_event_loop(require_shadow_evidence=True)永被 MINIQMT_GRAY_SHADOW_SCENARIO_COVERAGE_MISSING 拒。\n\n底层能力已具备(仅生产路径未接): MiniQMTShadowScenario 7场景枚举(shadow.py:45-52); _drive_event_loop_runtime 全7类型event处理(shadow.py:510-596); MiniQMTShadowParallelRunner.run / MiniQMTShadowReconciler.reconcile 均已接受 scenario 参数; 测试 _real_replay_events(scenario) (test_miniqmt_phase5_shadow_reconciliation.py:69-134)已按场景造对应 event 序列。\n\n修法(生产侧场景注入接线, 半生产非造假): 让生产SIM影子接线对同源真实intent按6场景集各产一份 durable SHADOW_RECONCILIATION_REPORTED。bridges.py 去硬编码 DELAY, 改为接受 scenario(列表)参数 / 或对 required 场景集循环驱动; scheduler.py 调用侧按场景集驱动。各场景用对应 event 序列(复用 _real_replay_events 同款构造, 提炼到可被生产复用的 helper, 不在测试里私藏)。保持 dry_run_no_broker_mutation 不触 broker; 每场景report metadata全字段(trade_date/portfolio/slot/binding/run_id/scenario)可被 gray.py 派生。\n\n非本范围: 不改 lotting(D3.6已合); 不改 gray.py 硬门判定逻辑(只喂数据让它能达标, 不放宽门); 不改 D4 切换逻辑。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260627-1fc713af71e8",
+      "timestamp": "2026-06-26T16:35:58.988527Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "生产SIM影子接线能产出全6场景集的durable SHADOW_RECONCILIATION_REPORTED(各场景同源真实intent+对应event序列), covered_scenarios覆盖required→D3硬门场景维度可达标(配合无FATAL+N>=1交易日)",
+  "first_seen_at": "2026-06-26T16:35:58.988531Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1665,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1665",
+  "last_seen_at": "2026-06-26T16:35:58.988531Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "不改 lotting(D3.6/BUG-531 已合)",
+    "不放宽/改动 D3 硬门判定逻辑(gray.py required/covered 比较)= 只喂数据让其可达标",
+    "不改 D4 event_loop 切换/canary 逻辑",
+    "不碰 client.py/CompilerAdapter-B 数量逻辑、LocalSim、TDX",
+    "不退化简化壳/合成 timer/假回款/JSON 当权威; shadow 必须 dry_run 不触 broker",
+    "synthetic 场景 event 序列必须从同源真实 intent 派生, 不得纯造假绕过对账"
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/miniqmt/gray-state 或直读runtime-state SHADOW_RECONCILIATION_REPORTED的scenario字段(恒delay); gray.py switch_to_event_loop require_shadow_evidence=True 必拒scenario_coverage_missing",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT shadow 生产接线硬编码scenario=DELAY致只产单一场景 D3 canary硬门6场景集永不满足",
+  "trigger_condition": "生产SIM影子接线产 SHADOW_RECONCILIATION_REPORTED 时只产单一 delay 场景; canary switch_to_event_loop require_shadow_evidence=True 校验场景覆盖时。",
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "ui_issue": false,
+  "candidate_type": "bug"
+}

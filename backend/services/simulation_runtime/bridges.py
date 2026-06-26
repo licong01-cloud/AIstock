@@ -21,6 +21,7 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTRuntimeManagedBatchSubmitResult,
 )
 from backend.services.miniqmt_execution_runtime.shadow import (
+    MINIQMT_SHADOW_CANARY_REQUIRED_SCENARIOS,
     MiniQMTShadowCompilerAdapter,
     MiniQMTShadowEventLoopAdapter,
     MiniQMTShadowInputEvent,
@@ -28,6 +29,7 @@ from backend.services.miniqmt_execution_runtime.shadow import (
     MiniQMTShadowReconciliationReport,
     MiniQMTShadowReconciler,
     MiniQMTShadowScenario,
+    build_miniqmt_shadow_scenario_replay_events,
 )
 from backend.services.trading_core.errors import (
     BrokerUnavailableError,
@@ -282,12 +284,26 @@ class MiniQMTExecutionBridge:
         )
 
     def run_shadow_reconciliation(self, **kwargs: Any) -> MiniQMTShadowReconciliationReport:
+        reports = self.run_shadow_reconciliations(**kwargs)
+        if len(reports) != 1:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow reconciliation expected exactly one report for single-scenario call",
+                context={
+                    "reason_code": "MINIQMT_SHADOW_SCENARIO_CARDINALITY_INVALID",
+                    "report_count": len(reports),
+                    "scenarios": [report.scenario.value for report in reports],
+                },
+            )
+        return reports[0]
+
+    def run_shadow_reconciliations(self, **kwargs: Any) -> list[MiniQMTShadowReconciliationReport]:
         mode = str(kwargs.get("mode") or "SIM").strip().upper()
         if mode != "SIM":
             raise LiveApprovalRequiredError(
                 "MiniQMT shadow reconciliation only runs for SIM mode",
                 context={"mode": mode, "reason_code": "MINIQMT_SHADOW_SIM_MODE_REQUIRED"},
             )
+        scenarios = self._shadow_scenarios(kwargs.get("scenario"), kwargs.get("scenarios"))
         plan = kwargs["plan"]
         binding = kwargs["binding"]
         run = kwargs.get("run")
@@ -319,24 +335,35 @@ class MiniQMTExecutionBridge:
         runner = MiniQMTShadowParallelRunner(
             reconciler=MiniQMTShadowReconciler(repository=self._runtime_client.repository)
         )
-        return runner.run(
-            runtime_id=runtime_id,
-            scenario=MiniQMTShadowScenario.DELAY,
-            input_events=events,
-            event_loop_adapter=MiniQMTShadowEventLoopAdapter(
-                repository=self._runtime_client.repository,
-                runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
-                account_group_id=str(vnpy_kwargs["account_group_id"]),
-                trade_date=plan.target_trade_date,
-            ),
-            compiler_adapter=MiniQMTShadowCompilerAdapter(
-                repository=self._runtime_client.repository,
-                runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
-                account_group_id=str(vnpy_kwargs["account_group_id"]),
-                trade_date=plan.target_trade_date,
-            ),
-            metadata=metadata,
-        )
+        reports: list[MiniQMTShadowReconciliationReport] = []
+        for scenario in scenarios:
+            scenario_events = build_miniqmt_shadow_scenario_replay_events(events, scenario=scenario)
+            scenario_metadata = {
+                **metadata,
+                "scenario": scenario.value,
+                "scenario_source": "same_intent_shadow_scenario_replay",
+            }
+            reports.append(
+                runner.run(
+                    runtime_id=runtime_id,
+                    scenario=scenario,
+                    input_events=scenario_events,
+                    event_loop_adapter=MiniQMTShadowEventLoopAdapter(
+                        repository=self._runtime_client.repository,
+                        runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
+                        account_group_id=str(vnpy_kwargs["account_group_id"]),
+                        trade_date=plan.target_trade_date,
+                    ),
+                    compiler_adapter=MiniQMTShadowCompilerAdapter(
+                        repository=self._runtime_client.repository,
+                        runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
+                        account_group_id=str(vnpy_kwargs["account_group_id"]),
+                        trade_date=plan.target_trade_date,
+                    ),
+                    metadata=scenario_metadata,
+                )
+            )
+        return reports
 
     def _managed_vnpy_request_factory(
         self,
@@ -412,6 +439,50 @@ class MiniQMTExecutionBridge:
             )
 
         return build
+
+    @staticmethod
+    def _shadow_scenarios(raw_scenario: Any, raw_scenarios: Any) -> tuple[MiniQMTShadowScenario, ...]:
+        if raw_scenario is not None and raw_scenarios is not None:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow reconciliation accepts either scenario or scenarios, not both",
+                context={"reason_code": "MINIQMT_SHADOW_SCENARIO_ARGUMENT_CONFLICT"},
+            )
+        if raw_scenario is None and raw_scenarios is None:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow reconciliation requires an explicit scenario or scenario set",
+                context={"reason_code": "MINIQMT_SHADOW_SCENARIO_REQUIRED"},
+            )
+        values = raw_scenarios if raw_scenarios is not None else (raw_scenario,)
+        if isinstance(values, str | MiniQMTShadowScenario):
+            values = (values,)
+        try:
+            scenarios = tuple(
+                value if isinstance(value, MiniQMTShadowScenario) else MiniQMTShadowScenario(str(value))
+                for value in values
+            )
+        except TypeError as exc:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow scenarios must be an iterable of scenario values",
+                context={"reason_code": "MINIQMT_SHADOW_SCENARIO_ARGUMENT_INVALID", "raw_scenarios": repr(raw_scenarios)},
+            ) from exc
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow scenario is unsupported",
+                context={
+                    "reason_code": "MINIQMT_SHADOW_SCENARIO_UNSUPPORTED",
+                    "raw_scenario": repr(raw_scenario if raw_scenario is not None else raw_scenarios),
+                },
+            ) from exc
+        if not scenarios:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT shadow scenarios must not be empty",
+                context={"reason_code": "MINIQMT_SHADOW_SCENARIO_EMPTY"},
+            )
+        return tuple(dict.fromkeys(scenarios))
+
+    @staticmethod
+    def required_canary_shadow_scenarios() -> tuple[MiniQMTShadowScenario, ...]:
+        return MINIQMT_SHADOW_CANARY_REQUIRED_SCENARIOS
 
     @staticmethod
     def _shadow_metadata(
