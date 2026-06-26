@@ -1551,6 +1551,165 @@ def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> No
     assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
 
 
+def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "usage"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "llm-test-plan-advice.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_test_plan_advice_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "usage_summary": {"prompt_units": 100, "completion_units": 40, "total_units": 140},
+                },
+                "advice_consumption": {"advice_consumed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-hypotheses.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_discovery_hypothesis_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "usage_summary": {"prompt_units": 20, "completion_units": 8, "total_units": 28},
+                },
+                "selected_plan_keys": ["validation_module_registry_l0"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "silent-degradation-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_silent_degradation_audit_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "reason": "silent_degradation_audit_live_provider_json",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-prompt-evaluation.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_prompt_evaluation_v1",
+                "provider": "deterministic",
+                "model": "deterministic-baseline-v1",
+                "llm_invocation_evidence": {"invoked": False, "reason": "prompt_evaluation_static_only"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bug_candidate_dir = artifact_dir / "bug-candidates"
+    bug_candidate_dir.mkdir()
+    (bug_candidate_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"high_value_candidate_count": 2, "issue_payload_ready_count": 1}}),
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_llm_usage_summary(root=tmp_path, artifact_dir=artifact_dir)
+    markdown = adapter.render_llm_usage_summary_markdown(payload)
+
+    assert payload["schema_version"] == "aistock_llm_token_usage_summary_v1"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["limit_enforced"] is False
+    assert payload["totals"]["invoked_count"] == 3
+    assert payload["totals"]["usage_available_count"] == 2
+    assert payload["totals"]["usage_missing_count"] == 1
+    assert payload["totals"]["prompt_units"] == 120
+    assert payload["totals"]["completion_units"] == 48
+    assert payload["totals"]["total_units"] == 168
+    assert payload["value_context"]["advice_consumed"] is True
+    assert payload["value_context"]["advice_changed_plan"] is True
+    assert payload["value_context"]["selected_plan_count"] == 1
+    assert payload["value_context"]["high_value_candidate_count"] == 2
+    assert payload["value_context"]["issue_payload_ready_count"] == 1
+    missing = [item for item in payload["records"] if item["step"] == "silent_degradation_audit"][0]
+    assert missing["usage_available"] is False
+    assert missing["usage_missing_reason"] == "provider_usage_missing"
+    assert "LLM Token Usage Summary" in markdown
+    assert "limit_enforced: `False`" in markdown
+    assert "total_units: `168`" in markdown
+    assert "silent_degradation_audit" in markdown
+
+
+def test_llm_usage_summary_command_defaults_to_compact_stdout(tmp_path: Path, capsys) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "usage-cli"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "llm-test-plan-advice.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_test_plan_advice_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "usage_summary": {"prompt_units": 3, "completion_units": 2, "total_units": 5},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = artifact_dir / "llm-usage-summary.json"
+    output_md = artifact_dir / "llm-usage-summary.md"
+
+    result = adapter.main(
+        [
+            "llm-usage-summary",
+            "--root",
+            str(tmp_path),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--output",
+            str(output),
+            "--output-md",
+            str(output_md),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("WARN llm-usage-summary ")
+    assert "total_units=5" in stdout
+    assert "limit_enforced=false" in stdout
+    assert "records" not in stdout
+    assert json.loads(output.read_text(encoding="utf-8"))["totals"]["total_units"] == 5
+    assert "LLM Token Usage Summary" in output_md.read_text(encoding="utf-8")
+
+
+def test_nightly_workflow_wires_llm_usage_summary_without_invoking_llm() -> None:
+    workflow = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+    assert "scripts/code_intelligence_adapter.py llm-usage-summary" in workflow
+    assert "--output \"$outDir/llm-usage-summary.json\"" in workflow
+    assert "--output-md \"$outDir/llm-usage-summary.md\"" in workflow
+    usage_block = workflow.split("scripts/code_intelligence_adapter.py llm-usage-summary", 1)[1].split(
+        "if (Test-Path -LiteralPath \"$outDir/llm-usage-summary.md\")",
+        1,
+    )[0]
+    assert "--invoke-llm" not in usage_block
+    assert "LLM_USAGE_MD=\"tmp/validation/code-intelligence/${RUN_ID}/llm-usage-summary.md\"" in workflow
+
+
 def test_code_intelligence_run_manifest_warns_without_freshness_json(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "missing"
     artifact_dir.mkdir(parents=True)

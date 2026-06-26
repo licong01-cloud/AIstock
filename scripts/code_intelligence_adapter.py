@@ -1342,6 +1342,256 @@ def _plan_changed(advised: list[str], baseline: list[str]) -> bool:
     return advised != baseline
 
 
+LLM_USAGE_ARTIFACTS = (
+    ("test_plan_advice", "llm-test-plan-advice.json"),
+    ("scheduler_advice", "llm-nightly-scheduler-advice.json"),
+    ("discovery_hypotheses", "llm-hypotheses.json"),
+    ("adaptive_scheduler", "llm-nightly-adaptive-scheduler.json"),
+    ("design_drift_audit", "design-drift-audit.json"),
+    ("silent_degradation_audit", "silent-degradation-audit.json"),
+    ("triage_quality_smoke", "llm-triage-quality.json"),
+    ("prompt_evaluation", "llm-prompt-evaluation.json"),
+    ("guarded_rollout", "llm-guarded-rollout-gate.json"),
+)
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_from_evidence(evidence: dict[str, Any]) -> tuple[dict[str, int | None], bool]:
+    usage = evidence.get("usage_summary") if isinstance(evidence.get("usage_summary"), dict) else None
+    if usage is not None:
+        units = {
+            "prompt_units": _optional_int(usage.get("prompt_units", usage.get("prompt_tokens"))),
+            "completion_units": _optional_int(usage.get("completion_units", usage.get("completion_tokens"))),
+            "total_units": _optional_int(usage.get("total_units", usage.get("total_tokens"))),
+        }
+        return units, any(value is not None for value in units.values())
+    public_units = evidence.get("usage_units") if isinstance(evidence.get("usage_units"), dict) else None
+    if public_units is not None:
+        units = {
+            "prompt_units": _optional_int(public_units.get("prompt")),
+            "completion_units": _optional_int(public_units.get("completion")),
+            "total_units": _optional_int(public_units.get("total")),
+        }
+        return units, any(value is not None for value in units.values())
+    return {"prompt_units": None, "completion_units": None, "total_units": None}, False
+
+
+def _usage_missing_reason(*, payload: dict[str, Any], evidence: dict[str, Any], invoked: bool) -> str | None:
+    if not invoked:
+        return "llm_not_invoked"
+    if not evidence:
+        return "llm_invocation_evidence_missing"
+    if evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint"):
+        return "provider_error_or_fallback_without_usage"
+    if payload.get("llm_gate") == "degraded":
+        return "llm_degraded_without_usage"
+    return "provider_usage_missing"
+
+
+def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
+    invoked = bool(evidence.get("invoked", payload.get("llm_invoked")))
+    units, usage_available = _usage_from_evidence(evidence)
+    total_units = units.get("total_units")
+    if total_units is None and units.get("prompt_units") is not None and units.get("completion_units") is not None:
+        total_units = int(units["prompt_units"] or 0) + int(units["completion_units"] or 0)
+        units["total_units"] = total_units
+    consumption = _mapping(payload.get("advice_consumption"))
+    selected_plan_keys = _string_list(payload.get("selected_plan_keys"))
+    if not selected_plan_keys:
+        selected_plan_keys = _string_list(payload.get("advised_plan_keys"))
+    return {
+        "step": step,
+        "artifact": _repo_rel(artifact_path, root),
+        "schema_version": payload.get("schema_version"),
+        "provider": evidence.get("provider") or payload.get("effective_provider") or payload.get("provider"),
+        "model": evidence.get("model") or payload.get("effective_model") or payload.get("model"),
+        "invoked": invoked,
+        "reason": evidence.get("reason"),
+        "fallback_used": bool(evidence.get("fallback_used")),
+        "fallback_reason": evidence.get("fallback_reason"),
+        "usage_available": usage_available,
+        "usage_missing_reason": None
+        if usage_available
+        else _usage_missing_reason(payload=payload, evidence=evidence, invoked=invoked),
+        "prompt_units": units.get("prompt_units"),
+        "completion_units": units.get("completion_units"),
+        "total_units": units.get("total_units"),
+        "advice_consumed": bool(consumption.get("advice_consumed") or payload.get("advice_consumed")),
+        "selected_plan_count": len(selected_plan_keys),
+    }
+
+
+def _aggregate_usage_records(records: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    totals = {
+        "record_count": len(records),
+        "invoked_count": sum(1 for item in records if item.get("invoked")),
+        "usage_available_count": sum(1 for item in records if item.get("usage_available")),
+        "usage_missing_count": sum(1 for item in records if item.get("invoked") and not item.get("usage_available")),
+        "prompt_units": sum(_optional_int(item.get("prompt_units")) or 0 for item in records),
+        "completion_units": sum(_optional_int(item.get("completion_units")) or 0 for item in records),
+        "total_units": sum(_optional_int(item.get("total_units")) or 0 for item in records),
+        "limit_enforced": False,
+    }
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in records:
+        provider = str(item.get("provider") or "unknown")
+        model = str(item.get("model") or "unknown")
+        key = f"{provider}\0{model}"
+        bucket = grouped.setdefault(
+            key,
+            {
+                "provider": provider,
+                "model": model,
+                "invoked_count": 0,
+                "usage_available_count": 0,
+                "prompt_units": 0,
+                "completion_units": 0,
+                "total_units": 0,
+            },
+        )
+        if item.get("invoked"):
+            bucket["invoked_count"] += 1
+        if item.get("usage_available"):
+            bucket["usage_available_count"] += 1
+        bucket["prompt_units"] += _optional_int(item.get("prompt_units")) or 0
+        bucket["completion_units"] += _optional_int(item.get("completion_units")) or 0
+        bucket["total_units"] += _optional_int(item.get("total_units")) or 0
+    return totals, sorted(grouped.values(), key=lambda value: (value["provider"], value["model"]))
+
+
+def build_llm_usage_summary(
+    *,
+    root: Path | None = None,
+    artifact_dir: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    artifact_dir = artifact_dir or root / "tmp" / "validation" / "code-intelligence" / "latest"
+    records: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    payloads: dict[str, dict[str, Any]] = {}
+    for step, filename in LLM_USAGE_ARTIFACTS:
+        artifact_path = artifact_dir / filename
+        payload = _read_json_object(artifact_path)
+        if not payload:
+            warnings.append(f"LLM usage source artifact is missing or empty: {filename}")
+            continue
+        payloads[step] = payload
+        records.append(_usage_step_record(step=step, artifact_path=artifact_path, payload=payload, root=root))
+    totals, by_provider_model = _aggregate_usage_records(records)
+    adaptive = payloads.get("adaptive_scheduler", {})
+    scheduler = payloads.get("scheduler_advice", {})
+    hypotheses = payloads.get("discovery_hypotheses", {})
+    bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
+    bug_summary = _mapping(bug_candidate_manifest.get("summary"))
+    bug_effectiveness = _mapping(bug_candidate_manifest.get("discovery_effectiveness"))
+    adaptive_consumption = _mapping(adaptive.get("advice_consumption"))
+    scheduler_consumption = _mapping(scheduler.get("advice_consumption"))
+    hypothesis_selected = _string_list(hypotheses.get("selected_plan_keys"))
+    adaptive_advised = _string_list(adaptive.get("advised_plan_keys"))
+    adaptive_baseline = _string_list(adaptive.get("deterministic_plan_keys")) or _string_list(
+        adaptive.get("executed_plan_keys")
+    )
+    scheduler_advised = _string_list(scheduler.get("advised_plan_keys"))
+    scheduler_baseline = _string_list(scheduler.get("deterministic_plan_keys")) or _string_list(
+        scheduler.get("executed_plan_keys")
+    )
+    advice_changed_plan = bool(
+        hypothesis_selected
+        or _plan_changed(adaptive_advised, adaptive_baseline)
+        or _plan_changed(scheduler_advised, scheduler_baseline)
+    )
+    return {
+        "schema_version": "aistock_llm_token_usage_summary_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "warning_only": True,
+        "limit_enforced": False,
+        "artifact_dir": _repo_rel(artifact_dir, root),
+        "totals": totals,
+        "by_provider_model": by_provider_model,
+        "records": records,
+        "value_context": {
+            "advice_consumed": bool(
+                adaptive_consumption.get("advice_consumed")
+                or scheduler_consumption.get("advice_consumed")
+                or hypothesis_selected
+            ),
+            "advice_changed_plan": advice_changed_plan,
+            "selected_plan_count": len(hypothesis_selected),
+            "high_value_candidate_count": _first_metric_int(
+                bug_summary,
+                bug_effectiveness,
+                key="high_value_candidate_count",
+            ),
+            "issue_payload_ready_count": _first_metric_int(
+                bug_summary,
+                bug_effectiveness,
+                key="issue_payload_ready_count",
+            ),
+        },
+        "warnings": warnings,
+    }
+
+
+def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
+    totals = _mapping(payload.get("totals"))
+    value = _mapping(payload.get("value_context"))
+    lines = [
+        "## LLM Token Usage Summary",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- limit_enforced: `{bool(payload.get('limit_enforced'))}`",
+        f"- invoked_steps: `{totals.get('invoked_count', 0)}`",
+        f"- usage_available_steps: `{totals.get('usage_available_count', 0)}`",
+        f"- usage_missing_steps: `{totals.get('usage_missing_count', 0)}`",
+        f"- total_units: `{totals.get('total_units', 0)}`",
+        f"- prompt_units: `{totals.get('prompt_units', 0)}`",
+        f"- completion_units: `{totals.get('completion_units', 0)}`",
+        f"- value_context: `advice_consumed={bool(value.get('advice_consumed'))}, advice_changed_plan={bool(value.get('advice_changed_plan'))}, high_value_candidates={value.get('high_value_candidate_count', 0)}, issue_payloads={value.get('issue_payload_ready_count', 0)}`",
+        "",
+        "| step | provider | model | invoked | usage | total_units | missing_reason |",
+        "|---|---|---|---|---|---:|---|",
+    ]
+    for item in payload.get("records") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item.get("step") or "unknown"),
+                    str(item.get("provider") or "unknown"),
+                    str(item.get("model") or "unknown"),
+                    str(bool(item.get("invoked"))),
+                    str(bool(item.get("usage_available"))),
+                    str(item.get("total_units") if item.get("total_units") is not None else "-"),
+                    str(item.get("usage_missing_reason") or "-"),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "This summary is observability-only. It does not enforce token limits, change workflow gates, invoke LLMs, or capture prompt content.",
+        ]
+    )
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    return "\n".join(lines).rstrip("\n")
+
+
 def build_llm_value_summary(
     *,
     root: Path | None = None,
@@ -3085,6 +3335,36 @@ def cmd_llm_value_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_llm_usage_summary(args: argparse.Namespace) -> int:
+    payload = build_llm_usage_summary(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        artifact_dir=Path(args.artifact_dir) if args.artifact_dir else None,
+    )
+    if args.output_md:
+        _write_text(Path(args.output_md), render_llm_usage_summary_markdown(payload))
+    totals = _mapping(payload.get("totals"))
+    value = _mapping(payload.get("value_context"))
+    _emit_compact_line(
+        "llm-usage-summary",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "invoked": totals.get("invoked_count"),
+            "usage_available": totals.get("usage_available_count"),
+            "usage_missing": totals.get("usage_missing_count"),
+            "total_units": totals.get("total_units"),
+            "limit_enforced": str(bool(payload.get("limit_enforced"))).lower(),
+            "advice_consumed": str(bool(value.get("advice_consumed"))).lower(),
+            "high_value": value.get("high_value_candidate_count"),
+            "issue_payloads": value.get("issue_payload_ready_count"),
+            "summary_ref": args.output_md,
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -3356,6 +3636,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stdout format. Compact prints value status only; full-json emits the complete payload.",
     )
     llm_value.set_defaults(func=cmd_llm_value_summary)
+
+    llm_usage = sub.add_parser(
+        "llm-usage-summary",
+        help="Build a compact observability-only summary of Nightly LLM token usage.",
+    )
+    llm_usage.add_argument("--root")
+    llm_usage.add_argument("--artifact-dir")
+    llm_usage.add_argument("--output")
+    llm_usage.add_argument("--output-md")
+    llm_usage.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints usage totals only; full-json emits the complete payload.",
+    )
+    llm_usage.set_defaults(func=cmd_llm_usage_summary)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)
