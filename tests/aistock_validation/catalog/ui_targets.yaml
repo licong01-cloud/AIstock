@@ -313,6 +313,25 @@ targets:
   - Review prediction correlation matrix
   - Review Top-K Jaccard matrix
   coverage_status: planned
+- route_id: qe.multi_alpha_combine_backtest
+  href: /quantevolver/multi-alpha/combine-backtest
+  label: Multi-Alpha Combine Backtest
+  nav_group: QuantEvolver
+  primary_module: qe.auto_evolution
+  impact_modules:
+  - qe.archive
+  - qe.enhanced_metrics
+  risk_level: high
+  required_test_plans:
+  - l0
+  - qe_read_l3
+  recommended_test_plans:
+  - qe_archive_backend
+  business_operations:
+  - Open Multi-Alpha Combine Backtest
+  - Review combine-backtest task grid
+  - Inspect combine-backtest loop detail
+  coverage_status: planned
 - route_id: qe.multi_alpha_evolve
   href: /quantevolver/multi-alpha/evolve-wizard
   label: Multi-Alpha Evolution

@@ -18,7 +18,7 @@ import {
 import { AllStocksTable } from "../../components/AllStocksTable";
 import { FactorAnalysisPanel } from "../../components/FactorAnalysisPanel";
 import { StrategyConfigCard } from "../../components/StrategyConfigCard";
-import EvolutionTrajectory from "../../components/EvolutionTrajectory";
+import EvolutionTrajectory, { type DataSourceAdapter } from "../../components/EvolutionTrajectory";
 import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import type { JsonObject } from "@/lib/paper-v2/types";
 
@@ -86,6 +86,7 @@ interface LoopDetailPanelProps {
   onSyncAssets: (loopIndex: number) => void;
   onForkFromLoop?: (loopIndex: number) => void;
   taskType?: string;
+  dataSourceAdapter?: DataSourceAdapter;
   // Loop 指标对比表数据（从 TopologyPanel 移到轨迹视图下方）
   loops?: Loop[];
   onLoopSelect?: (index: number) => void;
@@ -140,6 +141,7 @@ export default React.memo(function LoopDetailPanel({
   onSyncAssets,
   onForkFromLoop,
   taskType,
+  dataSourceAdapter,
   loops,
   onLoopSelect,
 }: LoopDetailPanelProps) {
@@ -232,7 +234,22 @@ export default React.memo(function LoopDetailPanel({
 
   // 策略演进任务：隐藏训练过程 Tab 和相关内容
   const isStrategyEvo = taskType === "strategy_evo";
-  const detailTabsForEvo = DETAIL_TABS.filter(tab => tab.key !== "training" && tab.key !== "prediction");
+  const isCombine = (dataSourceAdapter?.taskType || taskType) === "multi_alpha_combine";
+  const detailTabsForEvo = React.useMemo(
+    () => DETAIL_TABS.filter(tab => tab.key !== "training" && tab.key !== "prediction"),
+    [],
+  );
+  const activeTabs = React.useMemo(() => {
+    if (isCombine) {
+      return DETAIL_TABS
+        .filter(tab => ["overview", "trade"].includes(tab.key))
+        .map(tab => tab.key === "trade" ? { ...tab, label: "腿与权重" } : tab);
+    }
+    return isStrategyEvo ? detailTabsForEvo : DETAIL_TABS;
+  }, [detailTabsForEvo, isCombine, isStrategyEvo]);
+  React.useEffect(() => {
+    if (!activeTabs.some(tab => tab.key === detailTab)) onSetDetailTab("overview");
+  }, [activeTabs, detailTab, onSetDetailTab]);
 
   if (!activeLoopData && rightPanelView !== "trajectory") {
     return (
@@ -248,7 +265,9 @@ export default React.memo(function LoopDetailPanel({
       <div style={headerStyle}>
         <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1e293b", display: "flex", alignItems: "center", gap: "8px" }}>
           <FileCode2 color="#10b981" size={20} />
-          {rightPanelView === "trajectory" ? "演进轨迹总览" : `LOOP ${activeLoopData?.loop_index} 详情看板`}
+          {rightPanelView === "trajectory"
+            ? (isCombine ? "配置轨迹总览" : "演进轨迹总览")
+            : `${isCombine ? "配置" : "LOOP"} ${activeLoopData?.loop_index} 详情看板`}
         </h2>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           {VIEW_OPTIONS.map((v) => (
@@ -260,12 +279,12 @@ export default React.memo(function LoopDetailPanel({
                 color: rightPanelView === v.key ? "#fff" : "#64748b",
                 borderColor: rightPanelView === v.key ? "#3b82f6" : "#e2e8f0",
               }}>
-              <v.Icon size={14} /> {v.label}
+              <v.Icon size={14} /> {isCombine ? (v.key === "loop" ? "配置详情" : "配置轨迹") : v.label}
             </button>
           ))}
           {rightPanelView === "loop" && activeLoopData && (
             <>
-              {activeLoopData.status === "completed" && onForkFromLoop && !isStrategyEvo && (
+              {!isCombine && activeLoopData.status === "completed" && onForkFromLoop && !isStrategyEvo && (
                 <button onClick={() => onForkFromLoop(activeLoopData.loop_index)}
                   style={{
                     padding: "5px 12px", backgroundColor: "#8b5cf6", color: "#fff", border: "none", borderRadius: "6px",
@@ -275,7 +294,7 @@ export default React.memo(function LoopDetailPanel({
                   <GitBranch size={14} /> 以此为基础演进
                 </button>
               )}
-              {activeLoopData.status === "completed" && (
+              {!isCombine && activeLoopData.status === "completed" && (
                 <button data-testid="qe-loop-panel-add-candidate" onClick={addToCandidatePackages}
                   disabled={candidateBusy}
                   style={{
@@ -286,14 +305,14 @@ export default React.memo(function LoopDetailPanel({
                   {candidateBusy ? "加入中..." : "加入候选策略包"}
                 </button>
               )}
-              <button onClick={() => onSyncAssets(activeLoopData.loop_index)}
+              {!isCombine && <button onClick={() => onSyncAssets(activeLoopData.loop_index)}
                 style={{
                   padding: "5px 12px", backgroundColor: "#10b981", color: "#fff", border: "none", borderRadius: "6px",
                   fontSize: "12px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", gap: "4px",
                   boxShadow: "0 2px 4px rgba(16, 185, 129, 0.2)",
                 }}>
                 <DownloadCloud size={14} /> 同步资产
-              </button>
+              </button>}
             </>
           )}
         </div>
@@ -306,6 +325,7 @@ export default React.memo(function LoopDetailPanel({
             taskType={activeTask?.task_type || taskType}
             evolutionMode={activeTask?.evolution_mode}
             sourceType={activeTask?.source_type}
+            dataSourceAdapter={dataSourceAdapter}
           />
           {loops && loops.length > 0 && (
             <LoopMetricsComparison
@@ -331,7 +351,7 @@ export default React.memo(function LoopDetailPanel({
             display: "flex", gap: "4px", padding: "8px 20px", borderBottom: "1px solid #e2e8f0",
             backgroundColor: "#fff", overflowX: "auto",
           }}>
-            {(isStrategyEvo ? detailTabsForEvo : DETAIL_TABS).map((tab) => (
+            {activeTabs.map((tab) => (
               <button key={tab.key} onClick={() => onSetDetailTab(tab.key)}
                 style={{
                   padding: "6px 14px", border: "none", borderRadius: "6px", fontSize: "12px",
@@ -353,6 +373,7 @@ export default React.memo(function LoopDetailPanel({
                 configDiffLines={configDiffLines}
                 activeTask={activeTask}
                 enhancedMetrics={enhancedMetrics}
+                isCombine={isCombine}
               />
               </>
             )}
@@ -396,6 +417,10 @@ export default React.memo(function LoopDetailPanel({
             {/* 交易效率 Tab */}
             {detailTab === "trade" && (
               <>
+                {isCombine ? (
+                  <CombineLegWeightsPanel activeLoopData={activeLoopData} />
+                ) : (
+                <>
                 <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
                   <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "0.05em" }}>交易效率诊断</h3>
                   {enhancedMetrics?.trade_diagnostics ? (
@@ -439,6 +464,8 @@ export default React.memo(function LoopDetailPanel({
                     featureImportance={enhancedMetrics?.factor_analysis?.feature_importance || enhancedMetrics?.feature_importance}
                   />
                 )}
+                </>
+                )}
               </>
             )}
 
@@ -480,6 +507,56 @@ interface OverviewContentProps {
   configDiffLines: string[];
   activeTask?: TaskInfo;
   enhancedMetrics?: any;
+  isCombine?: boolean;
+}
+
+function CombineLegWeightsPanel({ activeLoopData }: { activeLoopData: Loop }) {
+  const loopAny = activeLoopData as any;
+  const cfg = activeLoopData.config_json || {};
+  const roster = Array.isArray(cfg.roster) ? cfg.roster : [];
+  const weights = loopAny.weights_json || cfg.weights_json || {};
+  const looRows = Array.isArray(loopAny.loo) ? loopAny.loo : [];
+  const legWeights = weights.leg_weights || weights.weights || weights;
+  return (
+    <div style={{ backgroundColor: "#fff", borderRadius: 8, border: "1px solid #e2e8f0", padding: 20 }}>
+      <h3 style={{ margin: "0 0 16px", fontSize: 13, fontWeight: 700, color: "#f59e0b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Roster 腿与权重</h3>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ backgroundColor: "#f1f5f9", borderBottom: "2px solid #e5e7eb" }}>
+              <th style={{ padding: "10px 12px", textAlign: "left", color: "#475569" }}>leg_id</th>
+              <th style={{ padding: "10px 12px", textAlign: "right", color: "#475569" }}>权重</th>
+              <th style={{ padding: "10px 12px", textAlign: "right", color: "#475569" }}>ΔCAGR</th>
+              <th style={{ padding: "10px 12px", textAlign: "right", color: "#475569" }}>ΔSharpe</th>
+              <th style={{ padding: "10px 12px", textAlign: "right", color: "#475569" }}>ΔCalmar</th>
+            </tr>
+          </thead>
+          <tbody>
+            {roster.map((leg: any, index: number) => {
+              const legId = String(leg.leg_id || leg.id || `leg_${index + 1}`);
+              const loo = looRows.find((row: any) => row.dropped_leg_id === legId) || {};
+              const weight = typeof legWeights?.[legId] === "number" ? legWeights[legId] : null;
+              return (
+                <tr key={legId} style={{ borderBottom: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: "10px 12px", fontFamily: "monospace", fontWeight: 700, color: "#334155" }}>{legId}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "monospace" }}>{weight == null ? "-" : weight.toFixed(4)}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "monospace", color: loo.marginal_cagr != null && loo.marginal_cagr < 0 ? "#dc2626" : "#475569" }}>{loo.marginal_cagr == null ? "-" : (loo.marginal_cagr * 100).toFixed(2) + "%"}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "monospace", color: loo.marginal_sharpe != null && loo.marginal_sharpe < 0 ? "#dc2626" : "#475569" }}>{loo.marginal_sharpe == null ? "-" : loo.marginal_sharpe.toFixed(4)}</td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "monospace", color: loo.marginal_calmar != null && loo.marginal_calmar < 0 ? "#dc2626" : "#475569" }}>{loo.marginal_calmar == null ? "-" : loo.marginal_calmar.toFixed(4)}</td>
+                </tr>
+              );
+            })}
+            {roster.length === 0 && (
+              <tr><td colSpan={5} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>暂无 roster 腿数据</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 10, color: "#64748b", fontSize: 12, lineHeight: 1.6 }}>
+        权重和 LOO 边际贡献均来自 combine-backtest 已落库结果；缺失时显示 “-”，不伪造默认值。
+      </div>
+    </div>
+  );
 }
 
 const OverviewContent = React.memo(function OverviewContent({
@@ -488,6 +565,7 @@ const OverviewContent = React.memo(function OverviewContent({
   configDiffLines,
   activeTask,
   enhancedMetrics,
+  isCombine,
 }: OverviewContentProps) {
   const diagnostics = extractLoopDiagnostics(activeLoopData, enhancedMetrics);
   const m = diagnostics.metrics || {};
@@ -511,7 +589,22 @@ const OverviewContent = React.memo(function OverviewContent({
   const hyperKeys = ["topk", "n_drop", "lr", "batch_size", "d_model", "n_head", "dropout", "n_epochs", "early_stop"];
   const hyperParams = hyperKeys.filter(k => cfg?.[k] !== undefined).map(k => ({ key: k, val: cfg[k] }));
 
-  const metricGroups = [
+  const metricGroups = isCombine ? [
+    {
+      label: "组合风险调整", color: "#8b5cf6", items: [
+        { label: "Sharpe", source: m, key: "sharpe", digits: 2 },
+        { label: "Calmar", source: m, key: "calmar", digits: 2 },
+        { label: "最大回撤", source: m, key: "max_drawdown", digits: 2, pct: true },
+      ],
+    },
+    {
+      label: "组合收益 / 交易", color: "#059669", items: [
+        { label: "CAGR", source: m, key: "cagr", digits: 2, pct: true },
+        { label: "年化收益", source: m, key: "annualized_return", digits: 2, pct: true },
+        { label: "换手", source: m, key: "turnover", digits: 3 },
+      ],
+    },
+  ] : [
     {
       label: "信号质量", color: "#3b82f6", items: [
         { label: "IC", source: m, key: "IC", digits: 4 },
@@ -588,7 +681,7 @@ const OverviewContent = React.memo(function OverviewContent({
   return (
     <>
       {/* Agent 诊断报告 */}
-      <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+      {!isCombine && <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
         <h3 style={{ margin: "0 0 16px 0", fontSize: "13px", fontWeight: 700, color: "#3b82f6", textTransform: "uppercase", letterSpacing: "0.05em", display: "flex", alignItems: "center", gap: "6px" }}>
           <AlertCircle size={16} />
           Agent 结案陈词 & 决策逻辑
@@ -626,7 +719,7 @@ const OverviewContent = React.memo(function OverviewContent({
             <p style={{ margin: 0, color: "#94a3b8" }}>暂无 Agent 报告数据...</p>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* 策略与执行配置 */}
       <StrategyConfigCard source={{ loopConfig: activeLoopData.config_json, taskConfig: activeTask }} />
@@ -652,7 +745,7 @@ const OverviewContent = React.memo(function OverviewContent({
       <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
         <h3 style={{ margin: "0 0 16px 0", fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
           核心指标
-          {activeLoopData.is_sota && <span style={{ marginLeft: "8px", fontSize: "11px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 8px", borderRadius: "4px" }}>SOTA</span>}
+          {activeLoopData.is_sota && <span style={{ marginLeft: "8px", fontSize: "11px", color: "#d97706", backgroundColor: "#fef3c7", padding: "2px 8px", borderRadius: "4px" }}>{isCombine ? "最优配置" : "SOTA"}</span>}
         </h3>
         {metricGroups.map((group) => (
           <div key={group.label} style={{ marginBottom: "16px" }}>
