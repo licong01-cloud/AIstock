@@ -356,7 +356,7 @@ class _Bug413RegeneratingLlm:
         )
 
 
-def test_bug_413_guard_violation_regenerates_with_exact_citation_options() -> None:
+def test_bug_413_guard_violation_fails_closed_without_forced_model_regeneration() -> None:
     fake = _Bug413RegeneratingLlm()
 
     result = run_react_grounding_loop(
@@ -378,13 +378,200 @@ def test_bug_413_guard_violation_regenerates_with_exact_citation_options() -> No
         ),
     )
 
-    assert len(fake.calls) == 3
-    assert result.evidence_guard.allowed is True
-    assert result.evidence_guard.reason == "ok"
-    assert result.stopped_reason == "final_answer"
-    assert "stock-ref:quote:000688" in result.final_text
+    assert len(fake.calls) == 2
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "missing_inline_tool_evidence"
+    assert result.stopped_reason == "missing_inline_tool_evidence"
     assert any(step.get("evidence_guard_reason") == "missing_inline_tool_evidence" for step in result.trace_steps)
-    assert any(step.get("repair") == "regenerate_with_evidence_citation_options" for step in result.trace_steps)
+    assert not any(step.get("repair") == "regenerate_with_evidence_citation_options" for step in result.trace_steps)
+
+
+class _EarlyStopProvider:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        self.calls.append((call.server_key, call.tool_name))
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="succeeded",
+            payload_json={"source": "source:primary", "as_of": "2026-06-26", "items": [{"value": "ok"}]},
+            source_refs=["source:primary"],
+            as_of="2026-06-26",
+            summary="primary evidence",
+            executed=True,
+        )
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("early-stop read-only test must not request preflight")
+
+
+class _EarlyStopLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+                tool_calls=[
+                    McpToolCall(
+                        server_key="aistock-primary",
+                        tool_name="primary_lookup",
+                        stable_call_id="primary_001",
+                    )
+                ],
+            )
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        assert "source:primary" in joined
+        return ModelTurn(
+            content="The answer is grounded in the primary read-only result; source=source:primary as_of=2026-06-26.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_bug_529_model_early_stop_after_evidence_is_not_forced_to_more_tools() -> None:
+    fake = _EarlyStopLlm()
+    provider = _EarlyStopProvider()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "answer after gathering evidence"}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=[
+            ToolCatalogEntry(server_key="aistock-primary", tool_name="primary_lookup", status="enabled", risk_level="low"),
+            ToolCatalogEntry(server_key="aistock-extra", tool_name="extra_lookup", status="enabled", risk_level="low"),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=24, user_message="answer after gathering evidence"),
+        fallback_tool_calls=lambda: [
+            McpToolCall(server_key="aistock-extra", tool_name="extra_lookup", stable_call_id="extra_001")
+        ],
+    )
+
+    assert fake.calls == 2
+    assert provider.calls == [("aistock-primary", "primary_lookup")]
+    assert result.iterations == 2
+    assert result.stopped_reason == "final_answer"
+    assert result.evidence_guard.allowed is True
+    assert not any(step.get("fallback_tool_call_count") for step in result.trace_steps)
+
+
+class _ZeroEvidenceFallbackProvider:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del decision
+        self.calls.append((call.server_key, call.tool_name))
+        return McpToolResult(
+            server_key=call.server_key,
+            tool_name=call.tool_name,
+            status="succeeded",
+            payload_json={"source": "source:zero-evidence-fallback", "as_of": "2026-06-26", "items": [{"value": "covered"}]},
+            source_refs=["source:zero-evidence-fallback"],
+            as_of="2026-06-26",
+            summary="fallback evidence",
+            executed=True,
+        )
+
+    def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+        del call, decision
+        raise AssertionError("zero-evidence fallback must stay read-only")
+
+
+class _ZeroEvidenceAnswerLlm:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, messages: list[dict[str, Any]]) -> ModelTurn:
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="I can answer now without tool evidence.",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+        joined = "\n".join(str(item.get("content", "")) for item in messages if isinstance(item, dict))
+        assert "source:zero-evidence-fallback" in joined
+        return ModelTurn(
+            content="The answer uses the read-only fallback evidence; source=source:zero-evidence-fallback as_of=2026-06-26.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+
+def test_bug_529_zero_evidence_answer_attempt_forces_read_only_evidence_without_question_classifier() -> None:
+    fake = _ZeroEvidenceAnswerLlm()
+    provider = _ZeroEvidenceFallbackProvider()
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "non-keyword wording"}],
+        model_complete=fake.complete,
+        mcp_provider=provider,
+        catalog_entries=[ToolCatalogEntry(server_key="aistock-generic-read", tool_name="generic_lookup", status="enabled", risk_level="low")],
+        config=ReactGroundingConfig(max_tool_iterations=24, user_message="non-keyword wording"),
+        fallback_tool_calls=lambda: [
+            McpToolCall(server_key="aistock-generic-read", tool_name="generic_lookup", stable_call_id="generic_001")
+        ],
+    )
+
+    assert fake.calls == 2
+    assert provider.calls == [("aistock-generic-read", "generic_lookup")]
+    assert result.evidence_guard.allowed is True
+    assert result.stopped_reason == "final_answer"
+    assert any(step.get("reason") == "zero_evidence_answer_attempt" for step in result.trace_steps)
+
+
+def test_bug_529_guard_redline_still_fails_closed_when_no_repair_or_fallback_exists() -> None:
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        del messages
+        return ModelTurn(
+            content="There are 42 unsupported facts without source or date.",
+            provider="fake",
+            model="fake-primary",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "answer from existing evidence"}],
+        model_complete=model_complete,
+        mcp_provider=_EarlyStopProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(max_tool_iterations=24, user_message="answer from existing evidence"),
+        initial_tool_results=[
+            McpToolResult(
+                server_key="aistock-existing",
+                tool_name="existing_lookup",
+                status="succeeded",
+                payload_json={"source": "source:existing", "as_of": "2026-06-26", "items": [{"value": "known"}]},
+                source_refs=["source:existing"],
+                as_of="2026-06-26",
+                summary="existing evidence",
+                executed=True,
+            )
+        ],
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason == "missing_inline_tool_evidence"
+    assert result.stopped_reason == "missing_inline_tool_evidence"
+    assert result.iterations == 1
 
 
 def _bug_509_stock_result(sections: list[dict[str, Any]], *, tool_name: str = "stock_analysis_get_quote") -> McpToolResult:
