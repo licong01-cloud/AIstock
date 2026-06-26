@@ -539,3 +539,60 @@ Rollback：
 - `production_frontend_dependency_gate=noop`：本设计不改前端依赖。
 - `production_backend_dependency_gate=noop`：本设计不改后端依赖。
 - 本轮不启/重启服务，不写生产 DB，不执行 DDL/DML，不触碰 research-assistant。
+
+## Addendum 2026-06-27：执行路径绑定路线 A 与分阶段排期补充
+
+本章节为设计交付后的补充说明，由战略 session 评审后追加，用于把"模拟盘执行路径"这一前提收敛到路线 A，并明确多 Alpha 研发与路线 A 验证的时序关系。原设计正文（路线 1 推荐、信号层架构、契约、no-silent 策略、冻结/复现/回滚）不变，本章节为优先级更高的执行前提与排期约束。
+
+### A-1 执行路径前提收敛
+
+1. **MiniQMT 执行路径今后只保留路线 A（durable event_loop）**。路线 B（compiler 简化方案）即将淘汰，仅维持现有 SIM 功能、不作为多 Alpha 组合的执行路径，也不承担收益验证职责。
+2. **LocalSim 不受本决策影响**：LocalSim 只使用其本地撮合分支线成交，**不走路线 A，保持原状**。本设计中所有"真实 paper dry-run/执行路径"的表述，凡涉及 MiniQMT，一律指路线 A；凡涉及 LocalSim，沿用其既有本地撮合，不引入路线 A。
+3. 因此多 Alpha 组合包在 MiniQMT 上的任何真实 paper 验证，必须等路线 A 落地（D4 切 event_loop submit）并经 canary 稳定后进行；在此之前 MiniQMT 侧只做信号层产物（selection artifact）的离线/确定性验证，不触发 MiniQMT 真实下单。
+
+### A-2 正交性结论（执行层零干扰）
+
+经代码核实，多 Alpha 上线改动集中在信号层，对执行层（MiniQMT event_loop 路线 A 的 runtime/scheduler/bridges/qmt_strategy_ledger/broker）为代码级零干扰：
+
+1. 信号→执行的唯一接缝是 `PaperTradingDayRunner._ensure_authoritative_selection_artifact`，其产物为 authoritative `SelectionScoreArtifact`；执行层只消费该 artifact。
+2. `alpha_mode == MULTI_ALPHA` 的分支仅存在于 `backend/services/strategy_package/runtime.py` 的 SignalSnapshot 加载层（位于 `TargetPositionEngine` 上游）。
+3. 执行层目录（`simulation_runtime` / `miniqmt_execution_runtime` / `qmt_strategy_ledger` / `paper_trading_v2/broker`）不含任何 `MULTI_ALPHA / alpha_mode / ic_weighted` 依赖；执行层接收的是 `(instrument, score)` 序列，与组合方式无关。
+4. 多 Alpha P0/P1 的服务 scope（Promotion / LivePrediction / Weight / SelectionArtifact / `strategy_package/runtime.py`）与路线 A 的执行层文件零重叠。
+
+结论：多 Alpha 信号层研发可与路线 A 开发并行推进，互不阻塞。
+
+### A-3 分阶段排期（按路线 A 适配）
+
+将原 P1 拆分为信号层（P1a，独立可验）与真实 paper 执行（P1b，依赖路线 A）：
+
+| 阶段 | 内容 | 依赖路线 A？ | 何时可做 |
+|---|---|---|---|
+| P0 | `MultiAlphaPackagePromotionService` + `from-multi-alpha-combine-run` 端点 + manifest 冻结 + fail-loud 校验 | 否 | 立即 |
+| P1a | `MultiAlphaLivePredictionProvider` + `MultiAlphaWeightService` + authoritative selection artifact 生成 + 确定性复现 + unit/integration | 否（产物与执行路径无关） | 立即，与路线 A 并行 |
+| P1b | MiniQMT 真实 paper dry-run（走路线 A event_loop submit）+ 收益型/下单链路验证 | 是 | 路线 A D4 落地 + canary 稳定后 |
+| P2 | 运营化、live approval、advisory 旁路 review | 是 | P1b 之后 |
+
+运营时序约束：多 Alpha 的 MiniQMT 真实 paper dry-run（P1b）不得与"路线 A 影子证据 N=1 基线攒证"安排在同一批交易日，避免异常归因混淆；P1b 应排在路线 A 影子 N=1 达标且 canary 稳定之后。
+
+### A-4 收益验证归属
+
+1. **组合收益验证归 combine-backtest**：2 腿组合的 Sharpe/收益指标以 combine-backtest run 为权威证据，不依赖 paper 模拟盘产出收益结论。
+2. **Paper 模拟盘只验功能**：多 Alpha 在 paper（MiniQMT 路线 A）上的验证目标是"信号正确性 + 下单链路通畅"，不承担收益验证。原因：路线 B 不验收益、即将淘汰；路线 A 上线并 canary 稳定后才具备收益型 paper 验证的前提。
+3. 据此调整原 Risk #6：阻碍不是"等模拟盘问题修复"，而是"等路线 A（D4）落地 + canary 稳定"；路线 B 不作为多 Alpha 执行路径。
+
+### A-5 执行层依赖与既有修复
+
+1. 目标股票池 `V25_1_SMALL_CAP` + topk50 将包含较多科创板（688/689）与创业板（300/301）标的；其在 MiniQMT 路线 A 上的下单数量正确性依赖 **BUG-531（MiniQMT event_loop 按 symbol 派生 board-lot，科创板 ≥200 后按 1 股递增、不再 floor 到整百手，已合入 main）**。
+2. P1b 的 orders-preview/真实 dry-run 应断言科创板标的下单数量不被错误 floor（与 BUG-531 回归一致）。
+3. 本依赖为利好前置，不构成对执行层的改动需求；多 Alpha 侧无需改执行层代码。
+
+### A-6 信号层时延门（P1a 验收补充）
+
+2 腿 × 多 seed 的每日 live inference 串入 selection artifact 生成路径，存在开盘前 deadline。P1a 验收应增加时延门：selection artifact 必须在交易日 cutoff 前的预留时窗内产出；超时必须 fail-loud（写具体 reason_code/context），不得晚产出导致错过执行窗口或被静默跳过。
+
+### A-7 本章节产出边界
+
+- 本补充仅为设计文档章节追加，`--mode plan` 设计先行，不交付任何实现代码、前端、MCP、DDL/DML、迁移或运行时变更。
+- 不启/重启服务，不写生产 DB，不执行 DDL/DML，不触碰 research-assistant，不修改路线 A 执行层代码。
+- LocalSim 维持原状不在本设计改动范围内。
+- 待澄清（非阻塞，不影响"信号层研发先行"结论）：本补充已明确 LocalSim 保持原状、MiniQMT 仅保留路线 A；若后续对 LocalSim 作为纯信号功能验证工具有进一步约束，另行追加章节，不在此轮处理。
