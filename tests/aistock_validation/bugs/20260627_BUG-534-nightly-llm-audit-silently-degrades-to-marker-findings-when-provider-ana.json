@@ -37,8 +37,8 @@
   "expected": "Semantic LLM audits fail loud/degraded on provider failure, preserve sanitized error evidence, and never present marker-only fallback as normal design drift or silent degradation findings.",
   "first_seen_at": "2026-06-26T18:46:49.008095Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b637e929da4f159f6bcf8ec6af85bc7fc3b9833",
+  "fixed_at": "2026-06-26T19:35:27.238641Z",
   "github_issue_number": 1669,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1669",
   "last_seen_at": "2026-06-26T18:46:49.008095Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1670",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -67,6 +68,15 @@
     "fingerprint": "6dc2bc9a7675fb48e7db3ff8",
     "source_event_id": "FE-20260627-6dc2bc9a7675"
   },
+  "validation_evidence": [
+    "targeted pytest: conda run -n AIstock python -m pytest backend/tests/scripts/test_nightly_design_drift_audit.py backend/tests/scripts/test_nightly_silent_degradation_audit.py backend/tests/scripts/test_code_intelligence_adapter.py backend/tests/scripts/test_nightly_adaptive_scheduler.py -q -p no:cacheprovider -> 92 passed",
+    "guardrail_changed_files: python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "l0 scoped: python -m nox -s l0 -- changed files -> passed",
+    "validation_module_registry_l0: python -m nox -s validation_module_registry_l0 -> passed",
+    "live deepseek config/audit smoke: AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env validate-config passed; nightly_design_drift_audit provider=deepseek_api invoke-llm -> llm_gate=ready",
+    "GitHub PR #1670 checks -> CLEAN/all required checks passed",
+    "git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
