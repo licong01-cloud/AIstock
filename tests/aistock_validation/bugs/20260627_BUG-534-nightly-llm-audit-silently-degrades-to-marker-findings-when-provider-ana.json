@@ -4,6 +4,7 @@
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
     "scripts/code_intelligence_adapter.py",
+    "scripts/llm_provider_adapter.py",
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_code_intelligence_adapter.py",
@@ -21,7 +22,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-26T18:46:49.008095Z",
-  "description": "Run 28235538846 design-drift audit had llm_invoked=false after provider failure but still emitted 3 marker-only findings and nightly summary presented them as design_drift_audit findings.\n\nScope update: root cause also includes .github/workflows/nightly.yml retrying deterministic provider after semantic audit command failure, which overwrote provider-failure evidence and made marker-only findings look normal.",
+  "description": "Run 28235538846 design-drift audit had llm_invoked=false after provider failure but still emitted 3 marker-only findings and nightly summary presented them as design_drift_audit findings.\n\nScope update: root cause also includes .github/workflows/nightly.yml retrying deterministic provider after semantic audit command failure, which overwrote provider-failure evidence and made marker-only findings look normal.\n\nScope update: public LLM invocation summaries must preserve sanitized error_type/error_fingerprint, so scripts/llm_provider_adapter.py is included for evidence propagation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
