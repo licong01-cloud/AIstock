@@ -133,7 +133,46 @@ def test_design_drift_audit_rejects_llm_action_fields(monkeypatch, tmp_path: Pat
 
     assert payload["llm_invocation_evidence"]["invoked"] is False
     assert payload["llm_invocation_evidence"]["reason"] == "design_drift_audit_live_provider_failed_fallback"
+    assert payload["llm_gate"] == "degraded"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["findings"] == []
+    assert payload["summary"]["degraded_reason"] == "llm_provider_failed_no_marker_findings_emitted"
     assert payload["official_bug_creation_allowed"] is False
+
+
+def test_design_drift_audit_llm_failure_does_not_emit_marker_findings(monkeypatch, tmp_path: Path) -> None:
+    _write_fixture(tmp_path, source_text="class DurableRuntime:\n    pass  # temporary fallback runtime\n")
+    config_path = _write_config(tmp_path, drift_markers=["fallback"])
+    llm_config = _write_llm_config(tmp_path)
+    _init_repo(tmp_path)
+
+    def fake_invoke(*args, **kwargs):
+        raise audit.llm_adapter.ProviderAdapterError("provider output JSON schema invalid")
+
+    monkeypatch.setattr(audit.llm_adapter, "invoke_provider_json", fake_invoke)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        provider="deepseek_api",
+        modules=["demo_runtime"],
+        invoke_llm=True,
+    )
+    artifact = audit.public_artifact(payload)
+    markdown = tmp_path / "out" / "design.md"
+    audit.write_markdown(markdown, payload)
+
+    assert payload["llm_gate"] == "degraded"
+    assert payload["workflow_gate"] == "warning"
+    assert payload["findings"] == []
+    assert payload["summary"]["finding_count"] == 0
+    assert payload["summary"]["deterministic_signal_count"] >= 1
+    assert artifact["llm_invocation_evidence"]["error_type"] == "ProviderAdapterError"
+    assert artifact["llm_invocation_evidence"]["error_fingerprint"]
+    text = markdown.read_text(encoding="utf-8")
+    assert "LLM Audit Degraded" in text
+    assert "marker-only deterministic signals were not promoted" in text
 
 
 def test_design_drift_audit_cli_writes_public_artifacts(tmp_path: Path, capsys) -> None:

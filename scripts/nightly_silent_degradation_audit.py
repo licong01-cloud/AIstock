@@ -489,6 +489,9 @@ def _llm_evidence(*, provider_summary: dict[str, Any], invoked: bool, reason: st
         evidence["error_fingerprint"] = stable_id(llm_adapter.redact_secret_text(str(error))[:500])
     return evidence
 
+def _deterministic_signal_count(review_targets: list[dict[str, Any]]) -> int:
+    return len(deterministic_findings(review_targets))
+
 def build_audit(
     *,
     root: Path = ROOT,
@@ -513,6 +516,7 @@ def build_audit(
     findings = deterministic_findings(review_targets)
     llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="silent_degradation_audit_dry_run_no_network")
     llm_summary: str | None = None
+    degraded_reason: str | None = None
     if invoke_llm and provider != "deterministic":
         try:
             result = llm_adapter.invoke_provider_json(
@@ -537,10 +541,14 @@ def build_audit(
             if not fallback_on_llm_error:
                 raise SilentDegradationAuditError(str(exc)) from exc
             llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="silent_degradation_audit_live_provider_failed_fallback", error=exc)
+            findings = []
+            degraded_reason = "llm_provider_failed_no_marker_findings_emitted"
     findings, suppressed_findings = apply_suppressions(findings, config)
-    workflow_gate = "warning" if findings else "ready"
+    workflow_gate = "warning" if findings or degraded_reason else "ready"
     no_candidate_reason = None
-    if not findings:
+    if degraded_reason:
+        no_candidate_reason = degraded_reason
+    elif not findings:
         no_candidate_reason = (
             "all_candidate_findings_suppressed"
             if suppressed_findings
@@ -568,7 +576,17 @@ def build_audit(
         "review_targets": review_targets,
         "findings": findings,
         "suppressed_findings": suppressed_findings,
-        "summary": {"review_target_count": len(review_targets), "finding_count": len(findings), "suppressed_count": len(suppressed_findings), "llm_summary": llm_summary, "no_candidate_reason": no_candidate_reason},
+        "summary": {
+            "review_target_count": len(review_targets),
+            "finding_count": len(findings),
+            "suppressed_count": len(suppressed_findings),
+            "llm_summary": llm_summary,
+            "no_candidate_reason": no_candidate_reason,
+            "deterministic_signal_count": _deterministic_signal_count(review_targets)
+            if invoke_llm and provider != "deterministic" and degraded_reason
+            else None,
+            "degraded_reason": degraded_reason,
+        },
         "llm_invocation_evidence": llm_evidence,
         "side_effects": {"readonly": True, "writes_source": False, "writes_bug_json": False, "writes_github_issue": False, "writes_database": False, "production_actions_allowed": False},
         "production_gates": PRODUCTION_GATES,
@@ -631,18 +649,36 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     findings = payload.get("findings") if isinstance(payload.get("findings"), list) else []
     suppressed_findings = payload.get("suppressed_findings") if isinstance(payload.get("suppressed_findings"), list) else []
-    llm_invoked = bool((payload.get("llm_invocation_evidence") or {}).get("invoked"))
+    llm_evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
+    llm_invoked = bool(llm_evidence.get("invoked"))
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     lines = [
         "# Nightly LLM Silent Degradation Audit",
         "",
         f"- workflow_gate: `{payload.get('workflow_gate')}`",
+        f"- llm_gate: `{payload.get('llm_gate')}`",
         f"- llm_invoked: `{llm_invoked}`",
+        f"- llm_reason: `{llm_evidence.get('reason') or 'unknown'}`",
         f"- checked_modules: `{len(payload.get('review_targets') or [])}`",
         f"- finding_count: `{len(findings)}`",
         f"- suppressed_count: `{len(suppressed_findings)}`",
+        f"- deterministic_signal_count: `{summary.get('deterministic_signal_count') or 0}`",
+        f"- no_candidate_reason: `{summary.get('no_candidate_reason') or 'n/a'}`",
         "- side_effects: `readonly; suggestions only; no source changes; no BUG or GitHub Issue writes`",
         "",
     ]
+    if not llm_invoked and summary.get("degraded_reason"):
+        lines.extend(
+            [
+                "## LLM Audit Degraded",
+                "",
+                "- Live LLM analysis failed; marker-only deterministic signals were not promoted to candidate findings.",
+                f"- degraded_reason: `{summary.get('degraded_reason')}`",
+                f"- error_type: `{llm_evidence.get('error_type') or 'unknown'}`",
+                f"- error_fingerprint: `{llm_evidence.get('error_fingerprint') or 'unknown'}`",
+                "",
+            ]
+        )
     lines.extend(["## Candidate Suggestions", ""])
     if findings:
         for item in findings[:20]:
@@ -798,11 +834,16 @@ def main(argv: list[str] | None = None) -> int:
         compact = {
             "schema_version": audit["schema_version"],
             "workflow_gate": audit["workflow_gate"],
+            "llm_gate": audit["llm_gate"],
+            "llm_reason": audit["llm_invocation_evidence"].get("reason"),
+            "degraded_reason": audit["summary"].get("degraded_reason"),
             "review_target_count": audit["summary"]["review_target_count"],
             "finding_count": audit["summary"]["finding_count"],
             "suppressed_count": audit["summary"].get("suppressed_count", 0),
             "warning_only": audit["warning_only"],
             "llm_invoked": audit["llm_invocation_evidence"]["invoked"],
+            "error_type": audit["llm_invocation_evidence"].get("error_type"),
+            "error_fingerprint": audit["llm_invocation_evidence"].get("error_fingerprint"),
             "artifact": args.output,
             "markdown_artifact": args.markdown_output,
         }

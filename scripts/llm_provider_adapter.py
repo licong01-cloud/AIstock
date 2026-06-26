@@ -2635,6 +2635,10 @@ def llm_invocation_public_summary(record: dict[str, Any] | None) -> dict[str, An
         summary["fallback_reason"] = source.get("fallback_reason")
     if source.get("error"):
         summary["error"] = redact_secret_text(str(source.get("error")))
+    if source.get("error_type"):
+        summary["error_type"] = str(source.get("error_type"))[:120]
+    if source.get("error_fingerprint"):
+        summary["error_fingerprint"] = str(source.get("error_fingerprint"))[:64]
     return json.loads(redact_secret_text(json.dumps(summary, ensure_ascii=False)))
 
 

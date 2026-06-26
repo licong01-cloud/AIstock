@@ -1385,12 +1385,12 @@ def _usage_from_evidence(evidence: dict[str, Any]) -> tuple[dict[str, int | None
 
 
 def _usage_missing_reason(*, payload: dict[str, Any], evidence: dict[str, Any], invoked: bool) -> str | None:
-    if not invoked:
-        return "llm_not_invoked"
     if not evidence:
         return "llm_invocation_evidence_missing"
     if evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint"):
         return "provider_error_or_fallback_without_usage"
+    if not invoked:
+        return "llm_not_invoked"
     if payload.get("llm_gate") == "degraded":
         return "llm_degraded_without_usage"
     return "provider_usage_missing"
@@ -1399,6 +1399,8 @@ def _usage_missing_reason(*, payload: dict[str, Any], evidence: dict[str, Any], 
 def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any], root: Path) -> dict[str, Any]:
     evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
     invoked = bool(evidence.get("invoked", payload.get("llm_invoked")))
+    reason = str(evidence.get("reason") or "")
+    attempted = invoked or bool(evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint")) or reason.endswith("_failed_fallback")
     units, usage_available = _usage_from_evidence(evidence)
     total_units = units.get("total_units")
     if total_units is None and units.get("prompt_units") is not None and units.get("completion_units") is not None:
@@ -1415,6 +1417,7 @@ def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any
         "provider": evidence.get("provider") or payload.get("effective_provider") or payload.get("provider"),
         "model": evidence.get("model") or payload.get("effective_model") or payload.get("model"),
         "invoked": invoked,
+        "attempted": attempted,
         "reason": evidence.get("reason"),
         "fallback_used": bool(evidence.get("fallback_used")),
         "fallback_reason": evidence.get("fallback_reason"),
@@ -1434,8 +1437,9 @@ def _aggregate_usage_records(records: list[dict[str, Any]]) -> tuple[dict[str, A
     totals = {
         "record_count": len(records),
         "invoked_count": sum(1 for item in records if item.get("invoked")),
+        "attempted_count": sum(1 for item in records if item.get("attempted")),
         "usage_available_count": sum(1 for item in records if item.get("usage_available")),
-        "usage_missing_count": sum(1 for item in records if item.get("invoked") and not item.get("usage_available")),
+        "usage_missing_count": sum(1 for item in records if item.get("attempted") and not item.get("usage_available")),
         "prompt_units": sum(_optional_int(item.get("prompt_units")) or 0 for item in records),
         "completion_units": sum(_optional_int(item.get("completion_units")) or 0 for item in records),
         "total_units": sum(_optional_int(item.get("total_units")) or 0 for item in records),
@@ -1552,6 +1556,7 @@ def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
         f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
         f"- limit_enforced: `{bool(payload.get('limit_enforced'))}`",
         f"- invoked_steps: `{totals.get('invoked_count', 0)}`",
+        f"- attempted_steps: `{totals.get('attempted_count', 0)}`",
         f"- usage_available_steps: `{totals.get('usage_available_count', 0)}`",
         f"- usage_missing_steps: `{totals.get('usage_missing_count', 0)}`",
         f"- total_units: `{totals.get('total_units', 0)}`",
@@ -1559,8 +1564,8 @@ def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
         f"- completion_units: `{totals.get('completion_units', 0)}`",
         f"- value_context: `advice_consumed={bool(value.get('advice_consumed'))}, advice_changed_plan={bool(value.get('advice_changed_plan'))}, high_value_candidates={value.get('high_value_candidate_count', 0)}, issue_payloads={value.get('issue_payload_ready_count', 0)}`",
         "",
-        "| step | provider | model | invoked | usage | total_units | missing_reason |",
-        "|---|---|---|---|---|---:|---|",
+        "| step | provider | model | attempted | invoked | usage | total_units | missing_reason |",
+        "|---|---|---|---|---|---|---:|---|",
     ]
     for item in payload.get("records") or []:
         if not isinstance(item, dict):
@@ -1572,6 +1577,7 @@ def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
                     str(item.get("step") or "unknown"),
                     str(item.get("provider") or "unknown"),
                     str(item.get("model") or "unknown"),
+                    str(bool(item.get("attempted"))),
                     str(bool(item.get("invoked"))),
                     str(bool(item.get("usage_available"))),
                     str(item.get("total_units") if item.get("total_units") is not None else "-"),
@@ -1879,6 +1885,7 @@ def build_llm_value_summary(
         },
         "design_drift_audit": {
             "workflow_gate": design_drift.get("workflow_gate"),
+            "llm_gate": design_drift.get("llm_gate"),
             "candidate_only": design_drift.get("candidate_only"),
             "manual_analysis_required_before_bug_registration": design_drift.get(
                 "manual_analysis_required_before_bug_registration"
@@ -1890,11 +1897,15 @@ def build_llm_value_summary(
             if isinstance(design_drift.get("summary"), dict)
             else None,
             "llm_invoked": bool(design_drift.get("llm_invoked")),
+            "degraded_reason": (design_drift.get("summary") or {}).get("degraded_reason")
+            if isinstance(design_drift.get("summary"), dict)
+            else None,
             "artifact_ref": artifact_refs["design_drift_audit_json"],
             "markdown_ref": artifact_refs["design_drift_audit_markdown"],
         },
         "silent_degradation_audit": {
             "workflow_gate": silent_degradation.get("workflow_gate"),
+            "llm_gate": silent_degradation.get("llm_gate"),
             "candidate_only": silent_degradation.get("candidate_only"),
             "manual_analysis_required_before_bug_registration": silent_degradation.get(
                 "manual_analysis_required_before_bug_registration"
@@ -1906,6 +1917,9 @@ def build_llm_value_summary(
             if isinstance(silent_degradation.get("summary"), dict)
             else None,
             "llm_invoked": bool(silent_degradation.get("llm_invoked")),
+            "degraded_reason": (silent_degradation.get("summary") or {}).get("degraded_reason")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
             "artifact_ref": artifact_refs["silent_degradation_audit_json"],
             "markdown_ref": artifact_refs["silent_degradation_audit_markdown"],
         },
@@ -2006,8 +2020,8 @@ def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
         f"- candidate_no_issue_reason: `{feedback.get('no_candidate_reason') or 'n/a'}`",
         f"- allowed_plan_keys: `{allowed_plan_keys}`",
         f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
-        f"- design_drift_audit: `targets={design_drift.get('review_target_count') or 0}, findings={design_drift.get('finding_count') or 0}, candidate_only={bool(design_drift.get('candidate_only'))}`",
-        f"- silent_degradation_audit: `targets={silent_degradation.get('review_target_count') or 0}, findings={silent_degradation.get('finding_count') or 0}, candidate_only={bool(silent_degradation.get('candidate_only'))}`",
+        f"- design_drift_audit: `targets={design_drift.get('review_target_count') or 0}, findings={design_drift.get('finding_count') or 0}, llm_gate={design_drift.get('llm_gate') or 'unknown'}, degraded={bool(design_drift.get('degraded_reason'))}, candidate_only={bool(design_drift.get('candidate_only'))}`",
+        f"- silent_degradation_audit: `targets={silent_degradation.get('review_target_count') or 0}, findings={silent_degradation.get('finding_count') or 0}, llm_gate={silent_degradation.get('llm_gate') or 'unknown'}, degraded={bool(silent_degradation.get('degraded_reason'))}, candidate_only={bool(silent_degradation.get('candidate_only'))}`",
         f"- repo_hygiene_orphan_audit: `scanned={repo_hygiene.get('total_scanned') or 0}, candidates={repo_hygiene.get('candidate_count') or 0}, delete_candidates={repo_hygiene.get('delete_candidate_count') or 0}, human_pr={bool(repo_hygiene.get('cleanup_requires_human_pr'))}`",
         f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
         f"- guarded_rollout: `mode={rollout.get('mode') or 'unknown'}, can_enhance={rollout.get('llm_can_enhance_issue')}`",
