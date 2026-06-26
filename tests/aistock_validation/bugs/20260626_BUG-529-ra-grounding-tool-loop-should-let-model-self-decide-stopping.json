@@ -28,30 +28,30 @@
       "timestamp": "2026-06-26T04:03:59.938408Z"
     },
     {
-      "timestamp": "2026-06-26T04:20:00Z",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Added existing react tool-loop regression test file to allowed_write_scope because T5 changes the guard retry behavior asserted there."
+      "actor": "codex",
+      "note": "Added existing react tool-loop regression test file to allowed_write_scope because T5 changes the guard retry behavior asserted there.",
+      "timestamp": "2026-06-26T04:20:00Z"
     },
     {
-      "timestamp": "2026-06-26T04:35:00Z",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Added existing stock-analysis MCP regression test file because it asserted the guard-forced regeneration behavior retired by T5."
+      "actor": "codex",
+      "note": "Added existing stock-analysis MCP regression test file because it asserted the guard-forced regeneration behavior retired by T5.",
+      "timestamp": "2026-06-26T04:35:00Z"
     },
     {
-      "timestamp": "2026-06-26T05:42:00Z",
-      "actor": "codex",
       "action": "implementation",
-      "note": "Implemented B9 T5: max_tool_iterations is now a safety cap (24); removed guard-driven model regeneration; model early stop after evidence is accepted; zero-evidence answer attempts still trigger read-only fallback; anti-hallucination guard remains fail-closed. Added/updated react tool-loop and stock MCP regression tests. Validation: targeted pytest 36 passed; l0 passed; research_assistant_backend 353 passed; research_assistant_mcp_contract 38 passed; ra_phase0_baseline passed; ra_phase5_agent_teams passed; validation_module_registry_l0 8 passed; ruff passed; diff-check passed. ra_phase7_full_accept substeps passed through backend 353, frontend lint/build, phase7 Playwright 4/4, research-assistant Playwright 9/9, crosscheck/catalog/ownership; wrapper exited failed only after Playwright webServer cleanup hang requiring test-node cleanup, production ports untouched."
+      "actor": "codex",
+      "note": "Implemented B9 T5: max_tool_iterations is now a safety cap (24); removed guard-driven model regeneration; model early stop after evidence is accepted; zero-evidence answer attempts still trigger read-only fallback; anti-hallucination guard remains fail-closed. Added/updated react tool-loop and stock MCP regression tests. Validation: targeted pytest 36 passed; l0 passed; research_assistant_backend 353 passed; research_assistant_mcp_contract 38 passed; ra_phase0_baseline passed; ra_phase5_agent_teams passed; validation_module_registry_l0 8 passed; ruff passed; diff-check passed. ra_phase7_full_accept substeps passed through backend 353, frontend lint/build, phase7 Playwright 4/4, research-assistant Playwright 9/9, crosscheck/catalog/ownership; wrapper exited failed only after Playwright webServer cleanup hang requiring test-node cleanup, production ports untouched.",
+      "timestamp": "2026-06-26T05:42:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Model decides when enough evidence has been gathered; max_tool_iterations only prevents runaway loops; zero-evidence answers are forced to gather evidence; anti-hallucination remains fail-closed.",
   "first_seen_at": "2026-06-26T04:03:59.938412Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8e03c7cd270793d2dabb96009a665c2c414f4a4",
+  "fixed_at": "2026-06-26T07:19:13.590798Z",
   "github_issue_number": 1649,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1649",
   "last_seen_at": "2026-06-26T04:03:59.938412Z",
@@ -59,6 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1651",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -74,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -83,6 +84,9 @@
     "fingerprint": "c55ec0600feacc2dfc4b7f02",
     "source_event_id": "FE-20260626-c55ec0600fea"
   },
+  "validation_evidence": [
+    "Tier2 PASS; GitHub check rollup SUCCESS/SKIPPED only; local validation recorded in PR; phase7 wrapper cleanup hang environmental and not required"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
