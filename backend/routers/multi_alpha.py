@@ -16,6 +16,11 @@ from backend.services.multi_alpha import (
     MultiAlphaOrthogonalityService,
 )
 from backend.services.multi_alpha.combine_backtest import COMBINE_BACKTEST_STALE_FAIL_CONFIRM, error_payload
+from backend.services.multi_alpha.combine_ui_adapter import (
+    CombineUIAdapterError,
+    MultiAlphaCombineUIAdapter,
+    error_payload as combine_ui_error_payload,
+)
 
 
 router = APIRouter(prefix="/multi-alpha", tags=["multi-alpha"])
@@ -138,3 +143,56 @@ def mark_stale_multi_alpha_combine_backtests_failed(request: CombineBacktestStal
         "data": data,
         "confirmation_required": COMBINE_BACKTEST_STALE_FAIL_CONFIRM,
     }
+
+
+@router.get("/combine/tasks", summary="List combine-backtest UI tasks grouped by roster/config")
+def list_multi_alpha_combine_ui_tasks(
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    try:
+        data = MultiAlphaCombineUIAdapter().list_tasks(status=status, limit=limit, offset=offset)
+    except CombineUIAdapterError as exc:
+        raise HTTPException(status_code=400, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine/tasks/{task_key}", summary="Get one combine-backtest UI task with loops")
+def get_multi_alpha_combine_ui_task(task_key: str, scheme: str | None = None) -> dict:
+    try:
+        data = MultiAlphaCombineUIAdapter().get_task(task_key, scheme=scheme)
+    except CombineUIAdapterError as exc:
+        status_code = 404 if exc.reason_code == "combine_ui_task_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine/tasks/{task_key}/trajectory", summary="Get combine-backtest UI trajectory")
+def get_multi_alpha_combine_ui_trajectory(task_key: str, scheme: str | None = None) -> dict:
+    try:
+        data = MultiAlphaCombineUIAdapter().get_trajectory(task_key, scheme=scheme)
+    except CombineUIAdapterError as exc:
+        status_code = 404 if exc.reason_code == "combine_ui_task_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine/tasks/{task_key}/custom-evo-config", summary="Get combine-backtest UI config rows")
+def get_multi_alpha_combine_ui_custom_evo_config(task_key: str, scheme: str | None = None) -> dict:
+    try:
+        data = MultiAlphaCombineUIAdapter().get_custom_evo_config(task_key, scheme=scheme)
+    except CombineUIAdapterError as exc:
+        status_code = 404 if exc.reason_code == "combine_ui_task_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine/tasks/{task_key}/loops/{loop_index}", summary="Get one combine-backtest UI loop")
+def get_multi_alpha_combine_ui_loop(task_key: str, loop_index: int, scheme: str | None = None) -> dict:
+    try:
+        data = MultiAlphaCombineUIAdapter().get_loop(task_key, loop_index, scheme=scheme)
+    except CombineUIAdapterError as exc:
+        status_code = 404 if exc.reason_code in {"combine_ui_task_not_found", "combine_ui_loop_not_found"} else 400
+        raise HTTPException(status_code=status_code, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
