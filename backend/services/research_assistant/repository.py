@@ -303,6 +303,13 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"payload_json", "cost_json"},
         "search": {"trace_id", "task_id", "event_type", "component", "status"},
     },
+    "llm_usage_events": {
+        "table": "assistant_llm_usage_events",
+        "id": "usage_event_id",
+        "json": {"pricing_snapshot_json", "usage_raw_json", "request_meta_json", "response_meta_json"},
+        "search": {"usage_event_id", "trace_id", "task_id", "conversation_id", "message_id", "phase", "component", "provider", "model", "model_profile_id", "usage_status", "cost_status"},
+        "no_updated_at": True,
+    },
 }
 
 
@@ -320,6 +327,66 @@ def _adapt_json(value: Any) -> Json:
 
 def _clean_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return {k: copy.deepcopy(v) for k, v in dict(row).items() if v is not None}
+
+
+def _llm_usage_summary_from_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    row = (
+        len(items),
+        sum(int(item.get("prompt_tokens") or 0) for item in items),
+        sum(int(item.get("completion_tokens") or 0) for item in items),
+        sum(int(item.get("total_tokens") or 0) for item in items),
+        sum(int(item.get("reasoning_tokens") or 0) for item in items),
+        sum(int(item.get("cache_creation_input_tokens") or 0) for item in items),
+        sum(int(item.get("cache_read_input_tokens") or 0) for item in items),
+        sum(1 for item in items if item.get("prompt_tokens_estimated") or item.get("completion_tokens_estimated") or item.get("usage_status") == "estimated"),
+        sum(1 for item in items if item.get("usage_status") in {"unavailable", "failed"}),
+        sum(1 for item in items if item.get("cost_status") == "unavailable"),
+        sum(1 for item in items if item.get("cost_status") == "failed"),
+        sum(1 for item in items if item.get("total_cost_usd") is not None),
+        sum(float(item.get("total_cost_usd") or 0) for item in items if item.get("total_cost_usd") is not None),
+    )
+    return _llm_usage_summary_from_aggregate_row(row)
+
+
+def _llm_usage_summary_from_aggregate_row(row: Any) -> dict[str, Any]:
+    values = list(row or [0] * 13)
+    while len(values) < 13:
+        values.append(0)
+    call_count = int(values[0] or 0)
+    cost_count = int(values[11] or 0)
+    unavailable_usage = int(values[8] or 0)
+    estimated_usage = int(values[7] or 0)
+    unavailable_cost = int(values[9] or 0)
+    failed_cost = int(values[10] or 0)
+    if unavailable_usage:
+        usage_status = "unavailable"
+    elif estimated_usage:
+        usage_status = "estimated"
+    else:
+        usage_status = "recorded" if call_count else "unavailable"
+    if failed_cost:
+        cost_status = "failed"
+    elif unavailable_cost or not cost_count:
+        cost_status = "unavailable"
+    else:
+        cost_status = "recorded"
+    return {
+        "call_count": call_count,
+        "prompt_tokens": int(values[1] or 0),
+        "completion_tokens": int(values[2] or 0),
+        "total_tokens": int(values[3] or 0),
+        "reasoning_tokens": int(values[4] or 0),
+        "cache_creation_input_tokens": int(values[5] or 0),
+        "cache_read_input_tokens": int(values[6] or 0),
+        "estimated_usage_event_count": estimated_usage,
+        "unavailable_usage_event_count": unavailable_usage,
+        "unavailable_cost_event_count": unavailable_cost,
+        "failed_cost_event_count": failed_cost,
+        "total_cost_usd": f"{float(values[12] or 0):.10f}" if cost_count else None,
+        "currency": "USD",
+        "usage_status": usage_status,
+        "cost_status": cost_status,
+    }
 
 
 class ResearchAssistantRepositoryError(RuntimeError):
@@ -380,6 +447,101 @@ class DatabaseResearchAssistantRepository:
                 except SCHEMA_ERROR_TYPES as exc:
                     raise ResearchAssistantSchemaMissingError(f"Research Assistant schema is missing or out of date for table {table}; apply backend.db.init_research_assistant_schema_20260521") from exc
         return {"items": items, "total": total, "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < total}
+
+    def list_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM assistant_llm_usage_events {where}", params)
+                    total = int(cur.fetchone()[0])
+                    cur.execute(
+                        f"SELECT * FROM assistant_llm_usage_events {where} ORDER BY completed_at DESC, created_at DESC LIMIT %s OFFSET %s",
+                        [*params, limit, offset],
+                    )
+                    items = self._rows(cur)
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+        return {"items": items, "total": total, "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < total}
+
+    def summarize_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COALESCE(SUM(reasoning_tokens), 0),
+                            COALESCE(SUM(cache_creation_input_tokens), 0),
+                            COALESCE(SUM(cache_read_input_tokens), 0),
+                            COALESCE(SUM(CASE WHEN prompt_tokens_estimated OR completion_tokens_estimated OR usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status IN ('unavailable','failed') THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        """,
+                        params,
+                    )
+                    row = cur.fetchone()
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+        return _llm_usage_summary_from_aggregate_row(row)
 
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         meta = self._meta(kind)
@@ -547,6 +709,40 @@ class InMemoryResearchAssistantRepository:
             limit = requested_limit
         offset = max(0, int(offset or 0))
         return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
+
+    def list_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        items = list(self.data["llm_usage_events"].values())
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            items = [item for item in items if item.get(key) == value]
+        if date_from:
+            items = [item for item in items if str(item.get("completed_at") or item.get("created_at") or "") >= str(date_from)]
+        if date_to:
+            items = [item for item in items if str(item.get("completed_at") or item.get("created_at") or "") <= str(date_to)]
+        items.sort(key=lambda item: str(item.get("completed_at") or item.get("created_at") or ""), reverse=True)
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
+
+    def summarize_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        return _llm_usage_summary_from_items(
+            self.list_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to, limit=max(1, len(self.data["llm_usage_events"]) or 1))["items"]
+        )
 
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         row = self.data[kind].get(record_id)

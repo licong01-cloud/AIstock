@@ -532,6 +532,73 @@ export type AssistantTraceEvent = JsonObject & {
   created_at?: string;
 };
 
+export type AssistantLlmUsageEvent = JsonObject & {
+  usage_event_id: string;
+  trace_id?: string | null;
+  task_id?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  call_group_id?: string | null;
+  call_index?: number;
+  phase?: string;
+  component?: string;
+  provider?: string;
+  model?: string;
+  model_profile_id?: string | null;
+  litellm_model?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  prompt_tokens_estimated?: boolean;
+  completion_tokens_estimated?: boolean;
+  usage_source?: string;
+  usage_status?: string;
+  usage_reason_code?: string | null;
+  prompt_cost_usd?: string | number | null;
+  completion_cost_usd?: string | number | null;
+  total_cost_usd?: string | number | null;
+  currency?: string;
+  cost_source?: string;
+  cost_status?: string;
+  cost_reason_code?: string | null;
+  pricing_snapshot_json?: JsonObject;
+  usage_raw_json?: JsonObject;
+  request_meta_json?: JsonObject;
+  response_meta_json?: JsonObject;
+  duration_ms?: number | null;
+  completed_at?: string;
+  created_at?: string;
+};
+
+export type AssistantLlmUsageTotals = JsonObject & {
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  reasoning_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  estimated_usage_event_count?: number;
+  unavailable_usage_event_count?: number;
+  unavailable_cost_event_count?: number;
+  failed_cost_event_count?: number;
+  total_cost_usd?: string | number | null;
+  currency?: string;
+  usage_status?: string;
+  cost_status?: string;
+};
+
+export type AssistantLlmUsageSummary = JsonObject & {
+  schema_version?: string;
+  source_of_truth?: string;
+  filters?: JsonObject;
+  summary?: AssistantLlmUsageTotals;
+  events_page?: AssistantPage<AssistantLlmUsageEvent>;
+};
+
 export type AssistantAgentRun = JsonObject & {
   agent_run_id: string;
   parent_task_id?: string;
@@ -873,6 +940,12 @@ export const researchAssistantApi = {
   },
   traceEvents(params: { task_id?: string; component?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantTraceEvent>> {
     return unwrap<AssistantPage<AssistantTraceEvent>>(appendQuery("/research-assistant/trace-events", { limit: 100, ...params }));
+  },
+  llmUsageEvents(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantLlmUsageEvent>> {
+    return unwrap<AssistantPage<AssistantLlmUsageEvent>>(appendQuery("/research-assistant/llm-usage/events", { limit: 100, ...params }));
+  },
+  llmUsageSummary(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; limit?: number } = {}): Promise<AssistantLlmUsageSummary> {
+    return unwrap<AssistantLlmUsageSummary>(appendQuery("/research-assistant/llm-usage/summary", { limit: 100, ...params }));
   },
   notificationSummary(): Promise<JsonObject> {
     return unwrap<JsonObject>("/research-assistant/notifications/summary");

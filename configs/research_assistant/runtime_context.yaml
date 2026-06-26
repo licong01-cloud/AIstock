@@ -986,3 +986,4 @@ query_limits:
   api_list_agenda_items: 50
   api_list_validation_discovery_reports: 50
   api_list_trace_events: 50
+  api_list_llm_usage_events: 50
