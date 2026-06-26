@@ -36,8 +36,8 @@
   "expected": "A event_loop submits dependent BUY only after broker-authoritative qmt_strategy ledger facts show same-batch SELL proceeds are durably available; partial/unfilled/cancelled/EOD residual paths are loud with reason_code; B scheduler/order_service polling loop remains unchanged.",
   "first_seen_at": "2026-06-26T02:31:26.309392Z",
   "fix_branch": "bug/BUG-528-miniqmt-event-loop-lacks-event-driven-dependent-20260626",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b5bc189609fce6ab7c967cb21469cd3ba1e2efb0",
+  "fixed_at": "2026-06-26T06:50:13.733049Z",
   "github_issue_number": 1647,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1647",
   "last_seen_at": "2026-06-26T02:31:26.309392Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1650",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -89,6 +90,10 @@
     "ui_routes": [],
     "visual_acceptance_required": false
   },
+  "ui_issue": false,
+  "validation_evidence": [
+    "GitHub PR #1650 checks -> 17 passed, 0 failed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -102,6 +107,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_fix",
-  "ui_issue": false
+  "workflow_gate": "ready_for_fix"
 }
