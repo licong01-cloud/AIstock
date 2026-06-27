@@ -213,6 +213,7 @@ class StrategyPackageAssetEligibilityService:
                 )
 
         checks.extend(_alpha_core_shape_checks(manifest))
+        checks.extend(_multi_alpha_runtime_blockers(manifest))
         return self._result(package_id, manifest_sha256, actual, legacy_status, checks)
 
     def require_eligible(self, record: Any) -> StrategyPackageAssetEligibilityResult:
@@ -344,3 +345,24 @@ def _alpha_core_shape_checks(manifest: Any) -> list[StrategyPackageAssetEligibil
             )
         )
     return checks
+
+
+def _multi_alpha_runtime_blockers(manifest: Any) -> list[StrategyPackageAssetEligibilityCheck]:
+    if _status_value(getattr(manifest, "alpha_mode", None)) != "multi_alpha":
+        return []
+    evidence = getattr(manifest, "source_evidence", {}) or {}
+    multi_alpha = evidence.get("multi_alpha") if isinstance(evidence, dict) else None
+    paper_admission = multi_alpha.get("paper_admission") if isinstance(multi_alpha, dict) else None
+    blocking = list(paper_admission.get("blocking") or []) if isinstance(paper_admission, dict) else []
+    if not blocking:
+        return []
+    return [
+        _check(
+            str(reason),
+            "FAIL",
+            "hard",
+            "MULTI_ALPHA package is not eligible for Paper until runtime dry-run validates live signal generation",
+            {"package_id": manifest.package_id, "alpha_mode": "multi_alpha"},
+        )
+        for reason in blocking
+    ]
