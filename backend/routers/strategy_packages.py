@@ -18,6 +18,7 @@ from backend.services.strategy_package.asset_eligibility import StrategyPackageA
 from backend.services.strategy_package.components import StrategyPackageComponentService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.multi_alpha_promotion import MultiAlphaPackagePromotionService
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
@@ -56,6 +57,19 @@ class CreateFromQEEvolutionLoopRequest(BaseModel):
 
 class CreateFromCandidateStrategyPackageRequest(BaseModel):
     manifest_json: dict[str, Any] | None = None
+
+
+class CreateFromMultiAlphaCombineRunRequest(BaseModel):
+    combine_backtest_run_id: str = Field(min_length=1)
+    weighting_scheme: str = Field(min_length=1)
+    scheme_result_id: str | None = None
+    topk: int = Field(gt=0)
+    secondary_topk: list[int] = Field(default_factory=list)
+    package_name: str | None = None
+    component_package_ids: dict[str, str] = Field(default_factory=dict)
+    weight_policy: dict[str, Any] = Field(default_factory=dict)
+    promotion_gate: dict[str, Any] = Field(default_factory=dict)
+    confirmation: str = Field(min_length=1)
 
 
 class CreateCandidateFromQEExperimentRequest(BaseModel):
@@ -350,6 +364,26 @@ def create_package_from_candidate(
             manifest_json=req.manifest_json,
         )
         return {"ok": True, "package": _record_payload(record)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/from-multi-alpha-combine-run")
+def create_package_from_multi_alpha_combine_run(req: CreateFromMultiAlphaCombineRunRequest) -> dict[str, Any]:
+    try:
+        result = MultiAlphaPackagePromotionService().promote_from_combine_run(
+            combine_backtest_run_id=req.combine_backtest_run_id,
+            weighting_scheme=req.weighting_scheme,
+            scheme_result_id=req.scheme_result_id,
+            topk=req.topk,
+            secondary_topk=req.secondary_topk,
+            package_name=req.package_name,
+            component_package_ids=req.component_package_ids,
+            weight_policy=req.weight_policy,
+            promotion_gate=req.promotion_gate,
+            confirmation=req.confirmation,
+        )
+        return result.to_response()
     except TradingCoreError as exc:
         _raise_http(exc)
 
