@@ -447,32 +447,45 @@ def _loop_status(status: str) -> str:
 
 
 def _common_schemes(bundles: Sequence[Mapping[str, Any]]) -> list[str]:
+    # 只对 succeeded run 计算公共 weighting_scheme:failed/partial_failed run 的
+    # scheme_result 可能是部分/无效产物(不同 run 失败时落地的 scheme 集合不一致),
+    # 若纳入交集会把整个 task 的可用 scheme 算空,导致详情/轨迹整体渲染失败。
     common: set[str] | None = None
     seen_any = False
     for bundle in bundles:
         run = _as_mapping(bundle.get("run"))
+        if run.get("status") != "succeeded":
+            continue
         schemes = {
             str(row.get("weighting_scheme"))
             for row in _as_list(bundle.get("scheme_results"))
             if row.get("weighting_scheme")
         }
         if not schemes:
-            if run.get("status") == "succeeded":
-                raise CombineUIAdapterError(
-                    "succeeded combine run has no scheme_result rows",
-                    reason_code="combine_ui_scheme_results_missing",
-                    context={"run_id": run.get("id")},
-                )
-            continue
+            raise CombineUIAdapterError(
+                "succeeded combine run has no scheme_result rows",
+                reason_code="combine_ui_scheme_results_missing",
+                context={"run_id": run.get("id")},
+            )
         seen_any = True
         common = schemes if common is None else common & schemes
     if not seen_any:
+        # 该 task 下没有任何 succeeded run(全部 running/failed)→ 降级到默认 scheme,
+        # 让 UI 可渲染(轨迹/详情对 failed run 自有状态展示),不因无成功 run 而整体崩。
         return [DEFAULT_SCHEME]
     if not common:
+        # 走到这里说明存在 succeeded run 但它们之间确实无公共 scheme,
+        # 属真实数据异常,显式报错不掩盖(no-silent-error)。
         raise CombineUIAdapterError(
-            "combine task has no common weighting_scheme across runs",
+            "combine task has no common weighting_scheme across succeeded runs",
             reason_code="combine_ui_no_common_weighting_scheme",
-            context={"run_ids": [_as_mapping(bundle.get("run")).get("id") for bundle in bundles]},
+            context={
+                "run_ids": [
+                    _as_mapping(bundle.get("run")).get("id")
+                    for bundle in bundles
+                    if _as_mapping(bundle.get("run")).get("status") == "succeeded"
+                ]
+            },
         )
     return sorted(common, key=lambda item: SCHEME_PRIORITY.index(item) if item in SCHEME_PRIORITY else len(SCHEME_PRIORITY))
 
