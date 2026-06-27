@@ -45,7 +45,7 @@ from .live_inference import (
     WslStrategyPackageInferenceProvider,
     win_to_wsl_path,
 )
-from .models import SelectionScoreArtifactStatus
+from .models import AlphaMode, SelectionScoreArtifactStatus
 from .repository import StrategyPackageRepository
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
@@ -393,6 +393,25 @@ class StrategyPackageSelectionArtifactService:
             raise PackageAssetInvalidError(
                 "strategy package manifest must be frozen before generating live selection artifacts",
                 context={"package_id": package_id},
+            )
+        if manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            provider, inference_backend = self._resolve_live_provider(runtime_config)
+            from .multi_alpha_live import MultiAlphaLivePredictionProvider
+
+            return MultiAlphaLivePredictionProvider(
+                package_repository=self.package_repository,
+                artifact_repository=self.artifact_repository,
+                runtime_asset_resolver=self.runtime_asset_resolver,
+                live_inference_provider=provider,
+                reference_price_loader=self._load_reference_prices,
+            ).generate_artifacts(
+                package_id=package_id,
+                trade_dates=unique_dates,
+                data_source=data_source,
+                runtime_config=runtime_config,
+                include_reference_price=include_reference_price,
+                cutoff_date=cutoff_date,
+                inference_backend=inference_backend,
             )
         runtime_hash = selection_artifact_runtime_hash(runtime_config)
         topk = self._runtime_top_k(manifest, runtime_config)
