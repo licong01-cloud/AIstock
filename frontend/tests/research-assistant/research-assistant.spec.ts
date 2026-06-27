@@ -66,6 +66,38 @@ const chatTurnResponse = {
   },
 };
 
+
+const llmUsageReportResponse = {
+  schema_version: "aistock_research_assistant_llm_usage_report_v1",
+  source_of_truth: "assistant_llm_usage_events",
+  filters: { date_from: "2026-06-21T00:00:00+08:00", date_to: "2026-06-27T23:59:59+08:00", granularity: "day", timezone: "Asia/Shanghai" },
+  summary: {
+    call_count: 3,
+    prompt_tokens: 1200,
+    completion_tokens: 420,
+    total_tokens: 1620,
+    total_cost_usd: "0.0123000000",
+    usage_status: "recorded",
+    cost_status: "mixed",
+    estimated_usage_event_count: 0,
+    unavailable_usage_event_count: 0,
+    unavailable_cost_event_count: 1,
+    failed_cost_event_count: 0,
+  },
+  time_series: [
+    { bucket_start: "2026-06-27T09:00:00+08:00", bucket_end: "2026-06-27T10:00:00+08:00", model: "deepseek-chat", provider: "deepseek", call_count: 2, prompt_tokens: 900, completion_tokens: 300, total_tokens: 1200, total_cost_usd: "0.0100000000", usage_status: "recorded", cost_status: "recorded", usage_status_counts: { recorded: 2 }, cost_status_counts: { recorded: 2 } },
+    { bucket_start: "2026-06-27T10:00:00+08:00", bucket_end: "2026-06-27T11:00:00+08:00", model: "deepseek-reasoner", provider: "deepseek", call_count: 1, prompt_tokens: 300, completion_tokens: 120, total_tokens: 420, total_cost_usd: null, usage_status: "recorded", cost_status: "unavailable", usage_status_counts: { recorded: 1 }, cost_status_counts: { unavailable: 1 } },
+  ],
+  model_breakdown: [
+    { model: "deepseek-chat", provider: "deepseek", call_count: 2, prompt_tokens: 900, completion_tokens: 300, total_tokens: 1200, total_cost_usd: "0.0100000000", usage_status: "recorded", cost_status: "recorded" },
+    { model: "deepseek-reasoner", provider: "deepseek", call_count: 1, prompt_tokens: 300, completion_tokens: 120, total_tokens: 420, total_cost_usd: null, usage_status: "recorded", cost_status: "unavailable" },
+  ],
+  status_breakdown: { usage: { recorded: 3, estimated: 0, unavailable: 0, failed: 0 }, cost: { recorded: 2, estimated: 0, unavailable: 1, failed: 0 } },
+  prompt_text_retained: false,
+  degraded: false,
+  reason_code: null,
+};
+
 function page<T>(items: T[]) {
   return { items, total: items.length, page: 1, page_size: 100, has_more: false };
 }
@@ -532,4 +564,68 @@ test("Research Assistant audit legacy routes redirect to the consolidated audit 
     await expect(browserPage.getByRole("heading", { name: "研究助理审计" })).toBeVisible();
     await expect(browserPage.getByText(expectedText).first()).toBeVisible();
   }
+});
+
+
+test("Research Assistant chat shows per-turn LLM usage in the right rail only", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: { ...chatTurnResponse.assistant_message, message_id: "msg_usage" },
+    trace: {
+      trace_id: "trace_usage",
+      cost_json: {
+        source_of_truth: "assistant_llm_usage_events",
+        prompt_text_retained: false,
+        usage_event_refs: ["assistant_llm_usage_events:llmu_usage"],
+        usage_summary: {
+          call_count: 2,
+          prompt_tokens: 1234,
+          completion_tokens: 456,
+          total_tokens: 1690,
+          total_cost_usd: "0.0123000000",
+          usage_status: "recorded",
+          cost_status: "recorded",
+        },
+      },
+    },
+  };
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    if (path.endsWith("/llm-usage/summary")) return respond({ summary: response.trace.cost_json.usage_summary });
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("usage check");
+  await browserPage.locator(".ra-chat-send").click();
+
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("本轮消耗");
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("1,690");
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("$0.0123");
+  await expect(browserPage.locator(".ra-chat-bubble").filter({ hasText: "1,690" })).toHaveCount(0);
+  await expect(browserPage.locator(".ra-chat-bubble").filter({ hasText: "usage=recorded" })).toHaveCount(0);
+});
+
+test("Research Assistant audit LLM usage tab renders charts and KPI cards without tables", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/llm-usage/report")) return respond(llmUsageReportResponse);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/audit?tab=llm-usage");
+
+  await expect(browserPage.getByTestId("ra-llm-usage-section")).toBeVisible();
+  await expect(browserPage.getByText("LLM 消耗报表")).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "最近 7 天" })).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "最近 30 天" })).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-usage-kpis")).toContainText("1,620");
+  await expect(browserPage.getByTestId("ra-llm-token-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-cost-chart")).toContainText("部分成本不可用");
+  await expect(browserPage.getByTestId("ra-llm-top-model-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-status-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-usage-section").locator("table")).toHaveCount(0);
 });

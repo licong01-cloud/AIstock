@@ -2,21 +2,23 @@ import Link from "next/link";
 
 import { AgentRunsSection } from "./AgentRunsSection";
 import { ExternalAgentsSection } from "./ExternalAgentsSection";
+import { LlmUsageSection } from "./LlmUsageSection";
 import { TasksSection } from "./TasksSection";
 import { TraceSection } from "./TraceSection";
 
-type AuditTabKey = "tasks" | "trace" | "agent-runs" | "external-agents";
+type AuditTabKey = "tasks" | "trace" | "agent-runs" | "external-agents" | "llm-usage";
 
 const AUDIT_TABS: Array<{ key: AuditTabKey; label: string; href: string }> = [
   { key: "tasks", label: "任务", href: "/research-assistant/audit?tab=tasks" },
   { key: "trace", label: "Trace", href: "/research-assistant/audit?tab=trace" },
   { key: "agent-runs", label: "Agent运行", href: "/research-assistant/audit?tab=agent-runs" },
   { key: "external-agents", label: "外部Agent", href: "/research-assistant/audit?tab=external-agents" },
+  { key: "llm-usage", label: "LLM 消耗", href: "/research-assistant/audit?tab=llm-usage" },
 ];
 
 function normalizeTab(value: string | string[] | undefined): AuditTabKey {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === "trace" || raw === "agent-runs" || raw === "external-agents") return raw;
+  if (raw === "trace" || raw === "agent-runs" || raw === "external-agents" || raw === "llm-usage") return raw;
   return "tasks";
 }
 
@@ -24,6 +26,7 @@ function renderAuditSection(tab: AuditTabKey) {
   if (tab === "trace") return <TraceSection />;
   if (tab === "agent-runs") return <AgentRunsSection />;
   if (tab === "external-agents") return <ExternalAgentsSection />;
+  if (tab === "llm-usage") return <LlmUsageSection />;
   return <TasksSection />;
 }
 

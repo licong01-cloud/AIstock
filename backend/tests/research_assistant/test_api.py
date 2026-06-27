@@ -127,6 +127,14 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert usage_summary["source_of_truth"] == "assistant_llm_usage_events"
     assert usage_summary["summary"]["call_count"] >= 1
     assert usage_summary["events_page"]["items"]
+    usage_report = client.get("/api/v1/research-assistant/llm-usage/report", params={"task_id": chat_resp["task"]["task_id"], "granularity": "day", "timezone": "Asia/Shanghai"}).json()["data"]
+    assert usage_report["schema_version"] == "aistock_research_assistant_llm_usage_report_v1"
+    assert usage_report["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_report["prompt_text_retained"] is False
+    assert usage_report["summary"]["call_count"] >= 1
+    assert usage_report["time_series"]
+    assert usage_report["model_breakdown"]
+    assert "private prompt" not in json.dumps(usage_report, ensure_ascii=False)
 
     capability_resp = client.post(
         "/api/v1/research-assistant/chat/turn",

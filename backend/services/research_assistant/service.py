@@ -20,6 +20,7 @@ from enum import Enum
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import jsonschema
 
@@ -4000,6 +4001,120 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "summary": summary,
             "events_page": page,
         }
+
+    def llm_usage_report(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        conversation_id: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        granularity: str = "day",
+        timezone_name: str = "Asia/Shanghai",
+        limit_models: int = 8,
+    ) -> dict[str, Any]:
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"invalid_granularity: {granularity}; expected hour or day")
+        try:
+            ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"invalid_timezone: {timezone_name}") from exc
+        if limit_models < 1:
+            raise ValueError("limit_models must be positive")
+        filters = {
+            "trace_id": trace_id,
+            "task_id": task_id,
+            "conversation_id": conversation_id,
+            "model": model,
+            "provider": provider,
+        }
+        page = self.list_llm_usage_events(
+            trace_id=trace_id,
+            task_id=task_id,
+            conversation_id=conversation_id,
+            model=model,
+            provider=provider,
+            date_from=date_from,
+            date_to=date_to,
+            limit=self.configured_limit("api_list_max_page_size"),
+        )
+        summary = (
+            self.repository.summarize_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to)
+            if hasattr(self.repository, "summarize_llm_usage_events")
+            else self._llm_usage_summary_from_events(page["items"])
+        )
+        report_parts = self.repository.report_llm_usage_events(
+            filters=filters,
+            date_from=date_from,
+            date_to=date_to,
+            granularity=granularity,
+            timezone_name=timezone_name,
+            limit_models=limit_models,
+        )
+        status_breakdown = self._llm_usage_status_breakdown_from_report(report_parts.get("time_series") or [], page.get("items") or [])
+        summary = dict(summary)
+        summary["usage_status"] = self._llm_usage_rollup_status(status_breakdown["usage"])
+        summary["cost_status"] = self._llm_usage_rollup_status(status_breakdown["cost"])
+        return {
+            "schema_version": "aistock_research_assistant_llm_usage_report_v1",
+            "source_of_truth": "assistant_llm_usage_events",
+            "filters": {
+                "trace_id": trace_id,
+                "task_id": task_id,
+                "conversation_id": conversation_id,
+                "model": model,
+                "provider": provider,
+                "date_from": date_from,
+                "date_to": date_to,
+                "granularity": granularity,
+                "timezone": timezone_name,
+                "limit_models": limit_models,
+            },
+            "summary": summary,
+            "time_series": report_parts.get("time_series") or [],
+            "model_breakdown": report_parts.get("model_breakdown") or [],
+            "status_breakdown": status_breakdown,
+            "prompt_text_retained": False,
+            "degraded": False,
+            "reason_code": None,
+        }
+
+    @staticmethod
+    def _llm_usage_status_breakdown_from_report(time_series: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+        usage = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        cost = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        used_bucket_counts = False
+        for bucket in time_series:
+            usage_counts = bucket.get("usage_status_counts")
+            cost_counts = bucket.get("cost_status_counts")
+            if isinstance(usage_counts, dict):
+                used_bucket_counts = True
+                for key, value in usage_counts.items():
+                    usage[str(key)] = usage.get(str(key), 0) + int(value or 0)
+            if isinstance(cost_counts, dict):
+                used_bucket_counts = True
+                for key, value in cost_counts.items():
+                    cost[str(key)] = cost.get(str(key), 0) + int(value or 0)
+        if used_bucket_counts:
+            return {"usage": usage, "cost": cost}
+        for event in events:
+            usage_status = str(event.get("usage_status") or "unavailable")
+            cost_status = str(event.get("cost_status") or "unavailable")
+            usage[usage_status] = usage.get(usage_status, 0) + 1
+            cost[cost_status] = cost.get(cost_status, 0) + 1
+        return {"usage": usage, "cost": cost}
+
+    @staticmethod
+    def _llm_usage_rollup_status(counts: dict[str, int]) -> str:
+        present = {key for key, value in counts.items() if int(value or 0) > 0}
+        if not present:
+            return "unavailable"
+        if len(present) == 1:
+            return next(iter(present))
+        return "mixed"
 
     @staticmethod
     def _usage_event_from_turn(

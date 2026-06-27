@@ -3342,6 +3342,135 @@ def test_llm_usage_summary_aggregates_multiple_react_model_turns() -> None:
     assert len(cost_json["usage_event_refs"]) == 2
 
 
+
+def test_llm_usage_report_aggregates_chart_ready_hour_buckets_and_statuses() -> None:
+    svc = _chat_service(FakeLlmClient())
+    rows = [
+        {
+            "usage_event_id": "llmu_report_a",
+            "trace_id": "trace_report_a",
+            "task_id": "task_report",
+            "conversation_id": "conv_report",
+            "call_group_id": "task_report",
+            "call_index": 1,
+            "phase": "initial_chat",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek-chat",
+            "prompt_tokens": 100,
+            "completion_tokens": 30,
+            "total_tokens": 130,
+            "usage_source": "provider_reported",
+            "usage_status": "recorded",
+            "total_cost_usd": "0.0013000000",
+            "cost_status": "recorded",
+            "cost_source": "litellm_model_cost",
+            "request_meta_json": {"prompt_text_retained": False},
+            "completed_at": "2026-06-27T09:15:00+08:00",
+        },
+        {
+            "usage_event_id": "llmu_report_b",
+            "trace_id": "trace_report_b",
+            "task_id": "task_report",
+            "conversation_id": "conv_report",
+            "call_group_id": "task_report",
+            "call_index": 2,
+            "phase": "react_iteration",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek-reasoner",
+            "prompt_tokens": 50,
+            "completion_tokens": 20,
+            "total_tokens": 70,
+            "usage_source": "litellm_token_counter_estimated",
+            "usage_status": "estimated",
+            "prompt_tokens_estimated": True,
+            "cost_status": "unavailable",
+            "cost_source": "unavailable",
+            "cost_reason_code": "model_pricing_unavailable",
+            "request_meta_json": {"prompt_text_retained": False},
+            "completed_at": "2026-06-27T09:45:00+08:00",
+        },
+    ]
+    for row in rows:
+        svc.repository.create_record("llm_usage_events", row)
+    svc.repository.create_record(
+        "trace_events",
+        {
+            "trace_id": "trace_report_a",
+            "task_id": "task_report",
+            "event_type": "llm_call",
+            "component": "research_assistant.llm",
+            "status": "ok",
+            "cost_json": {"usage_summary": {"total_tokens": 999999, "total_cost_usd": "999.0000000000"}},
+        },
+    )
+
+    report = svc.llm_usage_report(
+        conversation_id="conv_report",
+        date_from="2026-06-27T00:00:00+08:00",
+        date_to="2026-06-27T23:59:59+08:00",
+        granularity="hour",
+        timezone_name="Asia/Shanghai",
+    )
+
+    assert report["source_of_truth"] == "assistant_llm_usage_events"
+    assert report["prompt_text_retained"] is False
+    assert report["filters"]["timezone"] == "Asia/Shanghai"
+    assert report["summary"]["call_count"] == 2
+    assert report["summary"]["total_tokens"] == 200
+    assert report["summary"]["usage_status"] == "mixed"
+    assert report["summary"]["cost_status"] == "mixed"
+    assert report["status_breakdown"]["usage"]["recorded"] == 1
+    assert report["status_breakdown"]["usage"]["estimated"] == 1
+    assert report["status_breakdown"]["cost"]["recorded"] == 1
+    assert report["status_breakdown"]["cost"]["unavailable"] == 1
+    assert {item["model"] for item in report["model_breakdown"]} == {"deepseek-chat", "deepseek-reasoner"}
+    assert "999999" not in json.dumps(report, ensure_ascii=False)
+    assert all("private prompt" not in json.dumps(bucket, ensure_ascii=False) for bucket in report["time_series"])
+
+
+def test_llm_usage_report_compacts_long_tail_models_into_other_without_dropping_tokens() -> None:
+    svc = _chat_service(FakeLlmClient())
+    for index in range(4):
+        svc.repository.create_record(
+            "llm_usage_events",
+            {
+                "usage_event_id": f"llmu_tail_{index}",
+                "trace_id": f"trace_tail_{index}",
+                "task_id": "task_tail",
+                "conversation_id": "conv_tail",
+                "call_group_id": "task_tail",
+                "call_index": index + 1,
+                "phase": "react_iteration",
+                "component": "research_assistant.llm",
+                "provider": "provider",
+                "model": f"model-{index}",
+                "prompt_tokens": 10 * (index + 1),
+                "completion_tokens": 5,
+                "total_tokens": 10 * (index + 1) + 5,
+                "usage_source": "provider_reported",
+                "usage_status": "recorded",
+                "total_cost_usd": "0.0001000000",
+                "cost_status": "recorded",
+                "cost_source": "litellm_model_cost",
+                "completed_at": "2026-06-27T10:00:00+08:00",
+            },
+        )
+
+    report = svc.llm_usage_report(conversation_id="conv_tail", granularity="day", timezone_name="Asia/Shanghai", limit_models=3)
+
+    assert len(report["model_breakdown"]) == 3
+    assert report["model_breakdown"][-1]["model"] == "other"
+    assert sum(int(item["total_tokens"]) for item in report["model_breakdown"]) == report["summary"]["total_tokens"]
+    assert any(bucket["model"] == "other" for bucket in report["time_series"])
+
+
+def test_llm_usage_report_rejects_invalid_timezone_loudly() -> None:
+    svc = _chat_service(FakeLlmClient())
+    with pytest.raises(ValueError, match="invalid_timezone"):
+        svc.llm_usage_report(timezone_name="Invalid/Timezone")
+
 def test_chat_turn_preserves_complete_long_raw_api_response() -> None:
     class LongAnswerLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:

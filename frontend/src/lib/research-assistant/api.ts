@@ -589,6 +589,8 @@ export type AssistantLlmUsageTotals = JsonObject & {
   currency?: string;
   usage_status?: string;
   cost_status?: string;
+  reason_code?: string | null;
+  cost_reason_code?: string | null;
 };
 
 export type AssistantLlmUsageSummary = JsonObject & {
@@ -597,6 +599,49 @@ export type AssistantLlmUsageSummary = JsonObject & {
   filters?: JsonObject;
   summary?: AssistantLlmUsageTotals;
   events_page?: AssistantPage<AssistantLlmUsageEvent>;
+};
+
+export type AssistantLlmUsageTimeBucket = JsonObject & {
+  bucket_start: string;
+  bucket_end?: string | null;
+  model?: string;
+  provider?: string;
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  total_cost_usd?: string | number | null;
+  usage_status?: string;
+  cost_status?: string;
+  usage_status_counts?: Record<string, number>;
+  cost_status_counts?: Record<string, number>;
+};
+
+export type AssistantLlmUsageModelBreakdown = JsonObject & {
+  model?: string;
+  provider?: string;
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  total_cost_usd?: string | number | null;
+  usage_status?: string;
+  cost_status?: string;
+  usage_status_counts?: Record<string, number>;
+  cost_status_counts?: Record<string, number>;
+};
+
+export type AssistantLlmUsageReport = JsonObject & {
+  schema_version?: string;
+  source_of_truth?: string;
+  filters?: JsonObject;
+  summary?: AssistantLlmUsageTotals;
+  time_series?: AssistantLlmUsageTimeBucket[];
+  model_breakdown?: AssistantLlmUsageModelBreakdown[];
+  status_breakdown?: { usage?: Record<string, number>; cost?: Record<string, number> };
+  prompt_text_retained?: boolean;
+  degraded?: boolean;
+  reason_code?: string | null;
 };
 
 export type AssistantAgentRun = JsonObject & {
@@ -946,6 +991,9 @@ export const researchAssistantApi = {
   },
   llmUsageSummary(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; limit?: number } = {}): Promise<AssistantLlmUsageSummary> {
     return unwrap<AssistantLlmUsageSummary>(appendQuery("/research-assistant/llm-usage/summary", { limit: 100, ...params }));
+  },
+  llmUsageReport(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; granularity?: "hour" | "day"; timezone?: string; limit_models?: number } = {}): Promise<AssistantLlmUsageReport> {
+    return unwrap<AssistantLlmUsageReport>(appendQuery("/research-assistant/llm-usage/report", { timezone: "Asia/Shanghai", limit_models: 8, ...params }));
   },
   notificationSummary(): Promise<JsonObject> {
     return unwrap<JsonObject>("/research-assistant/notifications/summary");
