@@ -44,8 +44,8 @@
   "expected": "docs/standards has an explicit active-standard index: v1.5 is the only current development standard, historical versions stay under docs/standards/archive, and agents are instructed not to read archived standards unless the user explicitly asks for historical context.",
   "first_seen_at": "2026-06-27T18:58:16.625014Z",
   "fix_branch": "bug/BUG-540-active-standards-index-missing-archived-standard-20260628",
-  "fix_commit": null,
-  "fixed_at": "2026-06-27T19:06:55Z",
+  "fix_commit": "3dbfc315e1f67b0f66929f6eaf91acbb6774fbe9",
+  "fixed_at": "2026-06-27T19:34:39.986750Z",
   "github_issue_number": 1689,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1689",
   "last_seen_at": "2026-06-27T18:58:16.625014Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1692",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -65,7 +66,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P3",
-  "status": "fixed_pending_pr",
+  "status": "fixed",
   "suspected_modules": [
     "scripts",
     "docs.standards",
@@ -77,6 +78,13 @@
     "source_event_id": "FE-20260628-ff5026eee2c2"
   },
   "ui_issue": false,
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "quick_validate fix-aistock-issue skill -> passed",
+    "quick_validate verify-aistock-feature skill -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
