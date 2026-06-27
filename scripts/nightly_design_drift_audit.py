@@ -26,6 +26,27 @@ LLM_MAX_CODE_SAMPLE_COUNT = 4
 LLM_MAX_MARKER_HITS = 12
 LLM_MAX_OUTPUT_TOKENS = 4096
 LLM_TIMEOUT_SECONDS = 180
+DEFAULT_LLM_BUDGET_TIER = "compact"
+LLM_BUDGET_TIERS = {
+    "compact": {
+        "max_input_chars": 50000,
+        "max_design_chars": LLM_MAX_DESIGN_CHARS,
+        "max_code_sample_chars": LLM_MAX_CODE_SAMPLE_CHARS,
+        "max_code_sample_count": LLM_MAX_CODE_SAMPLE_COUNT,
+        "max_marker_hits": LLM_MAX_MARKER_HITS,
+        "max_output_tokens": LLM_MAX_OUTPUT_TOKENS,
+        "timeout_seconds": LLM_TIMEOUT_SECONDS,
+    },
+    "expanded_80k_40k": {
+        "max_input_chars": 80000,
+        "max_design_chars": 4000,
+        "max_code_sample_chars": 2400,
+        "max_code_sample_count": 12,
+        "max_marker_hits": 40,
+        "max_output_tokens": 40000,
+        "timeout_seconds": 420,
+    },
+}
 PRODUCTION_GATES = {
     "production_ddl_gate": "noop",
     "production_frontend_dependency_gate": "noop",
@@ -70,6 +91,65 @@ def _safe_text(path: Path, max_chars: int = 120000) -> str:
 def _trim(value: Any, limit: int) -> str:
     text = str(value or "")
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+def _positive_int(value: Any, *, field: str) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DesignDriftAuditError(f"llm_budget.{field} must be a positive integer") from exc
+    if number <= 0:
+        raise DesignDriftAuditError(f"llm_budget.{field} must be a positive integer")
+    return number
+
+def _llm_budget(config: dict[str, Any], *, requested_tier: str | None = None, max_input_chars: int | None = None, max_output_tokens: int | None = None) -> dict[str, Any]:
+    raw = config.get("llm_budget") if isinstance(config.get("llm_budget"), dict) else {}
+    tier = str(requested_tier or raw.get("default_tier") or DEFAULT_LLM_BUDGET_TIER).strip()
+    if tier not in LLM_BUDGET_TIERS:
+        raise DesignDriftAuditError(f"unknown llm budget tier: {tier}")
+    budget = dict(LLM_BUDGET_TIERS[tier])
+    raw_tiers = raw.get("tiers") if isinstance(raw.get("tiers"), dict) else {}
+    if isinstance(raw_tiers.get(tier), dict):
+        budget.update(raw_tiers[tier])
+    budget["tier"] = tier
+    for field in ("max_input_chars", "max_design_chars", "max_code_sample_chars", "max_code_sample_count", "max_marker_hits", "max_output_tokens", "timeout_seconds"):
+        budget[field] = _positive_int(budget.get(field), field=field)
+    if max_input_chars is not None:
+        budget["max_input_chars"] = _positive_int(max_input_chars, field="max_input_chars")
+    if max_output_tokens is not None:
+        budget["max_output_tokens"] = _positive_int(max_output_tokens, field="max_output_tokens")
+    return budget
+
+def _new_budget_evidence(budget: dict[str, Any], *, requested_tier: str | None = None) -> dict[str, Any]:
+    return {
+        "tier": budget["tier"],
+        "requested_tier": requested_tier or budget["tier"],
+        "max_input_chars": budget["max_input_chars"],
+        "max_output_tokens": budget["max_output_tokens"],
+        "timeout_seconds": budget["timeout_seconds"],
+        "effective_limits": {
+            "max_design_chars": budget["max_design_chars"],
+            "max_code_sample_chars": budget["max_code_sample_chars"],
+            "max_code_sample_count": budget["max_code_sample_count"],
+            "max_marker_hits": budget["max_marker_hits"],
+        },
+        "input_chars": 0,
+        "input_within_budget": True,
+        "truncated_fields": 0,
+        "truncated_by_field": {},
+    }
+
+def _replace_budget_evidence(target: dict[str, Any], source: dict[str, Any]) -> None:
+    target.clear()
+    target.update(source)
+
+def _trim_budgeted(value: Any, limit: int, evidence: dict[str, Any], field: str) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    evidence["truncated_fields"] = int(evidence.get("truncated_fields") or 0) + 1
+    by_field = evidence.setdefault("truncated_by_field", {})
+    by_field[field] = int(by_field.get(field) or 0) + 1
+    return text[: limit - 1] + "…"
 
 def _compact_design_excerpt(text: str, *, keywords: list[str], max_chars: int) -> str:
     picked: list[str] = []
@@ -260,33 +340,33 @@ def _coerce_llm_findings(raw: dict[str, Any]) -> list[dict[str, Any]]:
         ))
     return findings
 
-def _llm_hit_view(hits: list[dict[str, Any]] | None, *, limit: int = LLM_MAX_MARKER_HITS) -> list[dict[str, Any]]:
+def _llm_hit_view(hits: list[dict[str, Any]] | None, *, limit: int, budget_evidence: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for hit in hits or []:
         if not isinstance(hit, dict):
             continue
         result.append(
             {
-                "marker": _trim(hit.get("marker"), 80),
-                "path": _trim(hit.get("path"), 220),
+                "marker": _trim_budgeted(hit.get("marker"), 80, budget_evidence, "marker"),
+                "path": _trim_budgeted(hit.get("path"), 220, budget_evidence, "path"),
                 "line": hit.get("line"),
-                "excerpt": _trim(hit.get("excerpt"), 120),
+                "excerpt": _trim_budgeted(hit.get("excerpt"), 120, budget_evidence, "marker_excerpt"),
             }
         )
         if len(result) >= limit:
             break
     return result
 
-def _llm_target_view(target: dict[str, Any]) -> dict[str, Any]:
+def _llm_target_view(target: dict[str, Any], *, budget: dict[str, Any], budget_evidence: dict[str, Any]) -> dict[str, Any]:
     design_docs: list[dict[str, Any]] = []
     for doc in target.get("design_docs") or []:
         if not isinstance(doc, dict):
             continue
         design_docs.append(
             {
-                "path": _trim(doc.get("path"), 220),
+                "path": _trim_budgeted(doc.get("path"), 220, budget_evidence, "path"),
                 "exists": bool(doc.get("exists")),
-                "excerpt": _trim(doc.get("excerpt"), LLM_MAX_DESIGN_CHARS),
+                "excerpt": _trim_budgeted(doc.get("excerpt"), budget["max_design_chars"], budget_evidence, "design_excerpt"),
             }
         )
     samples: list[dict[str, str]] = []
@@ -295,11 +375,11 @@ def _llm_target_view(target: dict[str, Any]) -> dict[str, Any]:
             continue
         samples.append(
             {
-                "path": _trim(sample.get("path"), 220),
-                "excerpt": _trim(sample.get("excerpt"), LLM_MAX_CODE_SAMPLE_CHARS),
+                "path": _trim_budgeted(sample.get("path"), 220, budget_evidence, "path"),
+                "excerpt": _trim_budgeted(sample.get("excerpt"), budget["max_code_sample_chars"], budget_evidence, "code_sample_excerpt"),
             }
         )
-        if len(samples) >= LLM_MAX_CODE_SAMPLE_COUNT:
+        if len(samples) >= budget["max_code_sample_count"]:
             break
     return {
         "module": target.get("module"),
@@ -308,15 +388,15 @@ def _llm_target_view(target: dict[str, Any]) -> dict[str, Any]:
         "code_paths": target.get("code_paths") or [],
         "code_file_count": target.get("code_file_count"),
         "expected_code_markers": target.get("expected_code_markers") or [],
-        "expected_marker_hits": _llm_hit_view(target.get("expected_marker_hits")),
+        "expected_marker_hits": _llm_hit_view(target.get("expected_marker_hits"), limit=budget["max_marker_hits"], budget_evidence=budget_evidence),
         "missing_expected_markers": target.get("missing_expected_markers") or [],
-        "drift_risk_hits": _llm_hit_view(target.get("drift_risk_hits")),
+        "drift_risk_hits": _llm_hit_view(target.get("drift_risk_hits"), limit=budget["max_marker_hits"], budget_evidence=budget_evidence),
         "code_samples": samples,
         "code_intelligence_refs": target.get("code_intelligence_refs") or {},
     }
 
-def _prompt_messages(review_targets: list[dict[str, Any]], *, run_id: str | None, commit: str | None) -> list[dict[str, str]]:
-    compact_targets = [_llm_target_view(target) for target in review_targets]
+def _prompt_messages(review_targets: list[dict[str, Any]], *, run_id: str | None, commit: str | None, budget: dict[str, Any], budget_evidence: dict[str, Any]) -> list[dict[str, str]]:
+    compact_targets = [_llm_target_view(target, budget=budget, budget_evidence=budget_evidence) for target in review_targets]
     system = ("You are an AIstock nightly design drift auditor. Compare approved design excerpts with compact code evidence. "
               "Return the JSON answer immediately; do not spend output tokens on hidden reasoning. "
               "Use your own semantic judgment; deterministic marker hits are hints, not findings. "
@@ -326,11 +406,47 @@ def _prompt_messages(review_targets: list[dict[str, Any]], *, run_id: str | None
     user_payload = {
         "schema": {"summary": "short string", "findings": [{"module": "module key", "severity": "P1|P2|P3", "title": "short title", "suspected_drift": "expected design vs observed implementation gap", "design_refs": ["doc path or section"], "code_refs": ["file path or file:line"], "confidence": 0.0}]},
         "policy": {"warning_only": True, "candidate_only": True, "manual_analysis_required_before_bug_registration": True, "source_modifications_allowed": False, "official_bug_creation_allowed": False, "github_issue_creation_allowed": False},
-        "input": {"run_id": run_id, "commit": commit, "review_targets": compact_targets},
+        "input": {"run_id": run_id, "commit": commit, "llm_budget": {"tier": budget["tier"], "max_input_chars": budget["max_input_chars"], "max_output_tokens": budget["max_output_tokens"]}, "review_targets": compact_targets},
     }
-    return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)}]
+    content = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+    budget_evidence["input_chars"] = sum(len(message) for message in (system, content))
+    budget_evidence["input_within_budget"] = budget_evidence["input_chars"] <= budget["max_input_chars"]
+    return [{"role": "system", "content": system}, {"role": "user", "content": content}]
 
-def _llm_evidence(*, provider_summary: dict[str, Any], invoked: bool, reason: str, usage: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
+def _budgeted_prompt_messages(review_targets: list[dict[str, Any]], *, run_id: str | None, commit: str | None, budget: dict[str, Any], budget_evidence: dict[str, Any]) -> list[dict[str, str]]:
+    attempt_budget = dict(budget)
+    final_messages: list[dict[str, str]] | None = None
+    initial_chars: int | None = None
+    last_evidence: dict[str, Any] | None = None
+    for attempt in range(8):
+        attempt_evidence = _new_budget_evidence(attempt_budget, requested_tier=budget_evidence.get("requested_tier"))
+        messages = _prompt_messages(review_targets, run_id=run_id, commit=commit, budget=attempt_budget, budget_evidence=attempt_evidence)
+        last_evidence = attempt_evidence
+        if initial_chars is None:
+            initial_chars = int(attempt_evidence.get("input_chars") or 0)
+        if attempt_evidence["input_within_budget"]:
+            attempt_evidence["initial_input_chars"] = initial_chars
+            attempt_evidence["adaptive_compaction_applied"] = attempt > 0
+            attempt_evidence["adaptive_compaction_attempts"] = attempt
+            _replace_budget_evidence(budget_evidence, attempt_evidence)
+            return messages
+        final_messages = messages
+        attempt_budget["max_design_chars"] = max(300, int(attempt_budget["max_design_chars"] * 0.72))
+        attempt_budget["max_code_sample_chars"] = max(220, int(attempt_budget["max_code_sample_chars"] * 0.72))
+        attempt_budget["max_code_sample_count"] = max(2, int(attempt_budget["max_code_sample_count"] * 0.72))
+        attempt_budget["max_marker_hits"] = max(6, int(attempt_budget["max_marker_hits"] * 0.72))
+    if last_evidence is not None:
+        _replace_budget_evidence(budget_evidence, last_evidence)
+    budget_evidence["initial_input_chars"] = initial_chars
+    budget_evidence["adaptive_compaction_applied"] = True
+    budget_evidence["adaptive_compaction_attempts"] = 8
+    if not budget_evidence.get("input_within_budget"):
+        raise DesignDriftAuditError(
+            f"llm input budget exceeded: {budget_evidence.get('input_chars')} > {budget['max_input_chars']}"
+        )
+    return final_messages or []
+
+def _llm_evidence(*, provider_summary: dict[str, Any], invoked: bool, reason: str, budget_evidence: dict[str, Any], usage: dict[str, Any] | None = None, error: str | None = None) -> dict[str, Any]:
     evidence: dict[str, Any] = {
         "schema_version": llm_adapter.LLM_INVOCATION_EVIDENCE_SCHEMA_VERSION,
         "provider": provider_summary.get("provider"),
@@ -339,6 +455,7 @@ def _llm_evidence(*, provider_summary: dict[str, Any], invoked: bool, reason: st
         "reason": reason,
         "input_policy": "design_docs_excerpts_code_marker_hits_codegraph_ua_refs_only",
         "redaction_applied": True,
+        "budget": budget_evidence,
     }
     if usage:
         evidence["usage_summary"] = {"prompt_units": usage.get("prompt_tokens"), "completion_units": usage.get("completion_tokens"), "total_units": usage.get("total_tokens")}
@@ -362,6 +479,9 @@ def build_audit(
     invoke_llm: bool = False,
     fallback_on_llm_error: bool = True,
     run_id: str | None = None,
+    llm_budget_tier: str | None = None,
+    llm_max_input_chars: int | None = None,
+    llm_max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     config = read_yaml(config_path)
     if config.get("schema_version") != "aistock_design_drift_audit_config_v1":
@@ -371,7 +491,9 @@ def build_audit(
     llm_adapter.validate_config(llm_config)
     provider_summary = llm_adapter._provider_model_summary(llm_config, provider)  # noqa: SLF001
     findings = deterministic_findings(review_targets)
-    llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="design_drift_audit_dry_run_no_network")
+    budget = _llm_budget(config, requested_tier=llm_budget_tier, max_input_chars=llm_max_input_chars, max_output_tokens=llm_max_output_tokens)
+    budget_evidence = _new_budget_evidence(budget, requested_tier=llm_budget_tier)
+    llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="design_drift_audit_dry_run_no_network", budget_evidence=budget_evidence)
     llm_summary: str | None = None
     degraded_reason: str | None = None
     if invoke_llm and provider != "deterministic":
@@ -380,19 +502,19 @@ def build_audit(
                 provider,
                 llm_config,
                 purpose="design_drift_audit",
-                messages=_prompt_messages(review_targets, run_id=run_id, commit=_git_value(root, "rev-parse", "HEAD")),
-                max_tokens=LLM_MAX_OUTPUT_TOKENS,
-                timeout_seconds=LLM_TIMEOUT_SECONDS,
+                messages=_budgeted_prompt_messages(review_targets, run_id=run_id, commit=_git_value(root, "rev-parse", "HEAD"), budget=budget, budget_evidence=budget_evidence),
+                max_tokens=budget["max_output_tokens"],
+                timeout_seconds=budget["timeout_seconds"],
             )
             llm_findings = _coerce_llm_findings(result["payload"])
             findings = llm_findings
             llm_summary = str(result["payload"].get("summary") or "")[:1000]
             provider_summary = {"provider": result.get("provider") or provider_summary.get("provider"), "model": result.get("model") or provider_summary.get("model"), "credential_source": result.get("credential_source") or provider_summary.get("credential_source")}
-            llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=True, reason="design_drift_audit_live_provider_json", usage=result.get("usage") if isinstance(result.get("usage"), dict) else None)
+            llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=True, reason="design_drift_audit_live_provider_json", budget_evidence=budget_evidence, usage=result.get("usage") if isinstance(result.get("usage"), dict) else None)
         except Exception as exc:
             if not fallback_on_llm_error:
                 raise DesignDriftAuditError(str(exc)) from exc
-            llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="design_drift_audit_live_provider_failed_fallback", error=exc)
+            llm_evidence = _llm_evidence(provider_summary=provider_summary, invoked=False, reason="design_drift_audit_live_provider_failed_fallback", budget_evidence=budget_evidence, error=exc)
             findings = []
             degraded_reason = "llm_provider_failed_no_marker_findings_emitted"
     workflow_gate = "warning" if findings or degraded_reason else "ready"
@@ -411,6 +533,7 @@ def build_audit(
         "model": provider_summary.get("model"),
         "effective_provider": provider_summary.get("provider"),
         "effective_model": provider_summary.get("model"),
+        "llm_budget": budget_evidence,
         "llm_gate": "ready" if llm_evidence.get("invoked") else "degraded",
         "workflow_gate": workflow_gate,
         "warning_only": True,
@@ -461,6 +584,7 @@ def public_artifact(payload: dict[str, Any]) -> dict[str, Any]:
         "model": payload.get("model"),
         "effective_provider": payload.get("effective_provider"),
         "effective_model": payload.get("effective_model"),
+        "llm_budget": payload.get("llm_budget"),
         "llm_gate": payload.get("llm_gate"),
         "workflow_gate": payload.get("workflow_gate"),
         "warning_only": True,
@@ -494,6 +618,7 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
     llm_evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
     llm_invoked = bool(llm_evidence.get("invoked"))
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    budget = payload.get("llm_budget") if isinstance(payload.get("llm_budget"), dict) else {}
     lines = [
         "# Nightly LLM Design Drift Audit",
         "",
@@ -501,6 +626,10 @@ def write_markdown(path: Path | None, payload: dict[str, Any]) -> None:
         f"- llm_gate: `{payload.get('llm_gate')}`",
         f"- llm_invoked: `{llm_invoked}`",
         f"- llm_reason: `{llm_evidence.get('reason') or 'unknown'}`",
+        f"- llm_budget_tier: `{budget.get('tier') or 'n/a'}`",
+        f"- llm_budget_input_chars: `{budget.get('input_chars') or 0}/{budget.get('max_input_chars') or 'n/a'}`",
+        f"- llm_budget_max_output_tokens: `{budget.get('max_output_tokens') or 'n/a'}`",
+        f"- llm_budget_truncated_fields: `{budget.get('truncated_fields') or 0}`",
         f"- checked_modules: `{len(payload.get('review_targets') or [])}`",
         f"- finding_count: `{len(findings)}`",
         f"- deterministic_signal_count: `{summary.get('deterministic_signal_count') or 0}`",
@@ -576,6 +705,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--invoke-llm", action="store_true")
     parser.add_argument("--fail-on-llm-error", action="store_true")
+    parser.add_argument("--llm-budget-tier", default=None, help="Configured LLM budget tier, for example compact or expanded_80k_40k.")
+    parser.add_argument("--llm-max-input-chars", type=int, default=None, help="Explicit max prompt input character budget for this run.")
+    parser.add_argument("--llm-max-output-tokens", type=int, default=None, help="Explicit provider max_tokens for this run.")
     parser.add_argument("--output", default=None)
     parser.add_argument("--markdown-output", default=None)
     return parser
@@ -593,6 +725,9 @@ def main(argv: list[str] | None = None) -> int:
             invoke_llm=args.invoke_llm,
             fallback_on_llm_error=not args.fail_on_llm_error,
             run_id=args.run_id,
+            llm_budget_tier=args.llm_budget_tier,
+            llm_max_input_chars=args.llm_max_input_chars,
+            llm_max_output_tokens=args.llm_max_output_tokens,
         )
         write_json(Path(args.output) if args.output else None, audit)
         write_markdown(Path(args.markdown_output) if args.markdown_output else None, audit)
@@ -601,6 +736,11 @@ def main(argv: list[str] | None = None) -> int:
             "workflow_gate": audit["workflow_gate"],
             "llm_gate": audit["llm_gate"],
             "llm_reason": audit["llm_invocation_evidence"].get("reason"),
+            "llm_budget_tier": audit["llm_budget"].get("tier"),
+            "llm_budget_input_chars": audit["llm_budget"].get("input_chars"),
+            "llm_budget_max_input_chars": audit["llm_budget"].get("max_input_chars"),
+            "llm_budget_max_output_tokens": audit["llm_budget"].get("max_output_tokens"),
+            "llm_budget_truncated_fields": audit["llm_budget"].get("truncated_fields"),
             "degraded_reason": audit["summary"].get("degraded_reason"),
             "review_target_count": audit["summary"]["review_target_count"],
             "finding_count": audit["summary"]["finding_count"],

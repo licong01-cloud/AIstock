@@ -632,6 +632,7 @@ jobs:
           conda run -n AIstock python scripts/nightly_design_drift_audit.py --json `
             --provider deepseek_api `
             --invoke-llm `
+            --llm-budget-tier expanded_80k_40k `
             --run-id "${{ github.run_id }}" `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/design-drift-audit.json" `
@@ -647,6 +648,7 @@ jobs:
           conda run -n AIstock python scripts/nightly_silent_degradation_audit.py --json `
             --provider deepseek_api `
             --invoke-llm `
+            --llm-budget-tier expanded_80k_40k `
             --run-id "${{ github.run_id }}" `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/silent-degradation-audit.json" `
