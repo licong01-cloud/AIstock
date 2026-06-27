@@ -12,10 +12,11 @@ import {
   type ChatModelRunOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { BlockerCard } from "@/components/research-assistant/BlockerCard";
 import { EvidenceCard, evidenceCompleteness, normalizeEvidenceRef } from "@/components/research-assistant/EvidenceCard";
+import { asRecord as usageRecord, formatUsageNumber, usageStatusText, usageTotalCost } from "@/components/research-assistant/llm-usage-format";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
   LOCAL_DATA_MANAGEMENT_PHASES,
@@ -26,6 +27,7 @@ import {
   type AssistantChatTurnResult,
   type AssistantBlockerCard,
   type AssistantEvidenceCard,
+  type AssistantLlmUsageTotals,
   type JsonObject,
   type LocalDataPhase,
   type LocalDataPhaseKey,
@@ -632,6 +634,130 @@ function RuntimeCodePanel({ latest }: { latest: AssistantChatTurnResult | null }
   );
 }
 
+function turnUsageFromTrace(latest: AssistantChatTurnResult | null): { summary?: AssistantLlmUsageTotals; eventRefs: string[]; traceId?: string; degradedReason?: string } {
+  const trace = usageRecord(latest?.trace);
+  const costJson = usageRecord(trace.cost_json);
+  const summary = usageRecord(costJson.usage_summary) as AssistantLlmUsageTotals;
+  const eventRefs = Array.isArray(costJson.usage_event_refs) ? costJson.usage_event_refs.map((item) => String(item)) : [];
+  const traceId = typeof trace.trace_id === "string" ? trace.trace_id : undefined;
+  if (isUsableTurnUsageSummary(summary) && summary.status !== "pending" && summary.status !== "failed") {
+    return { summary, eventRefs, traceId };
+  }
+  const reason = String(summary?.reason_code || costJson.reason_code || "llm_usage_summary_unavailable");
+  return { eventRefs, traceId, degradedReason: reason };
+}
+
+function isUsableTurnUsageSummary(summary?: AssistantLlmUsageTotals | null): summary is AssistantLlmUsageTotals {
+  return Boolean(summary && Number(summary.call_count || 0) > 0);
+}
+
+function TurnUsagePanel({ latest, history }: { latest: AssistantChatTurnResult | null; history: AssistantChatTurnResult[] }) {
+  const [lookupSummary, setLookupSummary] = useState<AssistantLlmUsageTotals | null>(null);
+  const [lookupReason, setLookupReason] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const initialUsage = useMemo(() => turnUsageFromTrace(latest), [latest]);
+  const traceId = initialUsage.traceId;
+  const historyRows = useMemo(
+    () =>
+      history.slice(-5).map((item, index, rows) => {
+        const usage = turnUsageFromTrace(item);
+        const summary = usage.summary;
+        const ordinal = history.length - rows.length + index + 1;
+        return {
+          key: item.assistant_message?.message_id || usage.traceId || `${ordinal}`,
+          ordinal,
+          summary,
+          reason: usage.degradedReason,
+        };
+      }),
+    [history],
+  );
+
+  useEffect(() => {
+    setLookupSummary(null);
+    setLookupReason(null);
+    setDetailsOpen(false);
+    if (!latest || initialUsage.summary || !traceId) return;
+    let cancelled = false;
+    researchAssistantApi.llmUsageSummary({ trace_id: traceId })
+      .then((summary) => {
+        if (cancelled) return;
+        const nextSummary = summary.summary || null;
+        if (isUsableTurnUsageSummary(nextSummary)) {
+          setLookupSummary(nextSummary);
+        } else {
+          const degraded = usageRecord(nextSummary);
+          setLookupReason(String(degraded.reason_code || degraded.status || "llm_usage_summary_unavailable"));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setLookupReason(error instanceof Error ? error.message : "llm_usage_summary_lookup_failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [latest, initialUsage.summary, traceId]);
+
+  if (!latest) {
+    return (
+      <section className="ra-chat-card ra-turn-usage-panel" data-testid="ra-turn-usage-panel">
+        <span className="ra-chat-eyebrow">本轮消耗</span>
+        <h2>等待对话完成</h2>
+        <p>每次助手回答完成后，这里会显示本轮 LLM 调用、token 和成本；不会写入回答正文。</p>
+      </section>
+    );
+  }
+  const usage = { ...initialUsage, summary: initialUsage.summary || lookupSummary || undefined };
+  const summary = usage.summary;
+  const messageId = latest.assistant_message?.message_id;
+  const degradedReason = lookupReason || usage.degradedReason;
+  return (
+    <section className="ra-chat-card ra-turn-usage-panel" data-testid="ra-turn-usage-panel">
+      <span className="ra-chat-eyebrow">本轮消耗</span>
+      <h2>{summary ? `${formatUsageNumber(summary.call_count)} 次 LLM 调用` : "消耗统计暂不可用"}</h2>
+      {summary ? (
+        <>
+          <div className="ra-turn-usage-grid">
+            <span>输入 <strong>{formatUsageNumber(summary.prompt_tokens)}</strong></span>
+            <span>输出 <strong>{formatUsageNumber(summary.completion_tokens)}</strong></span>
+            <span>总计 <strong>{formatUsageNumber(summary.total_tokens)}</strong></span>
+            <span>成本 <strong>{usageTotalCost(summary)}</strong></span>
+          </div>
+          <p>{usageStatusText(summary)}</p>
+          {(summary.estimated_usage_event_count || summary.unavailable_usage_event_count || summary.unavailable_cost_event_count || summary.failed_cost_event_count) ? (
+            <p>
+              估算 {formatUsageNumber(summary.estimated_usage_event_count)}；usage 不可用 {formatUsageNumber(summary.unavailable_usage_event_count)}；cost 不可用/失败 {formatUsageNumber((summary.unavailable_cost_event_count || 0) + (summary.failed_cost_event_count || 0))}。
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p className="ra-turn-usage-degraded">本轮消耗统计暂不可用：{degradedReason}</p>
+      )}
+      <details className="ra-turn-usage-details" onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>查看 ledger refs / trace</summary>
+        {detailsOpen ? (
+          <>
+            <p className="ra-mono">message_id={messageId || "-"}</p>
+            <p className="ra-mono">trace_id={usage.traceId || "-"}</p>
+            <p className="ra-mono">refs={usage.eventRefs.length ? usage.eventRefs.join(", ") : "-"}</p>
+          </>
+        ) : null}
+      </details>
+      {historyRows.length ? (
+        <div className="ra-turn-usage-history" data-testid="ra-turn-usage-history">
+          <p>本会话已完成 {formatUsageNumber(history.length)} 轮；下方保留最近 {formatUsageNumber(historyRows.length)} 轮消耗。</p>
+          {historyRows.map((row) => (
+            <span key={row.key}>
+              第 {formatUsageNumber(row.ordinal)} 轮：
+              {row.summary ? `${formatUsageNumber(row.summary.total_tokens)} tokens / ${usageTotalCost(row.summary)}` : `暂不可用：${row.reason || "llm_usage_summary_unavailable"}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
   if (!latest) return null;
   const cards = asCards(latest.cards || latest.assistant_message?.content_json?.cards);
@@ -785,10 +911,12 @@ export default function ResearchAssistantChatPage() {
   const [initializingCatalogs, setInitializingCatalogs] = useState(false);
   const [catalogInitMessage, setCatalogInitMessage] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [turnUsageHistory, setTurnUsageHistory] = useState<AssistantChatTurnResult[]>([]);
 
   const newConversation = useCallback(() => {
     setConversationId(null);
     setLatest(null);
+    setTurnUsageHistory([]);
     setSteps(initialSteps);
     setCatalogIssue(null);
     setCatalogInitMessage(null);
@@ -815,7 +943,12 @@ export default function ResearchAssistantChatPage() {
     }
   }, []);
 
-  const adapter = useMemo(() => createAdapter(setLatest, setSteps, setCatalogIssue, conversationId, setConversationId), [conversationId]);
+  const handleTurn = useCallback((result: AssistantChatTurnResult) => {
+    setLatest(result);
+    setTurnUsageHistory((prev) => [...prev, result]);
+  }, []);
+
+  const adapter = useMemo(() => createAdapter(handleTurn, setSteps, setCatalogIssue, conversationId, setConversationId), [conversationId, handleTurn]);
   const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
@@ -846,6 +979,7 @@ export default function ResearchAssistantChatPage() {
       ) : (
         <>
           <Phase7EvidencePanel latest={latest} />
+          <TurnUsagePanel latest={latest} history={turnUsageHistory} />
           <RuntimeCodePanel latest={latest} />
           <PlanSummary latest={latest} />
         </>

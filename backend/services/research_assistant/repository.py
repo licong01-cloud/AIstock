@@ -11,8 +11,9 @@ from __future__ import annotations
 import copy
 from collections import Counter
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from psycopg2 import errors
 from psycopg2.extras import Json
@@ -348,6 +349,140 @@ def _llm_usage_summary_from_items(items: list[dict[str, Any]]) -> dict[str, Any]
     return _llm_usage_summary_from_aggregate_row(row)
 
 
+def _llm_usage_rollup_status(counts: Mapping[str, int], *, empty_status: str = "unavailable") -> str:
+    total = sum(int(value or 0) for value in counts.values())
+    if total <= 0:
+        return empty_status
+    present = {str(key) for key, value in counts.items() if int(value or 0) > 0}
+    if len(present) == 1:
+        return next(iter(present))
+    return "mixed"
+
+
+def _llm_usage_status_counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    statuses = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    for item in items:
+        status = str(item.get(field) or "unavailable")
+        statuses[status] = statuses.get(status, 0) + 1
+    return statuses
+
+
+def _parse_usage_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("llm_usage_event_missing_completed_at")
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _floor_usage_bucket(dt: datetime, granularity: str) -> datetime:
+    if granularity == "hour":
+        return dt.replace(minute=0, second=0, microsecond=0)
+    if granularity == "day":
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+
+
+def _bucket_end(bucket_start: datetime, granularity: str) -> datetime:
+    return bucket_start + (timedelta(hours=1) if granularity == "hour" else timedelta(days=1))
+
+
+def _llm_usage_bucket_from_items(items: list[dict[str, Any]], bucket_start: datetime, granularity: str) -> dict[str, Any]:
+    summary = _llm_usage_summary_from_items(items)
+    usage_counts = _llm_usage_status_counts(items, "usage_status")
+    cost_counts = _llm_usage_status_counts(items, "cost_status")
+    providers = sorted({str(item.get("provider") or "unknown") for item in items})
+    models = sorted({str(item.get("model") or "unknown") for item in items})
+    return {
+        "bucket_start": bucket_start.isoformat(),
+        "bucket_end": _bucket_end(bucket_start, granularity).isoformat(),
+        "provider": providers[0] if len(providers) == 1 else "mixed",
+        "model": models[0] if len(models) == 1 else "mixed",
+        "call_count": summary["call_count"],
+        "prompt_tokens": summary["prompt_tokens"],
+        "completion_tokens": summary["completion_tokens"],
+        "total_tokens": summary["total_tokens"],
+        "total_cost_usd": summary["total_cost_usd"],
+        "usage_status": _llm_usage_rollup_status(usage_counts),
+        "cost_status": _llm_usage_rollup_status(cost_counts),
+        "usage_status_counts": usage_counts,
+        "cost_status_counts": cost_counts,
+    }
+
+
+def _compact_llm_usage_model_breakdown(items: list[dict[str, Any]], limit_models: int) -> tuple[list[dict[str, Any]], set[str]]:
+    limit = max(1, int(limit_models))
+    if len(items) <= limit:
+        return items, {str(item.get("model") or "unknown") for item in items}
+    keep_count = max(0, limit - 1)
+    kept = items[:keep_count]
+    rest = items[keep_count:]
+    usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    for item in rest:
+        for key, value in (item.get("usage_status_counts") or {}).items():
+            usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+        for key, value in (item.get("cost_status_counts") or {}).items():
+            cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+    other = {
+        "provider": "mixed",
+        "model": "other",
+        "call_count": sum(int(item.get("call_count") or 0) for item in rest),
+        "prompt_tokens": sum(int(item.get("prompt_tokens") or 0) for item in rest),
+        "completion_tokens": sum(int(item.get("completion_tokens") or 0) for item in rest),
+        "total_tokens": sum(int(item.get("total_tokens") or 0) for item in rest),
+        "total_cost_usd": f"{sum(float(item.get('total_cost_usd') or 0) for item in rest if item.get('total_cost_usd') is not None):.10f}" if any(item.get("total_cost_usd") is not None for item in rest) else None,
+        "usage_status": _llm_usage_rollup_status(usage_counts),
+        "cost_status": _llm_usage_rollup_status(cost_counts),
+        "usage_status_counts": usage_counts,
+        "cost_status_counts": cost_counts,
+    }
+    kept_models = {str(item.get("model") or "unknown") for item in kept}
+    return [*kept, other], kept_models
+
+
+def _compact_llm_usage_time_series(time_series: list[dict[str, Any]], kept_models: set[str], granularity: str) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for bucket in time_series:
+        model = str(bucket.get("model") or "unknown")
+        bucket_start = str(bucket.get("bucket_start") or "")
+        group_model = model if model in kept_models else "other"
+        grouped.setdefault((bucket_start, group_model), []).append(bucket)
+    compacted: list[dict[str, Any]] = []
+    for (bucket_start, model), rows in sorted(grouped.items(), key=lambda item: item[0]):
+        usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        for row in rows:
+            for key, value in (row.get("usage_status_counts") or {}).items():
+                usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+            for key, value in (row.get("cost_status_counts") or {}).items():
+                cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+        bucket_start_dt = datetime.fromisoformat(bucket_start)
+        compacted.append(
+            {
+                "bucket_start": bucket_start,
+                "bucket_end": _bucket_end(bucket_start_dt, granularity).isoformat(),
+                "provider": rows[0].get("provider") if model != "other" and len({str(row.get("provider") or "unknown") for row in rows}) == 1 else "mixed",
+                "model": model,
+                "call_count": sum(int(row.get("call_count") or 0) for row in rows),
+                "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in rows),
+                "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in rows),
+                "total_tokens": sum(int(row.get("total_tokens") or 0) for row in rows),
+                "total_cost_usd": f"{sum(float(row.get('total_cost_usd') or 0) for row in rows if row.get('total_cost_usd') is not None):.10f}" if any(row.get("total_cost_usd") is not None for row in rows) else None,
+                "usage_status": _llm_usage_rollup_status(usage_counts),
+                "cost_status": _llm_usage_rollup_status(cost_counts),
+                "usage_status_counts": usage_counts,
+                "cost_status_counts": cost_counts,
+            }
+        )
+    return compacted
+
+
 def _llm_usage_summary_from_aggregate_row(row: Any) -> dict[str, Any]:
     values = list(row or [0] * 13)
     while len(values) < 13:
@@ -542,6 +677,155 @@ class DatabaseResearchAssistantRepository:
                 except SCHEMA_ERROR_TYPES as exc:
                     raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
         return _llm_usage_summary_from_aggregate_row(row)
+
+    def report_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        granularity: str,
+        timezone_name: str,
+        limit_models: int = 8,
+    ) -> dict[str, Any]:
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        bucket_expr = f"date_trunc('{granularity}', completed_at AT TIME ZONE %s)"
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            {bucket_expr} AS bucket_local,
+                            provider,
+                            model,
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd),
+                            COALESCE(SUM(CASE WHEN usage_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        GROUP BY 1, provider, model
+                        ORDER BY 1 ASC, model ASC, provider ASC
+                        """,
+                        [timezone_name, *params],
+                    )
+                    series_rows = cur.fetchall()
+                    cur.execute(
+                        f"""
+                        SELECT
+                            provider,
+                            model,
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd),
+                            COALESCE(SUM(CASE WHEN usage_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        GROUP BY provider, model
+                        ORDER BY COALESCE(SUM(total_tokens), 0) DESC, model ASC
+                        """,
+                        params,
+                    )
+                    breakdown_rows = cur.fetchall()
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+
+        def _status(row: Any, offset: int) -> tuple[str, dict[str, int]]:
+            counts = {
+                "recorded": int(row[offset] or 0),
+                "estimated": int(row[offset + 1] or 0),
+                "unavailable": int(row[offset + 2] or 0),
+                "failed": int(row[offset + 3] or 0),
+            }
+            return _llm_usage_rollup_status(counts), counts
+
+        tzinfo = ZoneInfo(timezone_name)
+        time_series: list[dict[str, Any]] = []
+        for row in series_rows:
+            bucket_local = row[0]
+            if isinstance(bucket_local, datetime):
+                bucket_start_dt = bucket_local.replace(tzinfo=tzinfo)
+            else:
+                bucket_start_dt = datetime.fromisoformat(str(bucket_local)).replace(tzinfo=tzinfo)
+            usage_status, usage_counts = _status(row, 9)
+            cost_status, cost_counts = _status(row, 13)
+            time_series.append(
+                {
+                    "bucket_start": bucket_start_dt.isoformat(),
+                    "bucket_end": _bucket_end(bucket_start_dt, granularity).isoformat(),
+                    "provider": row[1],
+                    "model": row[2],
+                    "call_count": int(row[3] or 0),
+                    "prompt_tokens": int(row[4] or 0),
+                    "completion_tokens": int(row[5] or 0),
+                    "total_tokens": int(row[6] or 0),
+                    "total_cost_usd": f"{float(row[8] or 0):.10f}" if int(row[7] or 0) else None,
+                    "usage_status": usage_status,
+                    "cost_status": cost_status,
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        model_breakdown: list[dict[str, Any]] = []
+        for row in breakdown_rows:
+            usage_status, usage_counts = _status(row, 8)
+            cost_status, cost_counts = _status(row, 12)
+            model_breakdown.append(
+                {
+                    "provider": row[0],
+                    "model": row[1],
+                    "call_count": int(row[2] or 0),
+                    "prompt_tokens": int(row[3] or 0),
+                    "completion_tokens": int(row[4] or 0),
+                    "total_tokens": int(row[5] or 0),
+                    "total_cost_usd": f"{float(row[7] or 0):.10f}" if int(row[6] or 0) else None,
+                    "usage_status": usage_status,
+                    "cost_status": cost_status,
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        compact_breakdown, kept_models = _compact_llm_usage_model_breakdown(model_breakdown, limit_models)
+        return {"time_series": _compact_llm_usage_time_series(time_series, kept_models, granularity), "model_breakdown": compact_breakdown}
 
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         meta = self._meta(kind)
@@ -743,6 +1027,61 @@ class InMemoryResearchAssistantRepository:
         return _llm_usage_summary_from_items(
             self.list_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to, limit=max(1, len(self.data["llm_usage_events"]) or 1))["items"]
         )
+
+    def report_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        granularity: str,
+        timezone_name: str,
+        limit_models: int = 8,
+    ) -> dict[str, Any]:
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+        tzinfo = ZoneInfo(timezone_name)
+        events = self.list_llm_usage_events(
+            filters=filters,
+            date_from=date_from,
+            date_to=date_to,
+            limit=max(1, len(self.data["llm_usage_events"]) or 1),
+        )["items"]
+        buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        model_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for event in events:
+            completed = _parse_usage_datetime(event.get("completed_at") or event.get("created_at")).astimezone(tzinfo)
+            bucket_start = _floor_usage_bucket(completed, granularity)
+            provider = str(event.get("provider") or "unknown")
+            model = str(event.get("model") or "unknown")
+            buckets.setdefault((bucket_start.isoformat(), provider, model), []).append(event)
+            model_groups.setdefault((provider, model), []).append(event)
+        time_series = []
+        for (bucket_iso, _provider, _model), items in sorted(buckets.items(), key=lambda item: item[0]):
+            time_series.append(_llm_usage_bucket_from_items(items, datetime.fromisoformat(bucket_iso), granularity))
+        model_breakdown = []
+        for (provider, model), items in model_groups.items():
+            summary = _llm_usage_summary_from_items(items)
+            usage_counts = _llm_usage_status_counts(items, "usage_status")
+            cost_counts = _llm_usage_status_counts(items, "cost_status")
+            model_breakdown.append(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "call_count": summary["call_count"],
+                    "prompt_tokens": summary["prompt_tokens"],
+                    "completion_tokens": summary["completion_tokens"],
+                    "total_tokens": summary["total_tokens"],
+                    "total_cost_usd": summary["total_cost_usd"],
+                    "usage_status": _llm_usage_rollup_status(usage_counts),
+                    "cost_status": _llm_usage_rollup_status(cost_counts),
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        model_breakdown.sort(key=lambda item: int(item.get("total_tokens") or 0), reverse=True)
+        compact_breakdown, kept_models = _compact_llm_usage_model_breakdown(model_breakdown, limit_models)
+        return {"time_series": _compact_llm_usage_time_series(time_series, kept_models, granularity), "model_breakdown": compact_breakdown}
 
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         row = self.data[kind].get(record_id)
