@@ -416,6 +416,55 @@ def test_invoke_provider_json_retries_schema_invalid_once(monkeypatch):
     assert payload["payload"]["summary"] == "fixed"
 
 
+def test_invoke_provider_json_retries_empty_length_content(monkeypatch):
+    config = adapter.load_config()
+    calls = 0
+
+    class FakeResponse:
+        def __init__(self, content: str, finish_reason: str | None = None):
+            self.content = content
+            self.finish_reason = finish_reason
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {"content": self.content, "reasoning_content": "hidden reasoning"},
+                            "finish_reason": self.finish_reason,
+                        }
+                    ],
+                    "usage": {"total_tokens": 1},
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout=45):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FakeResponse("", "length")
+        return FakeResponse('{"summary":"fixed","findings":[]}', "stop")
+
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-test-token")
+    monkeypatch.setattr(adapter.urllib.request, "urlopen", fake_urlopen)
+
+    payload = adapter.invoke_provider_json(
+        "github_models",
+        config,
+        purpose="design_drift_audit",
+        messages=[{"role": "user", "content": "{}"}],
+    )
+
+    assert calls == 2
+    assert payload["payload"]["summary"] == "fixed"
+
+
 def test_test_plan_advice_can_invoke_llm_but_keeps_deterministic_gate(monkeypatch):
     def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
         return {

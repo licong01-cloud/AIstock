@@ -20,6 +20,12 @@ from scripts import llm_provider_adapter as llm_adapter  # noqa: E402
 
 DEFAULT_CONFIG_PATH = ROOT / "configs" / "validation" / "design_drift_audit.yaml"
 SCHEMA_VERSION = "aistock_nightly_design_drift_audit_v1"
+LLM_MAX_DESIGN_CHARS = 700
+LLM_MAX_CODE_SAMPLE_CHARS = 450
+LLM_MAX_CODE_SAMPLE_COUNT = 4
+LLM_MAX_MARKER_HITS = 12
+LLM_MAX_OUTPUT_TOKENS = 4096
+LLM_TIMEOUT_SECONDS = 180
 PRODUCTION_GATES = {
     "production_ddl_gate": "noop",
     "production_frontend_dependency_gate": "noop",
@@ -60,6 +66,10 @@ def _safe_text(path: Path, max_chars: int = 120000) -> str:
         return path.read_text(encoding="utf-8-sig", errors="replace")[:max_chars]
     except OSError:
         return ""
+
+def _trim(value: Any, limit: int) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 def _compact_design_excerpt(text: str, *, keywords: list[str], max_chars: int) -> str:
     picked: list[str] = []
@@ -250,23 +260,67 @@ def _coerce_llm_findings(raw: dict[str, Any]) -> list[dict[str, Any]]:
         ))
     return findings
 
+def _llm_hit_view(hits: list[dict[str, Any]] | None, *, limit: int = LLM_MAX_MARKER_HITS) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        result.append(
+            {
+                "marker": _trim(hit.get("marker"), 80),
+                "path": _trim(hit.get("path"), 220),
+                "line": hit.get("line"),
+                "excerpt": _trim(hit.get("excerpt"), 120),
+            }
+        )
+        if len(result) >= limit:
+            break
+    return result
+
+def _llm_target_view(target: dict[str, Any]) -> dict[str, Any]:
+    design_docs: list[dict[str, Any]] = []
+    for doc in target.get("design_docs") or []:
+        if not isinstance(doc, dict):
+            continue
+        design_docs.append(
+            {
+                "path": _trim(doc.get("path"), 220),
+                "exists": bool(doc.get("exists")),
+                "excerpt": _trim(doc.get("excerpt"), LLM_MAX_DESIGN_CHARS),
+            }
+        )
+    samples: list[dict[str, str]] = []
+    for sample in target.get("code_samples") or []:
+        if not isinstance(sample, dict):
+            continue
+        samples.append(
+            {
+                "path": _trim(sample.get("path"), 220),
+                "excerpt": _trim(sample.get("excerpt"), LLM_MAX_CODE_SAMPLE_CHARS),
+            }
+        )
+        if len(samples) >= LLM_MAX_CODE_SAMPLE_COUNT:
+            break
+    return {
+        "module": target.get("module"),
+        "risk": target.get("risk"),
+        "design_docs": design_docs,
+        "code_paths": target.get("code_paths") or [],
+        "code_file_count": target.get("code_file_count"),
+        "expected_code_markers": target.get("expected_code_markers") or [],
+        "expected_marker_hits": _llm_hit_view(target.get("expected_marker_hits")),
+        "missing_expected_markers": target.get("missing_expected_markers") or [],
+        "drift_risk_hits": _llm_hit_view(target.get("drift_risk_hits")),
+        "code_samples": samples,
+        "code_intelligence_refs": target.get("code_intelligence_refs") or {},
+    }
+
 def _prompt_messages(review_targets: list[dict[str, Any]], *, run_id: str | None, commit: str | None) -> list[dict[str, str]]:
-    compact_targets = []
-    for target in review_targets:
-        compact_targets.append({
-            "module": target.get("module"),
-            "risk": target.get("risk"),
-            "design_docs": target.get("design_docs") or [],
-            "code_paths": target.get("code_paths") or [],
-            "code_file_count": target.get("code_file_count"),
-            "expected_code_markers": target.get("expected_code_markers") or [],
-            "expected_marker_hits": target.get("expected_marker_hits") or [],
-            "missing_expected_markers": target.get("missing_expected_markers") or [],
-            "drift_risk_hits": target.get("drift_risk_hits") or [],
-            "code_samples": target.get("code_samples") or [],
-            "code_intelligence_refs": target.get("code_intelligence_refs") or {},
-        })
+    compact_targets = [_llm_target_view(target) for target in review_targets]
     system = ("You are an AIstock nightly design drift auditor. Compare approved design excerpts with compact code evidence. "
+              "Return the JSON answer immediately; do not spend output tokens on hidden reasoning. "
+              "Use your own semantic judgment; deterministic marker hits are hints, not findings. "
+              "Keep the response compact; include at most the highest-signal findings. "
               "Return one strict JSON object only. You may only suggest candidate findings for later human analysis. "
               "Do not create BUGs, GitHub issues, code patches, shell commands, production actions, or closure decisions.")
     user_payload = {
@@ -327,8 +381,8 @@ def build_audit(
                 llm_config,
                 purpose="design_drift_audit",
                 messages=_prompt_messages(review_targets, run_id=run_id, commit=_git_value(root, "rev-parse", "HEAD")),
-                max_tokens=1800,
-                timeout_seconds=60,
+                max_tokens=LLM_MAX_OUTPUT_TOKENS,
+                timeout_seconds=LLM_TIMEOUT_SECONDS,
             )
             llm_findings = _coerce_llm_findings(result["payload"])
             findings = llm_findings
