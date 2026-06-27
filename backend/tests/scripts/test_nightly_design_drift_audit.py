@@ -140,6 +140,59 @@ def test_design_drift_audit_rejects_llm_action_fields(monkeypatch, tmp_path: Pat
     assert payload["official_bug_creation_allowed"] is False
 
 
+def test_design_drift_audit_uses_compact_llm_input_and_large_output_budget(monkeypatch, tmp_path: Path) -> None:
+    long_source = "\n".join(
+        f"class DurableRuntime{i}: pass  # fallback runtime marker {i} " + "x" * 300
+        for i in range(12)
+    )
+    _write_fixture(tmp_path, source_text=long_source)
+    design = tmp_path / "docs" / "architecture" / "demo_runtime_design.md"
+    design.write_text(
+        "# Demo Runtime\n\n"
+        + "Requires DurableRuntime and durable EventLoop semantics. "
+        + "design-detail " * 500,
+        encoding="utf-8",
+    )
+    config_path = _write_config(tmp_path, drift_markers=["fallback"])
+    llm_config = _write_llm_config(tmp_path)
+    _init_repo(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
+        captured["provider"] = provider
+        captured["purpose"] = purpose
+        captured["messages"] = messages
+        captured["max_tokens"] = max_tokens
+        captured["timeout_seconds"] = timeout_seconds
+        return {
+            "provider": provider,
+            "model": "deepseek-v4-pro",
+            "credential_source": "test",
+            "payload": {"summary": "ok", "findings": []},
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+    monkeypatch.setattr(audit.llm_adapter, "invoke_provider_json", fake_invoke)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        provider="deepseek_api",
+        modules=["demo_runtime"],
+        invoke_llm=True,
+    )
+
+    user_payload = json.loads(captured["messages"][1]["content"])  # type: ignore[index]
+    target = user_payload["input"]["review_targets"][0]
+    assert payload["llm_gate"] == "ready"
+    assert captured["max_tokens"] == audit.LLM_MAX_OUTPUT_TOKENS
+    assert captured["timeout_seconds"] == audit.LLM_TIMEOUT_SECONDS
+    assert len(target["design_docs"][0]["excerpt"]) <= audit.LLM_MAX_DESIGN_CHARS
+    assert len(target["code_samples"][0]["excerpt"]) <= audit.LLM_MAX_CODE_SAMPLE_CHARS
+    assert len(target["drift_risk_hits"]) <= audit.LLM_MAX_MARKER_HITS
+
+
 def test_design_drift_audit_llm_failure_does_not_emit_marker_findings(monkeypatch, tmp_path: Path) -> None:
     _write_fixture(tmp_path, source_text="class DurableRuntime:\n    pass  # temporary fallback runtime\n")
     config_path = _write_config(tmp_path, drift_markers=["fallback"])

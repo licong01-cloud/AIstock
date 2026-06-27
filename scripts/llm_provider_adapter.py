@@ -605,8 +605,16 @@ def invoke_provider_json(
         choices = raw_response.get("choices") if isinstance(raw_response, dict) else None
         if not isinstance(choices, list) or not choices:
             raise ProviderAdapterError("provider output JSON schema invalid: choices missing")
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        content = (message or {}).get("content") if isinstance(message, dict) else choices[0].get("text")
+        choice = choices[0]
+        message = choice.get("message") if isinstance(choice, dict) else None
+        content = (message or {}).get("content") if isinstance(message, dict) else choice.get("text")
+        finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+        if not str(content or "").strip():
+            suffix = f" finish_reason={finish_reason}" if finish_reason else ""
+            last_error = ProviderAdapterError(f"provider output JSON schema invalid: empty content{suffix}")
+            if attempt == 2:
+                raise last_error
+            continue
         try:
             if purpose in ADVISORY_LLM_PURPOSES:
                 payload = _normalize_advisory_payload(
