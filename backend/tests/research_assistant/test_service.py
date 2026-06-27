@@ -4402,6 +4402,31 @@ def test_bug_538_grounded_forbidden_marker_answer_is_cleaned_not_replaced() -> N
         assert marker not in text
 
 
+def test_bug_538_forbidden_marker_cleanup_preserves_short_section_headings() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+    grounded_answer = (
+        "Bottom-line: 已基于只读行情和资金流证据合成。\n"
+        "## 一、跌停原因分析\n"
+        "盘面出现放量下跌，需要结合公告、资金流与板块表现交叉核对。\n"
+        "raw_payload=debug server_key=aistock-stock-analysis omitted_sections=[internal]\n"
+        "## 收尾结论\n"
+        "保留基本面、近期走势、风险和证据来源，不做方向预测。"
+    )
+
+    text = svc._compose_assistant_reply("请分析国城矿业的 MCP 取证结果", grounded_answer, cards, mode_decision)
+
+    assert "## 一、跌停原因分析" in text
+    assert "## 收尾结论" in text
+    assert text.count("## ") >= 2
+    assert "盘面出现放量下跌" in text
+    assert "不做方向预测" in text
+    assert "Insufficient evidence: business reply synthesis did not pass grounding guard." not in text
+    for marker in ("server_key", "raw_payload", "omitted_sections"):
+        assert marker not in text
+
+
 def test_bug_538_forbidden_marker_cleanup_preserves_internal_field_guard() -> None:
     svc = _chat_service(FakeLlmClient())
     mode_decision = _bug_538_capability_inquiry_mode()

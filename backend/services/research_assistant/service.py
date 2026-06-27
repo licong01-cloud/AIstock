@@ -7438,14 +7438,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     @staticmethod
     def _mcp_business_line_has_substantive_residue(line: str) -> bool:
-        stripped = ResearchAssistantService._strip_mcp_business_forbidden_marker_tokens(line)
-        if ResearchAssistantService._mcp_business_text_signal_count(stripped) < 12:
-            return False
         if not ResearchAssistantService._contains_mcp_business_forbidden_marker(line):
             return True
-        raw_count = max(ResearchAssistantService._mcp_business_text_signal_count(line), 1)
+        stripped = ResearchAssistantService._strip_mcp_business_forbidden_marker_tokens(line)
         stripped_count = ResearchAssistantService._mcp_business_text_signal_count(stripped)
-        return (stripped_count / raw_count) >= 0.45
+        return stripped_count > 0
 
     @staticmethod
     def _clean_mcp_business_forbidden_markers(text: str) -> str:
@@ -7496,8 +7493,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return cleaned
 
     @staticmethod
-    def _mcp_business_cleaned_text_has_substance(text: str) -> bool:
-        return ResearchAssistantService._mcp_business_text_signal_count(text) >= 12
+    def _mcp_business_cleaned_text_has_substance(text: str, *, original_text: str | None = None) -> bool:
+        if ResearchAssistantService._mcp_business_text_signal_count(text) < 12:
+            return False
+        if not original_text or not ResearchAssistantService._contains_mcp_business_forbidden_marker(original_text):
+            return True
+        stripped_original = ResearchAssistantService._strip_mcp_business_forbidden_marker_tokens(original_text)
+        raw_count = max(ResearchAssistantService._mcp_business_text_signal_count(original_text), 1)
+        stripped_count = ResearchAssistantService._mcp_business_text_signal_count(stripped_original)
+        return stripped_count >= 12 and (stripped_count / raw_count) >= 0.45
 
     @staticmethod
     def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
@@ -7776,7 +7780,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     cleaned_text = self._clean_mcp_business_forbidden_markers(text)
                     if (
                         cleaned_text
-                        and self._mcp_business_cleaned_text_has_substance(cleaned_text)
+                        and self._mcp_business_cleaned_text_has_substance(cleaned_text, original_text=text)
                         and not self._contains_mcp_business_forbidden_marker(cleaned_text)
                     ):
                         return self._apply_main_reply_policy(cleaned_text, mode_decision)
