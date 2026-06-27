@@ -19,8 +19,9 @@ Default rule: load this file only for AIstock architecture, backend, frontend, d
 
 ## Active Standards
 
-Use the active standard only when it is relevant to the current task:
+Use the active standard only when it is relevant to the current task. Start from `docs/standards/README.md` when there is any doubt about the current standard set.
 
+- `docs/standards/README.md`
 - `docs/standards/aistock_development_standard_v1.5_20260523.md`
 - `docs/standards/aistock_development_standard_v1.5_20260523.yaml`
 - `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
@@ -47,6 +48,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Ordinary BUG fixes do not read feature, module, architecture, or historical design documents by default; load them only when the BUG/GitHub Issue cites them, the user asks, or the task is T3 design/architecture.
 - Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
 - Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
+- Do not read `docs/standards/archive/` by default; archived standards are historical evidence only and must not override the active standards index.
 
 
 ## Feature Workflow Rules

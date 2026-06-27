@@ -5,7 +5,7 @@ Use this command only when the user asks Claude Code to design, implement, valid
 ## Required startup
 
 1. Work from latest `origin/main` in a fresh isolated worktree under `F:\Dev\AIstock_worktrees\<task-name>`; never develop in dirty `F:\Dev\AIstock`.
-2. Read `docs/codex_project_memory.md` and the relevant parts of `docs/standards/aistock_development_standard_v1.5_20260523.md`.
+2. Read `docs/codex_project_memory.md`, `docs/standards/README.md`, and the relevant parts of `docs/standards/aistock_development_standard_v1.5_20260523.md`. Do not read `docs/standards/archive/` unless the user explicitly asks for historical context.
 3. Apply `FEATURE-WORKFLOW-001` before implementation.
 4. Read the approved feature design document only after the task is confirmed to be a real feature delivery. If the task is a BUG, workflow change, docs change, audit, cleanup, or generic analysis, stay on the appropriate non-feature lane and do not pull feature design docs by default.
 

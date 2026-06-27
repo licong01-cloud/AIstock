@@ -4,7 +4,7 @@ Use this command when the user asks Claude Code to submit, fix, triage, batch, v
 
 ## Required startup
 
-Run the repo orchestrator before manual exploration:
+Run the repo orchestrator before manual exploration. If standard selection is unclear, read `docs/standards/README.md` and use only its Active Standards list. Do not read `docs/standards/archive/` unless the user explicitly asks for historical context.
 
 ```powershell
 python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
