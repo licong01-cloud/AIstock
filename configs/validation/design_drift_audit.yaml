@@ -5,6 +5,25 @@ defaults:
   max_code_files_per_module: 24
   max_code_excerpt_chars_per_file: 1200
   max_findings: 40
+llm_budget:
+  default_tier: compact
+  tiers:
+    compact:
+      max_input_chars: 50000
+      max_design_chars: 700
+      max_code_sample_chars: 450
+      max_code_sample_count: 4
+      max_marker_hits: 12
+      max_output_tokens: 4096
+      timeout_seconds: 180
+    expanded_80k_40k:
+      max_input_chars: 80000
+      max_design_chars: 4000
+      max_code_sample_chars: 2400
+      max_code_sample_count: 12
+      max_marker_hits: 40
+      max_output_tokens: 40000
+      timeout_seconds: 420
 policy:
   warning_only: true
   candidate_only: true

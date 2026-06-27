@@ -633,6 +633,7 @@ jobs:
             --provider deepseek_api `
             --invoke-llm `
             --run-id "${{ github.run_id }}" `
+            --llm-budget-tier expanded_80k_40k `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/design-drift-audit.json" `
             --markdown-output "$outDir/design-drift-audit.md"
@@ -648,6 +649,7 @@ jobs:
             --provider deepseek_api `
             --invoke-llm `
             --run-id "${{ github.run_id }}" `
+            --llm-budget-tier expanded_80k_40k `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/silent-degradation-audit.json" `
             --markdown-output "$outDir/silent-degradation-audit.md"

@@ -1,0 +1,80 @@
+{
+  "actual": "The schema fix in BUG-535 made DeepSeek invocation reliable again, but current limits are hardcoded compact values and cannot safely exercise DeepSeek's larger context window without code changes or ad hoc edits.",
+  "allowed_write_scope": [
+    "scripts/nightly_design_drift_audit.py",
+    "scripts/nightly_silent_degradation_audit.py",
+    "configs/validation/design_drift_audit.yaml",
+    "configs/validation/silent_degradation_audit.yaml",
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_nightly_design_drift_audit.py",
+    "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    "tests/aistock_validation/bugs/20260627_BUG-536-nightly-deepseek-audit-should-support-configurable-80k-input-and-40k-out.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-536",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-27T12:54:50.623509Z",
+  "description": "The schema fix in BUG-535 made DeepSeek invocation reliable again, but current limits are hardcoded compact values and cannot safely exercise DeepSeek's larger context window without code changes or ad hoc edits.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260627-e4e9d60408c9",
+      "timestamp": "2026-06-27T12:54:50.623506Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/pull/1675"
+  ],
+  "expected": "Nightly design-drift and silent-degradation audits expose explicit configurable LLM budget tiers. The expanded tier can request up to 80K input characters/tokens equivalent budget and 40K output tokens when the provider/model allows it; compact remains the default unless config/CLI opts in. The audit payload records requested tier, effective limits, max_output_tokens, truncation counters, and provider usage. Provider failures or budget exhaustion remain visible and do not silently fall back to deterministic conclusions.",
+  "first_seen_at": "2026-06-27T12:54:50.623509Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1678,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1678",
+  "last_seen_at": "2026-06-27T12:54:50.623509Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly DeepSeek audit should support configurable 80K input and 40K output budget",
+  "trigger_condition": {
+    "fingerprint": "e4e9d60408c9971490018479",
+    "source_event_id": "FE-20260627-e4e9d60408c9"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "scope_expanded_for_fix"
+}

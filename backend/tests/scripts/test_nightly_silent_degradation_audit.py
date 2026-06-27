@@ -462,6 +462,67 @@ def test_silent_degradation_audit_uses_llm_output_instead_of_marker_templates(mo
     assert payload["llm_invocation_evidence"]["invoked"] is True
     assert payload["findings"] == []
     assert payload["workflow_gate"] == "ready"
+    assert payload["llm_budget"]["tier"] == "compact"
+
+
+def test_silent_degradation_audit_supports_expanded_80k_40k_budget(monkeypatch, tmp_path: Path) -> None:
+    _write_fixture(
+        tmp_path,
+        source_text="\n".join(
+            f"class DurableRuntime{i}: pass  # fallback marker {i} " + "x" * 300
+            for i in range(40)
+        ),
+    )
+    reference = tmp_path / "docs" / "architecture" / "demo_runtime_contract.md"
+    reference.write_text(
+        "# Demo Runtime\n\n"
+        + "Requires DurableRuntime and durable EventLoop semantics. "
+        + "reference-detail " * 3000,
+        encoding="utf-8",
+    )
+    config_path = _write_config(tmp_path, silent_markers=["fallback"])
+    llm_config = _write_llm_config(tmp_path)
+    prompt_pack = _write_prompt_pack(tmp_path)
+    _init_repo(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_invoke(provider, config, *, purpose, messages, max_tokens=900, timeout_seconds=45):
+        captured["messages"] = messages
+        captured["max_tokens"] = max_tokens
+        captured["timeout_seconds"] = timeout_seconds
+        return {
+            "provider": provider,
+            "model": "deepseek-v4-pro",
+            "credential_source": "test",
+            "payload": {"summary": "ok", "findings": []},
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 50, "total_tokens": 1050},
+        }
+
+    monkeypatch.setattr(audit.llm_adapter, "invoke_provider_json", fake_invoke)
+
+    payload = audit.build_audit(
+        root=tmp_path,
+        config_path=config_path,
+        llm_config_path=llm_config,
+        prompt_pack_path=prompt_pack,
+        provider="deepseek_api",
+        modules=["demo_runtime"],
+        invoke_llm=True,
+        llm_budget_tier="expanded_80k_40k",
+    )
+
+    user_payload = json.loads(captured["messages"][1]["content"])  # type: ignore[index]
+    target = user_payload["input"]["review_targets"][0]
+    assert captured["max_tokens"] == 40000
+    assert captured["timeout_seconds"] == 420
+    assert user_payload["input"]["llm_budget"]["max_input_chars"] == 80000
+    assert payload["llm_budget"]["tier"] == "expanded_80k_40k"
+    assert payload["llm_budget"]["max_input_chars"] == 80000
+    assert payload["llm_budget"]["max_output_tokens"] == 40000
+    assert payload["llm_budget"]["input_within_budget"] is True
+    assert len(target["reference_docs"][0]["excerpt"]) <= 4000
+    assert len(target["code_samples"][0]["excerpt"]) <= 2400
+    assert len(target["silent_degradation_hits"]) <= 40
 
 
 def test_silent_degradation_audit_cli_writes_public_artifacts(tmp_path: Path, capsys) -> None:
@@ -499,6 +560,7 @@ def test_silent_degradation_audit_cli_writes_public_artifacts(tmp_path: Path, ca
     assert '"check": "nightly-silent-degradation-audit"' in stdout
     assert artifact["public_artifact"] is True
     assert artifact["candidate_only"] is True
+    assert artifact["llm_budget"]["tier"] == "compact"
     assert "suppressed_findings" in artifact
     assert artifact["source_modifications_allowed"] is False
     assert artifact["review_targets"][0]["silent_degradation_hit_count"] == 0
