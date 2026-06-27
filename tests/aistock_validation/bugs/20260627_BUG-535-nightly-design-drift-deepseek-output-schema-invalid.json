@@ -1,0 +1,75 @@
+{
+  "actual": "Run 28261346889 design-drift-audit returned llm_gate=degraded, llm_invoked=false, workflow_gate=warning, finding_count=0, degraded_reason=llm_provider_failed_no_marker_findings_emitted, error_fingerprint=cb5feefcb83d. Local repro with fallback disabled returns DesignDriftAuditError: provider output JSON schema invalid.",
+  "allowed_write_scope": [
+    "scripts/nightly_design_drift_audit.py",
+    "backend/tests/scripts/test_nightly_design_drift_audit.py",
+    "scripts/llm_provider_adapter.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "tests/aistock_validation/bugs/20260627_BUG-535-nightly-design-drift-deepseek-output-schema-invalid.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-535",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-27T03:11:01.042186Z",
+  "description": "Run 28261346889 design-drift-audit returned llm_gate=degraded, llm_invoked=false, workflow_gate=warning, finding_count=0, degraded_reason=llm_provider_failed_no_marker_findings_emitted, error_fingerprint=cb5feefcb83d. Local repro with fallback disabled returns DesignDriftAuditError: provider output JSON schema invalid.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260627-85288b8968c5",
+      "timestamp": "2026-06-27T03:11:01.042186Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/28261346889"
+  ],
+  "expected": "Nightly design drift audit should reliably accept valid DeepSeek semantic JSON responses, record llm_gate=ready and llm_invoked=true on success, and continue to fail-loud/degraded with sanitized error evidence only when the provider genuinely fails.",
+  "first_seen_at": "2026-06-27T03:11:01.042186Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1673,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1673",
+  "last_seen_at": "2026-06-27T03:11:01.042186Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "AISTOCK_LLM_ENV_FILE=F:/Dev/AIstock/.env python scripts/nightly_design_drift_audit.py --json --provider deepseek_api --invoke-llm --run-id manual-repro --code-intelligence-json tmp/validation/code-intelligence/latest/code-intelligence-summary.json --fail-on-llm-error",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly design drift DeepSeek output schema invalid",
+  "trigger_condition": {
+    "fingerprint": "85288b8968c530a6392dcdac",
+    "source_event_id": "FE-20260627-85288b8968c5"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
