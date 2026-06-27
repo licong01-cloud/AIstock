@@ -7398,6 +7398,108 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return "Insufficient evidence: business reply synthesis did not pass grounding guard."
 
     @staticmethod
+    def _react_has_grounded_business_tool_execution(
+        react_active: bool,
+        react_card: dict[str, Any],
+        react_guard: dict[str, Any],
+    ) -> bool:
+        if (
+            not react_active
+            or react_guard.get("allowed") is not True
+            or react_guard.get("reason") not in {"ok", "read_only_partial_evidence_degraded"}
+        ):
+            return False
+        executed_tools = react_card.get("executed_tools") if isinstance(react_card.get("executed_tools"), list) else []
+        for item in executed_tools:
+            if not isinstance(item, dict):
+                continue
+            server_key = str(item.get("server_key") or "")
+            tool_name = str(item.get("tool_name") or "")
+            side_effect = str(item.get("side_effect_level") or "read_only")
+            if not server_key or not tool_name:
+                continue
+            if server_key == "research-assistant":
+                continue
+            if side_effect == "read_only":
+                return True
+        return False
+
+    @staticmethod
+    def _strip_mcp_business_forbidden_marker_tokens(text: str) -> str:
+        cleaned = text
+        for marker in sorted(MCP_BUSINESS_REPLY_FORBIDDEN_MARKERS, key=len, reverse=True):
+            if marker:
+                cleaned = re.sub(re.escape(marker), "", cleaned, flags=re.IGNORECASE)
+        return cleaned
+
+    @staticmethod
+    def _mcp_business_text_signal_count(text: str) -> int:
+        return len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]", text))
+
+    @staticmethod
+    def _mcp_business_line_has_substantive_residue(line: str) -> bool:
+        stripped = ResearchAssistantService._strip_mcp_business_forbidden_marker_tokens(line)
+        if ResearchAssistantService._mcp_business_text_signal_count(stripped) < 12:
+            return False
+        if not ResearchAssistantService._contains_mcp_business_forbidden_marker(line):
+            return True
+        raw_count = max(ResearchAssistantService._mcp_business_text_signal_count(line), 1)
+        stripped_count = ResearchAssistantService._mcp_business_text_signal_count(stripped)
+        return (stripped_count / raw_count) >= 0.45
+
+    @staticmethod
+    def _clean_mcp_business_forbidden_markers(text: str) -> str:
+        replacements = {
+            "Evidence: source=": "证据来源：",
+            "server_key=": "服务：",
+            "tool_name=": "工具：",
+            "source=": "来源：",
+            "as_of=": "截至：",
+            "server_key": "服务",
+            "tool_name": "工具",
+            "selected_tool": "已选工具",
+            "detail_tool": "详情工具",
+            "detail tool": "详情工具",
+            "raw_payload": "原始数据",
+            "omitted_sections": "省略的内部字段",
+            "mcp_summary_result": "工具摘要",
+            "mcp_execution_result": "工具执行结果",
+            "response_mode": "回复模式",
+            "summary_envelope": "摘要信封",
+            "summary_adapter": "摘要适配器",
+            "research_assistant_catalog_summary_adapter": "目录摘要适配器",
+            "mcp_tool_event": "工具事件",
+            "mcp route": "工具路由",
+            "Route decision": "路由判断",
+            "route decision": "路由判断",
+            "artifact_ref": "产物引用",
+            "payload budget": "载荷预算",
+            "transport": "传输通道",
+            "summary-first": "摘要优先",
+            "summary_first": "摘要优先",
+            "我只展示概要": "仅展示概要",
+        }
+        kept_lines: list[str] = []
+        for line in text.splitlines():
+            if not ResearchAssistantService._mcp_business_line_has_substantive_residue(line):
+                continue
+            cleaned_line = line
+            for marker, replacement in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+                cleaned_line = re.sub(re.escape(marker), replacement, cleaned_line, flags=re.IGNORECASE)
+            cleaned_line = re.sub(r"[ \t]{2,}", " ", cleaned_line).strip(" \t:：,，;；")
+            if cleaned_line:
+                kept_lines.append(cleaned_line)
+        cleaned = "\n".join(kept_lines).strip()
+        if ResearchAssistantService._contains_mcp_business_forbidden_marker(cleaned):
+            cleaned = ResearchAssistantService._strip_mcp_business_forbidden_marker_tokens(cleaned)
+            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip(" \t:：,，;；")
+        return cleaned
+
+    @staticmethod
+    def _mcp_business_cleaned_text_has_substance(text: str) -> bool:
+        return ResearchAssistantService._mcp_business_text_signal_count(text) >= 12
+
+    @staticmethod
     def _mcp_result_source_refs(summary_result: dict[str, Any], tool_event: dict[str, Any]) -> list[str]:
         source = summary_result.get("source") or tool_event.get("transport") or tool_event.get("tool_event_id") or "mcp_tool_event"
         refs = [str(source)] if source else []
@@ -7639,6 +7741,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         raw_text = llm_text.strip()
         text = self._strip_assistant_tool_choice_markup(raw_text)
         react_active = isinstance(cards.get("react_grounding"), dict)
+        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
+        react_guard = react_card.get("evidence_guard") if isinstance(react_card.get("evidence_guard"), dict) else {}
+        grounded_business_answer_available = self._react_has_grounded_business_tool_execution(
+            react_active,
+            react_card,
+            react_guard,
+        )
         execution = cards.get("mcp_execution_result") if isinstance(cards, dict) else None
         tool_error = self._tool_error_from_cards(cards)
         if tool_error:
@@ -7646,12 +7755,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if isinstance(route, dict) and route.get("requires_clarification"):
             return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
-        if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY} and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower()):
+        if (
+            not grounded_business_answer_available
+            and mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY}
+            and (self._is_mcp_tool_catalog_inquiry(user_message) or "mcp" in user_message.lower() or "tool" in user_message.lower())
+        ):
             catalog = cards.get("runtime_mcp_catalog") if isinstance(cards, dict) else None
             if isinstance(catalog, dict):
                 return self._apply_main_reply_policy(self._render_mcp_tool_catalog_reply(catalog), mode_decision)
-        react_card = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
-        react_guard = react_card.get("evidence_guard") if isinstance(react_card.get("evidence_guard"), dict) else {}
         if (
             react_active
             and react_guard.get("allowed") is True
@@ -7659,9 +7770,20 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             and text
             and not self._is_insufficient_evidence_text(text)
             and not self._contains_agentic_template_marker(text)
-            and not self._contains_mcp_business_forbidden_marker(text)
         ):
-            return self._apply_main_reply_policy(text, mode_decision)
+            if self._contains_mcp_business_forbidden_marker(text):
+                if grounded_business_answer_available:
+                    cleaned_text = self._clean_mcp_business_forbidden_markers(text)
+                    if (
+                        cleaned_text
+                        and self._mcp_business_cleaned_text_has_substance(cleaned_text)
+                        and not self._contains_mcp_business_forbidden_marker(cleaned_text)
+                    ):
+                        return self._apply_main_reply_policy(cleaned_text, mode_decision)
+                    if not (isinstance(execution, dict) and execution.get("auto_executed")):
+                        return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
+            else:
+                return self._apply_main_reply_policy(text, mode_decision)
         if isinstance(execution, dict) and execution.get("auto_executed"):
             summary = cards.get("mcp_summary_result") if isinstance(cards.get("mcp_summary_result"), dict) else {}
             if self._is_business_synthesis_summary(summary):
