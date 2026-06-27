@@ -13,11 +13,12 @@ Read these files before planning or running validation:
 
 1. `AGENTS.override.md`
 2. `docs/codex_project_memory.md`
-3. `docs/standards/aistock_development_standard_v1.5_20260523.md`
-4. The approved feature design document or implementation plan only after the task is confirmed as feature delivery; for BUG/GitHub Issue fixes, read the BUG JSON `closure_requirements` and explicit user acceptance points instead.
-5. `docs/architecture/aistock_result_oriented_testing_standard.md`, if present.
-6. `docs/architecture/aistock_testing_version_management_system_design_20260429.md`, if present.
-7. The impacted module matrix under `tests/aistock_validation/modules/`, if present.
+3. `docs/standards/README.md` when available, then use only its Active Standards list. Do not read `docs/standards/archive/` unless the user explicitly asks for historical standards context.
+4. `docs/standards/aistock_development_standard_v1.5_20260523.md`
+5. The approved feature design document or implementation plan only after the task is confirmed as feature delivery; for BUG/GitHub Issue fixes, read the BUG JSON `closure_requirements` and explicit user acceptance points instead.
+6. `docs/architecture/aistock_result_oriented_testing_standard.md`, if present.
+7. `docs/architecture/aistock_testing_version_management_system_design_20260429.md`, if present.
+8. The impacted module matrix under `tests/aistock_validation/modules/`, if present.
 
 Do not modify `AGENTS.md`.
 
