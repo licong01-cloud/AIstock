@@ -32,8 +32,8 @@
   "expected": "Nightly design drift audit should reliably accept valid DeepSeek semantic JSON responses, record llm_gate=ready and llm_invoked=true on success, and continue to fail-loud/degraded with sanitized error evidence only when the provider genuinely fails.",
   "first_seen_at": "2026-06-27T03:11:01.042186Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6509a5618e93c674cf6305f67c3e72be2cf97bab",
+  "fixed_at": "2026-06-27T12:51:01.169527Z",
   "github_issue_number": 1673,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1673",
   "last_seen_at": "2026-06-27T03:11:01.042186Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1675",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -60,6 +61,12 @@
     "fingerprint": "85288b8968c530a6392dcdac",
     "source_event_id": "FE-20260627-85288b8968c5"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_nightly_design_drift_audit.py backend/tests/scripts/test_llm_provider_adapter.py -q -p no:cacheprovider -> 59 passed",
+    "real DeepSeek design-drift audit -> llm_gate=ready llm_invoked=true degraded_reason=null",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
