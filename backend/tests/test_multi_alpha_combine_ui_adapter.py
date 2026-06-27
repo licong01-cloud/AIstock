@@ -210,3 +210,55 @@ def test_running_run_without_scheme_result_uses_placeholder_not_silent_success()
     assert loop["status"] == "running"
     assert loop["metrics_json"]["annualized_return"] is None
     assert loop["config_json"]["weights_json"] == {}
+
+
+def test_failed_runs_with_disjoint_schemes_do_not_break_task_render() -> None:
+    # BUG-541: failed run 的 scheme_result 不应参与 common scheme 交集计算。
+    # 一个 succeeded run(ic_weighted) + 两个 scheme 互不相交的 failed run。
+    run_ok = _run("run_ok", status="succeeded")
+    run_fail_a = _run("run_fail_a", status="failed", oos_start="2024-07-02", oos_end="2025-05-31")
+    run_fail_b = _run("run_fail_b", status="failed", oos_start="2025-06-01", oos_end="2026-03-10")
+    task_key = task_key_for_run(run_ok)
+    adapter = _adapter({
+        "run_ok": {"run": run_ok, "scheme_results": [_scheme("ic_weighted")], "loo": _loo()},
+        "run_fail_a": {"run": run_fail_a, "scheme_results": [_scheme("equal"), _scheme("orthogonality_aware")], "loo": []},
+        "run_fail_b": {"run": run_fail_b, "scheme_results": [_scheme("rank_fusion_borda"), _scheme("rank_fusion_rrf")], "loo": []},
+    })
+
+    result = adapter.get_trajectory(task_key)
+
+    # 只取 succeeded run 的交集 → ic_weighted;不再抛 combine_ui_no_common_weighting_scheme
+    assert result["available_schemes"] == ["ic_weighted"]
+    assert result["scheme"] == "ic_weighted"
+
+
+def test_all_runs_failed_falls_back_to_default_scheme_not_crash() -> None:
+    # 全部 run 非 succeeded(无成功 run)→ 降级 default scheme,不崩。
+    run_fail_a = _run("run_fa", status="failed")
+    run_fail_b = _run("run_fb", status="failed")
+    task_key = task_key_for_run(run_fail_a)
+    adapter = _adapter({
+        "run_fa": {"run": run_fail_a, "scheme_results": [_scheme("equal")], "loo": []},
+        "run_fb": {"run": run_fail_b, "scheme_results": [_scheme("rank_fusion_rrf")], "loo": []},
+    })
+
+    result = adapter.get_trajectory(task_key)
+
+    assert result["available_schemes"] == ["ic_weighted"]  # DEFAULT_SCHEME
+
+
+def test_succeeded_runs_with_truly_disjoint_schemes_still_raise() -> None:
+    # 真实异常不掩盖:两个 succeeded run scheme 无交集 → 仍显式报错。
+    run_a = _run("run_sa", status="succeeded", oos_start="2024-07-02", oos_end="2025-05-31")
+    run_b = _run("run_sb", status="succeeded", oos_start="2025-06-01", oos_end="2026-03-10")
+    task_key = task_key_for_run(run_a)
+    adapter = _adapter({
+        "run_sa": {"run": run_a, "scheme_results": [_scheme("equal")], "loo": []},
+        "run_sb": {"run": run_b, "scheme_results": [_scheme("ic_weighted")], "loo": []},
+    })
+
+    with pytest.raises(CombineUIAdapterError) as excinfo:
+        adapter.get_trajectory(task_key)
+
+    assert excinfo.value.reason_code == "combine_ui_no_common_weighting_scheme"
+    assert set(excinfo.value.context["run_ids"]) == {"run_sa", "run_sb"}
