@@ -35,8 +35,8 @@
   "expected": "Nightly design-drift and silent-degradation audits expose explicit configurable LLM budget tiers. The expanded tier can request up to 80K input characters/tokens equivalent budget and 40K output tokens when the provider/model allows it; compact remains the default unless config/CLI opts in. The audit payload records requested tier, effective limits, max_output_tokens, truncation counters, and provider usage. Provider failures or budget exhaustion remain visible and do not silently fall back to deterministic conclusions.",
   "first_seen_at": "2026-06-27T12:54:50.623509Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a01d64d015661b4e0fe3c03c905e5608d3b27159",
+  "fixed_at": "2026-06-27T13:59:07.213452Z",
   "github_issue_number": 1678,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1678",
   "last_seen_at": "2026-06-27T12:54:50.623509Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1679",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -64,6 +65,13 @@
     "fingerprint": "e4e9d60408c9971490018479",
     "source_event_id": "FE-20260627-e4e9d60408c9"
   },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_nightly_design_drift_audit.py backend/tests/scripts/test_nightly_silent_degradation_audit.py -q -p no:cacheprovider -> 22 passed",
+    "pytest backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_nightly_workflow_wires_warning_only_adaptive_scheduler_job -q -p no:cacheprovider -> 1 passed",
+    "CI PR #1679 -> 17 passed / 0 failed",
+    "live DeepSeek design drift expanded -> llm_gate=ready llm_invoked=true input=26672/80000 max_output=40000",
+    "live DeepSeek silent degradation expanded -> llm_gate=ready llm_invoked=true input=29219/80000 max_output=40000"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
