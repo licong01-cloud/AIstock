@@ -46,6 +46,15 @@ from backend.services.qmt_strategy_ledger.models import (
     new_id as new_qmt_id,
 )
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
+from backend.services.miniqmt_execution_runtime import (
+    MiniQMTExecutionRuntimeKind,
+    MiniQMTGraySwitchController,
+)
+from backend.services.miniqmt_execution_runtime.gray import (
+    MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
+    MiniQMTGrayCanaryStrictness,
+)
+from backend.services.miniqmt_execution_runtime.repository import default_miniqmt_execution_runtime_repository
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.trading_calendar_status import TradingCalendarStatusService
@@ -1486,6 +1495,8 @@ class ProductionSimulationRunContextProvider:
 class PreviewOnlyMiniQMTManagedOrderService:
     """Managed-order facade that persists preview evidence without calling MiniQMT."""
 
+    preview_only = True
+
     def __init__(self, wrapped: QmtManagedOrderService) -> None:
         self._wrapped = wrapped
         self._repository = getattr(wrapped, "_repository", None)
@@ -2105,6 +2116,15 @@ class SimulationLifecycleScheduler:
                 "enabled": _env_flag(MINIQMT_SHADOW_ENABLED_ENV, default=False),
                 "default": False,
                 "mode": "dry_run_no_broker_mutation",
+            },
+            "miniqmt_gray": {
+                "canary_strictness_env_var": MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
+                "canary_strictness": (
+                    os.getenv(MINIQMT_GRAY_CANARY_STRICTNESS_ENV)
+                    or MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value
+                ),
+                "sim_default": MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value,
+                "live_forbidden": True,
             },
         }
 
@@ -3621,6 +3641,11 @@ class SimulationLifecycleScheduler:
                 managed_order_service=context.managed_order_service,
                 mode=mode,
                 price_by_symbol=context.price_by_symbol or context.current_prices,
+                miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
+                    binding=binding,
+                    plan=build_result.execution_plan,
+                    context=context,
+                ),
             )
         except BrokerRejectedError as exc:
             terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -3794,6 +3819,11 @@ class SimulationLifecycleScheduler:
             managed_order_service=context.managed_order_service,
             mode=mode,
             price_by_symbol=context.price_by_symbol or context.current_prices,
+            miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
+                binding=binding,
+                plan=build_result.execution_plan,
+                context=context,
+            ),
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -3984,6 +4014,11 @@ class SimulationLifecycleScheduler:
             managed_order_service=context.managed_order_service,
             mode=mode,
             price_by_symbol=context.price_by_symbol or context.current_prices,
+            miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
+                binding=binding,
+                plan=build_result.execution_plan,
+                context=context,
+            ),
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -4207,6 +4242,11 @@ class SimulationLifecycleScheduler:
                     managed_order_service=context.managed_order_service,
                     mode=mode,
                     price_by_symbol=context.price_by_symbol or context.current_prices,
+                    miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
+                        binding=binding,
+                        plan=plan,
+                        context=context,
+                    ),
                 )
             except BrokerRejectedError as exc:
                 terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -4895,6 +4935,43 @@ class SimulationLifecycleScheduler:
             )
             logger.warning("MiniQMT shadow reconciliation failed but B submit continues: %s", failure)
             return updated
+
+    def _resolve_miniqmt_runtime_kind_for_submit(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+    ) -> MiniQMTExecutionRuntimeKind:
+        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return MiniQMTExecutionRuntimeKind.COMPILER
+        runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
+        portfolio_id = str(plan.portfolio_id or context.portfolio_id or binding.strategy_id).strip()
+        strategy_slot_id = str(plan.strategy_slot_id or binding.strategy_slot_id or binding.strategy_id).strip()
+        try:
+            return MiniQMTGraySwitchController(
+                repository=default_miniqmt_execution_runtime_repository()
+            ).resolve_runtime_kind(
+                portfolio_id=portfolio_id,
+                strategy_slot_id=strategy_slot_id,
+                runtime_id=runtime_id,
+                environ=os.environ,
+            )
+        except Exception as exc:  # noqa: BLE001 - route selection must be loud before broker submit.
+            raise RuntimeConfigInvalidError(
+                "failed to resolve MiniQMT gray runtime kind before submit",
+                context={
+                    "reason_code": "MINIQMT_GRAY_RUNTIME_KIND_RESOLUTION_FAILED",
+                    "runtime_id": runtime_id,
+                    "portfolio_id": portfolio_id,
+                    "strategy_slot_id": strategy_slot_id,
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
 
     @staticmethod
     def _should_run_miniqmt_shadow(

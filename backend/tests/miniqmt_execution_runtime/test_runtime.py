@@ -31,6 +31,7 @@ from backend.services.qmt_strategy_ledger.order_service import (
     OrderPreflightResult,
 )
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.trading_core.errors import BrokerSubmitError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 
@@ -354,6 +355,187 @@ def test_compiler_adapter_keeps_star_market_child_quantity_with_explicit_board_l
     child = repo.list_child_orders(build.runtime_evidence.runtime_id, active_only=False)[0]
     assert child.quantity == 1215
     assert build.requests[0].quantity == 1215
+
+
+def test_event_loop_submit_rejects_non_broker_quote_source_loudly() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client.submit_event_loop_vnpy_parent_intents(
+            parent_intents=[intent],
+            policy_context=_event_loop_policy(),
+            account_group_id="acct_event_loop",
+            trade_date=TRADE_DATE,
+            runtime_config_hash="runtime_hash_event_loop_quote_source",
+            runtime_id="mqrt_event_loop_quote_source",
+            strategy_slot_id="slot_event_loop",
+            qmt_client=qmt_client,
+            strategy_name="strategy_event_loop",
+            order_remark_prefix="evtloop",
+            account_id="acct_event_loop",
+            quote_provider=lambda _symbol: {
+                "source": "TDX_REALTIME.batch_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 1000,
+            },
+        )
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE_INVALID"
+    assert exc_info.value.context["required_quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    assert "TDX_REALTIME.batch_quote" in str(exc_info.value.context["quote_source"])
+
+
+def test_event_loop_submit_missing_broker_quote_fails_loudly_before_order() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    qmt_client.quotes.clear()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client.submit_event_loop_vnpy_parent_intents(
+            parent_intents=[intent],
+            policy_context=_event_loop_policy(),
+            account_group_id="acct_event_loop",
+            trade_date=TRADE_DATE,
+            runtime_config_hash="runtime_hash_event_loop_missing_quote",
+            runtime_id="mqrt_event_loop_missing_quote",
+            strategy_slot_id="slot_event_loop",
+            qmt_client=qmt_client,
+            strategy_name="strategy_event_loop",
+            order_remark_prefix="evtloop",
+            account_id="acct_event_loop",
+        )
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING"
+    assert exc_info.value.context["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    assert qmt_client.place_order_calls == []
+
+
+def test_event_loop_submit_requires_l1_depth_from_broker_quote() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    qmt_client.quotes = {
+        "000001.SZ": {
+            "source": "MINIQMT_REALTIME.broker_quote",
+            "price": 10.0,
+        }
+    }
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client.submit_event_loop_vnpy_parent_intents(
+            parent_intents=[intent],
+            policy_context=_event_loop_policy(),
+            account_group_id="acct_event_loop",
+            trade_date=TRADE_DATE,
+            runtime_config_hash="runtime_hash_event_loop_depth",
+            runtime_id="mqrt_event_loop_depth",
+            strategy_slot_id="slot_event_loop",
+            qmt_client=qmt_client,
+            strategy_name="strategy_event_loop",
+            order_remark_prefix="evtloop",
+            account_id="acct_event_loop",
+        )
+
+    assert exc_info.value.context["reason_code"] == "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING"
+    assert exc_info.value.context["missing_fields"] == ["ask_price_1", "ask_volume_1"]
+    assert qmt_client.place_order_calls == []
+
+
+class _EventLoopFakeQmtClient:
+    def __init__(self) -> None:
+        self.quotes = {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 1000,
+                "bid_price_1": 9.99,
+                "bid_volume_1": 1000,
+            }
+        }
+        self.place_order_calls: list[dict] = []
+
+    def get_orders(self, cancelable_only: bool = False) -> list[dict]:  # noqa: ARG002
+        return []
+
+    def get_trades(self) -> list[dict]:
+        return []
+
+    def get_positions(self) -> list[dict]:
+        return []
+
+    def get_full_tick(self, symbols: list[str]) -> dict[str, dict]:
+        return {symbol: dict(self.quotes[symbol]) for symbol in symbols if symbol in self.quotes}
+
+    def place_order(self, **kwargs):
+        self.place_order_calls.append(dict(kwargs))
+        return 880000000 + len(self.place_order_calls), "accepted"
+
+    def cancel_order(self, order_id: str):
+        return True, f"cancelled {order_id}"
+
+
+def _event_loop_policy() -> dict[str, object]:
+    return {
+        "policy_json": {
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {},
+        },
+        "validated_execution_policy_id": "policy_event_loop",
+        "policy_sha256": "policy_sha_event_loop",
+    }
+
+
+def _event_loop_client_fixture() -> tuple[
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    InMemoryQmtStrategyLedgerRepository,
+    _EventLoopFakeQmtClient,
+    OrderIntent,
+]:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strategy_event_loop",
+            strategy_name="strategy_event_loop",
+            display_name="EVENT_LOOP strategy",
+            account_id="acct_event_loop",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    intent = OrderIntent(
+        intent_id="intent_event_loop_buy",
+        package_id="pkg_event_loop",
+        portfolio_id="portfolio_event_loop",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        quantity=100,
+        order_type=OrderType.LIMIT,
+        limit_price=10.0,
+        target_trade_date=TRADE_DATE,
+        metadata={
+            "strategy_id": "strategy_event_loop",
+            "strategy_name": "strategy_event_loop",
+            "order_remark_prefix": "evtloop",
+        },
+    )
+    return repo, qmt_repo, _EventLoopFakeQmtClient(), intent
 
 
 def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient() -> None:

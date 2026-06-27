@@ -22,6 +22,7 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTShadowScenario,
     get_miniqmt_execution_runtime_kind,
 )
+from backend.services.miniqmt_execution_runtime.gray import MiniQMTGrayCanaryStrictness
 from backend.services.trading_core.models import OrderSide
 
 
@@ -178,7 +179,10 @@ def test_phase6_canary_rejects_insufficient_shadow_trading_days_loudly() -> None
 def test_phase6_canary_rejects_missing_shadow_scenario_coverage_loudly() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
     _seed_no_fatal_shadow_evidence(repo, scenario=MiniQMTShadowScenario.FULL_FILL)
-    controller = MiniQMTGraySwitchController(repository=repo)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        canary_strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+    )
 
     with pytest.raises(RuntimeError, match="MINIQMT_GRAY_SHADOW_SCENARIO_COVERAGE_MISSING") as exc_info:
         controller.switch_to_event_loop(
@@ -190,6 +194,32 @@ def test_phase6_canary_rejects_missing_shadow_scenario_coverage_loudly() -> None
         )
 
     assert "partial_55_stream" in str(exc_info.value)
+
+
+def test_phase6_canary_default_single_day_smoke_accepts_one_no_fatal_shadow_day() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    report = _seed_no_fatal_shadow_evidence(repo, scenario=MiniQMTShadowScenario.FULL_FILL)
+    controller = MiniQMTGraySwitchController(repository=repo)
+
+    decision = controller.switch_to_event_loop(
+        runtime_id=RUNTIME_ID,
+        portfolio_id=PORTFOLIO_ID,
+        strategy_slot_id=STRATEGY_SLOT_ID,
+        mode=MiniQMTExecutionRuntimeMode.SIM,
+        trade_date=TRADE_DATE,
+        reason="d4_single_day_smoke_canary",
+    )
+
+    assert decision.status == MiniQMTGrayDecisionStatus.APPLIED
+    assert decision.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
+    assert decision.shadow_event_id == report.durable_event_id
+    gate_metadata = decision.metadata["shadow_evidence_gate"]
+    assert gate_metadata["canary_strictness"] == "single_day_smoke"
+    assert gate_metadata["canary_strictness_source"] == "default_sim_single_day_smoke"
+    assert gate_metadata["scenario_coverage_required"] is False
+    assert gate_metadata["required_scenarios"] == []
+    assert gate_metadata["missing_scenarios"] == []
+    assert set(gate_metadata["full_scenario_set_reference"]) == {scenario.value for scenario in _REQUIRED_D3_SCENARIOS}
 
 
 def test_phase6_canary_switch_requires_durable_shadow_report_then_rolls_back() -> None:
