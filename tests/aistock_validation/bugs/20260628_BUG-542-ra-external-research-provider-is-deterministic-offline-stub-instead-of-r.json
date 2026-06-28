@@ -1,6 +1,18 @@
 {
   "actual": "backend/routers/external_research.py defaults to DeterministicExternalResearchProvider; no real network-capable provider is wired behind an opt-in env gate, so RA external_research cannot query current web or papers.",
   "allowed_write_scope": [
+    "backend/services/research_assistant/external_research.py",
+    "backend/routers/external_research.py",
+    "backend/services/research_assistant/real_external_research_provider.py",
+    "backend/main.py",
+    "backend/tests/research_assistant/test_real_external_research_provider.py",
+    "backend/tests/research_assistant/test_external_research_provider_contract.py",
+    "docs/architecture/ra_external_research_real_provider_design_20260628.md",
+    "backend/requirements.txt",
+    ".env.example",
+    "deploy/agentsearch/docker-compose.yml",
+    "deploy/agentsearch/agentsearch.env.example",
+    "deploy/agentsearch/README.md",
     "tests/aistock_validation/bugs/20260628_BUG-542-ra-external-research-provider-is-deterministic-offline-stub-instead-of-r.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,13 +25,25 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-28T13:51:29.659359Z",
-  "description": "backend/routers/external_research.py defaults to DeterministicExternalResearchProvider; no real network-capable provider is wired behind an opt-in env gate, so RA external_research cannot query current web or papers.",
+  "description": "backend/routers/external_research.py defaults to DeterministicExternalResearchProvider; no real network-capable provider is wired behind an opt-in env gate, so RA external_research cannot query current web or papers.\n\nScope expanded for real opt-in provider implementation: AgentSearch web/extract, Semantic Scholar/arXiv papers, offline default fallback, docs/deploy artifacts, and httpx-mocked tests.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20260628-0a8a60554803",
       "timestamp": "2026-06-28T13:51:29.659356Z"
+    },
+    {
+      "timestamp": "2026-06-28T13:55:00Z",
+      "actor": "codex",
+      "action": "enrich_bug_scope",
+      "note": "Expanded allowed_write_scope for RA real external research provider; production_backend_dependency_gate=pending for trafilatura local extraction fallback."
+    },
+    {
+      "timestamp": "2026-06-28T14:25:00Z",
+      "actor": "codex",
+      "action": "expand_dependency_scope",
+      "note": "Added backend dependency manifests to allowed_write_scope for httpx/trafilatura production install gate."
     }
   ],
   "evidence_uris": [],
@@ -35,7 +59,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "production_backend_dependency_gate": "noop",
+  "production_backend_dependency_gate": "pending",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Call /api/v1/external-research/search-web or search-papers in current default runtime; results are deterministic offline/stub data and never hit real providers.",
@@ -43,7 +67,8 @@
     "l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -69,5 +94,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
+  "ui_issue": false,
+  "production_backend_dependency_note": "trafilatura==2.1.0 is required for the local fetch_extract fallback when RA_EXTERNAL_RESEARCH_PROVIDER=real; httpx==0.28.1 and trafilatura==2.1.0 are pinned in backend/requirements.txt for production backend installs."
 }

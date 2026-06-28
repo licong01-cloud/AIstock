@@ -256,6 +256,7 @@ async def _lifespan(app: FastAPI):
         pass
 
     init_db_pool(minconn=5, maxconn=40)
+    _configure_external_research_provider()
 
     if (os.getenv("DUMP_THREADS_ON_SIGNAL") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
         try:
@@ -567,6 +568,38 @@ def create_app() -> FastAPI:
     app.include_router(quant.router, prefix="")
 
     return app
+
+
+def _configure_external_research_provider() -> None:
+    mode = (os.getenv("RA_EXTERNAL_RESEARCH_PROVIDER") or "offline").strip().lower()
+    if mode in {"", "offline", "deterministic"}:
+        logging.getLogger("uvicorn.error").info("RA external research provider remains offline deterministic provider")
+        return
+    if mode != "real":
+        logging.getLogger("uvicorn.error").warning(
+            "Unsupported RA_EXTERNAL_RESEARCH_PROVIDER=%s; reason_code=RA_EXTERNAL_RESEARCH_PROVIDER_UNSUPPORTED; keeping offline provider",
+            mode,
+        )
+        return
+    base_url = (os.getenv("RA_AGENTSEARCH_BASE_URL") or "").strip()
+    if not base_url:
+        logging.getLogger("uvicorn.error").warning(
+            "RA_EXTERNAL_RESEARCH_PROVIDER=real without RA_AGENTSEARCH_BASE_URL; "
+            "reason_code=RA_AGENTSEARCH_BASE_URL_MISSING; keeping offline provider"
+        )
+        return
+    try:
+        from backend.routers.external_research import set_external_research_provider
+        from backend.services.research_assistant.real_external_research_provider import RealExternalResearchProvider
+
+        set_external_research_provider(RealExternalResearchProvider.from_env())
+    except Exception as exc:  # noqa: BLE001 - startup must be loud but keep offline provider as configured fallback.
+        logging.getLogger("uvicorn.error").warning(
+            "Failed to configure real RA external research provider; reason_code=RA_EXTERNAL_RESEARCH_PROVIDER_INIT_FAILED; error=%s",
+            exc,
+        )
+        return
+    logging.getLogger("uvicorn.error").info("RA external research provider configured as real provider")
 
 
 app = create_app()
