@@ -8,12 +8,13 @@ explicit reason codes instead of being converted into fabricated evidence.
 from __future__ import annotations
 
 import importlib
+import ipaddress
 import logging
 import re
 from dataclasses import dataclass, field
 from html import unescape
 from typing import Any
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, urlunparse
 from xml.etree import ElementTree
 
 import httpx
@@ -71,6 +72,7 @@ class RealExternalResearchProvider:
     s2_base_url: str = DEFAULT_S2_BASE_URL
     arxiv_base_url: str = DEFAULT_ARXIV_BASE_URL
     timeout_seconds: float = 8.0
+    local_extract_allowed_hosts: tuple[str, ...] = ()
     http_client: httpx.Client | None = None
     _last_failures: dict[str, dict[str, Any]] = field(default_factory=dict, init=False)
     _owned_client: httpx.Client | None = field(default=None, init=False, repr=False)
@@ -80,6 +82,7 @@ class RealExternalResearchProvider:
         self.paper_provider = _normalize_paper_provider(self.paper_provider)
         self.s2_base_url = self.s2_base_url.rstrip("/")
         self.arxiv_base_url = self.arxiv_base_url.rstrip("/")
+        self.local_extract_allowed_hosts = _normalize_allowed_hosts(self.local_extract_allowed_hosts)
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "RealExternalResearchProvider":
@@ -90,6 +93,7 @@ class RealExternalResearchProvider:
             agentsearch_base_url=str(env.get("RA_AGENTSEARCH_BASE_URL") or "").strip(),
             paper_provider=str(env.get("RA_PAPER_PROVIDER") or SEMANTIC_SCHOLAR_PROVIDER).strip(),
             s2_api_key=str(env.get("S2_API_KEY") or "").strip() or None,
+            local_extract_allowed_hosts=_split_allowed_hosts(env.get("RA_LOCAL_EXTRACT_ALLOWED_HOSTS")),
         )
 
     def last_failure(self, operation: str | None = None) -> dict[str, Any] | None:
@@ -235,7 +239,11 @@ class RealExternalResearchProvider:
 
     def _fetch_extract_with_trafilatura(self, *, url: str, max_chars: int, upstream_error: Exception) -> ExtractedEvidence:
         try:
-            response = self._client().get(url)
+            safe_url = _require_local_extract_allowed_url(url, self.local_extract_allowed_hosts)
+            # This fallback is host allow-listed by RA_LOCAL_EXTRACT_ALLOWED_HOSTS
+            # and rejects localhost/private/reserved IP targets before the request.
+            # CodeQL[py/full-ssrf] safe_url is rebuilt after explicit host allowlist and internal-target rejection.
+            response = self._client().get(safe_url)
             if response.status_code >= 400:
                 raise _HttpStatusFailure("LOCAL_EXTRACT_HTTP_ERROR", response)
             trafilatura = importlib.import_module("trafilatura")
@@ -251,8 +259,8 @@ class RealExternalResearchProvider:
             title = _title_from_html(response.text) or url
             return _build_extract(
                 title=title,
-                url=url,
-                source=_host(url) or LOCAL_EXTRACT_PROVIDER,
+                url=safe_url,
+                source=_host(safe_url) or LOCAL_EXTRACT_PROVIDER,
                 provider=LOCAL_EXTRACT_PROVIDER,
                 content=content,
                 max_chars=max_chars,
@@ -360,6 +368,93 @@ def _normalize_paper_provider(value: str | None) -> str:
         "reason_code=RA_PAPER_PROVIDER_UNSUPPORTED, expected semantic_scholar or arxiv, "
         f"got {value!r}"
     )
+
+
+def _split_allowed_hosts(value: str | None) -> tuple[str, ...]:
+    return tuple(part.strip() for part in str(value or "").split(",") if part.strip())
+
+
+def _normalize_allowed_hosts(hosts: tuple[str, ...]) -> tuple[str, ...]:
+    normalized: list[str] = []
+    for host in hosts:
+        item = str(host or "").strip().lower()
+        if not item:
+            continue
+        if item == "*":
+            raise RuntimeError("reason_code=RA_LOCAL_EXTRACT_ALLOWED_HOSTS_WILDCARD_FORBIDDEN")
+        if item.startswith("*."):
+            item = item[1:]
+        pattern = item[1:] if item.startswith(".") else item
+        if not pattern or not re.fullmatch(r"[a-z0-9.-]+", pattern):
+            raise RuntimeError("reason_code=RA_LOCAL_EXTRACT_ALLOWED_HOSTS_INVALID")
+        normalized.append(item)
+    return tuple(dict.fromkeys(normalized))
+
+
+def _require_local_extract_allowed_url(url: str, allowed_hosts: tuple[str, ...]) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_URL_SCHEME_NOT_ALLOWED")
+    if parsed.username or parsed.password:
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_URL_USERINFO_FORBIDDEN")
+    hostname = str(parsed.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_URL_HOST_MISSING")
+    address = _ip_literal(hostname)
+    if address is not None:
+        if _ip_address_is_internal(address):
+            raise RuntimeError("reason_code=LOCAL_TRAFILATURA_INTERNAL_HOST_FORBIDDEN")
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_IP_LITERAL_FORBIDDEN")
+    if _hostname_is_internal_name(hostname):
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_INTERNAL_HOST_FORBIDDEN")
+    if not _host_matches_allowed(hostname, allowed_hosts):
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_HOST_NOT_ALLOWED")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_PORT_NOT_ALLOWED") from exc
+    if port not in (None, 80, 443):
+        raise RuntimeError("reason_code=LOCAL_TRAFILATURA_PORT_NOT_ALLOWED")
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    path = parsed.path or "/"
+    return urlunparse((parsed.scheme, netloc, path, parsed.params, parsed.query, ""))
+
+
+def _hostname_is_internal_name(hostname: str) -> bool:
+    lowered = hostname.lower()
+    return lowered in {"localhost", "localhost.localdomain"} or lowered.endswith(".localhost")
+
+
+def _ip_literal(hostname: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        return ipaddress.ip_address(hostname.strip("[]"))
+    except ValueError:
+        return None
+
+
+def _ip_address_is_internal(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(
+        (
+            address.is_private,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_multicast,
+            address.is_reserved,
+            address.is_unspecified,
+        )
+    )
+
+
+def _host_matches_allowed(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:
+    for allowed in allowed_hosts:
+        if allowed.startswith("."):
+            suffix = allowed[1:]
+            if hostname == suffix or hostname.endswith(allowed):
+                return True
+            continue
+        if hostname == allowed:
+            return True
+    return False
 
 
 def _agentsearch_results(payload: dict[str, Any]) -> list[dict[str, Any]]:

@@ -7,6 +7,7 @@ BUG-542 处理 Research Assistant 的 `external_research` 当前只能返回 det
 - L1 联网搜索：本地自托管 AgentSearch（SearXNG + FastAPI 抽取一体）。
 - L2 论文搜索：Semantic Scholar API 为主，arXiv API 兜底。
 - L3 正文抽取：AgentSearch `/read` 优先；AgentSearch 不可用时，用 `httpx` 拉取网页并交给本地 `trafilatura` 抽取。
+- Local trafilatura fallback is SSRF-guarded: default RA_LOCAL_EXTRACT_ALLOWED_HOSTS is empty, so fallback performs no direct page fetch unless operators explicitly allow public hosts.
 - 默认行为：未配置或 `RA_EXTERNAL_RESEARCH_PROVIDER=offline` 时继续使用 `DeterministicExternalResearchProvider`。
 
 ## 2. 接口契约
@@ -63,6 +64,7 @@ BUG-542 处理 Research Assistant 的 `external_research` 当前只能返回 det
 ```env
 RA_EXTERNAL_RESEARCH_PROVIDER=offline
 RA_AGENTSEARCH_BASE_URL=http://127.0.0.1:3939
+RA_LOCAL_EXTRACT_ALLOWED_HOSTS=
 RA_PAPER_PROVIDER=semantic_scholar
 S2_API_KEY=
 ```
@@ -74,6 +76,8 @@ S2_API_KEY=
 - 搜索失败（timeout、connection refused、HTTP 4xx/5xx、JSON/XML schema invalid）：返回空 list，并在 provider `last_failure()` 记录 `reason_code/context`。
 - router 在空结果时将 `reason_codes/status/warnings` 放进响应，使上层 no-data guard 可诚实报告“无对应数据源”。
 - `fetch_extract` 的 AgentSearch 抽取失败先记录 `AGENTSEARCH_EXTRACT_REQUEST_FAILED`，再走本地 `trafilatura`；本地也失败时返回空 preview 的 `ExtractedEvidence`，`detail_ref.reason_code` 明确失败原因。
+- fetch_extract local fallback SSRF guard: no allowlist or internal hosts return explicit reason_code without direct HTTP fetch.
+- Local trafilatura fallback rejects wildcard allowlists, localhost/private/reserved IPs, URL userinfo, non-http(s), non-80/443 ports, and hosts outside RA_LOCAL_EXTRACT_ALLOWED_HOSTS; failures stay loud via LOCAL_TRAFILATURA_* reason codes.
 
 ## 6. Stub 守卫兼容
 

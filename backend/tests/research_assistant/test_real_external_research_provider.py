@@ -27,10 +27,16 @@ def _client(handler: Any) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), base_url="http://mock.local")
 
 
-def _provider(handler: Any, *, paper_provider: str = SEMANTIC_SCHOLAR_PROVIDER) -> RealExternalResearchProvider:
+def _provider(
+    handler: Any,
+    *,
+    paper_provider: str = SEMANTIC_SCHOLAR_PROVIDER,
+    local_extract_allowed_hosts: tuple[str, ...] = (),
+) -> RealExternalResearchProvider:
     return RealExternalResearchProvider(
         agentsearch_base_url="http://agentsearch.local",
         paper_provider=paper_provider,
+        local_extract_allowed_hosts=local_extract_allowed_hosts,
         http_client=_client(handler),
     )
 
@@ -232,7 +238,7 @@ def test_real_fetch_extract_agentsearch_503_uses_trafilatura_local_fallback(monk
         return httpx.Response(200, text="<html><title>Local Article</title><body>Article</body></html>")
 
     monkeypatch.setattr(importlib, "import_module", fake_import)
-    provider = _provider(handler)
+    provider = _provider(handler, local_extract_allowed_hosts=("research.example.net",))
     extract = provider.fetch_extract("https://research.example.net/article", max_chars=500)
 
     assert calls == ["/read", "/article"]
@@ -240,6 +246,43 @@ def test_real_fetch_extract_agentsearch_503_uses_trafilatura_local_fallback(monk
     assert extract.title == "Local Article"
     assert "Locally extracted text" in extract.content_preview
     assert extract.detail_ref["fallback_from"] == "agentsearch_extract"
+
+
+def test_real_fetch_extract_trafilatura_fallback_requires_host_allowlist() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/read":
+            return httpx.Response(503, json={"error": "unavailable"})
+        raise AssertionError("local fallback must not fetch when host is not allow-listed")
+
+    provider = _provider(handler)
+    extract = provider.fetch_extract("https://research.example.net/article", max_chars=500)
+
+    assert calls == ["/read"]
+    assert extract.provider == "local_trafilatura_extract"
+    assert extract.content_preview == ""
+    assert extract.detail_ref["reason_code"] == "LOCAL_TRAFILATURA_HOST_NOT_ALLOWED"
+    assert provider.last_failure("fetch_extract")["reason_code"] == "LOCAL_TRAFILATURA_HOST_NOT_ALLOWED"
+
+
+def test_real_fetch_extract_trafilatura_fallback_rejects_internal_hosts() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path == "/read":
+            return httpx.Response(503, json={"error": "unavailable"})
+        raise AssertionError("local fallback must not fetch internal hosts")
+
+    provider = _provider(handler, local_extract_allowed_hosts=("localhost",))
+    extract = provider.fetch_extract("http://localhost/admin", max_chars=500)
+
+    assert calls == ["/read"]
+    assert extract.content_preview == ""
+    assert extract.detail_ref["reason_code"] == "LOCAL_TRAFILATURA_INTERNAL_HOST_FORBIDDEN"
+    assert provider.last_failure("fetch_extract")["reason_code"] == "LOCAL_TRAFILATURA_INTERNAL_HOST_FORBIDDEN"
 
 
 def test_real_search_web_timeout_returns_empty_with_reason_code() -> None:

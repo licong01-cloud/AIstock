@@ -24,9 +24,12 @@ AIstock `RealExternalResearchProvider` expects the AgentSearch FastAPI service t
 ```env
 RA_EXTERNAL_RESEARCH_PROVIDER=real
 RA_AGENTSEARCH_BASE_URL=http://127.0.0.1:3939
+RA_LOCAL_EXTRACT_ALLOWED_HOSTS=
 RA_PAPER_PROVIDER=semantic_scholar
 S2_API_KEY=
 ```
+
+Leave RA_LOCAL_EXTRACT_ALLOWED_HOSTS empty unless AgentSearch /read is unavailable and operators explicitly approve local trafilatura fallback for specific public hosts; wildcard, localhost/private/reserved IPs, userinfo, and non-80/443 ports are rejected.
 
 5. Install backend dependencies from the PR dependency gate, then restart backend 8001.
 

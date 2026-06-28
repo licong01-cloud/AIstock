@@ -34,16 +34,22 @@
       "timestamp": "2026-06-28T13:51:29.659356Z"
     },
     {
-      "timestamp": "2026-06-28T13:55:00Z",
-      "actor": "codex",
       "action": "enrich_bug_scope",
-      "note": "Expanded allowed_write_scope for RA real external research provider; production_backend_dependency_gate=pending for trafilatura local extraction fallback."
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope for RA real external research provider; production_backend_dependency_gate=pending for trafilatura local extraction fallback.",
+      "timestamp": "2026-06-28T13:55:00Z"
     },
     {
-      "timestamp": "2026-06-28T14:25:00Z",
-      "actor": "codex",
       "action": "expand_dependency_scope",
-      "note": "Added backend dependency manifests to allowed_write_scope for httpx/trafilatura production install gate."
+      "actor": "codex",
+      "note": "Added backend dependency manifests to allowed_write_scope for httpx/trafilatura production install gate.",
+      "timestamp": "2026-06-28T14:25:00Z"
+    },
+    {
+      "action": "ssrf_guard_local_extract_fallback",
+      "actor": "codex",
+      "note": "Local trafilatura fallback is SSRF-guarded; RA_LOCAL_EXTRACT_ALLOWED_HOSTS defaults empty and must list approved public hosts before direct local fetch_extract fallback is used.",
+      "timestamp": "2026-06-28T15:05:00Z"
     }
   ],
   "evidence_uris": [],
@@ -60,6 +66,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "pending",
+  "production_backend_dependency_note": "trafilatura==2.1.0 is required for the local fetch_extract fallback when RA_EXTERNAL_RESEARCH_PROVIDER=real; httpx==0.28.1 and trafilatura==2.1.0 are pinned in backend/requirements.txt for production backend installs. RA_LOCAL_EXTRACT_ALLOWED_HOSTS defaults empty; set explicit public hosts only if using the local trafilatura fallback.",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Call /api/v1/external-research/search-web or search-papers in current default runtime; results are deterministic offline/stub data and never hit real providers.",
@@ -82,6 +89,7 @@
     "fingerprint": "0a8a6055480338f3c73cf268",
     "source_event_id": "FE-20260628-0a8a60554803"
   },
+  "ui_issue": false,
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -94,7 +102,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "ui_issue": false,
-  "production_backend_dependency_note": "trafilatura==2.1.0 is required for the local fetch_extract fallback when RA_EXTERNAL_RESEARCH_PROVIDER=real; httpx==0.28.1 and trafilatura==2.1.0 are pinned in backend/requirements.txt for production backend installs."
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
