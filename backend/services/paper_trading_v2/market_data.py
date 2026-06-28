@@ -869,8 +869,17 @@ def _parse_tdx_intraday_centisecond_time(value: str, *, trade_date: date) -> dat
         centisecond = int(value[6:8])
     else:
         raise ValueError(f"unsupported TDX centisecond intraday timestamp length {len(value)}")
-    if hour > 23 or minute > 59 or centisecond > 99:
+    if hour > 23 or centisecond > 99:
         raise ValueError(f"invalid TDX centisecond intraday timestamp {value!r}")
+    if minute > 59:
+        if minute == 99 and second > 59:
+            # TDX quote ServerTime can use 99:SScc as a late-session sequence
+            # sentinel; treat only that narrow encoding as the 59th minute.
+            minute = 59
+            second = 0
+            centisecond = 0
+        else:
+            raise ValueError(f"invalid TDX centisecond intraday timestamp {value!r}")
     if second > 59:
         # Some TDX servers expose HHMM plus a non-clock intra-minute sequence
         # in the final four digits (for example 10158777 at 10:15). The minute
