@@ -126,6 +126,29 @@
 - T9-6c:废除 `natural_language_triggers` 作为触发主路径(降为可选 seed 提示,或删);新增 skill 进 catalog 即自动进可选集。
 - T9-6d:回归断言 —— ① skill 换措辞(不含原关键词)LLM 仍能基于语义选中;② 选中 skill 必出 Action Proposal 且未经审批不执行(审批门未削);③ 新增一个 mock skill 进 catalog,无需写关键词即被 LLM 可见可选。
 
+## 7bis. T9-7:能力/记忆调用去机械化 — 区分"能力询问"与"执行请求",自然语言触发记忆
+
+### 7bis.0 动因(2026-06-29 真实失败实证)
+用户问"**你是否可以记住我的待办**"(纯能力询问,尚未给内容),RA 回复:中英文混杂 + 机械追问"请提供 exact todo item / subject_key / memory_type / 需要你审批确认"。这是一次典型失败,根因经代码核实是**两个去类型化缺陷叠加**:
+
+1. **能力询问被当成执行请求**:用户问"能不能记住"(询问功能是否存在),框架按 `memory.write_candidate` capability 的 `input_slots.required:[memory_type, subject_key, title]`(`runtime_context.yaml:815`)机械反问缺失参数,把"问功能"误判成"立即写入"。
+2. **记忆写入靠英文关键词触发**:`MemoryCurator._extract_candidates`(`memory_curator.py:118-182`)只对**用户消息**做固定英文前缀扫描(`"project directive:"` / `"prefer"` / `"habit:"` / `"always/must"`)才提炼记忆候选。用户用**中文自然语言**"帮我记住待办"**不命中任何关键词 → 根本不会被记**;且只看用户消息、丢弃助手回复。
+3. 附带:反问用了内部字段名(`subject_key`/`memory_type`)甩给用户,违反"禁内部行话"护栏精神;中英混杂违反全中文要求。
+
+这三条 T9-1..T9-6 均未覆盖,补为 T9-7。
+
+### 7bis.1 目标态
+- **能力询问 ≠ 执行请求**:用户问"能不能/支不支持 X"时,LLM 自主回答"能,你把内容给我我就记",**不机械追问内部参数、不触发写操作**。是否执行由 LLM 基于对话判断,不由框架按 `input_slots.required` 代决。
+- **`input_slots.required` 不作为框架强制追问依据**:LLM 拿到工具 schema 后**自己判断缺什么、用人话问**。缺内容就用中文人话问"要记什么",**绝不**把 `subject_key`/`memory_type` 这类内部字段名暴露给用户(由反幻觉"禁内部行话"护栏兜底)。
+- **记忆触发去关键词化**:记忆提炼不再靠 `"prefer"/"habit:"/"always"` 等固定英文前缀。改为**机制/语义驱动** —— 由 LLM 在对话中识别"用户表达了需长期记住的偏好/习惯/项目指令/待办"并发起记忆候选(经审批门),中文自然语言"帮我记住…/我习惯…/这个项目要…"都能触发,不靠魔法词。curator 的关键词规则降为可选 seed 提示,不作为唯一提炼路径。
+- **审批门/scope 不动(护栏)**:① project directive 仍走草稿+审批;② personal preference/habit 仍可直接 approved + resident 常驻;③ MCP 写 approved / high risk 仍必经 `_consume_approval_gate`。改的是"怎么触发和追问",不是"写入授权策略"。
+
+### 7bis.2 实施(排在 A 组之后,可与 T9-6 并列,单独 PR)
+- T9-7a:capability 调用层区分 inquiry vs execute —— 能力询问不触发 `input_slots.required` 追问、不发起写操作;由 LLM 决定是否执行。
+- T9-7b:缺参数时改为 LLM 用人话询问(基于工具 schema 的 description),禁暴露内部字段名;接反幻觉"禁内部行话"+ 全中文。
+- T9-7c:记忆提炼去关键词化 —— LLM 语义识别"需长期记住"的表达(中文自然语言)发起记忆候选,curator 关键词规则降为可选 seed;助手回复也可参与提炼(不止用户消息),但写入仍经审批门。
+- T9-7d:回归断言 —— ① 问"能不能记住 X"→ 答"能,给我内容"不追问内部字段不写库;② 中文"帮我记住明天要复盘"→ 能正确发起记忆候选(走审批);③ 缺内容追问用中文人话无 subject_key/memory_type 字样;④ 审批门/scope 写入策略未变(project directive 仍 draft+审批)。
+
 ## 8. 产品对比与取长补短(附录,佐证选型)
 | 维度 | Claude Code | OpenClaw | RA 现状 | T9 目标 |
 |---|---|---|---|---|
