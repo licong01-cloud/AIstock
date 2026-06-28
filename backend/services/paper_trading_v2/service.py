@@ -220,12 +220,6 @@ class PaperTradingV2PortfolioService:
     ) -> PaperPortfolio:
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
-        self.asset_eligibility_service.require_eligible(record)
-        if not manifest.manifest_sha256:
-            raise PackageAssetInvalidError(
-                "paper portfolio requires frozen strategy package manifest",
-                context={"package_id": package_id},
-            )
         # R-Q9 D1/D3: validate broker_backend up-front (typed error, fail-fast).
         # Engine section 3.6.4 strong binding is re-checked inside PaperPortfolio model
         # validator; this layer additionally restricts to Paper-v2-creatable
@@ -237,6 +231,12 @@ class PaperTradingV2PortfolioService:
                     "broker_backend": broker_backend,
                     "allowed": sorted(PAPER_V2_CREATABLE_BROKER_BACKENDS),
                 },
+            )
+        self.asset_eligibility_service.require_eligible(record, broker_backend=broker_backend)
+        if not manifest.manifest_sha256:
+            raise PackageAssetInvalidError(
+                "paper portfolio requires frozen strategy package manifest",
+                context={"package_id": package_id},
             )
         assert_broker_market_source_match(broker_backend, data_source)
         # OPEN-EXT-3 stub - broker_compatibility manifest field not yet
