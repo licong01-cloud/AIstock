@@ -56,6 +56,7 @@ QE单次实验 ✅ → 自定义演进 ✅ → 多Alpha combine回测 ✅ → �
 | F-007 | evolve-wizard 彻底退役 | §4.2 |
 | F-008 | diagnostics 整改重定向 combine 对象后保留 | §4.3 |
 | F-009 | orthogonality 保留并内嵌 combine 详情 | §4.4 |
+| F-010 | 统一包抽象核实 + 多Alpha 一步导出 parity（S1） | §3.8 |
 
 ## 1. 审计方法与证据基线（Background 证据）
 
@@ -147,7 +148,7 @@ QE单次实验 ✅ → 自定义演进 ✅ → 多Alpha combine回测 ✅ → �
 
 ### 2.9 次要结构问题（非阻断）
 
-1. **`enable-selection`/`enable-paper` 是无操作**：只做 eligibility 校验，不落库状态。`SELECTION_ENABLED/PAPER_ENABLED/PAPER_RUNNING/PASSED/FAILED` 五枚举是**不可达死状态**（`service.py:399` 短路）。"启用"是一次查询而非持久生命周期。
+1. **`enable-selection`/`enable-paper` 的生命周期落库需复核（修正前述探子结论）**：DB 实测单Alpha 包**确有** `SELECTION_ENABLED`/`PAPER_ENABLED` 状态记录（如 `pkg_5a5ccb56...`=PAPER_ENABLED），故"这些是不可达死状态"对单Alpha **不成立**。待批 1/批 2 核实多Alpha 是否同样可达 parity；探子早期"死状态"判断仅对部分 transition 路径成立，以 DB 实测为准。
 2. **状态机封顶 `BACKTEST_APPROVED`**：governance promote 上不去更高态。
 3. **live rolling 权重不支持**：`weight_policy.mode='live_rolling_ic_weighted'` 无条件拒绝（"before P1 weight service"）。
 4. **pred.pkl 上传 env 门控**：最脆弱的 join。
@@ -249,6 +250,54 @@ asset_eligibility._multi_alpha_runtime_blockers(manifest, *, venue, admission_re
 
 ---
 
+### 3.8 统一包抽象核实 + 多Alpha 一步导出 parity（F-010 / S1）
+
+> 目标（用户要求）：未来在模拟盘、选股、荐股中，**单Alpha 与多Alpha 是同一种策略包**，可**直接从 QE 单Alpha 实验或多Alpha 实验导出成策略包**，然后进入模拟盘/选股/荐股。
+
+#### 3.8.1 核实结论：包抽象**已经统一**（架构层无需重做）
+
+代码核实（`backend/services/strategy_package/models.py:234-310`）：单/多Alpha 共用**同一 `StrategyPackageManifest`**，由 `alpha_mode ∈ {single_alpha, multi_alpha}` 判别：
+
+- `alpha_components`：单 = 恰 1 个；多 = ≥2 个（`:271-274`）。
+- `alpha_combination_policy`：单 = `identity`(权重恒 1.0，`:287-293`)；多 = `ic_weighted` 等。
+- 单/多落**同一张 `strategy_pkg.package` 表**，同一 manifest 冻结/sha256 机制。
+
+消费层对 alpha_mode **基本无感**（F-008 单 `package_id` 契约）：
+
+- paper `day_runner.py`：**0 处** alpha_mode 分支。
+- `selection_center/service.py`：`SelectionMode.SINGLE_PACKAGE` 是"选股跑几个包"，**与 alpha_mode 无关**；多Alpha 父包被当普通单包跑（`:159/792/939/1213`）。
+- advisory：alpha 无关（零 multi_alpha 引用）。
+- **唯一真分支 = `strategy_package/runtime.py` 信号快照层 7 行**（`:136/197/268-286`），把 multi_alpha 派给 `MultiAlphaLivePredictionProvider`，下游执行层只收 `(instrument, score)`。这是**有意的统一接缝**，非两套并行。
+
+→ **"模拟盘/选股/荐股把单与多当同一种包"在架构层已成立**，不需要拆双轨。距用户完整愿景的缺口集中在**导出对称性**与**准入打通**。
+
+#### 3.8.2 缺口：导出不对称（S1 核心）
+
+| 维度 | 单Alpha | 多Alpha（现状） |
+|---|---|---|
+| 导出调用 | 一次 `from-qe-experiment` / `from-qe-evolution-loop` | 三步：①每条腿先单独建 single_alpha 包 → ②要有 combine-backtest run → ③`from-multi-alpha-combine-run` 还须手传 `component_package_ids` |
+| SourceType 血缘 | `QE_EXPERIMENT`/`QE_EVOLUTION_LOOP`（`models.py:13-16`） | **枚举无 `multi_alpha_combine_run` 值** |
+| UI 导出入口 | 实验页有导出 | **无**（combine 前端零导出按钮，多Alpha 导出 MCP-only） |
+
+术语对齐：当前架构里**"多Alpha 实验"= combine-backtest run**（旧 `alpha_mode=multi` 元模型实验已废弃、无导出路径，见 §4）。故"从多Alpha 实验导出" 实指"从 combine-backtest run 导出"。
+
+#### 3.8.3 S1 设计（多Alpha 一步导出 parity）
+
+| # | 组件 | 类型 | 说明 |
+|---|---|---|---|
+| S1-1 | `from-multi-alpha-combine-run` 自动建 component 包 | 改 promotion 服务 | 由 roster 各腿 `seed_run_ids` **自动物化/复用** component single_alpha 包，免操作者手传 `component_package_ids`；已存在等价 frozen 单包则复用（按 seed 覆盖 + sha 匹配），缺失则自动建。幂等。 |
+| S1-2 | `SourceType.MULTI_ALPHA_COMBINE_RUN` | 改枚举 + 血缘 | 正式血缘值，`source_id` = combine run_id；manifest.source 如实记录，便于审计与 UI 反查。 |
+| S1-3 | combine-backtest 详情页"导出为策略包"按钮 | 前端 | 与单Alpha 实验导出**对称**；选 scheme(ic_weighted)+runtime_variant → 调 `from-multi-alpha-combine-run`。 |
+| S1-4 | 统一导出入口语义 | UI/MCP | "导出策略包"入口并列两个 source：QE 单Alpha 实验 / 多Alpha combine run；导出后均落同一包列表、同一后续流程（选股/荐股/模拟盘）。 |
+
+兼容性保证：S1 **不改 manifest 结构**（已统一）、**不改 F-008 契约**、**不改单Alpha 导出路径**（仅补多Alpha 对称入口）。S1-1 自动建包须 fail-loud（seed 缺失/sha 漂移/腿不可解析 → 具体 reason_code，禁静默兜底）。
+
+#### 3.8.4 S1 与批 1 的关系（可并行）
+
+- 批 1（C1–C5，已派 Codex）：改 `paper_admission`/`asset_eligibility`/`paper_trading_v2`，打通**准入**。
+- S1（F-010）：改 `multi_alpha_promotion`/`SourceType`/combine 前端，打通**导出对称**。
+- 两者**无文件冲突**，可并行。先后顺序不限；完整愿景 = 批 1（进得去）+ S1（导得出且对称）+ 批 2（生命周期 parity）。
+
 ## 4. 设计：三个多Alpha UI 页面处置
 
 ### 4.1 处置依据
@@ -344,6 +393,7 @@ asset_eligibility._multi_alpha_runtime_blockers(manifest, *, venue, admission_re
 | F-007 | §4.2 | evolve-wizard 绑死架构（DB 04-26 零新增、0 下游包），退役动作清单已定 | done | 后端 alpha_mode=multi 分支本轮不删（存量只读），approved deviation（用户指定本轮只断 UI 入口） |
 | F-008 | §4.3 | diagnostics 诊断 UI 框架有价值，整改重定向 combine 对象（方案 A 推荐/B 保守）已定 | done | - |
 | F-009 | §4.4 | orthogonality 服务当前 combine 主线（06-19 在用），保留 + 可选内嵌 combine 详情 | done | - |
+| F-010 | §3.8；`models.py:234-310`（统一 manifest）、`runtime.py:136-286`（唯一接缝）、`models.py:13-16`（SourceType 待补）、combine 前端无导出按钮 | 核实单/多共用同一 manifest+表+消费契约，包抽象已统一；S1-1~S1-4 设计补多Alpha 一步导出 parity | done | - |
 
 
 - 闸门写死：`backend/services/strategy_package/multi_alpha_promotion.py:37,255,369,912`
