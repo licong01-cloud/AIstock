@@ -1246,7 +1246,10 @@ class TushareSyncEngine:
                 source_dataset=dataset,
             )
             result: Dict[str, Any] = {"marked_dirty": marked}
-            result["ensure"] = service.ensure_st_pit_universe(strict=False)
+            result["ensure"] = service.ensure_st_pit_universe(
+                strict=False,
+                refresh_policy="source_fingerprint",
+            )
             return {"ok": True, **result}
         except Exception as exc:  # noqa: BLE001
             # Source sync success must not be turned into a fake failure. The
