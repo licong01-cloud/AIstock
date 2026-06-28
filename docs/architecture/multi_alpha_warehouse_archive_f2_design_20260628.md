@@ -105,7 +105,7 @@ macb run succeeded/partial_failed/failed
   - PK `(run_id, leg_id, source_seq)`;`seed_ref`(原始 seed 标识,如 `qear_run_*` 或 `qe_*_Lx`)、`seed_ref_kind`(`archive_run_id` / `evolution_loop_id`,兼容两种标识体系)、**精确来源**:`source_experiment_id`、`source_task_id`、`source_loop_id`、`source_loop_index`、`source_run_type`(evolution_loop/single_experiment)、`source_model_type`、`source_factor_set_hash`、`resolved bool`、`resolve_method`(archive_run_id 直查 / evolution_loop_id 解析)、`resolve_note`(未解析时记原因)。
   - **设计要点**:每条腿的每个 seed 都必须能回答"来自哪个 QE 实验(experiment_id)、哪个 loop(loop_id+index)、哪种实验类型"。这是单实验 / 自定义演进 / 多 Alpha 三层全链路追踪与分析的数据基础。seed 标识有两种格式(实测):`qear_run_<hash>`→直查 `qe_archive.run`;`qe_<task>_L<idx>`→解析 task+index 后查 `qe_evolution_loops`/`qe_archive.run`。两种都必须解析到 (experiment_id, loop_id, loop_index),解析失败显式记 `resolved=false`+reason,不静默。
 - `qe_archive.multi_alpha_scheme`(叠加方式 + 指标,每 run × scheme 一行)
-  - PK `(run_id, weighting_scheme)`;`weights_json`、`per_window_weights_json`、`cagr/max_drawdown/sharpe/calmar/topk_return_20/topk_hit_rate_20/turnover`、`vs_baseline_sharpe_delta/vs_baseline_calmar_delta`、`pred_persisted/skipped/skipped_reason`、`is_best bool`(succeeded 内最优)。
+  - PK `(run_id, weighting_scheme)`;`scheme_algorithm`(算法语义: equal=均分/ic_weighted=IC正比/risk_parity=波动倒数/orthogonality_aware=正交加权/rank_fusion=排名融合)、`weights_json`(每腿静态权重数值)、`per_window_weights_json`(滚动权重轨迹)、`cagr/max_drawdown/sharpe/calmar/topk_return_20/topk_hit_rate_20/turnover`、`vs_baseline_sharpe_delta/vs_baseline_calmar_delta`、`pred_persisted/skipped/skipped_reason`、`is_best bool`(succeeded 内最优)。
 - `qe_archive.multi_alpha_loo`(腿边际,每 run × scheme × dropped_leg 一行)
   - `(run_id, weighting_scheme, dropped_leg_id)`;`marginal_cagr/sharpe/calmar`。
 - `qe_archive.run` 头:为每个 macb run 写一行 `run_type='multi_alpha_combine'`、`source_system='multi_alpha'`、`status` 映射(复用现有列;不破坏 evolution_loop/single_experiment)。
@@ -122,7 +122,7 @@ macb run succeeded/partial_failed/failed
 > **架构边界(用户明确)**:UI 读 **QE 多 Alpha 自己的业务配置表**(`strategy_pkg.multi_alpha_combine_backtest_*` + 腿来源解析),**不读数仓**。数仓**不参与实验构建**,仅用于事后分析统计。两者职责严格分离。
 - macb 详情页(承接 `multi_alpha_combine_backtest_ui_reuse_design`):每个 loop(=窗口×topk run)可点开详情,展示:
   - **每腿**:leg_id、因子集(factor_names/hash)、模型类型、训练窗口、**精确来源(来自哪个 QE 实验 experiment_id + 哪个 loop_id/index + 实验类型)**、seed 数量、provenance 解析状态。
-  - **叠加方式**:weighting_scheme、静态权重、per_window 滚动权重(图)、normalize/walk_forward。
+  - **权重分配方式 + 配置(用户硬要求,必查必存)**:weighting_scheme(equal/ic_weighted/risk_parity/orthogonality_aware/rank_fusion 及其算法语义说明)、**每腿静态权重数值**(weights_json,如 a1=0.6967/fund=0.3033)、**per_window 滚动权重轨迹**(per_window_weights_json,185 时点 {weights, train_start/end, apply_date},图形化展示权重随窗口演变)、normalize_method(zscore)、walk_forward 配置(window/min_periods/expanding)、baseline_leg_id。**这些既要 UI 详情可查,也必须进数仓(`multi_alpha_scheme` 表)永久留存**。
   - **失败可见**:status(含 partial_failed)、reason(失败子任务 + stderr_tail 摘要),消除"看似全失败"。
 - **数据源**:UI 一律读业务表 + 实时来源解析(业务侧轻量解析 seed→experiment/loop);数仓物化是**事后分析旁路**,UI 不依赖、不回退到数仓。归档失败不影响 UI 展示。
 
@@ -148,6 +148,7 @@ macb run succeeded/partial_failed/failed
 | F-014 | QE 隔离零回归：不破坏 evolution_loop/single_experiment 归档与 paper telemetry |
 | F-015 | **腿来源精确溯源入仓**:每 seed 解析到 (experiment_id, loop_id, loop_index, run_type),兼容 `qear_run_*` 与 `qe_*_Lx` 两种标识,解析失败显式记录 |
 | F-016 | **三层全链路追踪分析面**:基于 leg_source 关联单实验 / 自定义演进 / 多 Alpha,支持「某 loop 被哪些 roster 复用」「某 roster 各腿溯源」双向查询 |
+| F-017 | **权重分配方式 + 配置 UI 可查且入仓**:weighting_scheme 算法语义 + 每腿静态权重数值 + per_window 滚动权重轨迹 + normalize/walk_forward/baseline 在 UI 详情可查,且全部进 `multi_alpha_scheme` 数仓表永久留存 |
 
 ## 3B. 实施方案(Implementation Plan,分阶段)
 
@@ -161,7 +162,7 @@ macb run succeeded/partial_failed/failed
 7. 隔离验证：evolution_loop/single_experiment/paper telemetry 零回归（F-014）。
 
 **Phase B — UI 详情(读业务表) + 数仓分析面（目标 3）**
-8. UI 腿级详情面板（F-010），**读 macb 业务表 + 实时来源解析,不读数仓**。
+8. UI 腿级详情面板（F-010/F-017），**读 macb 业务表 + 实时来源解析,不读数仓**；展示权重分配方式 + 每腿静态权重 + per_window 滚动权重轨迹图 + normalize/walk_forward/baseline。
 9. 数仓跨实验分析 SQL/视图（F-011）+ 三层全链路追踪双向查询（F-016)。
 
 **Phase C — 失败治理收口（目标 1 长期解）**
@@ -209,6 +210,7 @@ allowed_write_scope:
 | F-014 | 实现阶段填 | L3 隔离断言 | ready | - |
 | F-015 | 实现阶段填 | L5 两种 seed 格式溯源对账 | ready | - |
 | F-016 | 实现阶段填 | L2 双向追踪查询 | ready | - |
+| F-017 | 实现阶段填 | L4 权重展示截图 + L5 数仓权重对账 | ready | - |
 
 ## 6. 回滚 / 发布(Rollout / Rollback)
 - **发布顺序**:Phase A（schema+归档）→ B（UI/分析）→ C（失败治理）。每 Phase 独立 PR + 用户确认后合 main。
