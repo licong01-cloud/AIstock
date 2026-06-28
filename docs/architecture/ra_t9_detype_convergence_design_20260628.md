@@ -126,6 +126,56 @@
 - T9-6c:废除 `natural_language_triggers` 作为触发主路径(降为可选 seed 提示,或删);新增 skill 进 catalog 即自动进可选集。
 - T9-6d:回归断言 —— ① skill 换措辞(不含原关键词)LLM 仍能基于语义选中;② 选中 skill 必出 Action Proposal 且未经审批不执行(审批门未削);③ 新增一个 mock skill 进 catalog,无需写关键词即被 LLM 可见可选。
 
+## 7bis. T9-7:能力/记忆调用去机械化 — 区分"能力询问"与"执行请求",自然语言触发记忆
+
+### 7bis.0 动因(2026-06-29 真实失败实证)
+用户问"**你是否可以记住我的待办**"(纯能力询问,尚未给内容),RA 回复:中英文混杂 + 机械追问"请提供 exact todo item / subject_key / memory_type / 需要你审批确认"。这是一次典型失败,根因经代码核实是**两个去类型化缺陷叠加**:
+
+1. **能力询问被当成执行请求**:用户问"能不能记住"(询问功能是否存在),框架按 `memory.write_candidate` capability 的 `input_slots.required:[memory_type, subject_key, title]`(`runtime_context.yaml:815`)机械反问缺失参数,把"问功能"误判成"立即写入"。
+2. **记忆写入靠英文关键词触发**:`MemoryCurator._extract_candidates`(`memory_curator.py:118-182`)只对**用户消息**做固定英文前缀扫描(`"project directive:"` / `"prefer"` / `"habit:"` / `"always/must"`)才提炼记忆候选。用户用**中文自然语言**"帮我记住待办"**不命中任何关键词 → 根本不会被记**;且只看用户消息、丢弃助手回复。
+3. 附带:反问用了内部字段名(`subject_key`/`memory_type`)甩给用户,违反"禁内部行话"护栏精神;中英混杂违反全中文要求。
+
+这三条 T9-1..T9-6 均未覆盖,补为 T9-7。
+
+### 7bis.1 目标态
+- **能力询问 ≠ 执行请求**:用户问"能不能/支不支持 X"时,LLM 自主回答"能,你把内容给我我就记",**不机械追问内部参数、不触发写操作**。是否执行由 LLM 基于对话判断,不由框架按 `input_slots.required` 代决。
+- **`input_slots.required` 不作为框架强制追问依据**:LLM 拿到工具 schema 后**自己判断缺什么、用人话问**。缺内容就用中文人话问"要记什么",**绝不**把 `subject_key`/`memory_type` 这类内部字段名暴露给用户(由反幻觉"禁内部行话"护栏兜底)。
+- **记忆触发去关键词化**:记忆提炼不再靠 `"prefer"/"habit:"/"always"` 等固定英文前缀。改为**机制/语义驱动** —— 由 LLM 在对话中识别"用户表达了需长期记住的偏好/习惯/项目指令/待办"并发起记忆候选(经审批门),中文自然语言"帮我记住…/我习惯…/这个项目要…"都能触发,不靠魔法词。curator 的关键词规则降为可选 seed 提示,不作为唯一提炼路径。
+- **审批门/scope 不动(护栏)**:① project directive 仍走草稿+审批;② personal preference/habit 仍可直接 approved + resident 常驻;③ MCP 写 approved / high risk 仍必经 `_consume_approval_gate`。改的是"怎么触发和追问",不是"写入授权策略"。
+
+### 7bis.2 实施(排在 A 组之后,可与 T9-6 并列,单独 PR)
+- T9-7a:capability 调用层区分 inquiry vs execute —— 能力询问不触发 `input_slots.required` 追问、不发起写操作;由 LLM 决定是否执行。
+- T9-7b:缺参数时改为 LLM 用人话询问(基于工具 schema 的 description),禁暴露内部字段名;接反幻觉"禁内部行话"+ 全中文。
+- T9-7c:记忆提炼去关键词化 —— LLM 语义识别"需长期记住"的表达(中文自然语言)发起记忆候选,curator 关键词规则降为可选 seed;助手回复也可参与提炼(不止用户消息),但写入仍经审批门。
+- T9-7d:回归断言 —— ① 问"能不能记住 X"→ 答"能,给我内容"不追问内部字段不写库;② 中文"帮我记住明天要复盘"→ 能正确发起记忆候选(走审批);③ 缺内容追问用中文人话无 subject_key/memory_type 字样;④ 审批门/scope 写入策略未变(project directive 仍 draft+审批)。
+
+## 7ter. T9-8:记忆召回去关键词化 — 借鉴 Claude Code"索引常驻 + LLM 自选展开"(存储不变)
+
+### 7ter.0 动因与定位
+用户问:Claude Code 的"MEMORY.md 索引 + 每条 detail MD"方式 vs RA 的"DB 树状结构"哪个更适合长期记忆?结论(已代码核实双方机制):
+- **存储层保留 RA 的 DB 树状,不换文件**。理由:RA 是金融生产助手,需要审批门(draft/approved)、审计(memory_access_log/use_count)、scope 隔离(project/personal)、版本失效(valid_to/supersedes)、知识图遍历(relations 表)、多会话并发持久 —— 这些 DB 行天然支持,memory.md 文件模型靠 git 兜不住。这是 RA 相对 Claude Code 的护栏优势,不丢。
+- **召回层借鉴 Claude Code 的精髓**:Claude 的关键不是"用文件",而是 **L1 轻量索引常驻 + L2 命中才展开详情 + LLM 自主决定展开哪条**(渐进式披露)。RA 现在召回靠 `_TREE_KEYWORDS`(memory_tree.py:23-31,7 组关键词→分支)seed + 前缀匹配 —— **关键词 seed 不命中就漏召回**,正是 T9 要去的"按措辞分类"。
+- 定位:**存储不动(DB 树状),只改召回的"关键词驱动"为"LLM 自选驱动"**。是 DB 树状(存储)+ Claude 式 LLM 自选召回(检索逻辑)的组合,非二选一。T9-7 修记忆写入触发,T9-8 修记忆召回触发,合起来记忆链读写都去关键词化。
+
+### 7ter.1 现状(memory_tree.py 召回链,已核实)
+`select_memory_branches`(memory_tree.py:34-93):① `list_records` 拉 approved 记忆(确定性 SQL);② `_seed_branches`(:64)用 `_TREE_KEYWORDS` 关键词命中分支;③ `_matches_branch_or_query`(:65)按 seed 分支前缀 + 词项子串匹配;④ resident 强制注入(:55);⑤ importance/recency 打分 + token 预算截断(:70-71)。**漏召回风险**:用户措辞不含 `_TREE_KEYWORDS` 关键词 → seed 落空 → 相关记忆拉不进(除非 resident)。
+
+### 7ter.2 目标态(索引常驻 + LLM 自选展开)
+- **L1 记忆索引常驻**:每轮给 LLM 一份**轻量记忆树索引** —— branch 路径 + 每条 fact 的一句话摘要(title/前 N 字),覆盖该 namespace/scope 下全部 approved 记忆(或按 importance 取上限,token 可控)。类似 Claude Code 的 MEMORY.md 索引"每条一行"。
+- **L2 LLM 自选展开**:LLM 基于对话**自主判断**要展开哪几条 fact 的完整内容(通过一个确定性"展开记忆"调用按 memory_id/tree_path 拉全文),而非框架用关键词 seed 代选。展开是确定性 SQL 取数(无向量)。
+- **去关键词 seed**:`_TREE_KEYWORDS` 关键词→分支映射降为**可选提示**(或移除),召回相关性不再由关键词命中决定,改由"索引常驻 + LLM 自选 + resident 强制"三者。
+- **resident 不变**:personal directive/preference/habit 的 `resident=True` 仍每轮强制注入(等价 Claude"每会话先读"段),这是确定性护栏不动。
+- **存储/审批/审计/图/scope 全部不动**:DB 树状 schema、approval_status、memory_access_log、relations 图遍历、valid_to 失效、scope 隔离 —— 零改动。只改"哪些 fact 进上下文"的选择逻辑。
+
+### 7ter.3 不引入的东西(防误解,非新增开发项,仅澄清边界)
+- 不改存储为文件;不引入向量/embedding(索引是确定性 SQL 取 title/摘要,展开是确定性按 id 取全文)。
+
+### 7ter.4 实施(排在 A 组之后,可与 T9-6/T9-7 并列,单独 PR;只改 memory_tree.py + build_context_pack 召回侧 + 测试)
+- T9-8a:构造 L1 记忆索引(branch + fact 一句话摘要,按 scope/importance 控规模),常驻注入上下文。
+- T9-8b:提供确定性"展开记忆"调用(按 memory_id/tree_path 取全文),供 LLM 自选展开;接 use_count/last_used_at 审计(不变)。
+- T9-8c:`_TREE_KEYWORDS` seed 降为可选提示或移除;召回相关性改由索引常驻 + LLM 自选 + resident。
+- T9-8d:回归断言 —— ① 用户措辞不含任何 `_TREE_KEYWORDS` 关键词但语义相关 → 相关记忆仍能经"索引常驻 + LLM 自选展开"被用到(改前因 seed 落空而漏,改后不漏);② resident 记忆仍每轮强制注入;③ 存储/审批/审计/scope/图召回零行为变更(parity 测试);④ 不引入向量,展开为确定性取数;⑤ token 预算仍受控(索引轻量 + 按需展开)。
+
 ## 8. 产品对比与取长补短(附录,佐证选型)
 | 维度 | Claude Code | OpenClaw | RA 现状 | T9 目标 |
 |---|---|---|---|---|
