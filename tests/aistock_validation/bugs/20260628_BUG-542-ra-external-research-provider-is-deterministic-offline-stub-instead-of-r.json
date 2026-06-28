@@ -56,8 +56,8 @@
   "expected": "With RA_EXTERNAL_RESEARCH_PROVIDER=real and RA_AGENTSEARCH_BASE_URL configured, RA external_research uses AgentSearch for web/extract and Semantic Scholar/arXiv for papers; default offline remains deterministic stub; all network failures return empty results with explicit reason_code and no fabricated evidence.",
   "first_seen_at": "2026-06-28T13:51:29.659359Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8db58e29dc50497bc1c7fb094565f4b863ffe79b",
+  "fixed_at": "2026-06-29T00:00:00Z",
   "github_issue_number": 1700,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1700",
   "last_seen_at": "2026-06-28T13:51:29.659359Z",
@@ -80,7 +80,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],

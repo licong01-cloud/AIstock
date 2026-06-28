@@ -30,8 +30,8 @@
   "expected": "Any evidence-required answer containing an unnegated directional prediction is rejected regardless of question wording; negated non-predictions and historical factual restatements pass.",
   "first_seen_at": "2026-06-28T16:55:52.341502Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "de55b4a91604366efde2b4a9451a4423c288f196",
+  "fixed_at": "2026-06-29T00:00:00Z",
   "github_issue_number": 1708,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1708",
   "last_seen_at": "2026-06-28T16:55:52.341502Z",
@@ -54,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
