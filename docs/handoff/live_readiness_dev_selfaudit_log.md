@@ -81,3 +81,15 @@
 - Loud failure: PASS. Unknown/invalid/empty scenarios fail with explicit MINIQMT_SHADOW_SCENARIO_* reason codes; no fallback to delay.
 - Scope: PASS. Changes stay in scoped MiniQMT shadow/bridge/scheduler files, scoped tests, docs/handoff, and BUG JSON; no LocalSim, TDX, client.py/CompilerAdapter-B, D4 switch, service, DB, or DDL action was touched.
 - Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.
+
+## BUG-539 - 2026-06-28
+
+- B inert default: PASS. Non-EVENT_LOOP MiniQMT SIM scopes still use `MiniQMTExecutionBridge.submit_plan()`; regression monkeypatches `submit_event_loop_plan()` to fail and default compiler submit still succeeds without new route payload keys.
+- A no compiler submit: PASS. EVENT_LOOP scopes resolve through gray and use `submit_event_loop_plan()` -> `submit_event_loop_vnpy_parent_intents()`; regression monkeypatches B `submit_plan()` to fail and A route still succeeds.
+- Real gateway / no synthetic timer: PASS. A route binds `QmtClientMiniQMTEventLoopGateway` and drives the initial broker quote through gateway `on_tick`; function-level guard reports no `range(_timer_iterations)`, no `on_timer`, and no `submit_managed_vnpy_order_requests`.
+- Broker quote / no TDX: PASS. A route requires `MINIQMT_REALTIME.broker_quote` and rejects `TDX_REALTIME.batch_quote`; function-level guard reports no `TDX_REALTIME` / `fetch_tdx_realtime_quotes` in A submit.
+- qmt_strategy ledger authority: PASS. event_loop client requires qmt_strategy repository; child orders are persisted to qmt_strategy order ledger and tests assert `qmt_strategy_ledger_authority=True`.
+- SIM single-day canary: PASS. `MINIQMT_GRAY_CANARY_STRICTNESS=single_day_smoke|full_scenario_set` is explicit and metadata-audited; SIM defaults to single_day_smoke, while LIVE still fails with `MINIQMT_GRAY_LIVE_FORBIDDEN`.
+- D3.5/D3.6 non-regression: PASS. dependent-buy still releases from on_trade plus `qmt_strategy_ledger.virtual_account.cash`; board-lot still derives from `board_lot_rule`, and A route keeps STAR 688 child quantity unrounded.
+- Scope/safety: PASS. No LocalSim, frontend, Research Assistant, service control, production DB, or DDL changes; changed files stay within BUG-539 allowed_write_scope.
+- Production gates: production_ddl_gate=noop, production_backend_dependency_gate=noop, production_frontend_dependency_gate=noop.

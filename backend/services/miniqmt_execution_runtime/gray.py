@@ -8,6 +8,7 @@ orders.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field as dataclass_field
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -35,6 +36,7 @@ _GRAY_SCOPE_METADATA_KEY = "gray_runtime_overrides"
 _LAST_GRAY_DECISION_METADATA_KEY = "last_gray_runtime_decision"
 _LAST_SHADOW_METADATA_KEY = "last_shadow_reconciliation"
 _DEFAULT_RUNTIME_CONFIG_HASH = "miniqmt_gray_switch"
+MINIQMT_GRAY_CANARY_STRICTNESS_ENV = "MINIQMT_GRAY_CANARY_STRICTNESS"
 MINIQMT_GRAY_SHADOW_MIN_TRADING_DAYS = 1
 MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS = frozenset(
     {
@@ -46,6 +48,11 @@ MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS = frozenset(
         "restart_recovery",
     }
 )
+
+
+class MiniQMTGrayCanaryStrictness(str, Enum):
+    SINGLE_DAY_SMOKE = "single_day_smoke"
+    FULL_SCENARIO_SET = "full_scenario_set"
 
 
 class MiniQMTGrayDecisionType(str, Enum):
@@ -93,6 +100,7 @@ class MiniQMTGraySwitchController:
     repository: MiniQMTExecutionRuntimeRepository
     shadow_min_trading_days: int = MINIQMT_GRAY_SHADOW_MIN_TRADING_DAYS
     shadow_required_scenarios: frozenset[str] = MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS
+    canary_strictness: MiniQMTGrayCanaryStrictness | str | None = None
 
     def resolve_runtime_kind(
         self,
@@ -216,13 +224,32 @@ class MiniQMTGraySwitchController:
             runtime_id=runtime_id,
             environ={MINIQMT_EXECUTION_RUNTIME_ENV: MiniQMTExecutionRuntimeKind.COMPILER.value},
         )
+        if require_shadow_evidence and effective_mode == MiniQMTExecutionRuntimeMode.SIM:
+            strictness = _resolve_canary_strictness(self.canary_strictness)
+        elif require_shadow_evidence:
+            strictness = _CanaryStrictnessResolution(
+                strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+                source="live_forbidden",
+                scenario_coverage_required=True,
+            )
+        else:
+            strictness = _CanaryStrictnessResolution(
+                strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+                source="not_required_for_decision",
+                scenario_coverage_required=False,
+            )
+        required_scenarios = (
+            self.shadow_required_scenarios
+            if strictness.scenario_coverage_required
+            else frozenset()
+        )
         evidence = _shadow_evidence_for_scope(
             self.repository,
             runtime,
             portfolio_id=portfolio_id,
             strategy_slot_id=strategy_slot_id,
             min_trading_days=self.shadow_min_trading_days,
-            required_scenarios=self.shadow_required_scenarios,
+            required_scenarios=required_scenarios,
         )
         active_child_order_ids = [
             child.child_order_id
@@ -268,7 +295,11 @@ class MiniQMTGraySwitchController:
                 metadata={
                     **dict(metadata or {}),
                     "requested_reason": reason,
-                    **_shadow_evidence_metadata(evidence),
+                    **_shadow_evidence_metadata(
+                        evidence,
+                        strictness=strictness,
+                        full_required_scenarios=self.shadow_required_scenarios,
+                    ),
                 },
             )
             raise RuntimeError(_decision_error_message(decision))
@@ -291,7 +322,14 @@ class MiniQMTGraySwitchController:
             shadow_report=evidence.report,
             active_child_order_ids=active_child_order_ids,
             active_algo_instance_ids=active_algo_instance_ids,
-            metadata={**dict(metadata or {}), **_shadow_evidence_metadata(evidence)},
+            metadata={
+                **dict(metadata or {}),
+                **_shadow_evidence_metadata(
+                    evidence,
+                    strictness=strictness,
+                    full_required_scenarios=self.shadow_required_scenarios,
+                ),
+            },
         )
         return decision
 
@@ -380,6 +418,39 @@ class _ShadowEvidence:
     fatal_event_ids: list[str] = dataclass_field(default_factory=list)
     total_report_count: int = 0
     scope_report_count: int = 0
+
+
+@dataclass(frozen=True)
+class _CanaryStrictnessResolution:
+    strictness: MiniQMTGrayCanaryStrictness
+    source: str
+    scenario_coverage_required: bool
+
+
+def _resolve_canary_strictness(
+    raw: MiniQMTGrayCanaryStrictness | str | None,
+) -> _CanaryStrictnessResolution:
+    if raw is not None:
+        raw_text = str(raw.value if isinstance(raw, MiniQMTGrayCanaryStrictness) else raw).strip().lower()
+        source = "constructor"
+    else:
+        env_raw = str(os.getenv(MINIQMT_GRAY_CANARY_STRICTNESS_ENV) or "").strip().lower()
+        raw_text = env_raw or MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value
+        source = "env" if env_raw else "default_sim_single_day_smoke"
+    try:
+        strictness = MiniQMTGrayCanaryStrictness(raw_text)
+    except ValueError as exc:
+        raise RuntimeError(
+            "MiniQMT gray canary strictness is unsupported; "
+            f"reason_code=MINIQMT_GRAY_CANARY_STRICTNESS_UNSUPPORTED, "
+            f"{MINIQMT_GRAY_CANARY_STRICTNESS_ENV}={raw_text!r}, "
+            "expected one of: single_day_smoke,full_scenario_set"
+        ) from exc
+    return _CanaryStrictnessResolution(
+        strictness=strictness,
+        source=source,
+        scenario_coverage_required=strictness == MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+    )
 
 
 def _shadow_evidence_for_scope(
@@ -673,7 +744,12 @@ def _normalize_scenario(raw: Any) -> str:
     return str(raw or "").strip().lower()
 
 
-def _shadow_evidence_metadata(evidence: _ShadowEvidence) -> dict[str, Any]:
+def _shadow_evidence_metadata(
+    evidence: _ShadowEvidence,
+    *,
+    strictness: _CanaryStrictnessResolution,
+    full_required_scenarios: frozenset[str],
+) -> dict[str, Any]:
     accepted_reports = [
         {
             "event_id": str(report.get("durable_event_id") or ""),
@@ -687,9 +763,19 @@ def _shadow_evidence_metadata(evidence: _ShadowEvidence) -> dict[str, Any]:
     return {
         "accepted_shadow_event_ids": [item["event_id"] for item in accepted_reports if item["event_id"]],
         "shadow_evidence_gate": {
+            "canary_strictness": strictness.strictness.value,
+            "canary_strictness_env_var": MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
+            "canary_strictness_source": strictness.source,
+            "scenario_coverage_required": strictness.scenario_coverage_required,
+            "strictness_reason": (
+                "SIM single_day_smoke requires one no-fatal durable shadow day and skips full scenario coverage"
+                if strictness.strictness == MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE
+                else "full_scenario_set requires durable coverage for every required canary scenario"
+            ),
             "required_trading_days": evidence.required_trading_days,
             "covered_trade_dates": list(evidence.covered_trade_dates),
             "required_scenarios": list(evidence.required_scenarios),
+            "full_scenario_set_reference": sorted(_normalize_scenario(item) for item in full_required_scenarios),
             "covered_scenarios": list(evidence.covered_scenarios),
             "missing_scenarios": list(evidence.missing_scenarios),
             "accepted_reports": accepted_reports,

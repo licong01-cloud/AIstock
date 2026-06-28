@@ -1708,6 +1708,7 @@ class MiniQMTExecutionRuntime:
                     algo_instance_id=instance.algo_instance_id,
                     quantity=int(action.volume or 0),
                     price=float(action.price or 0),
+                    price_type=_child_price_type_from_metadata(child_metadata),
                     metadata=child_metadata,
                 )
                 core = self._ensure_vnpy_core(instance)
@@ -2037,23 +2038,25 @@ class MiniQMTExecutionRuntime:
             action_payload.get("price"),
             field_name="dependent_buy_action.price",
         )
+        child_metadata = self._child_metadata_for_vnpy_action_payload(
+            latest,
+            action_payload,
+            extra={
+                "dependent_buy_released": True,
+                "dependent_buy_reason_code": "MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
+                "dependent_buy_required_cash": str(contract["required_cash"]),
+                "dependent_buy_available_cash": str(available_cash),
+                "dependent_buy_reserved_cash": str(reserved_cash),
+                "dependent_buy_cash_source": "qmt_strategy_ledger.virtual_account.cash",
+                "dependent_buy_trigger": dict(trigger_context),
+            },
+        )
         child = self.submit_child_order(
             algo_instance_id=latest.algo_instance_id,
             quantity=quantity,
             price=price,
-            metadata=self._child_metadata_for_vnpy_action_payload(
-                latest,
-                action_payload,
-                extra={
-                    "dependent_buy_released": True,
-                    "dependent_buy_reason_code": "MINIQMT_DEPENDENT_BUY_RELEASED_AFTER_SELL_TRADE",
-                    "dependent_buy_required_cash": str(contract["required_cash"]),
-                    "dependent_buy_available_cash": str(available_cash),
-                    "dependent_buy_reserved_cash": str(reserved_cash),
-                    "dependent_buy_cash_source": "qmt_strategy_ledger.virtual_account.cash",
-                    "dependent_buy_trigger": dict(trigger_context),
-                },
-            ),
+            price_type=_child_price_type_from_metadata(child_metadata),
+            metadata=child_metadata,
         )
         updated = self._mark_dependent_buy_state(
             latest,
@@ -2816,6 +2819,25 @@ def _order_price_type(order: dict[str, Any]) -> int:
         return int(order.get("price_type") or 11)
     except (TypeError, ValueError):
         return 11
+
+
+def _child_price_type_from_metadata(metadata: dict[str, Any]) -> int:
+    raw = metadata.get("price_type")
+    if raw is None:
+        return 11
+    try:
+        price_type = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "MiniQMT event-loop child order metadata has invalid price_type; "
+            f"reason_code=MINIQMT_EVENT_LOOP_PRICE_TYPE_INVALID, price_type={raw!r}"
+        ) from exc
+    if price_type <= 0:
+        raise RuntimeError(
+            "MiniQMT event-loop child order metadata has non-positive price_type; "
+            f"reason_code=MINIQMT_EVENT_LOOP_PRICE_TYPE_INVALID, price_type={raw!r}"
+        )
+    return price_type
 
 
 def _resolve_vnpy_board_lot_params(

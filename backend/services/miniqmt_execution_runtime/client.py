@@ -7,6 +7,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, Callable
 
 from backend.execution_algos.board_lot import board_lot_rule
@@ -24,6 +25,7 @@ from backend.services.qmt_strategy_ledger.order_service import (
     ManagedBatchSubmitResult,
     ManagedOrderRequest,
     ManagedOrderSubmitResult,
+    OrderPreflightError,
     OrderPreflightResult,
     QmtManagedOrderService,
 )
@@ -38,7 +40,7 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
 from .config import MiniQMTExecutionRuntimeKind, get_miniqmt_execution_runtime_kind
-from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck
+from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck, QmtClientMiniQMTEventLoopGateway
 from .models import (
     MiniQMTChildOrder,
     MiniQMTChildOrderStatus,
@@ -51,6 +53,7 @@ from .repository import MiniQMTExecutionRuntimeRepository, default_miniqmt_execu
 from .runtime import MiniQMTExecutionRuntime
 
 RUNTIME_OWNER = "MiniQMTExecutionRuntime"
+MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
 
 
 @dataclass(frozen=True)
@@ -455,6 +458,167 @@ class MiniQMTExecutionRuntimeClient:
             runtime_evidence=self.evidence_for_runtime(build.runtime_evidence.runtime_id, source=source),
         )
 
+    def submit_event_loop_vnpy_parent_intents(
+        self,
+        *,
+        parent_intents: list[OrderIntent],
+        policy_context: dict[str, Any],
+        account_group_id: str,
+        trade_date: date,
+        runtime_config_hash: str,
+        runtime_id: str | None,
+        strategy_slot_id: str,
+        qmt_client: Any,
+        strategy_name: str,
+        order_remark_prefix: str,
+        account_id: str | None = None,
+        quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
+        child_context_factory: Callable[[OrderIntent, int], dict[str, Any]] | None = None,
+        source: str = "simulation_runtime_event_loop_submit",
+    ) -> MiniQMTRuntimeManagedBatchSubmitResult:
+        """Submit a gray-switched SIM scope through the real event-loop gateway.
+
+        This is the D4 Route-A boundary.  It refuses compiler-style managed
+        request generation and drives vn.py instances only through the
+        event-loop gateway callback surface.
+        """
+
+        if self.runtime_kind != MiniQMTExecutionRuntimeKind.EVENT_LOOP:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop submit requires runtime_kind=event_loop",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_RUNTIME_KIND_REQUIRED",
+                    "source": source,
+                    "runtime_kind": self.runtime_kind.value,
+                },
+            )
+        if self.strategy_ledger_repository is None:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop submit requires qmt_strategy ledger authority",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_LEDGER_AUTHORITY_MISSING",
+                    "source": source,
+                    "runtime_id": runtime_id,
+                    "account_group_id": account_group_id,
+                },
+            )
+        if not parent_intents:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop submit requires at least one parent intent",
+                context={"reason_code": "MINIQMT_EVENT_LOOP_PARENT_INTENTS_MISSING", "source": source},
+            )
+        policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
+        if not isinstance(policy_json, dict):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop submit requires policy_json",
+                context={"reason_code": "MINIQMT_EVENT_LOOP_POLICY_JSON_MISSING", "source": source},
+            )
+        algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+        if not is_vnpy_style_algo(algo_code):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop submit requires approved MiniQMT vn.py algo",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_ALGO_UNSUPPORTED",
+                    "source": source,
+                    "algo_code": algo_code,
+                },
+            )
+        gateway = QmtClientMiniQMTEventLoopGateway(
+            qmt_client=qmt_client,
+            strategy_name=strategy_name,
+            order_remark_prefix=order_remark_prefix,
+        )
+        runtime = self._runtime(
+            account_group_id=account_group_id,
+            trade_date=trade_date,
+            runtime_config_hash=runtime_config_hash,
+            runtime_id=runtime_id,
+            gateway=gateway,
+            account_id=account_id,
+            metadata={
+                "source": source,
+                "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+                "gateway_class": "QmtClientMiniQMTEventLoopGateway",
+                "oms_authority": "qmt_strategy_ledger",
+                "algo_code": algo_code,
+                "account_id": account_id,
+            },
+        )
+        runtime.start()
+        runtime.recover()
+        existing_child_ids = {
+            child.child_order_id
+            for child in self.repository.list_child_orders(runtime.config.runtime_id, active_only=False)
+        }
+        for index, intent in enumerate(parent_intents, start=1):
+            tick_payload = _required_event_loop_tick_payload(
+                intent=intent,
+                quote_provider=quote_provider,
+                qmt_client=qmt_client,
+                source=source,
+            )
+            child_context = (
+                child_context_factory(intent, index)
+                if child_context_factory is not None
+                else _event_loop_child_metadata(intent=intent, trade_date=trade_date, source=source, index=index)
+            )
+            runtime.create_vnpy_algo_instance(
+                parent_intent_id=intent.intent_id,
+                strategy_slot_id=strategy_slot_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                target_quantity=int(intent.quantity),
+                algo_code=algo_code,
+                limit_price=_limit_price_for_event_loop(intent=intent, tick_payload=tick_payload),
+                algo_config=dict(policy_json.get("algo_config") or {}),
+                metadata={
+                    "source": source,
+                    "runtime_child_context": child_context,
+                    "execution_policy_id": policy_context.get("validated_execution_policy_id"),
+                    "execution_policy_sha256": policy_context.get("policy_sha256"),
+                    "event_loop_submit": True,
+                    "quote_source": tick_payload.get("source") or tick_payload.get("quote_source"),
+                },
+            )
+            gateway.on_tick(tick_payload)
+        runtime_evidence = self._evidence(runtime, source=source)
+        new_children = tuple(
+            child
+            for child in self.repository.list_child_orders(runtime.config.runtime_id, active_only=False)
+            if child.child_order_id not in existing_child_ids
+        )
+        child_by_parent: dict[str, list[MiniQMTChildOrder]] = {}
+        for child in new_children:
+            child_by_parent.setdefault(child.parent_intent_id, []).append(child)
+        results: list[ManagedOrderSubmitResult] = []
+        for intent in parent_intents:
+            children = child_by_parent.get(intent.intent_id) or []
+            if not children:
+                results.append(_event_loop_no_child_result(intent=intent, source=source))
+                continue
+            for child in children:
+                results.append(_event_loop_child_submit_result(child=child, source=source))
+        succeeded = sum(1 for item in results if item.success)
+        failed = len(results) - succeeded
+        batch_status = "SUCCEEDED" if failed == 0 and succeeded > 0 else ("PARTIAL" if succeeded else "FAILED")
+        managed_result = ManagedBatchSubmitResult(
+            success=failed == 0 and succeeded > 0,
+            total=len(results),
+            succeeded=succeeded,
+            failed=failed,
+            results=tuple(results),
+            compensation_required=False,
+            compensation_hint=None if failed == 0 else "inspect event_loop child result reason_code",
+            batch_id=f"mqrt_event_loop_{_short_hash([runtime_evidence.runtime_id, len(results), source])}",
+            batch_status=batch_status,
+            preflight_passed=failed == 0,
+            compensation_actions=(),
+        )
+        return MiniQMTRuntimeManagedBatchSubmitResult.from_managed_result(
+            managed_result,
+            runtime_evidence=runtime_evidence,
+        )
+
     def execute_paper_vnpy_intent(
         self,
         *,
@@ -570,6 +734,7 @@ class MiniQMTExecutionRuntimeClient:
         runtime_config_hash: str,
         gateway: MiniQMTGateway,
         runtime_id: str | None = None,
+        account_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionRuntime:
         return MiniQMTExecutionRuntime(
@@ -587,7 +752,7 @@ class MiniQMTExecutionRuntimeClient:
                 if self.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
                 else None
             ),
-            account_id=account_group_id,
+            account_id=account_id or account_group_id,
         )
 
     def _reject_event_loop_compiler_lifecycle(self, *, source: str, operation: str, **context: Any) -> None:
@@ -994,6 +1159,27 @@ def _managed_vnpy_child_metadata(
     }
 
 
+def _event_loop_child_metadata(*, intent: OrderIntent, trade_date: date, source: str, index: int) -> dict[str, Any]:
+    prefix = str(intent.metadata.get("order_remark_prefix") or "eventloop").strip()[:20] or "eventloop"
+    order_remark = str(intent.metadata.get("order_remark") or f"{prefix}-{_short_hash([intent.intent_id, index])[:12]}")
+    strategy_name = str(intent.metadata.get("strategy_name") or intent.metadata.get("strategy_id") or intent.portfolio_id)
+    return {
+        "source": source,
+        "managed_parent_intent_id": intent.intent_id,
+        "package_id": intent.package_id,
+        "portfolio_id": intent.portfolio_id,
+        "strategy_id": str(intent.metadata.get("strategy_id") or intent.portfolio_id),
+        "strategy_name": strategy_name,
+        "order_remark": order_remark,
+        "target_weight": intent.metadata.get("target_weight"),
+        "order_type": OrderType.LIMIT.value,
+        "limit_price": intent.limit_price,
+        "target_trade_date": trade_date.isoformat(),
+        "parent_intent_metadata": dict(intent.metadata or {}),
+        "event_loop_submit": True,
+    }
+
+
 def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
     return {
         "account_id": request.account_id,
@@ -1145,6 +1331,243 @@ def _limit_price_for_runtime(
     raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py client requires quote or limit_price")
 
 
+def _limit_price_for_event_loop(*, intent: OrderIntent, tick_payload: dict[str, Any]) -> float:
+    if intent.limit_price is not None:
+        price = float(intent.limit_price)
+    elif intent.side == OrderSide.BUY:
+        price = float(tick_payload.get("ask_price_1") or tick_payload.get("price") or 0)
+    else:
+        price = float(tick_payload.get("bid_price_1") or tick_payload.get("price") or 0)
+    if price <= 0:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop submit requires positive broker quote price",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_QUOTE_PRICE_INVALID",
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+            },
+        )
+    return price
+
+
+def _required_event_loop_tick_payload(
+    *,
+    intent: OrderIntent,
+    quote_provider: Callable[[str], dict[str, Any] | None] | None,
+    qmt_client: Any,
+    source: str,
+) -> dict[str, Any]:
+    quote_origin = ""
+    quote = quote_provider(intent.symbol) if quote_provider is not None else None
+    if isinstance(quote, dict):
+        quote_origin = "quote_provider"
+        quote_source = str(quote.get("source") or quote.get("quote_source") or "").strip()
+        if not quote_source:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop route refuses quote_provider payload without broker quote source",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE_MISSING",
+                    "source": source,
+                    "intent_id": intent.intent_id,
+                    "symbol": intent.symbol,
+                    "required_quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+                },
+            )
+        if quote_source != MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop route refuses non-broker quote source",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE_INVALID",
+                    "source": source,
+                    "intent_id": intent.intent_id,
+                    "symbol": intent.symbol,
+                    "quote_source": quote_source,
+                    "required_quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+                },
+            )
+    if quote is None:
+        query_quote = getattr(qmt_client, "query_quote", None)
+        if callable(query_quote):
+            quote = query_quote(intent.symbol)
+            if isinstance(quote, dict):
+                quote_origin = "qmt_client.query_quote"
+    if quote is None:
+        get_full_tick = getattr(qmt_client, "get_full_tick", None)
+        if callable(get_full_tick):
+            try:
+                payload = get_full_tick([intent.symbol])
+            except Exception as exc:  # noqa: BLE001
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop broker quote fetch failed",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_FETCH_FAILED",
+                        "source": source,
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                ) from exc
+            if not isinstance(payload, dict):
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop broker quote payload is invalid",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_PAYLOAD_INVALID",
+                        "source": source,
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+                        "payload_type": type(payload).__name__,
+                    },
+                )
+            row = payload.get(intent.symbol)
+            if row is None:
+                raw_code = str(intent.symbol).split(".")[0]
+                for key, value in payload.items():
+                    if str(key).split(".")[0] == raw_code:
+                        row = value
+                        break
+            if isinstance(row, dict):
+                quote = row
+                quote_origin = "qmt_client.get_full_tick"
+    if not isinstance(quote, dict):
+        raise BrokerSubmitError(
+            "MiniQMT event_loop submit requires broker quote before routing parent intent",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_MISSING",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+            },
+        )
+    payload = dict(quote)
+    raw_quote_source = str(payload.get("source") or payload.get("quote_source") or "").strip()
+    if raw_quote_source and raw_quote_source != MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop route refuses non-broker quote source",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE_INVALID",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "quote_source": raw_quote_source,
+                "required_quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+            },
+        )
+    if quote_origin == "quote_provider" and not raw_quote_source:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop route refuses quote_provider payload without broker quote source",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE_MISSING",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "required_quote_source": MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE,
+            },
+        )
+
+    def _first_value(*keys: str) -> Any:
+        for key in keys:
+            value = payload.get(key)
+            if value is not None:
+                return value
+        return None
+
+    def _first_level(value: Any) -> Any:
+        if isinstance(value, (list, tuple)) and value:
+            return value[0]
+        return value
+
+    payload.setdefault("symbol", intent.symbol)
+    payload.setdefault("stock_code", intent.symbol)
+    payload.setdefault("source", MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE)
+    payload.setdefault("quote_source", MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE)
+    price = _first_value("price", "last_price", "lastPrice", "close")
+    ask = _first_value("ask_price_1", "askPrice1", "ask_price", "ask")
+    bid = _first_value("bid_price_1", "bidPrice1", "bid_price", "bid")
+    if ask is None:
+        ask = _first_level(payload.get("askPrice"))
+    if bid is None:
+        bid = _first_level(payload.get("bidPrice"))
+    ask_volume = _first_value("ask_volume_1", "askVolume1", "askVol1", "ask_volume", "askVolume")
+    bid_volume = _first_value("bid_volume_1", "bidVolume1", "bidVol1", "bid_volume", "bidVolume")
+    if ask_volume is None:
+        ask_volume = _first_level(payload.get("askVol"))
+    if bid_volume is None:
+        bid_volume = _first_level(payload.get("bidVol"))
+    if price is None:
+        price = ask if intent.side == OrderSide.BUY else bid
+    if ask is not None:
+        payload["ask_price_1"] = ask
+    if bid is not None:
+        payload["bid_price_1"] = bid
+    if ask_volume is not None:
+        payload["ask_volume_1"] = ask_volume
+    if bid_volume is not None:
+        payload["bid_volume_1"] = bid_volume
+    payload["price"] = price
+    try:
+        if float(payload["price"]) <= 0:
+            raise ValueError("non-positive")
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop broker quote has invalid price",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_PRICE_INVALID",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "quote_source": payload.get("quote_source"),
+            },
+        ) from exc
+    required_depth = (
+        ("ask_price_1", payload.get("ask_price_1"), "ask_volume_1", payload.get("ask_volume_1"))
+        if intent.side == OrderSide.BUY
+        else ("bid_price_1", payload.get("bid_price_1"), "bid_volume_1", payload.get("bid_volume_1"))
+    )
+    price_field, depth_price, volume_field, depth_volume = required_depth
+    if depth_price is None or depth_volume is None:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop broker quote is missing required L1 depth for runtime tick",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_MISSING",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                "missing_fields": [
+                    field
+                    for field, value in ((price_field, depth_price), (volume_field, depth_volume))
+                    if value is None
+                ],
+                "quote_source": payload.get("quote_source"),
+            },
+        )
+    try:
+        if float(depth_price) <= 0:
+            raise ValueError(f"{price_field} non-positive")
+        if int(depth_volume) < 0:
+            raise ValueError(f"{volume_field} negative")
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError(
+            "MiniQMT event_loop broker quote has invalid L1 depth for runtime tick",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_BROKER_QUOTE_DEPTH_INVALID",
+                "source": source,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                price_field: depth_price,
+                volume_field: depth_volume,
+                "quote_source": payload.get("quote_source"),
+            },
+        ) from exc
+    return payload
+
+
 def _tick_payload_for_runtime(
     *,
     intent: OrderIntent,
@@ -1168,6 +1591,68 @@ def _tick_payload_for_runtime(
         "ask_volume_1": int(intent.quantity),
         "source": "runtime_synthetic_limit_quote",
     }
+
+
+def _event_loop_no_child_result(*, intent: OrderIntent, source: str) -> ManagedOrderSubmitResult:
+    preflight = OrderPreflightResult(
+        allowed=False,
+        errors=(
+            OrderPreflightError(
+                code="MINIQMT_EVENT_LOOP_NO_CHILD_ORDER",
+                message="event_loop route produced no child order for parent intent",
+                context={"intent_id": intent.intent_id, "symbol": intent.symbol, "source": source},
+            ),
+        ),
+        strategy_id=str(intent.metadata.get("strategy_id") or intent.portfolio_id),
+        estimated_notional=Decimal("0"),
+        estimated_fee=Decimal("0"),
+        freeze_amount=Decimal("0"),
+        available_cash=None,
+    )
+    return ManagedOrderSubmitResult(
+        success=False,
+        intent_id=intent.intent_id,
+        qmt_order_id=None,
+        broker_message="event_loop route produced no child order",
+        preflight=preflight,
+        broker_called=False,
+    )
+
+
+def _event_loop_child_submit_result(*, child: MiniQMTChildOrder, source: str) -> ManagedOrderSubmitResult:
+    accepted = child.status != MiniQMTChildOrderStatus.REJECTED and bool(child.broker_order_id)
+    error_code = None if accepted else "MINIQMT_EVENT_LOOP_CHILD_REJECTED"
+    preflight = OrderPreflightResult(
+        allowed=accepted,
+        errors=()
+        if accepted
+        else (
+            OrderPreflightError(
+                code=error_code or "MINIQMT_EVENT_LOOP_CHILD_REJECTED",
+                message=str(child.metadata.get("gateway_message") or "event_loop child order rejected"),
+                context={
+                    "runtime_id": child.runtime_id,
+                    "child_order_id": child.child_order_id,
+                    "parent_intent_id": child.parent_intent_id,
+                    "symbol": child.symbol,
+                    "source": source,
+                },
+            ),
+        ),
+        strategy_id=str(child.metadata.get("strategy_id") or child.strategy_slot_id),
+        estimated_notional=Decimal(str(child.price or 0)) * Decimal(int(child.quantity or 0)),
+        estimated_fee=Decimal("0"),
+        freeze_amount=Decimal("0"),
+        available_cash=None,
+    )
+    return ManagedOrderSubmitResult(
+        success=accepted,
+        intent_id=child.parent_intent_id,
+        qmt_order_id=child.broker_order_id,
+        broker_message=str(child.metadata.get("gateway_message") or ("accepted" if accepted else "rejected")),
+        preflight=preflight,
+        broker_called=True,
+    )
 
 
 def _timer_iterations(algo_code: str, config: dict[str, Any]) -> int:
