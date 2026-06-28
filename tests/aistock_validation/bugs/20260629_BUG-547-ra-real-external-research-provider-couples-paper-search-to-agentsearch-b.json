@@ -44,6 +44,7 @@
   "reproduce_command": "Unset RA_AGENTSEARCH_BASE_URL, set RA_EXTERNAL_RESEARCH_PROVIDER=real, then call RealExternalResearchProvider.from_env() or backend.main._configure_external_research_provider(); provider construction/injection falls back to offline instead of enabling real paper search.",
   "required_verification": [
     "l0",
+    "validation_module_registry_l0",
     "research_assistant_backend",
     "research_assistant_mcp_contract",
     "ra_phase7_full_accept"
@@ -71,5 +72,6 @@
       "Run targeted validation first, then final gates once the patch is stable."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
-  }
+  },
+  "ui_issue": false
 }

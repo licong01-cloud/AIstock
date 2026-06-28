@@ -41,6 +41,14 @@ def _provider(
     )
 
 
+def _paper_only_provider(handler: Any, *, paper_provider: str = SEMANTIC_SCHOLAR_PROVIDER) -> RealExternalResearchProvider:
+    return RealExternalResearchProvider(
+        agentsearch_base_url="",
+        paper_provider=paper_provider,
+        http_client=_client(handler),
+    )
+
+
 @pytest.fixture(autouse=True)
 def _restore_external_research_provider() -> Any:
     previous = get_external_research_provider()
@@ -128,6 +136,70 @@ def test_real_search_papers_semantic_scholar_maps_ids_authors_and_summary() -> N
     assert {"kind": "arxiv_id", "value": "2405.00001"} in item.artifact_refs
     assert {"kind": "doi", "value": "10.1234/factor.1"} in item.artifact_refs
     assert_token_safe({"items": [item.compact()]})
+
+
+def test_real_provider_from_env_without_agentsearch_base_url_constructs_paper_only() -> None:
+    provider = RealExternalResearchProvider.from_env(
+        {
+            "RA_EXTERNAL_RESEARCH_PROVIDER": "real",
+            "RA_PAPER_PROVIDER": "semantic_scholar",
+        }
+    )
+
+    assert provider.agentsearch_base_url == ""
+    assert provider.paper_provider == SEMANTIC_SCHOLAR_PROVIDER
+
+
+def test_real_search_papers_without_agentsearch_base_url_uses_semantic_scholar() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/graph/v1/paper/search"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "paperId": "paper-no-web",
+                        "title": "Paper search without AgentSearch",
+                        "abstract": "Semantic Scholar remains available without the web provider.",
+                        "url": "https://www.semanticscholar.org/paper/paper-no-web",
+                        "authors": [{"name": "Eve"}],
+                        "externalIds": {"DOI": "10.1234/no-web"},
+                    }
+                ]
+            },
+        )
+
+    provider = _paper_only_provider(handler)
+    items = provider.search_papers("paper only mode", limit=1)
+
+    assert len(items) == 1
+    assert items[0].provider == SEMANTIC_SCHOLAR_PROVIDER
+    assert items[0].authors == ("Eve",)
+    assert {"kind": "doi", "value": "10.1234/no-web"} in items[0].artifact_refs
+
+
+def test_real_search_web_without_agentsearch_base_url_returns_empty_reason_code() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("search_web must not call HTTP without RA_AGENTSEARCH_BASE_URL")
+
+    provider = _paper_only_provider(handler)
+    assert provider.search_web("factor timing") == []
+    failure = provider.last_failure("search_web")
+    assert failure["reason_code"] == "RA_AGENTSEARCH_BASE_URL_MISSING"
+    assert failure["context"]["web_provider"] == AGENTSEARCH_WEB_PROVIDER
+
+
+def test_real_fetch_extract_without_agentsearch_base_url_returns_empty_reason_code() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("fetch_extract must not call HTTP without RA_AGENTSEARCH_BASE_URL")
+
+    provider = _paper_only_provider(handler)
+    extract = provider.fetch_extract("https://research.example.net/article", max_chars=500)
+
+    assert extract.provider == "agentsearch_extract"
+    assert extract.content_preview == ""
+    assert extract.detail_ref["reason_code"] == "RA_AGENTSEARCH_BASE_URL_MISSING"
+    assert provider.last_failure("fetch_extract")["reason_code"] == "RA_AGENTSEARCH_BASE_URL_MISSING"
 
 
 def test_real_search_papers_semantic_scholar_429_falls_back_to_arxiv() -> None:
@@ -346,14 +418,18 @@ def test_main_configure_external_research_provider_default_offline_keeps_stub(mo
     assert isinstance(get_external_research_provider(), DeterministicExternalResearchProvider)
 
 
-def test_main_configure_external_research_provider_real_requires_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_configure_external_research_provider_real_without_base_url_injects_paper_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from backend import main as backend_main
 
     set_external_research_provider(DeterministicExternalResearchProvider())
     monkeypatch.setenv("RA_EXTERNAL_RESEARCH_PROVIDER", "real")
     monkeypatch.delenv("RA_AGENTSEARCH_BASE_URL", raising=False)
     backend_main._configure_external_research_provider()
-    assert isinstance(get_external_research_provider(), DeterministicExternalResearchProvider)
+    provider = get_external_research_provider()
+    assert isinstance(provider, RealExternalResearchProvider)
+    assert provider.agentsearch_base_url == ""
 
 
 def test_main_configure_external_research_provider_real_injects_provider(monkeypatch: pytest.MonkeyPatch) -> None:

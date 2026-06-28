@@ -581,22 +581,22 @@ def _configure_external_research_provider() -> None:
             mode,
         )
         return
-    base_url = (os.getenv("RA_AGENTSEARCH_BASE_URL") or "").strip()
-    if not base_url:
-        logging.getLogger("uvicorn.error").warning(
-            "RA_EXTERNAL_RESEARCH_PROVIDER=real without RA_AGENTSEARCH_BASE_URL; "
-            "reason_code=RA_AGENTSEARCH_BASE_URL_MISSING; keeping offline provider"
-        )
-        return
     try:
         from backend.routers.external_research import set_external_research_provider
         from backend.services.research_assistant.real_external_research_provider import RealExternalResearchProvider
 
-        set_external_research_provider(RealExternalResearchProvider.from_env())
+        provider = RealExternalResearchProvider.from_env()
+        set_external_research_provider(provider)
     except Exception as exc:  # noqa: BLE001 - startup must be loud but keep offline provider as configured fallback.
         logging.getLogger("uvicorn.error").warning(
             "Failed to configure real RA external research provider; reason_code=RA_EXTERNAL_RESEARCH_PROVIDER_INIT_FAILED; error=%s",
             exc,
+        )
+        return
+    if not provider.agentsearch_base_url:
+        logging.getLogger("uvicorn.error").warning(
+            "RA external research provider configured for real paper search only; web/extract disabled; "
+            "reason_code=RA_AGENTSEARCH_BASE_URL_MISSING"
         )
         return
     logging.getLogger("uvicorn.error").info("RA external research provider configured as real provider")
