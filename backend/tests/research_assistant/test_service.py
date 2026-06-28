@@ -4293,3 +4293,180 @@ def test_read_only_partial_evidence_degraded_reply_is_returned_by_compose_path()
     text = svc._compose_assistant_reply("stock depth question", degraded_text, cards, mode_decision)
 
     assert text == degraded_text
+
+
+def _bug_538_capability_inquiry_mode() -> ModeDecision:
+    return ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.MCP_CAPABILITY_INQUIRY,
+        confidence=0.93,
+        mode_reason="capability_inquiry",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+
+def _bug_538_react_grounded_business_cards() -> dict[str, object]:
+    return {
+        "react_grounding": {
+            "schema_version": "research_assistant_react_grounding_v1",
+            "tool_result_count": 1,
+            "executed_tools": [
+                {
+                    "server_key": "aistock-stock-analysis",
+                    "tool_name": "stock_analysis_get_quote",
+                    "status": "succeeded",
+                    "side_effect_level": "read_only",
+                }
+            ],
+            "evidence_guard": {
+                "allowed": True,
+                "reason": "ok",
+                "source_count": 1,
+                "as_of_count": 1,
+            },
+            "tool_errors": [],
+        }
+    }
+
+
+def _bug_538_catalog_cards() -> dict[str, object]:
+    return {
+        "runtime_mcp_catalog": {
+            "source": "gateway_manifest_derived_catalog",
+            "server_count": 1,
+            "tool_count": 2,
+            "capability_count": 1,
+            "tools_by_server": {},
+            "servers_by_key": {},
+        }
+    }
+
+
+def test_bug_538_grounded_react_answer_wins_over_mcp_catalog_canned_reply() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+    cards.update(_bug_538_catalog_cards())
+    grounded_answer = (
+        "Grounded answer: 国城矿业已完成只读取证；source stock_quote_000688 as_of 2026-06-27. "
+        "我会围绕基本面、近期走势和风险因素合成，不返回工具目录。"
+    )
+
+    text = svc._compose_assistant_reply("请用 MCP 工具分析国城矿业", grounded_answer, cards, mode_decision)
+
+    assert text == grounded_answer
+    assert "Grounded answer" in text
+    assert "个业务域" not in text
+    assert "个可用能力" not in text
+
+
+def test_bug_538_pure_mcp_catalog_inquiry_still_returns_catalog_without_business_tools() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_catalog_cards()
+
+    text = svc._compose_assistant_reply(
+        "你有哪些 MCP 工具？",
+        "I can use arbitrary file and HTTP tools.",
+        cards,
+        mode_decision,
+    )
+
+    assert "个业务域" in text
+    assert "个可用能力" in text
+    assert "arbitrary file" not in text
+
+
+def test_bug_538_grounded_forbidden_marker_answer_is_cleaned_not_replaced() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+    grounded_answer = (
+        "Bottom-line: 国城矿业当前回答已基于只读行情和财务证据合成；"
+        "raw_payload 显示的内部载荷只用于核对，不应展示字段名。\n"
+        "server_key=aistock-stock-analysis tool_name=stock_analysis_get_quote omitted_sections=[debug]\n"
+        "结论：保留基本面、近期走势、风险和证据来源，不做方向预测。"
+    )
+
+    text = svc._compose_assistant_reply("请分析国城矿业的 MCP 取证结果", grounded_answer, cards, mode_decision)
+
+    assert "Bottom-line" in text
+    assert "国城矿业" in text
+    assert "不做方向预测" in text
+    assert "Insufficient evidence: business reply synthesis did not pass grounding guard." not in text
+    for marker in ("server_key", "raw_payload", "omitted_sections"):
+        assert marker not in text
+
+
+def test_bug_538_forbidden_marker_cleanup_preserves_short_section_headings() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+    grounded_answer = (
+        "Bottom-line: 已基于只读行情和资金流证据合成。\n"
+        "## 一、跌停原因分析\n"
+        "盘面出现放量下跌，需要结合公告、资金流与板块表现交叉核对。\n"
+        "raw_payload=debug server_key=aistock-stock-analysis omitted_sections=[internal]\n"
+        "## 收尾结论\n"
+        "保留基本面、近期走势、风险和证据来源，不做方向预测。"
+    )
+
+    text = svc._compose_assistant_reply("请分析国城矿业的 MCP 取证结果", grounded_answer, cards, mode_decision)
+
+    assert "## 一、跌停原因分析" in text
+    assert "## 收尾结论" in text
+    assert text.count("## ") >= 2
+    assert "盘面出现放量下跌" in text
+    assert "不做方向预测" in text
+    assert "Insufficient evidence: business reply synthesis did not pass grounding guard." not in text
+    for marker in ("server_key", "raw_payload", "omitted_sections"):
+        assert marker not in text
+
+
+def test_bug_538_forbidden_marker_cleanup_preserves_internal_field_guard() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+
+    text = svc._compose_assistant_reply(
+        "请分析工具结果",
+        "raw_payload: valuation evidence; server_key=aistock-stock-analysis; omitted_sections=debug",
+        cards,
+        mode_decision,
+    )
+
+    assert "valuation evidence" in text
+    assert not ResearchAssistantService._contains_mcp_business_forbidden_marker(text)
+    for marker in ("server_key", "raw_payload", "omitted_sections"):
+        assert marker not in text
+
+
+def test_bug_538_forbidden_marker_cleanup_falls_back_when_no_substantive_text_remains() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = _bug_538_capability_inquiry_mode()
+    cards = _bug_538_react_grounded_business_cards()
+    cards["mcp_execution_result"] = {
+        "auto_executed": True,
+        "status": "succeeded",
+        "server_key": "aistock-stock-analysis",
+        "tool_name": "stock_analysis_get_quote",
+        "route": "aistock-stock-analysis/stock_analysis_get_quote",
+    }
+    cards["mcp_summary_result"] = {
+        "response_mode": "stock_analysis_evidence_card",
+        "source": "stock_analysis_read_adapter",
+        "as_of": "2026-06-27",
+    }
+
+    text = svc._compose_assistant_reply(
+        "请分析工具结果",
+        "raw_payload\nserver_key\nomitted_sections",
+        cards,
+        mode_decision,
+    )
+
+    assert text == "Insufficient evidence: business reply synthesis did not pass grounding guard."

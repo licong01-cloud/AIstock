@@ -1,0 +1,75 @@
+{
+  "actual": "Catalog short-circuit can return tool catalog for grounded analysis questions containing MCP/tool wording, and forbidden internal markers can skip the grounded branch and fall into business synthesis failure canned text.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260628_BUG-538-ra-compose-reply-canned-templates-overwrite-grounded-react-answers.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-538",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-27T16:59:20.929998Z",
+  "description": "Catalog short-circuit can return tool catalog for grounded analysis questions containing MCP/tool wording, and forbidden internal markers can skip the grounded branch and fall into business synthesis failure canned text.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260628-fa65d142d0fb",
+      "timestamp": "2026-06-27T16:59:20.929994Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "When a ReAct turn executed business read-only tools and grounding guard allowed the answer, the grounded answer remains user-visible; pure capability inquiries still show catalog; internal field names are removed from final user text.",
+  "first_seen_at": "2026-06-27T16:59:20.929998Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1684,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1684",
+  "last_seen_at": "2026-06-27T16:59:20.929998Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA compose reply canned templates overwrite grounded ReAct answers",
+  "trigger_condition": {
+    "fingerprint": "fa65d142d0fb912c0e4fff32",
+    "source_event_id": "FE-20260628-fa65d142d0fb"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
