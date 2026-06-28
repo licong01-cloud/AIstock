@@ -1278,9 +1278,9 @@ export default function ExperimentsPage() {
                         </>
                       )}
                       {exp.alpha_mode === "multi" && (
-                        <button onClick={() => window.open(`/quantevolver/multi-alpha/diagnostics/${exp.experiment_id}`, '_blank')}
+                        <button onClick={() => window.open(`/quantevolver/multi-alpha/combine-backtest`, '_blank')}
                           style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600 }}>
-                          查看诊断
+                          组合回测
                         </button>
                       )}
                       <button onClick={() => syncResult(exp.experiment_id)}

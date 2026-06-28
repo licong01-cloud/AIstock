@@ -1,11 +1,13 @@
 ﻿"use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Activity, ArrowLeft, DownloadCloud, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import LoopDetailPanel from "../../../evolution/components/LoopDetailPanel";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
 import type { DataSourceAdapter } from "../../../components/EvolutionTrajectory";
+import CombineDiagnosticsPanel, { type CombineDiagnosticsLoop } from "../components/CombineDiagnosticsPanel";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const DELETE_APPROVAL_MESSAGE = "删除属于写操作，当前设计实现为只读查询；如需启用删除端点，请单独审批写入范围。";
@@ -130,16 +132,22 @@ function combineStatusInfo(status: string): { color: string; bgColor: string; la
   }
 }
 
-export default function MultiAlphaCombineBacktestDetailPage({ params }: { params: { taskKey: string } }) {
+type PageProps = { params: { taskKey: string } };
+
+function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   const taskKey = safeDecode(params.taskKey);
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
   const [detail, setDetail] = useState<CombineTaskDetail | null>(null);
   const [selectedScheme, setSelectedScheme] = useState("");
   const [selectedLoopIndex, setSelectedLoopIndex] = useState<number | null>(null);
   const [rightPanelView, setRightPanelView] = useState<"loop" | "trajectory">("trajectory");
+  const [pageTab, setPageTab] = useState<"detail" | "diagnostics">(requestedTab === "diagnostics" ? "diagnostics" : "detail");
   const [detailTab, setDetailTab] = useState("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const selectionRunId = searchParams.get("selection_run_id");
 
   const loadDetail = useCallback(async () => {
     setLoading(true);
@@ -165,6 +173,12 @@ export default function MultiAlphaCombineBacktestDetailPage({ params }: { params
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+
+  useEffect(() => {
+    if (requestedTab === "diagnostics") {
+      setPageTab("diagnostics");
+    }
+  }, [requestedTab]);
 
   const loops = useMemo(() => detail?.loops || [], [detail?.loops]);
   const task = detail?.task || null;
@@ -267,6 +281,42 @@ export default function MultiAlphaCombineBacktestDetailPage({ params }: { params
         ))}
       </div>
 
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        {[
+          { key: "detail" as const, label: "配置详情" },
+          { key: "diagnostics" as const, label: "诊断" },
+        ].map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setPageTab(tab.key)}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 8,
+              border: `1px solid ${pageTab === tab.key ? "#2563eb" : "#cbd5e1"}`,
+              backgroundColor: pageTab === tab.key ? "#eff6ff" : "#fff",
+              color: pageTab === tab.key ? "#1d4ed8" : "#475569",
+              fontSize: 13,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {pageTab === "diagnostics" ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <CombineDiagnosticsPanel
+            apiBase={API}
+            taskKey={taskKey}
+            task={task}
+            loops={loops as CombineDiagnosticsLoop[]}
+            selectedScheme={detail?.scheme || selectedScheme}
+            selectionRunId={selectionRunId}
+          />
+        </div>
+      ) : (
       <div style={{ display: "flex", flex: 1, gap: "16px", minHeight: 0 }}>
         <div style={{ ...cardStyle, flex: "0 0 420px" }}>
           <div style={headerStyle}>
@@ -327,6 +377,15 @@ export default function MultiAlphaCombineBacktestDetailPage({ params }: { params
           onLoopSelect={(loopIndex) => { setSelectedLoopIndex(loopIndex); setRightPanelView("loop"); }}
         />
       </div>
+      )}
     </div>
+  );
+}
+
+export default function MultiAlphaCombineBacktestDetailPage({ params }: PageProps) {
+  return (
+    <Suspense fallback={<div style={{ padding: 24, color: "#475569" }}>Loading combine-backtest detail...</div>}>
+      <MultiAlphaCombineBacktestDetailContent params={params} />
+    </Suspense>
   );
 }
