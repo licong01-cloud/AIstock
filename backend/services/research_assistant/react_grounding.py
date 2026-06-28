@@ -1282,10 +1282,6 @@ def _is_factual_list_query(config: ReactGroundingConfig) -> bool:
     return has_list_cue
 
 
-def _is_future_question(config: ReactGroundingConfig) -> bool:
-    return _contains_any(config.user_message, config.future_answer_terms)
-
-
 def _directional_marker_is_negated(lowered_text: str, marker_start: int) -> bool:
     prefix = lowered_text[max(0, marker_start - 24) : marker_start]
     compact_prefix = re.sub(r"[\s，,。；;：:、（）()\[\]{}\"'“”‘’]+$", "", prefix)
@@ -1332,8 +1328,6 @@ def _has_unnegated_future_directional_marker(text: str, config: ReactGroundingCo
 
 
 def _passes_future_answer_discipline(text: str, config: ReactGroundingConfig) -> bool:
-    if not _is_future_question(config):
-        return True
     return not _has_unnegated_future_directional_marker(text, config)
 
 

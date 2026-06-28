@@ -49,6 +49,17 @@ def test_future_answer_still_blocks_directional_prediction() -> None:
     assert decision.reason == "future_answer_boundary_missing"
 
 
+def test_t9_1_blocks_directional_prediction_without_future_question_terms() -> None:
+    decision = compose_with_evidence_guard(
+        "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="这只票怎么样？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
 def test_future_answer_allows_negated_directional_marker_context() -> None:
     decision = compose_with_evidence_guard(
         "基于现有证据无法判断方向、不会上涨，也不会给出涨跌预测；来源 stock_ref，截至 2026-06-17。",
@@ -62,6 +73,34 @@ def test_future_answer_allows_negated_directional_marker_context() -> None:
 
     assert decision.allowed is True
     assert decision.reason == "ok"
+
+
+def test_t9_1_allows_historical_price_restatement_without_prediction() -> None:
+    decision = compose_with_evidence_guard(
+        "历史事实：该股上月上涨了 10%，昨日涨停；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="把这只票近期表现说明一下"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_1_directional_prediction_guard_is_wording_invariant_without_future_terms() -> None:
+    messages = (
+        "这只票怎么样？",
+        "国城矿业怎么看？",
+        "这家公司现在值得关注吗？",
+    )
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+            [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is False
+        assert decision.reason == "future_answer_boundary_missing"
 
 
 def test_future_answer_allows_driver_scenario_risk_without_directional_prediction() -> None:
