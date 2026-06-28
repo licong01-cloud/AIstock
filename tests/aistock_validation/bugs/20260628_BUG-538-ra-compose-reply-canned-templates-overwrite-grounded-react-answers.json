@@ -28,8 +28,8 @@
   "expected": "When a ReAct turn executed business read-only tools and grounding guard allowed the answer, the grounded answer remains user-visible; pure capability inquiries still show catalog; internal field names are removed from final user text.",
   "first_seen_at": "2026-06-27T16:59:20.929998Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e9c52a92b8a9067baabbbd35e60a05abca401b81",
+  "fixed_at": "2026-06-28T03:21:21.561979Z",
   "github_issue_number": 1684,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1684",
   "last_seen_at": "2026-06-27T16:59:20.929998Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1688",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "fa65d142d0fb912c0e4fff32",
     "source_event_id": "FE-20260628-fa65d142d0fb"
   },
+  "validation_evidence": [
+    "PR #1688 CI: MERGEABLE/CLEAN, all checks success/skipped, 0 pending, 0 failing"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
