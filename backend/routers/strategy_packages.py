@@ -70,7 +70,7 @@ class CreateFromMultiAlphaCombineRunRequest(BaseModel):
     topk: int = Field(gt=0)
     secondary_topk: list[int] = Field(default_factory=list)
     package_name: str | None = None
-    component_package_ids: dict[str, str] = Field(default_factory=dict)
+    component_package_ids: dict[str, str] | None = None
     weight_policy: dict[str, Any] = Field(default_factory=dict)
     promotion_gate: dict[str, Any] = Field(default_factory=dict)
     confirmation: str = Field(min_length=1)

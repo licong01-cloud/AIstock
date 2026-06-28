@@ -14,6 +14,7 @@ class SourceType(str, Enum):
     QE_EXPERIMENT = "qe_experiment"
     QE_EVOLUTION_LOOP = "qe_evolution_loop"
     CANDIDATE_STRATEGY_PACKAGE = "candidate_strategy_package"
+    MULTI_ALPHA_COMBINE_RUN = "multi_alpha_combine_run"
 
 
 class AlphaMode(str, Enum):

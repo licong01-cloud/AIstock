@@ -333,6 +333,31 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [record for record in (self._record_from_row(dict(row), quarantine=True) for row in rows) if record is not None]
 
+    def list_single_alpha_candidates_for_seed_reuse(self, *, limit: int = 2000) -> list[StrategyPackageRecord]:
+        """Return frozen single-alpha packages for deterministic seed-coverage matching."""
+
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE alpha_mode = 'single_alpha'
+                      AND package_status <> 'RETIRED'
+                    ORDER BY created_at DESC, package_id ASC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [self._record_from_row(dict(row)) for row in rows]
+
     def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
         self.get(package_id)
         summary: dict[str, Any] = {
@@ -2006,6 +2031,16 @@ class InMemoryStrategyPackageRepository:
             ):
                 return record
         return None
+
+    def list_single_alpha_candidates_for_seed_reuse(self, *, limit: int = 2000) -> list[StrategyPackageRecord]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        records = [
+            record
+            for record in self.records.values()
+            if record.alpha_mode == AlphaMode.SINGLE_ALPHA and record.package_status != PackageStatus.RETIRED
+        ]
+        return sorted(records, key=lambda record: (record.created_at, record.package_id), reverse=True)[:limit]
 
     def get(self, package_id: str) -> StrategyPackageRecord:
         record = self.records.get(package_id)

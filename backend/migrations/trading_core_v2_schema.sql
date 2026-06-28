@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS strategy_pkg.package (
     package_id TEXT PRIMARY KEY,
     package_name TEXT NOT NULL,
     package_version TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package')),
+    source_type TEXT NOT NULL CHECK (source_type IN ('qe_experiment', 'qe_evolution_loop', 'candidate_strategy_package', 'multi_alpha_combine_run')),
     source_id TEXT NOT NULL,
     loop_id TEXT,
     run_id TEXT,

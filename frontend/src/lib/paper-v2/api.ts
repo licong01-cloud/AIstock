@@ -142,6 +142,21 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-evolution-loop", body(payload));
     return data.package;
   },
+  async createFromMultiAlphaCombineRun(payload: {
+    combine_backtest_run_id: string;
+    weighting_scheme: string;
+    scheme_result_id?: string | null;
+    topk: number;
+    secondary_topk?: number[];
+    package_name?: string | null;
+    component_package_ids?: Record<string, string> | null;
+    weight_policy: JsonObject;
+    promotion_gate?: JsonObject;
+    confirmation: string;
+  }): Promise<StrategyPackage> {
+    const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-multi-alpha-combine-run", body(payload));
+    return data.package;
+  },
   async createFromCandidate(candidateId: string, payload: { manifest_json?: JsonObject | null } = {}): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(
       `/strategy-packages/from-candidate/${encodeURIComponent(candidateId)}`,

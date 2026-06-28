@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.db import init_trading_core_v2_schema
 from backend.routers import strategy_packages as router_module
 from backend.services.multi_alpha.combine_backtest import InMemoryCombineBacktestRepository
+from backend.services.qe_archive.multi_alpha_provenance import SeedProvenance
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import AlphaCombinationPolicy, AlphaMode, PackageStatus
+from backend.services.strategy_package.models import AlphaCombinationPolicy, AlphaMode, PackageStatus, SourceType
 from backend.services.strategy_package.multi_alpha_promotion import (
     MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
@@ -23,9 +27,84 @@ from backend.tests.strategy_package.test_multi_alpha_base_schema import _single_
 RUN_ID = "macb_target_two_leg_20260627"
 A1_LEG = "a1_plus3_LSTM_h20"
 FUND_LEG = "new_FUNDGROWTH_h20"
-A1_SEED = "qear_a1_seed_42"
-FUND_SEED = "qear_fundgrowth_seed_42"
+A1_SEED = "qear_run_a1_seed_42"
+FUND_SEED = "qe_new_FUNDGROWTH_L5"
 PRED_SHA = "a" * 64
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+class FakeProvenanceResolver:
+    def __init__(self, mapping: dict[str, SeedProvenance] | None = None) -> None:
+        self.mapping = mapping if mapping is not None else _default_seed_provenance()
+        self.calls: list[str] = []
+
+    def resolve_seed(self, seed_ref: str) -> SeedProvenance:
+        self.calls.append(seed_ref)
+        return self.mapping.get(
+            seed_ref,
+            SeedProvenance(
+                seed_ref=seed_ref,
+                seed_ref_kind="unknown",
+                resolved=False,
+                resolve_method="unit_fake_missing",
+                resolve_note="seed not registered in fake provenance resolver",
+            ),
+        )
+
+
+class FakeQESourceResolver:
+    def __init__(self, fail_on: set[str] | None = None) -> None:
+        self.fail_on = fail_on or set()
+        self.experiment_calls: list[str] = []
+        self.loop_calls: list[tuple[str, str]] = []
+
+    def build_from_experiment(self, experiment_id: str, *, resolve_runtime_assets: bool = False):
+        self.experiment_calls.append(experiment_id)
+        if experiment_id in self.fail_on:
+            raise StrategyPackageValidationError("fake QE experiment unavailable", context={"experiment_id": experiment_id})
+        return freeze_manifest(_single_manifest(f"auto_{experiment_id}", run_id=experiment_id))
+
+    def build_from_evolution_loop(
+        self,
+        *,
+        qe_task_id: str,
+        qe_loop_id: str,
+        resolve_runtime_assets: bool = False,
+    ):
+        self.loop_calls.append((qe_task_id, qe_loop_id))
+        source_key = f"{qe_task_id}:{qe_loop_id}"
+        if source_key in self.fail_on:
+            raise StrategyPackageValidationError(
+                "fake QE loop unavailable",
+                context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
+            )
+        return freeze_manifest(_single_manifest(f"auto_{qe_task_id}_{qe_loop_id}", run_id=source_key))
+
+
+def _default_seed_provenance() -> dict[str, SeedProvenance]:
+    return {
+        A1_SEED: SeedProvenance(
+            seed_ref=A1_SEED,
+            seed_ref_kind="archive_run_id",
+            resolved=True,
+            resolve_method="unit_fake_archive_run_id_lookup",
+            source_experiment_id="qe_exp_a1_seed_42",
+            source_run_type="qe_archive_run",
+            source_run_id=A1_SEED,
+        ),
+        FUND_SEED: SeedProvenance(
+            seed_ref=FUND_SEED,
+            seed_ref_kind="evolution_loop_id",
+            resolved=True,
+            resolve_method="unit_fake_evolution_loop_id_lookup",
+            source_experiment_id="qe_exp_fundgrowth_seed_42",
+            source_task_id="qe_new_FUNDGROWTH",
+            source_loop_id="qe_new_FUNDGROWTH_L5",
+            source_loop_index=5,
+            source_run_type="qe_evolution_loop",
+            source_run_id="qear_run_fundgrowth_seed_42",
+        ),
+    }
 
 
 def _seed_child(repo: InMemoryStrategyPackageRepository, name: str, leg_id: str, seed_run_id: str):
@@ -47,6 +126,22 @@ def _seed_child(repo: InMemoryStrategyPackageRepository, name: str, leg_id: str,
         }
     )
     return repo.save_manifest(freeze_manifest(manifest))
+
+
+def _replace_child_with_valid_missing_seed(repo: InMemoryStrategyPackageRepository, child) -> None:
+    manifest = freeze_manifest(
+        child.manifest.model_copy(
+            update={
+                "run_id": "different_seed",
+                "source_evidence": {"seed_run_ids": ["different_seed"]},
+                "backtest_context": {},
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.records[child.package_id] = child.model_copy(
+        update={"run_id": "different_seed", "manifest": manifest, "manifest_sha256": manifest.manifest_sha256}
+    )
 
 
 def _seed_repos():
@@ -112,8 +207,33 @@ def _seed_repos():
     return combine_repo, package_repo, child_a1, child_fund
 
 
-def _service(combine_repo, package_repo):
-    return MultiAlphaPackagePromotionService(combine_repository=combine_repo, package_repository=package_repo)
+def _seed_auto_repos():
+    combine_repo, package_repo, _child_a1, _child_fund = _seed_repos()
+    package_repo.records.clear()
+    package_repo.events.clear()
+    return combine_repo, package_repo
+
+
+def _service(combine_repo, package_repo, *, provenance_resolver=None, source_resolver=None, prediction_ref_roots=None):
+    return MultiAlphaPackagePromotionService(
+        combine_repository=combine_repo,
+        package_repository=package_repo,
+        provenance_resolver=provenance_resolver,
+        source_resolver=source_resolver,
+        prediction_ref_roots=prediction_ref_roots,
+    )
+
+
+def _weight_policy() -> dict[str, object]:
+    return {
+        "mode": "frozen_backtest_terminal_weights",
+        "metric": "rank_ic",
+        "lookback_trading_days": 252,
+        "min_periods": 60,
+        "label_horizon": 20,
+        "label_maturity_lag_days": 20,
+        "clip_negative_to_zero": True,
+    }
 
 
 def _request(child_a1, child_fund):
@@ -125,15 +245,20 @@ def _request(child_a1, child_fund):
         "secondary_topk": [25],
         "package_name": "MA2_a1_plus3_LSTM_new_FUNDGROWTH_icw_h20",
         "component_package_ids": {A1_LEG: child_a1.package_id, FUND_LEG: child_fund.package_id},
-        "weight_policy": {
-            "mode": "frozen_backtest_terminal_weights",
-            "metric": "rank_ic",
-            "lookback_trading_days": 252,
-            "min_periods": 60,
-            "label_horizon": 20,
-            "label_maturity_lag_days": 20,
-            "clip_negative_to_zero": True,
-        },
+        "weight_policy": _weight_policy(),
+        "confirmation": MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
+    }
+
+
+def _auto_request():
+    return {
+        "combine_backtest_run_id": RUN_ID,
+        "weighting_scheme": "ic_weighted",
+        "scheme_result_id": "scheme_icw_1",
+        "topk": 50,
+        "secondary_topk": [25],
+        "package_name": "MA2_a1_plus3_LSTM_new_FUNDGROWTH_icw_h20",
+        "weight_policy": _weight_policy(),
         "confirmation": MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
     }
 
@@ -142,6 +267,18 @@ def _promote(service, child_a1, child_fund, **overrides):
     payload = _request(child_a1, child_fund)
     payload.update(overrides)
     return service.promote_from_combine_run(**payload)
+
+
+def _strip_explicit_prediction_ref(combine_repo: InMemoryCombineBacktestRepository) -> None:
+    weights_json = dict(combine_repo.scheme_results[0]["weights_json"])
+    weights_json.pop("combined_prediction_ref", None)
+    weights_json.pop("prediction_ref", None)
+    combine_repo.scheme_results[0]["weights_json"] = weights_json
+    combine_repo.scheme_results[0].pop("combined_prediction_ref", None)
+    combine_repo.scheme_results[0].pop("prediction_ref", None)
+    combine_repo.scheme_results[0].pop("combined_prediction_ref_uri", None)
+    combine_repo.scheme_results[0].pop("combined_prediction_ref_sha256", None)
+    combine_repo.scheme_results[0]["pred_persisted"] = False
 
 
 def _reason_code(exc: BaseException) -> str | None:
@@ -165,6 +302,9 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
     assert first.package.prediction_ref_sha256 == PRED_SHA
     manifest = first.package.manifest
     assert manifest.alpha_combination_policy.method == "ic_weighted"
+    assert manifest.source.source_type == SourceType.MULTI_ALPHA_COMBINE_RUN
+    assert manifest.source.source_id == RUN_ID
+    assert manifest.source.run_id == RUN_ID
     assert manifest.source_evidence["multi_alpha"]["combine_backtest_run_id"] == RUN_ID
     assert manifest.source_evidence["multi_alpha"]["paper_admission"]["blocking"] == [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
     assert manifest.backtest_context["daily_strategy"]["topk"] == 50
@@ -174,6 +314,177 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
     )
     eligibility = service.package_repository.get(first.package.package_id)
     assert eligibility.package_status == PackageStatus.ASSET_VALIDATED
+
+
+def test_prediction_ref_can_fall_back_to_local_combine_workspace(tmp_path: Path) -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    _strip_explicit_prediction_ref(combine_repo)
+    prediction_file = tmp_path / RUN_ID / "combined_ic_weighted" / "combined_prediction.pkl"
+    prediction_payload = b"unit-test-combined-prediction"
+    prediction_file.parent.mkdir(parents=True)
+    prediction_file.write_bytes(prediction_payload)
+    expected_sha = hashlib.sha256(prediction_payload).hexdigest()
+
+    result = _promote(
+        _service(combine_repo, package_repo, prediction_ref_roots=[tmp_path]),
+        child_a1,
+        child_fund,
+    )
+
+    assert result.package.prediction_ref_uri == prediction_file.resolve().as_uri()
+    assert result.package.prediction_ref_sha256 == expected_sha
+    evidence = result.package.current_manifest().source_evidence["multi_alpha"]
+    assert evidence["combined_prediction_ref_source"] == "combine_backtest_local_workspace"
+    assert evidence["combined_prediction_ref_sha256"] == expected_sha
+
+
+def test_missing_local_prediction_ref_fails_loud_without_parent_half_package(tmp_path: Path) -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    _strip_explicit_prediction_ref(combine_repo)
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _promote(
+            _service(combine_repo, package_repo, prediction_ref_roots=[tmp_path]),
+            child_a1,
+            child_fund,
+        )
+
+    assert _reason_code(excinfo.value) == "multi_alpha_prediction_ref_missing"
+    attempted_paths = excinfo.value.context["attempted_local_prediction_paths"]
+    assert str(tmp_path / RUN_ID / "combined_ic_weighted" / "combined_prediction.pkl") in attempted_paths
+    assert not any(record.alpha_mode == AlphaMode.MULTI_ALPHA for record in package_repo.records.values())
+    assert package_repo.components == {}
+
+
+def test_backtest_config_strategy_field_fills_stock_pool_and_execution_algo() -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    combine_repo.runs[RUN_ID]["backtest_config_json"] = {
+        "strategy": "V25_1_SMALL_CAP",
+        "filtered_pool": "filtered_pool_20260428",
+        "label_horizon": 20,
+        "n_drop": 2,
+        "topk": 50,
+    }
+
+    result = _promote(_service(combine_repo, package_repo), child_a1, child_fund)
+
+    context = result.package.current_manifest().backtest_context
+    assert context["universe"]["stock_pool"] == "V25_1_SMALL_CAP"
+    assert context["execution"]["execution_algo"] == "V25_1_SMALL_CAP"
+
+
+def test_auto_path_materializes_components_and_is_idempotent() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+    provenance_resolver = FakeProvenanceResolver()
+    source_resolver = FakeQESourceResolver()
+    service = _service(
+        combine_repo,
+        package_repo,
+        provenance_resolver=provenance_resolver,
+        source_resolver=source_resolver,
+    )
+
+    first = service.promote_from_combine_run(**_auto_request())
+    second = service.promote_from_combine_run(**_auto_request())
+
+    assert first.package.package_id == second.package.package_id
+    assert first.package.manifest_sha256 == second.package.manifest_sha256
+    assert first.package.manifest.source.source_type == SourceType.MULTI_ALPHA_COMBINE_RUN
+    assert first.package.manifest.source.source_id == RUN_ID
+    assert first.package.manifest.source.run_id == RUN_ID
+    assert sorted(component.child_package_id for component in first.components) == sorted(
+        component.child_package_id for component in second.components
+    )
+    assert sorted(item["mode"] for item in first.auto_component_materialization) == [
+        "auto_created_component_package",
+        "auto_created_component_package",
+    ]
+    assert sorted(item["mode"] for item in second.auto_component_materialization) == [
+        "reused_existing_component_package",
+        "reused_existing_component_package",
+    ]
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.SINGLE_ALPHA]) == 2
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.MULTI_ALPHA]) == 1
+    for component in first.components:
+        child = package_repo.get(component.child_package_id)
+        assert child.source_type == SourceType.MULTI_ALPHA_COMBINE_RUN.value
+        assert child.source_id == RUN_ID
+        assert child.current_manifest().source_evidence["multi_alpha_component"]["combine_backtest_run_id"] == RUN_ID
+    assert source_resolver.experiment_calls == ["qe_exp_a1_seed_42"]
+    assert source_resolver.loop_calls == [("qe_new_FUNDGROWTH", "Loop5")]
+
+
+def test_auto_path_unresolved_seed_fails_without_half_package() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+    resolver = FakeProvenanceResolver(
+        {
+            **_default_seed_provenance(),
+            FUND_SEED: SeedProvenance(
+                seed_ref=FUND_SEED,
+                seed_ref_kind="evolution_loop_id",
+                resolved=False,
+                resolve_method="unit_fake_missing_loop",
+                resolve_note="qe_evolution_loops row missing",
+            ),
+        }
+    )
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _service(
+            combine_repo,
+            package_repo,
+            provenance_resolver=resolver,
+            source_resolver=FakeQESourceResolver(),
+        ).promote_from_combine_run(**_auto_request())
+
+    assert _reason_code(excinfo.value) == "multi_alpha_seed_unresolved"
+    assert package_repo.records == {}
+    assert package_repo.components == {}
+
+
+def test_auto_path_materialization_failure_fails_without_half_package() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _service(
+            combine_repo,
+            package_repo,
+            provenance_resolver=FakeProvenanceResolver(),
+            source_resolver=FakeQESourceResolver(fail_on={"qe_new_FUNDGROWTH:Loop5"}),
+        ).promote_from_combine_run(**_auto_request())
+
+    assert _reason_code(excinfo.value) == "multi_alpha_component_auto_materialize_failed"
+    assert package_repo.records == {}
+    assert package_repo.components == {}
+
+
+def test_explicit_child_manifest_sha_drift_is_rejected() -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    package_repo.records[child_a1.package_id] = child_a1.model_copy(
+        update={
+            "manifest": child_a1.manifest.model_copy(
+                update={"source_evidence": {"seed_run_ids": ["different_seed"]}}
+            )
+        }
+    )
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _promote(_service(combine_repo, package_repo), child_a1, child_fund)
+
+    assert _reason_code(excinfo.value) == "multi_alpha_child_package_not_frozen"
+
+
+def test_schema_allows_multi_alpha_combine_source_type() -> None:
+    init_ddl = "\n".join(init_trading_core_v2_schema.iter_ddl())
+    snapshot_ddl = (REPO_ROOT / "backend/migrations/trading_core_v2_schema.sql").read_text(encoding="utf-8")
+    migration_ddl = (
+        REPO_ROOT / "backend/migrations/strategy_pkg_multi_alpha_combine_source_type_20260629.sql"
+    ).read_text(encoding="utf-8")
+
+    for ddl in (init_ddl, snapshot_ddl, migration_ddl):
+        assert "'multi_alpha_combine_run'" in ddl
+    assert "package_source_type_check" in init_ddl
+    assert "package_source_type_check" in migration_ddl
 
 
 @pytest.mark.parametrize(
@@ -196,17 +507,7 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
             "multi_alpha_roster_mismatch",
         ),
         (
-            lambda repos, children: repos[1].records.__setitem__(
-                children[0].package_id,
-                repos[1].records[children[0].package_id].model_copy(
-                    update={
-                        "run_id": "different_seed",
-                        "manifest": repos[1]
-                        .records[children[0].package_id]
-                        .manifest.model_copy(update={"source_evidence": {}, "backtest_context": {}}),
-                    }
-                ),
-            ),
+            lambda repos, children: _replace_child_with_valid_missing_seed(repos[1], children[0]),
             "multi_alpha_roster_mismatch",
         ),
         (
@@ -306,17 +607,7 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
             400,
         ),
         (
-            lambda repos, children: repos[1].records.__setitem__(
-                children[0].package_id,
-                repos[1].records[children[0].package_id].model_copy(
-                    update={
-                        "run_id": "different_seed",
-                        "manifest": repos[1]
-                        .records[children[0].package_id]
-                        .manifest.model_copy(update={"source_evidence": {}, "backtest_context": {}}),
-                    }
-                ),
-            ),
+            lambda repos, children: _replace_child_with_valid_missing_seed(repos[1], children[0]),
             "multi_alpha_roster_mismatch",
             400,
         ),
