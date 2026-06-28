@@ -26,9 +26,9 @@
   "evidence_uris": [],
   "expected": "设计稿入库,作为 T9 去类型化逐片实施的权威依据",
   "first_seen_at": "2026-06-28T13:56:31.071266Z",
-  "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_branch": "docs/ra-t9-detype-design-20260628",
+  "fix_commit": "9e8c7536c9129b77b67991b74f4e77c18b2b106f",
+  "fixed_at": "2026-06-28T16:40:45Z",
   "github_issue_number": 1702,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1702",
   "last_seen_at": "2026-06-28T13:56:31.071266Z",
@@ -44,7 +44,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P3",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
