@@ -1,0 +1,68 @@
+{
+  "actual": "B9 总纲标记的去类型化收敛尚无落地设计稿",
+  "allowed_write_scope": [
+    "docs/architecture/ra_t9_detype_convergence_design_20260628.md",
+    "tests/aistock_validation/bugs/20260628_BUG-543-t9-ra-claude-code.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-543",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-28T13:56:31.071266Z",
+  "description": "B9 总纲标记的去类型化收敛尚无落地设计稿",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260628-a8e99f8ad9d8",
+      "timestamp": "2026-06-28T13:56:31.071263Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "设计稿入库,作为 T9 去类型化逐片实施的权威依据",
+  "first_seen_at": "2026-06-28T13:56:31.071266Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1702,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1702",
+  "last_seen_at": "2026-06-28T13:56:31.071266Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P3",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "T9 去类型化收敛设计稿:RA 处理逻辑向 Claude Code 模式靠拢",
+  "trigger_condition": {
+    "fingerprint": "a8e99f8ad9d8cca833ee9267",
+    "source_event_id": "FE-20260628-a8e99f8ad9d8"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
