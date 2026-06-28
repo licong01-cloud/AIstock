@@ -99,3 +99,56 @@
 - 最大风险 = A2(删深度强制闸):确定性下限保障转模型,弱模型/波动时可能取证不足。**故排最后、单独 PR、真模型多轮回归;若误拒/取证不足率高,prompt 加强而非恢复关键词闸。**
 - 与线B 协同:A4 依赖真 provider;其余与线B 文件零重叠(线B 不碰 react_grounding/service)。
 - 整体哲学风险:去类型化把更多判断压给模型(DeepSeek)。B9 结论是"DeepSeek 接 Claude 框架基本够 + 保留两道护栏兜底",故 T9 是"尽量去类型化 + 关键处留护栏",非极端裸交模型。
+
+---
+
+## 7. T9-6:Skill 平权 — 让 LLM 像选工具一样自主选 skill(保留审批门)
+
+### 7.0 动因(用户诉求)
+用户要求:LLM 应清楚自己有哪些工具**和 skill**、能基于问题**自主选择** MCP 或 skill、未来新增 MCP/skill **由 LLM 自己判断**(免硬编码)。代码核实现状(2026-06-28):
+- **MCP 工具侧**:T4(BUG-527)已达标 —— 整个只读域以 function spec(name+描述+schema)暴露,LLM `tool_choice="auto"` 自选;新增只读工具进 `TOOL_MANIFEST` 即自动可见,免改 service.py。
+- **Skill 侧:落后一代**。skill **从不进 LLM 的 function-calling 列表**;触发靠 `runtime_context.yaml` 的 `natural_language_triggers` **关键词分类器** + `propose_skill_reuse` 显式 API,且必经 Action Proposal → 审批。新增 skill 要改 YAML 注册 capability(skill_refs + 关键词),**永不**进 LLM 可选集。
+- 结论:skill 既不平权、新增又靠关键词硬注册 = 正是 B9 要消灭的"框架按关键词代选"。这是 T9 漏盘的一片,补为 T9-6。
+
+### 7.1 目标态(对齐 Claude Code 的 skill 模型)
+- **skill 平权进 LLM 可选集**:每个 approved skill 生成一个 function spec(用其 `description_for_llm` + "何时用"),与 MCP 工具同列暴露给 LLM,**LLM 基于问题自主决定要不要用某 skill**(推理选择,非关键词匹配)。
+- **去关键词触发**:废除/降级 `natural_language_triggers` 关键词分类器作为 skill 触发的主路径;触发改由 LLM function-calling 决定(= 去类型化,同 T9 主线哲学)。
+- **新增即可见**:skill 进 catalog(seed)即自动对 LLM 可见可选,免在 YAML 手写关键词触发。
+- **审批门绝不动(护栏)**:LLM "选了某 skill" ≠ 直接执行。skill 的 `direct_execution_allowed=False` / `action_proposal_required=True` 保持;LLM 选中 → 生成 Action Proposal → preflight → **用户审批** → 才执行。即:**把"选择权"交还 LLM,把"执行权"仍锁在审批门后**。这正是 RA 相对 Claude Code/OpenClaw 的护栏优势(金融生产必需),不削弱。
+
+### 7.2 与渐进式披露(借鉴 Claude Code)
+- skill 描述常驻成本低(只放 name + 一句"何时用",~百 token 级),类似 Claude Code 的 L1 frontmatter;完整 skill 指令/步骤在选中后才注入(L2),避免全量灌上下文。
+- 当前 RA 仅 6 个 skill,常驻全部描述零压力;此设计为未来 skill 增多预留。
+
+### 7.3 实施(排在 A 组之后,单独 PR,串行)
+- T9-6a:skill → function spec 生成器(复用现有 `description_for_llm`),并入 `_agentic_function_tools` 的可选集(与 MCP 工具同列,带 skill 标记)。
+- T9-6b:LLM 选中 skill 的 native tool_call → 路由到 `propose_skill_reuse` 生成 Action Proposal(不直接执行),接现有审批门。
+- T9-6c:废除 `natural_language_triggers` 作为触发主路径(降为可选 seed 提示,或删);新增 skill 进 catalog 即自动进可选集。
+- T9-6d:回归断言 —— ① skill 换措辞(不含原关键词)LLM 仍能基于语义选中;② 选中 skill 必出 Action Proposal 且未经审批不执行(审批门未削);③ 新增一个 mock skill 进 catalog,无需写关键词即被 LLM 可见可选。
+
+## 8. 明确边界:T9 全程不引入 RAG / 向量检索(对齐既有"长期记忆不是 RAG"原则)
+
+**这是本设计稿的硬约束,防止误引入向量层:**
+
+1. **长期记忆维持现状,坚决不用 RAG**。依据 `aistock_research_agent_console_design_20260520.md` §4.4「长期记忆不是 RAG」:RAG/向量检索只能辅助召回,不能作事实源/规则源/审批源/任务状态源。现实现 `memory_tree.py` + `graph_context.expand_neighbors` 是**纯确定性 SQL 树遍历 + 图边遍历**(按 `tree_path` 前缀 / 关系边,**无 embedding、无向量、无余弦相似度**)。项目级记忆(`project.*`)与个人习惯记忆(`personal.preference.*`/`personal.habit.*`)均树状结构 + 确定性检索。**T9 不碰记忆层,不引入向量。**
+
+2. **工具 / skill 选择也不用 RAG / 向量**。外部框架(LangGraph bigtool 等)对工具做向量检索 top-k,是为解决**上千工具撞 128 上限**的过载问题。**RA 仅 283 工具 + 6 skill,量级远未到过载阈值**,DeepSeek 上下文可全量承载(T4 已全只读域暴露并跑通)。故:
+   - 工具:维持 T4 的"全只读域 function spec 全量暴露 + LLM function-calling 自选",**不做向量检索子集**(向量检索 = 隐性分类,违背 T9 去类型化)。
+   - skill:T9-6 同样"全量描述暴露 + LLM 自选",**不做向量检索**。
+   - Claude Code 本身也不对工具/skill 做向量检索 —— 它是 frontmatter 全量常驻 + LLM 推理选。RA 与之同构。
+
+3. **若未来工具/skill 增至数百上千**(目前没有),再评估"懒加载 schema"(选中才拉完整 schema,如 Tool Attention)这类**确定性**优化 —— 仍非向量召回事实。届时单独设计,不在 T9 范围。
+
+**一句话:T9 把"选择权交还 LLM(function-calling,去关键词分类)",但既不碰确定性长期记忆树,也不引入任何向量/RAG 层。**
+
+## 9. 产品对比与取长补短(附录,佐证选型)
+| 维度 | Claude Code | OpenClaw | LangGraph 等框架 | RA 现状 | T9 目标 |
+|---|---|---|---|---|---|
+| MCP 工具选择 | LLM 推理(frontmatter 常驻) | LLM + Gateway | function-calling | ✅ T4 已达标 | 维持 |
+| 工具过载处理 | 全量常驻(量级可控) | 文件化 | 向量 RAG(上千工具时) | 283 全量(可控) | 维持全量,不引向量 |
+| Skill 选择 | LLM 像选工具一样选(meta-tool) | skill 原生调 MCP | — | ❌ 关键词分类器+审批 | **T9-6 平权** |
+| 新增 skill 可见 | 丢 SKILL.md 即可见 | 文件化自动发现 | — | ❌ YAML 硬注册+关键词 | **T9-6 自动可见** |
+| 自进化 | — | Skill Workshop 自动起草 | — | ❌ 无 | 远期(走审批) |
+| 审批门/护栏 | 沙箱 | 签名 manifest+沙箱 | — | ✅ 审批门+反幻觉(更严) | **保留强化(RA 优势)** |
+
+取长补短结论:**借 Claude Code 的 skill 平权 + 描述常驻(T9-6);维持 RA 已对齐的工具 function-calling(T4);保留并强化 RA 独有的审批门+反幻觉(金融生产必需);均不引入向量/RAG;OpenClaw 式自进化列为远期、必经审批。**
