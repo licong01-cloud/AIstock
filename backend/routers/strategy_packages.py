@@ -18,6 +18,10 @@ from backend.services.strategy_package.asset_eligibility import StrategyPackageA
 from backend.services.strategy_package.components import StrategyPackageComponentService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.paper_trading_v2.models import BrokerBackendId
+from backend.services.strategy_package.multi_alpha_paper_dry_run import (
+    MultiAlphaPaperDryRunValidator,
+)
 from backend.services.strategy_package.multi_alpha_promotion import MultiAlphaPackagePromotionService
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
@@ -221,6 +225,16 @@ class GenerateSelectionArtifactsRequest(BaseModel):
     source_path: str | None = None
     include_reference_price: bool = True
     cutoff_date: date | None = None
+
+
+class MultiAlphaPaperRuntimeDryRunRequest(BaseModel):
+    broker_backend: BrokerBackendId = "local_sim"
+    trade_date: date
+    runtime_variant: str = Field(pattern=r"^top_k=(25|50)$")
+    confirmation: str = Field(min_length=1)
+    validated_by: str = Field(default="aistock_api", min_length=1)
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    initial_cash: float = Field(default=1_000_000.0, gt=0)
 
 
 def _raise_http(exc: TradingCoreError) -> None:
@@ -725,6 +739,35 @@ def list_strategy_package_selection_artifacts(package_id: str, limit: int = 100)
             "ok": True,
             "package_id": package_id,
             "artifacts": [_selection_artifact_payload(artifact) for artifact in artifacts],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/paper-runtime-dry-run")
+def run_multi_alpha_paper_runtime_dry_run(
+    package_id: str,
+    req: MultiAlphaPaperRuntimeDryRunRequest,
+) -> dict[str, Any]:
+    try:
+        result = MultiAlphaPaperDryRunValidator().run(
+            package_id=package_id,
+            broker_backend=req.broker_backend,
+            trade_date=req.trade_date,
+            runtime_variant=req.runtime_variant,
+            confirmation=req.confirmation,
+            validated_by=req.validated_by,
+            runtime_config=req.runtime_config,
+            initial_cash=req.initial_cash,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "broker_backend": req.broker_backend,
+            "runtime_variant": req.runtime_variant,
+            "trade_date": req.trade_date.isoformat(),
+            "admission": result.admission.to_dict(),
+            "dry_run": result.to_dict(),
         }
     except TradingCoreError as exc:
         _raise_http(exc)

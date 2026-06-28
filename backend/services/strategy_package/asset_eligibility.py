@@ -6,11 +6,15 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.services.paper_trading_v2.models import BrokerBackendId
 from backend.services.trading_core.errors import PackageAssetInvalidError, StrategyPackageValidationError
 
 from .manifest import compute_manifest_sha256
 from .models import PackageStatus
+from .multi_alpha_paper_admission import MultiAlphaPaperAdmissionRepository
 from .validators import StrategyPackageValidator
+
+MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
 
 
 @dataclass(frozen=True)
@@ -48,10 +52,22 @@ class StrategyPackageAssetEligibilityResult:
 class StrategyPackageAssetEligibilityService:
     """Validate immutable package assets without Paper/Selection lifecycle gates."""
 
-    def __init__(self, *, validator: StrategyPackageValidator | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        validator: StrategyPackageValidator | None = None,
+        admission_reader: Any | None = None,
+    ) -> None:
         self.validator = validator or StrategyPackageValidator()
+        self.admission_reader = admission_reader or MultiAlphaPaperAdmissionRepository()
 
-    def summarize(self, record: Any) -> StrategyPackageAssetEligibilityResult:
+    def summarize(
+        self,
+        record: Any,
+        *,
+        broker_backend: BrokerBackendId = "local_sim",
+        runtime_variant: str | None = None,
+    ) -> StrategyPackageAssetEligibilityResult:
         package_id = str(getattr(record, "package_id", "") or "")
         manifest_sha256 = getattr(record, "manifest_sha256", None)
         legacy_status = _status_value(getattr(record, "package_status", None))
@@ -213,11 +229,24 @@ class StrategyPackageAssetEligibilityService:
                 )
 
         checks.extend(_alpha_core_shape_checks(manifest))
-        checks.extend(_multi_alpha_runtime_blockers(manifest))
+        checks.extend(
+            _multi_alpha_runtime_blockers(
+                manifest,
+                broker_backend=broker_backend,
+                runtime_variant=runtime_variant,
+                admission_reader=self.admission_reader,
+            )
+        )
         return self._result(package_id, manifest_sha256, actual, legacy_status, checks)
 
-    def require_eligible(self, record: Any) -> StrategyPackageAssetEligibilityResult:
-        result = self.summarize(record)
+    def require_eligible(
+        self,
+        record: Any,
+        *,
+        broker_backend: BrokerBackendId = "local_sim",
+        runtime_variant: str | None = None,
+    ) -> StrategyPackageAssetEligibilityResult:
+        result = self.summarize(record, broker_backend=broker_backend, runtime_variant=runtime_variant)
         if result.eligible:
             return result
         raise PackageAssetInvalidError(
@@ -347,7 +376,13 @@ def _alpha_core_shape_checks(manifest: Any) -> list[StrategyPackageAssetEligibil
     return checks
 
 
-def _multi_alpha_runtime_blockers(manifest: Any) -> list[StrategyPackageAssetEligibilityCheck]:
+def _multi_alpha_runtime_blockers(
+    manifest: Any,
+    *,
+    broker_backend: BrokerBackendId = "local_sim",
+    runtime_variant: str | None = None,
+    admission_reader: Any | None = None,
+) -> list[StrategyPackageAssetEligibilityCheck]:
     if _status_value(getattr(manifest, "alpha_mode", None)) != "multi_alpha":
         return []
     evidence = getattr(manifest, "source_evidence", {}) or {}
@@ -356,13 +391,89 @@ def _multi_alpha_runtime_blockers(manifest: Any) -> list[StrategyPackageAssetEli
     blocking = list(paper_admission.get("blocking") or []) if isinstance(paper_admission, dict) else []
     if not blocking:
         return []
-    return [
-        _check(
-            str(reason),
-            "FAIL",
-            "hard",
-            "MULTI_ALPHA package is not eligible for Paper until runtime dry-run validates live signal generation",
-            {"package_id": manifest.package_id, "alpha_mode": "multi_alpha"},
+    resolved_variant = runtime_variant or _runtime_variant_from_manifest(manifest)
+    checks: list[StrategyPackageAssetEligibilityCheck] = []
+    for reason in blocking:
+        reason_text = str(reason)
+        if reason_text != MULTI_ALPHA_PAPER_ADMISSION_BLOCKER:
+            checks.append(
+                _check(
+                    reason_text,
+                    "FAIL",
+                    "hard",
+                    "MULTI_ALPHA package is blocked by manifest paper admission policy",
+                    {
+                        "reason_code": reason_text,
+                        "package_id": manifest.package_id,
+                        "alpha_mode": "multi_alpha",
+                        "broker_backend": broker_backend,
+                        "runtime_variant": resolved_variant,
+                    },
+                )
+            )
+            continue
+        admission = None
+        lookup_error: str | None = None
+        if admission_reader is not None and getattr(manifest, "manifest_sha256", None):
+            try:
+                admission = admission_reader.get_eligible(
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest.manifest_sha256,
+                    broker_backend=broker_backend,
+                    runtime_variant=resolved_variant,
+                )
+            except Exception as exc:  # fail-closed with explicit context; do not silently ignore DB/DDL drift.
+                lookup_error = f"{type(exc).__name__}: {exc}"
+        if admission is not None:
+            checks.append(
+                _check(
+                    reason_text,
+                    "PASS",
+                    "hard",
+                    "MULTI_ALPHA runtime dry-run admission is present for broker/runtime variant",
+                    {
+                        "reason_code": reason_text,
+                        "package_id": manifest.package_id,
+                        "alpha_mode": "multi_alpha",
+                        "broker_backend": broker_backend,
+                        "runtime_variant": resolved_variant,
+                        "admission_id": getattr(admission, "admission_id", None),
+                        "dry_run_run_id": getattr(admission, "dry_run_run_id", None),
+                        "validated_at": getattr(admission, "validated_at", None).isoformat()
+                        if getattr(admission, "validated_at", None)
+                        else None,
+                    },
+                )
+            )
+            continue
+        context = {
+            "reason_code": reason_text,
+            "package_id": manifest.package_id,
+            "alpha_mode": "multi_alpha",
+            "manifest_sha256": getattr(manifest, "manifest_sha256", None),
+            "broker_backend": broker_backend,
+            "runtime_variant": resolved_variant,
+        }
+        if lookup_error:
+            context["admission_lookup_error"] = lookup_error
+        checks.append(
+            _check(
+                reason_text,
+                "FAIL",
+                "hard",
+                "MULTI_ALPHA package is not eligible for Paper/Selection until runtime dry-run validates live signal generation for this broker/runtime variant",
+                context,
+            )
         )
-        for reason in blocking
-    ]
+    return checks
+
+
+def _runtime_variant_from_manifest(manifest: Any) -> str:
+    daily_strategy = (getattr(manifest, "backtest_context", {}) or {}).get("daily_strategy")
+    topk = daily_strategy.get("topk") if isinstance(daily_strategy, dict) else None
+    if topk is None:
+        return "top_k=unknown"
+    try:
+        return f"top_k={int(topk)}"
+    except (TypeError, ValueError):
+        return f"top_k={topk}"
