@@ -1046,11 +1046,13 @@ class MultiAlphaCombineBacktestService:
         self._panel_builder = panel_builder or MultiAlphaPanelBuilder()
         self._prediction_loader = prediction_loader
         self._model_store = ModelStoreService()
-        self._executor = executor or ShellPredBacktestExecutor()
+        self._executor = executor
         self._repository = repository or MultiAlphaCombineBacktestRepository()
         self._capacity_checker = capacity_checker or DatabaseQENodeCapacityChecker()
         self._workspace_root = Path(workspace_root or os.getenv("AISTOCK_MULTI_ALPHA_BACKTEST_ROOT") or "rdagent_assets/multi_alpha_combine_backtests")
         self._clock = clock or utc_now
+        self._local_executor = ShellPredBacktestExecutor()
+        self._remote_executor: BacktestExecutor | None = None
 
     def submit_run(self, payload: Mapping[str, Any], *, run_async: bool | None = None) -> dict[str, Any]:
         request = parse_request(payload)
@@ -1602,7 +1604,8 @@ class MultiAlphaCombineBacktestService:
             backtest_name=name,
         )
         try:
-            metrics = self._executor.execute_pred_backtest(
+            executor = self._executor_for_node(node_id)
+            metrics = executor.execute_pred_backtest(
                 workspace=workspace,
                 pred_pkl=pred_pkl,
                 node_id=node_id,
@@ -1627,6 +1630,17 @@ class MultiAlphaCombineBacktestService:
         )
         metrics["pred_persisted"] = metrics["prediction_store_manifest"] is not None
         return metrics
+
+    def _executor_for_node(self, node_id: str) -> BacktestExecutor:
+        if self._executor is not None:
+            return self._executor
+        from backend.services.multi_alpha.remote_dispatch import RemotePredBacktestExecutor, is_remote_compute_node
+
+        if not is_remote_compute_node(node_id):
+            return self._local_executor
+        if self._remote_executor is None:
+            self._remote_executor = RemotePredBacktestExecutor()
+        return self._remote_executor
 
 
 CallableUtc = Any
