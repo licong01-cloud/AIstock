@@ -126,29 +126,13 @@
 - T9-6c:废除 `natural_language_triggers` 作为触发主路径(降为可选 seed 提示,或删);新增 skill 进 catalog 即自动进可选集。
 - T9-6d:回归断言 —— ① skill 换措辞(不含原关键词)LLM 仍能基于语义选中;② 选中 skill 必出 Action Proposal 且未经审批不执行(审批门未削);③ 新增一个 mock skill 进 catalog,无需写关键词即被 LLM 可见可选。
 
-## 8. 明确边界:T9 全程不引入 RAG / 向量检索(对齐既有"长期记忆不是 RAG"原则)
+## 8. 产品对比与取长补短(附录,佐证选型)
+| 维度 | Claude Code | OpenClaw | RA 现状 | T9 目标 |
+|---|---|---|---|---|
+| MCP 工具选择 | LLM 推理(frontmatter 常驻) | LLM + Gateway | ✅ T4 已达标(全只读域 function-calling 自选) | 维持 |
+| Skill 选择 | LLM 像选工具一样选(meta-tool) | skill 原生调 MCP | ❌ 关键词分类器 + 审批 | **T9-6 平权** |
+| 新增 skill 可见 | 丢 SKILL.md 即可见 | 文件化自动发现 | ❌ YAML 硬注册 + 关键词 | **T9-6 自动可见** |
+| 自进化 | — | Skill Workshop 自动起草 | ❌ 无 | 远期(必经审批) |
+| 审批门 / 护栏 | 沙箱 | 签名 manifest + 沙箱 | ✅ 审批门 + 反幻觉(更严) | **保留强化(RA 优势)** |
 
-**这是本设计稿的硬约束,防止误引入向量层:**
-
-1. **长期记忆维持现状,坚决不用 RAG**。依据 `aistock_research_agent_console_design_20260520.md` §4.4「长期记忆不是 RAG」:RAG/向量检索只能辅助召回,不能作事实源/规则源/审批源/任务状态源。现实现 `memory_tree.py` + `graph_context.expand_neighbors` 是**纯确定性 SQL 树遍历 + 图边遍历**(按 `tree_path` 前缀 / 关系边,**无 embedding、无向量、无余弦相似度**)。项目级记忆(`project.*`)与个人习惯记忆(`personal.preference.*`/`personal.habit.*`)均树状结构 + 确定性检索。**T9 不碰记忆层,不引入向量。**
-
-2. **工具 / skill 选择也不用 RAG / 向量**。外部框架(LangGraph bigtool 等)对工具做向量检索 top-k,是为解决**上千工具撞 128 上限**的过载问题。**RA 仅 283 工具 + 6 skill,量级远未到过载阈值**,DeepSeek 上下文可全量承载(T4 已全只读域暴露并跑通)。故:
-   - 工具:维持 T4 的"全只读域 function spec 全量暴露 + LLM function-calling 自选",**不做向量检索子集**(向量检索 = 隐性分类,违背 T9 去类型化)。
-   - skill:T9-6 同样"全量描述暴露 + LLM 自选",**不做向量检索**。
-   - Claude Code 本身也不对工具/skill 做向量检索 —— 它是 frontmatter 全量常驻 + LLM 推理选。RA 与之同构。
-
-3. **若未来工具/skill 增至数百上千**(目前没有),再评估"懒加载 schema"(选中才拉完整 schema,如 Tool Attention)这类**确定性**优化 —— 仍非向量召回事实。届时单独设计,不在 T9 范围。
-
-**一句话:T9 把"选择权交还 LLM(function-calling,去关键词分类)",但既不碰确定性长期记忆树,也不引入任何向量/RAG 层。**
-
-## 9. 产品对比与取长补短(附录,佐证选型)
-| 维度 | Claude Code | OpenClaw | LangGraph 等框架 | RA 现状 | T9 目标 |
-|---|---|---|---|---|---|
-| MCP 工具选择 | LLM 推理(frontmatter 常驻) | LLM + Gateway | function-calling | ✅ T4 已达标 | 维持 |
-| 工具过载处理 | 全量常驻(量级可控) | 文件化 | 向量 RAG(上千工具时) | 283 全量(可控) | 维持全量,不引向量 |
-| Skill 选择 | LLM 像选工具一样选(meta-tool) | skill 原生调 MCP | — | ❌ 关键词分类器+审批 | **T9-6 平权** |
-| 新增 skill 可见 | 丢 SKILL.md 即可见 | 文件化自动发现 | — | ❌ YAML 硬注册+关键词 | **T9-6 自动可见** |
-| 自进化 | — | Skill Workshop 自动起草 | — | ❌ 无 | 远期(走审批) |
-| 审批门/护栏 | 沙箱 | 签名 manifest+沙箱 | — | ✅ 审批门+反幻觉(更严) | **保留强化(RA 优势)** |
-
-取长补短结论:**借 Claude Code 的 skill 平权 + 描述常驻(T9-6);维持 RA 已对齐的工具 function-calling(T4);保留并强化 RA 独有的审批门+反幻觉(金融生产必需);均不引入向量/RAG;OpenClaw 式自进化列为远期、必经审批。**
+取长补短结论:**借 Claude Code 的 skill 平权 + 描述常驻(T9-6);维持 RA 已对齐的工具 function-calling 自选(T4);保留并强化 RA 独有的审批门 + 反幻觉(金融生产必需);OpenClaw 式自进化列为远期、必经审批。**
