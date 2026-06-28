@@ -11,11 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
-from backend.services.qe_archive.archive_service import QEArchiveService
-from backend.services.qe_archive.backfill_service import QEArchiveBackfillService
-from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
+from backend.services.qe_archive.archive_service import QEArchiveService  # noqa: E402
+from backend.services.qe_archive.backfill_service import QEArchiveBackfillService  # noqa: E402
+from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler  # noqa: E402
 
 
 WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE"

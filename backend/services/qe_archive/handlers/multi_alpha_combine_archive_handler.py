@@ -9,7 +9,7 @@ from typing import Any
 
 from ..models import ArchiveJobRecord, ClaimedOutboxEvent
 from ..repository import QEArchiveRepository
-from ..multi_alpha_provenance import MultiAlphaProvenanceResolver, SeedProvenance
+from ..multi_alpha_provenance import MultiAlphaProvenanceResolver
 from .contract import ArchiveHandler, ArchiveResult, HandlerStatus, PayloadValidationError
 
 
