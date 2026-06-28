@@ -30,8 +30,8 @@
   "expected": "LocalSIM market-data preflight should accept valid TDX realtime compact intraday timestamp encodings, preserve fail-fast rejection for truly malformed timestamps, and avoid marking LocalSIM sessions failed before broker submission when quotes are otherwise usable.",
   "first_seen_at": "2026-06-28T18:22:22.182914Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c942a7438b5d512279d0158a4319bb03b6d50ff5",
+  "fixed_at": "2026-06-28T19:11:51.652456Z",
   "github_issue_number": 1712,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1712",
   "last_seen_at": "2026-06-28T18:22:22.182914Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1715",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -59,6 +60,10 @@
     "fingerprint": "765c1ccae00d5040fe507e53",
     "source_event_id": "FE-20260629-765c1ccae00d"
   },
+  "validation_evidence": [
+    "GitHub PR #1715 CI -> passed (17 checks)",
+    "local: pytest market_data, ruff changed files, diff-check, l0, validation_module_registry_l0, paper_v2_l3(skip UI) -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
