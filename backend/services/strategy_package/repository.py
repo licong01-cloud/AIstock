@@ -2249,7 +2249,12 @@ class InMemoryStrategyPackageRepository:
         if record.package_status not in allowed_from:
             raise InvalidStateTransitionError(
                 "invalid strategy package status transition",
-                context={"package_id": package_id, "from_status": record.package_status.value, "to_status": to_status.value},
+                context={
+                    "package_id": package_id,
+                    "from_status": record.package_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed_from),
+                },
             )
         updated = record.model_copy(update={"package_status": to_status, "updated_at": datetime.now(timezone.utc)})
         self.records[package_id] = updated

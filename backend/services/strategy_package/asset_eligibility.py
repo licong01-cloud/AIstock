@@ -311,12 +311,7 @@ def _status_value(status: Any) -> str | None:
 def _normalized_legacy_status(status: str | None) -> str | None:
     if not status:
         return None
-    if status in {
-        PackageStatus.DRAFT.value,
-        PackageStatus.ASSET_VALIDATED.value,
-        PackageStatus.BACKTEST_APPROVED.value,
-        PackageStatus.RETIRED.value,
-    }:
+    if status in {item.value for item in PackageStatus}:
         return status
     return PackageStatus.BACKTEST_APPROVED.value
 
