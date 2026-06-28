@@ -1,0 +1,78 @@
+{
+  "actual": "Directional-prediction guard currently depends on _is_future_question keyword classification before checking answer markers.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "tests/aistock_validation/bugs/20260629_BUG-544-ra-t9-1-direction-prediction-guard-is-gated-by-future-question-keywords.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-544",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-28T16:55:52.341502Z",
+  "description": "Directional-prediction guard currently depends on _is_future_question keyword classification before checking answer markers.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-caf95e54f319",
+      "timestamp": "2026-06-28T16:55:52.341498Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/ra_t9_detype_convergence_design_20260628 §2-A1 §3 T9-1 §4 §5"
+  ],
+  "expected": "Any evidence-required answer containing an unnegated directional prediction is rejected regardless of question wording; negated non-predictions and historical factual restatements pass.",
+  "first_seen_at": "2026-06-28T16:55:52.341502Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1708,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1708",
+  "last_seen_at": "2026-06-28T16:55:52.341502Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "research_assistant_backend",
+    "ra_phase7_full_accept",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA T9-1 direction prediction guard is gated by future-question keywords",
+  "trigger_condition": {
+    "fingerprint": "caf95e54f3192c8876a2d617",
+    "source_event_id": "FE-20260629-caf95e54f319"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
