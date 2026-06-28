@@ -1,4 +1,4 @@
-# 多 Alpha 组合回测(combine-backtest)远端节点派发能力设计
+﻿# 多 Alpha 组合回测(combine-backtest)远端节点派发能力设计
 
 - 日期:2026-06-27
 - 文档类型:功能设计方案(**F1 标准单模块功能**)+ 现状可行性分析
@@ -244,17 +244,25 @@ combine workspace 的数据按"变化频率"分三层:
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 实现阶段填 | L1 node 解析单测 | ready | - |
-| F-002 | 实现阶段填 | L2 远端执行器集成 | ready | - |
-| F-003 | 实现阶段填 | L4 远端 loop 投递 | ready | - |
-| F-004 | 实现阶段填 | L1 三层就绪校验 | ready | - |
-| F-005 | 实现阶段填 | L1 守卫跨来源单测 | ready | - |
-| F-006 | 实现阶段填 | L2 本地路径前后对照 | ready | - |
-| F-007 | 实现阶段填 | L5 数值对账 | ready | - |
-| F-008 | 实现阶段填 | L1 fail-loud 用例 | ready | - |
-| F-009 | 实现阶段填 | L2 WAS 流式+sha 校验 | ready | - |
-| F-010 | 实现阶段填 | L1 sha 幂等去重 | ready | - |
-| F-011 | 实现阶段填 | L2 symlink 装配 | ready | - |
+| F-001 | `backend/services/multi_alpha/remote_dispatch.py`; `backend/services/multi_alpha/combine_backtest.py` | `test_is_remote_compute_node_uses_compute_node_registry`; local/remote executor selection tests | verified | - |
+| F-002 | `backend/services/multi_alpha/remote_dispatch.py::RemotePredBacktestExecutor` | `test_remote_pred_backtest_executor_posts_loop_and_ingests_metrics` | verified | - |
+| F-003 | `backend/services/multi_alpha/remote_dispatch.py::_run_remote_loop` | L2 mock loop POST/poll verified; L4 live remote task `macb_f007_7738e811_ic_weighted_20260628` Loop1/Loop2 completed on `rdagent-node1`; `run.log` records `bash -lc` with explicit `cd /home/lc999/projects/RD-Agent-main/qe_workspace/.../LoopN` and returned `qlib_results_enhanced.json` | verified | - |
+| F-004 | `_resolve_l2_artifact_path`; `_remote_paths`; `_sync_small_files`; `_remote_wsl_command` | remote path missing/local-path rejection/small-file loop scoped upload tests | verified | - |
+| F-005 | Phase 2 per design section 4B; no Phase 1 code path | User-approved Phase 1 scope excludes capacity guard; verified no qe_evolution_* / qe_experiments runtime changes in this branch | not_applicable approved_by_user | approved_by_user: capacity guard remains Phase 2 scope per section 4B; not implemented in Phase 1. |
+| F-006 | `combine_backtest.py::_executor_for_node` | `backend/tests/test_multi_alpha_combine_backtest.py` + remote tests: 55 passed | verified | - |
+| F-007 | remote enhanced JSON is ingested via existing `ingest_enhanced_metrics` | L4 true remote run on `rdagent-node1`: baseline `macb_7738e811293948eb_20250601_20260310_20260627T191255096216Z/combined_ic_weighted` vs remote `macb_f007_7738e811_ic_weighted_20260628/Loop1`; CAGR 0.53318, MaxDD -0.086708, Sharpe 3.1063, Calmar 6.149144254278729, topk_return_20 0.045095, topk_hit_rate_20 0.608634, turnover 9.5448; abs/rel tolerance 1e-6, all diffs 0.0 | verified | - |
+| F-008 | `remote_dispatch.py` reason_code paths for node/path/artifact/sync/remote fail/timeout/result invalid | failure/timeout/sync/sha mismatch tests | verified | - |
+| F-009 | `rdagent/app/api_endpoints/qe_workspace_artifacts_api.py`; `rdagent/app/results_api_server.py` | RDAgent WAS tests: upload/head/get/dedup/sha mismatch/invalid sha; live 215 `GET /api/v1/qe_workspace/artifacts/{64*0}` returns 200; true 952333757-byte parquet artifact sha `96a81665ee0c1f02247d36813d1e14f8f88ab94ce0c71d9e4501578e26c8ecbf` uploaded and then HEAD verified | verified | - |
+| F-010 | `remote_dispatch.py::WorkspaceArtifactSyncClient` | HEAD hit skip, upload+verify, remote size mismatch, invalid upload response tests | verified | - |
+| F-011 | RDAgent content-addressed store; AIstock symlink command | symlink command and WAS endpoint tests; L4 `run.log` shows `ln -sfn /home/lc999/projects/RD-Agent-main/qe_workspace_artifact_store/96a81665... combined_factors_df.parquet` followed by successful `test -f` and full backtest completion; second dispatch Loop2 used `uploaded=false` HEAD hit | verified | - |
+
+### 4D.1 Phase 1 F-007 live evidence (2026-06-28)
+
+- Remote node: `rdagent-node1` / `192.168.50.215:9000`.
+- Remote task: `macb_f007_7738e811_ic_weighted_20260628`, loops `Loop1` and `Loop2`.
+- Baseline: `macb_7738e811293948eb_20250601_20260310_20260627T191255096216Z/combined_ic_weighted`.
+- Artifact: `combined_factors_df.parquet`, size `952333757`, sha256 `96a81665ee0c1f02247d36813d1e14f8f88ab94ce0c71d9e4501578e26c8ecbf`; first sync uploaded to WAS, later dispatches reported `uploaded=false`.
+- Numeric tolerance: absolute and relative `1e-6`; compared CAGR/Sharpe/MaxDD/Calmar/topk_return_20/topk_hit_rate_20/turnover; all diffs were `0.0`.
 
 ---
 
