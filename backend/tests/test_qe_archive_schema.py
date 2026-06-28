@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.db.init_qe_archive_schema import (
     QE_ARCHIVE_SCHEMA_VERSION,
     iter_ddl,
@@ -18,6 +20,11 @@ def test_qe_archive_schema_declares_required_tables() -> None:
     required_tables = (
         "qe_archive.run",
         "qe_archive.run_source",
+        "qe_archive.multi_alpha_run",
+        "qe_archive.multi_alpha_leg",
+        "qe_archive.multi_alpha_leg_source",
+        "qe_archive.multi_alpha_scheme",
+        "qe_archive.multi_alpha_loo",
         "qe_archive.run_config",
         "qe_archive.run_reproducibility_manifest",
         "qe_archive.run_data_context",
@@ -157,7 +164,7 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 
 
 def test_qe_archive_schema_version_is_explicit() -> None:
-    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v2_20260516"
+    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v3_20260628"
     assert "qe_archive.schema_version" in _ddl_text()
 
 
@@ -190,3 +197,45 @@ def test_qe_archive_every_table_and_column_has_database_comment() -> None:
 
     for table_name, column_name in iter_qe_archive_columns():
         assert f"COMMENT ON COLUMN {table_name}.{column_name} IS" in ddl
+
+def test_qe_archive_multi_alpha_phase_a_schema_contract() -> None:
+    ddl = _ddl_text()
+
+    required_fragments = (
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_run",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg_source",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_scheme",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_loo",
+        "status IN ('succeeded','partial_failed','failed')",
+        "source_experiment_id TEXT",
+        "source_loop_index INTEGER",
+        "source_run_type TEXT",
+        "resolved BOOLEAN NOT NULL DEFAULT FALSE",
+        "resolved = TRUE AND source_experiment_id IS NOT NULL AND source_loop_id IS NOT NULL AND source_loop_index IS NOT NULL AND source_run_type IS NOT NULL",
+        "scheme_algorithm TEXT NOT NULL",
+        "weights_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "per_window_weights_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in ddl
+
+
+def test_qe_archive_multi_alpha_phase_a_migration_has_forward_rollback_comments_and_partial_failed() -> None:
+    forward = Path("backend/migrations/qe_archive_multi_alpha_phase_a_20260628.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/migrations/qe_archive_multi_alpha_phase_a_20260628.rollback.sql").read_text(encoding="utf-8")
+
+    for table in (
+        "multi_alpha_run",
+        "multi_alpha_leg",
+        "multi_alpha_leg_source",
+        "multi_alpha_scheme",
+        "multi_alpha_loo",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in forward
+        assert f"COMMENT ON TABLE qe_archive.{table}" in forward
+        assert f"DROP TABLE IF EXISTS qe_archive.{table}" in rollback
+    assert "partial_failed" in forward
+    assert "reason->>'logical_status' = 'partial_failed'" in forward
+    assert "Cannot rollback ck_macb_run_status while partial_failed rows exist" in rollback

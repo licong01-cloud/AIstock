@@ -22,7 +22,7 @@ router = APIRouter(prefix="/qe-archive", tags=["qe-archive"])
 
 
 class QEArchiveBackfillRequest(BaseModel):
-    source: Literal["experiment", "loop", "task", "all"] = Field(
+    source: Literal["experiment", "loop", "task", "multi-alpha", "all"] = Field(
         "loop",
         description="Source rows to backfill when explicit ids are not provided.",
     )

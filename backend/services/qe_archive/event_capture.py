@@ -12,6 +12,10 @@ from typing import Any
 
 from .models import OutboxEventRecord
 from .repository import QEArchiveRepository
+from .handlers.multi_alpha_combine_archive_handler import (
+    MULTI_ALPHA_COMBINE_EVENT_TYPE,
+    MULTI_ALPHA_COMBINE_SCHEMA_VERSION,
+)
 
 
 QE_ARCHIVE_EVENT_CAPTURE_ENV = "QE_ARCHIVE_EVENT_CAPTURE_ENABLED"
@@ -129,6 +133,59 @@ class QEArchiveEventCapture:
             source_system="qe",
             source_id=experiment_id,
             source_sub_id=None,
+            payload=event_payload,
+        )
+
+    def enqueue_multi_alpha_combine_completed(
+        self,
+        *,
+        run_id: str,
+        roster_hash: str | None = None,
+        status: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> bool:
+        return bool(
+            self.enqueue_multi_alpha_combine_completed_result(
+                run_id=run_id,
+                roster_hash=roster_hash,
+                status=status,
+                payload=payload,
+            ).get("inserted")
+        )
+
+    def enqueue_multi_alpha_combine_completed_result(
+        self,
+        *,
+        run_id: str,
+        roster_hash: str | None = None,
+        status: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+        archive_policy: str = "AUTO",
+        archive_policy_source: str = "multi_alpha_default",
+        trigger_reason: str = "realtime",
+        payload_sha256: str | None = None,
+        runtime_config_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        event_payload = dict(payload or {})
+        event_payload.setdefault("schema_version", MULTI_ALPHA_COMBINE_SCHEMA_VERSION)
+        event_payload.setdefault("run_id", run_id)
+        if roster_hash:
+            event_payload.setdefault("roster_hash", roster_hash)
+        if status:
+            event_payload.setdefault("status", status)
+        event_payload.setdefault("routing_class", "archive")
+        event_payload.setdefault("archive_policy", archive_policy)
+        event_payload.setdefault("archive_policy_source", archive_policy_source)
+        event_payload.setdefault("trigger_reason", trigger_reason)
+        if payload_sha256:
+            event_payload.setdefault("payload_sha256", payload_sha256)
+        if runtime_config_sha256:
+            event_payload.setdefault("runtime_config_sha256", runtime_config_sha256)
+        return self._insert_event_result(
+            event_type=MULTI_ALPHA_COMBINE_EVENT_TYPE,
+            source_system="multi_alpha",
+            source_id=run_id,
+            source_sub_id=run_id,
             payload=event_payload,
         )
 

@@ -11,10 +11,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
-from backend.services.qe_archive.archive_service import QEArchiveService
-from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
+from backend.services.qe_archive.archive_service import QEArchiveService  # noqa: E402
+from backend.services.qe_archive.backfill_service import QEArchiveBackfillService  # noqa: E402
+from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler  # noqa: E402
 
 
 WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE"
@@ -57,7 +58,7 @@ def main() -> int:
             "Default mode is dry-run and does not write qe_archive rows."
         )
     )
-    parser.add_argument("--source", choices=("experiment", "loop", "all"), default="all")
+    parser.add_argument("--source", choices=("experiment", "loop", "multi-alpha", "all"), default="all")
     parser.add_argument("--experiment-id", help="Archive or preview one qe_experiments row.")
     parser.add_argument("--loop-id", help="Archive or preview one qe_evolution_loops row.")
     parser.add_argument("--task-id", help="Task id used with --loop-index.")
@@ -76,10 +77,28 @@ def main() -> int:
     if args.write and args.confirm_write != WRITE_CONFIRM_TEXT:
         parser.error(f"--write requires --confirm-write {WRITE_CONFIRM_TEXT}")
 
-    load_dotenv(REPO_ROOT / ".env", override=True)
+    load_dotenv(REPO_ROOT / ".env", override=False)
     assembler = QEArchiveSourceAssembler()
+    backfill_service = QEArchiveBackfillService()
     dry_run = not args.write
     results: list[dict[str, Any]] = []
+
+    def process_multi_alpha() -> dict[str, Any]:
+        return backfill_service.backfill_multi_alpha_combine_runs(
+            write=args.write,
+            confirm_write=args.confirm_write,
+            include_archived=False,
+            limit=args.limit,
+        )
+
+    if args.source == "multi-alpha":
+        report = process_multi_alpha()
+        text = json.dumps(report, ensure_ascii=False, indent=2, default=_json_default)
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(text, encoding="utf-8")
+        print(text)
+        return 0
 
     if args.experiment_id:
         payload = assembler.assemble_experiment_payload(args.experiment_id)
@@ -113,6 +132,9 @@ def main() -> int:
         "processed_count": len(results),
         "results": results,
     }
+    if args.source == "all":
+        report["multi_alpha_report"] = process_multi_alpha()
+        report["processed_count"] += int(report["multi_alpha_report"].get("processed_count") or 0)
     text = json.dumps(report, ensure_ascii=False, indent=2, default=_json_default)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

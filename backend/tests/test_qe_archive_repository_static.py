@@ -1118,6 +1118,58 @@ def test_backfill_service_task_loop_indices_expand_selected_loops() -> None:
     assert result["results"][2]["skipped_reason"] == "loop_not_found_or_filtered"
 
 
+def test_backfill_all_includes_multi_alpha_runs() -> None:
+    class FakeAssembler:
+        def list_experiment_ids(self, *, status, limit, include_archived):  # type: ignore[no-untyped-def]
+            return ["exp_1"]
+
+        def list_loop_refs(self, *, status, limit, include_archived):  # type: ignore[no-untyped-def]
+            return [{"task_id": "task_1", "loop_id": "loop_1", "loop_index": 1}]
+
+        def assemble_experiment_payload(self, experiment_id):  # type: ignore[no-untyped-def]
+            return {"source_system": "qe", "source_id": experiment_id, "experiment_id": experiment_id}
+
+        def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
+            return {"source_system": "qe_evolution", "source_id": task_id, "source_sub_id": loop_id}
+
+    class FakeArchiveService:
+        def process_payload(self, payload, *, event_type, source_system, source_id, source_sub_id, dry_run):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(run_id=f"run_{source_id}_{source_sub_id or 'exp'}", stats={"written": not dry_run})
+
+    class FakeRepository:
+        def get_archive_summary(self):  # type: ignore[no-untyped-def]
+            return {"run_count": 2}
+
+        def list_multi_alpha_combine_run_ids(self, *, include_archived, limit):  # type: ignore[no-untyped-def]
+            assert include_archived is False
+            assert limit == 10
+            return ["macb_1", "macb_2"]
+
+    class FakeMultiAlphaHandler:
+        def archive_run(self, run_id, *, dry_run=False):  # type: ignore[no-untyped-def]
+            return {
+                "run_id": run_id,
+                "dry_run": dry_run,
+                "written": not dry_run,
+                "leg_count": 1,
+                "provenance_complete_leg_count": 1,
+                "leg_source_count": 1,
+                "resolved_source_count": 1,
+            }
+
+    result = QEArchiveBackfillService(
+        assembler=FakeAssembler(),  # type: ignore[arg-type]
+        archive_service=FakeArchiveService(),  # type: ignore[arg-type]
+        repository=FakeRepository(),  # type: ignore[arg-type]
+        multi_alpha_handler=FakeMultiAlphaHandler(),  # type: ignore[arg-type]
+    ).process_backfill(QEArchiveBackfillOptions(source="all", limit=10, write=False))
+
+    assert result["processed_count"] == 4
+    assert result["candidate_count"] == 4
+    assert result["multi_alpha_report"]["processed_count"] == 2
+    assert result["multi_alpha_report"]["provenance_report"]["source_resolve_rate"] == 1.0
+
+
 def test_backfill_execute_records_audit_run_items_and_separate_counts() -> None:
     class FakeAssembler:
         def list_loop_refs_for_task_indices(self, task_id, loop_indices, *, status, include_archived):  # type: ignore[no-untyped-def]
@@ -1888,7 +1940,7 @@ def test_worker_skips_paper_v2_archive_events_with_audit_reason() -> None:
 
         def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
             self.claims.append(dict(kwargs))
-            if kwargs.get("source_systems") == ("paper_v2.daemon", "paper_v2"):
+            if set(kwargs.get("source_systems") or ()) >= {"paper_v2.daemon", "paper_v2"}:
                 return [event]
             return []
 
@@ -1909,7 +1961,7 @@ def test_worker_skips_paper_v2_archive_events_with_audit_reason() -> None:
     assert result.failed == 0
     assert result.skipped == 1
     assert repository.claims[1]["routing_class"] is None
-    assert repository.claims[1]["source_systems"] == ("paper_v2.daemon", "paper_v2")
+    assert set(repository.claims[1]["source_systems"]) >= {"paper_v2.daemon", "paper_v2"}
     assert repository.skipped == [(event, "paper_v2_archive_deferred_throwaway", "realtime")]
 
 
@@ -1928,7 +1980,7 @@ def test_worker_skips_unsupported_paper_outbox_events_loudly() -> None:
             self.skipped: list[tuple[str, str]] = []
 
         def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
-            if kwargs.get("source_systems") == ("paper_v2.daemon", "paper_v2"):
+            if set(kwargs.get("source_systems") or ()) >= {"paper_v2.daemon", "paper_v2"}:
                 return [event]
             return []
 
@@ -2056,7 +2108,11 @@ def test_worker_service_archives_loop_outbox_event_through_backfill_handler() ->
             self.completed_jobs: list[tuple[str, str | None, dict]] = []
 
         def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
-            assert kwargs["event_types"] == ("qe.loop.completed", "qe.experiment.completed")
+            assert kwargs["event_types"] == (
+                "qe.loop.completed",
+                "qe.experiment.completed",
+                "qe.multi_alpha.combine.completed",
+            )
             return [event]
 
         def create_archive_job(self, job):  # type: ignore[no-untyped-def]
