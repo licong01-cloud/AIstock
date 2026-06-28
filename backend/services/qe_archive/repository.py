@@ -43,6 +43,7 @@ ConnectionProvider = Callable[[], Any]
 
 ARCHIVE_ROUTING_CLASS = "archive"
 PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS = ("paper_v2.daemon", "paper_v2")
+MULTI_ALPHA_OUTBOX_SKIP_SOURCE_SYSTEMS = ("multi_alpha",)
 PAPER_DAEMON_EVENT_TYPES = (
     "paper.daemon.run_started",
     "paper.daemon.intent_created",
@@ -114,6 +115,87 @@ RUN_SOURCE_COLUMNS = (
     "qlib_recorder_name",
     "node_api_base_url",
     "metadata",
+)
+
+MULTI_ALPHA_RUN_COLUMNS = (
+    "run_id",
+    "roster_hash",
+    "oos_start",
+    "oos_end",
+    "normalize_method",
+    "walk_forward_json",
+    "baseline_leg_id",
+    "leg_count",
+    "status",
+    "logical_status",
+    "reason_json",
+    "source_created_at",
+    "archived_at",
+)
+
+MULTI_ALPHA_LEG_COLUMNS = (
+    "run_id",
+    "leg_id",
+    "leg_order",
+    "seed_run_ids",
+    "factor_set_hash",
+    "factor_names",
+    "factor_count",
+    "model_type",
+    "model_family",
+    "freq",
+    "label_horizon",
+    "seed_count",
+    "source_run_meta",
+    "provenance_complete",
+)
+
+MULTI_ALPHA_LEG_SOURCE_COLUMNS = (
+    "run_id",
+    "leg_id",
+    "source_seq",
+    "seed_ref",
+    "seed_ref_kind",
+    "source_experiment_id",
+    "source_task_id",
+    "source_loop_id",
+    "source_loop_index",
+    "source_run_type",
+    "source_model_type",
+    "source_factor_set_hash",
+    "resolved",
+    "resolve_method",
+    "resolve_note",
+)
+
+MULTI_ALPHA_SCHEME_COLUMNS = (
+    "run_id",
+    "weighting_scheme",
+    "scheme_algorithm",
+    "weights_json",
+    "per_window_weights_json",
+    "cagr",
+    "max_drawdown",
+    "sharpe",
+    "calmar",
+    "topk_return_20",
+    "topk_hit_rate_20",
+    "turnover",
+    "vs_baseline_sharpe_delta",
+    "vs_baseline_calmar_delta",
+    "pred_persisted",
+    "skipped",
+    "skipped_reason",
+    "is_best",
+)
+
+MULTI_ALPHA_LOO_COLUMNS = (
+    "run_id",
+    "weighting_scheme",
+    "dropped_leg_id",
+    "marginal_cagr",
+    "marginal_sharpe",
+    "marginal_calmar",
 )
 
 RUN_CONFIG_COLUMNS = (
@@ -440,6 +522,13 @@ JSON_COLUMNS = {
     "canonical_config",
     "raw_config",
     "factor_list",
+    "walk_forward_json",
+    "reason_json",
+    "seed_run_ids",
+    "factor_names",
+    "source_run_meta",
+    "weights_json",
+    "per_window_weights_json",
     "model_config",
     "model_params",
     "strategy_config",
@@ -639,6 +728,177 @@ class QEArchiveRepository:
                 cur.execute(sql, [self._adapt_value(col, record[col]) for col in columns])
                 row = cur.fetchone()
         return int(row[0]) if row else None
+
+    def fetch_archive_run_for_seed(self, seed_run_id: str) -> dict[str, Any] | None:
+        """Fetch the authoritative QE archive run row for a seed reference."""
+
+        seed_run_id = str(seed_run_id or "").strip()
+        if not seed_run_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        r.run_id,
+                        r.experiment_id,
+                        r.task_id,
+                        r.loop_id,
+                        r.loop_index,
+                        r.run_type,
+                        r.model_type,
+                        r.model_family,
+                        r.factor_set_hash,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        rc.factor_list AS factor_names,
+                        r.completed_at,
+                        r.archived_at,
+                        r.source_created_at,
+                        r.source_updated_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_archive.run_config rc ON rc.run_id = r.run_id
+                    WHERE r.run_id = %s
+                    """,
+                    (seed_run_id,),
+                )
+                rows = self._fetch_dicts(cur)
+        return rows[0] if rows else None
+
+    def resolve_evolution_loop_seed(self, *, task_id: str, loop_index: int) -> dict[str, Any] | None:
+        """Resolve qe_<task>_L<idx> style seeds through QE loop rows and archive runs."""
+
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        l.task_id,
+                        l.loop_id,
+                        l.loop_index,
+                        l.experiment_id,
+                        l.status AS loop_status,
+                        l.config_json,
+                        l.metrics_json,
+                        r.run_id,
+                        r.run_type,
+                        r.model_type,
+                        r.model_family,
+                        r.factor_set_hash,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        rc.factor_list AS factor_names,
+                        r.completed_at,
+                        r.archived_at,
+                        r.source_created_at,
+                        r.source_updated_at
+                    FROM qe_evolution_loops l
+                    LEFT JOIN qe_archive.run r
+                      ON r.task_id = l.task_id
+                     AND (r.loop_id = l.loop_id OR r.loop_index = l.loop_index)
+                     AND r.run_type IN ('evolution_loop','single_experiment')
+                    LEFT JOIN qe_archive.run_config rc ON rc.run_id = r.run_id
+                    WHERE l.task_id = %s
+                      AND l.loop_index = %s
+                    ORDER BY r.archived_at DESC NULLS LAST, r.completed_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (task_id, loop_index),
+                )
+                rows = self._fetch_dicts(cur)
+        return rows[0] if rows else None
+
+    def fetch_multi_alpha_combine_run(self, run_id: str) -> dict[str, Any] | None:
+        """Read the macb source-of-truth business tables for one run."""
+
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run
+                    WHERE id = %s
+                    """,
+                    (run_id,),
+                )
+                run_rows = self._fetch_dicts(cur)
+                if not run_rows:
+                    return None
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme
+                    """,
+                    (run_id,),
+                )
+                schemes = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_loo
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme, dropped_leg_id
+                    """,
+                    (run_id,),
+                )
+                loo = self._fetch_dicts(cur)
+        return {"run": run_rows[0], "scheme_results": schemes, "loo": loo}
+
+    def list_multi_alpha_combine_run_ids(
+        self,
+        *,
+        statuses: Sequence[str] = ("succeeded", "partial_failed", "failed"),
+        include_archived: bool = False,
+        limit: int = 500,
+    ) -> list[str]:
+        """List terminal macb business runs for manual or historical backfill."""
+
+        normalized_statuses = [str(status).strip() for status in statuses if str(status).strip()]
+        if not normalized_statuses:
+            return []
+        limit = max(1, min(int(limit or 500), 5000))
+        archive_filter = (
+            ""
+            if include_archived
+            else """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM qe_archive.multi_alpha_run ar
+                  WHERE ar.run_id = r.id
+              )
+            """
+        )
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.id
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run r
+                    WHERE (
+                        r.status = ANY(%s)
+                        OR (
+                            r.status = 'failed'
+                            AND r.reason->>'logical_status' = 'partial_failed'
+                            AND 'partial_failed' = ANY(%s)
+                        )
+                    )
+                    {archive_filter}
+                    ORDER BY r.created_at ASC
+                    LIMIT %s
+                    """,
+                    (normalized_statuses, normalized_statuses, limit),
+                )
+                return [str(row[0]) for row in cur.fetchall()]
 
     def upsert_run_config(self, config: RunConfigRecord | Mapping[str, Any]) -> str:
         if isinstance(config, Mapping):
@@ -969,6 +1229,9 @@ class QEArchiveRepository:
             "routing_class": payload.get("routing_class"),
             "event_id": event.event_id,
         }
+        archive_policy_source = "paper_v2_throwaway_policy"
+        if event.source_system == "multi_alpha":
+            archive_policy_source = "multi_alpha_archive_policy"
         skip_record = SkipRegistryRecord(
             source_system=event.source_system,
             source_type=source_type,
@@ -976,7 +1239,7 @@ class QEArchiveRepository:
             source_sub_id=event.source_sub_id,
             event_type=event.event_type,
             archive_policy="SKIP",
-            archive_policy_source="paper_v2_throwaway_policy",
+            archive_policy_source=archive_policy_source,
             skip_reason=reason_code,
             trigger_reason=trigger_reason,
             payload_sha256=payload_sha256,
@@ -2535,6 +2798,97 @@ class QEArchiveRepository:
                 execute_values(cur, insert_sql, rows, page_size=1000)
         return len(records)
 
+    def archive_multi_alpha_bundle(
+        self,
+        *,
+        run_header: Mapping[str, Any],
+        archive_run: Mapping[str, Any],
+        run_source: Mapping[str, Any],
+        legs: Sequence[Mapping[str, Any]],
+        leg_sources: Sequence[Mapping[str, Any]],
+        schemes: Sequence[Mapping[str, Any]],
+        loo: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Idempotently write all Phase A macb archive rows in one transaction."""
+
+        run_record = self._prepare_record(archive_run, RUN_COLUMNS, defaults={"attempt_no": 1, "is_latest_attempt": True})
+        self._require(run_record, RUN_REQUIRED)
+        macb_run = self._prepare_record(run_header, MULTI_ALPHA_RUN_COLUMNS)
+        self._require(macb_run, ("run_id", "roster_hash", "oos_start", "oos_end", "normalize_method", "status"))
+        source_record = self._prepare_record(run_source, RUN_SOURCE_COLUMNS)
+        self._require(source_record, ("run_id", "source_system", "source_type", "source_id"))
+        leg_records = [self._prepare_record(row, MULTI_ALPHA_LEG_COLUMNS) for row in legs]
+        source_records = [self._prepare_record(row, MULTI_ALPHA_LEG_SOURCE_COLUMNS) for row in leg_sources]
+        scheme_records = [self._prepare_record(row, MULTI_ALPHA_SCHEME_COLUMNS) for row in schemes]
+        loo_records = [self._prepare_record(row, MULTI_ALPHA_LOO_COLUMNS) for row in loo]
+        for record in leg_records:
+            self._require(record, ("run_id", "leg_id", "leg_order"))
+        for record in source_records:
+            self._require(record, ("run_id", "leg_id", "source_seq", "seed_ref", "seed_ref_kind", "resolve_method"))
+        for record in scheme_records:
+            self._require(record, ("run_id", "weighting_scheme", "scheme_algorithm"))
+        for record in loo_records:
+            self._require(record, ("run_id", "weighting_scheme", "dropped_leg_id"))
+
+        with self._transaction_connection() as conn:
+            with conn.cursor() as cur:
+                self._execute_upsert_run(cur, run_record)
+                self._execute_upsert_run_source(cur, source_record)
+                self._execute_upsert_single(
+                    cur,
+                    table_name="qe_archive.multi_alpha_run",
+                    columns=MULTI_ALPHA_RUN_COLUMNS,
+                    record=macb_run,
+                    conflict_target="run_id",
+                )
+                run_id = str(macb_run["run_id"])
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_leg",
+                    columns=MULTI_ALPHA_LEG_COLUMNS,
+                    records=leg_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_leg WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_leg_source",
+                    columns=MULTI_ALPHA_LEG_SOURCE_COLUMNS,
+                    records=source_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_leg_source WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_scheme",
+                    columns=MULTI_ALPHA_SCHEME_COLUMNS,
+                    records=scheme_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_scheme WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_loo",
+                    columns=MULTI_ALPHA_LOO_COLUMNS,
+                    records=loo_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_loo WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+        return {
+            "run_id": str(macb_run["run_id"]),
+            "run_rows": 1,
+            "leg_rows": len(leg_records),
+            "leg_source_rows": len(source_records),
+            "scheme_rows": len(scheme_records),
+            "loo_rows": len(loo_records),
+        }
+
+    def _transaction_connection(self) -> Any:
+        try:
+            return self._connection_provider(autocommit=False, manage_transaction=True)
+        except TypeError:
+            return self._connection_provider()
+
     def replace_run_curves(self, run_id: str, curves: Sequence[CurveRecord | Mapping[str, Any]]) -> int:
         records = [self._prepare_record(curve, CURVE_COLUMNS) for curve in curves]
         if not records:
@@ -2853,6 +3207,113 @@ class QEArchiveRepository:
                 f"{trigger_reason!r}: {constraint_text}"
             )
 
+    def _execute_upsert_run(self, cur: Any, record: Mapping[str, Any]) -> None:
+        columns = list(record.keys())
+        placeholders = ", ".join(["%s"] * len(columns))
+        assignment_parts: list[str] = []
+        for column in columns:
+            if column == "run_id":
+                continue
+            if column == "archived_at":
+                assignment_parts.append(
+                    "archived_at = COALESCE(EXCLUDED.archived_at, qe_archive.run.archived_at)"
+                )
+            else:
+                assignment_parts.append(f"{column} = EXCLUDED.{column}")
+        if record.get("is_latest_attempt") is True:
+            cur.execute(
+                """
+                UPDATE qe_archive.run
+                SET is_latest_attempt = FALSE, updated_at = NOW()
+                WHERE logical_experiment_id = %s AND run_id <> %s
+                """,
+                (record["logical_experiment_id"], record["run_id"]),
+            )
+        cur.execute(
+            f"""
+            INSERT INTO qe_archive.run ({", ".join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT (run_id) DO UPDATE SET
+                {", ".join(assignment_parts)},
+                updated_at = NOW()
+            """,
+            [self._adapt_value(col, record[col]) for col in columns],
+        )
+
+    def _execute_upsert_run_source(self, cur: Any, record: Mapping[str, Any]) -> None:
+        columns = list(record.keys())
+        cur.execute(
+            """
+            DELETE FROM qe_archive.run_source
+            WHERE source_system = %s
+              AND source_type = %s
+              AND source_id = %s
+              AND COALESCE(source_sub_id, '') = COALESCE(%s, '')
+            """,
+            (
+                record["source_system"],
+                record["source_type"],
+                record["source_id"],
+                record.get("source_sub_id"),
+            ),
+        )
+        cur.execute(
+            f"""
+            INSERT INTO qe_archive.run_source ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            """,
+            [self._adapt_value(col, record[col]) for col in columns],
+        )
+
+    def _execute_upsert_single(
+        self,
+        cur: Any,
+        *,
+        table_name: str,
+        columns: Sequence[str],
+        record: Mapping[str, Any],
+        conflict_target: str,
+    ) -> None:
+        insert_columns = [column for column in columns if column in record]
+        assignments = ", ".join(
+            f"{column} = EXCLUDED.{column}"
+            for column in insert_columns
+            if column != conflict_target
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {table_name} ({", ".join(insert_columns)})
+            VALUES ({", ".join(["%s"] * len(insert_columns))})
+            ON CONFLICT ({conflict_target}) DO UPDATE SET
+                {assignments}
+            """,
+            [self._adapt_value(col, record.get(col)) for col in insert_columns],
+        )
+
+    def _execute_replace_rows(
+        self,
+        cur: Any,
+        *,
+        table_name: str,
+        columns: Sequence[str],
+        records: Sequence[Mapping[str, Any]],
+        delete_sql: str,
+        delete_params: Sequence[Any],
+    ) -> None:
+        cur.execute(delete_sql, tuple(delete_params))
+        if not records:
+            return
+        rows = [
+            tuple(self._adapt_value(column, record.get(column)) for column in columns)
+            for record in records
+        ]
+        execute_values(
+            cur,
+            f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s",
+            rows,
+            page_size=500,
+        )
+
     @staticmethod
     def _fetch_dicts(cur: Any) -> list[dict[str, Any]]:
         rows = cur.fetchall()
@@ -2899,6 +3360,8 @@ class QEArchiveRepository:
             )
 
 def _policy_skip_source_type(event_type: str) -> str:
+    if event_type == "qe.multi_alpha.combine.completed":
+        return "multi_alpha_combine"
     if event_type.startswith("paper.daemon."):
         return "paper_daemon_telemetry"
     if event_type == "paper.portfolio_run.completed":

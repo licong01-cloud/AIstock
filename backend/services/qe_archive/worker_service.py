@@ -7,13 +7,21 @@ from dataclasses import asdict
 from typing import Any
 
 from .backfill_service import QEArchiveBackfillService
+from .handlers.multi_alpha_combine_archive_handler import (
+    MULTI_ALPHA_COMBINE_EVENT_TYPE,
+    MultiAlphaCombineArchiveHandler,
+)
 from .models import ClaimedOutboxEvent
 from .repository import QEArchiveRepository
-from .worker import ArchiveWorkerEventResult, ArchiveWorkerRunResult, QEArchiveWorker
+from .worker import ArchiveWorkerEventResult, ArchiveWorkerRunResult, QEArchiveWorker, archive_handler_adapter
 
 
 WORKER_CONFIRM_TEXT = "QE_ARCHIVE_WORKER_RUN"
-SUPPORTED_WORKER_EVENT_TYPES = ("qe.loop.completed", "qe.experiment.completed")
+SUPPORTED_WORKER_EVENT_TYPES = (
+    "qe.loop.completed",
+    "qe.experiment.completed",
+    MULTI_ALPHA_COMBINE_EVENT_TYPE,
+)
 
 
 class QEArchiveWorkerService:
@@ -29,6 +37,7 @@ class QEArchiveWorkerService:
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._backfill_service = backfill_service or QEArchiveBackfillService(repository=self._repository)
+        self._multi_alpha_handler = MultiAlphaCombineArchiveHandler(repository=self._repository)
         self._enabled = enabled
         self._worker_id = worker_id
 
@@ -40,6 +49,7 @@ class QEArchiveWorkerService:
             handlers={
                 "qe.loop.completed": self._handle_loop_completed,
                 "qe.experiment.completed": self._handle_experiment_completed,
+                MULTI_ALPHA_COMBINE_EVENT_TYPE: archive_handler_adapter(self._multi_alpha_handler),
             },
         )
         return _worker_result_to_dict(worker.run_once(limit=limit))
@@ -66,7 +76,6 @@ class QEArchiveWorkerService:
 
         report = self._backfill_service.archive_experiment_completed(experiment_id=experiment_id)
         return _archive_report_to_worker_result(report)
-
 
 def _archive_report_to_worker_result(report: Mapping[str, Any]) -> ArchiveWorkerEventResult:
     results = report.get("results")

@@ -1053,6 +1053,16 @@ class MultiAlphaCombineBacktestService:
         self._clock = clock or utc_now
         self._local_executor = ShellPredBacktestExecutor()
         self._remote_executor: BacktestExecutor | None = None
+        self._archive_event_capture = None
+        if isinstance(self._repository, MultiAlphaCombineBacktestRepository):
+            try:
+                from backend.services.qe_archive.event_capture import QEArchiveEventCapture
+
+                # Sidecar only: respect the explicit QE archive capture gate so
+                # combine-backtest runs never hard-depend on qe_archive DDL.
+                self._archive_event_capture = QEArchiveEventCapture()
+            except Exception:
+                logger.exception("multi-alpha QE archive event capture is unavailable")
 
     def submit_run(self, payload: Mapping[str, Any], *, run_async: bool | None = None) -> dict[str, Any]:
         request = parse_request(payload)
@@ -1065,9 +1075,13 @@ class MultiAlphaCombineBacktestService:
         if request.run_async:
             thread = threading.Thread(target=self._execute_run_thread, args=(run_id, request), daemon=True, name=f"macb-run-{run_id[:12]}")
             thread.start()
+            execution_payload: Mapping[str, Any] = {}
         else:
-            self.execute_run(run_id, request)
-        return {"run_id": run_id, "status": self.get_run(run_id)["run"]["status"]}
+            execution_payload = self.execute_run(run_id, request)
+        response = {"run_id": run_id, "status": self.get_run(run_id)["run"]["status"]}
+        if "archive_event" in execution_payload:
+            response["archive_event"] = execution_payload["archive_event"]
+        return response
 
     def _execute_run_thread(self, run_id: str, request: CombineBacktestRequest) -> None:
         try:
@@ -1085,23 +1099,74 @@ class MultiAlphaCombineBacktestService:
             return
 
     def execute_run(self, run_id: str, request: CombineBacktestRequest) -> dict[str, Any]:
+        roster_hash = roster_hash_for(request.roster)
         try:
             payload = self._execute_run(run_id, request)
         except Exception as exc:
             reason = terminal_error_payload(exc, run_id=run_id)
             self._repository.update_run_status(run_id, status="failed", reason=reason)
+            archive_event = self._emit_archive_event(
+                run_id=run_id,
+                roster_hash=roster_hash,
+                status="failed",
+                reason=reason,
+            )
+            reason["archive_event"] = archive_event
+            self._repository.update_run_status(run_id, status="failed", reason=reason)
             raise
         status = str(payload.get("status") or "succeeded")
         reason = payload.get("reason") if isinstance(payload.get("reason"), Mapping) else None
         self._repository.update_run_status(run_id, status=_persisted_run_status(status), reason=reason)
+        archive_event = self._emit_archive_event(
+            run_id=run_id,
+            roster_hash=roster_hash,
+            status=status,
+            reason=reason,
+        )
+        payload["archive_event"] = archive_event
+        if archive_event.get("error") or archive_event.get("skipped_reason"):
+            reason = _reason_with_archive_event(reason, status=status, archive_event=archive_event)
+            payload["reason"] = reason
+            self._repository.update_run_status(run_id, status=_persisted_run_status(status), reason=reason)
         if status == "failed":
             first_child_error = _first_child_error(reason)
             raise MultiAlphaCombineBacktestError(
                 "combine-backtest run failed; see run.reason failed_child_tasks for details",
                 reason_code=str((first_child_error or {}).get("reason_code") or "combine_backtest_child_failed"),
-                context={"run_id": run_id, "reason": dict(reason or {})},
+                context={"run_id": run_id, "reason": dict(reason or {}), "archive_event": archive_event},
             )
         return payload
+
+    def _emit_archive_event(
+        self,
+        *,
+        run_id: str,
+        roster_hash: str,
+        status: str,
+        reason: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self._archive_event_capture is None:
+            return {"queued": False, "skipped_reason": "archive_event_capture_not_configured", "run_id": run_id}
+        try:
+            result = self._archive_event_capture.enqueue_multi_alpha_combine_completed_result(
+                run_id=run_id,
+                roster_hash=roster_hash,
+                status=status,
+                payload={
+                    "reason_code": "multi_alpha_combine_terminal",
+                    "logical_status": status,
+                    "terminal_reason": dict(reason or {}),
+                },
+            )
+        except Exception as exc:
+            logger.exception("failed to enqueue multi-alpha QE archive event for run_id=%s", run_id)
+            return {
+                "queued": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "run_id": run_id,
+                "status": status,
+            }
+        return {"queued": bool(result.get("inserted")), **result}
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         payload = self._repository.get_run(run_id)
@@ -1575,11 +1640,6 @@ class MultiAlphaCombineBacktestService:
                 "failed_child_tasks": failed_by_name,
                 "logical_status": status,
             }
-            if status == LOGICAL_PARTIAL_FAILED_STATUS:
-                reason["storage_note"] = (
-                    "PostgreSQL run.status currently allows running/succeeded/failed only; "
-                    "partial_failed is recorded in reason.logical_status until the schema is extended."
-                )
         return {"run_id": run_id, "scheme_results": scheme_payloads, "loo": loo_payloads, "status": status, "reason": reason}
 
     def _run_prediction(
@@ -2030,8 +2090,6 @@ def validate_node_parallelism(*, node_id: str, backtest_config: Mapping[str, Any
 
 
 def _persisted_run_status(status: str) -> str:
-    if status == LOGICAL_PARTIAL_FAILED_STATUS:
-        return "failed"
     return status
 
 
@@ -2052,6 +2110,19 @@ def _with_logical_status(row: dict[str, Any]) -> dict[str, Any]:
     if isinstance(reason, Mapping) and reason.get("logical_status") == LOGICAL_PARTIAL_FAILED_STATUS:
         row["status"] = LOGICAL_PARTIAL_FAILED_STATUS
     return row
+
+
+def _reason_with_archive_event(
+    reason: Mapping[str, Any] | None,
+    *,
+    status: str,
+    archive_event: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(reason or {})
+    payload.setdefault("reason_code", "multi_alpha_combine_terminal")
+    payload.setdefault("logical_status", status)
+    payload["archive_event"] = dict(archive_event)
+    return payload
 
 
 def terminal_error_payload(exc: Exception, *, run_id: str) -> dict[str, Any]:

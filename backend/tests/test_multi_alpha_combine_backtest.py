@@ -103,6 +103,29 @@ class FakeCapacityChecker:
         self.releases.append(capacity)
 
 
+class FakeArchiveEventCapture:
+    def __init__(self, *, fail: bool = False, on_enqueue=None) -> None:  # type: ignore[no-untyped-def]
+        self.fail = fail
+        self.on_enqueue = on_enqueue
+        self.events: list[dict] = []
+
+    def enqueue_multi_alpha_combine_completed_result(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.events.append(dict(kwargs))
+        if self.on_enqueue is not None:
+            self.on_enqueue(dict(kwargs))
+        if self.fail:
+            raise RuntimeError("archive outbox unavailable")
+        return {
+            "inserted": True,
+            "event_id": f"evt_{kwargs['run_id']}",
+            "event_type": "qe.multi_alpha.combine.completed",
+            "source_system": "multi_alpha",
+            "source_id": kwargs["run_id"],
+            "source_sub_id": kwargs["run_id"],
+            "duplicate": False,
+        }
+
+
 def _pred(offset: float) -> pd.DataFrame:
     rows = []
     for d_idx, trade_date in enumerate(DATES):
@@ -184,6 +207,7 @@ def _service(
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
     )
+    service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker
 
 
@@ -235,6 +259,7 @@ def _rank_fusion_service(
         workspace_root=tmp_path / "macb",
         clock=lambda: datetime(2026, 1, 5, tzinfo=timezone.utc),
     )
+    service._archive_event_capture = FakeArchiveEventCapture()  # type: ignore[attr-defined]
     return service, repo, executor, checker
 
 
@@ -266,6 +291,21 @@ def test_combine_backtest_heartbeat_updates_phase_and_updated_at(tmp_path: Path)
     assert run["status"] == "succeeded"
     assert run["updated_at"] is not None
     assert run["reason"] is None
+
+
+def test_archive_event_enqueue_failure_is_sidecar_and_persisted(tmp_path: Path) -> None:
+    service, repo, _executor, _checker = _service(tmp_path)
+    service._archive_event_capture = FakeArchiveEventCapture(fail=True)  # type: ignore[attr-defined]
+
+    result = service.submit_run(_payload(), run_async=False)
+    run = repo.runs[result["run_id"]]
+
+    assert run["status"] == "succeeded"
+    assert result["archive_event"]["queued"] is False
+    assert "archive outbox unavailable" in result["archive_event"]["error"]
+    assert run["reason"]["logical_status"] == "succeeded"
+    assert run["reason"]["archive_event"]["run_id"] == result["run_id"]
+    assert "archive outbox unavailable" in run["reason"]["archive_event"]["error"]
 
 
 def test_async_daemon_exception_is_persisted_as_failed_not_silent(tmp_path: Path) -> None:
@@ -836,6 +876,10 @@ def test_node_parallelism_must_cover_selected_node(tmp_path: Path) -> None:
 
 def test_node_capacity_exhaustion_fails_loud_before_executor(tmp_path: Path) -> None:
     service, repo, executor, _checker = _service(tmp_path, capacity_checker=FakeCapacityChecker(active_count=2))
+    status_seen_by_archive_emit: list[str] = []
+    service._archive_event_capture = FakeArchiveEventCapture(  # type: ignore[attr-defined]
+        on_enqueue=lambda event: status_seen_by_archive_emit.append(repo.runs[event["run_id"]]["status"])
+    )
 
     with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
         service.submit_run(_payload(), run_async=False)
@@ -843,6 +887,7 @@ def test_node_capacity_exhaustion_fails_loud_before_executor(tmp_path: Path) -> 
     assert excinfo.value.reason_code == "node_capacity_exhausted"
     run_id = next(iter(repo.runs))
     assert repo.runs[run_id]["status"] == "failed"
+    assert status_seen_by_archive_emit == ["failed"]
     assert executor.calls == []
 
 
@@ -863,7 +908,7 @@ def test_noncritical_child_failure_records_reason_and_continues(tmp_path: Path) 
     assert len(run["scheme_results"]) == 1
     assert len(run["loo"]) == 2
     assert {row["dropped_leg_id"] for row in run["loo"]} == {"leg_a", "leg_c"}
-    assert repo.runs[run_id]["status"] == "failed"
+    assert repo.runs[run_id]["status"] == "partial_failed"
     assert {call["workspace"].name for call in executor.calls} >= {"baseline_leg_a", "combined_equal", "loo_equal_drop_leg_a", "loo_equal_drop_leg_c"}
 
 
