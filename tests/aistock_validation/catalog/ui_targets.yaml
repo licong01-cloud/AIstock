@@ -277,24 +277,6 @@ targets:
   - Review Auto Evolution state
   - Validate Auto Evolution primary workflow
   coverage_status: planned
-- route_id: qe.multi_alpha_diagnostics
-  href: /quantevolver/multi-alpha/diagnostics
-  label: Multi-Alpha Diagnostics
-  nav_group: QuantEvolver
-  primary_module: qe.auto_evolution
-  impact_modules:
-  - qe.enhanced_metrics
-  risk_level: high
-  required_test_plans:
-  - l0
-  - qe_read_l3
-  recommended_test_plans:
-  - qe_data_contract_backend
-  business_operations:
-  - Open Multi-Alpha Diagnostics
-  - Review Multi-Alpha Diagnostics state
-  - Validate Multi-Alpha Diagnostics primary workflow
-  coverage_status: planned
 - route_id: qe.multi_alpha_orthogonality
   href: /quantevolver/multi-alpha/orthogonality
   label: Multi-Alpha Orthogonality
@@ -331,24 +313,6 @@ targets:
   - Open Multi-Alpha Combine Backtest
   - Review combine-backtest task grid
   - Inspect combine-backtest loop detail
-  coverage_status: planned
-- route_id: qe.multi_alpha_evolve
-  href: /quantevolver/multi-alpha/evolve-wizard
-  label: Multi-Alpha Evolution
-  nav_group: QuantEvolver
-  primary_module: qe.auto_evolution
-  impact_modules:
-  - qe.custom_evolution
-  risk_level: high
-  required_test_plans:
-  - l0
-  - qe_read_l3
-  recommended_test_plans:
-  - qe_data_contract_backend
-  business_operations:
-  - Open Multi-Alpha Evolution
-  - Review Multi-Alpha Evolution state
-  - Validate Multi-Alpha Evolution primary workflow
   coverage_status: planned
 - route_id: qe.sota
   href: /quantevolver/evolution/sota
