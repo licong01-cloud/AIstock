@@ -8,6 +8,7 @@ from backend.db.init_qe_archive_schema import (
     iter_qe_archive_columns,
     iter_qe_archive_tables,
 )
+from scripts.qe_archive_data_quality_smoke import _schema_version_status
 
 
 def _ddl_text() -> str:
@@ -166,6 +167,30 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 def test_qe_archive_schema_version_is_explicit() -> None:
     assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v3_20260628"
     assert "qe_archive.schema_version" in _ddl_text()
+
+
+def test_qe_archive_data_quality_treats_missing_version_metadata_as_warning_when_structure_matches() -> None:
+    status, should_fail = _schema_version_status(
+        None,
+        missing_tables=[],
+        missing_table_comments=[],
+        missing_column_comments=[],
+    )
+
+    assert status == "missing_structural_match"
+    assert should_fail is False
+
+
+def test_qe_archive_data_quality_fails_missing_version_when_structure_drifts() -> None:
+    status, should_fail = _schema_version_status(
+        None,
+        missing_tables=["qe_archive.run_metric"],
+        missing_table_comments=[],
+        missing_column_comments=[],
+    )
+
+    assert status == "missing_structural_drift"
+    assert should_fail is True
 
 
 def test_qe_archive_v2_tracks_policy_ingest_history_and_backfill_lifecycle() -> None:

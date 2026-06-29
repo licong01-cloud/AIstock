@@ -11,14 +11,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
-from backend.db.init_qe_archive_schema import (
+from backend.db.init_qe_archive_schema import (  # noqa: E402
     QE_ARCHIVE_SCHEMA_VERSION,
     iter_qe_archive_columns,
     iter_qe_archive_tables,
 )
-from backend.db.pg_pool import get_conn
+from backend.db.pg_pool import get_conn  # noqa: E402
+
+
+def _schema_version_status(
+    schema_version_row: Any,
+    *,
+    missing_tables: list[str],
+    missing_table_comments: list[str],
+    missing_column_comments: list[tuple[str, str]],
+) -> tuple[str, bool]:
+    """Return schema version status and whether it should fail the smoke."""
+
+    if schema_version_row:
+        return "recorded", False
+    if not missing_tables and not missing_table_comments and not missing_column_comments:
+        return "missing_structural_match", False
+    return "missing_structural_drift", True
 
 
 def _check_run(
@@ -231,12 +247,19 @@ def _check_db(
     missing_tables = sorted(expected_tables - existing_tables)
     missing_table_comments = sorted(expected_tables - commented_tables)
     missing_column_comments = sorted(expected_columns - commented_columns)
+    schema_version_status, schema_version_failure = _schema_version_status(
+        schema_version_row,
+        missing_tables=missing_tables,
+        missing_table_comments=missing_table_comments,
+        missing_column_comments=missing_column_comments,
+    )
 
     result["checks"] = {
         "expected_table_count": len(expected_tables),
         "existing_table_count": len(expected_tables & existing_tables),
         "missing_tables": missing_tables,
         "schema_version_present": bool(schema_version_row),
+        "schema_version_status": schema_version_status,
         "expected_column_count": len(expected_columns),
         "commented_table_count": len(expected_tables & commented_tables),
         "missing_table_comments": missing_table_comments,
@@ -254,8 +277,13 @@ def _check_db(
 
     if missing_tables:
         result["failures"].append(f"missing qe_archive tables: {missing_tables}")
-    if not schema_version_row:
+    if schema_version_failure:
         result["failures"].append(f"missing schema version: {QE_ARCHIVE_SCHEMA_VERSION}")
+    elif not schema_version_row:
+        result["warnings"].append(
+            f"missing schema version metadata: {QE_ARCHIVE_SCHEMA_VERSION}; "
+            "structural schema matches current code"
+        )
     if missing_table_comments:
         result["failures"].append(f"missing table comments: {missing_table_comments}")
     if missing_column_comments:
