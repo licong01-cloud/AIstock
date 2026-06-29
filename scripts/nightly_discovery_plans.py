@@ -144,6 +144,24 @@ def finalize_result(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _fixed_bug_has_closure_evidence(payload: dict[str, Any]) -> bool:
+    if str(payload.get("fix_commit") or "").strip():
+        return True
+    if str(payload.get("pr_url") or "").strip():
+        return True
+    for ref in payload.get("evidence_uris") or []:
+        text = str(ref or "").strip().lower()
+        if "/pull/" in text or text.startswith("pr #"):
+            return True
+    for event in payload.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        text = " ".join(str(event.get(key) or "") for key in ("action", "note", "pr_url", "commit"))
+        if "/pull/" in text.lower() or str(event.get("commit") or "").strip():
+            return True
+    return False
+
+
 def discover_issue_intake_readonly(root: Path, *, limit: int = 120, **_: Any) -> dict[str, Any]:
     plan_key = "validation_discovery_issue_intake_readonly"
     result = base_result(plan_key, root=root)
@@ -198,7 +216,7 @@ def discover_issue_intake_readonly(root: Path, *, limit: int = 120, **_: Any) ->
                     details={"bug_id": bug_id, "status": status},
                 )
             )
-        if status == "fixed" and (not payload.get("fix_commit") or not payload.get("pr_url")):
+        if status == "fixed" and not _fixed_bug_has_closure_evidence(payload):
             result["anomalies"].append(
                 make_anomaly(
                     plan_key=plan_key,
