@@ -117,13 +117,24 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
     repo.mark_paper_portfolio_created(saved.package_id, "paper_1")
 
     assert saved.manifest_sha256 == manifest.manifest_sha256
-    assert selected.package_status == PackageStatus.BACKTEST_APPROVED
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert selected.package_status == PackageStatus.SELECTION_ENABLED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
     assert repo.get(saved.package_id).paper_portfolio_count == 1
     assert [event.reason for event in repo.list_status_events(saved.package_id)] == [
         "package_created",
+        "enable_selection",
+        "enable_paper",
         "paper_portfolio_created",
     ]
+    lifecycle_events = repo.list_status_events(saved.package_id)
+    assert (lifecycle_events[1].from_status, lifecycle_events[1].to_status) == (
+        PackageStatus.BACKTEST_APPROVED,
+        PackageStatus.SELECTION_ENABLED,
+    )
+    assert (lifecycle_events[2].from_status, lifecycle_events[2].to_status) == (
+        PackageStatus.SELECTION_ENABLED,
+        PackageStatus.PAPER_ENABLED,
+    )
 
 
 def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
@@ -137,7 +148,30 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
 
     paper = service.enable_paper(manifest.package_id)
 
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_enable_paper_rejects_draft_direct_transition_with_context() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.DRAFT})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    err = exc_info.value
+    assert err.context["package_id"] == manifest.package_id
+    assert err.context["from_status"] == PackageStatus.DRAFT.value
+    assert err.context["to_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["allowed_from"] == [
+        PackageStatus.BACKTEST_APPROVED.value,
+        PackageStatus.SELECTION_ENABLED.value,
+    ]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.DRAFT
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == ["package_created"]
 
 
 def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
@@ -155,8 +189,8 @@ def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
     assert governance["live_strict_ready"] is False
     assert governance["does_not_block_paper_simulation"] is True
     assert "protected_asset_ledger_missing" in governance["blockers"]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
-    assert [event.reason for event in repo.list_status_events(manifest.package_id)][-1] == "package_created"
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)][-1] == "enable_paper"
 
 
 def test_paper_simulation_admission_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +237,7 @@ def test_enable_paper_allows_missing_original_fixed_weight_retest_as_warning() -
 
     assert admission["paper_simulation_allowed"] is True
     assert "live_strict_governance:original_fixed_weight_retest_missing_passed_run_for_current_manifest" in admission["warnings"]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_intent() -> None:
@@ -243,7 +277,7 @@ def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_
             "created_by": "unit_test",
         }
     ]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
@@ -274,7 +308,7 @@ def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> No
     assert original_retest["same_manifest_run_count"] == 0
     assert original_retest["observed_original_fixed_weight_runs"] == []
     assert context["does_not_block_paper_simulation"] is True
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:
@@ -317,7 +351,7 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
 
     assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
     assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_qe_source_payload_warns_on_malformed_result_metrics(caplog: pytest.LogCaptureFixture) -> None:
@@ -663,7 +697,7 @@ def test_strategy_package_execution_policy_stores_unregistered_algo_as_runtime_c
     assert policy.paper_enabled is False
 
 
-def test_asset_eligibility_accepts_legacy_paper_status_as_non_gate_metadata() -> None:
+def test_asset_eligibility_accepts_paper_status_as_formal_lifecycle_state() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
     record = repo.save_manifest(manifest)
@@ -673,7 +707,7 @@ def test_asset_eligibility_accepts_legacy_paper_status_as_non_gate_metadata() ->
 
     assert result.eligible is True
     assert result.legacy_status == PackageStatus.PAPER_ENABLED.value
-    assert result.legacy_status_normalized_to == PackageStatus.BACKTEST_APPROVED.value
+    assert result.legacy_status_normalized_to == PackageStatus.PAPER_ENABLED.value
     assert result.blockers == []
 
 

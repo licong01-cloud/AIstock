@@ -1,11 +1,8 @@
-"""Invariant tests for enable_paper() compatibility behavior.
+"""Invariant tests for enable_paper() lifecycle behavior.
 
-Paper v2 gate purge keeps enable_paper() as a deprecated compatibility entry:
-asset identity still fails fast, but legacy PAPER_ENABLED is a no-op instead
-of a StrategyPackage lifecycle gate.
-
-Out of scope: validation_status / paper_candidate / retest gate wiring (T8-A,
-blocked on Codex Phase 3 schema integration into backend/services/validation/).
+enable_paper() is a real StrategyPackage lifecycle transition again: asset
+identity remains fail-fast and already-enabled re-entry is rejected with
+state-machine context instead of being treated as compatibility no-op success.
 """
 
 from __future__ import annotations
@@ -22,6 +19,7 @@ from backend.services.strategy_package.repository import (
 )
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import (
+    InvalidStateTransitionError,
     StrategyPackageValidationError,
 )
 from backend.tests.strategy_package.test_enable_paper_router_409 import (
@@ -76,7 +74,7 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
 
     service = StrategyPackageService(repository=repo)
 
-    # Seed legacy governance evidence to prove manifest identity remains the
+    # Seed governance evidence to prove manifest identity remains the
     # blocking condition even when live-strict evidence exists.
     _seed_paper_ready_package(service, record.package_id)
 
@@ -95,8 +93,8 @@ def test_enable_paper_raises_on_manifest_sha256_mismatch() -> None:
     assert str(context.get("status")).lower() == "blocked"
 
 
-def test_enable_paper_treats_legacy_paper_enabled_as_noop() -> None:
-    """PAPER_ENABLED is legacy metadata, not a Paper simulation admission gate."""
+def test_enable_paper_rejects_already_enabled_reentry_with_context() -> None:
+    """PAPER_ENABLED is an active lifecycle state; re-entry is not silent."""
     repo = InMemoryStrategyPackageRepository()
     saved_manifest = freeze_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
@@ -105,7 +103,7 @@ def test_enable_paper_treats_legacy_paper_enabled_as_noop() -> None:
 
     service = StrategyPackageService(repository=repo)
     # Seed read-only governance fixtures so this regression stays focused on
-    # the legacy state-machine compare-and-set raise point.
+    # the PAPER_ENABLED re-entry state-machine raise point.
     _seed_paper_ready_package(service, record.package_id)
 
     # Force the persisted package_status to PAPER_ENABLED. current_manifest()
@@ -115,6 +113,14 @@ def test_enable_paper_treats_legacy_paper_enabled_as_noop() -> None:
         update={"package_status": PackageStatus.PAPER_ENABLED}
     )
 
-    paper = service.enable_paper(record.package_id)
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        service.enable_paper(record.package_id)
 
-    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    err = exc_info.value
+    assert err.context["package_id"] == record.package_id
+    assert err.context["from_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["to_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["allowed_from"] == [
+        PackageStatus.BACKTEST_APPROVED.value,
+        PackageStatus.SELECTION_ENABLED.value,
+    ]

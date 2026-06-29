@@ -1,50 +1,32 @@
-"""Phase 3 INT-6: enable_paper() fail-fast compat against the dev DB.
+"""Dev-DB coverage for StrategyPackageService.enable_paper lifecycle semantics.
 
-测试范围: **pre-d1ca0ba** enable_paper narrow gate
-(manifest_identity + original_fixed_weight_retest), 对应 commit
-9cd4c9b (in-memory invariants) + 4528a32 (T8-C router 409).
+These tests exercise the real PostgreSQL-backed repository against
+``aistock_dev``. They mirror the in-memory lifecycle invariants in
+``backend/tests/strategy_package/test_enable_paper_invariants.py``: an already
+``PAPER_ENABLED`` package must fail fast with ``InvalidStateTransitionError``,
+and asset-check failures must keep explicit validation context without silent
+state mutation.
 
-注意: codex/qe-governance-integration-20260509 上的 d1ca0ba 引入了
-governance hard gate (paper_ready=true 才能 enable). d1ca0ba 决定不
-merge 到 main 在 Phase 3 全绿前. 因此本测试 **不覆盖** d1ca0ba 路径.
-
-TODO INT-7: d1ca0ba 合 main 后启用
-``backend/tests/paper_trading_v2/test_runtime_enable_paper_strict_gate_compat.py``
-测试新路径 (paper_ready=false → StrategyPackageValidationError +
-governance_eligibility detail).
-
-REV-1 P1.1: Codex review noted INT-6 不测 d1ca0ba 路径; this docstring
-clarifies that gap and INT-7 placeholder reserves the slot.
-
----
-
-These tests exercise StrategyPackageService.enable_paper end-to-end against
-the real PG repository (``aistock_dev``). They mirror the in-memory
-invariants in ``backend/tests/strategy_package/test_enable_paper_invariants.py``
-(commit 9cd4c9b) but with the actual database-backed transition_status path
-(repository.py line 188-237).
-
-Boundary: every test inserts records tagged with ``package_id LIKE 'pkg_test_int6_%'``
-and DELETEs them on teardown. No existing dev-DB packages are mutated.
+Boundary: every test inserts records tagged with ``package_id LIKE
+'pkg_test_int6_%'`` and DELETEs them on teardown. No existing dev-DB packages
+are mutated.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Iterator
 from uuid import uuid4
 
 import psycopg2
 import pytest
 
-from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     AssetCheck,
     PackageStatus,
 )
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import StrategyPackageValidationError
+from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 from backend.tests.strategy_package.test_enable_paper_router_409 import (
     _seed_paper_ready_package,
@@ -152,7 +134,7 @@ def _seed_test_package(
             "package_status": PackageStatus.BACKTEST_APPROVED,
         }
     )
-    record = repo.save_manifest(manifest)
+    repo.save_manifest(manifest)
 
     # Now coerce the persisted package_status if it differs from BACKTEST_APPROVED.
     if persisted_status != PackageStatus.BACKTEST_APPROVED:
@@ -171,14 +153,14 @@ def _seed_test_package(
 
 
 # ---------------------------------------------------------------------------
-# INT-6a - legacy PAPER_ENABLED remains compatible metadata
+# INT-6a - persisted PAPER_ENABLED rejects re-entry explicitly
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_enable_paper_legacy_status_is_noop_compat(
+def test_runtime_enable_paper_enabled_status_reentry_fails_fast(
     dev_pkg_repo: StrategyPackageRepository,
 ) -> None:
-    """Legacy PAPER_ENABLED rows no longer block or mutate package admission."""
+    """PAPER_ENABLED rows are formal lifecycle state; re-entry is rejected."""
     pkg_id = _seed_test_package(
         dev_pkg_repo,
         persisted_status=PackageStatus.PAPER_ENABLED,
@@ -187,10 +169,19 @@ def test_runtime_enable_paper_legacy_status_is_noop_compat(
     service = StrategyPackageService(repository=dev_pkg_repo)
     _seed_paper_ready_package(service, pkg_id)
 
-    record = service.enable_paper(pkg_id)
-    assert record.package_status == PackageStatus.PAPER_ENABLED
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        service.enable_paper(pkg_id)
 
-    # Compatibility endpoint is a no-op: legacy row remains PAPER_ENABLED.
+    err = exc_info.value
+    assert err.context["package_id"] == pkg_id
+    assert err.context["from_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["to_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["allowed_from"] == [
+        PackageStatus.BACKTEST_APPROVED.value,
+        PackageStatus.SELECTION_ENABLED.value,
+    ]
+
+    # The failed re-entry must not mutate the row.
     conn = psycopg2.connect(**_dev_dsn())
     try:
         with conn.cursor() as cur:
@@ -216,10 +207,9 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
     """enable_paper on a SELECTION_ENABLED package whose manifest has a
     failed asset_check raises StrategyPackageValidationError.
 
-    The validator path runs BEFORE the state-machine compare-and-set
-    (service.py line 320-326), so even though the persisted state
-    transition (SELECTION_ENABLED -> PAPER_ENABLED) IS allowed, the
-    validator's manifest gate fails fast.
+    Asset eligibility runs before the repository compare-and-set, so even
+    though the persisted transition (SELECTION_ENABLED -> PAPER_ENABLED) is
+    allowed, the manifest asset-check gate fails fast.
 
     This is what audit-grade observability means: the failure surfaces the
     failed-checks context for downstream operator triage rather than
@@ -231,9 +221,8 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
         asset_checks_passing=False,
     )
     service = StrategyPackageService(repository=dev_pkg_repo)
-    # R6: governance gate prereq seed; the asset-check failure remains the
-    # operative blocker (caught inside _manifest_identity_gate), but seeding
-    # the other gates avoids unrelated blockers crowding the eligibility dict.
+    # Seed governance fixtures; the asset-check failure remains the operative
+    # blocker, but seeding avoids unrelated blockers crowding the context.
     _seed_paper_ready_package(service, pkg_id)
 
     with pytest.raises(StrategyPackageValidationError) as exc_info:

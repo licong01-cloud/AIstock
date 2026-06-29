@@ -20,6 +20,7 @@ from backend.services.strategy_package.asset_eligibility import (
     StrategyPackageAssetEligibilityService,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.multi_alpha_paper_admission import (
     InMemoryMultiAlphaPaperAdmissionRepository,
 )
@@ -31,6 +32,7 @@ from backend.services.strategy_package.multi_alpha_paper_dry_run import (
     MultiAlphaPaperDryRunValidator,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.tests.paper_trading_v2.test_day_runner import (
     make_paper_enabled_manifest,
@@ -144,6 +146,70 @@ def test_local_sim_dry_run_writes_admission_and_is_deterministic_for_topk_varian
         package_health_service=SelectionPackageHealthService(artifact_repository=artifact_repo),
     ).list_selectable_packages()
     assert parent.package_id in {item["package_id"] for item in selectable}
+
+
+def test_multi_alpha_parent_enable_lifecycle_uses_shared_status_machine_after_dry_run() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    validator, admission_repo, _artifact_repo = _admission_validator(package_repo=package_repo)
+    _run_dry_run(validator, parent.package_id, runtime_variant="top_k=50")
+    service = StrategyPackageService(
+        repository=package_repo,
+        asset_eligibility=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+    )
+
+    approved = service.transition_status(
+        package_id=parent.package_id,
+        to_status=PackageStatus.BACKTEST_APPROVED,
+        reason="approve_backtest_for_multi_alpha_lifecycle_test",
+    )
+    selected = service.enable_selection(parent.package_id)
+    paper = service.enable_paper(parent.package_id)
+
+    assert approved.package_status == PackageStatus.BACKTEST_APPROVED
+    assert selected.package_status == PackageStatus.SELECTION_ENABLED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    events = service.list_status_events(parent.package_id)
+    assert [event.reason for event in events] == [
+        "package_created",
+        "approve_backtest_for_multi_alpha_lifecycle_test",
+        "enable_selection",
+        "enable_paper",
+    ]
+    assert (events[2].from_status, events[2].to_status) == (
+        PackageStatus.BACKTEST_APPROVED,
+        PackageStatus.SELECTION_ENABLED,
+    )
+    assert (events[3].from_status, events[3].to_status) == (
+        PackageStatus.SELECTION_ENABLED,
+        PackageStatus.PAPER_ENABLED,
+    )
+
+
+def test_multi_alpha_parent_enable_paper_without_dry_run_fails_before_transition() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    service = StrategyPackageService(
+        repository=package_repo,
+        asset_eligibility=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+    )
+    service.transition_status(
+        package_id=parent.package_id,
+        to_status=PackageStatus.BACKTEST_APPROVED,
+        reason="approve_backtest_for_multi_alpha_lifecycle_test",
+    )
+
+    with pytest.raises(StrategyPackageValidationError) as exc_info:
+        service.enable_paper(parent.package_id)
+
+    err = exc_info.value
+    context = err.context or {}
+    assert context.get("package_id") == parent.package_id
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in context.get("blockers", [])
+    assert package_repo.get(parent.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert [event.reason for event in service.list_status_events(parent.package_id)] == [
+        "package_created",
+        "approve_backtest_for_multi_alpha_lifecycle_test",
+    ]
 
 
 def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_closed() -> None:

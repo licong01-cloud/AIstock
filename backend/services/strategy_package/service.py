@@ -62,6 +62,11 @@ logger = logging.getLogger(__name__)
 STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
     PackageStatus.ASSET_VALIDATED: {PackageStatus.DRAFT},
     PackageStatus.BACKTEST_APPROVED: {PackageStatus.DRAFT, PackageStatus.ASSET_VALIDATED},
+    PackageStatus.SELECTION_ENABLED: {PackageStatus.BACKTEST_APPROVED},
+    PackageStatus.PAPER_ENABLED: {PackageStatus.BACKTEST_APPROVED, PackageStatus.SELECTION_ENABLED},
+    PackageStatus.PAPER_RUNNING: {PackageStatus.PAPER_ENABLED},
+    PackageStatus.PAPER_PASSED: {PackageStatus.PAPER_RUNNING},
+    PackageStatus.PAPER_FAILED: {PackageStatus.PAPER_ENABLED, PackageStatus.PAPER_RUNNING},
     PackageStatus.RETIRED: {
         status for status in PackageStatus if status != PackageStatus.RETIRED
     },
@@ -87,16 +92,6 @@ REQUIRED_LIVE_SIM_VALIDATION_KEYS = {"paper_v2", "miniqmt_sim"}
 BROKER_COMPATIBILITY_SUCCESS_STATUSES = {"PASSED", "VERIFIED", "COMPATIBLE"}
 
 LIVE_STRICT_GOVERNANCE_LIMIT = 10_000
-
-
-def _is_deprecated_runtime_admission_status(status: PackageStatus) -> bool:
-    core_statuses = {
-        PackageStatus.DRAFT,
-        PackageStatus.ASSET_VALIDATED,
-        PackageStatus.BACKTEST_APPROVED,
-        PackageStatus.RETIRED,
-    }
-    return status not in core_statuses
 
 
 class StrategyPackageService:
@@ -396,10 +391,6 @@ class StrategyPackageService:
         reason: str,
         context: dict[str, Any] | None = None,
     ) -> StrategyPackageRecord:
-        if _is_deprecated_runtime_admission_status(to_status):
-            record = self.repository.get(package_id)
-            self.asset_eligibility.require_eligible(record)
-            return record
         if to_status == PackageStatus.RETIRED and hasattr(self.repository, "list_component_parents"):
             active_parents: list[str] = []
             for component in self.repository.list_component_parents(package_id):
@@ -417,6 +408,9 @@ class StrategyPackageService:
                 "unsupported strategy package target status",
                 context={"package_id": package_id, "to_status": to_status.value},
             )
+        if to_status in {PackageStatus.SELECTION_ENABLED, PackageStatus.PAPER_ENABLED}:
+            record = self.repository.get(package_id)
+            self.asset_eligibility.require_eligible(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -426,14 +420,18 @@ class StrategyPackageService:
         )
 
     def enable_selection(self, package_id: str) -> StrategyPackageRecord:
-        record = self.repository.get(package_id)
-        self.asset_eligibility.require_eligible(record)
-        return record
+        return self.transition_status(
+            package_id=package_id,
+            to_status=PackageStatus.SELECTION_ENABLED,
+            reason="enable_selection",
+        )
 
     def enable_paper(self, package_id: str) -> StrategyPackageRecord:
-        record = self.repository.get(package_id)
-        self.asset_eligibility.require_eligible(record)
-        return record
+        return self.transition_status(
+            package_id=package_id,
+            to_status=PackageStatus.PAPER_ENABLED,
+            reason="enable_paper",
+        )
 
     def retire(self, package_id: str, *, reason: str = "retire_package") -> StrategyPackageRecord:
         return self.transition_status(
