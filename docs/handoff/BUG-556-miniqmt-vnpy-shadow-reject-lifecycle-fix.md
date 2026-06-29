@@ -39,7 +39,9 @@
 - `sniper_algo.py:on_order`: 非 active order 只清空 `vt_orderid`。
   - 本仓对齐方式: 保留 core `on_order` 行为，不把 reject 当成静默吞错；由 runtime 根据 child terminal facts 终止 algo，状态为 `FAILED`。
 - `sniper_algo.py:on_tick`: 若 `vt_orderid` 仍存在则 `cancel_all(); return`; 新发单量为 `volume - traded`。
-  - 本仓对齐方式: 不改 SNIPER core，不禁止合法剩余量语义；修复的是旧 replay/旧 `ACTIVE` algo 被后续 tick 复活导致同 parent 重复下满量。
+  - 本仓保持不变: 不改 SNIPER core；当一个 order 仍在 active 工作中时，core 的 `volume - traded` 剩余量定价语义不变。`_vnpy_core_active_order_ids` 终结守卫仅在 core 无 active order 时才允许终结，正在工作的 algo 保持 `ACTIVE`。
+  - 本仓有意偏离: 当某 child 进入 reject/终态而 algo 仍有剩余未成交量时，runtime 依据 child 终态事实将 algo 终结为 `FAILED`（loud + 审计 metadata），不再走纯 vn.py `on_tick` 的“下一 tick 在剩余量上 resubmit”。这是必要偏离：shadow gate 拿 A 对 B（compiler，永不 resubmit），若保留 vn.py 自动重试，A 会持续产生 B 没有的 open-like child，导致 `MINIQMT_SHADOW_CHILD_ORDER_COUNT_DRIFT` FATAL 无法消除；终结为 `FAILED` 也比无限重试更安全，符合 no-silent-error。
+  - D4 前瞻: D4 接 event_loop 真实 submit 后，若希望对瞬时/可重试 reject 在剩余量上重试，必须显式实现该重试逻辑，不能再依赖本次已被移除的 vn.py SNIPER `on_tick` 自动重试。
 - `sniper_algo.py:on_trade`: `traded >= volume` 时 `finish()` 进入终态。
   - 本仓对齐方式: filled-only 仍进入 `COMPLETED`，既有 trade finish 语义保持，并新增后续 tick 不再发单断言。
 
