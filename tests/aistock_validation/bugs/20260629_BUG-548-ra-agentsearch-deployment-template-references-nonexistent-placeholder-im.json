@@ -1,6 +1,9 @@
 {
-  "actual": "deploy/agentsearch/docker-compose.yml references placeholder image agent-search-api:latest; official AgentSearch has no public image, so operator activation can fail before web provider is reachable.",
+  "actual": "The AIstock deploy/agentsearch compose template references AGENTSEARCH_IMAGE default agent-search-api:latest, causing docker compose activation to fail because that placeholder image is not published.",
   "allowed_write_scope": [
+    "deploy/agentsearch/README.md",
+    "deploy/agentsearch/docker-compose.yml",
+    "deploy/agentsearch/agentsearch.env.example",
     "tests/aistock_validation/bugs/20260629_BUG-548-ra-agentsearch-deployment-template-references-nonexistent-placeholder-im.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -13,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-06-29T04:14:17.615645Z",
-  "description": "deploy/agentsearch/docker-compose.yml references placeholder image agent-search-api:latest; official AgentSearch has no public image, so operator activation can fail before web provider is reachable.",
+  "description": "deploy/agentsearch/docker-compose.yml references placeholder image agent-search-api:latest, but the official brcrusoe72/agent-search project currently ships source plus compose rather than a public agent-search-api image. Activation should direct operators to clone the official repository outside F:/Dev/AIstock and run its compose on 127.0.0.1:3939; the AIstock deployment artifact must not present the placeholder image as runnable.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +26,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "AIstock deployment artifact should direct operators to SSH clone the official brcrusoe72/agent-search repository outside the AIstock repo and run the official compose on 127.0.0.1:3939; no nonexistent placeholder image should be advertised as runnable.",
+  "expected": "Deployment docs identify the official SSH clone plus official docker compose path, keep AgentSearch outside the AIstock repo, document the expected /search and /read contract and .env values, and remove or neutralize the invalid placeholder compose/image instructions.",
   "first_seen_at": "2026-06-29T04:14:17.615645Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -41,9 +44,7 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "research_assistant_backend",
-    "research_assistant_mcp_contract",
-    "ra_phase7_full_accept"
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
