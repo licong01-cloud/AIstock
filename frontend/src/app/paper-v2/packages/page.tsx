@@ -140,7 +140,15 @@ export default function PaperV2PackagesPage() {
       ]);
       setPackages(packageRows);
       setSources(sourceRows);
-      if (!selectedId && packageRows[0]) setSelectedId(packageRows[0].package_id);
+      const requestedPackageId = typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("package_id")
+        : null;
+      const requestedPackage = packageRows.find((item) => item.package_id === requestedPackageId);
+      if (requestedPackage) {
+        setSelectedId(requestedPackage.package_id);
+      } else if ((!selectedId || !packageRows.some((item) => item.package_id === selectedId)) && packageRows[0]) {
+        setSelectedId(packageRows[0].package_id);
+      }
       if (!sourceRows.some((item) => sourceKey(item) === sourceKeyValue)) {
         setSourceKeyValue(sourceRows[0] ? sourceKey(sourceRows[0]) : "");
       }

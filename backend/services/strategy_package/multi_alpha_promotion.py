@@ -5,15 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from backend.services.multi_alpha.combine_backtest import MultiAlphaCombineBacktestRepository
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.qe_archive.multi_alpha_provenance import MultiAlphaProvenanceResolver, SeedProvenance
+from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .components import StrategyPackageComponentService
-from .manifest import freeze_manifest
+from .manifest import compute_manifest_sha256, freeze_manifest
 from .models import (
     AlphaCombinationPolicy,
     AlphaComponent,
@@ -29,6 +32,7 @@ from .models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
+from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import StrategyPackageRecord, StrategyPackageRepository
 from .validators import StrategyPackageValidator
 
@@ -45,6 +49,7 @@ class MultiAlphaPackagePromotionResult:
     components: list[StrategyPackageComponentRecord]
     paper_admission: dict[str, Any]
     source_run_id: str
+    auto_component_materialization: list[dict[str, Any]] = field(default_factory=list)
 
     def to_response(self) -> dict[str, Any]:
         return {
@@ -54,6 +59,7 @@ class MultiAlphaPackagePromotionResult:
             "manifest_sha256": self.package.manifest_sha256,
             "source_run_id": self.source_run_id,
             "paper_admission": self.paper_admission,
+            "auto_component_materialization": self.auto_component_materialization,
             "package": {
                 "package_id": self.package.package_id,
                 "package_name": self.package.package_name,
@@ -74,6 +80,17 @@ class _LegEvidence:
     seed_run_ids: tuple[str, ...]
     child: StrategyPackageRecord
     terminal_weight: float
+    materialization: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ComponentMaterializationPlan:
+    leg_id: str
+    seed_run_ids: tuple[str, ...]
+    terminal_weight: float
+    existing_child: StrategyPackageRecord | None = None
+    manifest_to_save: StrategyPackageManifest | None = None
+    materialization: dict[str, Any] = field(default_factory=dict)
 
 
 class MultiAlphaPackagePromotionService:
@@ -86,6 +103,9 @@ class MultiAlphaPackagePromotionService:
         package_repository: StrategyPackageRepository | Any | None = None,
         component_service: StrategyPackageComponentService | None = None,
         validator: StrategyPackageValidator | None = None,
+        provenance_resolver: MultiAlphaProvenanceResolver | Any | None = None,
+        source_resolver: QEExperimentSourceResolver | None = None,
+        prediction_ref_roots: Sequence[str | Path] | None = None,
     ) -> None:
         self.combine_repository = combine_repository or MultiAlphaCombineBacktestRepository()
         if component_service is not None:
@@ -95,6 +115,9 @@ class MultiAlphaPackagePromotionService:
             self.package_repository = package_repository or StrategyPackageRepository()
             self.component_service = StrategyPackageComponentService(repository=self.package_repository)
         self.validator = validator or StrategyPackageValidator()
+        self.provenance_resolver = provenance_resolver or MultiAlphaProvenanceResolver()
+        self.source_resolver = source_resolver or QEExperimentSourceResolver()
+        self.prediction_ref_roots = tuple(Path(root) for root in (prediction_ref_roots or ()))
 
     def promote_from_combine_run(
         self,
@@ -103,7 +126,7 @@ class MultiAlphaPackagePromotionService:
         weighting_scheme: str,
         topk: int,
         confirmation: str,
-        component_package_ids: Mapping[str, str],
+        component_package_ids: Mapping[str, str] | None = None,
         weight_policy: Mapping[str, Any],
         scheme_result_id: str | None = None,
         secondary_topk: Sequence[int] | None = None,
@@ -171,7 +194,8 @@ class MultiAlphaPackagePromotionService:
         _validate_promotion_gate(scheme_result, promotion_gate or {}, run_id=run_id, weighting_scheme=scheme)
 
         requested_component_ids = _normalize_component_package_ids(component_package_ids)
-        if set(requested_component_ids) != {item["leg_id"] for item in roster}:
+        roster_leg_ids = {item["leg_id"] for item in roster}
+        if requested_component_ids and set(requested_component_ids) != roster_leg_ids:
             _fail(
                 "component_package_ids must exactly match combine-backtest roster leg_ids",
                 reason_code="multi_alpha_roster_mismatch",
@@ -179,7 +203,11 @@ class MultiAlphaPackagePromotionService:
                 roster_leg_ids=[item["leg_id"] for item in roster],
                 requested_leg_ids=sorted(requested_component_ids),
             )
-        prediction_ref = _extract_prediction_ref(scheme_result)
+        prediction_ref = _extract_prediction_ref(
+            scheme_result,
+            run=run,
+            workspace_roots=self.prediction_ref_roots,
+        )
         weights = _extract_terminal_weights(
             scheme_result.get("weights_json"),
             expected_leg_ids=[item["leg_id"] for item in roster],
@@ -187,16 +215,28 @@ class MultiAlphaPackagePromotionService:
             weighting_scheme=scheme,
         )
 
-        leg_evidence = [
-            self._load_leg_evidence(
-                leg_id=item["leg_id"],
-                seed_run_ids=tuple(item["seed_run_ids"]),
-                child_package_id=requested_component_ids[item["leg_id"]],
-                terminal_weight=weights[item["leg_id"]],
-                run_id=run_id,
-            )
-            for item in roster
-        ]
+        if requested_component_ids:
+            leg_evidence = [
+                self._load_leg_evidence(
+                    leg_id=item["leg_id"],
+                    seed_run_ids=tuple(item["seed_run_ids"]),
+                    child_package_id=requested_component_ids[item["leg_id"]],
+                    terminal_weight=weights[item["leg_id"]],
+                    run_id=run_id,
+                )
+                for item in roster
+            ]
+        else:
+            component_plans = [
+                self._prepare_component_package(
+                    leg_id=item["leg_id"],
+                    seed_run_ids=tuple(item["seed_run_ids"]),
+                    terminal_weight=weights[item["leg_id"]],
+                    run_id=run_id,
+                )
+                for item in roster
+            ]
+            leg_evidence = self._save_component_plans(component_plans)
         backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
         strategy_snapshot = _build_strategy_snapshot(
             topk=topk_value,
@@ -253,6 +293,334 @@ class MultiAlphaPackagePromotionService:
             components=components,
             source_run_id=run_id,
             paper_admission=_paper_admission(),
+            auto_component_materialization=[_jsonable(leg.materialization) for leg in leg_evidence],
+        )
+
+    def _prepare_component_package(
+        self,
+        *,
+        leg_id: str,
+        seed_run_ids: tuple[str, ...],
+        terminal_weight: float,
+        run_id: str,
+    ) -> _ComponentMaterializationPlan:
+        if terminal_weight <= 0 or not math.isfinite(terminal_weight):
+            _fail_manifest_incomplete(
+                "terminal component weight must be positive and finite",
+                run_id=run_id,
+                leg_id=leg_id,
+                component_weight=terminal_weight,
+            )
+        reusable = self._find_reusable_component_package(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
+        if reusable is not None:
+            return _ComponentMaterializationPlan(
+                leg_id=leg_id,
+                seed_run_ids=seed_run_ids,
+                terminal_weight=terminal_weight,
+                existing_child=reusable,
+                materialization={
+                    "leg_id": leg_id,
+                    "mode": "reused_existing_component_package",
+                    "child_package_id": reusable.package_id,
+                    "child_manifest_sha256": reusable.manifest_sha256,
+                    "seed_run_ids": list(seed_run_ids),
+                },
+            )
+
+        seed_sources = self._resolve_leg_seed_sources(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
+        manifest = self._build_auto_component_manifest(
+            leg_id=leg_id,
+            seed_run_ids=seed_run_ids,
+            seed_sources=seed_sources,
+            run_id=run_id,
+        )
+        return _ComponentMaterializationPlan(
+            leg_id=leg_id,
+            seed_run_ids=seed_run_ids,
+            terminal_weight=terminal_weight,
+            manifest_to_save=manifest,
+            materialization={
+                "leg_id": leg_id,
+                "mode": "auto_created_component_package",
+                "child_package_id": manifest.package_id,
+                "child_manifest_sha256": manifest.manifest_sha256,
+                "seed_run_ids": list(seed_run_ids),
+                "seed_source_count": len(seed_sources),
+            },
+        )
+
+    def _save_component_plans(self, plans: Sequence[_ComponentMaterializationPlan]) -> list[_LegEvidence]:
+        leg_evidence: list[_LegEvidence] = []
+        for plan in plans:
+            if plan.existing_child is not None:
+                child = plan.existing_child
+            elif plan.manifest_to_save is not None:
+                child = self.package_repository.save_manifest(plan.manifest_to_save)
+            else:
+                _fail_manifest_incomplete(
+                    "multi-alpha component materialization plan has neither reusable child nor manifest",
+                    leg_id=plan.leg_id,
+                    seed_run_ids=list(plan.seed_run_ids),
+                )
+            materialization = dict(plan.materialization)
+            materialization["child_package_id"] = child.package_id
+            materialization["child_manifest_sha256"] = child.manifest_sha256
+            leg_evidence.append(
+                _LegEvidence(
+                    leg_id=plan.leg_id,
+                    seed_run_ids=plan.seed_run_ids,
+                    child=child,
+                    terminal_weight=plan.terminal_weight,
+                    materialization=materialization,
+                )
+            )
+        return leg_evidence
+
+    def _find_reusable_component_package(
+        self,
+        *,
+        leg_id: str,
+        seed_run_ids: tuple[str, ...],
+        run_id: str,
+    ) -> StrategyPackageRecord | None:
+        required = set(seed_run_ids)
+        for child in self.package_repository.list_single_alpha_candidates_for_seed_reuse(limit=5000):
+            child_seed_refs = _collect_seed_refs(child)
+            if not required.issubset(child_seed_refs):
+                continue
+            if not _is_sha256(child.manifest_sha256):
+                _fail(
+                    "multi-alpha child package is not frozen",
+                    reason_code="multi_alpha_child_package_not_frozen",
+                    run_id=run_id,
+                    leg_id=leg_id,
+                    child_package_id=child.package_id,
+                    child_manifest_sha256=child.manifest_sha256,
+                )
+            computed = compute_manifest_sha256(child.current_manifest())
+            if computed != child.manifest_sha256:
+                _fail(
+                    "multi-alpha child package manifest sha256 drift detected",
+                    reason_code="multi_alpha_child_package_not_frozen",
+                    run_id=run_id,
+                    leg_id=leg_id,
+                    child_package_id=child.package_id,
+                    child_manifest_sha256=child.manifest_sha256,
+                    computed_manifest_sha256=computed,
+                )
+            return child
+        return None
+
+    def _resolve_leg_seed_sources(
+        self,
+        *,
+        leg_id: str,
+        seed_run_ids: tuple[str, ...],
+        run_id: str,
+    ) -> list[SeedProvenance]:
+        resolved: list[SeedProvenance] = []
+        for seed_ref in seed_run_ids:
+            try:
+                provenance = self.provenance_resolver.resolve_seed(seed_ref)
+            except TradingCoreError as exc:
+                raise StrategyPackageValidationError(
+                    "multi-alpha leg seed provenance resolver failed",
+                    context={
+                        "reason_code": "multi_alpha_seed_unresolved",
+                        "run_id": run_id,
+                        "leg_id": leg_id,
+                        "seed_ref": seed_ref,
+                        "upstream_error_code": exc.error_code,
+                        "upstream_context": exc.context,
+                    },
+                ) from exc
+            except Exception as exc:
+                raise StrategyPackageValidationError(
+                    "multi-alpha leg seed provenance resolver failed",
+                    context={
+                        "reason_code": "multi_alpha_seed_unresolved",
+                        "run_id": run_id,
+                        "leg_id": leg_id,
+                        "seed_ref": seed_ref,
+                        "upstream_error_type": type(exc).__name__,
+                        "upstream_error": str(exc),
+                    },
+                ) from exc
+            if not provenance.resolved:
+                _fail(
+                    "multi-alpha leg seed could not be resolved to QE provenance",
+                    reason_code="multi_alpha_seed_unresolved",
+                    run_id=run_id,
+                    leg_id=leg_id,
+                    seed_ref=seed_ref,
+                    seed_ref_kind=provenance.seed_ref_kind,
+                    resolve_method=provenance.resolve_method,
+                    resolve_note=provenance.resolve_note,
+                )
+            if not (provenance.source_task_id and _resolver_loop_id(provenance)) and not provenance.source_experiment_id:
+                _fail(
+                    "multi-alpha leg seed provenance lacks QE source coordinates",
+                    reason_code="multi_alpha_seed_source_incomplete",
+                    run_id=run_id,
+                    leg_id=leg_id,
+                    seed_ref=seed_ref,
+                    provenance=provenance.to_meta(),
+                )
+            resolved.append(provenance)
+        if not resolved:
+            _fail("roster item requires seed_run_ids", reason_code="multi_alpha_roster_mismatch", run_id=run_id, leg_id=leg_id)
+        return resolved
+
+    def _build_auto_component_manifest(
+        self,
+        *,
+        leg_id: str,
+        seed_run_ids: tuple[str, ...],
+        seed_sources: Sequence[SeedProvenance],
+        run_id: str,
+    ) -> StrategyPackageManifest:
+        primary = seed_sources[0]
+        try:
+            loop_id = _resolver_loop_id(primary)
+            if primary.source_task_id and loop_id:
+                base = self.source_resolver.build_from_evolution_loop(
+                    qe_task_id=primary.source_task_id,
+                    qe_loop_id=loop_id,
+                )
+                base_source = {
+                    "source_type": SourceType.QE_EVOLUTION_LOOP.value,
+                    "source_id": primary.source_task_id,
+                    "loop_id": loop_id,
+                    "experiment_id": primary.source_experiment_id,
+                }
+            elif primary.source_experiment_id:
+                base = self.source_resolver.build_from_experiment(primary.source_experiment_id)
+                base_source = {
+                    "source_type": SourceType.QE_EXPERIMENT.value,
+                    "source_id": primary.source_experiment_id,
+                    "loop_id": None,
+                    "experiment_id": primary.source_experiment_id,
+                }
+            else:
+                _fail(
+                    "multi-alpha leg seed provenance lacks QE source coordinates",
+                    reason_code="multi_alpha_seed_source_incomplete",
+                    run_id=run_id,
+                    leg_id=leg_id,
+                    seed_ref=primary.seed_ref,
+                    provenance=primary.to_meta(),
+                )
+        except StrategyPackageValidationError as exc:
+            if exc.context.get("reason_code", "").startswith("multi_alpha_"):
+                raise
+            raise StrategyPackageValidationError(
+                "failed to auto-materialize multi-alpha component package from QE source",
+                context={
+                    "reason_code": "multi_alpha_component_auto_materialize_failed",
+                    "run_id": run_id,
+                    "leg_id": leg_id,
+                    "seed_ref": primary.seed_ref,
+                    "source_task_id": primary.source_task_id,
+                    "source_loop_id": primary.source_loop_id,
+                    "source_experiment_id": primary.source_experiment_id,
+                    "upstream_error_code": exc.error_code,
+                    "upstream_context": exc.context,
+                },
+            ) from exc
+        except DataUnavailableError as exc:
+            raise StrategyPackageValidationError(
+                "failed to auto-materialize multi-alpha component package from QE source",
+                context={
+                    "reason_code": "multi_alpha_component_auto_materialize_failed",
+                    "run_id": run_id,
+                    "leg_id": leg_id,
+                    "seed_ref": primary.seed_ref,
+                    "source_task_id": primary.source_task_id,
+                    "source_loop_id": primary.source_loop_id,
+                    "source_experiment_id": primary.source_experiment_id,
+                    "upstream_error_code": exc.error_code,
+                    "upstream_context": exc.context,
+                },
+            ) from exc
+        except TradingCoreError as exc:
+            raise StrategyPackageValidationError(
+                "failed to auto-materialize multi-alpha component package from QE source",
+                context={
+                    "reason_code": "multi_alpha_component_auto_materialize_failed",
+                    "run_id": run_id,
+                    "leg_id": leg_id,
+                    "seed_ref": primary.seed_ref,
+                    "source_task_id": primary.source_task_id,
+                    "source_loop_id": primary.source_loop_id,
+                    "source_experiment_id": primary.source_experiment_id,
+                    "upstream_error_code": exc.error_code,
+                    "upstream_context": exc.context,
+                },
+            ) from exc
+        except Exception as exc:
+            raise StrategyPackageValidationError(
+                "failed to auto-materialize multi-alpha component package from QE source",
+                context={
+                    "reason_code": "multi_alpha_component_auto_materialize_failed",
+                    "run_id": run_id,
+                    "leg_id": leg_id,
+                    "seed_ref": primary.seed_ref,
+                    "source_task_id": primary.source_task_id,
+                    "source_loop_id": primary.source_loop_id,
+                    "source_experiment_id": primary.source_experiment_id,
+                    "upstream_error_type": type(exc).__name__,
+                    "upstream_error": str(exc),
+                },
+            ) from exc
+
+        if base.alpha_mode != AlphaMode.SINGLE_ALPHA:
+            _fail(
+                "auto-materialized component source must resolve to a single-alpha QE package",
+                reason_code="multi_alpha_component_auto_materialize_failed",
+                run_id=run_id,
+                leg_id=leg_id,
+                seed_ref=primary.seed_ref,
+                source_alpha_mode=base.alpha_mode.value,
+            )
+        seed_digest = _seed_roster_digest(leg_id=leg_id, seed_run_ids=seed_run_ids, seed_sources=seed_sources)
+        package_id = _stable_component_package_id(run_id=run_id, leg_id=leg_id, seed_digest=seed_digest)
+        component = base.alpha_components[0].model_copy(
+            update={
+                "alpha_id": leg_id,
+                "alpha_name": leg_id,
+                "component_weight": 1.0,
+            }
+        )
+        source_evidence = dict(base.source_evidence or {})
+        source_evidence["seed_run_ids"] = list(seed_run_ids)
+        source_evidence["multi_alpha_component"] = {
+            "schema_version": "multi_alpha_component_auto_materialization_v1",
+            "component_materialization": "auto_from_combine_roster",
+            "combine_backtest_run_id": run_id,
+            "leg_id": leg_id,
+            "seed_run_ids": list(seed_run_ids),
+            "seed_roster_digest": seed_digest,
+            "primary_qe_source": base_source,
+            "seed_provenance": [source.to_meta() for source in seed_sources],
+        }
+        return freeze_manifest(
+            base.model_copy(
+                update={
+                    "package_id": package_id,
+                    "package_name": _default_component_package_name(leg_id, run_id, package_id),
+                    "source": StrategyPackageSource(
+                        source_type=SourceType.MULTI_ALPHA_COMBINE_RUN,
+                        source_id=run_id,
+                        loop_id=f"component:{leg_id}:{seed_digest[:16]}",
+                        run_id=run_id,
+                        created_at=base.source.created_at,
+                    ),
+                    "alpha_components": [component],
+                    "alpha_combination_policy": AlphaCombinationPolicy(method="identity", weights={leg_id: 1.0}),
+                    "source_evidence": _jsonable(source_evidence),
+                    "manifest_sha256": None,
+                }
+            )
         )
 
     def _load_leg_evidence(
@@ -300,6 +668,17 @@ class MultiAlphaPackagePromotionService:
                 child_package_id=child_package_id,
                 child_manifest_sha256=child.manifest_sha256,
             )
+        computed = compute_manifest_sha256(child.current_manifest())
+        if computed != child.manifest_sha256:
+            _fail(
+                "multi-alpha child package manifest sha256 drift detected",
+                reason_code="multi_alpha_child_package_not_frozen",
+                run_id=run_id,
+                leg_id=leg_id,
+                child_package_id=child.package_id,
+                child_manifest_sha256=child.manifest_sha256,
+                computed_manifest_sha256=computed,
+            )
         child_seed_refs = _collect_seed_refs(child)
         missing = sorted(set(seed_run_ids) - child_seed_refs)
         if missing:
@@ -312,7 +691,19 @@ class MultiAlphaPackagePromotionService:
                 missing_seed_run_ids=missing,
                 child_seed_refs=sorted(child_seed_refs),
             )
-        return _LegEvidence(leg_id=leg_id, seed_run_ids=seed_run_ids, child=child, terminal_weight=terminal_weight)
+        return _LegEvidence(
+            leg_id=leg_id,
+            seed_run_ids=seed_run_ids,
+            child=child,
+            terminal_weight=terminal_weight,
+            materialization={
+                "leg_id": leg_id,
+                "mode": "explicit_component_package_ids",
+                "child_package_id": child.package_id,
+                "child_manifest_sha256": child.manifest_sha256,
+                "seed_run_ids": list(seed_run_ids),
+            },
+        )
 
     def _build_manifest(
         self,
@@ -352,6 +743,7 @@ class MultiAlphaPackagePromotionService:
                 "runtime_provider_version": MULTI_ALPHA_PROMOTION_PROVIDER_VERSION,
                 "combined_prediction_ref_uri": prediction_ref["uri"],
                 "combined_prediction_ref_sha256": prediction_ref["sha256"],
+                "combined_prediction_ref_source": prediction_ref.get("ref_source") or "explicit_scheme_result",
                 "weight_policy": dict(weight_policy),
                 "terminal_weights": dict(weights),
                 "per_window_weights": _jsonable(scheme_result.get("per_window_weights_json") or []),
@@ -397,8 +789,9 @@ class MultiAlphaPackagePromotionService:
             package_name=package_name,
             package_version="1.0.0",
             source=StrategyPackageSource(
-                source_type=SourceType.CANDIDATE_STRATEGY_PACKAGE,
-                source_id=f"multi_alpha_combine:{run['id']}:{weighting_scheme}:topk{topk}:{package_id[-8:]}",
+                source_type=SourceType.MULTI_ALPHA_COMBINE_RUN,
+                source_id=str(run["id"]),
+                loop_id=f"{scheme_result_id}:topk{topk}",
                 run_id=str(run["id"]),
                 created_at=_stable_created_at(run.get("created_at")),
             ),
@@ -641,7 +1034,12 @@ def _extract_terminal_weights(value: Any, *, expected_leg_ids: Sequence[str], ru
     return weights
 
 
-def _extract_prediction_ref(row: Mapping[str, Any]) -> dict[str, str]:
+def _extract_prediction_ref(
+    row: Mapping[str, Any],
+    *,
+    run: Mapping[str, Any],
+    workspace_roots: Sequence[Path] = (),
+) -> dict[str, str]:
     candidates: list[Any] = [
         row.get("combined_prediction_ref"),
         row.get("prediction_ref"),
@@ -675,11 +1073,21 @@ def _extract_prediction_ref(row: Mapping[str, Any]) -> dict[str, str]:
         ref = _prediction_ref_from_candidate(candidate)
         if ref:
             return ref
+
+    workspace_ref, attempted_paths = _workspace_prediction_ref(
+        run=run,
+        weighting_scheme=str(row.get("weighting_scheme") or "").strip(),
+        workspace_roots=workspace_roots,
+    )
+    if workspace_ref is not None:
+        return workspace_ref
     _fail(
         "combined prediction ref is required for multi-alpha package promotion",
         reason_code="multi_alpha_prediction_ref_missing",
+        run_id=run.get("id"),
         weighting_scheme=row.get("weighting_scheme"),
         pred_persisted=row.get("pred_persisted"),
+        attempted_local_prediction_paths=attempted_paths,
     )
     raise AssertionError("unreachable")
 
@@ -699,9 +1107,112 @@ def _prediction_ref_from_candidate(candidate: Any) -> dict[str, str] | None:
     return None
 
 
-def _normalize_component_package_ids(value: Mapping[str, str]) -> dict[str, str]:
-    if not isinstance(value, Mapping) or not value:
-        _fail("component_package_ids is required", reason_code="multi_alpha_roster_mismatch")
+def _workspace_prediction_ref(
+    *,
+    run: Mapping[str, Any],
+    weighting_scheme: str,
+    workspace_roots: Sequence[Path],
+) -> tuple[dict[str, str] | None, list[str]]:
+    run_id = str(run.get("id") or "").strip()
+    scheme = str(weighting_scheme or "").strip()
+    if not run_id or not scheme:
+        return None, []
+    attempted: list[str] = []
+    backtest_name = f"combined_{scheme}"
+    for root in _combine_workspace_roots(workspace_roots):
+        root_resolved = root.resolve()
+        candidate = (root_resolved / run_id / backtest_name / "combined_prediction.pkl").resolve()
+        if root_resolved not in candidate.parents:
+            _fail(
+                "combine prediction ref path escapes configured workspace root",
+                reason_code="multi_alpha_prediction_ref_path_escape",
+                run_id=run_id,
+                weighting_scheme=scheme,
+                workspace_root=str(root_resolved),
+                prediction_path=str(candidate),
+            )
+        candidate_text = str(candidate)
+        if candidate_text in attempted:
+            continue
+        attempted.append(candidate_text)
+        if not candidate.exists():
+            continue
+        if not candidate.is_file():
+            _fail(
+                "combine prediction ref path is not a file",
+                reason_code="multi_alpha_prediction_ref_missing",
+                run_id=run_id,
+                weighting_scheme=scheme,
+                prediction_path=candidate_text,
+            )
+        try:
+            size_bytes = candidate.stat().st_size
+            if size_bytes <= 0:
+                _fail(
+                    "combine prediction ref file is empty",
+                    reason_code="multi_alpha_prediction_ref_missing",
+                    run_id=run_id,
+                    weighting_scheme=scheme,
+                    prediction_path=candidate_text,
+                    prediction_size_bytes=size_bytes,
+                )
+            sha = _sha256_file(candidate)
+        except OSError as exc:
+            raise StrategyPackageValidationError(
+                "combine prediction ref file cannot be read",
+                context={
+                    "reason_code": "multi_alpha_prediction_ref_unreadable",
+                    "run_id": run_id,
+                    "weighting_scheme": scheme,
+                    "prediction_path": candidate_text,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            ) from exc
+        return {
+            "uri": candidate.as_uri(),
+            "sha256": sha,
+            "ref_source": "combine_backtest_local_workspace",
+        }, attempted
+    return None, attempted
+
+
+def _combine_workspace_roots(extra_roots: Sequence[Path]) -> list[Path]:
+    roots: list[Path] = []
+    roots.extend(Path(root) for root in extra_roots)
+    env_root = os.getenv("AISTOCK_MULTI_ALPHA_BACKTEST_ROOT")
+    if env_root:
+        roots.append(Path(env_root))
+    roots.append(Path("rdagent_assets/multi_alpha_combine_backtests"))
+    roots.append(Path(__file__).resolve().parents[3] / "rdagent_assets" / "multi_alpha_combine_backtests")
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            key = str(root.expanduser().resolve())
+        except OSError:
+            key = str(root.expanduser())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(root.expanduser())
+    return deduped
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _normalize_component_package_ids(value: Mapping[str, str] | None) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        _fail("component_package_ids must be an object", reason_code="multi_alpha_roster_mismatch")
+    if not value:
+        return {}
     normalized = {str(key).strip(): str(val).strip() for key, val in value.items() if str(key).strip() and str(val).strip()}
     if len(normalized) != len(value):
         _fail("component_package_ids contains empty leg_id or package_id", reason_code="multi_alpha_roster_mismatch")
@@ -735,10 +1246,10 @@ def _build_strategy_snapshot(*, topk: int, secondary_topk: list[int], backtest_c
         "topk": topk,
         "secondary_topk": secondary_topk,
         "n_drop": _first_present(backtest_config, ("n_drop", "ndrop", "n_drop")),
-        "stock_pool": _first_present(backtest_config, ("stock_pool", "universe", "market_universe")),
+        "stock_pool": _first_present(backtest_config, ("stock_pool", "universe", "market_universe", "strategy")),
         "filtered_pool": _first_present(backtest_config, ("filtered_pool", "filtered_pool_name", "pool_name")),
         "label_horizon": _first_present(backtest_config, ("label_horizon", "horizon", "label_horizon_days")),
-        "execution_algo": _first_present(backtest_config, ("execution_algo", "algo_code", "strategy_id")),
+        "execution_algo": _first_present(backtest_config, ("execution_algo", "algo_code", "strategy_id", "strategy")),
     }
     missing = [key for key, value in snapshot.items() if value in (None, "", []) and key != "secondary_topk"]
     if missing:
@@ -804,9 +1315,51 @@ def _stable_package_id(
     return f"pkg_ma_{digest[:24]}"
 
 
+def _stable_component_package_id(*, run_id: str, leg_id: str, seed_digest: str) -> str:
+    payload = {
+        "run_id": run_id,
+        "leg_id": leg_id,
+        "seed_digest": seed_digest,
+        "materialization": "multi_alpha_component_auto_v1",
+    }
+    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+    return f"pkg_mac_{digest[:24]}"
+
+
+def _seed_roster_digest(
+    *,
+    leg_id: str,
+    seed_run_ids: Sequence[str],
+    seed_sources: Sequence[SeedProvenance],
+) -> str:
+    payload = {
+        "leg_id": leg_id,
+        "seed_run_ids": list(seed_run_ids),
+        "seed_sources": [
+            {
+                "seed_ref": source.seed_ref,
+                "seed_ref_kind": source.seed_ref_kind,
+                "source_experiment_id": source.source_experiment_id,
+                "source_task_id": source.source_task_id,
+                "source_loop_id": source.source_loop_id,
+                "source_loop_index": source.source_loop_index,
+                "source_run_id": source.source_run_id,
+            }
+            for source in seed_sources
+        ],
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
 def _default_package_name(leg_evidence: Sequence[_LegEvidence], weighting_scheme: str, topk: int, package_id: str) -> str:
     legs = "_".join(leg.leg_id.split("_h20")[0][:12] for leg in leg_evidence)
     return f"MA{len(leg_evidence)}_{legs}_{weighting_scheme}_topk{topk}_{package_id[-8:]}"[:120]
+
+
+def _default_component_package_name(leg_id: str, run_id: str, package_id: str) -> str:
+    leg = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in leg_id)[:48]
+    run_suffix = str(run_id)[-12:]
+    return f"MAC_{leg}_{run_suffix}_{package_id[-8:]}"[:120]
 
 
 def _component_from_child(leg: _LegEvidence) -> AlphaComponent:
@@ -870,6 +1423,23 @@ def _collect_seed_refs_from_payload(payload: Any) -> set[str]:
         for item in payload:
             refs.update(_collect_seed_refs_from_payload(item))
     return {ref for ref in refs if ref}
+
+
+def _resolver_loop_id(provenance: SeedProvenance) -> str | None:
+    text = str(provenance.source_loop_id or "").strip()
+    if text.startswith("Loop"):
+        return text
+    if "_Loop" in text:
+        suffix = text.rsplit("_Loop", 1)[1]
+        if suffix.isdigit():
+            return f"Loop{suffix}"
+    if "_L" in text:
+        suffix = text.rsplit("_L", 1)[1]
+        if suffix.isdigit():
+            return f"Loop{suffix}"
+    if provenance.source_loop_index is not None:
+        return f"Loop{provenance.source_loop_index}"
+    return text or None
 
 
 def _stable_created_at(value: Any) -> datetime:

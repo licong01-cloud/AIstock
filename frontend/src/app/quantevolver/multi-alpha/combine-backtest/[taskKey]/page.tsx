@@ -1,9 +1,10 @@
 ﻿"use client";
 
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, ArrowLeft, DownloadCloud, RefreshCw, Trash2 } from "lucide-react";
+import { Activity, ArrowLeft, DownloadCloud, PackagePlus, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { PaperV2ApiError, strategyPackageApi } from "@/lib/paper-v2/api";
 import LoopDetailPanel from "../../../evolution/components/LoopDetailPanel";
 import type { Loop } from "../../../evolution/components/TopologyPanel";
 import type { DataSourceAdapter } from "../../../components/EvolutionTrajectory";
@@ -61,9 +62,12 @@ function normalizeError(detail: any, fallback: string): string {
   if (!detail) return fallback;
   if (typeof detail === "string") return detail;
   if (typeof detail === "object") {
-    const code = detail.reason_code ? `reason_code=${detail.reason_code}` : "";
+    const context = typeof detail.context === "object" && detail.context !== null ? detail.context : null;
+    const reasonCode = detail.reason_code || context?.reason_code;
+    const code = reasonCode ? `reason_code=${reasonCode}` : "";
     const message = detail.message || detail.detail || fallback;
-    return [code, message].filter(Boolean).join(": ");
+    const contextPreview = context ? ` context=${JSON.stringify(context)}` : "";
+    return `${[code, message].filter(Boolean).join(": ")}${contextPreview}`;
   }
   return fallback;
 }
@@ -100,6 +104,16 @@ function formatNum(value: any, digits = 2): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "-";
 }
 
+function apiErrorMessage(error: unknown): string {
+  if (error instanceof PaperV2ApiError) {
+    const reasonCode = typeof error.context?.reason_code === "string" ? `reason_code=${error.context.reason_code}: ` : "";
+    const context = error.context ? ` context=${JSON.stringify(error.context)}` : "";
+    return `${reasonCode}${error.message}${context}`;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error || "unknown error");
+}
+
 function exportJson(filename: string, payload: unknown) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
@@ -114,6 +128,18 @@ function exportJson(filename: string, payload: unknown) {
 
 function metricValue(loop: Loop | undefined, key: string): any {
   return loop?.metrics_json?.[key];
+}
+
+function extractTopk(loop: Loop | undefined): number | null {
+  const topk = loop?.config_json?.strategy_params?.topk ?? loop?.config_json?.backtest_config?.topk;
+  const parsed = Number(topk);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function exportRunId(loop: Loop | undefined): string | null {
+  const value = loop?.config_json?.runtime_flags?.run_id ?? (loop as any)?.run_id;
+  const text = String(value || "").trim();
+  return text || null;
 }
 
 function combineStatusInfo(status: string): { color: string; bgColor: string; label: string } {
@@ -146,6 +172,8 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   const [detailTab, setDetailTab] = useState("overview");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [packageExporting, setPackageExporting] = useState(false);
+  const [packageExportMessage, setPackageExportMessage] = useState<{ ok: boolean; text: string; packageId?: string } | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const selectionRunId = searchParams.get("selection_run_id");
 
@@ -200,6 +228,46 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
   const failedCount = loops.filter((loop) => loop.status === "failed").length;
   const runningCount = loops.filter((loop) => loop.status === "running").length;
   const bestLoop = loops.find((loop) => loop.is_sota);
+  const exportLoop = bestLoop || loops.find((loop) => loop.status === "completed") || activeLoopData;
+  const packageExportRunId = exportRunId(exportLoop);
+  const packageExportTopk = extractTopk(exportLoop);
+  const packageExportScheme = detail?.scheme || selectedScheme;
+  const packageExportDisabledReason = !detail
+    ? "详情尚未加载"
+    : task?.status !== "completed"
+      ? "仅已完成的 combine-backtest task 可导出策略包"
+      : packageExportScheme !== "ic_weighted"
+        ? "S1 仅支持 ic_weighted scheme 导出"
+        : !packageExportRunId
+          ? "缺少可审计的 combine_backtest_run_id"
+          : packageExportTopk == null
+            ? "缺少 TopK，拒绝使用默认值"
+            : null;
+  const canExportPackage = !packageExportDisabledReason && !packageExporting;
+
+  const exportStrategyPackage = useCallback(async () => {
+    if (packageExportDisabledReason || !packageExportRunId || packageExportTopk == null) {
+      setPackageExportMessage({ ok: false, text: packageExportDisabledReason || "导出条件不完整" });
+      return;
+    }
+    setPackageExporting(true);
+    setPackageExportMessage(null);
+    try {
+      const pkg = await strategyPackageApi.createFromMultiAlphaCombineRun({
+        combine_backtest_run_id: packageExportRunId,
+        weighting_scheme: packageExportScheme,
+        topk: packageExportTopk,
+        secondary_topk: [],
+        weight_policy: { mode: "frozen_backtest_terminal_weights" },
+        confirmation: "MULTI_ALPHA_PACKAGE_PROMOTE",
+      });
+      setPackageExportMessage({ ok: true, text: `已导出 StrategyPackage: ${pkg.package_id}`, packageId: pkg.package_id });
+    } catch (exc) {
+      setPackageExportMessage({ ok: false, text: `导出策略包失败: ${apiErrorMessage(exc)}` });
+    } finally {
+      setPackageExporting(false);
+    }
+  }, [packageExportDisabledReason, packageExportRunId, packageExportScheme, packageExportTopk]);
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#f1f5f9", padding: "24px 32px", overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -241,7 +309,15 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
             disabled={!detail}
             style={{ padding: "6px 14px", backgroundColor: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: "6px", fontSize: "12px", fontWeight: 600, cursor: detail ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: "6px" }}
           >
-            <DownloadCloud size={12} /> 导出
+            <DownloadCloud size={12} /> 导出 JSON
+          </button>
+          <button
+            onClick={() => void exportStrategyPackage()}
+            disabled={!canExportPackage}
+            title={packageExportDisabledReason || "从多Alpha combine run 一步导出 StrategyPackage"}
+            style={{ padding: "6px 14px", backgroundColor: canExportPackage ? "#ecfdf5" : "#f8fafc", color: canExportPackage ? "#047857" : "#94a3b8", border: `1px solid ${canExportPackage ? "#86efac" : "#e2e8f0"}`, borderRadius: "6px", fontSize: "12px", fontWeight: 700, cursor: canExportPackage ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            <PackagePlus size={12} /> {packageExporting ? "导出中..." : "导出为策略包"}
           </button>
           <button
             onClick={() => alert(DELETE_APPROVAL_MESSAGE)}
@@ -262,6 +338,17 @@ function MultiAlphaCombineBacktestDetailContent({ params }: PageProps) {
       {detail?.scheme_warning && (
         <div style={{ marginBottom: 12, padding: "10px 12px", backgroundColor: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontSize: 12, color: "#92400e" }}>
           默认 ic_weighted 不可用，当前展示 {detail.scheme}；reason_code={detail.scheme_warning.reason_code || "combine_ui_default_scheme_unavailable"}
+        </div>
+      )}
+
+      {packageExportMessage && (
+        <div style={{ marginBottom: 12, padding: "10px 12px", backgroundColor: packageExportMessage.ok ? "#f0fdf4" : "#fef2f2", border: `1px solid ${packageExportMessage.ok ? "#86efac" : "#ef4444"}`, borderRadius: 8, fontSize: 12, color: packageExportMessage.ok ? "#166534" : "#991b1b" }}>
+          {packageExportMessage.text}
+          {packageExportMessage.packageId && (
+            <Link href={`/paper-v2/packages?package_id=${encodeURIComponent(packageExportMessage.packageId)}`} style={{ marginLeft: 12, color: "#047857", fontWeight: 800 }}>
+              打开策略包列表
+            </Link>
+          )}
         </div>
       )}
 
