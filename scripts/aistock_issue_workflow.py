@@ -1075,7 +1075,14 @@ def _repo_rel(path: Path, root: Path | None = None) -> str:
 
 def _git(args: list[str], cwd: Path | None = None, check: bool = True) -> str:
     cwd = cwd or REPO_ROOT
-    proc = subprocess.run(["git", *args], cwd=str(cwd), text=True, capture_output=True, check=False)
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=_subprocess_env(["git", *args]),
+    )
     if check and proc.returncode != 0:
         raise WorkflowError(proc.stderr.strip() or proc.stdout.strip() or f"git {' '.join(args)} failed")
     return proc.stdout.strip()
@@ -1093,6 +1100,7 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
             capture_output=True,
             check=False,
             timeout=timeout,
+            env=_subprocess_env(args),
         )
         return {
             "ok": proc.returncode == 0,
@@ -1102,6 +1110,19 @@ def _run_command(args: list[str], cwd: Path | None = None, timeout: int = 30) ->
         }
     except Exception as exc:
         return {"ok": False, "returncode": None, "stdout": "", "stderr": str(exc)}
+
+
+def _subprocess_env(args: list[str]) -> dict[str, str] | None:
+    """Return a safe environment for workflow child processes."""
+    if not args or Path(str(args[0])).name.lower() != "git":
+        return None
+    env = os.environ.copy()
+    shell = env.get("SHELL", "")
+    if os.name == "nt" and shell:
+        shell_name = Path(shell).name.lower()
+        if shell_name in {"powershell.exe", "pwsh.exe", "cmd.exe"}:
+            env.pop("SHELL", None)
+    return env
 
 
 def _parse_git_porcelain_path(line: str) -> str:
