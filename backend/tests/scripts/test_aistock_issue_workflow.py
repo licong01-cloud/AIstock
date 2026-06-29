@@ -85,6 +85,33 @@ def _write_repo_client_entrypoints(root: Path) -> None:
     (root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
 
 
+def test_git_subprocess_env_unsets_powershell_shell_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow.os, "name", "nt")
+    monkeypatch.setenv("SHELL", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+
+    env = workflow._subprocess_env(["git", "ls-remote", "origin"])
+
+    assert env is not None
+    assert "SHELL" not in env
+
+
+def test_git_subprocess_env_keeps_git_sh_shell_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow.os, "name", "nt")
+    monkeypatch.setenv("SHELL", r"C:\Program Files\Git\bin\sh.exe")
+
+    env = workflow._subprocess_env(["git", "ls-remote", "origin"])
+
+    assert env is not None
+    assert env["SHELL"] == r"C:\Program Files\Git\bin\sh.exe"
+
+
+def test_subprocess_env_ignores_non_git_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(workflow.os, "name", "nt")
+    monkeypatch.setenv("SHELL", r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+
+    assert workflow._subprocess_env(["python", "--version"]) is None
+
+
 def _fetched_origin_payload() -> dict[str, Any]:
     return {
         "status": "fetched",
