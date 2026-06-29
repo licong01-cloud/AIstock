@@ -24,10 +24,10 @@
       "timestamp": "2026-06-29T09:17:05.308222Z"
     },
     {
-      "timestamp": "2026-06-29T09:55:00Z",
-      "actor": "codex",
       "action": "investigation_scope_corrected",
-      "note": "Corrected handoff path from BUG-551 typo to BUG-553 and marked this BUG as investigation-only."
+      "actor": "codex",
+      "note": "Corrected handoff path from BUG-551 typo to BUG-553 and marked this BUG as investigation-only.",
+      "timestamp": "2026-06-29T09:55:00Z"
     }
   ],
   "evidence_uris": [
@@ -36,8 +36,8 @@
   "expected": "Reject scenario shadow reconciliation should distinguish true A/B behavior divergence from expected event-loop retry semantics, and investigation should identify whether the 30 extra A SUBMITTED child orders are a real A bug or an over-strict reconciler count metric.",
   "first_seen_at": "2026-06-29T09:17:05.308225Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "33d2e2defeb2b6912d589afc330998009d43389e",
+  "fixed_at": "2026-06-29T11:34:43.862326Z",
   "github_issue_number": 1734,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1734",
   "last_seen_at": "2026-06-29T09:17:05.308225Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1736",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -64,6 +65,11 @@
     "fingerprint": "7fd1df96c4f6911c77548b56",
     "source_event_id": "FE-20260629-7fd1df96c4f6"
   },
+  "validation_evidence": [
+    "rtk git diff --check origin/main...HEAD -> passed",
+    "rtk python -m json.tool BUG-553 registry files -> passed",
+    "rtk python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-553 --pr-url https://github.com/licong01-cloud/AIstock/pull/1736 -> passed (20 passed, 0 failed, 0 pending)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
