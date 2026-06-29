@@ -20,6 +20,20 @@ Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:53.6181164Z nox
 """
 
 
+MIXED_NIGHTLY_LOG = """
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:01:00.0000000Z nox > Running session paper_v2_l3
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:02:00.0000000Z nox > python -m pytest backend/tests/paper_trading_v2 backend/tests/selection_center backend/tests/strategy_package -q -p no:cacheprovider
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:03:00.0000000Z nox > Session paper_v2_l3 was successful.
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:04:00.0000000Z nox > Running session qe_archive_l3
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:05:00.0000000Z nox > Session qe_archive_l3 was successful.
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:00.0000000Z nox > Running session qe_archive_data_quality
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:01.0000000Z nox > python scripts/qe_archive_data_quality_smoke.py --output tmp/qe_archive_data_quality_smoke.json
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:02.0000000Z missing schema version: qe_archive_v3_20260628
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:03.0000000Z nox > Session qe_archive_data_quality failed.
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:04.0000000Z ##[error]Process completed with exit code 1.
+"""
+
+
 def test_parse_job_log_extracts_pytest_failure_details() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
 
@@ -32,6 +46,59 @@ def test_parse_job_log_extracts_pytest_failure_details() -> None:
     assert any("market.trading_calendar" in line for line in parsed["key_log_excerpt"])
     assert parsed["key_log_excerpt_omitted_count"] == 0
     assert parsed["suspected_module"] == "paper_v2"
+
+
+def test_parse_job_log_prefers_failed_session_over_mixed_job_name() -> None:
+    parsed = summary.parse_job_log(MIXED_NIGHTLY_LOG, job_name="Nightly L3 (paper_v2 + qe_archive + qe_read)")
+
+    assert parsed["nox_session"] == "paper_v2_l3"
+    assert parsed["failed_step"] == "qe_archive_data_quality"
+    assert parsed["command"] == "python scripts/qe_archive_data_quality_smoke.py --output tmp/qe_archive_data_quality_smoke.json"
+    assert parsed["suspected_module"] == "qe_archive"
+    assert "scripts/qe_archive_data_quality_smoke.py" in parsed["suspected_files"]
+    assert not any(path.startswith("backend/services/paper_trading_v2") for path in parsed["suspected_files"])
+
+
+def test_finalize_summary_uses_actionable_failed_job_for_mixed_nightly_scope() -> None:
+    infra_job = {
+        "job_name": "Code intelligence weekly graph summary",
+        "job_url": "https://github.com/licong01-cloud/AIstock/actions/runs/28334737223/job/83938869182",
+        "failed_step": None,
+        "command": None,
+        "nox_session": None,
+        "pytest_summary": None,
+        "failed_tests": [],
+        "error_signature": "##[error]Process completed with exit code 1.",
+        "key_log_excerpt": ["##[error]Process completed with exit code 1."],
+        "key_log_excerpt_omitted_count": 0,
+        "suspected_module": None,
+        "suspected_files": [],
+    }
+    qe_job = summary.parse_job_log(MIXED_NIGHTLY_LOG, job_name="Nightly L3 (paper_v2 + qe_archive + qe_read)")
+    payload = summary.finalize_summary(
+        {
+            "schema_version": "aistock_ci_failure_summary_v1",
+            "severity": "P1",
+            "workflow": "AIstock Nightly L3 + DR",
+            "run_id": "28334737223",
+            "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/28334737223",
+            "branch": "main",
+            "commit": "a4897918",
+            "failed_jobs": [infra_job, qe_job],
+            "extraction_errors": [],
+        }
+    )
+    issue_payload = summary.build_github_issue_payload(payload)
+    context_pack = summary.build_context_pack(payload, github_issue_number=1723)
+
+    assert payload["suspected_modules"] == ["qe_archive"]
+    assert "[P1][qe_archive_data_quality] main CI failed" in payload["issue_title"]
+    assert payload["reproduce_command"] == "python -m nox -s qe_archive_data_quality"
+    assert "scripts/qe_archive_data_quality_smoke.py" in payload["suspected_files"]
+    assert "module:qe_archive" in issue_payload["labels"]
+    assert "module:paper_v2" not in issue_payload["labels"]
+    assert context_pack["module"] == "qe_archive"
+    assert context_pack["agent_handoff"]["allowed_write_scope"] == payload["suspected_files"]
 
 
 def test_finalize_summary_builds_fingerprint_title_and_reproduce_command() -> None:

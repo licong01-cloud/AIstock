@@ -284,13 +284,13 @@ def _handoff_mode(summary: dict[str, Any]) -> dict[str, Any]:
     return {"mode": "bug_promotion", "needs_bug_json": True, "reason": "code_or_test_failure"}
 
 
-def _infer_module(job_name: str, nox_session: str | None, failed_tests: list[str]) -> str | None:
-    haystack = " ".join([job_name, nox_session or "", *failed_tests]).lower()
+def _match_module(text: str) -> str | None:
+    haystack = text.lower()
     module_patterns = [
-        ("paper_v2", ["paper_v2", "paper-v2", "paper_trading_v2", "selection_center", "strategy_package"]),
-        ("validation", ["validation_center", "validation", "guardrail", "catalog"]),
         ("qe_archive", ["qe_archive"]),
         ("qe_data_contract", ["qe_data_contract"]),
+        ("paper_v2", ["paper_v2", "paper-v2", "paper_trading_v2", "selection_center", "strategy_package"]),
+        ("validation", ["validation_center", "validation", "guardrail", "catalog"]),
         ("model_registry", ["model_registry"]),
         ("market_regime_label", ["market_regime_label"]),
         ("rl_execution", ["rl_execution"]),
@@ -299,6 +299,20 @@ def _infer_module(job_name: str, nox_session: str | None, failed_tests: list[str
         if any(needle in haystack for needle in needles):
             return module
     return None
+
+
+def _infer_module(
+    job_name: str,
+    nox_session: str | None,
+    failed_tests: list[str],
+    failed_step: str | None = None,
+) -> str | None:
+    # Prefer the actual failing session/test before broad mixed job names.
+    for candidate in [failed_step or "", nox_session or "", *failed_tests]:
+        module = _match_module(candidate)
+        if module:
+            return module
+    return _match_module(job_name)
 
 
 def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
@@ -312,6 +326,16 @@ def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
                 "backend/tests/strategy_package",
             ]
         )
+    elif module == "qe_archive":
+        files.extend(
+            [
+                "backend/db/init_qe_archive_schema.py",
+                "backend/services/qe_archive",
+                "backend/tests/qe_archive",
+                "backend/tests/test_qe_archive_schema.py",
+                "scripts/qe_archive_data_quality_smoke.py",
+            ]
+        )
     elif module == "validation":
         files.extend(
             [
@@ -322,6 +346,34 @@ def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
             ]
         )
     return _unique(files)
+
+
+def _command_from_session(lines: list[str], session: str | None) -> str | None:
+    if not session:
+        return None
+    start = None
+    end = None
+    start_patterns = [
+        re.compile(rf"nox > Running session {re.escape(session)}\b"),
+        re.compile(rf"\bnox -s {re.escape(session)}\b"),
+    ]
+    end_pattern = re.compile(rf"nox > Session {re.escape(session)} (?:failed|was successful|skipped)")
+    for index, line in enumerate(lines):
+        if start is None and any(pattern.search(line) for pattern in start_patterns):
+            start = index
+        if start is not None and end_pattern.search(line):
+            end = index
+            break
+    if start is None:
+        return None
+    window = lines[start : (end + 1 if end is not None else None)]
+    command_patterns = [
+        r"nox > Command (.+?) failed",
+        r"nox > ((?:python|pytest|npm|node|npx)\b.+)",
+        r"##\[command\](.*(?:python|pytest|npm|node|npx).*)",
+    ]
+    command = _first_match(window, command_patterns)
+    return command.strip() if command else None
 
 
 def _short_sha(value: Any) -> str | None:
@@ -442,6 +494,10 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         ],
     )
     failed_step = _first_match(lines, [r"nox > Session ([A-Za-z0-9_.-]+) failed"])
+    if failed_step:
+        failed_command = _command_from_session(lines, failed_step)
+        if failed_command:
+            command = failed_command
     failed_tests = _unique(re.findall(r"FAILED\s+([^\s]+::[^\s]+)", joined))
     pytest_summary = _first_match(
         lines,
@@ -489,7 +545,7 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
             excerpt_candidates.append(stripped)
     unique_excerpts = _unique(excerpt_candidates)
     key_log_excerpt = unique_excerpts[:12]
-    module = _infer_module(job_name, nox_session, failed_tests)
+    module = _infer_module(job_name, nox_session, failed_tests, failed_step)
     return {
         "job_name": job_name,
         "job_url": job_url,
@@ -507,8 +563,7 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
 
 
 def _fingerprint_source(summary: dict[str, Any]) -> str:
-    failed = summary.get("failed_jobs") or []
-    first = failed[0] if failed else {}
+    first = _primary_failed_job(summary)
     first_test = (first.get("failed_tests") or [None])[0]
     return "|".join(
         str(part or "")
@@ -516,10 +571,32 @@ def _fingerprint_source(summary: dict[str, Any]) -> str:
             summary.get("workflow"),
             summary.get("branch"),
             first.get("job_name"),
-            first.get("nox_session"),
+            first.get("failed_step") or first.get("nox_session"),
             first_test or first.get("error_signature"),
         ]
     )
+
+
+def _primary_failed_job(summary: dict[str, Any]) -> dict[str, Any]:
+    failed_jobs = summary.get("failed_jobs") or []
+    if not failed_jobs:
+        return {}
+
+    def score(job: dict[str, Any]) -> int:
+        value = 0
+        if job.get("failed_tests"):
+            value += 100
+        if job.get("failed_step"):
+            value += 80
+        if job.get("command"):
+            value += 60
+        if job.get("suspected_module"):
+            value += 40
+        if job.get("error_signature"):
+            value += 10
+        return value
+
+    return max(failed_jobs, key=score)
 
 
 def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -545,9 +622,10 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     for job in failed_jobs:
         files.extend(job.get("suspected_files") or [])
     summary["suspected_files"] = _unique(files)
-    first_job = failed_jobs[0] if failed_jobs else {}
+    first_job = _primary_failed_job(summary)
     first_test = ((first_job.get("failed_tests") or [None])[0] or "").split("::")[-1]
-    nox_session = first_job.get("nox_session") or _session_from_job_name(first_job.get("job_name")) or "ci"
+    effective_session = first_job.get("failed_step") or first_job.get("nox_session")
+    nox_session = effective_session or _session_from_job_name(first_job.get("job_name")) or "ci"
     branch = summary.get("branch") or "unknown"
     failure_name = first_test or first_job.get("error_signature") or summary.get("manual_summary") or "diagnostic extraction incomplete"
     summary["issue_title"] = f"[{summary.get('severity') or 'P1'}][{nox_session}] {branch} CI failed: {failure_name}"[:240]
@@ -574,8 +652,7 @@ def _github_issue_url(issue_number: int | str | None, repo: str = DEFAULT_REPO) 
 
 
 def _first_failed_job(summary: dict[str, Any]) -> dict[str, Any]:
-    failed_jobs = summary.get("failed_jobs") or []
-    return failed_jobs[0] if failed_jobs else {}
+    return _primary_failed_job(summary)
 
 
 def _all_failed_tests(summary: dict[str, Any]) -> list[str]:
