@@ -1136,14 +1136,14 @@ class MiniQMTExecutionRuntime:
         instance = self._find_algo_instance(runtime_id, algo_instance_id)
         if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
             return None
-        if self._is_vnpy_instance(instance) and command_id is None:
-            return None
         children = [
             child
             for child in self.repository.list_child_orders(runtime_id, active_only=False)
             if child.algo_instance_id == algo_instance_id
         ]
         if not children or any(child.status not in _TERMINAL_CHILD_ORDER_STATUSES for child in children):
+            return None
+        if self._is_vnpy_instance(instance) and self._vnpy_core_active_order_ids(instance):
             return None
         terminal_status = _algo_terminal_status_from_child_orders(children)
         updated = self.oms.record_algo_instance(
@@ -1156,6 +1156,9 @@ class MiniQMTExecutionRuntime:
                         "terminalized_by_runtime": True,
                         "terminalized_reason": reason,
                         "terminal_child_order_statuses": sorted({child.status.value for child in children}),
+                        "terminal_vnpy_active_order_ids": (
+                            self._vnpy_core_active_order_ids(instance) if self._is_vnpy_instance(instance) else []
+                        ),
                         **({"operator_command_id": command_id} if command_id else {}),
                     },
                 }
@@ -1174,6 +1177,17 @@ class MiniQMTExecutionRuntime:
             },
         )
         return updated
+
+    def _vnpy_core_active_order_ids(self, instance: MiniQMTExecutionAlgoInstance) -> list[str]:
+        if not self._is_vnpy_instance(instance):
+            return []
+        core = self._vnpy_cores.get(instance.algo_instance_id)
+        if core is not None:
+            return sorted(str(vt_orderid) for vt_orderid in core.active_orders)
+        snapshot = dict(dict(instance.metadata or {}).get("vnpy_algo_state") or {}).get("snapshot")
+        if not isinstance(snapshot, dict):
+            return []
+        return sorted(str(vt_orderid) for vt_orderid in (snapshot.get("active_order_ids") or []))
 
     def _terminalize_orphaned_active_algos(self, runtime_id: str, *, reason: str) -> list[str]:
         terminalized: list[str] = []
@@ -1725,6 +1739,12 @@ class MiniQMTExecutionRuntime:
                 )
                 self._persist_vnpy_core_state(instance, core)
                 self._handle_vnpy_actions(instance, follow_up_actions)
+                if child.status in _TERMINAL_CHILD_ORDER_STATUSES:
+                    self._terminalize_algo_if_all_children_terminal(
+                        instance.runtime_id,
+                        instance.algo_instance_id,
+                        reason=f"broker_submit_{child.status.value.lower()}",
+                    )
             elif action.action_type in {VnpyActionType.CANCEL, VnpyActionType.CANCEL_ALL}:
                 cancel_acks = []
                 for child in self._find_vnpy_active_children(instance, vt_orderid=action.vt_orderid):
