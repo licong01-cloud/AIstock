@@ -31,8 +31,8 @@
   "expected": "validation_discovery_issue_intake_readonly should recognize merged PR evidence, close-sync evidence, GitHub Issue closure, and BUG JSON fixed metadata; it should not create fixed_bug_missing_pr_or_commit candidates for already closed and synchronized BUGs.",
   "first_seen_at": "2026-06-29T09:09:30.665309Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c5a1c80a43f10cc8513792758c11f11a36565625",
+  "fixed_at": "2026-06-29T11:17:24.573272Z",
   "github_issue_number": 1730,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1730",
   "last_seen_at": "2026-06-29T09:09:30.665309Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1743",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -60,6 +61,13 @@
     "fingerprint": "6e5f70d933cab76231dfe109",
     "source_event_id": "FE-20260629-6e5f70d933ca"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_nightly_discovery_plans.py -q -p no:cacheprovider -> 8 passed",
+    "python scripts/nightly_discovery_plans.py --json run --plan-key validation_discovery_issue_intake_readonly --root . --output tmp/issue_workflow/BUG-550/discovery-after.json -> BUG-544 no longer reported",
+    "python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 -> passed",
+    "git diff --check -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-550 --module validation_llm_pipeline --changed-file scripts/nightly_discovery_plans.py --changed-file backend/tests/scripts/test_nightly_discovery_plans.py -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
