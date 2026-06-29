@@ -22,7 +22,7 @@ from backend.services.trading_core.errors import (
 )
 
 from .execution_policy import ValidatedExecutionPolicy
-from .manifest import compute_manifest_sha256, freeze_manifest
+from .manifest import classify_manifest_hash_drift, compute_manifest_sha256, freeze_manifest
 from .model_state import (
     ModelRetrainJobStatus,
     ModelStalenessStatus,
@@ -59,19 +59,47 @@ logger = logging.getLogger("aistock.strategy_package.repository")
 ConnFactory = Callable[[], Iterator[Any]]
 
 
-def _manifest_drift_repair_plan(*, stored_sha256: str | None, computed_sha256: str | None) -> dict[str, Any]:
+SAFE_MANIFEST_REPAIR_CLASSIFICATION = "A_schema_evolution_stale_hash"
+
+
+def _manifest_drift_repair_plan(
+    *,
+    stored_sha256: str | None,
+    computed_sha256: str | None,
+    manifest_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    classification = classify_manifest_hash_drift(
+        manifest_json=manifest_json,
+        stored_sha256=stored_sha256,
+        computed_sha256=computed_sha256,
+    )
     return {
-        "recommended_action": "repair_manifest_hash" if computed_sha256 else "quarantine_manual_review",
+        "recommended_action": (
+            "repair_manifest_hash"
+            if classification["repair_allowed"]
+            else "quarantine_manual_review"
+        ),
         "mutates_manifest_json": False,
         "requires_operator_confirmation": True,
         "confirm_stored_sha256": stored_sha256,
         "confirm_computed_sha256": computed_sha256,
+        "confirm_repair_classification": classification["classification"],
+        "classification": classification,
         "rollback_restore": {
             "field": "strategy_pkg.package.manifest_sha256",
             "restore_value": stored_sha256,
             "audit_event_reason": "manifest_hash_repaired",
         },
     }
+
+
+def _manifest_json_for_record_classification(record: "StrategyPackageRecord") -> dict[str, Any]:
+    payload = record.current_manifest().model_dump(mode="json")
+    fields_set = getattr(record.manifest, "model_fields_set", set())
+    for default_key in ("source_evidence", "backtest_context"):
+        if default_key not in fields_set and payload.get(default_key) == {}:
+            payload.pop(default_key, None)
+    return payload
 
 
 def _infer_data_vintage(manifest: StrategyPackageManifest) -> date | None:
@@ -121,7 +149,12 @@ class StrategyPackageRecord(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def current_manifest(self) -> StrategyPackageManifest:
-        return self.manifest.model_copy(update={"package_status": self.package_status})
+        return self.manifest.model_copy(
+            update={
+                "package_status": self.package_status,
+                "manifest_sha256": self.manifest_sha256,
+            }
+        )
 
 
 class PackageStatusEvent(BaseModel):
@@ -1568,6 +1601,11 @@ class StrategyPackageRepository:
                     "stored_sha256": row_dict["manifest_sha256"],
                     "computed_sha256": None,
                     "error": "manifest_json failed pydantic validation",
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=row_dict["manifest_sha256"],
+                        computed_sha256=None,
+                        manifest_json=manifest_json if isinstance(manifest_json, dict) else None,
+                    ),
                 })
                 continue
             stored = row_dict["manifest_sha256"]
@@ -1611,6 +1649,7 @@ class StrategyPackageRepository:
                     "repair_plan": _manifest_drift_repair_plan(
                         stored_sha256=stored,
                         computed_sha256=computed,
+                        manifest_json=manifest_json if isinstance(manifest_json, dict) else None,
                     ),
                 })
             else:
@@ -1657,7 +1696,25 @@ class StrategyPackageRepository:
                 context={"package_id": package_id},
             )
         row_dict = dict(row)
-        manifest = StrategyPackageManifest.model_validate(row_dict["manifest_json"])
+        try:
+            manifest = StrategyPackageManifest.model_validate(row_dict["manifest_json"])
+        except Exception as exc:
+            repair_plan = _manifest_drift_repair_plan(
+                stored_sha256=row_dict["manifest_sha256"],
+                computed_sha256=None,
+                manifest_json=row_dict["manifest_json"] if isinstance(row_dict["manifest_json"], dict) else None,
+            )
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": row_dict["manifest_sha256"],
+                    "computed_sha256": None,
+                    "error": "manifest_json failed pydantic validation",
+                    "validation_error": str(exc),
+                    "repair_plan": repair_plan,
+                },
+            ) from exc
         record = StrategyPackageRecord(
             package_id=row_dict["package_id"],
             package_name=row_dict["package_name"],
@@ -1685,6 +1742,21 @@ class StrategyPackageRepository:
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        repair_plan = _manifest_drift_repair_plan(
+            stored_sha256=record.manifest_sha256,
+            computed_sha256=correct_hash,
+            manifest_json=row_dict["manifest_json"] if isinstance(row_dict["manifest_json"], dict) else None,
+        )
+        if repair_plan["classification"]["classification"] != SAFE_MANIFEST_REPAIR_CLASSIFICATION:
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "repair_plan": repair_plan,
+                },
+            )
         if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
             raise InvalidStateTransitionError(
                 "manifest hash repair requires explicit stored/computed hash confirmation",
@@ -1694,44 +1766,65 @@ class StrategyPackageRepository:
                     "computed_sha256": correct_hash,
                     "confirm_stored_sha256": confirm_stored_sha256,
                     "confirm_computed_sha256": confirm_computed_sha256,
-                    "repair_plan": _manifest_drift_repair_plan(
-                        stored_sha256=record.manifest_sha256,
-                        computed_sha256=correct_hash,
-                    ),
+                    "repair_plan": repair_plan,
                 },
             )
         with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE strategy_pkg.package
-                    SET manifest_sha256 = %s, updated_at = NOW()
-                    WHERE package_id = %s
-                    """,
-                    (correct_hash, package_id),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        package_id,
-                        record.package_status.value,
-                        record.package_status.value,
-                        "manifest_hash_repaired",
-                        psycopg2.extras.Json({
-                            "operator": operator,
-                            "old_manifest_sha256": record.manifest_sha256,
-                            "new_manifest_sha256": correct_hash,
-                            "rollback_restore": {
-                                "field": "strategy_pkg.package.manifest_sha256",
-                                "restore_value": record.manifest_sha256,
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.package
+                        SET manifest_sha256 = %s, updated_at = NOW()
+                        WHERE package_id = %s AND manifest_sha256 = %s
+                        """,
+                        (correct_hash, package_id, record.manifest_sha256),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "manifest hash repair lost compare-and-set race",
+                            context={
+                                "package_id": package_id,
+                                "expected_stored_sha256": record.manifest_sha256,
+                                "computed_sha256": correct_hash,
                             },
-                        }),
-                    ),
-                )
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            package_id,
+                            record.package_status.value,
+                            record.package_status.value,
+                            "manifest_hash_repaired",
+                            psycopg2.extras.Json({
+                                "operator": operator,
+                                "old_manifest_sha256": record.manifest_sha256,
+                                "new_manifest_sha256": correct_hash,
+                                "repair_classification": repair_plan["classification"]["classification"],
+                                "classification_reason": repair_plan["classification"]["reason"],
+                                "rollback_restore": {
+                                    "field": "strategy_pkg.package.manifest_sha256",
+                                    "restore_value": record.manifest_sha256,
+                                },
+                            }),
+                        ),
+                    )
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
         return self.get(package_id)
 
     def _record_from_row(self, row: dict[str, Any], *, quarantine: bool = False) -> StrategyPackageRecord | None:
@@ -2180,6 +2273,11 @@ class InMemoryStrategyPackageRepository:
                     "stored_sha256": record.manifest_sha256,
                     "computed_sha256": None,
                     "error": "manifest_json failed pydantic validation",
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=record.manifest_sha256,
+                        computed_sha256=None,
+                        manifest_json=_manifest_json_for_record_classification(record),
+                    ),
                 })
                 continue
             if record.manifest_sha256 != computed:
@@ -2197,6 +2295,7 @@ class InMemoryStrategyPackageRepository:
                     "repair_plan": _manifest_drift_repair_plan(
                         stored_sha256=record.manifest_sha256,
                         computed_sha256=computed,
+                        manifest_json=_manifest_json_for_record_classification(record),
                     ),
                 })
             else:
@@ -2222,6 +2321,21 @@ class InMemoryStrategyPackageRepository:
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        repair_plan = _manifest_drift_repair_plan(
+            stored_sha256=record.manifest_sha256,
+            computed_sha256=correct_hash,
+            manifest_json=_manifest_json_for_record_classification(record),
+        )
+        if repair_plan["classification"]["classification"] != SAFE_MANIFEST_REPAIR_CLASSIFICATION:
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "repair_plan": repair_plan,
+                },
+            )
         if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
             raise InvalidStateTransitionError(
                 "manifest hash repair requires explicit stored/computed hash confirmation",
@@ -2231,10 +2345,7 @@ class InMemoryStrategyPackageRepository:
                     "computed_sha256": correct_hash,
                     "confirm_stored_sha256": confirm_stored_sha256,
                     "confirm_computed_sha256": confirm_computed_sha256,
-                    "repair_plan": _manifest_drift_repair_plan(
-                        stored_sha256=record.manifest_sha256,
-                        computed_sha256=correct_hash,
-                    ),
+                    "repair_plan": repair_plan,
                 },
             )
         updated = record.model_copy(update={"manifest_sha256": correct_hash, "updated_at": datetime.now(timezone.utc)})
@@ -2249,6 +2360,8 @@ class InMemoryStrategyPackageRepository:
                     "operator": operator,
                     "old_manifest_sha256": record.manifest_sha256,
                     "new_manifest_sha256": correct_hash,
+                    "repair_classification": repair_plan["classification"]["classification"],
+                    "classification_reason": repair_plan["classification"]["reason"],
                     "rollback_restore": {
                         "field": "strategy_pkg.package.manifest_sha256",
                         "restore_value": record.manifest_sha256,
