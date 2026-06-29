@@ -7,9 +7,68 @@ import NoticePanel from "@/components/paper-v2/NoticePanel";
 import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
-import { paperV2Api, qmtApi, strategyPackageApi, type QmtStatus } from "@/lib/paper-v2/api";
+import { paperV2Api, qmtApi, simulationRuntimeApi, strategyPackageApi, type QmtStatus } from "@/lib/paper-v2/api";
 import { asText, dataSourceLabel, formatCompact } from "@/lib/paper-v2/format";
-import type { ExecutionPolicy, JsonObject, PaperAutoRunSummary, PaperPortfolio, PaperSchedulerBootstrapStatus, StrategyPackage } from "@/lib/paper-v2/types";
+import type {
+  ExecutionPolicy,
+  JsonObject,
+  PaperAutoRunSummary,
+  PaperPortfolio,
+  PaperSchedulerBootstrapStatus,
+  SimulationRuntimeOperatorCommandRequest,
+  SimulationRuntimeRunSummary,
+  StrategyPackage,
+} from "@/lib/paper-v2/types";
+
+type OperatorCommandType = SimulationRuntimeOperatorCommandRequest["command_type"];
+
+type OperatorCommandOption = {
+  value: OperatorCommandType;
+  label: string;
+  summary: string;
+  impact: string;
+  requiresStrategySlot?: boolean;
+  requiresAlphaSignalBook?: boolean;
+};
+
+const OPERATOR_COMMAND_OPTIONS: OperatorCommandOption[] = [
+  {
+    value: "CANCEL_ALL_OPEN_ORDERS",
+    label: "撤销全部未成交委托",
+    summary: "通过 MiniQMTExecutionRuntime 撤销当前账号组仍处于活跃状态的子单。",
+    impact: "不会新增买卖单；可能改变当前挂单状态。",
+  },
+  {
+    value: "FLATTEN_ALL_POSITIONS",
+    label: "清空全部持仓",
+    summary: "对 MiniQMT 模拟账号内可卖持仓生成受控清仓操作。",
+    impact: "会影响整个 MiniQMT 模拟账号组，请仅在确认需要退出全部仓位时使用。",
+  },
+  {
+    value: "FLATTEN_STRATEGY_SLOT",
+    label: "清空当前策略槽持仓",
+    summary: "仅对选中运行记录对应的策略槽执行清仓。",
+    impact: "需要可追溯的 strategy_slot_id；不会处理其他策略槽。",
+    requiresStrategySlot: true,
+  },
+  {
+    value: "RESET_STRATEGY_SLOT",
+    label: "重置当前策略槽",
+    summary: "终结选中策略槽的运行时状态并撤销其活跃子单。",
+    impact: "用于人工恢复策略槽；不会修改策略包源码或模型。",
+    requiresStrategySlot: true,
+  },
+  {
+    value: "REPLACE_ALPHA_SIGNAL_BOOK",
+    label: "更换 Alpha 信号簿",
+    summary: "把选中策略槽切换到一份可追溯的 Alpha 信号簿。",
+    impact: "仅替换信号簿引用，不直接提交委托；必须从页面发现的信号簿候选中选择。",
+    requiresStrategySlot: true,
+    requiresAlphaSignalBook: true,
+  },
+];
+
+const OPERATOR_COMMAND_BY_VALUE = new Map(OPERATOR_COMMAND_OPTIONS.map((item) => [item.value, item]));
 
 function numberValue(row: JsonObject | null | undefined, key: string): number | null {
   const raw = row?.[key];
@@ -23,6 +82,19 @@ function textValue(row: JsonObject | null | undefined, key: string): string {
   return String(raw);
 }
 
+function rawText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  return String(value);
+}
+
+function objectValue(value: unknown): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
+}
+
+function itemValue(row: JsonObject | null | undefined, key: string): unknown {
+  return row ? row[key] : undefined;
+}
+
 function fmt(value: unknown, digits = 2): string {
   if (value === null || value === undefined || value === "") return "-";
   const n = typeof value === "number" ? value : Number(value);
@@ -32,6 +104,78 @@ function fmt(value: unknown, digits = 2): string {
 
 function miniqmtPortfolios(rows: PaperPortfolio[]): PaperPortfolio[] {
   return rows.filter((row) => row.broker_backend === "minqmt_sim" || row.data_source === "MINIQMT_REALTIME");
+}
+
+function portfolioAccountGroupId(row: PaperPortfolio | null | undefined): string {
+  const autoRunConfig = objectValue(row?.auto_run_config);
+  const autoRunSummary = objectValue(itemValue(row, "auto_run"));
+  const binding = objectValue(itemValue(autoRunSummary, "binding"));
+  const values = [
+    autoRunConfig?.account_group_id,
+    autoRunConfig?.broker_account_id,
+    binding?.account_group_id,
+    binding?.broker_account_id,
+    row?.portfolio_id,
+  ];
+  for (const value of values) {
+    const text = rawText(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function portfolioStrategySlotId(row: PaperPortfolio | null | undefined): string {
+  const autoRunConfig = objectValue(row?.auto_run_config);
+  const autoRunSummary = objectValue(itemValue(row, "auto_run"));
+  const binding = objectValue(itemValue(autoRunSummary, "binding"));
+  const values = [
+    autoRunConfig?.strategy_slot_id,
+    binding?.strategy_slot_id,
+    row?.portfolio_id,
+  ];
+  for (const value of values) {
+    const text = rawText(value).trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function runtimeIdFromRun(row: SimulationRuntimeRunSummary | null | undefined): string | undefined {
+  const evidence = runtimeEvidenceFromRun(row);
+  const runtimeId = rawText(itemValue(evidence, "runtime_id")).trim();
+  return runtimeId || undefined;
+}
+
+function runtimeEvidenceFromRun(row: SimulationRuntimeRunSummary | null | undefined): JsonObject | null {
+  const batch = objectValue(itemValue(row?.broker_context, "qmt_batch_result"));
+  return objectValue(itemValue(batch, "runtime_evidence"));
+}
+
+function runtimeHashFromRun(row: SimulationRuntimeRunSummary | null | undefined): string {
+  return rawText(row?.execution_plan_hash || row?.binding_hash || row?.release_hash).trim();
+}
+
+function alphaSignalBookCandidates(rows: SimulationRuntimeRunSummary[]): string[] {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    for (const source of [
+      row,
+      row.broker_context,
+      row.reconciliation_context,
+      row.strategy_performance,
+      runtimeEvidenceFromRun(row),
+    ]) {
+      const direct = rawText(itemValue(objectValue(source), "alpha_signal_book_id")).trim();
+      if (direct) ids.add(direct);
+    }
+  }
+  return Array.from(ids).sort();
+}
+
+function runDisplayValue(row: SimulationRuntimeRunSummary | null | undefined, key: string): string {
+  const display = objectValue(itemValue(row, "display"));
+  const value = rawText(itemValue(display, key)).trim();
+  return value || "-";
 }
 
 function todayIso(): string {
@@ -205,9 +349,18 @@ export default function PaperV2MiniQMTSimPage() {
   const [orders, setOrders] = useState<JsonObject[]>([]);
   const [trades, setTrades] = useState<JsonObject[]>([]);
   const [portfolios, setPortfolios] = useState<PaperPortfolio[]>([]);
+  const [runtimeRuns, setRuntimeRuns] = useState<SimulationRuntimeRunSummary[]>([]);
   const [autoRunByPortfolio, setAutoRunByPortfolio] = useState<Record<string, PaperAutoRunSummary>>({});
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
+  const [selectedPortfolioId, setSelectedPortfolioId] = useState("");
+  const [selectedRuntimeRunId, setSelectedRuntimeRunId] = useState("");
+  const [operatorCommand, setOperatorCommand] = useState<OperatorCommandType>("CANCEL_ALL_OPEN_ORDERS");
+  const [operatorReason, setOperatorReason] = useState("");
+  const [operatorAlphaSignalBookId, setOperatorAlphaSignalBookId] = useState("");
+  const [operatorSubmitting, setOperatorSubmitting] = useState(false);
+  const [operatorConfirming, setOperatorConfirming] = useState(false);
+  const [operatorResult, setOperatorResult] = useState<JsonObject | null>(null);
   const [packageId, setPackageId] = useState("");
   const [policyId, setPolicyId] = useState("");
   const [portfolioName, setPortfolioName] = useState(`MiniQMT-${todayIso()}`);
@@ -253,6 +406,11 @@ export default function PaperV2MiniQMTSimPage() {
         if (value) nextAutoRunByPortfolio[portfolioId] = value;
       }
       setAutoRunByPortfolio(nextAutoRunByPortfolio);
+      const runsPayload = await simulationRuntimeApi.listRuns({
+        brokerBackend: "minqmt_sim",
+        limit: 100,
+      });
+      setRuntimeRuns(runsPayload.runs);
       if (nextStatus.connected) {
         const [nextAccount, nextPositions, nextOrders, nextTrades] = await Promise.all([
           qmtApi.account(),
@@ -289,6 +447,19 @@ export default function PaperV2MiniQMTSimPage() {
   );
   const provider = status?.provider || "-";
   const sortedPositions = useMemo(() => sortRows(positions, positionSort, positionSortValue), [positions, positionSort]);
+  const selectedPortfolio = useMemo(
+    () => miniPortfolios.find((row) => row.portfolio_id === selectedPortfolioId) || miniPortfolios[0] || null,
+    [miniPortfolios, selectedPortfolioId],
+  );
+  const selectedRuntimeRun = useMemo(
+    () => runtimeRuns.find((row) => row.run_id === selectedRuntimeRunId) || runtimeRuns[0] || null,
+    [runtimeRuns, selectedRuntimeRunId],
+  );
+  const selectedCommandOption = OPERATOR_COMMAND_BY_VALUE.get(operatorCommand) || OPERATOR_COMMAND_OPTIONS[0];
+  const alphaBookOptions = useMemo(() => alphaSignalBookCandidates(runtimeRuns), [runtimeRuns]);
+  const operatorAccountGroupId = rawText(selectedRuntimeRun?.account_group_id).trim() || portfolioAccountGroupId(selectedPortfolio);
+  const operatorStrategySlotId = rawText(selectedRuntimeRun?.strategy_slot_id).trim() || portfolioStrategySlotId(selectedPortfolio);
+  const operatorRuntimeConfigHash = runtimeHashFromRun(selectedRuntimeRun);
   const currentTradeDate = useMemo(() => trades.map(tradeDate).find(Boolean) || "", [trades]);
   const currentTrades = useMemo(() => currentTradeDate ? trades.filter((row) => tradeDate(row) === currentTradeDate) : trades, [currentTradeDate, trades]);
   const sortedTrades = useMemo(() => sortRows(currentTrades, tradeSort, tradeSortValue), [currentTrades, tradeSort]);
@@ -409,6 +580,63 @@ export default function PaperV2MiniQMTSimPage() {
     }
   }
 
+  function requestOperatorCommand() {
+    setError(null);
+    setOperatorResult(null);
+    if (operatorDisabledReason) {
+      setError(new Error(operatorDisabledReason));
+      return;
+    }
+    setOperatorConfirming(true);
+  }
+
+  async function executeConfirmedOperatorCommand() {
+    if (operatorDisabledReason || !selectedRuntimeRun) return;
+    setOperatorSubmitting(true);
+    setError(null);
+    setOperatorResult(null);
+    try {
+      const result = await simulationRuntimeApi.executeMiniQmtOperatorCommand({
+        command_type: operatorCommand,
+        account_group_id: operatorAccountGroupId,
+        strategy_slot_id: operatorStrategySlotId || undefined,
+        alpha_signal_book_id: selectedCommandOption.requiresAlphaSignalBook ? operatorAlphaSignalBookId : undefined,
+        trade_date: selectedRuntimeRun.trade_date || todayIso(),
+        runtime_config_hash: operatorRuntimeConfigHash,
+        runtime_id: runtimeIdFromRun(selectedRuntimeRun),
+        reason: operatorReason.trim(),
+        confirm_text: `EXECUTE ${operatorCommand}`,
+        requested_by: "paper-v2-miniqmt-sim-ui",
+        payload: {
+          selected_portfolio_id: selectedPortfolio?.portfolio_id,
+          selected_run_id: selectedRuntimeRun.run_id,
+          source: "miniqmt_sim_controlled_ops_card",
+        },
+      });
+      setOperatorResult(result as unknown as JsonObject);
+      setOperatorConfirming(false);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setOperatorSubmitting(false);
+    }
+  }
+
+  const operatorDisabledReason = !selectedRuntimeRun
+    ? "请先选择一条 MiniQMT 模拟盘运行证据。"
+    : !operatorReason.trim()
+      ? "请填写运维原因。"
+      : !operatorAccountGroupId
+        ? "缺少 account_group_id，无法审计命令归属。"
+        : selectedCommandOption.requiresStrategySlot && !operatorStrategySlotId
+          ? "当前命令需要 strategy_slot_id，请选择带策略槽的运行记录。"
+          : !operatorRuntimeConfigHash
+            ? "缺少运行配置 hash，请选择已有 MiniQMT runtime run。"
+            : selectedCommandOption.requiresAlphaSignalBook && !operatorAlphaSignalBookId
+              ? "更换 Alpha 信号簿前必须先选择页面发现的信号簿。"
+              : "";
+
   return (
     <main>
       <ErrorPanel error={error} title="MiniQMT 模拟盘检查失败" />
@@ -422,6 +650,100 @@ export default function PaperV2MiniQMTSimPage() {
       <NoticePanel title="交易权威边界" tone="warning">
         AIstock 只生成买卖方向、代码、数量和提交时间；MiniQMT 是唯一委托、拒单、成交、资金和持仓权威。本页面不会用 TDX、DB、tick 或 LocalSim 补成交，也不会展示每策略真实资金池。
       </NoticePanel>
+
+      <SectionCard title="MiniQMT 模拟盘受控操作" eyebrow="运行时命令 / 二次确认">
+        <NoticePanel title="仅限 MiniQMT 模拟盘" tone="warning">
+          撤单、清仓、重置策略槽和更换 Alpha 信号簿都通过 MiniQMTExecutionRuntime 审计执行；页面不要求手工输入确认文本，点击提交后会弹出二次确认，再由前端生成后端所需的受控确认字段。
+        </NoticePanel>
+        <div className="pv2-form-grid" data-testid="miniqmt-operator-command-panel">
+          <div className="pv2-field">
+            <label>目标 MiniQMT 模拟盘</label>
+            <select className="pv2-select" data-testid="miniqmt-operator-portfolio" value={selectedPortfolio?.portfolio_id || ""} onChange={(event) => setSelectedPortfolioId(event.target.value)}>
+              {miniPortfolios.length ? miniPortfolios.map((item) => <option key={item.portfolio_id} value={item.portfolio_id}>{item.portfolio_name} / {item.status}</option>) : <option value="">暂无 MiniQMT 模拟盘</option>}
+            </select>
+          </div>
+          <div className="pv2-field">
+            <label>运行证据</label>
+            <select className="pv2-select" data-testid="miniqmt-operator-runtime-run" value={selectedRuntimeRun?.run_id || ""} onChange={(event) => setSelectedRuntimeRunId(event.target.value)}>
+              {runtimeRuns.length ? runtimeRuns.map((item) => (
+                <option key={item.run_id} value={item.run_id}>
+                  {item.trade_date} / {runDisplayValue(item, "account_slot_label")} / {item.status}
+                </option>
+              )) : <option value="">暂无 MiniQMT runtime run</option>}
+            </select>
+          </div>
+          <div className="pv2-field">
+            <label>受控命令</label>
+            <select
+              className="pv2-select"
+              data-testid="miniqmt-operator-command-type"
+              value={operatorCommand}
+              onChange={(event) => {
+                setOperatorCommand(event.target.value as OperatorCommandType);
+                setOperatorAlphaSignalBookId("");
+                setOperatorResult(null);
+              }}
+            >
+              {OPERATOR_COMMAND_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </div>
+          <div className="pv2-field">
+            <label>运维原因</label>
+            <input className="pv2-input" data-testid="miniqmt-operator-reason" value={operatorReason} onChange={(event) => setOperatorReason(event.target.value)} placeholder="必填：说明为什么需要人工操作" />
+          </div>
+          {selectedCommandOption.requiresAlphaSignalBook ? (
+            <div className="pv2-field">
+              <label>选择 Alpha 信号簿</label>
+              <select className="pv2-select" data-testid="miniqmt-operator-alpha-book" value={operatorAlphaSignalBookId} onChange={(event) => setOperatorAlphaSignalBookId(event.target.value)}>
+                <option value="">请选择可追溯信号簿</option>
+                {alphaBookOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+              <span className="pv2-help">仅更换 Alpha 信号簿时需要；候选来自 MiniQMT runtime run 证据，不再要求手工输入复杂 ID。</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="pv2-readable-panel">
+          <div className="pv2-readable-table">
+            <div className="pv2-readable-row"><div className="pv2-readable-key">命令说明</div><div className="pv2-readable-value">{selectedCommandOption.summary}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">影响范围</div><div className="pv2-readable-value">{selectedCommandOption.impact}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">账号组 / 策略槽</div><div className="pv2-readable-value pv2-mono">{operatorAccountGroupId || "-"} / {operatorStrategySlotId || "-"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">运行证据</div><div className="pv2-readable-value pv2-mono" data-testid="miniqmt-operator-selected-run">{selectedRuntimeRun?.run_id || "请选择 MiniQMT runtime run"}</div></div>
+            <div className="pv2-readable-row"><div className="pv2-readable-key">最近结果</div><div className="pv2-readable-value" data-testid="miniqmt-operator-result">{asText(itemValue(objectValue(operatorResult?.result), "status") || itemValue(operatorResult, "ok"))}</div></div>
+          </div>
+        </div>
+        {operatorDisabledReason ? <div className="pv2-help" data-testid="miniqmt-operator-disabled-reason">{operatorDisabledReason}</div> : null}
+        <button className="pv2-button-danger" data-testid="miniqmt-operator-submit" type="button" onClick={requestOperatorCommand} disabled={Boolean(operatorDisabledReason) || operatorSubmitting}>
+          {operatorSubmitting ? "执行中..." : "提交受控操作"}
+        </button>
+      </SectionCard>
+
+      {operatorConfirming ? (
+        <div className="pv2-modal-backdrop" role="presentation">
+          <div className="pv2-modal-card" role="dialog" aria-modal="true" aria-labelledby="miniqmt-operator-confirm-title" data-testid="miniqmt-operator-confirm-dialog">
+            <div className="pv2-eyebrow">MiniQMTExecutionRuntime</div>
+            <h2 id="miniqmt-operator-confirm-title">确认执行：{selectedCommandOption.label}</h2>
+            <p>{selectedCommandOption.summary}</p>
+            <div className="pv2-readable-panel">
+              <div className="pv2-readable-table">
+                <div className="pv2-readable-row"><div className="pv2-readable-key">目标模拟盘</div><div className="pv2-readable-value">{selectedPortfolio?.portfolio_name || "-"}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">账号组 / 策略槽</div><div className="pv2-readable-value pv2-mono">{operatorAccountGroupId || "-"} / {operatorStrategySlotId || "-"}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">运行证据</div><div className="pv2-readable-value pv2-mono">{selectedRuntimeRun?.run_id || "-"}</div></div>
+                <div className="pv2-readable-row"><div className="pv2-readable-key">原因</div><div className="pv2-readable-value">{operatorReason}</div></div>
+                {selectedCommandOption.requiresAlphaSignalBook ? <div className="pv2-readable-row"><div className="pv2-readable-key">Alpha 信号簿</div><div className="pv2-readable-value pv2-mono">{operatorAlphaSignalBookId || "-"}</div></div> : null}
+              </div>
+            </div>
+            <NoticePanel title="二次确认" tone="warning">
+              点击“确认执行”后才会向后端提交受控命令；后端仍保留破坏性命令确认门和审计记录。
+            </NoticePanel>
+            <div className="pv2-row-actions" style={{ justifyContent: "flex-end" }}>
+              <button className="pv2-button-ghost" type="button" onClick={() => setOperatorConfirming(false)} disabled={operatorSubmitting}>取消</button>
+              <button className="pv2-button-danger" data-testid="miniqmt-operator-confirm-submit" type="button" onClick={executeConfirmedOperatorCommand} disabled={operatorSubmitting || Boolean(operatorDisabledReason)}>
+                {operatorSubmitting ? "执行中..." : "确认执行"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <SectionCard title="创建 MiniQMT 自动运行组合" eyebrow="account group slot auto-run" action={<button className="pv2-button-primary" onClick={createExclusivePortfolio} disabled={creating || !packageId || !brokerAccountId.trim()} type="button">{creating ? "创建中..." : "创建并启用自动运行"}</button>}>
         <div className="pv2-form-grid">

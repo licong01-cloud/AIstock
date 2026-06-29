@@ -171,6 +171,10 @@
 .pv2-muted { color: var(--pv2-muted); }
 .pv2-mono { font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; }
 .pv2-confirm-box { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--pv2-red); border-radius: 14px; background: #fff1f2; }
+.pv2-modal-backdrop { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 20px; background: rgba(23, 20, 18, 0.45); backdrop-filter: blur(3px); }
+.pv2-modal-card { width: min(720px, 100%); max-height: min(86vh, 760px); overflow: auto; border: 1px solid rgba(255, 253, 248, 0.5); border-radius: 24px; background: var(--pv2-panel); box-shadow: 0 30px 90px rgba(23, 20, 18, 0.28); padding: 22px; }
+.pv2-modal-card h2 { margin: 6px 0 10px; font-size: 22px; letter-spacing: -0.03em; }
+.pv2-modal-card p { margin: 0 0 12px; color: #4d463e; line-height: 1.55; }
 .pv2-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 
 .pv2-sparkline { height: 150px; display: flex; align-items: flex-end; gap: 4px; padding: 12px; border-radius: 16px; background: linear-gradient(180deg, #fffaf1, #ede5d8); overflow-x: auto; }
