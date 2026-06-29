@@ -61,6 +61,7 @@ from backend.services.research_assistant.react_grounding import EvidenceGuardDec
 class DialogueAwareFakeLlmClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.memory_curation_calls: list[dict[str, object]] = []
 
     def complete(self, **kwargs: object) -> LlmCallResult:
         self.calls.append(kwargs)
@@ -87,6 +88,16 @@ class DialogueAwareFakeLlmClient:
             model="fake-primary",
             duration_ms=12,
             usage={"prompt_tokens": 100, "completion_tokens": 40},
+        )
+
+    def complete_memory_curation(self, **kwargs: object) -> LlmCallResult:
+        self.memory_curation_calls.append(kwargs)
+        return LlmCallResult(
+            content='{"candidates":[]}',
+            provider="fake",
+            model="fake-memory-curator",
+            duration_ms=1,
+            usage={"prompt_tokens": 20, "completion_tokens": 5},
         )
 
 
@@ -1771,6 +1782,141 @@ def test_chat_turn_capability_inquiry_answers_without_workflow_noise() -> None:
     event_types = {event["event_type"] for event in result["task_events"]}
     assert {"chat_received", "prompt_bundle_built", "context_pack_built", "llm_started", "llm_done"} <= event_types
     assert "action_proposed" not in event_types
+
+
+def test_t9_7_memory_capability_inquiry_does_not_write_or_expose_internal_slots() -> None:
+    class MemoryCapabilityLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="可以。你把要记住的具体内容告诉我，我会先按记忆候选处理；需要确认的内容会让你审批后再进入长期记忆。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = MemoryCapabilityLlmClient()
+    svc = _chat_service(fake)
+    before_count = svc.repository.list_records("memory_items", filters={}, limit=1000)["total"]
+
+    result = svc.chat_turn(ChatTurnRequest(message="你是否可以记住我的待办？"))
+
+    text = result["assistant_message"]["content_text"]
+    assert "可以" in text
+    assert "具体内容" in text or "要记什么" in text
+    assert "subject_key" not in text
+    assert "memory_type" not in text
+    assert result["cards"]["intent_type"] == "capability_inquiry"
+    assert result["mode_decision"]["mode"] == "dialogue"
+    assert result["mode_decision"]["allowed_tool_side_effect"] == "none"
+    assert result["cards"]["action_proposals"] == []
+    assert "mcp_execution_result" not in result["cards"]
+    assert len(fake.memory_curation_calls) == 1
+    after_count = svc.repository.list_records("memory_items", filters={}, limit=1000)["total"]
+    assert after_count == before_count
+    assert not any(event["event_type"] == "memory_written" for event in result["task_events"])
+
+
+def test_t9_7_dialogue_reply_policy_sanitizes_memory_slot_names() -> None:
+    svc = _chat_service(FakeLlmClient())
+    mode_decision = ModeDecision(
+        mode=DialogueMode.DIALOGUE,
+        intent_type=DialogueIntent.CAPABILITY_INQUIRY,
+        confidence=0.9,
+        mode_reason="capability_inquiry",
+        requires_tool=False,
+        allowed_tool_side_effect="none",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    text = svc._apply_main_reply_policy(
+        "可以，请提供 subject_key、memory_type 和 title。",
+        mode_decision,
+    )
+
+    assert "subject_key" not in text
+    assert "memory_type" not in text
+    assert "记忆对象" in text
+    assert "记忆类别" in text
+
+
+def test_t9_7_chinese_memory_intent_triggers_semantic_curator_candidate() -> None:
+    class ChineseMemoryLlmClient(FakeLlmClient):
+        def complete(self, **kwargs: object) -> LlmCallResult:
+            self.calls.append(kwargs)
+            return LlmCallResult(
+                content="好的，我会先把“明天要复盘”作为待办记忆候选，等待你确认后再进入长期记忆。",
+                provider="fake",
+                model="fake-primary",
+                duration_ms=1,
+                usage={},
+            )
+
+        def complete_memory_curation(self, **kwargs: object) -> LlmCallResult:
+            self.memory_curation_calls.append(kwargs)
+            return LlmCallResult(
+                content=json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "memory_type": "task_state",
+                                "scope": "personal",
+                                "tree_path": "personal.task_state.todo",
+                                "title": "待办：明天复盘",
+                                "content_text": "明天要复盘",
+                                "trust_level": "user_stated",
+                                "resident": False,
+                                "requires_approval": True,
+                                "importance": 0.7,
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                provider="fake",
+                model="fake-memory-curator",
+                duration_ms=1,
+                usage={},
+            )
+
+    fake = ChineseMemoryLlmClient()
+    svc = _chat_service(fake)
+
+    result = svc.chat_turn(ChatTurnRequest(message="帮我记住明天要复盘"))
+
+    assert len(fake.memory_curation_calls) == 1
+    prompt_text = "\n".join(str(message.get("content", "")) for message in fake.memory_curation_calls[0]["messages"])  # type: ignore[index,union-attr]
+    assert "英文 seed 语句可作为线索，但不能是唯一依据" in prompt_text
+    rows = svc.repository.list_records("memory_items", filters={"memory_type": "task_state"}, limit=20)["items"]
+    fact = next(item for item in rows if item["node_type"] == "fact")
+    assert fact["content_text"] == "明天要复盘"
+    assert fact["approval_status"] == "draft"
+    assert fact["resident"] is False
+    assert fact["scope"] == "personal"
+    assert result["cards"]["action_proposals"] == []
+    assert any(event["event_type"] == "memory_written" for event in result["task_events"])
+
+
+def test_t9_7_memory_write_approval_gate_policy_still_blocks_approved_write() -> None:
+    svc = _chat_service(FakeLlmClient())
+
+    with pytest.raises(ValueError, match="requires approval_id"):
+        svc.create_memory(
+            MemoryCreate(
+                memory_type="task_state",
+                subject_key="personal.task_state.todo.manual",
+                title="Manual approved memory",
+                content_text="批准态写入仍需审批门。",
+                evidence_refs=["test://memory-policy"],
+                approval_status="approved",
+                scope="personal",
+                tree_path="personal.task_state.todo",
+                risk_level="medium",
+            )
+        )
 
 
 def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims() -> None:
