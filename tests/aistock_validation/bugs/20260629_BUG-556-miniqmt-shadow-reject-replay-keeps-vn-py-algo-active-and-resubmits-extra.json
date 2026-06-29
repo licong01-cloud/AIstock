@@ -1,0 +1,76 @@
+{
+  "actual": "BUG-553 investigation found A=90/B=60 child_order_count drift in the 2026-06-29 reject scenario: A retained stale ACTIVE vn.py algo state and produced 30 extra open-like SUBMITTED child orders while B stayed at 60 rejected child orders.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_parity_sniper.py",
+    "docs/handoff/BUG-556-miniqmt-vnpy-shadow-reject-lifecycle-fix.md",
+    "tests/aistock_validation/bugs/20260629_BUG-556-miniqmt-shadow-reject-replay-keeps-vn-py-algo-active-and-resubmits-extra.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-556",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T11:45:01.678239Z",
+  "description": "BUG-553 investigation found A=90/B=60 child_order_count drift in the 2026-06-29 reject scenario: A retained stale ACTIVE vn.py algo state and produced 30 extra open-like SUBMITTED child orders while B stayed at 60 rejected child orders.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-4ca0bc63af09",
+      "timestamp": "2026-06-29T11:45:01.678236Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-553 PR #1736 root-cause report; vn.py audit copy F:\\Dev\\AIstock_artifacts\\vnpy_source_audit_20260529\\vnpy_algotrading"
+  ],
+  "expected": "vn.py-style MiniQMT algo instances must terminalize once their orders are terminal and no core active orders remain; terminal algos must not receive later tick/timer dispatch; repeated shadow reject replays of the same base runtime/scenario must be isolated/idempotent; _append_count_diff remains strict.",
+  "first_seen_at": "2026-06-29T11:45:01.678239Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1746,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1746",
+  "last_seen_at": "2026-06-29T11:45:01.678239Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Run MiniQMT shadow reject scenario replay repeatedly for the same base runtime and inspect A-side child_orders/algo state; compare against vn.py audit copy at F:\\Dev\\AIstock_artifacts\\vnpy_source_audit_20260529\\vnpy_algotrading.",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT shadow reject replay keeps vn.py algo active and resubmits extra child orders",
+  "trigger_condition": {
+    "fingerprint": "4ca0bc63af0958ad8ad7f1fe",
+    "source_event_id": "FE-20260629-4ca0bc63af09"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
