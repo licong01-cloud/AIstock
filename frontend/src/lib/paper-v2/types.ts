@@ -129,7 +129,7 @@ export type CandidateStrategyPackageInput = {
 };
 
 export type QEPackagingSource = {
-  source_kind: "qe_experiment" | "qe_evolution_loop";
+  source_kind: "qe_experiment" | "qe_evolution_loop" | "multi_alpha_combine_run";
   experiment_id: string;
   experiment_name: string;
   qe_task_id?: string | null;
@@ -140,6 +140,54 @@ export type QEPackagingSource = {
   metrics_summary?: MetricsSummary;
   created_at?: string | null;
   completed_at?: string | null;
+};
+
+export type MultiAlphaCombineRun = {
+  id: string;
+  roster_hash?: string | null;
+  roster_json?: unknown;
+  oos_start?: string | null;
+  oos_end?: string | null;
+  normalize_method?: string | null;
+  walk_forward_json?: unknown;
+  backtest_config_json?: unknown;
+  baseline_leg_id?: string | null;
+  status: string;
+  reason?: JsonObject | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+};
+
+export type MultiAlphaCombineSchemeResult = {
+  weighting_scheme?: string | null;
+  status?: string | null;
+  skipped?: boolean | null;
+  cagr?: number | null;
+  annual_return?: number | null;
+  max_drawdown?: number | null;
+  sharpe?: number | null;
+  calmar?: number | null;
+  turnover?: number | null;
+  topk_return_20?: number | null;
+  topk_hit_rate_20?: number | null;
+  weights_json?: unknown;
+  per_window_weights_json?: unknown;
+  [key: string]: unknown;
+};
+
+export type MultiAlphaCombineRunDetail = {
+  run: MultiAlphaCombineRun;
+  scheme_results: MultiAlphaCombineSchemeResult[];
+  loo?: JsonObject[];
+};
+
+export type StrategyPackagePromotionResult = StrategyPackage & {
+  alpha_mode?: string;
+  source_run_id?: string;
+  paper_admission?: JsonObject;
+  components?: JsonObject[];
+  auto_component_materialization?: JsonObject[];
 };
 
 export type LatestSelectionRun = {

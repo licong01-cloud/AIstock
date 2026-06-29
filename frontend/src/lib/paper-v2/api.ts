@@ -12,6 +12,8 @@ import type {
   HmmSnapshot,
   JsonObject,
   MiniQMTExecutionQualityResponse,
+  MultiAlphaCombineRun,
+  MultiAlphaCombineRunDetail,
   PaperPortfolio,
   PaperAutoRunSummary,
   PaperLiveDashboard,
@@ -41,6 +43,7 @@ import type {
   SimulationRuntimeRunDetail,
   SimulationRuntimeRunsResponse,
   SimulationRuntimeSchedulerStatus,
+  StrategyPackagePromotionResult,
   StrategyPackage,
   TradingDayDefaults,
 } from "./types";
@@ -71,7 +74,11 @@ function parseError(payload: unknown, status: number): PaperV2ApiError {
   if (isObject(payload)) {
     const detail = payload.detail;
     if (isObject(detail)) {
-      const errorCode = typeof detail.error_code === "string" ? detail.error_code : undefined;
+      const errorCode = typeof detail.error_code === "string"
+        ? detail.error_code
+        : typeof detail.reason_code === "string"
+          ? detail.reason_code
+          : undefined;
       const message = typeof detail.message === "string" ? detail.message : JSON.stringify(detail);
       const context = isObject(detail.context) ? detail.context : undefined;
       return new PaperV2ApiError(message, status, payload, errorCode, context);
@@ -134,6 +141,20 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ sources: QEPackagingSource[] }>(`/strategy-packages/qe-sources?${qs.toString()}`);
     return data.sources || [];
   },
+  async listCombineRuns(limit = 200): Promise<MultiAlphaCombineRun[]> {
+    const qs = new URLSearchParams({ status: "succeeded", limit: String(limit) });
+    const data = await apiFetch<{ data?: { runs?: MultiAlphaCombineRun[] }; runs?: MultiAlphaCombineRun[] }>(
+      `/multi-alpha/combine-backtest/runs?${qs.toString()}`,
+    );
+    return data.data?.runs || data.runs || [];
+  },
+  async getCombineRun(runId: string): Promise<MultiAlphaCombineRunDetail> {
+    const data = await apiFetch<{ data?: MultiAlphaCombineRunDetail }>(
+      `/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}`,
+    );
+    if (!data.data) throw new PaperV2ApiError("combine run response missing data", 500, data);
+    return data.data;
+  },
   async createFromQEExperiment(payload: { experiment_id: string; resolve_runtime_assets?: boolean }): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-experiment", body(payload));
     return data.package;
@@ -153,9 +174,19 @@ export const strategyPackageApi = {
     weight_policy: JsonObject;
     promotion_gate?: JsonObject;
     confirmation: string;
-  }): Promise<StrategyPackage> {
-    const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-multi-alpha-combine-run", body(payload));
-    return data.package;
+  }): Promise<StrategyPackagePromotionResult> {
+    const data = await apiFetch<StrategyPackagePromotionResult & { package?: StrategyPackage }>(
+      "/strategy-packages/from-multi-alpha-combine-run",
+      body(payload),
+    );
+    return {
+      ...(data.package || {}),
+      ...data,
+      package_id: data.package_id || data.package?.package_id || "",
+      package_name: data.package?.package_name || data.package_name || "",
+      package_status: data.package?.package_status || data.package_status || "",
+      manifest_sha256: data.manifest_sha256 || data.package?.manifest_sha256 || "",
+    };
   },
   async createFromCandidate(candidateId: string, payload: { manifest_json?: JsonObject | null } = {}): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(
