@@ -36,8 +36,8 @@
   "expected": "Read-only qe_archive data-quality smoke should fail on structural drift, but treat a missing version marker as an auditable warning when all expected tables, columns, and comments match current code.",
   "first_seen_at": "2026-06-29T10:37:20.671042Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9ab6518faec3092a4f91574509dbdf9cb0f679e9",
+  "fixed_at": "2026-06-29T10:59:14.767806Z",
   "github_issue_number": 1723,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1723",
   "last_seen_at": "2026-06-29T10:37:20.671042Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1741",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -67,6 +68,13 @@
     "fingerprint": "a279d578763e3bdfc686c752",
     "source_event_id": "FE-20260629-a279d578763e"
   },
+  "validation_evidence": [
+    "python -m nox -s qe_archive_data_quality -> passed",
+    "python -m pytest backend/tests/test_qe_archive_schema.py -q -p no:cacheprovider -> 12 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "git diff --check -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-555 --module qe_archive --changed-file backend/tests/test_qe_archive_schema.py --changed-file scripts/qe_archive_data_quality_smoke.py --changed-file tests/aistock_validation/bugs/20260629_BUG-555-qe-archive-ci-failure-requires-triage-error-process-completed-with-exit.json -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
