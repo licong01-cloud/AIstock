@@ -31,8 +31,8 @@
   "expected": "Nightly candidate promotion and any git/ssh operation used by the workflow must be Windows-compatible on the self-hosted runner; proxy/ssh commands must not rely on Unix-only exec syntax, and Code Intelligence should not fail for environment command syntax when candidate generation itself succeeds.",
   "first_seen_at": "2026-06-29T09:07:57.211242Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4225fe8a3c9e6dd531a1e877996bb287360726b9",
+  "fixed_at": "2026-06-29T10:01:02.726498Z",
   "github_issue_number": 1729,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1729",
   "last_seen_at": "2026-06-29T09:07:57.211242Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1735",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "scripts"
   ],
@@ -61,6 +62,11 @@
     "fingerprint": "b4dfa4408d639e5da9813a74",
     "source_event_id": "FE-20260629-b4dfa4408d63"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 169 passed",
+    "python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 -> passed",
+    "SHELL=PowerShell python -c _run_command git ls-remote smoke -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
