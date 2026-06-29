@@ -78,7 +78,7 @@ class RealExternalResearchProvider:
     _owned_client: httpx.Client | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.agentsearch_base_url = _required_base_url(self.agentsearch_base_url, "RA_AGENTSEARCH_BASE_URL")
+        self.agentsearch_base_url = _optional_base_url(self.agentsearch_base_url)
         self.paper_provider = _normalize_paper_provider(self.paper_provider)
         self.s2_base_url = self.s2_base_url.rstrip("/")
         self.arxiv_base_url = self.arxiv_base_url.rstrip("/")
@@ -105,6 +105,13 @@ class RealExternalResearchProvider:
         operation = "search_web"
         self._clear_failure(operation)
         safe_limit = clamp_limit(limit)
+        if not self._agentsearch_enabled():
+            self._record_reason(
+                operation,
+                "RA_AGENTSEARCH_BASE_URL_MISSING",
+                {"query": query, "locale": locale, "web_provider": AGENTSEARCH_WEB_PROVIDER},
+            )
+            return []
         try:
             payload = self._get_agentsearch(
                 "/search",
@@ -163,6 +170,17 @@ class RealExternalResearchProvider:
         operation = "fetch_extract"
         self._clear_failure(operation)
         safe_chars = clamp_chars(max_chars)
+        if not self._agentsearch_enabled():
+            reason = "RA_AGENTSEARCH_BASE_URL_MISSING"
+            self._record_reason(operation, reason, {"url": url, "provider": AGENTSEARCH_EXTRACT_PROVIDER})
+            fallback = _empty_extract(
+                url=url,
+                max_chars=safe_chars,
+                provider=AGENTSEARCH_EXTRACT_PROVIDER,
+                reason_code=reason,
+            )
+            assert_token_safe(fallback.compact(max_preview_chars=safe_chars))
+            return fallback
         try:
             payload = self._get_agentsearch(
                 "/read",
@@ -300,6 +318,9 @@ class RealExternalResearchProvider:
             self._owned_client = httpx.Client(timeout=self.timeout_seconds)
         return self._owned_client
 
+    def _agentsearch_enabled(self) -> bool:
+        return bool(self.agentsearch_base_url)
+
     def _clear_failure(self, operation: str) -> None:
         self._last_failures.pop(operation, None)
 
@@ -351,10 +372,8 @@ class _HttpStatusFailure(RuntimeError):
         self.status_code = response.status_code
 
 
-def _required_base_url(value: str, env_name: str) -> str:
+def _optional_base_url(value: str) -> str:
     normalized = str(value or "").strip().rstrip("/")
-    if not normalized:
-        raise RuntimeError(f"reason_code=RA_AGENTSEARCH_BASE_URL_MISSING,{env_name}=empty")
     return normalized
 
 
