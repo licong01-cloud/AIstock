@@ -353,7 +353,12 @@ class MiniQMTShadowEventLoopAdapter:
         metadata: dict[str, Any],
     ) -> MiniQMTShadowRuntimeSnapshot:
         gateway = _RecordingShadowGateway()
-        adapter_runtime_id = _shadow_adapter_runtime_id(runtime_id, metadata=metadata, runtime_kind="a")
+        replay_attempt = _next_shadow_replay_attempt(metadata)
+        adapter_runtime_id = _shadow_adapter_runtime_id(
+            runtime_id,
+            metadata={**metadata, "shadow_replay_attempt": replay_attempt},
+            runtime_kind="a",
+        )
         runtime = MiniQMTExecutionRuntime(
             config=_runtime_config(
                 runtime_id=adapter_runtime_id,
@@ -376,6 +381,7 @@ class MiniQMTShadowEventLoopAdapter:
                 "broker_mutated": False,
                 "shadow_adapter": type(self).__name__,
                 "source_runtime_id": runtime_id,
+                "shadow_replay_attempt": replay_attempt,
             },
         )
 
@@ -407,7 +413,12 @@ class MiniQMTShadowCompilerAdapter:
             repository=self.repository,
             runtime_kind=MiniQMTExecutionRuntimeKind.COMPILER,
         )
-        adapter_runtime_id = _shadow_adapter_runtime_id(runtime_id, metadata=metadata, runtime_kind="b")
+        replay_attempt = _next_shadow_replay_attempt(metadata)
+        adapter_runtime_id = _shadow_adapter_runtime_id(
+            runtime_id,
+            metadata={**metadata, "shadow_replay_attempt": replay_attempt},
+            runtime_kind="b",
+        )
         trade_date = _trade_date_from_metadata(metadata) or self.trade_date
         parent_intents = _parent_intents_from_shadow_events(input_events, trade_date=trade_date)
         if not parent_intents:
@@ -443,6 +454,7 @@ class MiniQMTShadowCompilerAdapter:
                 "broker_mutated": False,
                 "shadow_adapter": type(self).__name__,
                 "source_runtime_id": runtime_id,
+                "shadow_replay_attempt": replay_attempt,
             },
         )
 
@@ -472,6 +484,8 @@ class MiniQMTShadowParallelRunner:
             "input_event_count": len(materialized_events),
             "shadow_mode": "dry_run_no_broker_mutation",
         }
+        replay_attempt = _next_shadow_replay_attempt(run_metadata)
+        run_metadata["shadow_replay_attempt"] = replay_attempt
         a_snapshot = event_loop_adapter.compute_shadow_snapshot(
             runtime_id=runtime_id,
             input_events=materialized_events,
@@ -599,12 +613,26 @@ _DEFAULT_PACKAGE_ID = "shadow_package"
 _DEFAULT_PORTFOLIO_ID = "shadow_portfolio"
 _DEFAULT_SYMBOL = "000001.SZ"
 _DEFAULT_PRICE = 10.0
+_SHADOW_REPLAY_ATTEMPT_COUNTER = 0
 
 
 def _shadow_adapter_runtime_id(runtime_id: str, *, metadata: dict[str, Any], runtime_kind: str) -> str:
     scenario = str(metadata.get("scenario") or "default").strip().lower()
     safe_scenario = "".join(char if char.isalnum() else "_" for char in scenario) or "default"
-    return f"{runtime_id}_{safe_scenario}_{runtime_kind}"
+    attempt = str(metadata.get("shadow_replay_attempt") or "").strip().lower()
+    safe_attempt = "".join(char if char.isalnum() else "_" for char in attempt)
+    suffix = f"_{safe_attempt}" if safe_attempt else ""
+    return f"{runtime_id}_{safe_scenario}_{runtime_kind}{suffix}"
+
+
+def _next_shadow_replay_attempt(metadata: dict[str, Any]) -> str:
+    configured = str(metadata.get("shadow_replay_attempt") or metadata.get("shadow_attempt_id") or "").strip()
+    if configured:
+        return configured
+    global _SHADOW_REPLAY_ATTEMPT_COUNTER
+    _SHADOW_REPLAY_ATTEMPT_COUNTER += 1
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"attempt_{timestamp}_{_SHADOW_REPLAY_ATTEMPT_COUNTER:06d}"
 
 
 @dataclass
@@ -810,19 +838,27 @@ def _apply_terminal_shadow_events_to_repository(
 
 def _record_shadow_order_status(runtime: MiniQMTExecutionRuntime, *, payload: dict[str, Any], status: int) -> None:
     parent_intent_id = str(payload.get("parent_intent_id") or "")
-    child = _child_for_event(runtime, parent_intent_id=parent_intent_id, child_by_parent=_latest_child_by_parent(runtime))
-    if child is None:
+    children = _open_like_children_for_event(runtime, parent_intent_id=parent_intent_id)
+    if not children:
+        child = _child_for_event(
+            runtime,
+            parent_intent_id=parent_intent_id,
+            child_by_parent=_latest_child_by_parent(runtime),
+        )
+        children = [child] if child is not None else []
+    if not children:
         return
-    runtime.record_order_event(
-        broker_order_id=child.broker_order_id or child.child_order_id,
-        status=str(status),
-        payload={
-            "order_status": status,
-            "traded": int(payload.get("traded") or payload.get("filled_quantity") or 0),
-            "status_msg": str(payload.get("status_msg") or "shadow terminal order update"),
-            **payload,
-        },
-    )
+    for child in children:
+        runtime.record_order_event(
+            broker_order_id=child.broker_order_id or child.child_order_id,
+            status=str(status),
+            payload={
+                "order_status": status,
+                "traded": int(payload.get("traded") or payload.get("filled_quantity") or 0),
+                "status_msg": str(payload.get("status_msg") or "shadow terminal order update"),
+                **payload,
+            },
+        )
 
 
 def _parent_intents_from_shadow_events(
@@ -1044,6 +1080,27 @@ def _latest_child_by_parent(runtime: MiniQMTExecutionRuntime) -> dict[str, Any]:
     for child in runtime.repository.list_child_orders(runtime.config.runtime_id, active_only=False):
         result[child.parent_intent_id] = child
     return result
+
+
+def _open_like_children_for_event(
+    runtime: MiniQMTExecutionRuntime,
+    *,
+    parent_intent_id: str,
+) -> list[Any]:
+    if not parent_intent_id:
+        return []
+    children = runtime.repository.list_child_orders(runtime.config.runtime_id, active_only=False)
+    scoped = [child for child in children if child.parent_intent_id == parent_intent_id]
+    return [
+        child
+        for child in scoped
+        if child.status
+        in {
+            MiniQMTChildOrderStatus.SUBMITTING,
+            MiniQMTChildOrderStatus.SUBMITTED,
+            MiniQMTChildOrderStatus.PARTIALLY_FILLED,
+        }
+    ]
 
 
 def _child_for_event(

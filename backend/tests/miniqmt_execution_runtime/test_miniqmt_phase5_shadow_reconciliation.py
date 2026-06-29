@@ -5,8 +5,13 @@ from datetime import date
 import pytest
 
 from backend.services.miniqmt_execution_runtime import (
+    FakeMiniQMTGateway,
     InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTAlgoInstanceStatus,
+    MiniQMTChildOrderStatus,
     MiniQMTExecutionEventType,
+    MiniQMTExecutionRuntime,
+    MiniQMTExecutionRuntimeConfig,
     MiniQMTShadowCompilerAdapter,
     MiniQMTShadowEventLoopAdapter,
     MiniQMTShadowInputEvent,
@@ -16,8 +21,11 @@ from backend.services.miniqmt_execution_runtime import (
     NoBrokerMutationMiniQMTShadowGateway,
 )
 from backend.services.miniqmt_execution_runtime.shadow import (
+    _record_shadow_order_status,
     build_miniqmt_shadow_scenario_replay_events,
 )
+from backend.services.qmt_strategy_ledger.models import STATUS_REJECTED
+from backend.services.trading_core.models import OrderSide
 
 
 def _snapshot(
@@ -241,6 +249,94 @@ def test_phase5_shadow_star_market_intent_uses_same_board_lot_without_quantity_d
     assert report.b_runtime.ledger.child_orders[0]["quantity"] == 1215
     assert report.a_runtime.metadata["broker_called"] is False
     assert report.b_runtime.metadata["broker_called"] is False
+
+
+def test_phase5_shadow_repeated_reject_replay_is_attempt_isolated_without_extra_open_child() -> None:
+    reconciler, repo = _reconciler()
+    runner = MiniQMTShadowParallelRunner(reconciler=reconciler)
+    event_loop_adapter = MiniQMTShadowEventLoopAdapter(repository=repo)
+    compiler_adapter = MiniQMTShadowCompilerAdapter(repository=repo)
+    runtime_id = "mqrt_shadow_repeated_reject"
+
+    reports = [
+        runner.run(
+            runtime_id=runtime_id,
+            scenario=MiniQMTShadowScenario.REJECT,
+            input_events=_real_replay_events(MiniQMTShadowScenario.REJECT),
+            event_loop_adapter=event_loop_adapter,
+            compiler_adapter=compiler_adapter,
+            metadata={
+                "trade_date": date(2026, 6, 29).isoformat(),
+                "account_group_id": "shadow_account",
+                "portfolio_id": "portfolio_reject",
+                "strategy_slot_id": "slot_reject",
+                "binding_id": "binding_reject",
+                "run_id": "run_reject",
+            },
+        )
+        for _ in range(3)
+    ]
+
+    for report in reports:
+        assert report.fatal_differences == []
+        assert [order["status"] for order in report.a_runtime.ledger.child_orders] == ["REJECTED"]
+        assert [order["status"] for order in report.b_runtime.ledger.child_orders] == ["REJECTED"]
+        assert report.a_runtime.metadata["shadow_replay_attempt"] == report.b_runtime.metadata["shadow_replay_attempt"]
+
+    a_runtime_ids = [report.a_runtime.runtime_id for report in reports]
+    assert len(set(a_runtime_ids)) == 3
+    latest_a_id = reports[-1].a_runtime.runtime_id
+    assert repo.list_algo_instances(latest_a_id, active_only=True) == []
+    assert repo.list_algo_instances(latest_a_id, active_only=False)[0].status == MiniQMTAlgoInstanceStatus.FAILED
+    assert repo.list_child_orders(latest_a_id, active_only=False)[0].status == MiniQMTChildOrderStatus.REJECTED
+
+
+def test_phase5_shadow_reject_status_updates_all_open_like_children_for_same_parent() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    runtime = MiniQMTExecutionRuntime(
+        config=MiniQMTExecutionRuntimeConfig(
+            runtime_id="mqrt_shadow_open_like_reject",
+            account_group_id="shadow_account",
+            trade_date=date(2026, 6, 29),
+            runtime_config_hash="shadow_open_like_reject",
+        ),
+        repository=repo,
+        gateway=FakeMiniQMTGateway(),
+    )
+    runtime.start()
+    algo = runtime.create_algo_instance(
+        parent_intent_id="intent_shadow_multi_open",
+        strategy_slot_id="slot_reject",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=200,
+        algo_code="SNIPER_MINIQMT",
+    )
+    runtime.record_external_child_order(
+        algo_instance_id=algo.algo_instance_id,
+        quantity=100,
+        price=10.0,
+        broker_order_id="shadow_broker_open_1",
+        status=MiniQMTChildOrderStatus.SUBMITTED,
+    )
+    runtime.record_external_child_order(
+        algo_instance_id=algo.algo_instance_id,
+        quantity=100,
+        price=10.0,
+        broker_order_id="shadow_broker_open_2",
+        status=MiniQMTChildOrderStatus.SUBMITTED,
+    )
+
+    _record_shadow_order_status(
+        runtime,
+        payload={"parent_intent_id": "intent_shadow_multi_open", "status_msg": "shadow reject all open children"},
+        status=STATUS_REJECTED,
+    )
+
+    children = repo.list_child_orders(runtime.config.runtime_id, active_only=False)
+    assert [child.status for child in children] == [MiniQMTChildOrderStatus.REJECTED, MiniQMTChildOrderStatus.REJECTED]
+    assert repo.list_algo_instances(runtime.config.runtime_id, active_only=True) == []
+    assert repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0].status == MiniQMTAlgoInstanceStatus.FAILED
 
 
 def test_phase5_shadow_scenario_helper_rejects_unknown_scenario_loudly() -> None:
