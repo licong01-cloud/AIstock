@@ -36,6 +36,22 @@ def test_issue_intake_readonly_detects_missing_linkage(tmp_path: Path) -> None:
     assert result["anomalies"][0]["type"] == "bug_missing_github_linkage"
 
 
+def test_issue_intake_readonly_accepts_fixed_bug_with_fix_commit_only(tmp_path: Path) -> None:
+    bug_file = tmp_path / "tests" / "aistock_validation" / "bugs" / "20260629_BUG-544-fixture.json"
+    _write_bug(
+        bug_file,
+        bug_id="BUG-544",
+        status="fixed",
+        fix_commit="de55b4a91604366efde2b4a9451a4423c288f196",
+        pr_url=None,
+    )
+
+    result = plans.run_plan("validation_discovery_issue_intake_readonly", root=tmp_path)
+
+    assert result["summary"]["candidate_count"] == 0
+    assert result["summary"]["no_candidate_reason"] == "no_anomalies_detected"
+
+
 def test_root_clean_guard_ignores_tmp_validation_artifacts(tmp_path: Path, monkeypatch) -> None:
     def fake_status(root: Path) -> list[str]:
         return ["?? tmp/validation/nightly/file.json", " M backend/main.py"]
