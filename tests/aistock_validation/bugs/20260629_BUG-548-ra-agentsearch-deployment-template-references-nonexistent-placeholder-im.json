@@ -29,8 +29,8 @@
   "expected": "Deployment docs identify the official SSH clone plus official docker compose path, keep AgentSearch outside the AIstock repo, document the expected /search and /read contract and .env values, and remove or neutralize the invalid placeholder compose/image instructions.",
   "first_seen_at": "2026-06-29T04:14:17.615645Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2d4f648894e80346d3b331c41fee88bf89fd1aea",
+  "fixed_at": "2026-06-29T00:00:00Z",
   "github_issue_number": 1725,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1725",
   "last_seen_at": "2026-06-29T04:14:17.615645Z",
@@ -49,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
