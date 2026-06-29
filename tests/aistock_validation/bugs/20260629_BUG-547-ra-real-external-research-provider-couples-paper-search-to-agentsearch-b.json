@@ -29,8 +29,8 @@
   "expected": "With RA_EXTERNAL_RESEARCH_PROVIDER=real, the provider should construct without RA_AGENTSEARCH_BASE_URL; search_papers should use Semantic Scholar/arXiv normally, while search_web and fetch_extract should loudly return no-data with reason_code=RA_AGENTSEARCH_BASE_URL_MISSING until AgentSearch is configured.",
   "first_seen_at": "2026-06-28T19:00:10.992018Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ab8fa9be2e5d15159df9ab122b9c90191201004b",
+  "fixed_at": "2026-06-29T00:00:00Z",
   "github_issue_number": 1717,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1717",
   "last_seen_at": "2026-06-28T19:00:10.992018Z",
@@ -52,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
