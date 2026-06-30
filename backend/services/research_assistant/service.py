@@ -4754,9 +4754,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = route_request(user_message)
         intent_value = route.get("intent_value")
         if intent_value and str(route.get("domain") or "") != "mcp_capability":
-            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value:
-                return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
-            if self._is_business_mcp_overview_request(user_message, route):
+            route_domain = str(route.get("domain") or "")
+            concrete_business_route = route_domain not in {"", "general", "validation_issue", "qe_experiment"}
+            if intent_value == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST.value or concrete_business_route:
                 try:
                     return DialogueIntent(str(intent_value))
                 except ValueError:
@@ -4772,9 +4772,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 return DialogueIntent(str(intent_value))
             except ValueError:
                 pass
-
-        if self._is_local_data_management_request(user_message):
-            return DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST
 
         has_qe = self._has_any(lower, intent_config.get("qe_terms", []))
         has_bug = self._has_any(lower, intent_config.get("bug_terms", []))
@@ -4800,51 +4797,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if explicit_task:
             return DialogueIntent.AMBIGUOUS_REQUEST
         return DialogueIntent.GENERAL_CHAT
-
-
-
-    @staticmethod
-    def _is_business_mcp_overview_request(user_message: str, route: dict[str, Any]) -> bool:
-        domain = str(route.get("domain") or "")
-        if domain in {"", "general", "mcp_capability", "local_data", "validation_issue", "qe_experiment"}:
-            return False
-        lower = user_message.lower()
-        overview_terms = ('overview', 'summary', 'catalog', 'list', 'available', '概要', '概览', '列表', '有哪些', '有什么', '可用')
-        business_terms = ('因子库', '因子独立指标', '因子相关性', '模型库', '策略库', '执行策略库', 'factor library', 'factor metrics', 'factor correlation', 'model registry', 'strategy library', 'execution policy')
-        return any(term in lower for term in overview_terms) and any(term in lower for term in business_terms)
-
-
-    @staticmethod
-    def _is_local_data_management_request(user_message: str) -> bool:
-        lower = user_message.lower()
-        if any(term in lower for term in ("shucang", "guidang", "outbox", "backfill", "warehouse", "archive")):
-            return False
-        local_markers = [
-            "本地数据",
-            "数据同步",
-            "同步情况",
-            "trade_date",
-            "数据集",
-            "交易日",
-            "日历",
-            "local_data",
-            "local data",
-            "data sync",
-            "data_sync",
-            "data-stats",
-            "data_stats",
-            "dataset_date_refresh_audit",
-            "data_sync_targets",
-            "tushare",
-            "source test",
-            "repair",
-            "sync",
-            "gap",
-            "health",
-            "readiness",
-        ]
-        return any(marker.lower() in lower for marker in local_markers)
-
 
     @staticmethod
     def _write_prompt_cache(checksum: str, bundle_text: str, bundle_json: dict[str, Any], selection_trace: dict[str, Any]) -> str:
@@ -5858,7 +5810,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _agentic_route_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
         limit = min(6, max(1, self.configured_limit("graph_summary_paths")))
-        if self._is_stock_depth_analysis_request(user_message, route):
+        if self._stock_analysis_route_seed_context(user_message, route):
             limit = max(limit, len(STOCK_DEPTH_SEEDED_TOOL_REFS))
         candidates: list[dict[str, Any]] = []
         lower = user_message.lower()
@@ -5893,7 +5845,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_list_packages", score=66, reason="strategy_package_candidate"))
                 candidates.append(self._candidate_route_for_spec(strategy, tool_name="strategy_governance_get_paper_readiness", score=64, reason="paper_v2_candidate"))
 
-        candidates.extend(self._stock_depth_route_candidates(user_message, route))
+        candidates.extend(self._stock_analysis_route_seed_candidates(user_message, route))
 
         canonical_candidates: list[dict[str, Any]] = []
         for candidate in candidates:
@@ -5924,7 +5876,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return False
         if str(route.get("side_effect") or "read_only") != "read_only":
             return False
-        if self._is_stock_depth_analysis_request(user_message, route):
+        if self._stock_analysis_route_seed_context(user_message, route):
             return True
         lower = user_message.lower()
         graph_first_qe = "qe" in lower and self._should_prioritize_graph_context(user_message)
@@ -5992,6 +5944,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return bool(stock_context and cls._stock_depth_focus_matches(user_message))
 
     @classmethod
+    def _stock_analysis_route_seed_context(cls, user_message: str, route: dict[str, Any] | None = None) -> bool:
+        route_domain = str((route or {}).get("domain") or "")
+        route_tool = str((route or {}).get("tool_name") or "")
+        return route_domain == "stock_analysis" or route_tool.startswith("stock_analysis_") or bool(cls._stock_symbol_from_user_message(user_message))
+
+    @classmethod
     def _stock_depth_tool_args(cls, user_message: str) -> dict[str, Any]:
         args: dict[str, Any] = {
             "period": STOCK_DEPTH_HISTORY_PERIOD,
@@ -6003,8 +5961,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             args["symbol"] = symbol
         return args
 
-    def _stock_depth_route_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
-        if not self._is_stock_depth_analysis_request(user_message, route):
+    def _stock_analysis_route_seed_candidates(self, user_message: str, route: dict[str, Any]) -> list[dict[str, Any]]:
+        if not self._stock_analysis_route_seed_context(user_message, route):
             return []
         base_score = 99
         candidates: list[dict[str, Any]] = []
@@ -6017,10 +5975,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "server_key": server_key,
                     "tool_name": tool_name,
                     "side_effect": "read_only",
-                    "policy": "stock_depth_requires_full_read_only_data_surface",
+                    "policy": "stock_analysis_read_only_route_seed",
                     "candidate_score": base_score - index,
-                    "candidate_reason": "stock_depth_required_evidence",
-                    "stock_depth_required": True,
+                    "candidate_reason": "stock_analysis_route_seed",
                     "min_trading_days": STOCK_DEPTH_MIN_HISTORY_TRADING_DAYS,
                 }
             )
@@ -6029,14 +5986,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             tool_args = dict(candidate.get("tool_args") if isinstance(candidate.get("tool_args"), dict) else {})
             tool_args.update(self._stock_depth_tool_args(user_message))
             if server_key == "aistock-external-research":
-                tool_args.setdefault("query", str(user_message) + " 000688 Guocheng Mining limit-down reason fundamentals industry position news")
+                tool_args.setdefault("query", str(user_message) + " stock analysis event fundamentals industry context")
                 tool_args.setdefault("locale", "zh-CN")
             candidate["tool_args"] = tool_args
             candidate.update({key: value for key, value in tool_args.items() if key not in candidate})
             try:
                 candidates.append(self._canonicalize_mcp_route(candidate))
             except KeyError:
-                logger.warning("skip unavailable stock-depth route candidate: %s/%s", server_key, tool_name)
+                logger.warning("skip unavailable stock analysis route seed: %s/%s", server_key, tool_name)
         return candidates
 
     @staticmethod
@@ -7051,9 +7008,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         include_qe_capabilities = bool(template.get("include_qe_capabilities"))
         mcp_route = dict(route_decision) if isinstance(route_decision, dict) else self._semantic_or_legacy_route_decision(user_message, model_profile=route.get("model_profile") or {})
         route_domain = str(mcp_route.get("domain") or "general")
-        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or (
-            route_domain in {"local_data", "general"} and self._is_local_data_management_request(user_message)
-        )
+        is_local_data = dialogue_intent == DialogueIntent.LOCAL_DATA_MANAGEMENT_REQUEST or route_domain == "local_data"
         local_data_capability_keys = set(self.active_runtime_config().get("planner", {}).get("local_data_workflow_capability_keys", []))
         capability_card_keys: set[str] = set()
         if include_qe_capabilities:
@@ -7298,9 +7253,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
         route_seeds = self._seeded_react_tool_calls(cards, mode_decision)
         route_candidates = self._route_candidates_from_cards(cards)
-        stock_depth_seeded = any(candidate.get("stock_depth_required") for candidate in route_candidates)
-        if route_seeds and first_llm_result.tool_calls and not stock_depth_seeded:
-            # Native function calls take precedence over legacy route seeding.
+        if route_seeds and first_llm_result.tool_calls:
+            # Native function calls take precedence over route seed suggestions.
             route_seeds = []
         graph_context = self._graph_context_from_context_pack(context_pack)
         react_messages = self._react_messages_for_agentic_synthesis(
@@ -7402,7 +7356,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
         configured_iterations = int(cfg["max_tool_iterations"])
         return ReactGroundingConfig(
-            max_tool_iterations=max(configured_iterations, 10 if self._is_stock_depth_analysis_request(user_message) else 6),
+            max_tool_iterations=max(configured_iterations, 10),
             evidence_required=bool(cfg.get("evidence_required", True)),
             user_message=user_message,
             token_budget=int(cfg.get("token_budget") or token_budget) if (cfg.get("token_budget") or token_budget) else None,
@@ -7466,7 +7420,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else {}
         if isinstance(route, dict) and route.get("requires_clarification"):
             return False
-        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message):
+        if (
+            mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST
+            and isinstance(route, dict)
+            and str(route.get("domain") or "") == "qe_experiment"
+            and str(route.get("tool_name") or "") in set(DOMAIN_SPECS[McpDomain.QE_EXPERIMENT].plan_tools)
+        ):
             return bool(first_llm_result.tool_calls)
         if mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY}:
             return bool(first_llm_result.tool_calls)
@@ -7534,23 +7493,23 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 for candidate in candidates
                 if self._react_tool_call_from_route_candidate(candidate, mode_decision, stable_prefix="probe") is not None
             ]
-            stock_depth = [
+            stock_analysis_seeds = [
                 candidate
                 for candidate in eligible_candidates
-                if candidate.get("stock_depth_required") or str(candidate.get("candidate_reason") or "") == "stock_depth_required_evidence"
+                if str(candidate.get("candidate_reason") or "") == "stock_analysis_route_seed"
             ]
-            if stock_depth:
+            if stock_analysis_seeds:
                 stock_keys = {("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES}
                 external_search_key = ("aistock-external-research", "external_research_search_web")
                 stock_selected = [
                     candidate
-                    for candidate in stock_depth
+                    for candidate in stock_analysis_seeds
                     if (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or "")) in stock_keys
                 ]
                 external_selected = next(
                     (
                         candidate
-                        for candidate in stock_depth
+                        for candidate in stock_analysis_seeds
                         if (str(candidate.get("server_key") or ""), str(candidate.get("tool_name") or "")) == external_search_key
                     ),
                     None,
@@ -8001,7 +7960,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return {"eligible": False, "reason": "route_missing_tool"}
         if route.get("domain") in {"general"}:
             return {"eligible": False, "reason": "general_route"}
-        if route.get("domain") == "qe_experiment" and self._is_qe_draft_creation_request_text(str(route.get("request") or "")):
+        qe_plan_tools = set(DOMAIN_SPECS[McpDomain.QE_EXPERIMENT].plan_tools)
+        if route.get("domain") == "qe_experiment" and str(route.get("tool_name") or "") in qe_plan_tools:
             return {"eligible": False, "reason": "qe_draft_creation_uses_plan_reply"}
         if str(route.get("side_effect") or "read_only") != "read_only":
             return {"eligible": False, "reason": "route_not_read_only"}
@@ -8034,15 +7994,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "risk_level": tool.get("risk_level"),
             "side_effect_level": tool.get("side_effect_level"),
         }
-
-    @staticmethod
-    def _is_qe_draft_creation_request_text(text: str) -> bool:
-        lower = text.lower()
-        draft_terms = ("草案", "设计", "方案", "template", "draft", "proposal")
-        list_terms = ("列表", "汇总", "状态", "进度", "有哪些", "最近", "leaderboard", "outbox", "数仓")
-        return ("qe" in lower or "实验" in lower or "custom_evo" in lower) and any(term in lower for term in draft_terms) and not any(
-            term in lower for term in list_terms
-        )
 
     @staticmethod
     def _compact_mcp_summary_for_cards(summary_result: dict[str, Any]) -> dict[str, Any]:
@@ -8188,7 +8139,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             if self._is_business_synthesis_summary(summary):
                 return self._apply_main_reply_policy(self._business_synthesis_failure_text(text), mode_decision)
             return self._apply_main_reply_policy(self._render_mcp_execution_reply(execution, summary), mode_decision)
-        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_qe_draft_creation_request_text(user_message) and self._is_insufficient_evidence_text(text):
+        if mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST and self._is_insufficient_evidence_text(text):
             return self._apply_main_reply_policy(self._render_qe_draft_safe_reply(cards), mode_decision)
         if self._is_insufficient_evidence_text(text):
             if isinstance(execution, dict) and not execution.get("auto_executed"):

@@ -2361,6 +2361,64 @@ def test_bug_357_qe_draft_does_not_auto_execute_or_surface_insufficient_evidence
     assert "mcp_execution_result" not in result["cards"] or result["cards"]["mcp_execution_result"].get("auto_executed") is not True
 
 
+def test_bug_564_qe_draft_safe_reply_uses_intent_not_draft_keywords() -> None:
+    svc = _chat_service()
+    mode_decision = ModeDecision(
+        mode=DialogueMode.PLANNING,
+        intent_type=DialogueIntent.EXPERIMENT_DRAFT_REQUEST,
+        confidence=0.94,
+        mode_reason="semantic_intent",
+        requires_tool=False,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    cards = {
+        "plan_card": {"steps": ["明确目标、数据边界和风险约束。"]},
+        "clarification_card": {"questions": ["需要固定股票池或时间窗吗？"]},
+    }
+
+    text = svc._compose_assistant_reply(
+        "QE alpha 边界先想一下，不执行",
+        "Insufficient evidence: max tool iterations reached without reliable evidence.",
+        cards,
+        mode_decision,
+    )
+
+    assert "已收到 QE 实验草案需求" in text
+    assert "本轮只生成方案" in text
+    assert "Insufficient evidence" not in text
+
+
+def test_bug_564_qe_plan_tools_never_auto_execute_by_tool_mechanism() -> None:
+    svc = _chat_service()
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.AMBIGUOUS_REQUEST,
+        confidence=0.9,
+        mode_reason="semantic_route",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+
+    eligibility = svc._read_only_mcp_auto_execution_eligibility(
+        {
+            "domain": "qe_experiment",
+            "server_key": "aistock-qe",
+            "tool_name": "qe_template_create",
+            "side_effect": "read_only",
+            "request": "QE alpha 边界先想一下，不执行",
+        },
+        mode_decision,
+    )
+
+    assert eligibility == {"eligible": False, "reason": "qe_draft_creation_uses_plan_reply"}
+
+
 def test_bug_343_chat_turn_renders_local_data_daily_status_groups() -> None:
     class LocalDataDailyLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
@@ -3846,6 +3904,137 @@ def test_bug_509_stock_depth_route_seeds_all_stock_reads_plus_web_and_60_day_kli
     assert set(stock_policy["required_stock_tools"]) == set(STOCK_DEPTH_STOCK_TOOL_NAMES)
     assert set(stock_policy["required_external_tools"]) == set(STOCK_DEPTH_EXTERNAL_TOOL_NAMES)
     assert stock_policy["minimum_kline_trading_days"] == 60
+
+
+def test_bug_564_stock_analysis_seed_and_iteration_do_not_require_depth_keywords() -> None:
+    svc = _chat_service()
+    message = "000688 这只票怎么看？"
+    route = svc._with_agentic_route_candidates(
+        message,
+        {
+            "domain": "stock_analysis",
+            "server_key": "aistock-stock-analysis",
+            "tool_name": "stock_analysis_get_quote",
+            "side_effect": "read_only",
+            "confidence": 0.95,
+        },
+    )
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.STOCK_ANALYSIS_REQUEST,
+        confidence=0.95,
+        mode_reason="stock_analysis",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    runtime_config = copy.deepcopy(svc.active_runtime_config())
+    runtime_config["react_grounding"]["max_tool_iterations"] = 6
+
+    assert svc._is_stock_depth_analysis_request(message, route) is False
+    assert route["agentic_route_policy"]["allow_multi_tool"] is True
+    assert route["agentic_route_policy"]["mode"] == "sorted_candidate_seeds"
+    seeds = svc._seeded_react_tool_calls({"mcp_route_decision": route}, mode_decision)
+    seed_pairs = {(seed.server_key, seed.tool_name) for seed in seeds}
+    expected_seed_pairs = {
+        *{("aistock-stock-analysis", tool_name) for tool_name in STOCK_DEPTH_STOCK_TOOL_NAMES},
+        ("aistock-external-research", "external_research_search_web"),
+    }
+    external_seed = next(seed for seed in seeds if seed.server_key == "aistock-external-research")
+    react_config = svc._react_grounding_config(runtime_config, user_message=message)
+
+    assert expected_seed_pairs <= seed_pairs
+    assert len(seed_pairs) >= STOCK_DEPTH_MIN_TOOL_EXECUTIONS
+    assert all(seed.reason == "stock_analysis_route_seed" for seed in seeds)
+    assert external_seed.payload_json["query"].startswith(message)
+    assert "Guocheng" not in external_seed.payload_json["query"]
+    assert "limit-down" not in external_seed.payload_json["query"]
+    assert react_config.max_tool_iterations == 10
+
+
+def test_bug_564_route_seed_suggestions_yield_to_native_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    svc = _chat_service()
+    message = "000688 这只票怎么看？"
+    route = svc._with_agentic_route_candidates(
+        message,
+        {
+            "domain": "stock_analysis",
+            "server_key": "aistock-stock-analysis",
+            "tool_name": "stock_analysis_get_quote",
+            "side_effect": "read_only",
+            "confidence": 0.95,
+        },
+    )
+    mode_decision = ModeDecision(
+        mode=DialogueMode.ANALYSIS,
+        intent_type=DialogueIntent.STOCK_ANALYSIS_REQUEST,
+        confidence=0.95,
+        mode_reason="stock_analysis",
+        requires_tool=True,
+        allowed_tool_side_effect="read_only",
+        requires_user_confirmation=False,
+        requires_approval=False,
+        visible_audit_default=False,
+    )
+    runtime_config = svc.active_runtime_config()
+    budget_plan = svc.context_budget_planner.plan(
+        model_profile={},
+        runtime_config=runtime_config,
+        current_user_message=message,
+    )
+    native_call = McpToolCall(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        payload_json={"symbol": "000688"},
+        stable_call_id="native:quote",
+        reason="native_function_call",
+    )
+    first_llm_result = LlmCallResult(
+        content="I'll call the quote tool first.",
+        provider="fake",
+        model="fake-primary",
+        duration_ms=1,
+        usage={},
+        tool_calls=[native_call],
+    )
+    captured: dict[str, object] = {}
+
+    def fake_react_grounding_loop(**kwargs: object) -> ReactGroundingResult:
+        captured["seeded_tool_calls"] = kwargs.get("seeded_tool_calls")
+        model_complete = kwargs["model_complete"]
+        assert callable(model_complete)
+        turn = model_complete([])  # type: ignore[misc]
+        return ReactGroundingResult(
+            final_text=turn.content,
+            messages=list(kwargs["messages"]),  # type: ignore[arg-type]
+            tool_calls=list(turn.tool_calls),
+            tool_results=[],
+            trace_steps=[],
+            evidence_guard=EvidenceGuardDecision(True, turn.content, "ok", 0, 0),
+            iterations=0,
+            stopped_reason="final_answer",
+            model_turns=[turn],
+        )
+
+    monkeypatch.setattr("backend.services.research_assistant.service.run_react_grounding_loop", fake_react_grounding_loop)
+
+    svc._complete_chat_with_react_grounding(
+        user_message=message,
+        conversation_id="conv_bug_564",
+        task={"task_id": "task_bug_564"},
+        context_pack={"pack_json": {}},
+        messages=[{"role": "user", "content": message}],
+        first_llm_result=first_llm_result,
+        cards={"mcp_route_decision": route},
+        model_profile={},
+        budget_plan=budget_plan,
+        runtime_config=runtime_config,
+        mode_decision=mode_decision,
+    )
+
+    assert captured["seeded_tool_calls"] is None
 
 
 def test_chat_turn_explicit_qe_draft_builds_cards_and_blocks_execution() -> None:
