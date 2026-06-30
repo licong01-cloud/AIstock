@@ -17,7 +17,7 @@ def _canonical_payload(manifest: StrategyPackageManifest) -> dict[str, Any]:
     # Package lifecycle status is stored separately and may transition after the
     # runtime manifest is frozen for selection/paper trading.
     payload["package_status"] = None
-    return payload
+    return _drop_empty_asset_fields(payload)
 
 
 def compute_manifest_sha256(manifest: StrategyPackageManifest) -> str:
@@ -36,6 +36,7 @@ def compute_manifest_json_sha256(manifest_json: Mapping[str, Any]) -> str:
     payload = deepcopy(dict(manifest_json))
     payload["manifest_sha256"] = None
     payload["package_status"] = None
+    payload = _drop_empty_asset_fields(payload)
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -132,3 +133,31 @@ def classify_manifest_hash_drift(
 def freeze_manifest(manifest: StrategyPackageManifest) -> StrategyPackageManifest:
     digest = compute_manifest_sha256(manifest)
     return manifest.model_copy(update={"manifest_sha256": digest})
+
+
+def _drop_empty_asset_fields(value: Any) -> Any:
+    """Keep legacy manifest hashes stable until Batch 1 writes real asset refs."""
+
+    if not isinstance(value, dict):
+        return value
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "factor_set" and isinstance(item, list):
+            cleaned[key] = [_drop_empty_asset_field_defaults(asset) for asset in item]
+        elif key == "model_asset" and isinstance(item, list):
+            cleaned[key] = [_drop_empty_asset_field_defaults(asset) for asset in item]
+        elif key == "model_asset" and isinstance(item, dict):
+            cleaned[key] = _drop_empty_asset_field_defaults(item)
+        else:
+            cleaned[key] = item
+    return cleaned
+
+
+def _drop_empty_asset_field_defaults(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: item
+        for key, item in value.items()
+        if not (key in {"asset_ref", "sha256", "size_bytes", "source_uri"} and item in (None, "", [], {}))
+    }

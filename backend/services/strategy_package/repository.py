@@ -122,6 +122,132 @@ def _infer_data_vintage(manifest: StrategyPackageManifest) -> date | None:
     return None
 
 
+def _validate_asset_records_for_manifest(
+    manifest: StrategyPackageManifest,
+    assets: list[StrategyPackageAssetRecord],
+) -> None:
+    if not assets:
+        raise StrategyPackageValidationError(
+            "frozen strategy package assets are required",
+            context={"reason_code": "strategy_package_assets_missing", "package_id": manifest.package_id},
+        )
+    expected = _expected_manifest_asset_keys(manifest)
+    actual = {
+        (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+        for asset in assets
+    }
+    missing = sorted(
+        {
+            (asset_type.value, asset_ref, sha256)
+            for asset_type, asset_ref, sha256 in expected
+            if (asset_type, asset_ref, sha256) not in actual
+        }
+    )
+    if missing:
+        raise StrategyPackageValidationError(
+            "package_asset ledger rows do not cover frozen manifest assets",
+            context={
+                "reason_code": "strategy_package_assets_incomplete",
+                "package_id": manifest.package_id,
+                "missing_assets": missing,
+            },
+        )
+    unexpected = sorted(
+        {
+            (asset.asset_type.value, asset.asset_ref, asset.asset_sha256)
+            for asset in assets
+            if (asset.asset_type, asset.asset_ref, asset.asset_sha256) not in expected
+        }
+    )
+    if unexpected:
+        raise StrategyPackageValidationError(
+            "package_asset ledger rows must match frozen manifest assets exactly",
+            context={
+                "reason_code": "strategy_package_assets_unexpected",
+                "package_id": manifest.package_id,
+                "unexpected_assets": unexpected,
+            },
+        )
+    for asset in assets:
+        if asset.package_id != manifest.package_id:
+            raise StrategyPackageValidationError(
+                "package_asset package_id must match manifest package_id",
+                context={
+                    "reason_code": "strategy_package_asset_package_mismatch",
+                    "package_id": manifest.package_id,
+                    "asset_package_id": asset.package_id,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+        if asset.asset_type not in {StrategyPackageAssetType.MODEL_WEIGHT, StrategyPackageAssetType.FACTOR_CODE}:
+            raise StrategyPackageValidationError(
+                "Batch 1 package freeze only accepts model_weight and factor_code assets",
+                context={
+                    "reason_code": "strategy_package_asset_unexpected_type",
+                    "package_id": manifest.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+        if _looks_like_backtest_prediction(asset.asset_ref):
+            raise StrategyPackageValidationError(
+                "QE backtest prediction artifacts must not be recorded as package runtime assets",
+                context={
+                    "reason_code": "strategy_package_prediction_asset_forbidden",
+                    "package_id": manifest.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+
+
+def _expected_manifest_asset_keys(
+    manifest: StrategyPackageManifest,
+) -> set[tuple[StrategyPackageAssetType, str, str]]:
+    expected: set[tuple[StrategyPackageAssetType, str, str]] = set()
+    for factor in manifest.factor_set:
+        if not (factor.asset_ref and factor.sha256):
+            raise StrategyPackageValidationError(
+                "manifest factor asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "factor_id": factor.factor_id,
+                    "factor_name": factor.factor_name,
+                },
+            )
+        expected.add((StrategyPackageAssetType.FACTOR_CODE, factor.asset_ref, factor.sha256))
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for model in model_assets:
+        if not (model.asset_ref and model.sha256):
+            raise StrategyPackageValidationError(
+                "manifest model asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "model_id": model.model_id,
+                },
+            )
+        expected.add((StrategyPackageAssetType.MODEL_WEIGHT, model.asset_ref, model.sha256))
+    return expected
+
+
+def _looks_like_backtest_prediction(asset_ref: str) -> bool:
+    text = str(asset_ref or "").lower()
+    return "combined_prediction.pkl" in text or "pred.pkl" in text
+
+
+def _asset_key_payload(assets: list[StrategyPackageAssetRecord]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "asset_type": asset.asset_type.value,
+            "asset_ref": asset.asset_ref,
+            "asset_sha256": asset.asset_sha256,
+        }
+        for asset in assets
+    ]
+
+
 class StrategyPackageRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -282,6 +408,206 @@ class StrategyPackageRepository:
                 },
             ) from exc
         return self.get(frozen.package_id)
+
+    def save_manifest_with_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+    ) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        if not frozen.manifest_sha256:
+            raise StrategyPackageValidationError(
+                "manifest_sha256 is required before persistence",
+                context={"package_id": frozen.package_id},
+            )
+        _validate_asset_records_for_manifest(frozen, assets)
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            if not self._has_package_asset_rows(source_existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package source version exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": source_existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return source_existing
+
+        cm, managed_by_factory = self._transaction_conn()
+        try:
+            with cm as conn:
+                original_autocommit = getattr(conn, "autocommit", None)
+                if not managed_by_factory and original_autocommit is not None:
+                    conn.autocommit = False
+                try:
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(
+                            """
+                            SELECT package_id, manifest_sha256, paper_portfolio_count
+                            FROM strategy_pkg.package
+                            WHERE package_id = %s
+                            """,
+                            (frozen.package_id,),
+                        )
+                        existing = cur.fetchone()
+                        if existing:
+                            if existing["manifest_sha256"] != frozen.manifest_sha256:
+                                raise InvalidStateTransitionError(
+                                    "package manifest cannot be silently replaced",
+                                    context={
+                                        "package_id": frozen.package_id,
+                                        "existing_manifest_sha256": existing["manifest_sha256"],
+                                        "new_manifest_sha256": frozen.manifest_sha256,
+                                        "paper_portfolio_count": existing["paper_portfolio_count"],
+                                    },
+                                )
+                        else:
+                            self._insert_manifest(cur, frozen)
+                        for asset in assets:
+                            self._upsert_package_asset(cur, asset)
+                    if not managed_by_factory and hasattr(conn, "commit"):
+                        conn.commit()
+                except Exception:
+                    if not managed_by_factory and hasattr(conn, "rollback"):
+                        conn.rollback()
+                    raise
+                finally:
+                    if not managed_by_factory and original_autocommit is not None:
+                        conn.autocommit = original_autocommit
+        except pg_errors.UniqueViolation as exc:
+            existing_by_source = self.find_by_source_version(
+                source_type=frozen.source.source_type.value,
+                source_id=frozen.source.source_id,
+                loop_id=frozen.source.loop_id,
+                package_version=frozen.package_version,
+            )
+            if existing_by_source and self._has_package_asset_rows(existing_by_source.package_id, assets):
+                return existing_by_source
+            raise InvalidStateTransitionError(
+                "strategy package unique constraint collision",
+                context={
+                    "package_id": frozen.package_id,
+                    "source_type": frozen.source.source_type.value,
+                    "source_id": frozen.source.source_id,
+                    "loop_id": frozen.source.loop_id,
+                    "package_version": frozen.package_version,
+                    "required_assets": _asset_key_payload(assets),
+                },
+            ) from exc
+        return self.get(frozen.package_id)
+
+    def _transaction_conn(self) -> tuple[Any, bool]:
+        try:
+            return self._conn_factory(autocommit=False, manage_transaction=True), True  # type: ignore[misc]
+        except TypeError:
+            return self._conn_factory(), False
+
+    def _insert_manifest(self, cur: Any, frozen: StrategyPackageManifest) -> None:
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package (
+                package_id, package_name, package_version, source_type,
+                source_id, loop_id, run_id, package_status, manifest_json,
+               manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+               data_vintage, prediction_ref_uri, prediction_ref_sha256,
+               model_artifact_uri, model_artifact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                frozen.package_id,
+                frozen.package_name,
+                frozen.package_version,
+                frozen.source.source_type.value,
+                frozen.source.source_id,
+                frozen.source.loop_id,
+                frozen.source.run_id,
+                frozen.package_status.value,
+                psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                frozen.manifest_sha256,
+                frozen.alpha_mode.value,
+                None,
+                frozen.package_name,
+                frozen.package_name,
+                _infer_data_vintage(frozen),
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package_status_event (
+                package_id, from_status, to_status, reason, context
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                frozen.package_id,
+                None,
+                frozen.package_status.value,
+                "package_created",
+                psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
+            ),
+        )
+
+    def _upsert_package_asset(self, cur: Any, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord | None:
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package_asset (
+                package_id, asset_type, asset_ref, asset_sha256, metadata,
+                asset_role, asset_size_bytes, protected_asset, source_uri, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (package_id, asset_type, asset_ref) DO UPDATE
+            SET asset_sha256 = EXCLUDED.asset_sha256,
+                metadata = EXCLUDED.metadata,
+                asset_role = EXCLUDED.asset_role,
+                asset_size_bytes = EXCLUDED.asset_size_bytes,
+                protected_asset = EXCLUDED.protected_asset,
+                source_uri = EXCLUDED.source_uri
+            WHERE strategy_pkg.package_asset.asset_sha256 IS NOT DISTINCT FROM EXCLUDED.asset_sha256
+            RETURNING *
+            """,
+            (
+                asset.package_id,
+                asset.asset_type.value,
+                asset.asset_ref,
+                asset.asset_sha256,
+                psycopg2.extras.Json(asset.metadata),
+                asset.asset_role,
+                asset.asset_size_bytes,
+                asset.protected_asset,
+                asset.source_uri,
+                asset.created_at,
+            ),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise StrategyPackageValidationError(
+                "existing package_asset row has a different sha256 for the same asset_ref",
+                context={
+                    "reason_code": "strategy_package_asset_sha_mismatch",
+                    "package_id": asset.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                    "asset_sha256": asset.asset_sha256,
+                },
+            )
+        return self._package_asset_from_row(dict(row))
+
+    def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
+        if not assets:
+            return True
+        existing = {
+            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+            for asset in self.list_package_assets(package_id)
+        }
+        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
 
     def find_by_source_version(
         self,
@@ -2105,6 +2431,67 @@ class InMemoryStrategyPackageRepository:
             )
         )
         return record
+
+    def save_manifest_with_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+    ) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        _validate_asset_records_for_manifest(frozen, assets)
+        existing = self.records.get(frozen.package_id)
+        if existing:
+            if existing.manifest_sha256 != frozen.manifest_sha256:
+                raise InvalidStateTransitionError(
+                    "package manifest cannot be silently replaced",
+                    context={"package_id": frozen.package_id},
+                )
+            if not self._has_package_asset_rows(existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return existing
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            if not self._has_package_asset_rows(source_existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package source version exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": source_existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return source_existing
+        record = self.save_manifest(frozen)
+        try:
+            for asset in assets:
+                self.save_package_asset(asset)
+        except Exception:
+            self.records.pop(record.package_id, None)
+            self.events = [event for event in self.events if event.package_id != record.package_id]
+            self.package_assets = {
+                key: value for key, value in self.package_assets.items() if value.package_id != record.package_id
+            }
+            raise
+        return self.get(record.package_id)
+
+    def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
+        existing = {
+            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+            for asset in self.list_package_assets(package_id)
+        }
+        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
 
     def find_by_source_version(
         self,

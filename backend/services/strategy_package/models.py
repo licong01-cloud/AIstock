@@ -117,6 +117,10 @@ class FactorAsset(BaseModel):
     factor_id: str
     factor_name: str
     artifact_ref: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
     required: bool = True
 
 
@@ -124,6 +128,10 @@ class ModelAsset(BaseModel):
     model_id: str
     model_ref: str | None = None
     model_type: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
 
 
 class UniversePolicy(BaseModel):
