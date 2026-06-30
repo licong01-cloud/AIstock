@@ -35,8 +35,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-06-30T05:47:52.636448Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "28a8c409d40928528f9a18deec9ecd46ab8d1f82",
+  "fixed_at": "2026-06-30T11:55:25.821702Z",
   "github_issue_number": 1766,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1766",
   "last_seen_at": "2026-06-30T05:47:52.636448Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1770",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -64,6 +65,9 @@
     "fingerprint": "1114d609ed47d745472eaf90",
     "source_event_id": "FE-20260630-1114d609ed47"
   },
+  "validation_evidence": [
+    "PR #1770 CI all green; local validation: 112 operator/router/scheduler tests passed; 71 paper/simulation tests passed; ruff passed; git diff --check passed; nox l0 passed; validation_module_registry_l0 passed; paper_v2_backend 733 passed, 1 skipped, 2 xfailed; miniqmt_sim_stub_l3 139 passed; miniqmt_sim_trading_hours_l5 skipped catalog-only manual gate"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
