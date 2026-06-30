@@ -533,6 +533,13 @@ class MiniQMTExecutionRuntime:
                 reason=reason,
                 payload=command_payload,
             )
+        if normalized == "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT":
+            return self._execute_reconcile_stale_runtime_no_broker_side_effect(
+                command_id=command_id,
+                command_type=normalized,
+                reason=reason,
+                payload=command_payload,
+            )
         if normalized == "REPLACE_ALPHA_SIGNAL_BOOK":
             return self._execute_replace_alpha_signal_book(
                 command_id=command_id,
@@ -937,6 +944,7 @@ class MiniQMTExecutionRuntime:
                     child.algo_instance_id,
                     reason="operator_cancel_all_open_orders",
                     command_id=command_id,
+                    ignore_vnpy_active_orders=True,
                 )
             else:
                 errors.append(
@@ -958,6 +966,236 @@ class MiniQMTExecutionRuntime:
             broker_packets=broker_packets,
             errors=errors,
             metadata={"active_child_count": len(active_children), "strategy_slot_id": strategy_slot_id},
+        )
+
+    def _execute_reconcile_stale_runtime_no_broker_side_effect(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        reason: str,
+        payload: dict[str, Any],
+    ) -> MiniQMTOperatorCommandResult:
+        runtime = self._require_runtime()
+        strategy_slot_id = _optional_text(payload.get("strategy_slot_id"))
+        sync_started_at = datetime.now(UTC).isoformat()
+        self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=MiniQMTExecutionEventType.BROKER_SYNC_STARTED,
+            source="operator",
+            payload={
+                "command_id": command_id,
+                "command_type": command_type,
+                "reason": reason,
+                "runtime_only_recovery": True,
+                "broker_mutation_allowed": False,
+            },
+        )
+        try:
+            broker_orders = self.gateway.sync_orders(runtime_id=runtime.runtime_id)
+            broker_trades = self.gateway.sync_trades(runtime_id=runtime.runtime_id)
+            broker_positions = self.gateway.sync_positions(runtime_id=runtime.runtime_id)
+        except Exception as exc:  # noqa: BLE001
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_BROKER_SYNC_FAILED",
+                        "message": "MiniQMT broker sync failed before stale runtime no-side-effect recovery",
+                        "context": {"reason": f"{type(exc).__name__}: {exc}"},
+                    }
+                ],
+                metadata={"runtime_only_cleanup_mutated": False, "broker_mutated": False},
+            )
+
+        open_broker_orders = [dict(order) for order in broker_orders if _is_open_broker_order(order)]
+        broker_evidence = {
+            "schema_version": "miniqmt_broker_empty_reconcile_evidence_v1",
+            "synced_at": sync_started_at,
+            "runtime_id": runtime.runtime_id,
+            "broker_order_count": len(broker_orders),
+            "broker_open_order_count": len(open_broker_orders),
+            "broker_trade_count": len(broker_trades),
+            "broker_position_count": len(broker_positions),
+            "broker_order_ids": [_broker_order_id(order) for order in broker_orders if _broker_order_id(order)],
+            "broker_open_order_ids": [_broker_order_id(order) for order in open_broker_orders if _broker_order_id(order)],
+            "broker_authority": "fresh_gateway_sync",
+            "broker_mutated": False,
+        }
+        broker_packet = {
+            "action": "fresh_broker_reconcile",
+            "accepted": True,
+            "broker_mutated": False,
+            "broker_open_order_count": broker_evidence["broker_open_order_count"],
+            "broker_open_order_ids": list(broker_evidence["broker_open_order_ids"]),
+        }
+        self.events.append(
+            runtime_id=runtime.runtime_id,
+            event_type=MiniQMTExecutionEventType.BROKER_SYNCED,
+            source="operator",
+            payload={
+                "command_id": command_id,
+                "command_type": command_type,
+                "orders": broker_orders,
+                "trades": broker_trades,
+                "positions": broker_positions,
+                "sync_before_runtime_only_cleanup": True,
+                "broker_mutated": False,
+            },
+        )
+        if open_broker_orders:
+            return self._operator_result(
+                command_id=command_id,
+                command_type=command_type,
+                status=MiniQMTOperatorCommandStatus.REJECTED,
+                reason=reason,
+                payload=payload,
+                broker_packets=[broker_packet],
+                errors=[
+                    {
+                        "error_code": "MINIQMT_OPERATOR_BROKER_OPEN_ORDERS_PRESENT",
+                        "message": "broker has open orders; runtime-only stale cleanup is forbidden",
+                        "context": {
+                            "reason_code": "MINIQMT_OPERATOR_BROKER_OPEN_ORDERS_PRESENT",
+                            "runtime_id": runtime.runtime_id,
+                            "broker_open_order_ids": list(broker_evidence["broker_open_order_ids"]),
+                            "broker_open_order_count": broker_evidence["broker_open_order_count"],
+                        },
+                    }
+                ],
+                metadata={
+                    "broker_evidence": broker_evidence,
+                    "runtime_only_cleanup_mutated": False,
+                    "broker_mutated": False,
+                    "strategy_slot_id": strategy_slot_id,
+                },
+                update_runtime_state=False,
+            )
+
+        active_children = [
+            child
+            for child in self.repository.list_child_orders(runtime.runtime_id, active_only=True)
+            if strategy_slot_id is None or child.strategy_slot_id == strategy_slot_id
+        ]
+        active_algos_before = [
+            instance
+            for instance in self.repository.list_algo_instances(runtime.runtime_id, active_only=True)
+            if strategy_slot_id is None or instance.strategy_slot_id == strategy_slot_id
+        ]
+        terminalized_child_order_ids: list[str] = []
+        affected_algo_instance_ids: list[str] = []
+        for child in active_children:
+            previous_status = child.status.value
+            updated = self.oms.record_child_order(
+                child.model_copy(
+                    update={
+                        "status": MiniQMTChildOrderStatus.REJECTED,
+                        "metadata": {
+                            **dict(child.metadata),
+                            "operator_command_id": command_id,
+                            "operator_command_type": command_type,
+                            "runtime_only_terminalized": True,
+                            "runtime_only_terminalized_reason": "broker_empty_no_side_effect_recovery",
+                            "runtime_only_terminalized_previous_status": previous_status,
+                            "runtime_only_terminalized_at": datetime.now(UTC).isoformat(),
+                            "broker_evidence": broker_evidence,
+                            "broker_cancel_called": False,
+                            "broker_mutated": False,
+                        },
+                    }
+                )
+            )
+            terminalized_child_order_ids.append(updated.child_order_id)
+            affected_algo_instance_ids.append(updated.algo_instance_id)
+            self.events.append(
+                runtime_id=runtime.runtime_id,
+                event_type=MiniQMTExecutionEventType.ORDER_EVENT,
+                source="operator",
+                payload={
+                    "command_id": command_id,
+                    "command_type": command_type,
+                    "child_order_id": updated.child_order_id,
+                    "algo_instance_id": updated.algo_instance_id,
+                    "previous_status": previous_status,
+                    "status": updated.status.value,
+                    "runtime_only_terminalized": True,
+                    "broker_cancel_called": False,
+                    "broker_mutated": False,
+                },
+            )
+
+        terminalized_algo_instance_ids: list[str] = []
+        for instance in active_algos_before:
+            updated = self._terminalize_algo_if_all_children_terminal(
+                runtime.runtime_id,
+                instance.algo_instance_id,
+                reason="broker_empty_no_side_effect_recovery",
+                command_id=command_id,
+                ignore_vnpy_active_orders=True,
+            )
+            if updated is not None:
+                terminalized_algo_instance_ids.append(updated.algo_instance_id)
+                affected_algo_instance_ids.append(updated.algo_instance_id)
+
+        for instance in list(self.repository.list_algo_instances(runtime.runtime_id, active_only=True)):
+            if strategy_slot_id is not None and instance.strategy_slot_id != strategy_slot_id:
+                continue
+            children = [
+                child
+                for child in self.repository.list_child_orders(runtime.runtime_id, active_only=False)
+                if child.algo_instance_id == instance.algo_instance_id
+            ]
+            if children:
+                continue
+            updated = self._terminalize_childless_algo_for_runtime_only_cleanup(
+                runtime_id=runtime.runtime_id,
+                instance=instance,
+                reason="broker_empty_no_side_effect_recovery",
+                command_id=command_id,
+                broker_evidence=broker_evidence,
+            )
+            terminalized_algo_instance_ids.append(updated.algo_instance_id)
+            affected_algo_instance_ids.append(updated.algo_instance_id)
+
+        already_clean = not active_children and not active_algos_before
+        cleanup_metadata = {
+            "schema_version": "miniqmt_stale_runtime_no_broker_side_effect_recovery_v1",
+            "command_id": command_id,
+            "command_type": command_type,
+            "reason_code": "MINIQMT_OPERATOR_RUNTIME_ONLY_CLEANUP_BROKER_EMPTY",
+            "runtime_id": runtime.runtime_id,
+            "strategy_slot_id": strategy_slot_id,
+            "broker_evidence": broker_evidence,
+            "broker_cancel_called": False,
+            "broker_mutated": False,
+            "runtime_only_cleanup_mutated": bool(terminalized_child_order_ids or terminalized_algo_instance_ids),
+            "already_clean": already_clean,
+            "active_child_count_before": len(active_children),
+            "active_algo_count_before": len(active_algos_before),
+            "terminalized_child_order_ids": terminalized_child_order_ids,
+            "terminalized_algo_instance_ids": _unique(terminalized_algo_instance_ids),
+        }
+        return self._operator_result(
+            command_id=command_id,
+            command_type=command_type,
+            status=MiniQMTOperatorCommandStatus.EXECUTED,
+            reason=reason,
+            payload=payload,
+            affected_algo_instance_ids=_unique(affected_algo_instance_ids),
+            broker_packets=[broker_packet],
+            metadata={
+                "broker_evidence": broker_evidence,
+                "runtime_only_cleanup": cleanup_metadata,
+                "runtime_only_cleanup_mutated": cleanup_metadata["runtime_only_cleanup_mutated"],
+                "already_clean": already_clean,
+                "broker_cancel_called": False,
+                "broker_mutated": False,
+                "strategy_slot_id": strategy_slot_id,
+            },
         )
 
     def _evaluate_risk_after_event(
@@ -1132,6 +1370,7 @@ class MiniQMTExecutionRuntime:
         *,
         reason: str,
         command_id: str | None = None,
+        ignore_vnpy_active_orders: bool = False,
     ) -> MiniQMTExecutionAlgoInstance | None:
         instance = self._find_algo_instance(runtime_id, algo_instance_id)
         if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
@@ -1143,7 +1382,8 @@ class MiniQMTExecutionRuntime:
         ]
         if not children or any(child.status not in _TERMINAL_CHILD_ORDER_STATUSES for child in children):
             return None
-        if self._is_vnpy_instance(instance) and self._vnpy_core_active_order_ids(instance):
+        vnpy_active_order_ids = self._vnpy_core_active_order_ids(instance) if self._is_vnpy_instance(instance) else []
+        if vnpy_active_order_ids and not ignore_vnpy_active_orders:
             return None
         terminal_status = _algo_terminal_status_from_child_orders(children)
         updated = self.oms.record_algo_instance(
@@ -1156,9 +1396,8 @@ class MiniQMTExecutionRuntime:
                         "terminalized_by_runtime": True,
                         "terminalized_reason": reason,
                         "terminal_child_order_statuses": sorted({child.status.value for child in children}),
-                        "terminal_vnpy_active_order_ids": (
-                            self._vnpy_core_active_order_ids(instance) if self._is_vnpy_instance(instance) else []
-                        ),
+                        "terminal_vnpy_active_order_ids": vnpy_active_order_ids,
+                        "terminal_vnpy_active_orders_ignored": bool(ignore_vnpy_active_orders and vnpy_active_order_ids),
                         **({"operator_command_id": command_id} if command_id else {}),
                     },
                 }
@@ -1174,6 +1413,51 @@ class MiniQMTExecutionRuntime:
                 "reason": reason,
                 "status": updated.status.value,
                 "terminal_child_order_ids": [child.child_order_id for child in children],
+            },
+        )
+        return updated
+
+    def _terminalize_childless_algo_for_runtime_only_cleanup(
+        self,
+        *,
+        runtime_id: str,
+        instance: MiniQMTExecutionAlgoInstance,
+        reason: str,
+        command_id: str,
+        broker_evidence: dict[str, Any],
+    ) -> MiniQMTExecutionAlgoInstance:
+        updated = self.oms.record_algo_instance(
+            instance.model_copy(
+                update={
+                    "status": MiniQMTAlgoInstanceStatus.FAILED,
+                    "metadata": {
+                        **dict(instance.metadata),
+                        "terminalized_by_runtime": True,
+                        "terminalized_reason": reason,
+                        "terminal_child_order_statuses": [],
+                        "terminal_vnpy_active_order_ids": (
+                            self._vnpy_core_active_order_ids(instance) if self._is_vnpy_instance(instance) else []
+                        ),
+                        "operator_command_id": command_id,
+                        "runtime_only_terminalized": True,
+                        "broker_evidence": broker_evidence,
+                        "broker_cancel_called": False,
+                        "broker_mutated": False,
+                    },
+                }
+            )
+        )
+        self.events.append(
+            runtime_id=runtime_id,
+            event_type=MiniQMTExecutionEventType.ALGO_ACTION_EMITTED,
+            source="oms",
+            payload={
+                "algo_instance_id": instance.algo_instance_id,
+                "action_type": "TERMINALIZE_CHILDLESS_STALE_ALGO",
+                "reason": reason,
+                "status": updated.status.value,
+                "command_id": command_id,
+                "broker_mutated": False,
             },
         )
         return updated
@@ -1536,6 +1820,7 @@ class MiniQMTExecutionRuntime:
         broker_packets: list[dict[str, Any]] | None = None,
         errors: list[dict[str, Any]] | None = None,
         metadata: dict[str, Any] | None = None,
+        update_runtime_state: bool = True,
     ) -> MiniQMTOperatorCommandResult:
         runtime = self._require_runtime()
         result = MiniQMTOperatorCommandResult(
@@ -1553,22 +1838,23 @@ class MiniQMTExecutionRuntime:
             errors=list(errors or []),
             metadata=dict(metadata or {}),
         )
-        self.repository.upsert_runtime(
-            runtime.model_copy(
-                update={
-                    "event_loop_state": MiniQMTExecutionRuntimeState.READY
-                    if status == MiniQMTOperatorCommandStatus.EXECUTED
-                    else MiniQMTExecutionRuntimeState.FAILED,
-                    "oms_state": MiniQMTOmsState.RECONCILED
-                    if not self.repository.list_child_orders(runtime.runtime_id, active_only=True)
-                    else runtime.oms_state,
-                    "metadata": {
-                        **dict(runtime.metadata),
-                        "last_operator_command": result.model_dump(mode="json"),
-                    },
-                }
+        if update_runtime_state:
+            self.repository.upsert_runtime(
+                runtime.model_copy(
+                    update={
+                        "event_loop_state": MiniQMTExecutionRuntimeState.READY
+                        if status == MiniQMTOperatorCommandStatus.EXECUTED
+                        else MiniQMTExecutionRuntimeState.FAILED,
+                        "oms_state": MiniQMTOmsState.RECONCILED
+                        if not self.repository.list_child_orders(runtime.runtime_id, active_only=True)
+                        else runtime.oms_state,
+                        "metadata": {
+                            **dict(runtime.metadata),
+                            "last_operator_command": result.model_dump(mode="json"),
+                        },
+                    }
+                )
             )
-        )
         self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=(

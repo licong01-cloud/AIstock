@@ -72,10 +72,15 @@ from backend.services.strategy_package.models import (
 from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 from backend.services.miniqmt_execution_runtime import (
+    FakeMiniQMTGateway,
+    InMemoryMiniQMTExecutionRuntimeRepository,
     JsonFileMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionRuntime,
+    MiniQMTExecutionRuntimeConfig,
     MiniQMTExecutionEventType,
     MiniQMTExecutionRuntimeKind,
     MiniQMTGraySwitchController,
+    MiniQMTOperatorCommandStatus,
     MiniQMTShadowReconciler,
     MiniQMTShadowScenario,
 )
@@ -5934,6 +5939,91 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
     assert restarted.results[0].run.run_payload_json["broker_called"] is False
     assert len(qmt_repo.list_order_intents_by_batch(payload["qmt_batch_id"])) == len(preview_intents)
     assert broker.place_order_payloads == []
+
+
+def test_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanup_and_retries() -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_shadow_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    plan = planned.results[0].execution_plan
+    assert run is not None
+    assert plan is not None
+    runtime_id = simulation_bridges.MiniQMTExecutionBridge._runtime_id(plan=plan, binding=qmt_binding)
+    runtime_repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    gateway = FakeMiniQMTGateway()
+    runtime = MiniQMTExecutionRuntime(
+        config=MiniQMTExecutionRuntimeConfig(
+            runtime_id=runtime_id,
+            account_group_id=qmt_binding.account_group_id or qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            trade_date=TRADE_DATE,
+            runtime_config_hash=plan.plan_hash,
+        ),
+        repository=runtime_repo,
+        gateway=gateway,
+    )
+    runtime.start()
+    stale_algo = runtime.create_algo_instance(
+        parent_intent_id="intent_stale_reconciling",
+        strategy_slot_id=qmt_binding.strategy_slot_id or qmt_binding.binding_id,
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=100,
+        algo_code="SNIPER_MINIQMT",
+    )
+    runtime.submit_child_order(algo_instance_id=stale_algo.algo_instance_id, quantity=100, price=10.0)
+    gateway._orders.clear()
+    stuck = repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={
+            "last_stage": "RECONCILING",
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": 0,
+            "order_intent_count": len(plan.intents),
+        },
+    )
+
+    retry_before_recovery = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    assert retry_before_recovery.results[0].status == "REUSED_EXISTING_PLAN"
+    assert broker.place_order_payloads == []
+
+    operator_result = runtime.execute_operator_command(
+        command_id="opcmd_recover_reconciling_001",
+        command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+        reason="unit stale runtime recovery",
+        payload={"run_id": stuck.run_id},
+    )
+    assert operator_result.status == MiniQMTOperatorCommandStatus.EXECUTED
+    recovered = scheduler.recover_no_side_effect_reconciling_run_after_operator_cleanup(
+        run_id=stuck.run_id,
+        operator_result=operator_result,
+        source="unit_test",
+    )
+    assert recovered.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert recovered.run_payload_json["miniqmt_no_side_effect_reconciling_recovery"]["broker_called"] is False
+    assert recovered.run_payload_json["submit_failure"]["stage"] == "MINIQMT_NO_SIDE_EFFECT_RECONCILING_RECOVERY"
+
+    retried = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    latest = repo.get_simulation_daily_run(stuck.run_id)
+    assert retried.results[0].status == "RECONCILED"
+    assert latest.run_payload_json["broker_called"] is True
+    assert len(broker.place_order_payloads) == len(plan.intents)
 
 
 def test_production_context_provider_builds_localsim_broker_from_persisted_paper_state():

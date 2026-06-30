@@ -2,7 +2,16 @@
   "actual": "On 2026-06-30 two MiniQMT SIM runs (L2 simrun_be0af928d096734b and L16 simrun_0143264657762a1e) are stuck in status=RECONCILING with last_stage=RECONCILING, broker_called=false, submitted_intents=0 while execution intents exist. Broker authoritative account 62266303 SIM has no orders, no cancelable orders, frozen_cash=0. L2 runtime-state still contains stale 2026-06-29 ACTIVE algo/child records while broker is empty. Scheduler does not resubmit no-side-effect RECONCILING runs, and RESET_STRATEGY_SLOT attempts broker cancel for stale order ids, xtquant returns raw_return_code=-1, so existing operator tooling cannot recover. Need a controlled operator recovery entry that fresh-reconciles broker authority, only when broker open orders are empty performs runtime-only terminalization of stale ACTIVE algo/child, and converts no-side-effect RECONCILING runs to FAILED_RETRYABLE for normal scheduler retry. All failures must be loud with reason_code and durable audit; existing CANCEL/RESET behavior for real orders must remain unchanged.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260630_BUG-562-miniqmt-sim-no-side-effect-reconciling-run-cannot-recover-when-runtime-s.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/simulation_runtime.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_operator_command_router.py",
+    "docs/handoff/BUG-562-miniqmt-stale-runtime-no-side-effect-recovery.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-562",
@@ -40,7 +49,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -66,5 +76,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }

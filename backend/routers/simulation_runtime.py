@@ -29,7 +29,13 @@ from backend.services.trading_core.errors import DataUnavailableError, TradingCo
 router = APIRouter(prefix="/simulation-runtime", tags=["simulation-runtime"])
 
 DESTRUCTIVE_MINIQMT_OPERATOR_COMMANDS = frozenset(
-    {"CANCEL_ALL_OPEN_ORDERS", "FLATTEN_ALL_POSITIONS", "FLATTEN_STRATEGY_SLOT", "RESET_STRATEGY_SLOT"}
+    {
+        "CANCEL_ALL_OPEN_ORDERS",
+        "FLATTEN_ALL_POSITIONS",
+        "FLATTEN_STRATEGY_SLOT",
+        "RESET_STRATEGY_SLOT",
+        "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+    }
 )
 
 
@@ -141,6 +147,9 @@ def _operator_payload(command: OperatorCommand, raw_payload: dict[str, Any]) -> 
         payload.setdefault("strategy_slot_id", command.strategy_slot_id)
     if command.alpha_signal_book_id:
         payload.setdefault("alpha_signal_book_id", command.alpha_signal_book_id)
+    for field_name in ("run_id", "binding_id", "runtime_id"):
+        if raw_payload.get(field_name):
+            payload.setdefault(field_name, str(raw_payload[field_name]).strip())
     if isinstance(raw_payload.get("positions"), list):
         payload["positions"] = raw_payload["positions"]
     return payload
@@ -292,6 +301,7 @@ def execute_miniqmt_operator_command(
     payload: dict[str, Any] = Body(...),
     runtime_client: MiniQMTExecutionRuntimeClient = Depends(get_miniqmt_runtime_client),
     gateway: Any | None = Depends(get_miniqmt_gateway),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
 ) -> dict[str, Any]:
     try:
         command_fields = {
@@ -345,6 +355,26 @@ def execute_miniqmt_operator_command(
             },
         ) from exc
 
+    operator_payload = _operator_payload(command, payload)
+    if command.command_type == "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT" and not operator_payload.get("run_id"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "MINIQMT_OPERATOR_RUN_ID_REQUIRED",
+                "message": "stale runtime no-side-effect recovery requires run_id",
+                "context": {
+                    "reason_code": "MINIQMT_OPERATOR_RUN_ID_REQUIRED",
+                    "command_type": command.command_type,
+                },
+            },
+        )
+    scheduler = getattr(service.scheduler, "lifecycle_scheduler", service.scheduler)
+    if command.command_type == "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT":
+        try:
+            scheduler.require_no_side_effect_reconciling_run_for_operator_recovery(run_id=str(operator_payload["run_id"]))
+        except TradingCoreError as exc:
+            _raise_http(exc)
+
     result, evidence = runtime_client.execute_operator_command(
         account_group_id=command.account_group_id,
         trade_date=trade_date,
@@ -353,15 +383,35 @@ def execute_miniqmt_operator_command(
         command_id=command.command_id,
         command_type=command.command_type,
         reason=command.reason,
-        payload=_operator_payload(command, payload),
+        payload=operator_payload,
         gateway=gateway,
         source="simulation_runtime_operator_command",
     )
+    run_recovery = None
+    if (
+        command.command_type == "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT"
+        and result.status == MiniQMTOperatorCommandStatus.EXECUTED
+    ):
+        try:
+            recovered = scheduler.recover_no_side_effect_reconciling_run_after_operator_cleanup(
+                run_id=str(operator_payload["run_id"]),
+                operator_result=result,
+                source="simulation_runtime_operator_command",
+            )
+        except TradingCoreError as exc:
+            _raise_http(exc)
+        run_recovery = {
+            "run_id": recovered.run_id,
+            "status": recovered.status.value,
+            "last_stage": recovered.run_payload_json.get("last_stage"),
+            "recovery": recovered.run_payload_json.get("miniqmt_no_side_effect_reconciling_recovery"),
+        }
     return {
         "ok": result.status == MiniQMTOperatorCommandStatus.EXECUTED,
         "operator_command": command.model_dump(mode="json"),
         "result": result.model_dump(mode="json"),
         "runtime_evidence": evidence.to_dict(),
+        "run_recovery": run_recovery,
         "production_runtime_restart_required": False,
     }
 
