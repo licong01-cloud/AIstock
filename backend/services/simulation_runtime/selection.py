@@ -179,6 +179,8 @@ class DailySelectionSignalService:
             loop_id=record.loop_id,
             run_id=record.run_id,
             runtime_config=runtime_config,
+            manifest=record.current_manifest(),
+            package_id=record.package_id,
         )
 
 

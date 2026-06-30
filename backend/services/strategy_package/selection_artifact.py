@@ -8,6 +8,7 @@ requiring V24/V25 execution algorithms or their runtime dependencies.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -51,6 +52,14 @@ from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 ConnFactory = Callable[[], Iterator[Any]]
 logger = logging.getLogger("aistock.strategy_package.selection_artifact")
+
+
+def _callable_accepts_keyword(func: Callable[..., Any], keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    return keyword in signature.parameters
 
 
 def _canonical_json_sha256(payload: Any) -> str:
@@ -417,12 +426,16 @@ class StrategyPackageSelectionArtifactService:
         topk = self._runtime_top_k(manifest, runtime_config)
         source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
         if callable(source_loader):
-            source = source_loader(
-                source_type=record.source_type,
-                source_id=record.source_id,
-                loop_id=record.loop_id,
-                run_id=record.run_id,
-            )
+            source_kwargs: dict[str, Any] = {
+                "source_type": record.source_type,
+                "source_id": record.source_id,
+                "loop_id": record.loop_id,
+                "run_id": record.run_id,
+            }
+            if _callable_accepts_keyword(source_loader, "manifest"):
+                source_kwargs["manifest"] = manifest
+                source_kwargs["package_id"] = record.package_id
+            source = source_loader(**source_kwargs)
         else:
             source = self.runtime_asset_resolver.load_source(record.source_id)
         provider, inference_backend = self._resolve_live_provider(runtime_config)

@@ -373,3 +373,17 @@ def test_multi_alpha_runtime_disabled_fails_loud() -> None:
         )
 
     assert _reason(excinfo.value) == REASON_RUNTIME_NOT_ENABLED
+
+
+def test_multi_alpha_frozen_child_runtime_does_not_require_seed_run_id_binding() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    first_leg = parent.manifest.source_evidence["multi_alpha"]["legs"][0]
+    child = package_repo.get(first_leg["child_package_id"])
+    package_repo.records[child.package_id] = child.model_copy(update={"run_id": "different_seed_runtime_binding"})
+    service, _artifact_repo, resolver, provider = _artifact_service(package_repo)
+
+    artifact = _generate(service, parent, _runtime_config())
+
+    assert artifact.status.value == "SUCCEEDED"
+    assert {call["run_id"] for call in resolver.load_calls} == {A1_SEED, FUND_SEED}
+    assert len(provider.calls) == 2

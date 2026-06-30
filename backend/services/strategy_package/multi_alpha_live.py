@@ -7,6 +7,7 @@ does not touch Paper v2 execution runtimes, schedulers, brokers, or portfolios.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ import pandas as pd
 from backend.services.multi_alpha.orthogonality import normalize_prediction_frame
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, win_to_wsl_path
+from backend.services.strategy_package.package_asset_freeze import manifest_has_frozen_runtime_assets
 from backend.services.strategy_package.models import AlphaMode, SelectionScoreArtifactStatus, StrategyPackageManifest
 from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
@@ -633,12 +635,16 @@ class MultiAlphaLivePredictionProvider:
                 )
             source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
             if callable(source_loader):
-                source = source_loader(
-                    source_type=child_record.source_type,
-                    source_id=child_record.source_id,
-                    loop_id=child_record.loop_id,
-                    run_id=seed_run_id,
-                )
+                source_kwargs: dict[str, Any] = {
+                    "source_type": child_record.source_type,
+                    "source_id": child_record.source_id,
+                    "loop_id": child_record.loop_id,
+                    "run_id": seed_run_id,
+                }
+                if _callable_accepts_keyword(source_loader, "manifest"):
+                    source_kwargs["manifest"] = child_record.current_manifest()
+                    source_kwargs["package_id"] = child_record.package_id
+                source = source_loader(**source_kwargs)
             else:
                 source = self.runtime_asset_resolver.load_source(child_record.source_id)
             prepared = self.runtime_asset_resolver.prepare_workspace(
@@ -861,6 +867,8 @@ def _seed_has_runtime_binding(config: Mapping[str, Any], *, child_record: Any, s
     artifact = _artifact_config(config)
     if artifact.get("model_params_path"):
         return True
+    if manifest_has_frozen_runtime_assets(child_record.current_manifest()):
+        return True
     return str(child_record.run_id or "").strip() == seed_run_id
 
 
@@ -1015,6 +1023,14 @@ def _artifact_config(runtime_config: Mapping[str, Any] | None) -> dict[str, Any]
             context={"selection_artifact_config_type": type(artifact).__name__},
         )
     return dict(artifact)
+
+
+def _callable_accepts_keyword(func: Callable[..., Any], keyword: str) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return True
+    return keyword in signature.parameters
 
 
 def _normalize_positive_weights(raw: Mapping[str, float], *, reason_code: str, context: Mapping[str, Any]) -> dict[str, float]:

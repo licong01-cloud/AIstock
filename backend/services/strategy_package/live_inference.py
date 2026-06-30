@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -45,11 +46,14 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 
+from .models import FactorAsset, ModelAsset, StrategyPackageManifest
+from .package_asset_freeze import manifest_has_frozen_runtime_assets
+from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger(__name__)
 
-ModelParamsOrigin = Literal["node", "cache", "unavailable"]
+ModelParamsOrigin = Literal["node", "cache", "package_asset", "unavailable"]
 ConnFactory = Callable[[], Iterator[Any]]
 
 AUTHORITATIVE_SELECTION_SOURCE_TYPE = "live_qe_model_inference_v1"
@@ -73,6 +77,9 @@ class QEExperimentRuntimeSource:
     # Set by _materialize_runtime_source_from_node based on whether the
     # mlruns archive came from the QE node API or the local cache fallback.
     model_params_origin: ModelParamsOrigin = "node"
+    source_workspace_type: str = "aistock_node_api_cache"
+    package_id: str | None = None
+    manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,10 +119,11 @@ class PreparedInferenceWorkspace:
     model_candidate_count: int
     dataset_processor_path: Path | None = None
     # Provenance of the params.pkl used for this workspace. 'node' = downloaded
-    # from the QE node API (the only origin allowed by default); 'cache' = local
-    # StrategyPackage cache fallback (requires explicit allow_cache_fallback=True
-    # at the materialization call site); 'unavailable' is reserved for failed
-    # runs written from upstream error handlers.
+    # from the QE node API (the only origin allowed by default for unfrozen
+    # packages); 'cache' = local StrategyPackage cache fallback (requires
+    # explicit allow_cache_fallback=True at the materialization call site);
+    # 'package_asset' = package-owned immutable asset blob; 'unavailable' is
+    # reserved for failed runs written from upstream error handlers.
     model_params_origin: ModelParamsOrigin = "node"
 
 
@@ -373,6 +381,117 @@ def _safe_cache_component(value: str) -> str:
     return text or "unknown"
 
 
+def _single_model_asset_for_runtime(manifest: StrategyPackageManifest) -> ModelAsset:
+    model_asset = manifest.model_asset
+    models = model_asset if isinstance(model_asset, list) else [model_asset]
+    if len(models) != 1:
+        raise PackageAssetInvalidError(
+            "single-alpha runtime package asset path requires exactly one model asset",
+            context={
+                "reason_code": "strategy_package_runtime_model_asset_ambiguous",
+                "package_id": manifest.package_id,
+                "model_asset_count": len(models),
+            },
+        )
+    model = models[0]
+    if not isinstance(model, ModelAsset):
+        raise PackageAssetInvalidError(
+            "strategy package runtime model asset is invalid",
+            context={"reason_code": "strategy_package_runtime_assets_incomplete", "package_id": manifest.package_id},
+        )
+    return model
+
+
+def _runtime_factor_name(factor: FactorAsset, *, package_id: str) -> str:
+    name = str(factor.factor_name or factor.factor_id or "").strip()
+    if not name:
+        raise PackageAssetInvalidError(
+            "strategy package runtime factor asset is missing factor_name",
+            context={"reason_code": "strategy_package_runtime_assets_incomplete", "package_id": package_id},
+        )
+    if name in {".", ".."} or any(sep in name for sep in ("/", "\\", ":")):
+        raise PackageAssetInvalidError(
+            "strategy package runtime factor_name must be a safe file stem",
+            context={
+                "reason_code": "strategy_package_runtime_factor_name_invalid",
+                "package_id": package_id,
+                "factor_name": name,
+            },
+        )
+    return name
+
+
+def _write_inside_runtime_source(target_path: Path, data: bytes, *, source_dir: Path, package_id: str) -> None:
+    source_root = source_dir.resolve(strict=False)
+    target = target_path.resolve(strict=False)
+    if source_root not in target.parents:
+        raise ArtifactGenerationFailedError(
+            "refusing to materialize StrategyPackage asset outside the runtime source cache",
+            context={
+                "reason_code": "strategy_package_runtime_asset_path_invalid",
+                "package_id": package_id,
+                "target_path": str(target_path),
+                "source_dir": str(source_dir),
+            },
+        )
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(data)
+
+
+def _manifest_source_text(source_evidence: dict[str, Any], key: str) -> str | None:
+    value = source_evidence.get(key)
+    text = str(value or "").strip()
+    return text or None
+
+
+def _manifest_runtime_experiment_id(manifest: StrategyPackageManifest) -> str:
+    source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+    for value in (
+        source_evidence.get("experiment_id"),
+        manifest.source.source_id,
+        manifest.source.run_id,
+        manifest.package_id,
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return manifest.package_id
+
+
+def _manifest_runtime_custom_params(manifest: StrategyPackageManifest) -> dict[str, Any]:
+    source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+    backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
+    custom = source_evidence.get("custom_params")
+    if not isinstance(custom, dict):
+        daily_strategy = backtest_context.get("daily_strategy")
+        if isinstance(daily_strategy, dict) and isinstance(daily_strategy.get("custom_params"), dict):
+            custom = daily_strategy["custom_params"]
+        else:
+            custom = {}
+    runtime_custom = dict(custom)
+    raw_disable = runtime_custom.get("disable_alpha158")
+    if raw_disable is False or (isinstance(raw_disable, str) and raw_disable.strip().lower() in {"false", "0", "no"}):
+        raise PackageAssetInvalidError(
+            "package-owned runtime assets do not include Alpha158 schema assets",
+            context={
+                "reason_code": "strategy_package_alpha158_runtime_assets_not_frozen",
+                "package_id": manifest.package_id,
+                "disable_alpha158": raw_disable,
+            },
+        )
+    runtime_custom["disable_alpha158"] = True
+    runtime_custom["runtime_contract_source"] = "strategy_package_package_assets"
+    return runtime_custom
+
+
+def _manifest_runtime_data_split(source_evidence: dict[str, Any], backtest_context: dict[str, Any]) -> dict[str, Any]:
+    data_split = source_evidence.get("data_split")
+    if isinstance(data_split, dict):
+        return dict(data_split)
+    data_split = backtest_context.get("data_split")
+    return dict(data_split) if isinstance(data_split, dict) else {}
+
+
 def _remote_relpath(value: str) -> str:
     text = str(value or "").strip().replace("\\", "/")
     if not text:
@@ -457,9 +576,11 @@ class QEExperimentRuntimeAssetResolver:
         *,
         conn_factory: ConnFactory | None = None,
         cache_root: Path | str | None = None,
+        asset_store: PackageAssetStore | None = None,
     ) -> None:
         self._conn_factory = conn_factory or get_conn
         self.cache_root = Path(cache_root or Path("rdagent_assets") / "strategy_package_runtime")
+        self.asset_store = asset_store or LocalPackageAssetStore()
 
     def load_source(self, experiment_id: str) -> QEExperimentRuntimeSource:
         experiment_id = str(experiment_id or "").strip()
@@ -475,8 +596,13 @@ class QEExperimentRuntimeAssetResolver:
         source_id: str,
         loop_id: str | None = None,
         run_id: str | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> QEExperimentRuntimeSource:
         """Resolve runtime source using the frozen StrategyPackage source identity."""
+
+        if manifest is not None and manifest_has_frozen_runtime_assets(manifest):
+            return self._source_from_package_assets(manifest, package_id=package_id)
 
         normalized_type = str(source_type or "").strip()
         normalized_source_id = str(source_id or "").strip()
@@ -564,7 +690,142 @@ class QEExperimentRuntimeAssetResolver:
                 "source_type": normalized_type,
                 "supported": ["qe_experiment", "qe_evolution_loop", "candidate_strategy_package"],
             },
+            )
+
+    def _source_from_package_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        package_id: str | None,
+    ) -> QEExperimentRuntimeSource:
+        package_key = str(package_id or manifest.package_id or "").strip()
+        manifest_sha = str(manifest.manifest_sha256 or "").strip().lower()
+        if not package_key or not manifest_sha:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage manifest identity is required for package-owned runtime assets",
+                context={
+                    "reason_code": "strategy_package_runtime_manifest_identity_missing",
+                    "package_id": package_key or None,
+                    "manifest_sha256": manifest_sha or None,
+                },
+            )
+
+        model_asset = _single_model_asset_for_runtime(manifest)
+        source_dir = (
+            self.cache_root
+            / "_package_asset_sources"
+            / _safe_cache_component(package_key)
+            / _safe_cache_component(manifest_sha[:16])
         )
+        self._reset_cache_dir(source_dir)
+        factors_dir = source_dir / "factors"
+        model_dir = source_dir / "mlruns" / "package_asset" / "artifacts"
+        factors_dir.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        factor_names: list[str] = []
+        for factor in manifest.factor_set:
+            factor_name = _runtime_factor_name(factor, package_id=package_key)
+            factor_names.append(factor_name)
+            payload = self._read_package_asset_bytes(
+                asset_ref=factor.asset_ref,
+                expected_sha256=factor.sha256,
+                package_id=package_key,
+                asset_kind="factor_code",
+                logical_name=factor_name,
+            )
+            _write_inside_runtime_source(
+                factors_dir / f"{factor_name}.py",
+                payload,
+                source_dir=source_dir,
+                package_id=package_key,
+            )
+
+        model_payload = self._read_package_asset_bytes(
+            asset_ref=model_asset.asset_ref,
+            expected_sha256=model_asset.sha256,
+            package_id=package_key,
+            asset_kind="model_weight",
+            logical_name=str(model_asset.model_id),
+        )
+        _write_inside_runtime_source(
+            model_dir / "params.pkl",
+            model_payload,
+            source_dir=source_dir,
+            package_id=package_key,
+        )
+        (source_dir / "conf.yaml").write_text("task: {}\n", encoding="utf-8")
+
+        source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+        backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
+        custom_params = _manifest_runtime_custom_params(manifest)
+        data_split = _manifest_runtime_data_split(source_evidence, backtest_context)
+        experiment_id = _manifest_runtime_experiment_id(manifest)
+        return QEExperimentRuntimeSource(
+            experiment_id=experiment_id,
+            db_workspace_path=Path(),
+            asset_workspace_path=source_dir,
+            factor_names=factor_names,
+            custom_params=custom_params,
+            data_split=data_split,
+            qe_task_id=_manifest_source_text(source_evidence, "qe_task_id"),
+            qe_loop_id=_manifest_source_text(source_evidence, "qe_loop_id"),
+            execution_node_id=None,
+            model_params_origin="package_asset",
+            source_workspace_type="strategy_package_asset_store",
+            package_id=package_key,
+            manifest_sha256=manifest_sha,
+        )
+
+    def _read_package_asset_bytes(
+        self,
+        *,
+        asset_ref: str | None,
+        expected_sha256: str | None,
+        package_id: str,
+        asset_kind: str,
+        logical_name: str,
+    ) -> bytes:
+        if not asset_ref or not expected_sha256:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage runtime asset is missing asset_ref or sha256",
+                context={
+                    "reason_code": "strategy_package_runtime_assets_incomplete",
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                    "asset_ref": asset_ref,
+                    "expected_sha256": expected_sha256,
+                },
+            )
+        try:
+            data = self.asset_store.get(asset_ref)
+        except PackageAssetInvalidError as exc:
+            raise PackageAssetInvalidError(
+                exc.message,
+                context={
+                    **(exc.context or {}),
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                },
+            ) from exc
+        actual = hashlib.sha256(data).hexdigest()
+        expected = str(expected_sha256).strip().lower()
+        if actual != expected:
+            raise PackageAssetInvalidError(
+                "strategy package runtime asset sha256 mismatch",
+                context={
+                    "reason_code": "strategy_package_asset_sha_mismatch",
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                    "asset_ref": asset_ref,
+                    "expected_sha256": expected,
+                    "actual_sha256": actual,
+                },
+            )
+        return data
 
     def preflight_for_strategy_package(
         self,
@@ -574,6 +835,8 @@ class QEExperimentRuntimeAssetResolver:
         loop_id: str | None = None,
         run_id: str | None = None,
         runtime_config: dict[str, Any] | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> LiveInferencePreflightResult:
         """Cold-start preflight for live inference (P0-F / Codex doc P0-4).
 
@@ -625,12 +888,17 @@ class QEExperimentRuntimeAssetResolver:
 
         # ---- Check 1: qe_source ----
         try:
-            source = self.load_source_for_strategy_package(
-                source_type=source_type,
-                source_id=source_id,
-                loop_id=loop_id,
-                run_id=run_id,
-            )
+            source_kwargs: dict[str, Any] = {
+                "source_type": source_type,
+                "source_id": source_id,
+                "loop_id": loop_id,
+                "run_id": run_id,
+            }
+            if manifest is not None:
+                source_kwargs["manifest"] = manifest
+            if package_id is not None:
+                source_kwargs["package_id"] = package_id
+            source = self.load_source_for_strategy_package(**source_kwargs)
         except TradingCoreError as exc:
             checks.append(
                 LiveInferencePreflightCheck(
@@ -657,18 +925,37 @@ class QEExperimentRuntimeAssetResolver:
             LiveInferencePreflightCheck(
                 name=PREFLIGHT_CHECK_QE_SOURCE,
                 status=PREFLIGHT_STATUS_PASS,
-                message="QE experiment source resolved",
+                message=(
+                    "StrategyPackage frozen runtime assets resolved"
+                    if source.source_workspace_type == "strategy_package_asset_store"
+                    else "QE experiment source resolved"
+                ),
                 context={
                     "experiment_id": source.experiment_id,
                     "qe_task_id": source.qe_task_id,
                     "qe_loop_id": source.qe_loop_id,
+                    "package_id": source.package_id,
+                    "source_workspace_type": source.source_workspace_type,
                 },
             )
         )
 
         # ---- Check 2: qe_node ----
         execution_node_id = (source.execution_node_id or "").strip()
-        if not execution_node_id:
+        if source.source_workspace_type == "strategy_package_asset_store":
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_NODE,
+                    status=PREFLIGHT_STATUS_PASS,
+                    message="package-owned runtime assets do not require QE node access",
+                    context={
+                        "package_id": source.package_id,
+                        "manifest_sha256": source.manifest_sha256,
+                        "asset_workspace_path": str(source.asset_workspace_path),
+                    },
+                )
+            )
+        elif not execution_node_id:
             checks.append(
                 LiveInferencePreflightCheck(
                     name=PREFLIGHT_CHECK_QE_NODE,
@@ -683,18 +970,18 @@ class QEExperimentRuntimeAssetResolver:
             )
             checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_NODE))
             return LiveInferencePreflightResult(passed=False, checks=checks)
-
-        checks.append(
-            LiveInferencePreflightCheck(
-                name=PREFLIGHT_CHECK_QE_NODE,
-                status=PREFLIGHT_STATUS_PASS,
-                message="QE execution node resolved",
-                context={
-                    "execution_node_id": execution_node_id,
-                    "asset_workspace_path": str(source.asset_workspace_path),
-                },
+        else:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_NODE,
+                    status=PREFLIGHT_STATUS_PASS,
+                    message="QE execution node resolved",
+                    context={
+                        "execution_node_id": execution_node_id,
+                        "asset_workspace_path": str(source.asset_workspace_path),
+                    },
+                )
             )
-        )
 
         # ---- Check 3: conf.yaml ----
         try:
@@ -829,6 +1116,8 @@ class QEExperimentRuntimeAssetResolver:
         loop_id: str | None = None,
         run_id: str | None = None,
         runtime_config: dict[str, Any] | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> LiveInferencePreflightResult:
         """Run preflight and raise ``LiveInferencePreflightError`` on failure.
 
@@ -844,6 +1133,8 @@ class QEExperimentRuntimeAssetResolver:
             loop_id=loop_id,
             run_id=run_id,
             runtime_config=runtime_config,
+            manifest=manifest,
+            package_id=package_id,
         )
         if result.passed:
             return result
@@ -860,6 +1151,7 @@ class QEExperimentRuntimeAssetResolver:
                 "source_id": source_id,
                 "loop_id": loop_id,
                 "run_id": run_id,
+                "package_id": package_id,
                 "preflight": result.to_dict(),
                 "blocked_check": blocked.name if blocked is not None else None,
             },
@@ -1129,7 +1421,9 @@ class QEExperimentRuntimeAssetResolver:
                     "diagnostics": {
                         "qe_experiment_id": source.experiment_id,
                         "source_workspace_path": str(source.asset_workspace_path),
-                        "source_workspace_type": "aistock_node_api_cache",
+                        "source_workspace_type": source.source_workspace_type,
+                        "package_id": source.package_id,
+                        "package_manifest_sha256": source.manifest_sha256,
                         "qe_task_id": source.qe_task_id,
                         "qe_loop_id": source.qe_loop_id,
                         "execution_node_id": source.execution_node_id,
@@ -1521,7 +1815,11 @@ class QEExperimentRuntimeAssetResolver:
             )
         else:
             dynamic_factors = list(source.factor_names)
-            dynamic_factor_source = "qe_experiments.factor_names"
+            dynamic_factor_source = (
+                "strategy_package_manifest.factor_set"
+                if source.source_workspace_type == "strategy_package_asset_store"
+                else "qe_experiments.factor_names"
+            )
         factor_order = [*alpha158_factors, *dynamic_factors]
         if not factor_order:
             raise ArtifactGenerationFailedError(
@@ -1730,6 +2028,15 @@ class QEExperimentRuntimeAssetResolver:
     ) -> tuple[Path, int]:
         explicit = artifact_config.get("model_params_path")
         if explicit:
+            if source.source_workspace_type == "strategy_package_asset_store":
+                raise RuntimeConfigInvalidError(
+                    "frozen StrategyPackage runtime must use package-owned model assets",
+                    context={
+                        "reason_code": "strategy_package_runtime_model_override_forbidden",
+                        "package_id": source.package_id,
+                        "model_params_path": str(explicit),
+                    },
+                )
             path = Path(str(explicit))
             ensure_not_forbidden_worker_workspace_path(path, purpose="live inference explicit model_params_path")
             if not path.exists() or not path.is_file():
