@@ -502,6 +502,125 @@ class StrategyPackageRepository:
             ) from exc
         return self.get(frozen.package_id)
 
+    def backfill_frozen_manifest_assets(
+        self,
+        package_id: str,
+        *,
+        frozen_manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+        operator: str,
+        expected_old_manifest_sha256: str,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        expected_old = str(expected_old_manifest_sha256 or "").strip().lower()
+        if record.manifest_sha256 != expected_old:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill lost compare-and-set race",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                    "package_id": package_id,
+                    "expected_old_manifest_sha256": expected_old,
+                    "actual_manifest_sha256": record.manifest_sha256,
+                },
+            )
+        if frozen_manifest.package_id != package_id:
+            raise StrategyPackageValidationError(
+                "backfilled manifest package_id must match target package",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_package_mismatch",
+                    "package_id": package_id,
+                    "manifest_package_id": frozen_manifest.package_id,
+                },
+            )
+        frozen = freeze_manifest(
+            frozen_manifest.model_copy(
+                update={
+                    "manifest_sha256": None,
+                    "package_status": record.package_status,
+                }
+            )
+        )
+        _validate_asset_records_for_manifest(frozen, assets)
+        cm, managed_by_factory = self._transaction_conn()
+        try:
+            with cm as conn:
+                original_autocommit = getattr(conn, "autocommit", None)
+                if not managed_by_factory and original_autocommit is not None:
+                    conn.autocommit = False
+                try:
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(
+                            """
+                            UPDATE strategy_pkg.package
+                            SET manifest_json = %s,
+                                manifest_sha256 = %s,
+                                updated_at = NOW()
+                            WHERE package_id = %s AND manifest_sha256 = %s
+                            """,
+                            (
+                                psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                                frozen.manifest_sha256,
+                                package_id,
+                                expected_old,
+                            ),
+                        )
+                        if cur.rowcount != 1:
+                            raise InvalidStateTransitionError(
+                                "strategy package asset backfill lost compare-and-set race",
+                                context={
+                                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                                    "package_id": package_id,
+                                    "expected_old_manifest_sha256": expected_old,
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                },
+                            )
+                        for asset in assets:
+                            self._upsert_package_asset(cur, asset)
+                        cur.execute(
+                            """
+                            INSERT INTO strategy_pkg.package_status_event (
+                                package_id, from_status, to_status, reason, context
+                            ) VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                package_id,
+                                record.package_status.value,
+                                record.package_status.value,
+                                "strategy_package_asset_backfill_freeze",
+                                psycopg2.extras.Json({
+                                    "operator": operator,
+                                    "old_manifest_sha256": record.manifest_sha256,
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                    "asset_count": len(assets),
+                                    "asset_keys": _asset_key_payload(assets),
+                                    "rollback_restore": {
+                                        "field": "strategy_pkg.package.manifest_json, strategy_pkg.package.manifest_sha256",
+                                        "manifest_sha256": record.manifest_sha256,
+                                        "manifest_json": record.current_manifest().model_dump(mode="json"),
+                                    },
+                                }),
+                            ),
+                        )
+                    if not managed_by_factory and hasattr(conn, "commit"):
+                        conn.commit()
+                except Exception:
+                    if not managed_by_factory and hasattr(conn, "rollback"):
+                        conn.rollback()
+                    raise
+                finally:
+                    if not managed_by_factory and original_autocommit is not None:
+                        conn.autocommit = original_autocommit
+        except pg_errors.UniqueViolation as exc:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill audit event sequence is behind existing rows",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_event_collision",
+                    "package_id": package_id,
+                    "operator": operator,
+                },
+            ) from exc
+        return self.get(package_id)
+
     def _transaction_conn(self) -> tuple[Any, bool]:
         try:
             return self._conn_factory(autocommit=False, manage_transaction=True), True  # type: ignore[misc]
@@ -2485,6 +2604,103 @@ class InMemoryStrategyPackageRepository:
             }
             raise
         return self.get(record.package_id)
+
+    def backfill_frozen_manifest_assets(
+        self,
+        package_id: str,
+        *,
+        frozen_manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+        operator: str,
+        expected_old_manifest_sha256: str,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        expected_old = str(expected_old_manifest_sha256 or "").strip().lower()
+        if record.manifest_sha256 != expected_old:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill lost compare-and-set race",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                    "package_id": package_id,
+                    "expected_old_manifest_sha256": expected_old,
+                    "actual_manifest_sha256": record.manifest_sha256,
+                },
+            )
+        if frozen_manifest.package_id != package_id:
+            raise StrategyPackageValidationError(
+                "backfilled manifest package_id must match target package",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_package_mismatch",
+                    "package_id": package_id,
+                    "manifest_package_id": frozen_manifest.package_id,
+                },
+            )
+        frozen = freeze_manifest(
+            frozen_manifest.model_copy(
+                update={
+                    "manifest_sha256": None,
+                    "package_status": record.package_status,
+                }
+            )
+        )
+        _validate_asset_records_for_manifest(frozen, assets)
+        backup_record = record
+        backup_assets = dict(self.package_assets)
+        backup_events = list(self.events)
+        try:
+            for asset in assets:
+                key = (asset.package_id, asset.asset_type, asset.asset_ref)
+                existing = self.package_assets.get(key)
+                if existing is not None and existing.asset_sha256 != asset.asset_sha256:
+                    raise StrategyPackageValidationError(
+                        "existing package_asset row has a different sha256 for the same asset_ref",
+                        context={
+                            "reason_code": "strategy_package_asset_sha_mismatch",
+                            "package_id": asset.package_id,
+                            "asset_type": asset.asset_type.value,
+                            "asset_ref": asset.asset_ref,
+                            "asset_sha256": asset.asset_sha256,
+                            "existing_asset_sha256": existing.asset_sha256,
+                        },
+                    )
+                asset_id = existing.asset_id if existing else self._next_package_asset_id
+                if existing is None:
+                    self._next_package_asset_id += 1
+                self.package_assets[key] = asset.model_copy(update={"asset_id": asset_id})
+            updated = record.model_copy(
+                update={
+                    "manifest": frozen,
+                    "manifest_sha256": frozen.manifest_sha256 or "",
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+            self.records[package_id] = updated
+            self.events.append(
+                PackageStatusEvent(
+                    package_id=package_id,
+                    from_status=record.package_status,
+                    to_status=record.package_status,
+                    reason="strategy_package_asset_backfill_freeze",
+                    context={
+                        "operator": operator,
+                        "old_manifest_sha256": record.manifest_sha256,
+                        "new_manifest_sha256": frozen.manifest_sha256,
+                        "asset_count": len(assets),
+                        "asset_keys": _asset_key_payload(assets),
+                        "rollback_restore": {
+                            "field": "strategy_pkg.package.manifest_json, strategy_pkg.package.manifest_sha256",
+                            "manifest_sha256": record.manifest_sha256,
+                            "manifest_json": record.current_manifest().model_dump(mode="json"),
+                        },
+                    },
+                )
+            )
+        except Exception:
+            self.records[package_id] = backup_record
+            self.package_assets = backup_assets
+            self.events = backup_events
+            raise
+        return self.get(package_id)
 
     def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
         existing = {
