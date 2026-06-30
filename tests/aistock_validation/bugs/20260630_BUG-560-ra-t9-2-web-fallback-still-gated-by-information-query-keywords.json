@@ -28,8 +28,8 @@
   "expected": "When business read-only MCP tools execute and return empty/no evidence, and external_research has not run, RA triggers a single web fallback regardless of user wording.",
   "first_seen_at": "2026-06-30T02:40:45.033246Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "65a48a025772c4c1353432e797a7ec4b4cfd1a56",
+  "fixed_at": "2026-06-30T03:55:47.644748Z",
   "github_issue_number": 1759,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1759",
   "last_seen_at": "2026-06-30T02:40:45.033246Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1760",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "71a34da8d72bfe370e2eade1",
     "source_event_id": "FE-20260630-71a34da8d72b"
   },
+  "validation_evidence": [
+    "PR #1760 CI all required checks green; Tier2 passed; squash merged at 2026-06-30T03:50:55Z"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
