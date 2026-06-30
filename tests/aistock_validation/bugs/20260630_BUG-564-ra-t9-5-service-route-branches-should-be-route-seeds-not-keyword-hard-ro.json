@@ -28,8 +28,8 @@
   "expected": "service.py B-group routing no longer depends on question-type keyword gates for stock-depth seeds/iterations; safety-critical QE draft insufficient-evidence behavior remains intact; no approval/anti-hallucination guard is weakened.",
   "first_seen_at": "2026-06-30T15:38:18.180496Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0581ede8e1df9417b5e8c996505d96f040a71fc3",
+  "fixed_at": "2026-06-30T18:04:30.003222Z",
   "github_issue_number": 1777,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1777",
   "last_seen_at": "2026-06-30T15:38:18.180496Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1778",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -59,6 +60,15 @@
     "fingerprint": "c3f63af04ad9c9767d607b7c",
     "source_event_id": "FE-20260630-c3f63af04ad9"
   },
+  "validation_evidence": [
+    "PR #1778 required checks -> 17 passed, 0 failed",
+    "python -m pytest backend/tests/research_assistant/test_service.py -q -> 133 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_backend -> 416 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s ra_phase7_full_accept -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
