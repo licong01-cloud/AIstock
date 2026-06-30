@@ -28,8 +28,8 @@
   "expected": "Guard does not hard-block grounded answers for synthesis/list style, and any numeric factual table/list line requires source/as_of regardless of question wording.",
   "first_seen_at": "2026-06-30T05:14:46.931156Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e4c1365f57668b420f39257422404b679af12704",
+  "fixed_at": "2026-06-30T12:09:41.557999Z",
   "github_issue_number": 1764,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1764",
   "last_seen_at": "2026-06-30T05:14:46.931156Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1765",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "6c5ee667cb26726e54362a5d",
     "source_event_id": "FE-20260630-6c5ee667cb26"
   },
+  "validation_evidence": [
+    "PR #1765 CI checks green (17 passed, 0 failed), mergeStateStatus=CLEAN before squash merge -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
