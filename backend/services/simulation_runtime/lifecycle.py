@@ -9,7 +9,9 @@ generation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime, time
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
@@ -43,6 +45,72 @@ from .models import (
     canonical_json_sha256,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
+
+
+SCHEDULER_TZ = ZoneInfo("Asia/Shanghai")
+SCHEDULER_TZ_NAME = "Asia/Shanghai"
+DEFAULT_SCHEDULER_WINDOWS = (
+    {"window_id": "pre_open", "label": "\u76d8\u524d", "start": "08:50", "end": "09:10", "action": "readiness"},
+    {"window_id": "selection", "label": "\u9009\u80a1", "start": "09:10", "end": "09:20", "action": "selection_evidence"},
+    {"window_id": "planning", "label": "\u8c03\u4ed3", "start": "09:20", "end": "09:25", "action": "execution_plan"},
+    {"window_id": "execution", "label": "\u76d8\u4e2d/\u5c3e\u76d8", "start": "09:25", "end": "15:00", "action": "submit"},
+    {
+        "window_id": "post_close_reconcile",
+        "label": "Post-close reconcile",
+        "start": "15:00",
+        "end": "15:30",
+        "action": "eod_reconcile",
+    },
+)
+MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW = "MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW"
+
+
+def scheduler_now() -> datetime:
+    return datetime.now(SCHEDULER_TZ)
+
+
+def scheduler_time(value: datetime | None) -> datetime:
+    if value is None:
+        return scheduler_now()
+    if value.tzinfo is None:
+        return value.replace(tzinfo=SCHEDULER_TZ)
+    return value.astimezone(SCHEDULER_TZ)
+
+
+def compute_schedule_windows(*, trade_date: date, as_of_time: datetime | None) -> tuple[dict[str, Any], ...]:
+    local_as_of = scheduler_time(as_of_time) if as_of_time is not None else None
+    current_dt = local_as_of.replace(second=0, microsecond=0) if local_as_of is not None else None
+    windows: list[dict[str, Any]] = []
+    for window in DEFAULT_SCHEDULER_WINDOWS:
+        start = datetime.combine(trade_date, time.fromisoformat(window["start"]), tzinfo=SCHEDULER_TZ)
+        end = datetime.combine(trade_date, time.fromisoformat(window["end"]), tzinfo=SCHEDULER_TZ)
+        state = "PENDING"
+        if current_dt is not None:
+            if current_dt < start:
+                state = "UPCOMING"
+            elif start <= current_dt < end:
+                state = "ACTIVE"
+            else:
+                state = "COMPLETED"
+        windows.append(
+            {
+                **window,
+                "trade_date": trade_date.isoformat(),
+                "state": state,
+                "timezone": SCHEDULER_TZ_NAME,
+                "start_at": start.isoformat(),
+                "end_at": end.isoformat(),
+            }
+        )
+    return tuple(windows)
+
+
+def active_submit_window(*, trade_date: date, as_of_time: datetime) -> tuple[dict[str, Any] | None, tuple[dict[str, Any], ...]]:
+    windows = compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time)
+    active = next((item for item in windows if item["state"] == "ACTIVE"), None)
+    if active is not None and str(active.get("action") or "") == "submit":
+        return active, windows
+    return None, windows
 
 
 @dataclass(frozen=True)
@@ -267,6 +335,7 @@ class SimulationLifecycleOrchestrator:
         mode: str = "SIM",
         price_by_symbol: dict[str, Any] | None = None,
         miniqmt_runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
+        as_of_time: datetime | None = None,
     ) -> SimulationExecutionResult:
         return self.submit_persisted_execution_plan(
             run=build_result.run,
@@ -277,6 +346,7 @@ class SimulationLifecycleOrchestrator:
             mode=mode,
             price_by_symbol=price_by_symbol,
             miniqmt_runtime_kind=miniqmt_runtime_kind,
+            as_of_time=as_of_time,
         )
 
     def submit_persisted_execution_plan(
@@ -290,13 +360,9 @@ class SimulationLifecycleOrchestrator:
         mode: str = "SIM",
         price_by_symbol: dict[str, Any] | None = None,
         miniqmt_runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
+        as_of_time: datetime | None = None,
     ) -> SimulationExecutionResult:
         """Submit an already-persisted plan exactly once after restart recovery."""
-        run = self.repository.update_simulation_daily_run(
-            run.run_id,
-            status=SimulationDailyRunStatus.SUBMITTING,
-            payload_patch={"last_stage": "SUBMITTING"},
-        )
         plan = execution_plan
         if not plan.intents:
             blocked_payload = _pre_trade_blocked_order_generation_payload(plan)
@@ -324,6 +390,18 @@ class SimulationLifecycleOrchestrator:
                 intent_count=0,
                 broker_result=None,
             )
+
+        self._assert_within_submit_window(
+            run=run,
+            binding=binding,
+            execution_plan=plan,
+            as_of_time=as_of_time,
+        )
+        run = self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.SUBMITTING,
+            payload_patch={"last_stage": "SUBMITTING"},
+        )
 
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             if local_broker is None:
@@ -449,6 +527,75 @@ class SimulationLifecycleOrchestrator:
             "unsupported simulation broker backend",
             context={"broker_backend": binding.broker_backend.value},
         )
+
+    def _assert_within_submit_window(
+        self,
+        *,
+        run: SimulationDailyRun,
+        binding: SimulationReleaseBinding,
+        execution_plan: ExecutionPlan,
+        as_of_time: datetime | None,
+    ) -> None:
+        local_as_of = scheduler_time(as_of_time)
+        active_window, windows = active_submit_window(trade_date=run.trade_date, as_of_time=local_as_of)
+        if active_window is not None:
+            return
+        active_non_submit = next((item for item in windows if item["state"] == "ACTIVE"), None)
+        intent_count = len(execution_plan.intents)
+        previous_broker_called = bool(run.run_payload_json.get("broker_called"))
+        try:
+            previous_submitted_intents = int(run.run_payload_json.get("submitted_intents") or 0)
+        except (TypeError, ValueError):
+            previous_submitted_intents = 0
+        payload = {
+            "schema_version": "simulation_submit_window_gate_v1",
+            "reason_code": MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
+            "reason": "real_broker_submit_outside_execution_window_rejected",
+            "run_id": run.run_id,
+            "plan_id": execution_plan.plan_id,
+            "strategy_id": binding.strategy_id,
+            "binding_id": binding.binding_id,
+            "broker_backend": binding.broker_backend.value,
+            "trade_date": run.trade_date.isoformat(),
+            "as_of_time": local_as_of.isoformat(),
+            "schedule_timezone": SCHEDULER_TZ_NAME,
+            "active_window": active_non_submit,
+            "schedule_windows": list(windows),
+            "blocked_intent_count": intent_count,
+            "blocked_buy_intent_count": sum(1 for intent in execution_plan.intents if str(intent.side.value).upper() == "BUY"),
+            "blocked_sell_intent_count": sum(1 for intent in execution_plan.intents if str(intent.side.value).upper() == "SELL"),
+            "durable_residual": True,
+            "broker_called_by_gate": False,
+            "broker_called_before_rejection": previous_broker_called,
+            "submitted_intents_before_rejection": previous_submitted_intents,
+            "next_action": (
+                "retry only from the shared scheduler submit window or terminalize via broker-authoritative "
+                "post-close/cross-day reconciliation; do not silently submit after close"
+            ),
+        }
+        exc = RuntimeConfigInvalidError(
+            "simulation broker submit rejected outside the configured execution window",
+            context=payload,
+        )
+        self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "broker_called": previous_broker_called,
+                "submitted_intents": previous_submitted_intents,
+                "failed_intents": intent_count,
+                "submit_window_gate": payload,
+                "durable_residual": payload,
+                "submit_failure": {
+                    "stage": MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": payload,
+                },
+            },
+        )
+        raise exc
 
     def mark_submit_failure(self, *, run: SimulationDailyRun, stage: str, exc: BaseException) -> SimulationDailyRun:
         context = getattr(exc, "context", None)

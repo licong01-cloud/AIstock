@@ -9,6 +9,7 @@ import pytest
 from backend.services.paper_trading_v2.broker.base import OrderHandle
 from backend.services.paper_trading_v2.market_data import (
     DailySuspendStatus,
+    DailyStStatus,
     PreTradeTradabilityProvider,
     quote_tradability_evidence,
 )
@@ -55,6 +56,19 @@ class MappingSuspendProvider:
             is_suspended=suspended,
             suspend_type="S" if suspended else None,
             source="unit_test.suspend",
+        )
+
+
+class MappingStStatusProvider:
+    def __init__(self, st_symbols: set[str] | None = None) -> None:
+        self.st_symbols = set(st_symbols or set())
+
+    def get_st_status(self, symbol: str, trade_date: date) -> DailyStStatus:
+        return DailyStStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_st=symbol in self.st_symbols,
+            source="unit_test.stock_st",
         )
 
 
@@ -533,21 +547,25 @@ def test_pre_trade_tradability_provider_combines_suspend_d_and_realtime_quote() 
                 "TotalHand": 0,
                 "BuyLevel": [{"Price": 0, "Number": 0}],
                 "SellLevel": [{"Price": 0, "Number": 0}],
+                "ServerTime": "2026-06-17 10:00:00",
             },
             "000001.SZ": {
-                "K": {"Close": 10000, "Open": 9900, "High": 10100, "Low": 9800},
+                "K": {"Close": 10000, "Last": 10000, "Open": 9900, "High": 10100, "Low": 9800},
                 "TotalHand": 100,
                 "BuyLevel": [{"Price": 9990, "Number": 1000}],
                 "SellLevel": [{"Price": 10000, "Number": 1000}],
+                "ServerTime": "2026-06-17 10:00:00",
             },
         },
         realtime_quote_source="TDX_REALTIME.batch_quote",
+        st_status_provider=MappingStStatusProvider(),
     )
 
     statuses = provider.get_statuses(
         ["688689.SH", "000002.SZ", "000001.SZ"],
         date(2026, 6, 17),
         require_realtime_quote=True,
+        as_of_time=datetime(2026, 6, 17, 10, 0, 30),
     )
 
     assert statuses["688689.SH"]["reason_code"] == "NO_TRADABLE_REALTIME_QUOTE"
@@ -565,7 +583,11 @@ def test_quote_tradability_evidence_blocks_zero_ohlc_volume_and_empty_book() -> 
             "TotalHand": 0,
             "BuyLevel": [{"Price": 0, "Number": 0}],
             "SellLevel": [{"Price": 0, "Number": 0}],
+            "ServerTime": "2026-06-17 10:00:00",
         },
+        trade_date=date(2026, 6, 17),
+        as_of_time=datetime(2026, 6, 17, 10, 0, 30),
+        st_status_provider=MappingStStatusProvider(),
     )
 
     assert evidence["no_tradable_market"] is True
@@ -913,7 +935,7 @@ def test_lifecycle_no_rebalance_does_not_call_broker_and_marks_success() -> None
         portfolio_id="portfolio_shared",
     )
 
-    result = orchestrator.submit_execution_plan(build_result=build)
+    result = orchestrator.submit_execution_plan(build_result=build, as_of_time=datetime(2026, 5, 21, 10, 0))
 
     assert result.status == "NO_REBALANCE"
     assert result.intent_count == 0
@@ -937,6 +959,7 @@ def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
         orchestrator.submit_execution_plan(
             build_result=build,
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+            as_of_time=datetime(2026, 5, 21, 10, 0),
         )
 
     latest = repo.get_simulation_daily_run(build.run.run_id)
@@ -960,6 +983,7 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
         orchestrator.submit_execution_plan(
             build_result=build,
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+            as_of_time=datetime(2026, 5, 21, 10, 0),
         )
 
 
@@ -972,6 +996,7 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
         binding=binding,
         execution_plan=build.execution_plan,
         local_broker=FakeLocalSimBroker(),  # type: ignore[arg-type]
+        as_of_time=datetime(2026, 5, 21, 10, 0),
     )
 
     latest = repo.get_simulation_daily_run(build.run.run_id)

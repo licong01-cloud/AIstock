@@ -6,6 +6,8 @@
     "backend/services/simulation_runtime/lifecycle.py",
     "backend/services/simulation_runtime/bridges.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_tail_policy.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
     "tests/aistock_validation/bugs/20260701_BUG-565-miniqmt-existing-plan-post-close-submit-lacks-shared-trading-window-gate.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json",
     "docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md"
@@ -38,6 +40,18 @@
       "actor": "codex",
       "note": "SimulationLifecycleOrchestrator is implemented in lifecycle.py; keep orchestrator.py entry as original request alias and add actual file for submit gate.",
       "timestamp": "2026-07-01T00:00:01Z"
+    },
+    {
+      "action": "scope_affected_tail_policy_regression",
+      "actor": "codex",
+      "note": "Lifecycle submit gate changes affect LocalSim tail-policy submit tests; include deterministic in-window as_of_time coverage in the same simulation_runtime regression scope.",
+      "timestamp": "2026-07-01T00:00:02Z"
+    },
+    {
+      "action": "scope_shared_orchestrator_direct_tests",
+      "actor": "codex",
+      "note": "Shared lifecycle submit gate also affects direct orchestrator submit tests; add deterministic in-window as_of_time coverage.",
+      "timestamp": "2026-07-01T00:00:03Z"
     }
   ],
   "evidence_uris": [
@@ -60,7 +74,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "See docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
