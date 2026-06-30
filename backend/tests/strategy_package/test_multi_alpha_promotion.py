@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -19,6 +20,7 @@ from backend.services.strategy_package.multi_alpha_promotion import (
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
     MultiAlphaPackagePromotionService,
 )
+from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_multi_alpha_base_schema import _single_manifest
@@ -81,6 +83,12 @@ class FakeQESourceResolver:
         return freeze_manifest(_single_manifest(f"auto_{qe_task_id}_{qe_loop_id}", run_id=source_key))
 
 
+class FakeAssetFreezer:
+    def freeze_manifest_assets(self, manifest):  # noqa: ANN001, ANN201
+        frozen = manifest if _manifest_has_assets(manifest) else _with_frozen_assets(manifest, label=manifest.package_name)
+        return SimpleNamespace(manifest=frozen, assets=_asset_records_from_manifest(frozen))
+
+
 def _default_seed_provenance() -> dict[str, SeedProvenance]:
     return {
         A1_SEED: SeedProvenance(
@@ -125,7 +133,76 @@ def _seed_child(repo: InMemoryStrategyPackageRepository, name: str, leg_id: str,
             "manifest_sha256": None,
         }
     )
-    return repo.save_manifest(freeze_manifest(manifest))
+    manifest = _with_frozen_assets(freeze_manifest(manifest), label=name)
+    child = repo.save_manifest_with_assets(manifest, _asset_records_from_manifest(manifest))
+    return child
+
+
+def _with_frozen_assets(manifest, *, label: str):  # noqa: ANN001, ANN202
+    factor_set = [
+        factor.model_copy(
+            update={
+                "asset_ref": f"aistock-package-asset://blobs/{hashlib.sha256(f'{label}:{factor.factor_name}'.encode()).hexdigest()}?kind=factor_code",
+                "sha256": hashlib.sha256(f"{label}:{factor.factor_name}".encode()).hexdigest(),
+                "size_bytes": len(f"{label}:{factor.factor_name}".encode()),
+                "source_uri": f"unit://factor/{factor.factor_name}.py",
+            }
+        )
+        for factor in manifest.factor_set
+    ]
+    model_input = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    model_assets = []
+    for model in model_input:
+        model_payload = f"{label}:{model.model_id}:model".encode()
+        model_assets.append(
+            model.model_copy(
+                update={
+                    "asset_ref": f"aistock-package-asset://blobs/{hashlib.sha256(model_payload).hexdigest()}?kind=model_weight",
+                    "sha256": hashlib.sha256(model_payload).hexdigest(),
+                    "size_bytes": len(model_payload),
+                    "source_uri": "unit://model/params.pkl",
+                }
+            )
+        )
+    model_asset = model_assets if isinstance(manifest.model_asset, list) else model_assets[0]
+    return freeze_manifest(manifest.model_copy(update={"factor_set": factor_set, "model_asset": model_asset, "manifest_sha256": None}))
+
+
+def _manifest_has_assets(manifest) -> bool:  # noqa: ANN001
+    if not manifest.factor_set or any(not factor.asset_ref or not factor.sha256 for factor in manifest.factor_set):
+        return False
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    return bool(model_assets) and all(asset.asset_ref and asset.sha256 for asset in model_assets)
+
+
+def _asset_records_from_manifest(manifest) -> list[StrategyPackageAssetRecord]:  # noqa: ANN001
+    rows: list[StrategyPackageAssetRecord] = []
+    for factor in manifest.factor_set:
+        rows.append(
+            StrategyPackageAssetRecord(
+                package_id=manifest.package_id,
+                asset_type=StrategyPackageAssetType.FACTOR_CODE,
+                asset_ref=factor.asset_ref,
+                asset_sha256=factor.sha256,
+                asset_size_bytes=factor.size_bytes,
+                source_uri=factor.source_uri,
+                metadata={"logical_name": factor.factor_name},
+            )
+        )
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for model_asset in model_assets:
+        rows.append(
+            StrategyPackageAssetRecord(
+                package_id=manifest.package_id,
+                asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+                asset_ref=model_asset.asset_ref,
+                asset_sha256=model_asset.sha256,
+                asset_size_bytes=model_asset.size_bytes,
+                source_uri=model_asset.source_uri,
+                metadata={"logical_name": model_asset.model_id},
+            )
+        )
+    return rows
 
 
 def _replace_child_with_valid_missing_seed(repo: InMemoryStrategyPackageRepository, child) -> None:
@@ -214,12 +291,13 @@ def _seed_auto_repos():
     return combine_repo, package_repo
 
 
-def _service(combine_repo, package_repo, *, provenance_resolver=None, source_resolver=None, prediction_ref_roots=None):
+def _service(combine_repo, package_repo, *, provenance_resolver=None, source_resolver=None, prediction_ref_roots=None, asset_freezer=None):
     return MultiAlphaPackagePromotionService(
         combine_repository=combine_repo,
         package_repository=package_repo,
         provenance_resolver=provenance_resolver,
         source_resolver=source_resolver,
+        asset_freezer=asset_freezer or FakeAssetFreezer(),
         prediction_ref_roots=prediction_ref_roots,
     )
 
@@ -412,6 +490,22 @@ def test_auto_path_materializes_components_and_is_idempotent() -> None:
         assert child.current_manifest().source_evidence["multi_alpha_component"]["combine_backtest_run_id"] == RUN_ID
     assert source_resolver.experiment_calls == ["qe_exp_a1_seed_42"]
     assert source_resolver.loop_calls == [("qe_new_FUNDGROWTH", "Loop5")]
+    for record in package_repo.records.values():
+        if record.alpha_mode == AlphaMode.SINGLE_ALPHA:
+            assert package_repo.list_package_assets(record.package_id)
+            assert all(factor.asset_ref and factor.sha256 for factor in record.current_manifest().factor_set)
+
+
+def test_explicit_unfrozen_child_is_rejected() -> None:
+    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    legacy_manifest = _single_manifest("legacy", run_id=A1_SEED)
+    legacy_record = package_repo.save_manifest(freeze_manifest(legacy_manifest))
+    package_repo.records[child_a1.package_id] = legacy_record.model_copy(update={"package_id": child_a1.package_id})
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _promote(_service(combine_repo, package_repo), child_a1, child_fund)
+
+    assert _reason_code(excinfo.value) == "multi_alpha_child_package_assets_unfrozen"
 
 
 def test_auto_path_unresolved_seed_fails_without_half_package() -> None:
@@ -569,7 +663,11 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
     combine_repo, package_repo, child_a1, child_fund = _seed_repos()
 
     def _factory(*args, **kwargs):  # noqa: ANN001
-        return MultiAlphaPackagePromotionService(combine_repository=combine_repo, package_repository=package_repo)
+        return MultiAlphaPackagePromotionService(
+            combine_repository=combine_repo,
+            package_repository=package_repo,
+            asset_freezer=FakeAssetFreezer(),
+        )
 
     monkeypatch.setattr(router_module, "MultiAlphaPackagePromotionService", _factory)
     app = FastAPI()

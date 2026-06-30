@@ -19,6 +19,7 @@ from .models import (
     StrategyPackageComponentRecord,
     StrategyPackageManifest,
 )
+from .package_asset_freeze import PackageAssetFreezeService
 from .repository import StrategyPackageRecord, StrategyPackageRepository
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -34,10 +35,12 @@ class StrategyPackageComponentService:
         repository: StrategyPackageRepository | Any | None = None,
         model_store: ModelStoreService | Any | None = None,
         artifact_store: PredictionArtifactStore | None = None,
+        asset_freezer: PackageAssetFreezeService | Any | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.model_store = model_store or ModelStoreService()
         self.artifact_store = artifact_store or PredictionArtifactStore()
+        self.asset_freezer = asset_freezer or PackageAssetFreezeService()
 
     def build_display_name(
         self,
@@ -93,12 +96,21 @@ class StrategyPackageComponentService:
                 context={"package_id": manifest.package_id, "component_count": len(component_inputs)},
             )
         frozen = freeze_manifest(manifest)
+        asset_records = None
+        if _manifest_has_runtime_assets(frozen):
+            frozen_assets = self.asset_freezer.freeze_manifest_assets(frozen)
+            frozen = frozen_assets.manifest
+            asset_records = frozen_assets.assets
         edges = self._build_component_records(
             parent_package_id=frozen.package_id,
             parent_alpha_mode=frozen.alpha_mode,
             component_inputs=component_inputs,
         )
-        parent = self.repository.save_manifest(frozen)
+        parent = (
+            self.repository.save_manifest_with_assets(frozen, asset_records)
+            if asset_records is not None
+            else self.repository.save_manifest(frozen)
+        )
         saved = self.repository.save_components(parent.package_id, edges)
         return parent, saved
 
@@ -325,3 +337,10 @@ def _sha256_of_payload(payload: bytes | str | Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def _manifest_has_runtime_assets(manifest: StrategyPackageManifest) -> bool:
+    if not manifest.factor_set or any(not factor.asset_ref or not factor.sha256 for factor in manifest.factor_set):
+        return False
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    return bool(model_assets) and all(asset.asset_ref and asset.sha256 for asset in model_assets)

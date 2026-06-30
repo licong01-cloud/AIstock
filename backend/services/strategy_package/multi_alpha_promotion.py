@@ -32,6 +32,8 @@ from .models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
+from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
+from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import StrategyPackageRecord, StrategyPackageRepository
 from .validators import StrategyPackageValidator
@@ -90,6 +92,7 @@ class _ComponentMaterializationPlan:
     terminal_weight: float
     existing_child: StrategyPackageRecord | None = None
     manifest_to_save: StrategyPackageManifest | None = None
+    asset_records: list[StrategyPackageAssetRecord] = field(default_factory=list)
     materialization: dict[str, Any] = field(default_factory=dict)
 
 
@@ -105,6 +108,7 @@ class MultiAlphaPackagePromotionService:
         validator: StrategyPackageValidator | None = None,
         provenance_resolver: MultiAlphaProvenanceResolver | Any | None = None,
         source_resolver: QEExperimentSourceResolver | None = None,
+        asset_freezer: PackageAssetFreezeService | None = None,
         prediction_ref_roots: Sequence[str | Path] | None = None,
     ) -> None:
         self.combine_repository = combine_repository or MultiAlphaCombineBacktestRepository()
@@ -113,10 +117,15 @@ class MultiAlphaPackagePromotionService:
             self.package_repository = package_repository or component_service.repository
         else:
             self.package_repository = package_repository or StrategyPackageRepository()
-            self.component_service = StrategyPackageComponentService(repository=self.package_repository)
         self.validator = validator or StrategyPackageValidator()
         self.provenance_resolver = provenance_resolver or MultiAlphaProvenanceResolver()
         self.source_resolver = source_resolver or QEExperimentSourceResolver()
+        self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        if component_service is None:
+            self.component_service = StrategyPackageComponentService(
+                repository=self.package_repository,
+                asset_freezer=self.asset_freezer,
+            )
         self.prediction_ref_roots = tuple(Path(root) for root in (prediction_ref_roots or ()))
 
     def promote_from_combine_run(
@@ -313,6 +322,7 @@ class MultiAlphaPackagePromotionService:
             )
         reusable = self._find_reusable_component_package(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
         if reusable is not None:
+            self._ensure_child_assets_frozen(child=reusable, run_id=run_id, leg_id=leg_id)
             return _ComponentMaterializationPlan(
                 leg_id=leg_id,
                 seed_run_ids=seed_run_ids,
@@ -334,16 +344,18 @@ class MultiAlphaPackagePromotionService:
             seed_sources=seed_sources,
             run_id=run_id,
         )
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         return _ComponentMaterializationPlan(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
             terminal_weight=terminal_weight,
-            manifest_to_save=manifest,
+            manifest_to_save=frozen_assets.manifest,
+            asset_records=frozen_assets.assets,
             materialization={
                 "leg_id": leg_id,
                 "mode": "auto_created_component_package",
-                "child_package_id": manifest.package_id,
-                "child_manifest_sha256": manifest.manifest_sha256,
+                "child_package_id": frozen_assets.manifest.package_id,
+                "child_manifest_sha256": frozen_assets.manifest.manifest_sha256,
                 "seed_run_ids": list(seed_run_ids),
                 "seed_source_count": len(seed_sources),
             },
@@ -355,7 +367,7 @@ class MultiAlphaPackagePromotionService:
             if plan.existing_child is not None:
                 child = plan.existing_child
             elif plan.manifest_to_save is not None:
-                child = self.package_repository.save_manifest(plan.manifest_to_save)
+                child = self.package_repository.save_manifest_with_assets(plan.manifest_to_save, plan.asset_records)
             else:
                 _fail_manifest_incomplete(
                     "multi-alpha component materialization plan has neither reusable child nor manifest",
@@ -691,6 +703,7 @@ class MultiAlphaPackagePromotionService:
                 missing_seed_run_ids=missing,
                 child_seed_refs=sorted(child_seed_refs),
             )
+        self._ensure_child_assets_frozen(child=child, run_id=run_id, leg_id=leg_id)
         return _LegEvidence(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
@@ -704,6 +717,48 @@ class MultiAlphaPackagePromotionService:
                 "seed_run_ids": list(seed_run_ids),
             },
         )
+
+    def _ensure_child_assets_frozen(self, *, child: StrategyPackageRecord, run_id: str, leg_id: str) -> None:
+        manifest = child.current_manifest()
+        if not manifest_has_frozen_runtime_assets(manifest):
+            _fail(
+                "multi-alpha child package runtime assets are not frozen",
+                reason_code="multi_alpha_child_package_assets_unfrozen",
+                run_id=run_id,
+                leg_id=leg_id,
+                child_package_id=child.package_id,
+                child_manifest_sha256=child.manifest_sha256,
+            )
+        expected = _manifest_asset_keys(manifest)
+        try:
+            rows = self.package_repository.list_package_assets(child.package_id)
+        except Exception as exc:
+            _fail(
+                "multi-alpha child package frozen asset ledger cannot be read",
+                reason_code="multi_alpha_child_package_assets_unfrozen",
+                run_id=run_id,
+                leg_id=leg_id,
+                child_package_id=child.package_id,
+                child_manifest_sha256=child.manifest_sha256,
+                upstream_error_type=type(exc).__name__,
+                upstream_error=str(exc),
+            )
+        actual = {(row.asset_type, row.asset_ref, row.asset_sha256) for row in rows}
+        missing = sorted(
+            (asset_type.value, asset_ref, sha256)
+            for asset_type, asset_ref, sha256 in expected
+            if (asset_type, asset_ref, sha256) not in actual
+        )
+        if missing:
+            _fail(
+                "multi-alpha child package frozen asset ledger is incomplete",
+                reason_code="multi_alpha_child_package_assets_unfrozen",
+                run_id=run_id,
+                leg_id=leg_id,
+                child_package_id=child.package_id,
+                child_manifest_sha256=child.manifest_sha256,
+                missing_assets=missing,
+            )
 
     def _build_manifest(
         self,
@@ -1383,6 +1438,20 @@ def _component_from_child(leg: _LegEvidence) -> AlphaComponent:
             model_artifact_ref=f"child_package:{leg.child.package_id}",
         ),
     )
+
+
+def _manifest_asset_keys(
+    manifest: StrategyPackageManifest,
+) -> set[tuple[StrategyPackageAssetType, str, str | None]]:
+    keys: set[tuple[StrategyPackageAssetType, str, str | None]] = set()
+    for factor in manifest.factor_set:
+        if factor.asset_ref and factor.sha256:
+            keys.add((StrategyPackageAssetType.FACTOR_CODE, factor.asset_ref, factor.sha256))
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for asset in model_assets:
+        if asset.asset_ref and asset.sha256:
+            keys.add((StrategyPackageAssetType.MODEL_WEIGHT, asset.asset_ref, asset.sha256))
+    return keys
 
 
 def _merge_factor_assets(manifests: Sequence[StrategyPackageManifest]) -> list[FactorAsset]:

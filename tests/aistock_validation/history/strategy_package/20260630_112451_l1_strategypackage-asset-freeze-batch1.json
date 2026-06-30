@@ -1,0 +1,101 @@
+{
+  "coverage": {
+    "branch": null,
+    "diff_branch": null,
+    "diff_line": null,
+    "line": null,
+    "quality_gates": [],
+    "schema_version": "aistock_validation_coverage_snapshot_v1",
+    "snapshot_path": null,
+    "status": "not_collected"
+  },
+  "environment": {
+    "backend_port": null,
+    "frontend_port": null,
+    "next_public_api_base": null,
+    "paper_v2_api_base": null,
+    "paper_v2_skip_realtime": null,
+    "qe_api_base": null,
+    "qe_archive_api_base": null,
+    "qe_archive_l3_skip_ui": null,
+    "qe_read_l3_skip_ui": null,
+    "tdx_http_port": null
+  },
+  "evidence": [
+    {
+      "path": "docs/architecture/strategy_package_asset_freeze_batch1_f2_design_20260630.md",
+      "type": "design"
+    },
+    {
+      "path": "backend/tests/strategy_package/test_package_asset_freeze_batch1.py",
+      "type": "test"
+    },
+    {
+      "path": "backend/tests/strategy_package/test_multi_alpha_promotion.py",
+      "type": "test"
+    }
+  ],
+  "finished_at": "2026-06-30T11:37:30",
+  "git_commit": "56e4165e",
+  "level": "L1",
+  "level_slug": "l1",
+  "markdown_path": "tests/aistock_validation/history/strategy_package/20260630_112451_l1_strategypackage-asset-freeze-batch1.md",
+  "metadata_path": "tests/aistock_validation/history/strategy_package/20260630_112451_l1_strategypackage-asset-freeze-batch1.json",
+  "module": "strategy_package",
+  "module_slug": "strategy_package",
+  "operator": "lc999",
+  "quality_gates": [
+    {
+      "command": "rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/strategy_package_asset_freeze_batch1_f2_design_20260630.md --tier F2",
+      "name": "feature_workflow_f2",
+      "result": "PASS tier=F2 design_items=5 matrix_rows=5 warnings=0",
+      "status": "passed"
+    },
+    {
+      "command": "rtk python -m compileall -q backend/services/strategy_package backend/routers",
+      "name": "compileall",
+      "result": "exit 0",
+      "status": "passed"
+    },
+    {
+      "command": "rtk python -m pytest backend/tests/strategy_package -q",
+      "name": "strategy_package_pytest",
+      "result": "258 passed",
+      "status": "passed"
+    },
+    {
+      "command": "rtk python -m pytest backend/tests/selection_center/test_runtime_selection.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py -q",
+      "name": "selection_regression",
+      "result": "63 passed",
+      "status": "passed"
+    },
+    {
+      "command": "rtk python -m ruff check <changed strategy_package files>",
+      "name": "ruff_changed_files",
+      "result": "All checks passed",
+      "status": "passed"
+    },
+    {
+      "command": "rtk git diff --check",
+      "name": "diff_check",
+      "result": "exit 0",
+      "status": "passed"
+    },
+    {
+      "command": "rtk rg ... | Select-String pred.pkl|combined_prediction",
+      "name": "prediction_artifact_anti_grep",
+      "result": "no output",
+      "status": "passed"
+    }
+  ],
+  "residual_risks": [
+    "Batch 1 does not switch runtime reads to package-owned assets; Batch 2 required.",
+    "Production backfill for existing 15 packages remains Batch 3 and was not executed."
+  ],
+  "schema_version": "aistock_validation_run_v1",
+  "started_at": "2026-06-30T11:24:51",
+  "status": "passed",
+  "steps": [],
+  "title": "StrategyPackage asset freeze batch1",
+  "title_slug": "strategypackage-asset-freeze-batch1"
+}

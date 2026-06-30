@@ -35,6 +35,7 @@ from .model_state import (
 )
 from .models import LiveApprovalStatus, PackageStatus, SourceType, StrategyPackageLiveApproval, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
+from .package_asset_freeze import PackageAssetFreezeService
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
 from .runtime_variant import (
@@ -103,12 +104,14 @@ class StrategyPackageService:
         validator: StrategyPackageValidator | None = None,
         candidate_service: CandidateStrategyPackageService | None = None,
         asset_eligibility: StrategyPackageAssetEligibilityService | None = None,
+        asset_freezer: PackageAssetFreezeService | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.resolver = resolver or QEExperimentSourceResolver()
         self.validator = validator or StrategyPackageValidator()
         self.candidate_service = candidate_service or CandidateStrategyPackageService()
         self.asset_eligibility = asset_eligibility or StrategyPackageAssetEligibilityService(validator=self.validator)
+        self.asset_freezer = asset_freezer or PackageAssetFreezeService()
 
     def create_from_qe_experiment(
         self,
@@ -116,12 +119,14 @@ class StrategyPackageService:
         *,
         resolve_runtime_assets: bool = False,
     ) -> StrategyPackageRecord:
+        _ = resolve_runtime_assets  # Batch 1 always freezes runtime assets after read-only manifest resolution.
         manifest = self.resolver.build_from_experiment(
             experiment_id,
-            resolve_runtime_assets=resolve_runtime_assets,
+            resolve_runtime_assets=False,
         )
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_qe_evolution_loop(
         self,
@@ -130,13 +135,15 @@ class StrategyPackageService:
         qe_loop_id: str,
         resolve_runtime_assets: bool = False,
     ) -> StrategyPackageRecord:
+        _ = resolve_runtime_assets  # Batch 1 always freezes runtime assets after read-only manifest resolution.
         manifest = self.resolver.build_from_evolution_loop(
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
-            resolve_runtime_assets=resolve_runtime_assets,
+            resolve_runtime_assets=False,
         )
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_candidate(
         self,
