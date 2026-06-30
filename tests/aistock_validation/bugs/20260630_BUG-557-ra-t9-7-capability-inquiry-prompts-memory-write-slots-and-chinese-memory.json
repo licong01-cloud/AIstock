@@ -1,0 +1,81 @@
+{
+  "actual": "RA mixes Chinese/English and asks exact todo item / subject_key / memory_type / approval wording for a pure capability inquiry; MemoryCurator only recognizes English fixed prefixes and misses Chinese remember intents.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/memory_curator.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_memory_curator.py",
+    "configs/research_assistant/runtime_context.yaml",
+    "tests/aistock_validation/bugs/20260630_BUG-557-ra-t9-7-capability-inquiry-prompts-memory-write-slots-and-chinese-memory.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-557",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T16:15:01.885435Z",
+  "description": "RA mixes Chinese/English and asks exact todo item / subject_key / memory_type / approval wording for a pure capability inquiry; MemoryCurator only recognizes English fixed prefixes and misses Chinese remember intents.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260630-e76afcec54de",
+      "timestamp": "2026-06-29T16:15:01.885431Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/ra_t9_detype_convergence_design_20260628.md §7bis"
+  ],
+  "expected": "Capability inquiry is answered as a capability statement without write or internal slot prompts; missing content prompts use Chinese human wording without subject_key/memory_type; Chinese natural-language memory intents can create memory candidates via approval/scope policy unchanged.",
+  "first_seen_at": "2026-06-29T16:15:01.885435Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1750,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1750",
+  "last_seen_at": "2026-06-29T16:15:01.885435Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline",
+    "ra_phase1_memory_tree"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA T9-7: capability inquiry prompts memory write slots and Chinese memory intents are missed",
+  "trigger_condition": {
+    "fingerprint": "e76afcec54de8af3cb3ee2f2",
+    "source_event_id": "FE-20260630-e76afcec54de"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

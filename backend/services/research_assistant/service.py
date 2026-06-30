@@ -904,8 +904,30 @@ AGENTIC_SYNTHESIS_SYSTEM_PROMPT = (
     "每个事实或数字必须引用实际工具或图谱上下文中的 source/as_of/trade_date/report_period。"
     "涉及未来/预测时只讲驱动、情景、风险和边界，不做涨跌或方向预测，不构成投资建议。"
     "写入、提交、训练、晋升和生产变更只说明审批/预检边界，不能绕过确认门。"
-    "中文人话作答，禁 raw JSON、server_key、tool_name、reason_code、summary_first、mcp_execution_result 等内部行话。"
+    "中文人话作答，禁 raw JSON、server_key、tool_name、reason_code、summary_first、mcp_execution_result、subject_key、memory_type 等内部行话。"
     "不要编造事实、占位符、来源、日期或动作。"
+)
+
+MEMORY_CURATOR_SEMANTIC_SYSTEM_PROMPT = (
+    "你是 AIstock 研究助理的长期记忆候选提炼器。只输出 JSON，不输出解释。"
+    "从 user_message 和 assistant_message 中判断用户是否表达了需要长期记住的偏好、习惯、项目指令或待办。"
+    "能力询问或缺少具体内容时返回空 candidates；不要因为用户只问能否记住就创建候选。"
+    "英文 seed 语句可作为线索，但不能是唯一依据；中文自然表达也要按语义识别。"
+    "助手回复可用于提炼用户确认过或助手复述出的候选内容，但不得编造用户没有表达的记忆。"
+    "输出格式：{\"candidates\":[{"
+    "\"memory_type\":\"user_preference|habit|directive|task_state|analysis_note\","
+    "\"scope\":\"personal|project\","
+    "\"tree_path\":\"personal.preference.response 等 scope 内路径\","
+    "\"title\":\"中文短标题\","
+    "\"content_text\":\"要记住的具体内容\","
+    "\"trust_level\":\"user_stated|assistant_inferred\","
+    "\"resident\":false,"
+    "\"requires_approval\":true,"
+    "\"importance\":0.0"
+    "}]}。"
+    "策略必须保持：project directive 必须 requires_approval=true 且 resident=false；"
+    "personal preference/habit 可以 requires_approval=false 且按需 resident=true；"
+    "待办或任务状态用 personal.task_state.todo，requires_approval=true，resident=false。"
 )
 
 STOCK_DEPTH_STOCK_TOOL_NAMES = (
@@ -1535,6 +1557,23 @@ def _parse_tool_arguments(arguments: Any) -> dict[str, Any]:
     return dict(parsed) if isinstance(parsed, dict) else {"value": parsed}
 
 
+_JSON_OBJECT_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.IGNORECASE | re.DOTALL)
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    raw = text.strip()
+    candidates = [raw]
+    candidates.extend(match.group(1).strip() for match in _JSON_OBJECT_FENCE_RE.finditer(text))
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    return None
+
+
 def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, str]] | None) -> list[McpToolCall]:
     raw_calls = _attr_or_key(message, "tool_calls", []) or []
     if not isinstance(raw_calls, list):
@@ -1946,6 +1985,9 @@ class ResearchAssistantLlmClient:
         return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, usage_event=usage_event, tool_calls=tool_calls)
 
     def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int | None) -> LlmCallResult:
+        return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
+
+    def complete_memory_curation(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int | None) -> LlmCallResult:
         return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
 
 
@@ -5045,6 +5087,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             user_message_id=user_message["message_id"],
             assistant_message_id=assistant_message["message_id"],
             task_id=task["task_id"],
+            model_profile=model_profile,
         )
         task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
         public_cards = self._public_chat_cards(cards)
@@ -8187,8 +8230,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             return text
         mode_cfg = self._dialogue_mode_config(mode_decision.mode.value)
         forbidden = [str(item) for item in mode_cfg.get("forbidden_main_reply_phrases", []) if str(item)]
-        if not forbidden:
-            return text
         kept_lines: list[str] = []
         for line in text.splitlines():
             stripped = line.strip()
@@ -8196,7 +8237,32 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 continue
             kept_lines.append(line)
         cleaned = "\n".join(kept_lines).strip()
+        cleaned = self._clean_user_visible_memory_slot_jargon(cleaned or text)
+        if cleaned and self._contains_user_visible_memory_slot_jargon(cleaned):
+            logger.error(
+                "research assistant main reply still contains memory slot jargon after cleanup: mode=%s intent=%s",
+                mode_decision.mode.value,
+                mode_decision.intent_type.value,
+            )
+            return "可以。你把要记住的具体内容告诉我，我会按记忆候选处理；需要确认的内容会先让你审批，不会直接写入长期记忆。"
         return cleaned or text
+
+    @staticmethod
+    def _contains_user_visible_memory_slot_jargon(text: str) -> bool:
+        lowered = text.lower()
+        return "subject_key" in lowered or "memory_type" in lowered
+
+    @classmethod
+    def _clean_user_visible_memory_slot_jargon(cls, text: str) -> str:
+        if not cls._contains_user_visible_memory_slot_jargon(text):
+            return text
+        cleaned_lines: list[str] = []
+        for line in text.splitlines():
+            cleaned = re.sub(r"`?\bsubject_key\b`?", "记忆对象", line, flags=re.IGNORECASE)
+            cleaned = re.sub(r"`?\bmemory_type\b`?", "记忆类别", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"`?\btitle\b`?", "标题", cleaned, flags=re.IGNORECASE)
+            cleaned_lines.append(cleaned)
+        return "\n".join(cleaned_lines).strip()
 
     def add_task_event(self, task_id: str, request: TaskEventCreate | dict[str, Any]) -> dict[str, Any]:
         task = self.repository.get_record("tasks", task_id)
@@ -8673,16 +8739,50 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         user_message_id: str,
         assistant_message_id: str,
         task_id: str,
+        model_profile: dict[str, Any] | None = None,
     ) -> None:
         def run_curator() -> CuratorResult:
-            result = MemoryCurator(self.repository).curate_turn(
-                user_message=user_message,
-                assistant_message=assistant_message,
-                conversation_id=conversation_id,
-                user_message_id=user_message_id,
-                assistant_message_id=assistant_message_id,
-                task_id=task_id,
-            )
+            try:
+                result = MemoryCurator(
+                    self.repository,
+                    semantic_extractor=self._semantic_memory_candidate_extractor(model_profile=model_profile),
+                ).curate_turn(
+                    user_message=user_message,
+                    assistant_message=assistant_message,
+                    conversation_id=conversation_id,
+                    user_message_id=user_message_id,
+                    assistant_message_id=assistant_message_id,
+                    task_id=task_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - record concrete curator failures; do not silently skip memory.
+                payload = {
+                    "reason_code": "memory_curator_failed",
+                    "exception_type": type(exc).__name__,
+                    "error_summary": str(exc)[:500],
+                    "conversation_id": conversation_id,
+                    "user_message_id": user_message_id,
+                    "assistant_message_id": assistant_message_id,
+                }
+                logger.exception(
+                    "research assistant memory curator failed: reason_code=%s conversation_id=%s user_message_id=%s exception_type=%s error=%s",
+                    payload["reason_code"],
+                    conversation_id,
+                    user_message_id,
+                    type(exc).__name__,
+                    exc,
+                )
+                self.add_task_event(
+                    task_id,
+                    TaskEventCreate(
+                        event_type="memory_curator_failed",
+                        severity="error",
+                        message=f"记忆候选提炼失败：{type(exc).__name__}: {exc}",
+                        payload_json=payload,
+                    ),
+                )
+                if self.repository.health().get("mode") == "in_memory_test_only":
+                    raise
+                return CuratorResult(skipped=["memory_curator_failed"])
             changed = result.created_branch_ids or result.created_memory_ids or result.updated_memory_ids
             if changed or result.approval_required_ids:
                 self.add_task_event(
@@ -8706,6 +8806,52 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             run_curator()
             return
         threading.Thread(target=run_curator, name="research-assistant-memory-curator", daemon=True).start()
+
+    def _semantic_memory_candidate_extractor(self, *, model_profile: dict[str, Any] | None) -> Any | None:
+        complete_memory_curation = getattr(self.llm_client, "complete_memory_curation", None)
+        if not callable(complete_memory_curation):
+            logger.warning(
+                "research assistant semantic memory curator unavailable: reason_code=memory_curator_llm_hook_missing; "
+                "falling back to seed-only memory extraction for this injected LLM client"
+            )
+            return None
+        if not isinstance(model_profile, dict) or not model_profile:
+            raise RuntimeError("reason_code=memory_curator_model_profile_missing; semantic memory curator requires a concrete model_profile")
+
+        def extract(*, user_message: str, assistant_message: str) -> list[dict[str, Any]]:
+            payload = {
+                "user_message": user_message,
+                "assistant_message": assistant_message,
+                "rules": {
+                    "capability_inquiry_is_not_execution": True,
+                    "no_internal_slot_names_in_user_reply": ["subject_key", "memory_type", "title"],
+                    "approval_scope_policy_unchanged": True,
+                },
+            }
+            result = complete_memory_curation(
+                messages=[
+                    {"role": "system", "content": MEMORY_CURATOR_SEMANTIC_SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+                ],
+                model_profile=model_profile,
+                temperature=0.0,
+                max_tokens=900,
+            )
+            parsed = _parse_json_object(str(result.content or ""))
+            if parsed is None:
+                raise ValueError(
+                    "semantic memory curator returned non-json response: "
+                    f"reason_code=memory_curator_invalid_json; actual_type=str; preview={str(result.content or '')[:120]!r}"
+                )
+            candidates = parsed.get("candidates")
+            if not isinstance(candidates, list):
+                raise ValueError(
+                    "semantic memory curator response missing candidates list: "
+                    f"reason_code=memory_curator_invalid_candidates; actual_type={type(candidates).__name__}"
+                )
+            return [dict(item) if isinstance(item, dict) else item for item in candidates]
+
+        return extract
 
 
 
