@@ -10,12 +10,14 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeClient,
     MiniQMTOperatorCommandStatus,
 )
+from backend.services.simulation_runtime import InMemorySimulationRuntimeRepository, SimulationRuntimeOpsService
 
 
 def _client(
     *,
     gateway: FakeMiniQMTGateway | None = None,
     runtime_client: MiniQMTExecutionRuntimeClient | None = None,
+    ops_service: SimulationRuntimeOpsService | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(simulation_runtime.router, prefix="/api/v1")
@@ -24,6 +26,9 @@ def _client(
     app.dependency_overrides[simulation_runtime.get_miniqmt_runtime_client] = (
         lambda: runtime_client
         or MiniQMTExecutionRuntimeClient(repository=InMemoryMiniQMTExecutionRuntimeRepository())
+    )
+    app.dependency_overrides[simulation_runtime.get_simulation_runtime_ops_service] = (
+        lambda: ops_service or SimulationRuntimeOpsService(repository=InMemorySimulationRuntimeRepository())
     )
     return TestClient(app)
 
@@ -103,3 +108,21 @@ def test_operator_command_router_replace_alpha_is_runtime_audit_not_broker_submi
     assert body["result"]["metadata"]["execution_layer_mutated"] is False
     assert body["runtime_evidence"]["submitted_child_count"] == 0
     assert gateway.submitted_orders == []
+
+
+def test_operator_command_router_requires_confirmation_and_run_id_for_stale_recovery() -> None:
+    gateway = FakeMiniQMTGateway()
+    client = _client(gateway=gateway)
+    payload = _payload("RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT")
+
+    missing_confirmation = client.post("/api/v1/simulation-runtime/miniqmt/operator-commands", json=payload)
+    assert missing_confirmation.status_code == 409
+    assert (
+        missing_confirmation.json()["detail"]["context"]["expected_confirm_text"]
+        == "EXECUTE RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT"
+    )
+
+    payload["confirm_text"] = "EXECUTE RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT"
+    missing_run = client.post("/api/v1/simulation-runtime/miniqmt/operator-commands", json=payload)
+    assert missing_run.status_code == 422
+    assert missing_run.json()["detail"]["error_code"] == "MINIQMT_OPERATOR_RUN_ID_REQUIRED"

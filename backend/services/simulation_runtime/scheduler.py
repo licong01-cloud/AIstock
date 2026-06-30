@@ -4329,6 +4329,113 @@ class SimulationLifecycleScheduler:
             ),
         )
 
+    def recover_no_side_effect_reconciling_run_after_operator_cleanup(
+        self,
+        *,
+        run_id: str,
+        operator_result: Any,
+        source: str = "miniqmt_operator_recovery",
+    ) -> SimulationDailyRun:
+        run = self.require_no_side_effect_reconciling_run_for_operator_recovery(run_id=run_id)
+        metadata = dict(getattr(operator_result, "metadata", {}) or {})
+        broker_evidence = dict(metadata.get("broker_evidence") or {})
+        cleanup = dict(metadata.get("runtime_only_cleanup") or {})
+        command_id = str(getattr(operator_result, "command_id", "") or "")
+        command_type = str(getattr(operator_result, "command_type", "") or "")
+        status = str(getattr(getattr(operator_result, "status", None), "value", getattr(operator_result, "status", "")))
+        open_order_count = int(broker_evidence.get("broker_open_order_count") or 0)
+        if status != "EXECUTED" or open_order_count != 0 or metadata.get("broker_mutated") is True:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT stale runtime recovery requires executed broker-empty operator evidence; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_OPERATOR_EVIDENCE_REJECTED",
+                context={
+                    "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_OPERATOR_EVIDENCE_REJECTED",
+                    "run_id": run.run_id,
+                    "operator_status": status,
+                    "broker_open_order_count": open_order_count,
+                    "broker_mutated": metadata.get("broker_mutated"),
+                    "command_id": command_id,
+                },
+            )
+        plan = self.repository.get_execution_plan(run.execution_plan_id or "")
+        plan_counts = self._execution_plan_side_counts(plan)
+        diagnostic = {
+            "schema_version": "miniqmt_no_side_effect_reconciling_recovery_v1",
+            "reason_code": "MINIQMT_NO_SIDE_EFFECT_RECONCILING_RECOVERED",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "strategy_id": run.strategy_id,
+            "binding_id": run.binding_id,
+            "trade_date": run.trade_date.isoformat(),
+            "previous_status": run.status.value,
+            "next_status": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            "source": source,
+            "operator_command_id": command_id,
+            "operator_command_type": command_type,
+            "broker_evidence": broker_evidence,
+            "runtime_only_cleanup": cleanup,
+            "broker_called": False,
+            "submitted_intents": 0,
+            "order_intent_count": run.run_payload_json.get("order_intent_count", plan_counts["intent_count"]),
+            "message": (
+                "RECONCILING run had no broker side effect and broker authority was empty; runtime-only stale "
+                "state was terminalized so the next scheduler tick can reuse the standard FAILED_RETRYABLE path"
+            ),
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": 0,
+                "no_rebalance_required": False,
+                "miniqmt_no_side_effect_reconciling_recovery": diagnostic,
+                "submit_failure": {
+                    "stage": "MINIQMT_NO_SIDE_EFFECT_RECONCILING_RECOVERY",
+                    "type": "OperatorRecovery",
+                    "message": diagnostic["message"],
+                    "context": diagnostic,
+                },
+            },
+        )
+
+    def require_no_side_effect_reconciling_run_for_operator_recovery(self, *, run_id: str) -> SimulationDailyRun:
+        run = self.repository.get_simulation_daily_run(run_id)
+        if run.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT stale runtime recovery requires a MiniQMT SIM run; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_BACKEND_UNSUPPORTED",
+                context={
+                    "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_BACKEND_UNSUPPORTED",
+                    "run_id": run.run_id,
+                    "broker_backend": run.broker_backend.value,
+                },
+            )
+        if run.status != SimulationDailyRunStatus.RECONCILING:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT stale runtime recovery only accepts RECONCILING runs; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_STATUS_UNSUPPORTED",
+                context={
+                    "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_STATUS_UNSUPPORTED",
+                    "run_id": run.run_id,
+                    "status": run.status.value,
+                },
+            )
+        if run.run_payload_json.get("broker_called") is not False or int(run.run_payload_json.get("submitted_intents") or 0) != 0:
+            raise RuntimeConfigInvalidError(
+                "MiniQMT stale runtime recovery requires a no-side-effect run; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_HAS_SIDE_EFFECT_EVIDENCE",
+                context={
+                    "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_HAS_SIDE_EFFECT_EVIDENCE",
+                    "run_id": run.run_id,
+                    "broker_called": run.run_payload_json.get("broker_called"),
+                    "submitted_intents": run.run_payload_json.get("submitted_intents"),
+                },
+            )
+        return run
+
     def _mark_localsim_pre_submit_retry_failure(
         self,
         *,

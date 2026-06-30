@@ -1,0 +1,80 @@
+{
+  "actual": "On 2026-06-30 two MiniQMT SIM runs (L2 simrun_be0af928d096734b and L16 simrun_0143264657762a1e) are stuck in status=RECONCILING with last_stage=RECONCILING, broker_called=false, submitted_intents=0 while execution intents exist. Broker authoritative account 62266303 SIM has no orders, no cancelable orders, frozen_cash=0. L2 runtime-state still contains stale 2026-06-29 ACTIVE algo/child records while broker is empty. Scheduler does not resubmit no-side-effect RECONCILING runs, and RESET_STRATEGY_SLOT attempts broker cancel for stale order ids, xtquant returns raw_return_code=-1, so existing operator tooling cannot recover. Need a controlled operator recovery entry that fresh-reconciles broker authority, only when broker open orders are empty performs runtime-only terminalization of stale ACTIVE algo/child, and converts no-side-effect RECONCILING runs to FAILED_RETRYABLE for normal scheduler retry. All failures must be loud with reason_code and durable audit; existing CANCEL/RESET behavior for real orders must remain unchanged.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260630_BUG-562-miniqmt-sim-no-side-effect-reconciling-run-cannot-recover-when-runtime-s.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/simulation_runtime.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/models.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_operator_commands.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_operator_command_router.py",
+    "docs/handoff/BUG-562-miniqmt-stale-runtime-no-side-effect-recovery.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-562",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-30T05:47:52.636448Z",
+  "description": "On 2026-06-30 two MiniQMT SIM runs (L2 simrun_be0af928d096734b and L16 simrun_0143264657762a1e) are stuck in status=RECONCILING with last_stage=RECONCILING, broker_called=false, submitted_intents=0 while execution intents exist. Broker authoritative account 62266303 SIM has no orders, no cancelable orders, frozen_cash=0. L2 runtime-state still contains stale 2026-06-29 ACTIVE algo/child records while broker is empty. Scheduler does not resubmit no-side-effect RECONCILING runs, and RESET_STRATEGY_SLOT attempts broker cancel for stale order ids, xtquant returns raw_return_code=-1, so existing operator tooling cannot recover. Need a controlled operator recovery entry that fresh-reconciles broker authority, only when broker open orders are empty performs runtime-only terminalization of stale ACTIVE algo/child, and converts no-side-effect RECONCILING runs to FAILED_RETRYABLE for normal scheduler retry. All failures must be loud with reason_code and durable audit; existing CANCEL/RESET behavior for real orders must remain unchanged.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260630-1114d609ed47",
+      "timestamp": "2026-06-30T05:47:52.636444Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-30T05:47:52.636448Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1766,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1766",
+  "last_seen_at": "2026-06-30T05:47:52.636448Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT SIM no-side-effect RECONCILING run cannot recover when runtime-state has stale broker-empty active orders",
+  "trigger_condition": {
+    "fingerprint": "1114d609ed47d745472eaf90",
+    "source_event_id": "FE-20260630-1114d609ed47"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

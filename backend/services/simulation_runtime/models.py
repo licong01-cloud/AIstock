@@ -560,6 +560,7 @@ class OperatorCommand(BaseModel):
         "FLATTEN_STRATEGY_SLOT",
         "CANCEL_ALL_OPEN_ORDERS",
         "RESET_STRATEGY_SLOT",
+        "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
         "REPLACE_ALPHA_SIGNAL_BOOK",
     ]
     account_group_id: str
