@@ -17,7 +17,8 @@ Use this command only when the user asks Claude Code to design, implement, valid
    - `F2`: cross-module, production-critical, DB/API/UI/MCP contract, or high-risk feature; requires architecture, contracts, rollout/rollback, and acceptance design.
 2. Keep a stable `Design Acceptance Index` (`F-001`, `F-002`, ...). Use these ids in implementation notes, tests, PR body, and final report to avoid repeatedly loading full designs.
 3. Maintain a design acceptance matrix with columns: `design_item`, `implementation_refs`, `test_or_evidence`, `status`, `gap_or_exception`.
-4. Run the local guard before PR or merge:
+4. If a Feature Card or design is stored under `docs/handoff/`, it must be a tracked formal handoff file. Ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, and `docs/handoff/local/`) are only for temporary Codex/Claude exchange notes and are not valid design acceptance artifacts.
+5. Run the local guard before PR or merge:
 
 ```powershell
 python scriptsistock_feature_workflow.py validate --design <design-or-card-path> --tier F0

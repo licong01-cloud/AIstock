@@ -52,6 +52,11 @@ frontend/.next-dev-*/
 frontend/.next-build-*/
 tmp/
 
+# Local Codex/Claude scratch handoff notes.
+# Keep formal docs/handoff files tracked; put temporary cross-tool notes here.
+docs/handoff/_scratch/
+docs/handoff/local/
+
 # Paper v2 sim runner state (worktree-local SQLite event log + scratch dir)
 var/
 

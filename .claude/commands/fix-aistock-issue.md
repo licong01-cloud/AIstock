@@ -30,6 +30,8 @@ Docs fast path rules:
 - do not run backend, frontend, nox, pytest, CodeGraph, or UA validation for ordinary docs
 - if the change is `docs-controlled`, fall back to the full issue workflow instead of docs fast path
 
+Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching docs or issue workflow.
+
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 
 Use graph-first context before broad searches. After `run --mode plan`, read the task card's Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg` or source reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise treat UA as warning-only and continue with CodeGraph plus allowed scope.

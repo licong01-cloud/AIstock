@@ -475,7 +475,7 @@ python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1
 - 严重等级：P1。
 - 适用范围：新增用户可见能力、跨模块能力、架构/流水线能力、生产运行路径、DB/API/UI/MCP 契约变化，以及用户明确要求按设计方案执行的功能开发。不替代 BUG 流程；BUG 修复继续使用 issue workflow。
 - 分级执行：`F0` 为低风险小功能或文档/流程补强，可使用轻量 Feature Card；`F1` 为标准单模块功能，必须有标准设计文档；`F2` 为跨模块、高风险或生产关键功能，必须有完整架构设计、契约、发布/回滚和验收方案。
-- 设计位置：F0 可在 `docs/analysis/`、`docs/handoff/` 或 PR body 中保留轻量 Feature Card；F1/F2 必须在 `docs/architecture/` 或任务明确批准的项目文档目录中提交设计文档，且不得放入根目录或临时输出目录。
+- 设计位置：F0 可在 `docs/analysis/`、`docs/handoff/` 或 PR body 中保留轻量 Feature Card；F1/F2 必须在 `docs/architecture/` 或任务明确批准的项目文档目录中提交设计文档，且不得放入根目录或临时输出目录。`docs/handoff/` 仅用于需要纳入 Git 的正式交接证据；临时 Codex/Claude 互传内容必须写入 `tmp/handoff/`、`docs/handoff/_scratch/` 或 `docs/handoff/local/`，这些忽略目录不得作为设计验收依据。
 - 设计验收索引：所有 F0/F1/F2 都必须列出稳定编号的 `Design Acceptance Index`（如 `F-001`），后续实现、测试、PR 和最终汇报只引用编号，避免反复注入全文导致 token 浪费。
 - 设计验收矩阵：合入前必须逐项给出 `design_item`、`implementation_refs`、`test_or_evidence`、`status`、`gap_or_exception`。未获用户明确批准的 `partial`、`todo`、`gap`、`blocked`、`后续补齐` 不得请求合入。
 - 禁止开发漂移：不得把简化版、POC、mock-only、静态成功、无真实 API/DB/UI 路径、静默兜底或“文档对齐现实”描述为完成。发现设计不可实现时必须停止并请求用户确认范围调整。
