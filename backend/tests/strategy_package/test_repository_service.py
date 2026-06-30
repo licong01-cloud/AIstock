@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime, timezone
 
 import psycopg2
-from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.manifest import compute_manifest_json_sha256, freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
 from backend.services.strategy_package.models import LiveApprovalStatus, PackageStatus, StrategyPackageLiveApproval
@@ -504,6 +504,23 @@ def manifest_to_record(manifest):
     return saved
 
 
+def _legacy_schema_manifest_sha(record) -> str:
+    payload = record.current_manifest().model_dump(mode="json")
+    for key in ("source_evidence", "backtest_context"):
+        if payload.get(key) == {}:
+            payload.pop(key)
+    return compute_manifest_json_sha256(payload)
+
+
+def _force_schema_evolution_hash_drift(repo: InMemoryStrategyPackageRepository, package_id: str) -> tuple[str, str]:
+    record = repo.records[package_id]
+    current_hash = record.manifest_sha256
+    legacy_hash = _legacy_schema_manifest_sha(record)
+    assert legacy_hash != current_hash, "fixture must emulate pre-source_evidence/backtest_context schema hash"
+    repo.records[package_id] = record.model_copy(update={"manifest_sha256": legacy_hash})
+    return legacy_hash, current_hash
+
+
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest())
@@ -911,7 +928,7 @@ def test_list_quarantines_corrupt_manifest_hash():
     repo.save_manifest(m1)
     repo.save_manifest(m2)
     # Corrupt the stored hash for pkg-bad
-    repo.records["pkg-bad"] = repo.records["pkg-bad"].model_copy(update={"manifest_sha256": "00badhash"})
+    repo.records["pkg-bad"] = repo.records["pkg-bad"].model_copy(update={"manifest_sha256": "0" * 64})
     records = repo.list()
     pkg_ids = [r.package_id for r in records]
     assert "pkg-ok" in pkg_ids
@@ -924,7 +941,7 @@ def test_get_still_raises_on_corrupt_manifest_hash():
     repo = InMemoryStrategyPackageRepository()
     m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(m)
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "0" * 64})
     # InMemory repo is lenient on get() (test double); PostgreSQL validates via _record_from_row.
     # The validate_manifest_integrity() method covers drift detection for both.
     report = repo.validate_manifest_integrity()
@@ -932,14 +949,16 @@ def test_get_still_raises_on_corrupt_manifest_hash():
     assert report["drifted"][0]["package_id"] == "pkg"
 
 
-def test_validate_manifest_integrity_reports_drift():
-    """validate_manifest_integrity detects hash drift."""
+def test_validate_manifest_integrity_classifies_safe_schema_evolution_drift():
+    """validate_manifest_integrity marks model-default drift as A-class repairable."""
     repo = InMemoryStrategyPackageRepository()
     for i in range(3):
         m = freeze_manifest(make_manifest().model_copy(update={"package_id": f"pkg-{i}", "package_name": f"pkg-{i}"}))
         repo.save_manifest(m)
-    repo.records["pkg-0"] = repo.records["pkg-0"].model_copy(update={"manifest_sha256": "deadbeef"})
+    legacy_hash, _current_hash = _force_schema_evolution_hash_drift(repo, "pkg-0")
+
     report = repo.validate_manifest_integrity()
+
     assert report["total_scanned"] == 3
     assert report["clean_count"] == 2
     assert report["drifted_count"] == 1
@@ -951,18 +970,105 @@ def test_validate_manifest_integrity_reports_drift():
         "blocks_detail_endpoint": True,
         "excluded_from_package_list": True,
     }
-    assert drift["repair_plan"] == {
-        "recommended_action": "repair_manifest_hash",
-        "mutates_manifest_json": False,
-        "requires_operator_confirmation": True,
-        "confirm_stored_sha256": "deadbeef",
-        "confirm_computed_sha256": drift["computed_sha256"],
-        "rollback_restore": {
-            "field": "strategy_pkg.package.manifest_sha256",
-            "restore_value": "deadbeef",
-            "audit_event_reason": "manifest_hash_repaired",
-        },
+    plan = drift["repair_plan"]
+    assert plan["recommended_action"] == "repair_manifest_hash"
+    assert plan["mutates_manifest_json"] is False
+    assert plan["requires_operator_confirmation"] is True
+    assert plan["confirm_stored_sha256"] == legacy_hash
+    assert plan["confirm_computed_sha256"] == drift["computed_sha256"]
+    assert plan["confirm_repair_classification"] == "A_schema_evolution_stale_hash"
+    assert plan["classification"]["repair_allowed"] is True
+    assert plan["classification"]["stored_equals_raw_manifest_json"] is True
+    assert plan["classification"]["missing_current_model_default_keys"] == [
+        "backtest_context",
+        "source_evidence",
+    ]
+    assert plan["rollback_restore"] == {
+        "field": "strategy_pkg.package.manifest_sha256",
+        "restore_value": legacy_hash,
+        "audit_event_reason": "manifest_hash_repaired",
     }
+
+
+def test_validate_manifest_integrity_blocks_dirty_manifest_json_repair():
+    """B-class drift is reported but never recommended for automatic repair."""
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "pkg"}))
+    repo.save_manifest(manifest)
+    dirty_hash = "d" * 64
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": dirty_hash})
+
+    report = repo.validate_manifest_integrity()
+
+    plan = report["drifted"][0]["repair_plan"]
+    assert plan["recommended_action"] == "quarantine_manual_review"
+    assert plan["classification"]["classification"] == "B_manifest_json_dirty_or_unknown"
+    assert plan["classification"]["repair_allowed"] is False
+    assert plan["classification"]["stored_equals_raw_manifest_json"] is False
+
+
+def test_validate_manifest_integrity_blocks_invalid_manifest_json_repair():
+    """Invalid manifest_json drift includes an explicit quarantine repair plan."""
+
+    repo = StrategyPackageRepository()
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def execute(self, _sql, _params=None):  # noqa: ANN001
+            return None
+
+        def fetchall(self):
+            return [
+                {
+                    "package_id": "pkg-invalid",
+                    "package_name": "pkg-invalid",
+                    "package_version": "1.0.0",
+                    "source_type": "qe_experiment",
+                    "source_id": "qe_invalid",
+                    "loop_id": None,
+                    "run_id": None,
+                    "package_status": "BACKTEST_APPROVED",
+                    "manifest_json": {"package_id": "pkg-invalid"},
+                    "manifest_sha256": "a" * 64,
+                    "alpha_mode": "single_alpha",
+                    "signal_domain": None,
+                    "display_name": "pkg-invalid",
+                    "legacy_name": None,
+                    "data_vintage": None,
+                    "prediction_ref_uri": None,
+                    "prediction_ref_sha256": None,
+                    "model_artifact_uri": None,
+                    "model_artifact_sha256": None,
+                    "paper_portfolio_count": 0,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            ]
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def cursor(self, *args, **kwargs):  # noqa: ANN001
+            return Cursor()
+
+    repo._conn_factory = lambda: Conn()  # noqa: SLF001
+
+    report = repo.validate_manifest_integrity()
+
+    assert report["drifted_count"] == 1
+    plan = report["drifted"][0]["repair_plan"]
+    assert plan["recommended_action"] == "quarantine_manual_review"
+    assert plan["classification"]["classification"] == "B_manifest_json_invalid_or_unknown"
+    assert plan["classification"]["repair_allowed"] is False
 
 
 def test_validate_manifest_integrity_clean_when_all_match():
@@ -978,35 +1084,34 @@ def test_validate_manifest_integrity_clean_when_all_match():
     assert report["drifted"] == []
 
 
-def test_repair_manifest_hash_fixes_drift():
-    """repair_manifest_hash updates the stored hash to the correct value."""
+def test_repair_manifest_hash_fixes_a_class_drift():
+    """repair_manifest_hash updates only A-class schema-evolution hash drift."""
     repo = InMemoryStrategyPackageRepository()
     m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(m)
-    correct_hash = m.manifest_sha256
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
-    # Before repair: integrity check should report drift
+    legacy_hash, correct_hash = _force_schema_evolution_hash_drift(repo, "pkg")
     report_before = repo.validate_manifest_integrity()
     assert report_before["drifted_count"] == 1
+
     repaired = repo.repair_manifest_hash(
         "pkg",
         operator="test_runner",
-        confirm_stored_sha256="00badhash",
+        confirm_stored_sha256=legacy_hash,
         confirm_computed_sha256=correct_hash,
     )
+
     assert repaired.manifest_sha256 == correct_hash
-    # After repair: get() should succeed
     after = repo.get("pkg")
     assert after.manifest_sha256 == correct_hash
-    # Audit event recorded
     repair_events = [e for e in repo.events if e.reason == "manifest_hash_repaired"]
     assert len(repair_events) == 1
     assert repair_events[0].context["operator"] == "test_runner"
-    assert repair_events[0].context["old_manifest_sha256"] == "00badhash"
+    assert repair_events[0].context["old_manifest_sha256"] == legacy_hash
     assert repair_events[0].context["new_manifest_sha256"] == correct_hash
+    assert repair_events[0].context["repair_classification"] == "A_schema_evolution_stale_hash"
     assert repair_events[0].context["rollback_restore"] == {
         "field": "strategy_pkg.package.manifest_sha256",
-        "restore_value": "00badhash",
+        "restore_value": legacy_hash,
     }
 
 
@@ -1015,15 +1120,14 @@ def test_repair_manifest_hash_requires_explicit_confirmation():
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(manifest)
-    correct_hash = manifest.manifest_sha256
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    legacy_hash, correct_hash = _force_schema_evolution_hash_drift(repo, "pkg")
 
     with pytest.raises(InvalidStateTransitionError) as exc_info:
         repo.repair_manifest_hash("pkg", operator="test_runner")
 
     assert exc_info.value.context["package_id"] == "pkg"
-    assert exc_info.value.context["stored_sha256"] == "00badhash"
+    assert exc_info.value.context["stored_sha256"] == legacy_hash
     assert exc_info.value.context["computed_sha256"] == correct_hash
-    assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == "00badhash"
-    assert repo.records["pkg"].manifest_sha256 == "00badhash"
+    assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == legacy_hash
+    assert repo.records["pkg"].manifest_sha256 == legacy_hash
 
