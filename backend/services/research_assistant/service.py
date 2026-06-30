@@ -87,6 +87,7 @@ from .skill_library import (
     SKILL_LIBRARY_APPROVAL_PREFIX,
     SKILL_LIBRARY_APPROVAL_TYPE,
     SKILL_LIBRARY_REUSE_CAPABILITY_KEY,
+    SKILL_LIBRARY_REUSE_CONFIRMATION,
     RepositorySkillLibraryExperienceReplayProvider,
     build_successful_workflow_recipe,
     search_approved_skill_recipes,
@@ -132,6 +133,7 @@ from .mcp_catalog_sync import (
     function_calling_tools_for_mcp,
     gateway_catalog,
     manifest_entry_to_mcp_tool,
+    mcp_tool_function_name,
     server_key_for_module,
     workflow_capabilities as catalog_workflow_capabilities,
 )
@@ -1482,6 +1484,15 @@ CATALOG_READINESS_REQUIREMENTS: list[dict[str, Any]] = [
 
 
 @dataclass
+class SkillFunctionCall:
+    skill_id: str
+    skill_key: str
+    payload_json: dict[str, Any]
+    stable_call_id: str
+    function_name: str
+
+
+@dataclass
 class LlmCallResult:
     content: str
     provider: str
@@ -1489,6 +1500,7 @@ class LlmCallResult:
     duration_ms: int
     usage: dict[str, Any]
     tool_calls: list[McpToolCall] | None = None
+    skill_calls: list[SkillFunctionCall] | None = None
     usage_event: dict[str, Any] | None = None
 
 
@@ -1574,7 +1586,24 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, str]] | None) -> list[McpToolCall]:
+class FunctionToolRegistry(dict[str, dict[str, Any]]):
+    """Registry with MCP-compatible values() for existing call-surface checks."""
+
+    def items(self) -> list[tuple[str, dict[str, Any]]]:  # type: ignore[override]
+        return [
+            (name, mapping)
+            for name, mapping in super().items()
+            if str(mapping.get("kind") or "mcp") == "mcp"
+        ]
+
+    def values(self) -> list[dict[str, Any]]:  # type: ignore[override]
+        return [mapping for mapping in super().values() if str(mapping.get("kind") or "mcp") == "mcp"]
+
+    def skill_values(self) -> list[dict[str, Any]]:
+        return [mapping for mapping in super().values() if str(mapping.get("kind") or "mcp") == "skill"]
+
+
+def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, Any]] | None) -> list[McpToolCall]:
     raw_calls = _attr_or_key(message, "tool_calls", []) or []
     if not isinstance(raw_calls, list):
         return []
@@ -1585,18 +1614,53 @@ def _extract_litellm_tool_calls(message: Any, registry: dict[str, dict[str, str]
         mapping = (registry or {}).get(function_name)
         if not mapping:
             continue
+        if str(mapping.get("kind") or "mcp") != "mcp":
+            continue
+        server_key = str(mapping.get("server_key") or "").strip()
+        tool_name = str(mapping.get("tool_name") or "").strip()
+        if not server_key or not tool_name:
+            continue
         arguments = _parse_tool_arguments(_attr_or_key(function, "arguments", {}) or {})
         call_id = str(_attr_or_key(raw, "id", "") or f"tool_call_{index:03d}")
         calls.append(
             McpToolCall(
-                server_key=mapping["server_key"],
-                tool_name=mapping["tool_name"],
+                server_key=server_key,
+                tool_name=tool_name,
                 payload_json=arguments,
                 stable_call_id=call_id,
                 reason=f"native_function_call:{function_name}",
             )
         )
     return sorted(calls, key=lambda call: call.sorted_key())
+
+
+def _extract_litellm_skill_calls(message: Any, registry: dict[str, dict[str, Any]] | None) -> list[SkillFunctionCall]:
+    raw_calls = _attr_or_key(message, "tool_calls", []) or []
+    if not isinstance(raw_calls, list):
+        return []
+    calls: list[SkillFunctionCall] = []
+    for index, raw in enumerate(raw_calls):
+        function = _attr_or_key(raw, "function", {}) or {}
+        function_name = str(_attr_or_key(function, "name", "") or "").strip()
+        mapping = (registry or {}).get(function_name)
+        if not mapping or str(mapping.get("kind") or "mcp") != "skill":
+            continue
+        skill_id = str(mapping.get("skill_id") or "").strip()
+        skill_key = str(mapping.get("skill_key") or skill_id).strip()
+        if not skill_id or not skill_key:
+            continue
+        arguments = _parse_tool_arguments(_attr_or_key(function, "arguments", {}) or {})
+        call_id = str(_attr_or_key(raw, "id", "") or f"skill_call_{index:03d}")
+        calls.append(
+            SkillFunctionCall(
+                skill_id=skill_id,
+                skill_key=skill_key,
+                payload_json=arguments,
+                stable_call_id=call_id,
+                function_name=function_name,
+            )
+        )
+    return sorted(calls, key=lambda call: (call.skill_key, call.stable_call_id))
 
 
 def _safe_jsonable(value: Any) -> Any:
@@ -1678,10 +1742,17 @@ def _build_request_meta(messages: list[dict[str, Any]], tools: list[dict[str, An
     }
 
 
-def _build_response_meta(content: str, tool_calls: list[McpToolCall], *, finish_reason: str | None = None) -> dict[str, Any]:
+def _build_response_meta(
+    content: str,
+    tool_calls: list[McpToolCall],
+    *,
+    skill_calls: list[SkillFunctionCall] | None = None,
+    finish_reason: str | None = None,
+) -> dict[str, Any]:
     return {
         "content_chars": len(content or ""),
         "tool_call_count": len(tool_calls),
+        "skill_call_count": len(skill_calls or []),
         "finish_reason": finish_reason,
         "prompt_text_retained": False,
     }
@@ -1913,7 +1984,7 @@ class ResearchAssistantLlmClient:
         max_tokens: int | None,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
-        tool_registry: dict[str, dict[str, str]] | None = None,
+        tool_registry: dict[str, dict[str, Any]] | None = None,
     ) -> LlmCallResult:
         provider = str(model_profile.get("provider") or "").strip()
         model_name = str(model_profile.get("model_name") or "").strip()
@@ -1947,6 +2018,7 @@ class ResearchAssistantLlmClient:
         message = choice.message
         content = str(message.content or "").strip()
         tool_calls = _extract_litellm_tool_calls(message, tool_registry)
+        skill_calls = _extract_litellm_skill_calls(message, tool_registry)
         usage_raw = getattr(response, "usage", None)
         finish_reason = str(getattr(choice, "finish_reason", "") or "").strip().lower()
         normalized_usage = _normalize_litellm_usage(
@@ -1972,7 +2044,7 @@ class ResearchAssistantLlmClient:
             "litellm_model": model_id,
             "duration_ms": duration_ms,
             "request_meta_json": _build_request_meta(provider_messages, tools),
-            "response_meta_json": _build_response_meta(content, tool_calls, finish_reason=finish_reason or None),
+            "response_meta_json": _build_response_meta(content, tool_calls, skill_calls=skill_calls, finish_reason=finish_reason or None),
         }
         usage = _llm_usage_summary_dict(usage_event)
         if finish_reason == "length":
@@ -1980,9 +2052,18 @@ class ResearchAssistantLlmClient:
                 "llm_completion_truncated: provider returned finish_reason=length; "
                 "Research Assistant refuses to return a silent mid-sentence partial answer"
             )
-        if not content and not tool_calls:
+        if not content and not tool_calls and not skill_calls:
             raise RuntimeError("assistant LLM returned empty content")
-        return LlmCallResult(content=content, provider=provider, model=model_id, duration_ms=duration_ms, usage=usage, usage_event=usage_event, tool_calls=tool_calls)
+        return LlmCallResult(
+            content=content,
+            provider=provider,
+            model=model_id,
+            duration_ms=duration_ms,
+            usage=usage,
+            usage_event=usage_event,
+            tool_calls=tool_calls,
+            skill_calls=skill_calls,
+        )
 
     def complete_tool_plan(self, *, messages: list[dict[str, str]], model_profile: dict[str, Any], temperature: float, max_tokens: int | None) -> LlmCallResult:
         return self.complete(messages=messages, model_profile=model_profile, temperature=temperature, max_tokens=max_tokens)
@@ -3209,6 +3290,51 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "side_effect_level": proposal.get("side_effect_level"),
             "required_approval_level": required_approval_level,
             "source": "chat_preflight_confirmation_card",
+        }
+        approval = self.repository.update_record("approvals", approval["approval_id"], {"approval_context_json": context})
+        self.repository.update_record("action_proposals", proposal["action_proposal_id"], {"approval_id": approval["approval_id"]})
+        return approval
+
+    def _ensure_skill_action_proposal_chat_approval(self, proposal: dict[str, Any]) -> dict[str, Any]:
+        existing_approval_id = str(proposal.get("approval_id") or "")
+        if existing_approval_id:
+            approval = self.repository.get_record("approvals", existing_approval_id)
+            if not approval:
+                raise KeyError(f"skill action proposal references missing approval: {existing_approval_id}")
+            if approval.get("approval_type") != ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE:
+                raise ValueError(
+                    "skill action proposal approval_type mismatch: "
+                    f"approval_id={existing_approval_id} expected={ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE} actual={approval.get('approval_type')}"
+                )
+            if approval.get("status") != "pending":
+                raise ValueError(f"skill action proposal approval is not pending: approval_id={existing_approval_id} status={approval.get('status')}")
+            return approval
+
+        required_approval_level = "L2" if "production_sensitive" in {str(proposal.get("risk_level") or ""), str(proposal.get("side_effect_level") or "")} else "L1"
+        approval = self.create_approval(
+            ApprovalCreate(
+                task_id=proposal["task_id"],
+                approval_type=ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE,
+                risk_level=str(proposal.get("risk_level") or "high"),
+                plan_digest=str(proposal["plan_digest"]),
+                config_version_id=proposal.get("runtime_config_activation_id"),
+                summary=(
+                    f"Execute action proposal {proposal['action_proposal_id']} "
+                    f"for {proposal.get('capability_key')} via selected skill"
+                ),
+                required_confirmation_text=SKILL_LIBRARY_REUSE_CONFIRMATION,
+                created_by="research_assistant_chat_skill_gate",
+            )
+        )
+        context = {
+            "conversation_id": proposal.get("conversation_id"),
+            "action_proposal_id": proposal["action_proposal_id"],
+            "capability_key": proposal.get("capability_key"),
+            "proposal_type": proposal.get("proposal_type"),
+            "risk_level": proposal.get("risk_level"),
+            "side_effect_level": proposal.get("side_effect_level"),
+            "required_approval_level": required_approval_level,
+            "source": "chat_skill_reuse_confirmation_card",
         }
         approval = self.repository.update_record("approvals", approval["approval_id"], {"approval_context_json": context})
         self.repository.update_record("action_proposals", proposal["action_proposal_id"], {"approval_id": approval["approval_id"]})
@@ -4964,6 +5090,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "questions": list(route_decision.get("clarification_questions") or []),
                 "default_collapsed": False,
             }
+        self._process_agentic_skill_calls(
+            list(llm_result.skill_calls or []),
+            task=task,
+            conversation_id=conversation_id,
+            context_pack=context_pack,
+            cards=cards,
+        )
         if self._should_run_react_grounding(
             user_message=data.message,
             cards=cards,
@@ -5355,6 +5488,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mcp_result_cards",
             "mcp_tool_event",
             "mcp_execution_result",
+            "skill_reuse_result",
             "react_grounding",
             "tool_errors",
             "error_card",
@@ -6226,8 +6360,200 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 records.append(tool)
         return records
 
-    def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
-        return function_calling_tools_for_mcp(self._agentic_mcp_catalog_records_for_mode(mode_decision))
+    @staticmethod
+    def _skill_function_name(skill_key: str) -> str:
+        return mcp_tool_function_name(f"skill__{skill_key}")
+
+    def _approved_skill_function_records(self) -> list[dict[str, Any]]:
+        return [
+            item
+            for item in self.repository.list_records("skills", filters={"status": "approved"}, limit=self.configured_limit("api_list_skills"))["items"]
+            if str(item.get("skill_id") or "").strip() and str(item.get("skill_key") or "").strip()
+        ]
+
+    @staticmethod
+    def _skill_function_spec(skill: dict[str, Any]) -> dict[str, Any]:
+        skill_key = str(skill.get("skill_key") or skill.get("skill_id") or "").strip()
+        schema = skill.get("input_schema_json") if isinstance(skill.get("input_schema_json"), dict) else {"type": "object"}
+        description = str(skill.get("description_for_llm") or skill.get("description") or skill.get("title") or skill_key).strip()
+        risk = str(skill.get("risk_level") or "medium")
+        permission = str(skill.get("permission_scope") or skill.get("allowed_side_effect_level") or "unknown")
+        return {
+            "type": "function",
+            "function": {
+                "name": ResearchAssistantService._skill_function_name(skill_key),
+                "description": (
+                    f"{description} Skill route={skill_key}; risk={risk}; permission_scope={permission}. "
+                    "Selecting this function only creates an approval-gated skill reuse proposal; it never executes directly. "
+                    "Use only parameters declared in the JSON schema."
+                )[:1024],
+                "parameters": schema,
+            },
+        }
+
+    def _agentic_function_tools(self, mode_decision: ModeDecision) -> tuple[list[dict[str, Any]], FunctionToolRegistry]:
+        specs, mcp_registry = function_calling_tools_for_mcp(self._agentic_mcp_catalog_records_for_mode(mode_decision))
+        registry = FunctionToolRegistry(
+            {
+                name: {**dict(mapping), "kind": str(mapping.get("kind") or "mcp")}
+                for name, mapping in mcp_registry.items()
+            }
+        )
+        for skill in self._approved_skill_function_records():
+            skill_key = str(skill.get("skill_key") or "").strip()
+            skill_id = str(skill.get("skill_id") or "").strip()
+            if not skill_key or not skill_id:
+                continue
+            function_name = self._skill_function_name(skill_key)
+            specs.append(self._skill_function_spec(skill))
+            registry[function_name] = {
+                "kind": "skill",
+                "skill_id": skill_id,
+                "skill_key": skill_key,
+            }
+        return specs, registry
+
+    def _process_agentic_skill_calls(
+        self,
+        calls: list[SkillFunctionCall],
+        *,
+        task: dict[str, Any],
+        conversation_id: str,
+        context_pack: dict[str, Any],
+        cards: dict[str, Any],
+    ) -> None:
+        if not calls:
+            return
+        cards.setdefault("action_proposals", [])
+        cards.setdefault("skill_reuse_result", {})
+        for call in calls:
+            try:
+                reuse = self.propose_skill_reuse(
+                    task_id=str(task["task_id"]),
+                    skill_id=call.skill_id,
+                    input_json={
+                        **dict(call.payload_json),
+                        "selected_skill": {
+                            "skill_id": call.skill_id,
+                            "skill_key": call.skill_key,
+                            "function_name": call.function_name,
+                            "stable_call_id": call.stable_call_id,
+                        },
+                    },
+                    conversation_id=conversation_id,
+                    context_pack_id=str(context_pack.get("context_pack_id") or ""),
+                )
+                proposal = reuse.get("action_proposal") if isinstance(reuse, dict) else None
+                if not isinstance(proposal, dict):
+                    cards["skill_reuse_result"] = {
+                        "auto_executed": False,
+                        "executed": False,
+                        "status": "blocked",
+                        "proposal_type": "skill",
+                        "skill_id": call.skill_id,
+                        "skill_key": call.skill_key,
+                        "reason_codes": list(reuse.get("reason_codes") or ["skill_reuse_proposal_blocked"]) if isinstance(reuse, dict) else ["skill_reuse_proposal_blocked"],
+                        "warnings": list(reuse.get("warnings") or []) if isinstance(reuse, dict) else [],
+                    }
+                    continue
+                payload = dict(proposal.get("input_json") or {})
+                preflight_payload = {
+                    "passed": True,
+                    "approval_required": True,
+                    "failed_checks": [],
+                    "preflight_checks": ["capability_status", "skill_registry"],
+                    "payload_digest": sha256_json(payload),
+                    "skill_id": call.skill_id,
+                    "skill_key": call.skill_key,
+                }
+                proposal_state = self.repository.update_record("action_proposals", proposal["action_proposal_id"], {"status": "approval_required"})
+                self.create_trace_event(
+                    TraceEventCreate(
+                        task_id=proposal["task_id"],
+                        event_type="action_preflight",
+                        component="research_assistant.execution_gateway",
+                        status="approval_required",
+                        payload_json={"action_proposal_id": proposal["action_proposal_id"], "preflight": preflight_payload},
+                    )
+                )
+                approval = None
+                if str(proposal_state.get("status") or "") == "approval_required":
+                    approval = self._ensure_skill_action_proposal_chat_approval(proposal_state)
+                    proposal_state = self.repository.get_record("action_proposals", proposal["action_proposal_id"]) or proposal_state
+                    preflight_payload.update(
+                        {
+                            "approval_id": approval["approval_id"],
+                            "required_confirmation_text": approval["required_confirmation_text"],
+                            "approval_type": approval["approval_type"],
+                        }
+                    )
+                card = {
+                    "title": proposal_state.get("title") or f"复用技能：{call.skill_key}",
+                    "proposal_type": "skill",
+                    "skill_id": call.skill_id,
+                    "skill_key": call.skill_key,
+                    "risk": proposal_state.get("risk_level"),
+                    "approval_required": True,
+                    "status": proposal_state.get("status"),
+                    "action_proposal_id": proposal_state["action_proposal_id"],
+                    "route": f"skill/{call.skill_key}",
+                    "direct_execution_allowed": False,
+                    "required_confirmations": [SKILL_LIBRARY_REUSE_CONFIRMATION],
+                }
+                if approval:
+                    card.update(
+                        {
+                            "approval_id": approval["approval_id"],
+                            "approval_type": approval["approval_type"],
+                            "required_confirmation_text": approval["required_confirmation_text"],
+                            "approval_status": approval["status"],
+                        }
+                    )
+                cards["action_proposals"].append(card)
+                cards["skill_reuse_result"] = {
+                    "auto_executed": False,
+                    "executed": False,
+                    "status": proposal_state.get("status"),
+                    "proposal_type": "skill",
+                    "skill_id": call.skill_id,
+                    "skill_key": call.skill_key,
+                    "route": f"skill/{call.skill_key}",
+                    "action_proposal_id": proposal_state["action_proposal_id"],
+                    "preflight": preflight_payload,
+                    "direct_execution_allowed": False,
+                }
+                if approval:
+                    cards["skill_reuse_result"].update(
+                        {
+                            "approval_id": approval["approval_id"],
+                            "approval_type": approval["approval_type"],
+                            "required_confirmation_text": approval["required_confirmation_text"],
+                            "approval_status": approval["status"],
+                        }
+                    )
+            except Exception as exc:  # noqa: BLE001 - skill routing failures must be visible, not silent.
+                error = {
+                    "reason_code": "skill_reuse_proposal_failed",
+                    "code": "skill_reuse_proposal_failed",
+                    "stage": "skill_function_call_dispatch",
+                    "skill_id": call.skill_id,
+                    "skill_key": call.skill_key,
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                logger.exception("research assistant skill function dispatch failed: skill=%s", call.skill_key)
+                cards["skill_reuse_result"] = {
+                    "auto_executed": False,
+                    "executed": False,
+                    "status": "failed",
+                    "proposal_type": "skill",
+                    "skill_id": call.skill_id,
+                    "skill_key": call.skill_key,
+                    "error": error,
+                }
+                cards.setdefault("tool_errors", [])
+                if isinstance(cards["tool_errors"], list):
+                    cards["tool_errors"].append(error)
 
     @staticmethod
     def _looks_like_large_tool_payload(payload: dict[str, Any]) -> bool:
@@ -6294,7 +6620,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         runtime_activation: dict[str, Any],
         assembly_trace: dict[str, Any],
         function_tools: list[dict[str, Any]] | None = None,
-        function_tool_registry: dict[str, dict[str, str]] | None = None,
+        function_tool_registry: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], ContextBudgetPlan, list[dict[str, str]], dict[str, Any]]:
         try:
             result = self.llm_client.complete(
@@ -6968,7 +7294,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         runtime_config: dict[str, Any],
         mode_decision: ModeDecision,
         function_tools: list[dict[str, Any]] | None = None,
-        function_tool_registry: dict[str, dict[str, str]] | None = None,
+        function_tool_registry: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[LlmCallResult, list[dict[str, str]], Any]:
         route_seeds = self._seeded_react_tool_calls(cards, mode_decision)
         route_candidates = self._route_candidates_from_cards(cards)
@@ -7802,6 +8128,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
         if isinstance(route, dict) and route.get("requires_clarification"):
             return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
+        skill_reuse = cards.get("skill_reuse_result") if isinstance(cards, dict) else None
+        if isinstance(skill_reuse, dict) and skill_reuse.get("proposal_type") == "skill":
+            return self._apply_main_reply_policy(self._render_skill_reuse_preflight_reply(skill_reuse), mode_decision)
         if (
             not grounded_business_answer_available
             and mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY}
@@ -8100,6 +8429,25 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             lines.append(f"确认口令：{required_confirmation}")
             lines.append("如需在对话内执行，请回填该 approval_id，并让 confirmation_text 与确认口令完全一致。")
         lines.append("下一步：请先补充必要 ID/参数，或明确说“先给预检”、“我确认执行”等边界。")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_skill_reuse_preflight_reply(skill_reuse: dict[str, Any]) -> str:
+        skill_key = str(skill_reuse.get("skill_key") or "selected_skill")
+        lines = [
+            f"已将技能 {skill_key} 转成待审批的复用提案；本轮没有直接执行技能。",
+            "安全边界：LLM 只能选择技能并生成 Action Proposal，执行必须由用户确认。",
+        ]
+        approval_id = str(skill_reuse.get("approval_id") or "")
+        required_confirmation = str(skill_reuse.get("required_confirmation_text") or "")
+        if approval_id and required_confirmation:
+            lines.append(f"审批 ID：{approval_id}")
+            lines.append(f"确认口令：{required_confirmation}")
+            lines.append("如需在对话内继续，请回填该 approval_id，并让 confirmation_text 与确认口令完全一致。")
+        else:
+            reason_codes = skill_reuse.get("reason_codes") if isinstance(skill_reuse.get("reason_codes"), list) else []
+            if reason_codes:
+                lines.append("阻断原因：" + "；".join(str(item) for item in reason_codes[:3]))
         return "\n".join(lines)
 
     @staticmethod
@@ -9657,8 +10005,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         """Create an Action Proposal for skill reuse; it never executes directly."""
 
         skill = self.repository.get_record("skill_library", skill_id)
+        skill_source = "skill_library"
         if not skill:
-            raise KeyError(f"skill library entry not found: {skill_id}")
+            skill = self.repository.get_record("skills", skill_id)
+            skill_source = "skill_registry"
+        if not skill:
+            raise KeyError(f"skill entry not found: {skill_id}")
         if skill.get("status") != "approved":
             return {
                 "status": "blocked",
@@ -9666,11 +10018,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "reason_codes": ["skill_library_reuse_requires_approved_skill"],
                 "warnings": [f"skill {skill.get('skill_key') or skill_id} is not approved and cannot be reused"],
             }
+        recipe_json = skill.get("recipe_json") if isinstance(skill.get("recipe_json"), dict) else {}
+        provenance_json = skill.get("provenance_json") if isinstance(skill.get("provenance_json"), dict) else {}
+        source_refs = recipe_json.get("source_refs") or provenance_json.get("source_refs") or ([skill["source_ref"]] if skill.get("source_ref") else [])
         payload = dict(input_json or {})
         payload["skill_library_ref"] = {
             "skill_id": skill["skill_id"],
             "skill_key": skill["skill_key"],
-            "source_refs": (skill.get("recipe_json") or {}).get("source_refs") or (skill.get("provenance_json") or {}).get("source_refs") or [],
+            "source": skill_source,
+            "source_refs": source_refs,
         }
         proposal = self.create_action_proposal(
             ActionProposalCreate(

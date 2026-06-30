@@ -1,0 +1,78 @@
+{
+  "actual": "_agentic_function_tools only exposes MCP catalog specs; _extract_litellm_tool_calls drops non-MCP names, so skills are invisible unless explicitly calling propose_skill_reuse by API.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_config_authority_characterization.py",
+    "backend/tests/research_assistant/test_skill_library.py",
+    "tests/aistock_validation/bugs/20260630_BUG-563-ra-t9-6-skill-function-calling-parity-approved-skills-are-not-in-llm-sel.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-563",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-30T06:12:11.366062Z",
+  "description": "_agentic_function_tools only exposes MCP catalog specs; _extract_litellm_tool_calls drops non-MCP names, so skills are invisible unless explicitly calling propose_skill_reuse by API.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260630-1ab4cb0e150d",
+      "timestamp": "2026-06-30T06:12:11.366058Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Approved skills appear as prefixed LLM function specs with schemas; LLM-selected skill calls create skill Action Proposals through propose_skill_reuse and never execute directly; MCP tool path remains unchanged.",
+  "first_seen_at": "2026-06-30T06:12:11.366062Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1768,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1768",
+  "last_seen_at": "2026-06-30T06:12:11.366062Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA T9-6 skill function-calling parity: approved skills are not in LLM selectable tool set",
+  "trigger_condition": {
+    "fingerprint": "1ab4cb0e150d108b814a0cbb",
+    "source_event_id": "FE-20260630-1ab4cb0e150d"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -456,11 +456,11 @@ def mcp_tool_function_name(tool_name: str) -> str:
     return f"{safe[:55]}_{digest}"
 
 
-def function_calling_tools_for_mcp(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
+def function_calling_tools_for_mcp(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     """Build LiteLLM/OpenAI function specs plus a local name-to-MCP registry."""
 
     specs: list[dict[str, Any]] = []
-    registry: dict[str, dict[str, str]] = {}
+    registry: dict[str, dict[str, Any]] = {}
     for tool in tools:
         if str(tool.get("status") or "") not in {"enabled", "ready", "approved"}:
             continue
