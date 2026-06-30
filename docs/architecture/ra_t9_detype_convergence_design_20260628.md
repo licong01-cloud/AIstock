@@ -107,13 +107,13 @@
 ### 7.0 动因(用户诉求)
 用户要求:LLM 应清楚自己有哪些工具**和 skill**、能基于问题**自主选择** MCP 或 skill、未来新增 MCP/skill **由 LLM 自己判断**(免硬编码)。代码核实现状(2026-06-28):
 - **MCP 工具侧**:T4(BUG-527)已达标 —— 整个只读域以 function spec(name+描述+schema)暴露,LLM `tool_choice="auto"` 自选;新增只读工具进 `TOOL_MANIFEST` 即自动可见,免改 service.py。
-- **Skill 侧:落后一代**。skill **从不进 LLM 的 function-calling 列表**;触发靠 `runtime_context.yaml` 的 `natural_language_triggers` **关键词分类器** + `propose_skill_reuse` 显式 API,且必经 Action Proposal → 审批。新增 skill 要改 YAML 注册 capability(skill_refs + 关键词),**永不**进 LLM 可选集。
-- 结论:skill 既不平权、新增又靠关键词硬注册 = 正是 B9 要消灭的"框架按关键词代选"。这是 T9 漏盘的一片,补为 T9-6。
+- **Skill 侧:落后一代,且无对话触发路径**。skill **从不进 LLM 的 function-calling 列表**(`function_calling_tools_for_mcp` 只迭代 MCP 记录)。**经代码核实(2026-06-30):skill 当前没有任何自动触发机制** —— `natural_language_triggers` 是 `workflow_capabilities`(MCP 编排能力)的字段,**不是 skill 的触发器**;skill 只能通过 `propose_skill_reuse(skill_id)` 显式调用,而生产无任何对话/MCP 路径会自动调它(仅测试与 qe_autonomy 的 L4 回放只读建议用到)。即:对话里用户根本无法让 LLM 用上任何 skill。
+- 结论:skill 既不进 LLM 可选集、对话里又完全无法触发 = 比"按关键词代选"更严重(根本用不上)。补为 T9-6。**T9-6 是"从无到有给 skill 建 LLM 可选集 + native tool_call 路由 + 审批门接入",不是"改造现有关键词触发"(现状无此触发)。**
 
 ### 7.1 目标态(对齐 Claude Code 的 skill 模型)
-- **skill 平权进 LLM 可选集**:每个 approved skill 生成一个 function spec(用其 `description_for_llm` + "何时用"),与 MCP 工具同列暴露给 LLM,**LLM 基于问题自主决定要不要用某 skill**(推理选择,非关键词匹配)。
-- **去关键词触发**:废除/降级 `natural_language_triggers` 关键词分类器作为 skill 触发的主路径;触发改由 LLM function-calling 决定(= 去类型化,同 T9 主线哲学)。
-- **新增即可见**:skill 进 catalog(seed)即自动对 LLM 可见可选,免在 YAML 手写关键词触发。
+- **skill 平权进 LLM 可选集(从无到有)**:每个 approved skill 生成一个 function spec(用其 `description`,可选新增 `description_for_llm` 更精确说明"何时用";parameters 用现成 `input_schema_json`),与 MCP 工具同列暴露给 LLM,**LLM 基于问题自主决定要不要用某 skill**(推理选择,非关键词匹配)。
+- **触发=LLM function-calling(本就无关键词触发可废)**:现状 skill 无任何自动触发,T9-6 是新建"LLM 选中 skill 的 tool_call → 路由到 propose_skill_reuse"这条路径;选择权交 LLM 推理,不引入任何关键词分类器。
+- **新增即可见**:新增一条 approved skill 进 catalog(DEFAULT_SKILLS/skills 表)即自动对 LLM 可见可选,免写任何触发关键词。
 - **审批门绝不动(护栏)**:LLM "选了某 skill" ≠ 直接执行。skill 的 `direct_execution_allowed=False` / `action_proposal_required=True` 保持;LLM 选中 → 生成 Action Proposal → preflight → **用户审批** → 才执行。即:**把"选择权"交还 LLM,把"执行权"仍锁在审批门后**。这正是 RA 相对 Claude Code/OpenClaw 的护栏优势(金融生产必需),不削弱。
 
 ### 7.2 与渐进式披露(借鉴 Claude Code)
@@ -121,9 +121,9 @@
 - 当前 RA 仅 6 个 skill,常驻全部描述零压力;此设计为未来 skill 增多预留。
 
 ### 7.3 实施(排在 A 组之后,单独 PR,串行)
-- T9-6a:skill → function spec 生成器(复用现有 `description_for_llm`),并入 `_agentic_function_tools` 的可选集(与 MCP 工具同列,带 skill 标记)。
-- T9-6b:LLM 选中 skill 的 native tool_call → 路由到 `propose_skill_reuse` 生成 Action Proposal(不直接执行),接现有审批门。
-- T9-6c:废除 `natural_language_triggers` 作为触发主路径(降为可选 seed 提示,或删);新增 skill 进 catalog 即自动进可选集。
+- T9-6a:skill → function spec 生成器(用 skill `description` + `input_schema_json`,可选补 `description_for_llm`),并入 `_agentic_function_tools`(service.py:6229)的可选集(与 MCP 工具同列,registry 标 kind=skill)。
+- T9-6b:LLM 选中 skill 的 native tool_call(`_extract_litellm_tool_calls` service.py:1577)→ 命中 kind=skill 时路由到 `propose_skill_reuse`(service.py:9648)生成 Action Proposal(不直接执行),继承其 `direct_execution_allowed=False` + 审批门(CONFIRM_SKILL_REUSE)。
+- T9-6c:新增 approved skill 进 catalog 即自动进可选集(无需任何触发关键词);不破 MCP 工具现有 spec/dispatch/capability 门控。
 - T9-6d:回归断言 —— ① skill 换措辞(不含原关键词)LLM 仍能基于语义选中;② 选中 skill 必出 Action Proposal 且未经审批不执行(审批门未削);③ 新增一个 mock skill 进 catalog,无需写关键词即被 LLM 可见可选。
 
 ## 7bis. T9-7:能力/记忆调用去机械化 — 区分"能力询问"与"执行请求",自然语言触发记忆
