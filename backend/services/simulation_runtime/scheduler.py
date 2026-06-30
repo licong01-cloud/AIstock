@@ -4346,7 +4346,8 @@ class SimulationLifecycleScheduler:
         open_order_count = int(broker_evidence.get("broker_open_order_count") or 0)
         if status != "EXECUTED" or open_order_count != 0 or metadata.get("broker_mutated") is True:
             raise RuntimeConfigInvalidError(
-                "MiniQMT stale runtime recovery requires executed broker-empty operator evidence",
+                "MiniQMT stale runtime recovery requires executed broker-empty operator evidence; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_OPERATOR_EVIDENCE_REJECTED",
                 context={
                     "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_OPERATOR_EVIDENCE_REJECTED",
                     "run_id": run.run_id,
@@ -4404,7 +4405,8 @@ class SimulationLifecycleScheduler:
         run = self.repository.get_simulation_daily_run(run_id)
         if run.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             raise RuntimeConfigInvalidError(
-                "MiniQMT stale runtime recovery requires a MiniQMT SIM run",
+                "MiniQMT stale runtime recovery requires a MiniQMT SIM run; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_BACKEND_UNSUPPORTED",
                 context={
                     "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_BACKEND_UNSUPPORTED",
                     "run_id": run.run_id,
@@ -4413,7 +4415,8 @@ class SimulationLifecycleScheduler:
             )
         if run.status != SimulationDailyRunStatus.RECONCILING:
             raise RuntimeConfigInvalidError(
-                "MiniQMT stale runtime recovery only accepts RECONCILING runs",
+                "MiniQMT stale runtime recovery only accepts RECONCILING runs; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_STATUS_UNSUPPORTED",
                 context={
                     "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_STATUS_UNSUPPORTED",
                     "run_id": run.run_id,
@@ -4422,7 +4425,8 @@ class SimulationLifecycleScheduler:
             )
         if run.run_payload_json.get("broker_called") is not False or int(run.run_payload_json.get("submitted_intents") or 0) != 0:
             raise RuntimeConfigInvalidError(
-                "MiniQMT stale runtime recovery requires a no-side-effect run",
+                "MiniQMT stale runtime recovery requires a no-side-effect run; "
+                "reason_code=MINIQMT_STALE_RUNTIME_RECOVERY_RUN_HAS_SIDE_EFFECT_EVIDENCE",
                 context={
                     "reason_code": "MINIQMT_STALE_RUNTIME_RECOVERY_RUN_HAS_SIDE_EFFECT_EVIDENCE",
                     "run_id": run.run_id,

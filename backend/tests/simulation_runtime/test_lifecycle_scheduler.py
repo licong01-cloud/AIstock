@@ -6026,6 +6026,103 @@ def test_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanu
     assert len(broker.place_order_payloads) == len(plan.intents)
 
 
+def test_scheduler_stale_runtime_recovery_rejects_non_reconciling_run() -> None:
+    scheduler, repo, _broker, _qmt_binding = _miniqmt_shadow_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.SUCCEEDED,
+        payload_patch={"broker_called": False, "submitted_intents": 0},
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="MINIQMT_STALE_RUNTIME_RECOVERY_RUN_STATUS_UNSUPPORTED"):
+        scheduler.require_no_side_effect_reconciling_run_for_operator_recovery(run_id=run.run_id)
+
+
+@pytest.mark.parametrize(
+    ("broker_called", "submitted_intents"),
+    [
+        (True, 0),
+        (False, 1),
+    ],
+)
+def test_scheduler_stale_runtime_recovery_rejects_run_with_side_effect_evidence(
+    broker_called: bool,
+    submitted_intents: int,
+) -> None:
+    scheduler, repo, _broker, _qmt_binding = _miniqmt_shadow_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={"broker_called": broker_called, "submitted_intents": submitted_intents},
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="MINIQMT_STALE_RUNTIME_RECOVERY_RUN_HAS_SIDE_EFFECT_EVIDENCE"):
+        scheduler.require_no_side_effect_reconciling_run_for_operator_recovery(run_id=run.run_id)
+
+
+@pytest.mark.parametrize(
+    "operator_result",
+    [
+        SimpleNamespace(
+            command_id="opcmd_recover_rejected",
+            command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+            status=MiniQMTOperatorCommandStatus.REJECTED,
+            metadata={"broker_evidence": {"broker_open_order_count": 0}, "broker_mutated": False},
+        ),
+        SimpleNamespace(
+            command_id="opcmd_recover_open_broker",
+            command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+            status=MiniQMTOperatorCommandStatus.EXECUTED,
+            metadata={"broker_evidence": {"broker_open_order_count": 1}, "broker_mutated": False},
+        ),
+        SimpleNamespace(
+            command_id="opcmd_recover_mutated_broker",
+            command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+            status=MiniQMTOperatorCommandStatus.EXECUTED,
+            metadata={"broker_evidence": {"broker_open_order_count": 0}, "broker_mutated": True},
+        ),
+    ],
+)
+def test_scheduler_stale_runtime_recovery_rejects_bad_operator_evidence(operator_result: SimpleNamespace) -> None:
+    scheduler, repo, _broker, _qmt_binding = _miniqmt_shadow_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    assert run is not None
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={"broker_called": False, "submitted_intents": 0},
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="MINIQMT_STALE_RUNTIME_RECOVERY_OPERATOR_EVIDENCE_REJECTED"):
+        scheduler.recover_no_side_effect_reconciling_run_after_operator_cleanup(
+            run_id=run.run_id,
+            operator_result=operator_result,
+            source="unit_test_bad_operator_evidence",
+        )
+
+
 def test_production_context_provider_builds_localsim_broker_from_persisted_paper_state():
     """LocalSim production context constructs a real broker using persisted Paper v2 cash and lots."""
     from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider

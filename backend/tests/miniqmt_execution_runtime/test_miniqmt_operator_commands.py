@@ -105,6 +105,45 @@ def test_operator_cancel_terminalizes_runtime_owned_vnpy_instance() -> None:
     assert stored_child.status == MiniQMTChildOrderStatus.CANCELLED
     assert stored_algo.status == MiniQMTAlgoInstanceStatus.CANCELLED
     assert stored_algo.metadata["operator_command_id"] == "opcmd_cancel_vnpy_001"
+    assert stored_algo.metadata["terminal_vnpy_active_order_ids"]
+    assert stored_algo.metadata["terminal_vnpy_active_orders_ignored"] is True
+
+
+def test_normal_terminalization_guard_keeps_vnpy_active_when_core_still_has_active_order() -> None:
+    runtime, repo, _gateway = _runtime()
+    algo = runtime.create_vnpy_algo_instance(
+        parent_intent_id="intent_vnpy_guard_000001",
+        strategy_slot_id="slot_alpha_001",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=1000,
+        algo_code="SNIPER_MINIQMT",
+        limit_price=10.0,
+    )
+    runtime.on_tick(
+        symbol="000001.SZ",
+        price=9.99,
+        payload={"bid_price_1": 9.98, "bid_volume_1": 1000, "ask_price_1": 9.99, "ask_volume_1": 1000},
+    )
+    child = repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0]
+    runtime.record_order_event(
+        broker_order_id=child.broker_order_id or child.child_order_id,
+        status="50",
+        payload={"order_status": 50, "status_msg": "still active"},
+    )
+    algo_after_tick = repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0]
+    assert algo_after_tick.metadata["vnpy_algo_state"]["snapshot"]["active_order_ids"]
+
+    repo.upsert_child_order(child.model_copy(update={"status": MiniQMTChildOrderStatus.CANCELLED}))
+    updated = runtime._terminalize_algo_if_all_children_terminal(  # noqa: SLF001
+        runtime.config.runtime_id,
+        algo.algo_instance_id,
+        reason="unit_normal_guard",
+    )
+
+    assert updated is None
+    guarded_algo = repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0]
+    assert guarded_algo.status == MiniQMTAlgoInstanceStatus.ACTIVE
 
 
 def test_cancel_all_open_orders_imports_active_broker_orders_before_cancel() -> None:
@@ -300,6 +339,89 @@ def test_stale_runtime_recovery_terminalizes_only_when_broker_empty_without_canc
     assert stored_algo.status == MiniQMTAlgoInstanceStatus.FAILED
     assert stored_algo.metadata["operator_command_id"] == "opcmd_recover_empty_broker_001"
     assert repo.list_child_orders(runtime.config.runtime_id, active_only=True) == []
+
+
+def test_stale_runtime_recovery_executes_when_status_50_order_has_production_stale_evidence() -> None:
+    runtime, repo, gateway = _runtime()
+    algo = runtime.create_algo_instance(
+        parent_intent_id="intent_stale_runtime_order_time",
+        strategy_slot_id="slot_alpha_001",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=100,
+        algo_code="SNIPER_MINIQMT",
+    )
+    child = runtime.submit_child_order(algo_instance_id=algo.algo_instance_id, quantity=100, price=10.0)
+    gateway._orders[:] = [
+        {
+            "order_id": "900004",
+            "stock_code": "000001.SZ",
+            "order_type": 23,
+            "order_volume": 100,
+            "traded_volume": 0,
+            "order_status": 50,
+            "order_time_iso": "2026-06-08T10:00:00+08:00",
+        }
+    ]
+
+    result = runtime.execute_operator_command(
+        command_id="opcmd_recover_stale_order_time_001",
+        command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+        reason="broker stale order-time evidence recovery",
+        payload={"run_id": "simrun_stale_runtime"},
+    )
+
+    assert result.status == MiniQMTOperatorCommandStatus.EXECUTED
+    broker_evidence = result.metadata["broker_evidence"]
+    assert broker_evidence["broker_order_count"] == 1
+    assert broker_evidence["broker_open_order_count"] == 0
+    assert broker_evidence["excluded_stale_order_count"] == 1
+    assert broker_evidence["excluded_stale_order_ids"] == ["900004"]
+    assert broker_evidence["excluded_stale_orders"][0]["reason"] == "historical_open_like_order_reported_by_broker_snapshot"
+    assert result.broker_packets[0]["excluded_stale_order_ids"] == ["900004"]
+    assert gateway.cancelled_orders == []
+    assert repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0].child_order_id == child.child_order_id
+    assert repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0].status == MiniQMTAlgoInstanceStatus.FAILED
+
+
+def test_stale_runtime_recovery_rejects_status_50_order_without_stale_evidence() -> None:
+    runtime, repo, gateway = _runtime()
+    algo = runtime.create_algo_instance(
+        parent_intent_id="intent_live_runtime_status_50",
+        strategy_slot_id="slot_alpha_001",
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        target_quantity=100,
+        algo_code="SNIPER_MINIQMT",
+    )
+    child = runtime.submit_child_order(algo_instance_id=algo.algo_instance_id, quantity=100, price=10.0)
+    gateway._orders[:] = [
+        {
+            "order_id": "900005",
+            "stock_code": "000001.SZ",
+            "order_type": 23,
+            "order_volume": 100,
+            "traded_volume": 0,
+            "order_status": 50,
+        }
+    ]
+
+    result = runtime.execute_operator_command(
+        command_id="opcmd_recover_live_order_001",
+        command_type="RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT",
+        reason="broker status 50 without stale evidence must block",
+        payload={"run_id": "simrun_stale_runtime"},
+    )
+
+    assert result.status == MiniQMTOperatorCommandStatus.REJECTED
+    assert result.errors[0]["error_code"] == "MINIQMT_OPERATOR_BROKER_OPEN_ORDERS_PRESENT"
+    broker_evidence = result.metadata["broker_evidence"]
+    assert broker_evidence["broker_open_order_ids"] == ["900005"]
+    assert broker_evidence["excluded_stale_order_count"] == 0
+    assert broker_evidence["excluded_stale_order_ids"] == []
+    assert gateway.cancelled_orders == []
+    assert repo.list_child_orders(runtime.config.runtime_id, active_only=False)[0].child_order_id == child.child_order_id
+    assert repo.list_algo_instances(runtime.config.runtime_id, active_only=False)[0].status == MiniQMTAlgoInstanceStatus.ACTIVE
 
 
 def test_stale_runtime_recovery_rejects_when_broker_has_open_order_without_mutation() -> None:

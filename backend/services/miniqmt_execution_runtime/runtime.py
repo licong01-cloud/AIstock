@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import (
@@ -1012,17 +1013,40 @@ class MiniQMTExecutionRuntime:
                 metadata={"runtime_only_cleanup_mutated": False, "broker_mutated": False},
             )
 
-        open_broker_orders = [dict(order) for order in broker_orders if _is_open_broker_order(order)]
+        excluded_stale_broker_orders = [
+            dict(order)
+            for order in broker_orders
+            if _broker_order_stale_exclusion_reason(order, trade_date=runtime.trade_date) is not None
+        ]
+        open_broker_orders = [
+            dict(order) for order in broker_orders if _is_open_broker_order(order, trade_date=runtime.trade_date)
+        ]
+        non_open_non_stale_order_ids = [
+            order_id
+            for order in broker_orders
+            if (order_id := _broker_order_id(order))
+            and not _is_open_broker_order(order, trade_date=runtime.trade_date)
+            and _broker_order_stale_exclusion_reason(order, trade_date=runtime.trade_date) is None
+        ]
         broker_evidence = {
             "schema_version": "miniqmt_broker_empty_reconcile_evidence_v1",
             "synced_at": sync_started_at,
             "runtime_id": runtime.runtime_id,
             "broker_order_count": len(broker_orders),
             "broker_open_order_count": len(open_broker_orders),
+            "excluded_stale_order_count": len(excluded_stale_broker_orders),
             "broker_trade_count": len(broker_trades),
             "broker_position_count": len(broker_positions),
             "broker_order_ids": [_broker_order_id(order) for order in broker_orders if _broker_order_id(order)],
             "broker_open_order_ids": [_broker_order_id(order) for order in open_broker_orders if _broker_order_id(order)],
+            "excluded_stale_order_ids": [
+                _broker_order_id(order) for order in excluded_stale_broker_orders if _broker_order_id(order)
+            ],
+            "excluded_stale_orders": [
+                _broker_order_stale_evidence(order, trade_date=runtime.trade_date)
+                for order in excluded_stale_broker_orders
+            ],
+            "non_open_non_stale_order_ids": non_open_non_stale_order_ids,
             "broker_authority": "fresh_gateway_sync",
             "broker_mutated": False,
         }
@@ -1032,6 +1056,8 @@ class MiniQMTExecutionRuntime:
             "broker_mutated": False,
             "broker_open_order_count": broker_evidence["broker_open_order_count"],
             "broker_open_order_ids": list(broker_evidence["broker_open_order_ids"]),
+            "excluded_stale_order_count": broker_evidence["excluded_stale_order_count"],
+            "excluded_stale_order_ids": list(broker_evidence["excluded_stale_order_ids"]),
         }
         self.events.append(
             runtime_id=runtime.runtime_id,
@@ -1045,6 +1071,7 @@ class MiniQMTExecutionRuntime:
                 "positions": broker_positions,
                 "sync_before_runtime_only_cleanup": True,
                 "broker_mutated": False,
+                "broker_evidence": broker_evidence,
             },
         )
         if open_broker_orders:
@@ -3048,9 +3075,8 @@ def _order_side(order: dict[str, Any]) -> str | None:
     return None
 
 
-def _is_open_broker_order(order: dict[str, Any]) -> bool:
-    diagnostic = order.get("diagnostic")
-    if isinstance(diagnostic, dict) and diagnostic.get("cancelable_stale_warning") is True:
+def _is_open_broker_order(order: dict[str, Any], *, trade_date: date | None = None) -> bool:
+    if _broker_order_stale_exclusion_reason(order, trade_date=trade_date) is not None:
         return False
     order_status = order.get("order_status")
     if is_terminal_order_status(order_status):
@@ -3061,6 +3087,64 @@ def _is_open_broker_order(order: dict[str, Any]) -> bool:
     if raw_status in {"OPEN", "SUBMITTED", "PARTIALLY_FILLED", "PENDING", "CANCEL_REQUESTED", "ACTIVE", "ACCEPTED"}:
         return True
     return False
+
+
+def _broker_order_stale_exclusion_reason(order: dict[str, Any], *, trade_date: date | None = None) -> str | None:
+    diagnostic = order.get("diagnostic")
+    if isinstance(diagnostic, dict) and diagnostic.get("cancelable_stale_warning") is True:
+        return str(diagnostic.get("cancelable_stale_reason") or "historical_cancelable_order_reported_by_broker")
+    if _truthy(order.get("cancelable_stale_warning")):
+        return str(order.get("cancelable_stale_reason") or "historical_cancelable_order_reported_by_broker")
+    if trade_date is None:
+        return None
+    if not is_open_like_order_status(order.get("order_status")):
+        return None
+    order_day = _broker_order_trade_date(order)
+    if order_day is None or order_day >= trade_date:
+        return None
+    return "historical_open_like_order_reported_by_broker_snapshot"
+
+
+def _broker_order_stale_evidence(order: dict[str, Any], *, trade_date: date | None = None) -> dict[str, Any]:
+    diagnostic = order.get("diagnostic") if isinstance(order.get("diagnostic"), dict) else {}
+    return {
+        "order_id": _broker_order_id(order),
+        "reason": _broker_order_stale_exclusion_reason(order, trade_date=trade_date),
+        "order_status": order.get("order_status"),
+        "status": order.get("status") or order.get("raw_status"),
+        "order_time": order.get("order_time"),
+        "order_time_iso": order.get("order_time_iso") or diagnostic.get("order_time_iso"),
+        "cancelable_stale_warning": (
+            diagnostic.get("cancelable_stale_warning")
+            if "cancelable_stale_warning" in diagnostic
+            else order.get("cancelable_stale_warning")
+        ),
+        "cancelable_stale_reason": (
+            diagnostic.get("cancelable_stale_reason")
+            if "cancelable_stale_reason" in diagnostic
+            else order.get("cancelable_stale_reason")
+        ),
+    }
+
+
+def _broker_order_trade_date(order: dict[str, Any]) -> date | None:
+    order_time_iso = _optional_text(order.get("order_time_iso"))
+    diagnostic = order.get("diagnostic")
+    if order_time_iso is None and isinstance(diagnostic, dict):
+        order_time_iso = _optional_text(diagnostic.get("order_time_iso"))
+    if order_time_iso:
+        try:
+            return datetime.fromisoformat(order_time_iso).date()
+        except ValueError:
+            pass
+    raw_order_time = _optional_text(order.get("order_time"))
+    if not raw_order_time:
+        return None
+    try:
+        timestamp = int(raw_order_time)
+    except ValueError:
+        return None
+    return datetime.fromtimestamp(timestamp, tz=UTC).astimezone(ZoneInfo("Asia/Shanghai")).date()
 
 
 def _open_order_remaining_quantity(order: dict[str, Any]) -> int:
