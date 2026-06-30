@@ -3,10 +3,12 @@
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/services/simulation_runtime/orchestrator.py",
+    "backend/services/simulation_runtime/lifecycle.py",
     "backend/services/simulation_runtime/bridges.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260701_BUG-565-miniqmt-existing-plan-post-close-submit-lacks-shared-trading-window-gate.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-565",
@@ -24,6 +26,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260701-58d985415d53",
       "timestamp": "2026-06-30T17:54:52.875607Z"
+    },
+    {
+      "action": "attach_rca_handoff",
+      "actor": "codex",
+      "note": "Copied rescued read-only RCA into BUG-565 worktree docs/handoff for PR evidence.",
+      "timestamp": "2026-07-01T00:00:00Z"
+    },
+    {
+      "action": "scope_real_orchestrator_file",
+      "actor": "codex",
+      "note": "SimulationLifecycleOrchestrator is implemented in lifecycle.py; keep orchestrator.py entry as original request alias and add actual file for submit gate.",
+      "timestamp": "2026-07-01T00:00:01Z"
     }
   ],
   "evidence_uris": [
