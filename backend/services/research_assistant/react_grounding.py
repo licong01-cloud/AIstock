@@ -202,59 +202,6 @@ STOCK_DEPTH_REQUIRED_CATEGORIES = ("market", "history", "fund_flow", "fundamenta
 STOCK_DEPTH_MIN_REQUIRED_CATEGORIES = 4
 STOCK_DEPTH_MIN_TOOL_EXECUTIONS = 8
 STOCK_ANALYSIS_SERVER_KEY = "aistock-stock-analysis"
-FACTUAL_LIST_QUERY_TERMS = (
-    "leaderboard",
-    "ranking",
-    "rank",
-    "top",
-    "topn",
-    "top n",
-    "list",
-    "table",
-    "respectively",
-    "cagr",
-    "annualized",
-    "\u6392\u540d",
-    "\u699c",
-    "\u5217\u8868",
-    "\u6e05\u5355",
-    "\u8868\u683c",
-    "\u5206\u522b",
-    "\u5404\u81ea",
-    "\u5e74\u5316",
-    "\u6536\u76ca",
-)
-FACTUAL_LOOKUP_QUERY_TERMS = (
-    "what are",
-    "which",
-    "model",
-    "\u6a21\u578b",
-    "\u591a\u5c11",
-    "\u54ea\u4e9b",
-    "\u662f\u4ec0\u4e48",
-)
-JUDGEMENT_SYNTHESIS_QUERY_TERMS = (
-    "analysis",
-    "analyze",
-    "synthesize",
-    "comprehensive",
-    "all-round",
-    "trend",
-    "future",
-    "outlook",
-    "why",
-    "how",
-    "\u5206\u6790",
-    "\u7efc\u5408",
-    "\u5168\u65b9\u4f4d",
-    "\u600e\u4e48\u6837",
-    "\u600e\u4e48\u770b",
-    "\u4e3a\u4ec0\u4e48",
-    "\u539f\u56e0",
-    "\u8d70\u52bf",
-    "\u8d8b\u52bf",
-    "\u672a\u6765",
-)
 UNVERIFIED_VALUE_TERMS = ("not_verified", "not verified", "unverified", "\u672a\u9a8c\u8bc1")
 UNVERIFIED_RISK_TERMS = (
     "risk",
@@ -795,7 +742,7 @@ def _degraded_reply_preserves_redlines(
         return False
     if config.evidence_required and _has_numeric_fact(text) and not (inline_source and inline_as_of):
         return False
-    if not _passes_factual_list_row_citations(text, config, known_sources, known_as_of):
+    if not _passes_factual_list_row_citations(text, known_sources, known_as_of):
         return False
     if not _passes_future_answer_discipline(text, config):
         return False
@@ -1223,22 +1170,6 @@ def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term.lower() in lowered for term in terms)
 
 
-def _is_factual_list_query(config: ReactGroundingConfig) -> bool:
-    question = str(config.user_message or "")
-    lowered = question.lower()
-    if re.search(r"\btop\s*\d+\b", lowered) or re.search(r"\btop\s*n\b", lowered):
-        return True
-    if re.search(r"\u524d\s*\d+\s*(?:\u4f4d|\u540d|\u4e2a|\u6761|loop|run)?", question):
-        return True
-    has_list_cue = _contains_any(question, FACTUAL_LIST_QUERY_TERMS)
-    has_lookup_cue = _contains_any(question, FACTUAL_LOOKUP_QUERY_TERMS)
-    if has_list_cue and has_lookup_cue:
-        return True
-    if _contains_any(question, JUDGEMENT_SYNTHESIS_QUERY_TERMS):
-        return False
-    return has_list_cue
-
-
 def _directional_marker_is_negated(lowered_text: str, marker_start: int) -> bool:
     prefix = lowered_text[max(0, marker_start - 24) : marker_start]
     compact_prefix = re.sub(r"[\s，,。；;：:、（）()\[\]{}\"'“”‘’]+$", "", prefix)
@@ -1288,45 +1219,6 @@ def _passes_future_answer_discipline(text: str, config: ReactGroundingConfig) ->
     return not _has_unnegated_future_directional_marker(text, config)
 
 
-def _requires_synthesis_answer(config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
-    if _is_factual_list_query(config):
-        return False
-    executed_tool_keys = {
-        (item.server_key, item.tool_name)
-        for item in collected_results
-        if item.executed and (item.server_key, item.tool_name) != ("research-assistant", "graph_context")
-    }
-    if len(executed_tool_keys) >= 2 and not any(item.status in {"failed", "rejected"} for item in collected_results):
-        return True
-    return _contains_any(config.user_message, ("综合", "关系", "怎么用", "如何用", "怎么利用", "路径", "链路", "synthesize", "multi-source"))
-
-
-def _looks_like_source_listing(text: str, collected_results: list[McpToolResult]) -> bool:
-    executed_tool_keys = {
-        (item.server_key, item.tool_name)
-        for item in collected_results
-        if item.executed and (item.server_key, item.tool_name) != ("research-assistant", "graph_context")
-    }
-    if len(executed_tool_keys) < 2:
-        return False
-    lowered = text.lower()
-    tool_mentions = sum(1 for item in collected_results if item.tool_name and item.tool_name.lower() in lowered)
-    section_markers = sum(1 for marker in ("来源1", "来源2", "来源 1", "来源 2", "source 1", "source 2", "工具1", "工具2", "tool 1", "tool 2", "第一项", "第二项") if marker in lowered)
-    synthesis_terms = ("bottom-line", "结论", "综合", "意味着", "优先", "路径", "下一步", "判断")
-    return (tool_mentions >= 2 or section_markers >= 2) and not any(term in lowered for term in synthesis_terms)
-
-
-def _passes_multi_source_synthesis(text: str, config: ReactGroundingConfig, collected_results: list[McpToolResult]) -> bool:
-    if not _requires_synthesis_answer(config, collected_results):
-        return True
-    if _looks_like_source_listing(text, collected_results):
-        return False
-    lowered = text.lower()
-    if any(term in lowered for term in ("bottom-line", "结论", "综合", "意味着", "路径", "下一步", "判断", "可以先", "优先")):
-        return True
-    return bool(_evidence_citation_inventory(collected_results))
-
-
 def _factual_list_data_lines(text: str) -> list[str]:
     lines: list[str] = []
     for raw_line in text.splitlines():
@@ -1344,9 +1236,7 @@ def _factual_list_data_lines(text: str) -> list[str]:
     return lines
 
 
-def _passes_factual_list_row_citations(text: str, config: ReactGroundingConfig, known_sources: set[str], known_as_of: set[str]) -> bool:
-    if not _is_factual_list_query(config):
-        return True
+def _passes_factual_list_row_citations(text: str, known_sources: set[str], known_as_of: set[str]) -> bool:
     data_lines = _factual_list_data_lines(text)
     if not data_lines:
         return True
@@ -1446,10 +1336,10 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
         return decision
-    if config.evidence_required and collected_results and not _passes_factual_list_row_citations(text, config, known_sources, known_as_of):
+    if config.evidence_required and collected_results and not _passes_factual_list_row_citations(text, known_sources, known_as_of):
         decision = EvidenceGuardDecision(
             False,
-            "Insufficient evidence: factual ranking/list rows require inline source/as_of.",
+            "Insufficient evidence: numeric table/list rows require inline source/as_of.",
             "factual_list_row_evidence_missing",
             source_count,
             as_of_count,
@@ -1495,13 +1385,6 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
             source_count,
             as_of_count,
         )
-        if program_errors and _text_reports_program_error(text, program_errors):
-            return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
-        if program_errors:
-            return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
-    if config.evidence_required and collected_results and not _passes_multi_source_synthesis(text, config, collected_results):
-        decision = EvidenceGuardDecision(False, "Insufficient evidence: multi-source answers must synthesize a judgement instead of listing tool outputs.", "multi_source_synthesis_missing", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
@@ -1724,7 +1607,6 @@ def run_react_grounding_loop(
                 "unsourced_numeric_fact",
                 "factual_list_row_evidence_missing",
                 "future_answer_boundary_missing",
-                "multi_source_synthesis_missing",
                 "unverified_evidence_risk_label_missing",
             }
             if not guard.allowed and guard.reason == "stock_depth_required_evidence_missing":

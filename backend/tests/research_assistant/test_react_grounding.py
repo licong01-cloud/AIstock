@@ -434,7 +434,7 @@ Sources: qe_archive:leaderboard as_of 2026-06-24.
     assert decision.reason.startswith("placeholder_blocked")
 
 
-def test_judgement_question_still_blocks_source_listing_without_synthesis() -> None:
+def test_t9_3_judgement_question_allows_list_style_without_synthesis_guard() -> None:
     decision = compose_with_evidence_guard(
         "Source 1: quote source source_a as_of 2026-06-17. Source 2: fund flow source source_b as_of 2026-06-17.",
         [
@@ -444,22 +444,51 @@ def test_judgement_question_still_blocks_source_listing_without_synthesis() -> N
         ReactGroundingConfig(max_tool_iterations=4, user_message="please synthesize and analyze this stock"),
     )
 
-    assert decision.allowed is False
-    assert decision.reason == "multi_source_synthesis_missing"
+    assert decision.allowed is True
+    assert decision.reason == "ok"
 
 
-def test_multi_source_listing_is_blocked_without_synthesis_judgement() -> None:
+def test_t9_3_numeric_list_rows_need_source_as_of_without_list_query_terms() -> None:
     decision = compose_with_evidence_guard(
-        "工具1：来源 source_a，截至 2026-06-17。工具2：来源 source_b，截至 2026-06-17。",
-        [
-            _result("tool_a", source="source_a", as_of="2026-06-17"),
-            _result("tool_b", source="source_b", as_of="2026-06-17"),
-        ],
-        ReactGroundingConfig(max_tool_iterations=4, user_message="综合分析一下这些信息"),
+        """
+- loop-001 CAGR 112.00% not_verified - unverified backtest risk; do not treat as real returns
+- loop-010 CAGR 106.00% not_verified - unverified backtest risk; do not treat as real returns
+Sources: qe_archive:leaderboard as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="tell me about QE loop outcomes"),
     )
 
     assert decision.allowed is False
-    assert decision.reason == "multi_source_synthesis_missing"
+    assert decision.reason == "factual_list_row_evidence_missing"
+
+
+def test_t9_3_numeric_list_rows_with_source_as_of_are_allowed_without_list_query_terms() -> None:
+    decision = compose_with_evidence_guard(
+        """
+- loop-001 CAGR 112.00%; source qe_archive:leaderboard; as_of 2026-06-24; not_verified - unverified backtest risk; do not treat as real returns
+- loop-010 CAGR 106.00%; source qe_archive:leaderboard; as_of 2026-06-24; not_verified - unverified backtest risk; do not treat as real returns
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="tell me about QE loop outcomes"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_3_numeric_row_citation_guard_is_wording_invariant_without_list_terms() -> None:
+    messages = ("tell me about QE loop outcomes", "QE loops status", "compare these QE runs")
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "- loop-001 CAGR 112.00% not_verified - unverified backtest risk; do not treat as real returns\n"
+            "Sources: qe_archive:leaderboard as_of 2026-06-24.",
+            _qe_leaderboard_results(),
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is False
+        assert decision.reason == "factual_list_row_evidence_missing"
 
 
 def test_multi_source_bottom_line_synthesis_is_allowed() -> None:
