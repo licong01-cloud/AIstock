@@ -31,8 +31,8 @@
   "expected": "Approved skills appear as prefixed LLM function specs with schemas; LLM-selected skill calls create skill Action Proposals through propose_skill_reuse and never execute directly; MCP tool path remains unchanged.",
   "first_seen_at": "2026-06-30T06:12:11.366062Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7d3ac311170b6a0417281d41c92f39220d8e5e17",
+  "fixed_at": "2026-06-30T12:14:02.382620Z",
   "github_issue_number": 1768,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1768",
   "last_seen_at": "2026-06-30T06:12:11.366062Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1772",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -63,6 +64,9 @@
     "fingerprint": "1ab4cb0e150d108b814a0cbb",
     "source_event_id": "FE-20260630-1ab4cb0e150d"
   },
+  "validation_evidence": [
+    "PR #1772 CI checks green (17 passed, 0 failed), mergeStateStatus=CLEAN before squash merge -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
