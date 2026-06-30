@@ -169,44 +169,6 @@ EXTERNAL_RESEARCH_STUB_MARKERS = (
 )
 GRAPH_CONTEXT_RESULT_KEY = ("research-assistant", "graph_context")
 EVIDENCE_GUARD_RESULT_KEY = ("evidence_guard", "compose_with_evidence_guard")
-INFORMATION_QUERY_TERMS = (
-    "what",
-    "which",
-    "who",
-    "where",
-    "when",
-    "how",
-    "search",
-    "find",
-    "latest",
-    "recent",
-    "news",
-    "information",
-    "overview",
-    "analysis",
-    "trend",
-    "industry",
-    "\u4ec0\u4e48",
-    "\u54ea\u4e9b",
-    "\u8c01",
-    "\u4f55\u65f6",
-    "\u600e\u4e48",
-    "\u5982\u4f55",
-    "\u662f\u5426",
-    "\u67e5\u8be2",
-    "\u641c\u7d22",
-    "\u6700\u65b0",
-    "\u8fd1\u671f",
-    "\u65b0\u95fb",
-    "\u4fe1\u606f",
-    "\u8d44\u6599",
-    "\u60c5\u51b5",
-    "\u57fa\u672c\u9762",
-    "\u884c\u4e1a",
-    "\u8d70\u52bf",
-    "\u8d8b\u52bf",
-    "\u5206\u6790",
-)
 STOCK_DEPTH_QUERY_TERMS = (
     "stock depth",
     "all-round",
@@ -889,10 +851,6 @@ def _has_external_research_call_or_result(calls: list[McpToolCall], results: lis
     )
 
 
-def _is_information_query(config: ReactGroundingConfig) -> bool:
-    return _contains_any(config.user_message, INFORMATION_QUERY_TERMS)
-
-
 def _external_research_web_fallback_call(config: ReactGroundingConfig) -> McpToolCall:
     query = config.user_message.strip() or "external research"
     return McpToolCall(
@@ -912,8 +870,7 @@ def _should_force_external_research(
     collected_calls: list[McpToolCall],
     collected_results: list[McpToolResult],
 ) -> bool:
-    if not _is_information_query(config):
-        return False
+    del config
     if _has_business_evidence(collected_results):
         return False
     if not _has_empty_mcp_business_result(collected_results):
@@ -1744,13 +1701,12 @@ def run_react_grounding_loop(
                         "iteration": iteration,
                         "fallback": "external_research_after_empty_mcp",
                         "fallback_tool_call_count": 1,
-                        "reason": "empty_mcp_result_for_information_query",
+                        "reason": "empty_mcp_business_result_without_external_research",
                     }
                 )
             else:
                 if (
                     _has_empty_external_research_result(collected_results)
-                    and _is_information_query(config)
                     and not _has_business_evidence(collected_results)
                     and _has_empty_mcp_business_result(collected_results)
                 ):
@@ -1847,7 +1803,7 @@ def run_react_grounding_loop(
                         "iteration": iteration,
                         "fallback": "external_research_after_empty_mcp",
                         "fallback_tool_call_count": 1,
-                        "reason": "empty_mcp_result_for_information_query",
+                        "reason": "empty_mcp_business_result_without_external_research",
                     }
                 )
             else:
@@ -1923,13 +1879,12 @@ def run_react_grounding_loop(
                     "iteration": iteration,
                     "fallback": "external_research_after_empty_mcp",
                     "fallback_tool_call_count": 1,
-                    "reason": "empty_mcp_result_for_information_query",
+                    "reason": "empty_mcp_business_result_without_external_research",
                 }
             )
             continue
         if (
             _has_empty_external_research_result(iteration_results)
-            and _is_information_query(config)
             and not _has_business_evidence(collected_results)
             and _has_empty_mcp_business_result(collected_results)
         ):

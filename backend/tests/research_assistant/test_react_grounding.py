@@ -9,6 +9,7 @@ from backend.services.research_assistant.react_grounding import (
     ReactGroundingConfig,
     ToolCatalogEntry,
     ToolGateDecision,
+    _should_force_external_research,
     compose_with_evidence_guard,
     run_react_grounding_loop,
 )
@@ -24,6 +25,176 @@ def _result(tool_name: str, *, source: str, as_of: str) -> McpToolResult:
         as_of=as_of,
         executed=True,
     )
+
+
+def _empty_business_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        status="succeeded",
+        payload_json={"source": "stock_quote:000688", "as_of": "2026-06-30", "items": []},
+        source_refs=[],
+        as_of=None,
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def _business_evidence_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        status="succeeded",
+        payload_json={
+            "source": "stock_quote:000688",
+            "as_of": "2026-06-30",
+            "items": [{"symbol": "000688", "close": 11.2}],
+        },
+        source_refs=["stock_quote:000688"],
+        as_of="2026-06-30",
+        summary="quote evidence is available",
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def _external_research_call() -> McpToolCall:
+    return McpToolCall(
+        server_key="aistock-external-research",
+        tool_name="external_research_search_web",
+        stable_call_id="external-search-001",
+        risk_level="low",
+        side_effect_level="read_only",
+    )
+
+
+def _empty_external_research_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-external-research",
+        tool_name="external_research_search_web",
+        status="succeeded",
+        payload_json={"provider": "offline_stub", "items": []},
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def test_t9_2_force_external_research_without_information_query_terms() -> None:
+    assert _should_force_external_research(
+        config=ReactGroundingConfig(max_tool_iterations=2, user_message="000688"),
+        collected_calls=[],
+        collected_results=[_empty_business_result()],
+    )
+
+
+def test_t9_2_force_external_research_keeps_mechanism_guards() -> None:
+    config = ReactGroundingConfig(max_tool_iterations=2, user_message="000688")
+
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[_business_evidence_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[_external_research_call()],
+        collected_results=[_empty_business_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[_empty_business_result(), _empty_external_research_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[],
+    )
+
+
+def test_t9_2_force_external_research_is_wording_invariant_without_information_terms() -> None:
+    messages = ("000688", "ticker 000688", "Guocheng Mining")
+    for message in messages:
+        assert _should_force_external_research(
+            config=ReactGroundingConfig(max_tool_iterations=2, user_message=message),
+            collected_calls=[],
+            collected_results=[_empty_business_result()],
+        )
+
+
+def test_t9_2_external_stub_fallback_remains_honest_no_data() -> None:
+    class EmptyThenStubProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            if call.server_key == "aistock-stock-analysis":
+                return _empty_business_result()
+            if call.server_key == "aistock-external-research":
+                return McpToolResult(
+                    server_key=call.server_key,
+                    tool_name=call.tool_name,
+                    status="succeeded",
+                    payload_json={
+                        "provider": "offline_stub",
+                        "source": "https://example.org/offline",
+                        "as_of": "2026-06-30",
+                        "items": [],
+                    },
+                    source_refs=["https://example.org/offline"],
+                    as_of="2026-06-30",
+                    summary="offline_stub result contains no real web evidence",
+                    executed=True,
+                    side_effect_level=decision.side_effect_level,
+                )
+            raise AssertionError(f"unexpected tool call {call.server_key}/{call.tool_name}")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("T9-2 fallback must stay read-only")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-empty-business-first",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-stock-analysis",
+                    tool_name="stock_analysis_get_quote",
+                    stable_call_id="quote-empty-001",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "000688"}],
+        model_complete=model_complete,
+        mcp_provider=EmptyThenStubProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            ToolCatalogEntry(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=3, user_message="000688"),
+    )
+
+    assert any(call.server_key == "aistock-external-research" for call in result.tool_calls)
+    assert result.stopped_reason == "no_data_source"
+    assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
+    assert "reason_code=no_data_source_after_mcp_and_external_research" in result.final_text
+    assert result.evidence_guard.source_count == 0
 
 
 def test_future_answer_allows_grounded_non_directional_answer_without_style_template() -> None:
