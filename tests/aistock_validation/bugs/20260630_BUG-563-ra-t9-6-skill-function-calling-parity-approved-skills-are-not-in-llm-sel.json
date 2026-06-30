@@ -4,6 +4,7 @@
     "backend/services/research_assistant/service.py",
     "backend/services/research_assistant/mcp_catalog_sync.py",
     "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_config_authority_characterization.py",
     "backend/tests/research_assistant/test_skill_library.py",
     "tests/aistock_validation/bugs/20260630_BUG-563-ra-t9-6-skill-function-calling-parity-approved-skills-are-not-in-llm-sel.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

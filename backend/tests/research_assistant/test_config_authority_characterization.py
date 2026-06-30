@@ -159,6 +159,9 @@ def test_approved_tool_supply_and_mode_gating_snapshot() -> None:
         if str(tool.get("side_effect_level") or "read_only") != "read_only"
     )
     read_plus_capability_backed_actions = manifest_read_only_count + capability_backed_non_read_only_count
+    approved_skill_count = len(svc._approved_skill_function_records())
+    assert approved_skill_count == 6
+    function_surface_count = read_plus_capability_backed_actions + approved_skill_count
     for mode in DialogueMode:
         decision = svc._decide_dialogue_mode(
             "",
@@ -172,13 +175,13 @@ def test_approved_tool_supply_and_mode_gating_snapshot() -> None:
         tool_counts[mode.value] = (decision.allowed_tool_side_effect, len(tools), len(registry))
 
     assert tool_counts == {
-        "dialogue": ("none", 0, 0),
-        "analysis": ("read_only", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
-        "planning": ("draft_only", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
-        "preflight": ("preflight", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
-        "execution": ("approved_execution", read_plus_capability_backed_actions, read_plus_capability_backed_actions),
-        "audit": ("read_only", 0, 0),
-        "recovery": ("read_only", 0, 0),
+        "dialogue": ("none", approved_skill_count, approved_skill_count),
+        "analysis": ("read_only", function_surface_count, function_surface_count),
+        "planning": ("draft_only", function_surface_count, function_surface_count),
+        "preflight": ("preflight", function_surface_count, function_surface_count),
+        "execution": ("approved_execution", function_surface_count, function_surface_count),
+        "audit": ("read_only", approved_skill_count, approved_skill_count),
+        "recovery": ("read_only", approved_skill_count, approved_skill_count),
     }
 
 
