@@ -33,8 +33,8 @@
   "expected": "Capability inquiry is answered as a capability statement without write or internal slot prompts; missing content prompts use Chinese human wording without subject_key/memory_type; Chinese natural-language memory intents can create memory candidates via approval/scope policy unchanged.",
   "first_seen_at": "2026-06-29T16:15:01.885435Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d98849950fef71c2260cac417da1f40bb1ac8bdd",
+  "fixed_at": "2026-06-30T00:00:00Z",
   "github_issue_number": 1750,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1750",
   "last_seen_at": "2026-06-29T16:15:01.885435Z",
@@ -57,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
