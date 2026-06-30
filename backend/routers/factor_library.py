@@ -10,6 +10,11 @@ from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
 from backend.services.mcp_payload_budget import artifact_ref, clamp_limit, clamp_offset, detail_ref, strip_forbidden_fields, summary_envelope
+from backend.services.strategy_package.factor_usage import (
+    STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+    StrategyPackageFactorUsageQueryError,
+    find_strategy_package_factor_usage,
+)
 
 router = APIRouter(prefix="/factor-library", tags=["factor-library"])
 REGISTER_FACTOR_CONFIRM = "REGISTER_FACTOR"
@@ -117,6 +122,22 @@ def _where(*, search: str | None = None, source: str | None = None, is_available
         clauses.append("c.is_available = %s")
         params.append(is_available)
     return ("WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def _strategy_package_usage_or_http(factor_name: str, *, limit: int = 20) -> dict[str, Any]:
+    try:
+        return find_strategy_package_factor_usage(factor_name, limit=limit)
+    except StrategyPackageFactorUsageQueryError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+                "reason_code": STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+                "message": "strategy package factor usage lookup failed",
+                "factor_name": factor_name,
+                "context": exc.context,
+            },
+        ) from exc
 
 
 @router.get("/factors")
@@ -239,7 +260,7 @@ def get_metric_summary(factor_name: str) -> dict[str, Any]:
 @router.get("/factors/{factor_name}/usage-summary")
 def get_usage_summary(factor_name: str, limit: int | None = Query(None, ge=1)) -> dict[str, Any]:
     safe_limit = clamp_limit(limit)
-    rows = _rows(
+    metric_rows = _rows(
         """
         SELECT factor_name, COUNT(*)::int AS metric_version_count, MAX(calculated_at) AS latest_metric_at,
                COUNT(DISTINCT calc_batch_id)::int AS calc_batch_count
@@ -249,14 +270,26 @@ def get_usage_summary(factor_name: str, limit: int | None = Query(None, ge=1)) -
         """,
         (factor_name, CALC_ENGINE),
     )
+    package_usage = _strategy_package_usage_or_http(factor_name, limit=safe_limit)
     return summary_envelope(
         domain="factor_library.usage_summary",
-        items=rows[:safe_limit],
-        total=len(rows),
+        items=metric_rows[:safe_limit],
+        total=len(metric_rows),
         limit=safe_limit,
         omitted_sections=["qe_archive_full_usage", "strategy_package_full_usage"],
         detail_tool="aistock-qe-archive/qe_archive_query_factor_usage",
         detail_args_hint={"factor_name": factor_name},
+        extra={
+            "strategy_package_usage": {
+                "factor_name": factor_name,
+                "protected": package_usage["protected"],
+                "reason_code": package_usage["reason_code"],
+                "package_count": package_usage["package_count"],
+                "reference_count": package_usage["reference_count"],
+                "sample_references": package_usage["references"][:safe_limit],
+                "query_sources": package_usage["query_sources"],
+            }
+        },
     )
 
 
@@ -314,6 +347,7 @@ def plan_deprecate(req: FactorDeprecatePlanRequest) -> dict[str, Any]:
     where, params = _where(source=req.source)
     suffix = " AND c.factor_name = %s" if where else "WHERE c.factor_name = %s"
     row = _one(f"SELECT factor_name, source, is_available FROM aistock_factor_catalog c {where}{suffix} LIMIT 1", tuple([*params, req.factor_name]))
+    package_usage = _strategy_package_usage_or_http(req.factor_name)
     return {
         "ok": True,
         "domain": "factor_library",
@@ -322,6 +356,14 @@ def plan_deprecate(req: FactorDeprecatePlanRequest) -> dict[str, Any]:
         "reason": req.reason,
         "required_confirmation": DEPRECATE_FACTOR_CONFIRM,
         "will_write": row is not None,
+        "strategy_package_usage": {
+            "protected": package_usage["protected"],
+            "reason_code": package_usage["reason_code"],
+            "package_count": package_usage["package_count"],
+            "reference_count": package_usage["reference_count"],
+            "sample_references": package_usage["references"][:5],
+        },
+        "deprecate_policy": "allowed_even_when_referenced_by_strategy_package",
     }
 
 
