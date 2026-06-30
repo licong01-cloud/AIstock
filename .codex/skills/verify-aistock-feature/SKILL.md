@@ -33,6 +33,8 @@ For non-trivial new feature delivery, architecture changes, cross-module capabil
 4. Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2`.
 5. Do not report ready if any acceptance matrix row has an unapproved gap, simplified/POC/mock-only/static success, partial implementation, or silent fallback.
 
+If a Feature Card or design is stored under `docs/handoff/`, it must be a tracked formal handoff file. Ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, and `docs/handoff/local/`) are only for temporary Codex/Claude exchange notes and are not valid design acceptance artifacts.
+
 Use the BUG workflow only when the task is a BUG/GitHub Issue fix; do not force new feature delivery through BUG JSON unless the user explicitly asks. If the request is workflow policy, docs cleanup, audit, generic analysis, or a non-feature maintenance task, stay off the feature lane and do not read feature design docs by default.
 
 ## Workflow

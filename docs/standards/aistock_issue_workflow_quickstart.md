@@ -24,6 +24,8 @@ Documentation work is split into three tiers so ordinary docs do not pay the ful
 
 Do not create BUG JSON, Context Packs, CodeGraph/UA artifacts, nox, pytest, backend, or frontend validation for `docs-fast-update` or `docs-fast-new`. If a documentation task touches controlled paths, stop the docs fast path and use the normal workflow.
 
+Temporary Codex/Claude exchange notes must use ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or design evidence.
+
 ## Trigger Examples
 
 - `按规范修复 BUG-112，不要合入 main`

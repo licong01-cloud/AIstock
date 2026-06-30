@@ -100,6 +100,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 - Durable project standards live under `docs/standards`.
 - Architecture and design docs live under `docs/architecture` or `docs/analysis` as appropriate, but they must not become competing global standards.
+- `docs/handoff/` is for formal tracked handoff evidence only. Temporary Codex/Claude exchange notes must use ignored scratch paths such as `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - Do not append detailed module changelogs, historical validation narratives, old handoffs, or temporary troubleshooting notes to this file.
 - Store task evidence in validation history, PR bodies, issue workflow state, or module-specific docs instead of this project memory.
 

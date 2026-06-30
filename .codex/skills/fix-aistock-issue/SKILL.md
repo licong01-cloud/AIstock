@@ -40,6 +40,8 @@ Use the three-tier docs flow instead of the BUG workflow for ordinary documentat
 
 For `docs-fast-update` and `docs-fast-new`, use an isolated worktree/branch, keep a version/date plus 1-3 change bullets in the document, run only `git diff --check`, create the PR, and after authorized merge sync root and clean the task worktree/branch. Do not create BUG JSON, Context Pack, CodeGraph/UA artifacts, nox, pytest, backend, or frontend validation for ordinary docs.
 
+Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching docs or issue workflow.
+
 ## Workflow
 
 1. Health-check the environment:
