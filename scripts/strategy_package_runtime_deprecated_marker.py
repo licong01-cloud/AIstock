@@ -86,7 +86,6 @@ def _db_config(*, target_db: str) -> dict[str, Any]:
             "port": int(os.environ["TDX_DB_DEV_PORT"]),
             "dbname": os.environ["TDX_DB_DEV_NAME"],
             "user": os.environ["TDX_DB_DEV_USER"],
-            "password": os.environ["TDX_DB_DEV_PASSWORD"],
         }
         host = str(cfg["host"]).lower()
         dbname = str(cfg["dbname"]).lower()
@@ -108,8 +107,15 @@ def _db_config(*, target_db: str) -> dict[str, Any]:
         "port": int(os.environ["TDX_DB_PORT"]),
         "dbname": os.environ["TDX_DB_NAME"],
         "user": os.environ["TDX_DB_USER"],
-        "password": os.environ["TDX_DB_PASSWORD"],
     }
+
+
+def _db_password(*, target_db: str) -> str:
+    key = "TDX_DB_DEV_PASSWORD" if target_db == TARGET_DEV else "TDX_DB_PASSWORD"
+    value = os.environ.get(key)
+    if not value:
+        raise DeprecatedMarkerScriptError(f"missing database environment key: {key}")
+    return value
 
 
 def _target_metadata(cfg: dict[str, Any], *, target_db: str) -> dict[str, Any]:
@@ -119,7 +125,7 @@ def _target_metadata(cfg: dict[str, Any], *, target_db: str) -> dict[str, Any]:
         "port": cfg["port"],
         "dbname": cfg["dbname"],
         "user": cfg["user"],
-        "password_configured": bool(cfg.get("password")),
+        "password_configured": True,
     }
 
 
@@ -127,7 +133,7 @@ def _target_metadata(cfg: dict[str, Any], *, target_db: str) -> dict[str, Any]:
 def _connect(*, env_file: Path | None, target_db: str, readonly: bool) -> Iterator[Any]:
     _load_env_file(env_file)
     cfg = _db_config(target_db=target_db)
-    conn = psycopg2.connect(**cfg)
+    conn = psycopg2.connect(**cfg, password=_db_password(target_db=target_db))
     if readonly:
         conn.set_session(readonly=True, autocommit=True)
     try:
