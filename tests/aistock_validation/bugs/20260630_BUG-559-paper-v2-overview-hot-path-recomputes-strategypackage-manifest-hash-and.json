@@ -43,8 +43,8 @@
   "expected": "模拟盘总览页面仅查询持久化数据库记录和必要聚合状态；总览热路径禁止任何文件/manifest hash 重算、asset 深校验和 GET 写回。manifest/hash 校验应只在入库、晋级、显式审计/repair 任务执行；model_state 刷新必须是显式写路径或后台任务。",
   "first_seen_at": "2026-06-29T17:12:08.621047Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "45f4d4482e3aaac08dbdab1b85316b930fc53fbc",
+  "fixed_at": "2026-07-01T11:35:23.882269Z",
   "github_issue_number": 1752,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1752",
   "last_seen_at": "2026-06-29T17:12:08.621047Z",
@@ -52,6 +52,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1794",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,7 +68,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -111,6 +112,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1794 merged with CI green; watch-ci: passed_count=20 failed=0 pending=0",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_overview_summary.py backend/tests/paper_trading_v2/test_day_runner.py::test_paper_trading_day_runner_persists_full_day_path -q -> passed (2 passed)",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> passed",
+    "rtk paper_v2_l3 hosted CI with PAPER_V2_L3_SKIP_UI=1 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
