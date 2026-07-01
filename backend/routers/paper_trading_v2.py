@@ -500,6 +500,14 @@ def list_running_portfolio_summary(
         _raise_http(exc)
 
 
+@router.get("/overview-summary")
+def get_overview_summary() -> dict[str, Any]:
+    try:
+        return {"ok": True, "summary": PaperTradingV2PortfolioService().overview_summary()}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/portfolios/bulk-lifecycle")
 def bulk_portfolio_lifecycle(req: BulkPortfolioLifecycleRequest) -> dict[str, Any]:
     try:
