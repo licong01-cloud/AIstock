@@ -39,8 +39,8 @@
   "expected": "模拟盘总览页只查询页面展示所需的数据库状态/聚合字段；避免重型 selectable package 列表、避免 N+1；对 SQL 做聚合/批量化优化，必要时以合理并发度利用连接池，但不得制造 DB 压力。",
   "first_seen_at": "2026-06-29T17:10:54.990358Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "45f4d4482e3aaac08dbdab1b85316b930fc53fbc",
+  "fixed_at": "2026-07-01T11:35:17.184687Z",
   "github_issue_number": 1751,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1751",
   "last_seen_at": "2026-06-29T17:10:54.990358Z",
@@ -48,6 +48,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1794",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,7 +64,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -113,6 +114,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1794 merged with CI green; watch-ci: passed_count=20 failed=0 pending=0",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_overview_summary.py backend/tests/paper_trading_v2/test_day_runner.py::test_paper_trading_day_runner_persists_full_day_path -q -> passed (2 passed)",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> passed",
+    "rtk paper_v2_l3 hosted CI with PAPER_V2_L3_SKIP_UI=1 -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
