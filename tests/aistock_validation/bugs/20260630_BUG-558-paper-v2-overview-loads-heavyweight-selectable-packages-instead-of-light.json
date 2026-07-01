@@ -12,7 +12,8 @@
     "frontend/src/lib/api",
     "backend/services/paper_trading_v2",
     "tests/aistock_validation/bugs/20260630_BUG-558-paper-v2-overview-loads-heavyweight-selectable-packages-instead-of-light.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260630_BUG-559-paper-v2-overview-hot-path-recomputes-strategypackage-manifest-hash-and.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-558",

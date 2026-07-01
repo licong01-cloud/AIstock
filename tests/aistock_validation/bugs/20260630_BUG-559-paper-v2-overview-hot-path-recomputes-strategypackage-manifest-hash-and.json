@@ -16,7 +16,8 @@
     "backend/services/paper_trading_v2/service.py",
     "backend/tests/paper_trading_v2",
     "frontend/src/lib/paper-v2/api.ts",
-    "frontend/tests/paper-v2"
+    "frontend/tests/paper-v2",
+    "tests/aistock_validation/bugs/20260630_BUG-558-paper-v2-overview-loads-heavyweight-selectable-packages-instead-of-light.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-559",
