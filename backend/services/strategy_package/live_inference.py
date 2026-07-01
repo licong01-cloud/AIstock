@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
@@ -421,6 +422,108 @@ def _safe_model_code_relpath(asset: ModelCodeAsset) -> Path:
             },
         )
     return Path(*pure.parts)
+
+
+_LOCAL_PICKLED_MODEL_MODULES = frozenset({"model"})
+
+
+def _pickle_payloads_from_params(model_params_path: Path) -> list[bytes]:
+    data = model_params_path.read_bytes()
+    payloads = [data]
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if name.endswith(".pkl"):
+                    payloads.append(archive.read(name))
+    except zipfile.BadZipFile:
+        pass
+    return payloads
+
+
+def _pickle_arg_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1]
+    return text
+
+
+def _pickle_payload_references_module(payload: bytes, module_names: set[str]) -> set[str]:
+    import pickletools
+
+    found: set[str] = set()
+    stack: list[str] = []
+    try:
+        for opcode, arg, _pos in pickletools.genops(payload):
+            name = opcode.name
+            if name in {"STRING", "BINSTRING", "SHORT_BINSTRING", "UNICODE", "BINUNICODE", "SHORT_BINUNICODE"}:
+                stack.append(_pickle_arg_text(arg))
+                continue
+            if name == "GLOBAL":
+                module = _pickle_arg_text(arg).split(" ", 1)[0]
+                if module in module_names:
+                    found.add(module)
+                continue
+            if name == "STACK_GLOBAL" and len(stack) >= 2:
+                _class_name = stack.pop()
+                module = stack.pop()
+                if module in module_names:
+                    found.add(module)
+    except Exception:
+        for module in module_names:
+            encoded = module.encode("utf-8")
+            if (
+                b"c" + encoded + b"\n" in payload
+                or bytes([0x8C, len(encoded)]) + encoded in payload
+                or b"X" + len(encoded).to_bytes(4, "little") + encoded in payload
+                or b"U" + bytes([len(encoded)]) + encoded in payload
+            ):
+                found.add(module)
+    return found
+
+
+def _model_code_module_exists(module_name: str, roots: list[Path]) -> bool:
+    relative_path = Path(*module_name.split(".")) if "." in module_name else Path(f"{module_name}.py")
+    if "." in module_name:
+        relative_path = relative_path.with_suffix(".py")
+    for root in roots:
+        if (root / relative_path).exists() and (root / relative_path).is_file():
+            return True
+    return False
+
+
+def _require_model_code_for_pickled_local_modules(
+    *,
+    model_params_path: Path,
+    model_code_roots: list[Path],
+    package_id: str | None,
+    experiment_id: str | None,
+    source_workspace_type: str,
+    phase: str,
+) -> list[str]:
+    if not model_params_path.exists() or not model_params_path.is_file():
+        return []
+    referenced: set[str] = set()
+    for payload in _pickle_payloads_from_params(model_params_path):
+        referenced.update(_pickle_payload_references_module(payload, set(_LOCAL_PICKLED_MODEL_MODULES)))
+    if not referenced:
+        return []
+    missing = [module for module in sorted(referenced) if not _model_code_module_exists(module, model_code_roots)]
+    if missing:
+        raise DataUnavailableError(
+            "StrategyPackage model params.pkl references local model code that is missing from the runtime workspace",
+            context={
+                "reason_code": "strategy_package_model_code_missing",
+                "package_id": package_id,
+                "experiment_id": experiment_id,
+                "model_params_path": str(model_params_path),
+                "missing_modules": missing,
+                "missing_relative_paths": [f"{module}.py" for module in missing],
+                "model_code_roots": [str(path) for path in model_code_roots],
+                "source_workspace_type": source_workspace_type,
+                "phase": phase,
+            },
+        )
+    return sorted(referenced)
 
 
 def _write_inside_runtime_source(target_path: Path, data: bytes, *, source_dir: Path, package_id: str) -> None:
@@ -1189,6 +1292,14 @@ class QEExperimentRuntimeAssetResolver:
             model_params_path, candidate_count = self._resolve_model_params_path(
                 source, artifact_config
             )
+            referenced_model_modules = _require_model_code_for_pickled_local_modules(
+                model_params_path=model_params_path,
+                model_code_roots=[source.asset_workspace_path, model_params_path.parent],
+                package_id=source.package_id,
+                experiment_id=source.experiment_id,
+                source_workspace_type=source.source_workspace_type,
+                phase="preflight",
+            )
         except DataUnavailableError as exc:
             checks.append(
                 LiveInferencePreflightCheck(
@@ -1212,6 +1323,7 @@ class QEExperimentRuntimeAssetResolver:
                 context={
                     "model_params_path": str(model_params_path),
                     "candidate_count": candidate_count,
+                    "referenced_model_modules": referenced_model_modules,
                 },
             )
         )
@@ -1464,6 +1576,14 @@ class QEExperimentRuntimeAssetResolver:
             model_source_path=model_source_path,
             model_dest_dir=workspace_path / "model",
         )
+        referenced_model_modules = _require_model_code_for_pickled_local_modules(
+            model_params_path=model_dest,
+            model_code_roots=[workspace_path / "model"],
+            package_id=source.package_id or package_id,
+            experiment_id=source.experiment_id,
+            source_workspace_type=source.source_workspace_type,
+            phase="prepare_workspace",
+        )
         dataset_processor_source = self._resolve_dataset_processor_path(
             source=source,
             model_source_path=model_source_path,
@@ -1545,6 +1665,7 @@ class QEExperimentRuntimeAssetResolver:
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
                         "model_params_origin": source.model_params_origin,
+                        "referenced_model_modules": referenced_model_modules,
                         "dataset_processor_source_path": str(dataset_processor_source) if dataset_processor_source else None,
                     },
                 },

@@ -9,18 +9,19 @@ from typing import Any
 import pytest
 
 from backend.services.strategy_package.live_inference import (
+    LiveInferencePreflightError,
     LiveInferenceResult,
     QEExperimentRuntimeAssetResolver,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import FactorAsset, ModelAsset
+from backend.services.strategy_package.models import FactorAsset, ModelAsset, ModelCodeAsset
 from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
     StrategyPackageSelectionArtifactService,
 )
-from backend.services.trading_core.errors import PackageAssetInvalidError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import DataUnavailableError, PackageAssetInvalidError, RuntimeConfigInvalidError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
@@ -37,7 +38,12 @@ def _put(store: LocalPackageAssetStore, payload: bytes, *, kind: str) -> tuple[s
     return blob.uri, blob.sha256
 
 
-def _frozen_manifest(store: LocalPackageAssetStore, *, model_payload: bytes = b"model params"):
+def _frozen_manifest(
+    store: LocalPackageAssetStore,
+    *,
+    model_payload: bytes = b"model params",
+    model_code_files: dict[str, bytes] | None = None,
+):
     factor_a_ref, factor_a_sha = _put(
         store,
         b"import pandas as pd\ndef calculate():\n    return pd.DataFrame({'factor_a': [1.0]})\n",
@@ -49,6 +55,19 @@ def _frozen_manifest(store: LocalPackageAssetStore, *, model_payload: bytes = b"
         kind="factor_code",
     )
     model_ref, model_sha = _put(store, model_payload, kind="model_weight")
+    model_code_assets: list[ModelCodeAsset] = []
+    for rel_path, payload in sorted((model_code_files or {}).items()):
+        code_ref, code_sha = _put(store, payload, kind="model_code")
+        module_name = rel_path.removesuffix(".py").replace("/", ".").replace("\\", ".")
+        model_code_assets.append(
+            ModelCodeAsset(
+                module_name=module_name,
+                relative_path=rel_path,
+                asset_ref=code_ref,
+                sha256=code_sha,
+                size_bytes=len(payload),
+            )
+        )
     base = make_manifest().model_copy(
         update={
             "manifest_version": "alpha_core_v1",
@@ -93,6 +112,8 @@ def _frozen_manifest(store: LocalPackageAssetStore, *, model_payload: bytes = b"
                 asset_ref=model_ref,
                 sha256=model_sha,
                 size_bytes=len(model_payload),
+                model_code_required=bool(model_code_assets),
+                model_code_assets=model_code_assets,
             ),
             "manifest_sha256": None,
         }
@@ -260,6 +281,105 @@ def test_preflight_for_frozen_package_marks_qe_node_not_required(tmp_path: Path)
     assert [check.name for check in result.checks] == ["qe_source", "qe_node", "conf_yaml", "factor_source", "model_params"]
     assert (result.checks[0].context or {})["source_workspace_type"] == "strategy_package_asset_store"
     assert result.checks[1].message == "package-owned runtime assets do not require QE node access"
+
+
+def test_preflight_rejects_package_asset_params_with_missing_pickled_model_code(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    manifest = _frozen_manifest(
+        store,
+        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+    )
+    resolver = QEExperimentRuntimeAssetResolver(
+        conn_factory=lambda: _ForbiddenConn(),
+        cache_root=tmp_path / "runtime_cache",
+        asset_store=store,
+    )
+
+    result = resolver.preflight_for_strategy_package(
+        source_type="qe_experiment",
+        source_id="would_query_if_legacy",
+        runtime_config={},
+        manifest=manifest,
+        package_id=manifest.package_id,
+    )
+
+    assert result.passed is False
+    assert result.blocked_check is not None
+    assert result.blocked_check.name == "model_params"
+    context = result.blocked_check.context or {}
+    assert context["reason_code"] == "strategy_package_model_code_missing"
+    assert context["missing_modules"] == ["model"]
+    assert context["missing_relative_paths"] == ["model.py"]
+
+    with pytest.raises(LiveInferencePreflightError) as excinfo:
+        resolver.require_preflight_or_raise(
+            source_type="qe_experiment",
+            source_id="would_query_if_legacy",
+            runtime_config={},
+            manifest=manifest,
+            package_id=manifest.package_id,
+        )
+    assert excinfo.value.context["blocked_check"] == "model_params"
+
+
+def test_prepare_workspace_rejects_package_asset_params_with_missing_pickled_model_code(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    manifest = _frozen_manifest(
+        store,
+        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+    )
+    resolver = QEExperimentRuntimeAssetResolver(
+        conn_factory=lambda: _ForbiddenConn(),
+        cache_root=tmp_path / "runtime_cache",
+        asset_store=store,
+    )
+    source = resolver.load_source_for_strategy_package(
+        source_type="qe_experiment",
+        source_id="would_query_if_legacy",
+        manifest=manifest,
+        package_id=manifest.package_id,
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        resolver.prepare_workspace(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            source=source,
+        )
+
+    assert excinfo.value.context["reason_code"] == "strategy_package_model_code_missing"
+    assert excinfo.value.context["missing_modules"] == ["model"]
+
+
+def test_package_asset_params_with_model_code_materialize_successfully(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    model_py = b"class LSTM_10D_hs64_d02:\n    pass\nmodel_cls = LSTM_10D_hs64_d02\n"
+    manifest = _frozen_manifest(
+        store,
+        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+        model_code_files={"model.py": model_py},
+    )
+    resolver = QEExperimentRuntimeAssetResolver(
+        conn_factory=lambda: _ForbiddenConn(),
+        cache_root=tmp_path / "runtime_cache",
+        asset_store=store,
+    )
+
+    source = resolver.load_source_for_strategy_package(
+        source_type="qe_experiment",
+        source_id="would_query_if_legacy",
+        manifest=manifest,
+        package_id=manifest.package_id,
+    )
+    prepared = resolver.prepare_workspace(
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256 or "",
+        source=source,
+    )
+
+    assert (prepared.model_params_path.parent / "model.py").read_bytes() == model_py
+    diagnostics = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))["diagnostics"]
+    assert diagnostics["referenced_model_modules"] == ["model"]
 
 
 def test_selection_artifact_service_passes_frozen_manifest_to_source_loader(tmp_path: Path) -> None:

@@ -1,6 +1,9 @@
 {
   "actual": "LocalSIM unattended run can bind to a strategy package runtime workspace containing model/params.pkl but missing model/model.py, causing backend/inference_engine.py pickle.load to fail with AttributeError for LSTM_10D_hs64_d02 during PRE_RUN_FAILED after scheduler starts. Expected runtime asset materialization or pre-run self-check to require the model code asset and fail fast with a loud reason_code before scheduled execution.",
   "allowed_write_scope": [
+    "backend/services/strategy_package/live_inference.py",
+    "backend/tests/strategy_package/test_live_inference_preflight.py",
+    "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
     "tests/aistock_validation/bugs/20260702_BUG-569-localsim-runtime-workspace-can-miss-model-code-asset-and-fail-pre-run-pi.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,10 +23,16 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260702-c1e7d8a550fb",
       "timestamp": "2026-07-01T17:36:00.717496Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope expanded from registry-only intake to strategy_package live_inference runtime guard and tests before product edits.",
+      "timestamp": "2026-07-02T00:00:00Z"
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "StrategyPackage live inference preflight and workspace preparation must fail fast with a loud reason_code when package-owned params.pkl references missing local model code, instead of reaching WSL pickle AttributeError during LocalSIM scheduler pre-run.",
   "first_seen_at": "2026-07-01T17:36:00.717500Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,10 +47,11 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "LocalSIM unattended run with package-owned runtime workspace containing model/params.pkl that references module model but has no model/model.py",
   "required_verification": [
     "l0",
-    "paper_v2_backend"
+    "paper_v2_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -56,30 +66,9 @@
     "source_event_id": "FE-20260702-c1e7d8a550fb"
   },
   "ui_intake_hints": {
-    "labels": [
-      "bug",
-      "ui",
-      "module:strategy_package",
-      "type:bug"
-    ],
-    "recommended_verification": [
-      "l0"
-    ],
-    "reproduce_required": true,
-    "reproduce_template": [
-      "Open the affected AIstock page/route.",
-      "Perform the visible user action that currently fails or looks wrong.",
-      "Verify the expected visible state, table, dialog, or form behavior."
-    ],
     "schema_version": "aistock_ui_issue_intake_hints_v1",
-    "scope_source": "inferred_from_module_route_and_changed_files",
-    "ui_component_scope": [],
-    "ui_issue": true,
-    "ui_route": "/params.pkl",
-    "ui_routes": [
-      "/params.pkl"
-    ],
-    "visual_acceptance_required": true
+    "scope_source": "manual_non_ui_runtime_bug",
+    "ui_issue": false
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
