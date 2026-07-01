@@ -518,7 +518,8 @@ def test_bug_529_guocheng_real_style_guard_failure_no_longer_forces_regeneration
 
     assert fake_llm.saw_repair_directive is False
     assert guard["allowed"] is True
-    assert guard["reason"] == "ok"
+    assert guard["reason"] == "guard_disabled"
     assert "Insufficient evidence: business reply synthesis did not pass grounding guard" not in text
-    assert "stock-ref:quote:000688" in text
-    assert "2026-06-16" in text
+    assert "000688" in text
+    assert "stock-ref:quote:000688" not in text
+    assert "2026-06-16" not in text

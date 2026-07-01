@@ -70,7 +70,8 @@ def test_external_research_tool_result_is_backfilled_into_react_messages_before_
     assert "source=" not in text
     assert "as_of=" not in text
     assert "research_assistant_catalog_summary_adapter" not in text
-    assert "只是外部研究线索" in text
+    assert "External evidence found" in text
+    assert "hypothesis only" in text
     assert "XX" not in text
     assert result["cards"]["react_grounding"]["tool_result_count"] >= 1
     assert result["cards"]["mcp_execution_result"]["auto_executed"] is True

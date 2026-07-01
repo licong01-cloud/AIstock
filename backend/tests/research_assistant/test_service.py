@@ -367,6 +367,13 @@ def _reload_runtime_config_fixture(svc: ResearchAssistantService, tmp_path, muta
     return path
 
 
+def _reload_guard_mode_fixture(svc: ResearchAssistantService, tmp_path, guard_mode: str) -> object:
+    def mutate(config: dict[str, object]) -> None:
+        config["research_assistant"] = {"guard_mode": guard_mode}
+
+    return _reload_runtime_config_fixture(svc, tmp_path, mutate)
+
+
 def _runtime_config_payload_with_mutated_capability(capability_key: str, field: str, value: object) -> dict[str, object]:
     payload: dict[str, object] = copy.deepcopy(load_runtime_config().config)
     planner = payload["planner"]
@@ -1752,6 +1759,34 @@ def test_context_pack_token_budget_max_is_runtime_config_driven(tmp_path) -> Non
     assert pack["token_budget"] == 9
 
 
+def test_bug_568_guard_mode_defaults_off_and_hot_reloads(tmp_path) -> None:
+    svc = _chat_service()
+
+    default_config = svc._react_grounding_config(svc.active_runtime_config(), user_message="含数字但无来源的回答")
+    assert default_config.guard_mode == "off"
+
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
+    strict_config = svc._react_grounding_config(svc.active_runtime_config(), user_message="含数字但无来源的回答")
+    assert strict_config.guard_mode == "strict"
+
+    _reload_guard_mode_fixture(svc, tmp_path, "annotate")
+    annotate_config = svc._react_grounding_config(svc.active_runtime_config(), user_message="含数字但无来源的回答")
+    assert annotate_config.guard_mode == "annotate"
+
+
+def test_bug_568_invalid_runtime_guard_mode_falls_closed_to_strict_with_warning(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    svc = _chat_service()
+    caplog.set_level(logging.WARNING, logger="aistock.research_assistant.react_grounding")
+
+    _reload_guard_mode_fixture(svc, tmp_path, "invalid-mode")
+    config = svc._react_grounding_config(svc.active_runtime_config(), user_message="测试非法 guard_mode")
+
+    assert config.guard_mode == "strict"
+    assert "invalid research_assistant.guard_mode" in caplog.text
+
+
 def test_chat_turn_capability_inquiry_answers_without_workflow_noise() -> None:
     fake = FakeLlmClient()
     svc = _chat_service(fake)
@@ -1964,7 +1999,7 @@ def test_chat_turn_mcp_tool_inquiry_uses_runtime_catalog_not_generic_tool_claims
     assert result["cards"]["action_proposals"] == []
 
 
-def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts() -> None:
+def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts(tmp_path) -> None:
     class FactorHallucinationLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -1977,6 +2012,7 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
             )
 
     svc = _chat_service(FactorHallucinationLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
 
     result = svc.chat_turn(ChatTurnRequest(message="帮我看看因子库有哪些可用因子"))
 
@@ -1992,7 +2028,7 @@ def test_chat_turn_chinese_factor_library_request_does_not_surface_mock_counts()
     assert "domain.factor_library" in keys
 
 
-def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
+def test_chat_turn_auto_executes_read_only_mcp_summary_cards(tmp_path) -> None:
     class FactorHallucinationLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -2005,6 +2041,7 @@ def test_chat_turn_auto_executes_read_only_mcp_summary_cards() -> None:
             )
 
     svc = _chat_service(FactorHallucinationLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
 
     result = svc.chat_turn(ChatTurnRequest(message="List available factor library entries as a compact summary."))
 
@@ -2639,7 +2676,7 @@ def test_bug_356_each_dataset_sync_detail_returns_all_dataset_statuses_without_d
     assert "local_data_get_dataset_status" not in result["assistant_message"]["content_text"]
 
 
-def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
+def test_bug_346_local_data_daily_status_stops_after_seeded_summary(tmp_path) -> None:
     class LocalDataSynthesisLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -2662,6 +2699,7 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
 
     fake = LocalDataSynthesisLlmClient()
     svc = _chat_service(fake)
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
     svc.local_data_service_factory = FakeLocalDataDailyStatusService
 
     result = svc.chat_turn(
@@ -2684,7 +2722,7 @@ def test_bug_346_local_data_daily_status_stops_after_seeded_summary() -> None:
     assert result["cards"]["mcp_summary_result"]["response_mode"] == "local_data_daily_sync_status"
 
 
-def test_bug_404_non_catalog_tool_reports_capability_not_found_without_crashing() -> None:
+def test_bug_404_non_catalog_tool_reports_capability_not_found_without_crashing(tmp_path) -> None:
     class UncoveredToolLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -2714,6 +2752,7 @@ def test_bug_404_non_catalog_tool_reports_capability_not_found_without_crashing(
 
     fake = UncoveredToolLlmClient()
     svc = _chat_service(fake)
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
 
     result = svc.chat_turn(
         ChatTurnRequest(
@@ -2735,7 +2774,7 @@ def test_bug_404_non_catalog_tool_reports_capability_not_found_without_crashing(
     assert any(event["event_type"] == "mcp_failed" for event in result["task_events"])
 
 
-def test_bug_404_data_source_unavailable_is_explicit_not_insufficient() -> None:
+def test_bug_404_data_source_unavailable_is_explicit_not_insufficient(tmp_path) -> None:
     class LocalDataUnavailableLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -2757,6 +2796,7 @@ def test_bug_404_data_source_unavailable_is_explicit_not_insufficient() -> None:
             )
 
     svc = _chat_service(LocalDataUnavailableLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
     svc.local_data_service_factory = FailingLocalDataDailyStatusService
 
     result = svc.chat_turn(
@@ -2986,8 +3026,9 @@ def test_bug_403_same_qe_tool_result_keeps_model_question_specific_answers() -> 
         assert "来源 qe_experiment_read_adapter" in answer
 
 
-def test_bug_403_running_status_chat_path_answers_none_without_row_dump() -> None:
+def test_bug_403_running_status_chat_path_answers_none_without_row_dump(tmp_path) -> None:
     svc = _chat_service(AgenticBusinessSynthesisFakeLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
     svc.qe_experiment_service_factory = FakeQeExperimentZeroRunningService
     svc.qe_custom_evo_service_factory = FakeQeCustomEvoService
     svc.qe_archive_repository_factory = FakeQeArchiveRepository
@@ -3141,7 +3182,7 @@ def test_chat_turn_includes_runtime_code_visibility_card() -> None:
     assert "cards" not in result["assistant_message"]["content_json"]
 
 
-def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() -> None:
+def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list(tmp_path) -> None:
     class FactorOverviewLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -3154,6 +3195,7 @@ def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() 
             )
 
     svc = _chat_service(FactorOverviewLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
 
     result = svc.chat_turn(ChatTurnRequest(message="查看因子库概要"))
 
@@ -3173,7 +3215,7 @@ def test_chat_turn_chinese_factor_library_overview_auto_executes_summary_list() 
     assert result["cards"]["mcp_result_cards"]
 
 
-def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> None:
+def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list(tmp_path) -> None:
     class ExecutionPolicyHallucinationLlmClient(FakeLlmClient):
         def complete(self, **kwargs: object) -> LlmCallResult:
             self.calls.append(kwargs)
@@ -3186,6 +3228,7 @@ def test_chat_turn_chinese_execution_policy_catalog_uses_read_only_list() -> Non
             )
 
     svc = _chat_service(ExecutionPolicyHallucinationLlmClient())
+    _reload_guard_mode_fixture(svc, tmp_path, "strict")
 
     result = svc.chat_turn(ChatTurnRequest(message="执行策略库里有什么 minute algo？"))
 
