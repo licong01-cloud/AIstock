@@ -31,8 +31,8 @@
   "expected": "Depth/multi-dimensional stock analysis is guided by prompt/model; guard only enforces grounded evidence, citations, no hallucination, no directional prediction, and approval boundaries.",
   "first_seen_at": "2026-07-01T03:07:13.281499Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3e838962bf45c9a0b68472e22a08524767331172",
+  "fixed_at": "2026-07-01T06:17:25.332628Z",
   "github_issue_number": 1785,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1785",
   "last_seen_at": "2026-07-01T03:07:13.281499Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1788",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -65,6 +66,9 @@
     "fingerprint": "a859c4d2568bd73ae445fc55",
     "source_event_id": "FE-20260701-a859c4d2568b"
   },
+  "validation_evidence": [
+    "PR #1788 merged with required checks green"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
