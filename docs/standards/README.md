@@ -1,6 +1,6 @@
 # AIstock Standards Index
 
-Last updated: 2026-06-28
+Last updated: 2026-07-01
 
 ## Active Standards
 
@@ -27,7 +27,9 @@ When a Claude Code, Codex, or other coding window starts outside the repository 
 1. `AGENTS.md`
 2. `docs/codex_project_memory.md`
 3. The task-specific command or standard:
+   - Broad / unclear work: `.claude/commands/aistock-task-router.md` or the Codex `aistock-task-router` skill.
    - BUG / issue work: `.claude/commands/fix-aistock-issue.md` or the Codex issue skill.
    - New feature work: `.claude/commands/aistock-feature-workflow.md` or `FEATURE-WORKFLOW-001` in the active development standard.
+   - Docs, merge aftercare, or read-only triage: use the matching `.claude/commands/aistock-*.md` command or Codex `aistock-*` skill.
 
 Do not treat `docs/standards/archive/` as a startup context source.
