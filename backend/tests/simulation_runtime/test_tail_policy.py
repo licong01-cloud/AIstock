@@ -18,9 +18,11 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
     TailHandlingPolicyService,
 )
+from backend.services.simulation_runtime.bridges import LocalSimExecutionSnapshot
 from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
-from backend.services.trading_core.models import PositionLot
+from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, PositionLot
 
 
 TRADE_DATE = date(2026, 5, 21)
@@ -133,6 +135,9 @@ class TailAwareLocalBroker:
     def __init__(self, states_by_intent: dict[str, str | tuple[str, int]]) -> None:
         self.states_by_intent = states_by_intent
         self.handles: list[OrderHandle] = []
+        self.orders_by_handle: dict[str, Order] = {}
+        self.fills_by_handle: dict[str, Fill] = {}
+        self.events_by_handle: dict[str, OrderEvent] = {}
         self.cancelled: list[str] = []
 
     def submit_order_intent(self, intent):
@@ -143,11 +148,57 @@ class TailAwareLocalBroker:
             intent_id=intent.intent_id,
         )
         self.handles.append(handle)
+        status = self._build_status(handle=handle, fallback_quantity=int(intent.quantity))
+        order = Order(
+            order_id=f"order_{handle.handle_id}",
+            intent_id=intent.intent_id,
+            package_id=intent.package_id,
+            portfolio_id=intent.portfolio_id,
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=int(intent.quantity),
+            order_type=intent.order_type,
+            limit_price=intent.limit_price,
+            status=_order_status_from_handle_state(status.state),
+            filled_quantity=int(status.filled_quantity),
+            avg_fill_price=float(status.avg_fill_price) if status.avg_fill_price is not None else None,
+        )
+        self.orders_by_handle[handle.handle_id] = order
+        if status.filled_quantity > 0:
+            fill = Fill(
+                fill_id=f"fill_{handle.handle_id}",
+                order_id=order.order_id,
+                symbol=order.symbol,
+                side=order.side,
+                quantity=int(status.filled_quantity),
+                price=float(status.avg_fill_price or Decimal("10")),
+                trade_time=status.last_event_at,
+                reason="unit_test_tail_fill",
+            )
+            self.fills_by_handle[handle.handle_id] = fill
+        event = OrderEvent(
+            event_id=f"event_{handle.handle_id}",
+            order_id=order.order_id,
+            event_type=_order_event_type_from_handle_state(status.state),
+            event_time=status.last_event_at,
+            fill=self.fills_by_handle.get(handle.handle_id),
+            reason="unit_test_tail_state",
+        )
+        self.events_by_handle[handle.handle_id] = event
         return handle
 
     def query_status(self, handle: OrderHandle) -> OrderHandleStatus:
-        raw_state = self.states_by_intent.get(handle.intent_id, "pending")
-        state, filled = raw_state if isinstance(raw_state, tuple) else (raw_state, 0)
+        order = self.orders_by_handle.get(handle.handle_id)
+        fallback_quantity = int(order.quantity) if order is not None else 0
+        return self._build_status(handle=handle, fallback_quantity=fallback_quantity)
+
+    def _build_status(self, *, handle: OrderHandle, fallback_quantity: int) -> OrderHandleStatus:
+        raw_state = self.states_by_intent.get(handle.intent_id, ("filled", fallback_quantity))
+        if isinstance(raw_state, tuple):
+            state, filled = raw_state
+        else:
+            state = raw_state
+            filled = fallback_quantity if raw_state == "filled" else 0
         return OrderHandleStatus(
             handle_id=handle.handle_id,
             state=state,
@@ -160,6 +211,79 @@ class TailAwareLocalBroker:
     def cancel(self, handle: OrderHandle) -> CancelAck:
         self.cancelled.append(handle.intent_id)
         return CancelAck(handle_id=handle.handle_id, accepted=True, reason="tail_cancel_unfilled_at_close")
+
+    def export_execution_snapshot(self, *, handles):
+        selected_handles = tuple(handles)
+        orders = tuple(self.orders_by_handle[handle.handle_id] for handle in selected_handles)
+        fills = tuple(
+            self.fills_by_handle[handle.handle_id]
+            for handle in selected_handles
+            if handle.handle_id in self.fills_by_handle
+        )
+        events = tuple(
+            self.events_by_handle[handle.handle_id]
+            for handle in selected_handles
+            if handle.handle_id in self.events_by_handle
+        )
+        positions = {
+            "000001.SZ": PositionLot(
+                portfolio_id="portfolio_tail",
+                symbol="000001.SZ",
+                quantity=100,
+                available_quantity=100,
+                avg_cost=10.0,
+                trade_date=TRADE_DATE,
+            )
+        }
+        cash_entries = tuple(
+            CashLedgerEntry(
+                fill_id=fill.fill_id,
+                portfolio_id="portfolio_tail",
+                trade_date=TRADE_DATE,
+                symbol=fill.symbol,
+                side=fill.side,
+                notional=Decimal(str(float(fill.quantity) * float(fill.price))),
+                fee=Decimal("0"),
+                cash_delta=Decimal(str(-float(fill.quantity) * float(fill.price) if fill.side == OrderSide.BUY else float(fill.quantity) * float(fill.price))),
+                cash_after=Decimal("90000"),
+            )
+            for fill in fills
+        )
+        return LocalSimExecutionSnapshot(
+            orders=orders,
+            fills=fills,
+            events=events,
+            cash_entries=cash_entries,
+            positions=positions,
+            account=AccountSnapshot(
+                portfolio_id="portfolio_tail",
+                cash=90_000.0,
+                market_value=1_000.0,
+                nav=91_000.0,
+                snapshot_time=datetime(2026, 5, 21, 15, 0, tzinfo=UTC),
+            ),
+            handle_statuses=tuple(self.query_status(handle) for handle in selected_handles),
+        )
+
+
+def _order_status_from_handle_state(state: str) -> OrderStatus:
+    return {
+        "filled": OrderStatus.FILLED,
+        "partial_filled": OrderStatus.PARTIALLY_FILLED,
+        "pending": OrderStatus.SUBMITTED,
+        "cancelled": OrderStatus.CANCELLED,
+        "rejected": OrderStatus.REJECTED,
+    }.get(state, OrderStatus.SUBMITTED)
+
+
+def _order_event_type_from_handle_state(state: str) -> OrderEventType:
+    return {
+        "filled": OrderEventType.FILLED,
+        "partial_filled": OrderEventType.PARTIALLY_FILLED,
+        "pending": OrderEventType.SUBMITTED,
+        "cancelled": OrderEventType.CANCELLED,
+        "rejected": OrderEventType.REJECTED,
+    }.get(state, OrderEventType.SUBMITTED)
 
 
 def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_submit() -> None:
@@ -199,6 +323,7 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
                 portfolio_id="portfolio_tail",
                 current_positions=initial_context.current_positions,
                 current_prices=initial_context.current_prices,
+                cash=100_000.0,
                 local_broker=broker,  # type: ignore[arg-type]
                 tail_policy_payload={"policy": "cancel_unfilled_at_close"},
                 tail_policy_service=TailHandlingPolicyService(),
@@ -211,6 +336,7 @@ def test_tail_policy_cancels_no_fill_and_partial_unfilled_orders_after_localsim_
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=True,
+        as_of_time=datetime(2026, 5, 21, 10, 0),
     )
 
     assert submitted.results[0].status == "TAIL_HANDLED"
@@ -231,6 +357,8 @@ def test_tail_policy_fails_fast_when_policy_payload_is_missing() -> None:
                 binding.binding_id: SimulationRunContext(
                     portfolio_id="portfolio_tail",
                     current_positions={},
+                    current_prices={"000001.SZ": 10.0},
+                    cash=100_000.0,
                     local_broker=TailAwareLocalBroker({}),  # type: ignore[arg-type]
                     tail_policy_service=TailHandlingPolicyService(),
                 )
@@ -243,6 +371,7 @@ def test_tail_policy_fails_fast_when_policy_payload_is_missing() -> None:
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         submit=True,
+        as_of_time=datetime(2026, 5, 21, 10, 0),
     )
 
     assert result.failed_count == 1

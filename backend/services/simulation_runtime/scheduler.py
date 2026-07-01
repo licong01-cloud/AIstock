@@ -18,8 +18,6 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import Any, Protocol
-from zoneinfo import ZoneInfo
-
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
@@ -62,7 +60,17 @@ from backend.services.trading_core.errors import BrokerRejectedError, DataUnavai
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
 from .bridges import MiniQMTExecutionBridge
-from .lifecycle import SimulationExecutionResult, SimulationLifecycleOrchestrator, SimulationPlanBuildResult
+from .lifecycle import (
+    DEFAULT_SCHEDULER_WINDOWS,
+    SCHEDULER_TZ,
+    SCHEDULER_TZ_NAME,
+    SimulationExecutionResult,
+    SimulationLifecycleOrchestrator,
+    SimulationPlanBuildResult,
+    compute_schedule_windows,
+    scheduler_now,
+    scheduler_time,
+)
 from .models import (
     DailySelectionEvidence,
     ExecutionPlan,
@@ -93,23 +101,7 @@ DEFAULT_SCHEDULER_APPROVAL_STATES = (
 MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
 MINIQMT_SHADOW_ENABLED_ENV = "MINIQMT_SHADOW_ENABLED"
 
-DEFAULT_SCHEDULER_WINDOWS = (
-    {"window_id": "pre_open", "label": "盘前", "start": "08:50", "end": "09:10", "action": "readiness"},
-    {"window_id": "selection", "label": "选股", "start": "09:10", "end": "09:20", "action": "selection_evidence"},
-    {"window_id": "planning", "label": "调仓", "start": "09:20", "end": "09:25", "action": "execution_plan"},
-    {"window_id": "execution", "label": "盘中/尾盘", "start": "09:25", "end": "15:00", "action": "submit"},
-    {
-        "window_id": "post_close_reconcile",
-        "label": "Post-close reconcile",
-        "start": "15:00",
-        "end": "15:30",
-        "action": "eod_reconcile",
-    },
-)
-
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
-SCHEDULER_TZ = ZoneInfo("Asia/Shanghai")
-SCHEDULER_TZ_NAME = "Asia/Shanghai"
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
 
 
@@ -2147,13 +2139,13 @@ class SimulationLifecycleScheduler:
         if limit <= 0:
             raise ValueError("limit must be positive")
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
-        if as_of_time is not None:
-            as_of_time = self._scheduler_time(as_of_time)
+        as_of_time = self._scheduler_time(as_of_time)
         stale_run_results = self._terminalize_stale_miniqmt_active_runs(
             trade_date=trade_date,
             broker_backend=broker_backend,
             strategy_id=strategy_id,
             limit=limit,
+            as_of_time=as_of_time,
         )
         stale_run_results.extend(
             self._terminalize_stale_localsim_active_runs(
@@ -2225,6 +2217,7 @@ class SimulationLifecycleScheduler:
                         created_by=created_by,
                         selection_cache=selection_cache,
                         shared_selection_keys=shared_selection_keys,
+                        as_of_time=as_of_time,
                     )
                 )
             except (DataUnavailableError, RuntimeConfigInvalidError) as exc:
@@ -2704,6 +2697,7 @@ class SimulationLifecycleScheduler:
         broker_backend: SimulationBrokerBackend | str | None,
         strategy_id: str | None,
         limit: int,
+        as_of_time: datetime | None,
     ) -> list[dict[str, Any]]:
         if broker_backend is not None and self._normalized_backend(broker_backend) != SimulationBrokerBackend.MINIQMT_SIM:
             return []
@@ -2720,23 +2714,43 @@ class SimulationLifecycleScheduler:
                     continue
                 seen_run_ids.add(run.run_id)
                 had_side_effect = bool(run.run_payload_json.get("broker_called") or run.run_payload_json.get("qmt_batch_id"))
+                if had_side_effect and self._mini_qmt_batch_has_broker_side_effect_evidence(run.run_payload_json):
+                    terminalized_run = self._post_close_terminalize_miniqmt_run(run=run, as_of_time=as_of_time)
+                    if terminalized_run is not None:
+                        terminalized_run.update(
+                            {
+                                "cross_day_terminalization": True,
+                                "scheduler_trade_date": trade_date.isoformat(),
+                            }
+                        )
+                        terminalized.append(terminalized_run)
+                        if len(terminalized) >= limit:
+                            return terminalized
+                        continue
                 next_status = (
                     SimulationDailyRunStatus.FAILED_RETRYABLE
                     if had_side_effect
                     else SimulationDailyRunStatus.CANCELLED
                 )
+                reason_code = (
+                    "MINIQMT_STALE_ACTIVE_WITH_BROKER_SIDE_EFFECT_UNRESOLVED"
+                    if had_side_effect
+                    else "MINIQMT_STALE_ACTIVE_WITHOUT_BROKER_SIDE_EFFECT"
+                )
                 evidence = {
                     "schema_version": "miniqmt_stale_active_run_terminalization_v1",
                     "reason": (
-                        "stale_historical_miniqmt_run_with_broker_side_effect"
+                        "stale_historical_miniqmt_run_with_broker_side_effect_unresolved"
                         if had_side_effect
                         else "stale_historical_miniqmt_run_without_broker_side_effect"
                     ),
+                    "reason_code": reason_code,
                     "scheduler_trade_date": trade_date.isoformat(),
                     "stale_trade_date": run.trade_date.isoformat(),
                     "previous_status": run.status.value,
                     "had_broker_side_effect": had_side_effect,
-                    "terminalized_at": datetime.now(UTC).isoformat(),
+                    "broker_authoritative_terminalization_attempted": had_side_effect,
+                    "terminalized_at": self._scheduler_time(as_of_time).isoformat() if as_of_time is not None else self._scheduler_now().isoformat(),
                 }
                 updated = self.repository.update_simulation_daily_run(
                     run.run_id,
@@ -2755,8 +2769,11 @@ class SimulationLifecycleScheduler:
                         "previous_status": run.status.value,
                         "status": updated.status.value,
                         "reason": evidence["reason"],
+                        "reason_code": reason_code,
                     }
                 )
+                if len(terminalized) >= limit:
+                    return terminalized
         return terminalized[:limit]
 
     def _terminalize_stale_localsim_active_runs(
@@ -3066,7 +3083,7 @@ class SimulationLifecycleScheduler:
             "previous_status": run.status.value,
             "terminal_status": terminal_status.value,
             "trade_date": run.trade_date.isoformat(),
-            "as_of_time": as_of_time.isoformat() if as_of_time is not None else None,
+            "as_of_time": self._scheduler_time(as_of_time).isoformat() if as_of_time is not None else None,
             "qmt_batch_status": fresh_payload.get("qmt_batch_status"),
             "qmt_batch_id": fresh_payload.get("qmt_batch_id"),
             "residual_summary": summary,
@@ -3483,6 +3500,7 @@ class SimulationLifecycleScheduler:
         created_by: str,
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None = None,
         shared_selection_keys: set[tuple[Any, ...]] | None = None,
+        as_of_time: datetime | None = None,
     ) -> SimulationSchedulerBindingResult:
         runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
         existing = self.repository.get_simulation_daily_run_by_key(
@@ -3503,6 +3521,7 @@ class SimulationLifecycleScheduler:
                     created_by=created_by,
                     selection_cache=selection_cache,
                     shared_selection_keys=shared_selection_keys,
+                    as_of_time=as_of_time,
                 )
             if self._should_rebuild_miniqmt_plan_after_side_effect_free_failure(binding=binding, run=existing):
                 return self._rebuild_miniqmt_plan_after_side_effect_free_failure(
@@ -3516,6 +3535,7 @@ class SimulationLifecycleScheduler:
                     created_by=created_by,
                     selection_cache=selection_cache,
                     shared_selection_keys=shared_selection_keys,
+                    as_of_time=as_of_time,
                 )
             return self._existing_plan_result(
                 binding=binding,
@@ -3524,6 +3544,7 @@ class SimulationLifecycleScheduler:
                 data_source=data_source,
                 submit=submit,
                 mode=mode,
+                as_of_time=as_of_time,
             )
 
         context = self.context_provider.load_context(
@@ -3646,6 +3667,7 @@ class SimulationLifecycleScheduler:
                     plan=build_result.execution_plan,
                     context=context,
                 ),
+                as_of_time=as_of_time,
             )
         except BrokerRejectedError as exc:
             terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -3728,6 +3750,7 @@ class SimulationLifecycleScheduler:
         created_by: str,
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
         shared_selection_keys: set[tuple[Any, ...]] | None,
+        as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
         context = self.context_provider.load_context(
             runtime_release=runtime_release,
@@ -3824,6 +3847,7 @@ class SimulationLifecycleScheduler:
                 plan=build_result.execution_plan,
                 context=context,
             ),
+            as_of_time=as_of_time,
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -3890,6 +3914,7 @@ class SimulationLifecycleScheduler:
         created_by: str,
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
         shared_selection_keys: set[tuple[Any, ...]] | None,
+        as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
         context = self.context_provider.load_context(
             runtime_release=runtime_release,
@@ -4019,6 +4044,7 @@ class SimulationLifecycleScheduler:
                 plan=build_result.execution_plan,
                 context=context,
             ),
+            as_of_time=as_of_time,
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -4063,6 +4089,7 @@ class SimulationLifecycleScheduler:
         data_source: str,
         submit: bool,
         mode: str,
+        as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
         plan = self.repository.get_execution_plan(run.execution_plan_id or "")
         runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
@@ -4123,6 +4150,7 @@ class SimulationLifecycleScheduler:
                 binding=binding,
                 execution_plan=plan,
                 mode=mode,
+                as_of_time=as_of_time,
             )
             return SimulationSchedulerBindingResult(
                 binding_id=binding.binding_id,
@@ -4247,6 +4275,7 @@ class SimulationLifecycleScheduler:
                         plan=plan,
                         context=context,
                     ),
+                    as_of_time=as_of_time,
                 )
             except BrokerRejectedError as exc:
                 terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -6783,43 +6812,15 @@ class SimulationLifecycleScheduler:
 
     @staticmethod
     def _compute_schedule_windows(*, trade_date: date, as_of_time: datetime | None) -> tuple[dict[str, Any], ...]:
-        local_as_of = SimulationLifecycleScheduler._scheduler_time(as_of_time) if as_of_time is not None else None
-        current_time = local_as_of.time().replace(second=0, microsecond=0) if local_as_of is not None else None
-        windows: list[dict[str, Any]] = []
-        for window in DEFAULT_SCHEDULER_WINDOWS:
-            start = datetime.combine(trade_date, time.fromisoformat(window["start"]), tzinfo=SCHEDULER_TZ)
-            end = datetime.combine(trade_date, time.fromisoformat(window["end"]), tzinfo=SCHEDULER_TZ)
-            state = "PENDING"
-            if current_time is not None:
-                if current_time < start.time():
-                    state = "UPCOMING"
-                elif start.time() <= current_time < end.time():
-                    state = "ACTIVE"
-                else:
-                    state = "COMPLETED"
-            windows.append(
-                {
-                    **window,
-                    "trade_date": trade_date.isoformat(),
-                    "state": state,
-                    "timezone": SCHEDULER_TZ_NAME,
-                    "start_at": start.isoformat(),
-                    "end_at": end.isoformat(),
-                }
-            )
-        return tuple(windows)
+        return compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time)
 
     @staticmethod
     def _scheduler_now() -> datetime:
-        return datetime.now(SCHEDULER_TZ)
+        return scheduler_now()
 
     @staticmethod
     def _scheduler_time(value: datetime | None) -> datetime:
-        if value is None:
-            return SimulationLifecycleScheduler._scheduler_now()
-        if value.tzinfo is None:
-            return value.replace(tzinfo=SCHEDULER_TZ)
-        return value.astimezone(SCHEDULER_TZ)
+        return scheduler_time(value)
 
 
 simulation_lifecycle_scheduler = build_simulation_lifecycle_scheduler_from_env()
