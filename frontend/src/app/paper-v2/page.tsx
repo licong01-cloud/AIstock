@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ErrorPanel from "@/components/paper-v2/ErrorPanel";
 import MetricCard from "@/components/paper-v2/MetricCard";
 import NoticePanel from "@/components/paper-v2/NoticePanel";
@@ -9,7 +9,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
-import { paperV2Api, selectionCenterApi, strategyPackageApi } from "@/lib/paper-v2/api";
+import { paperV2Api } from "@/lib/paper-v2/api";
 import { dataSourceLabel, formatCompact, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
 import {
   latestSnapshot,
@@ -20,12 +20,34 @@ import {
   statusFilterToStatuses,
   type RunningPortfolioSummary,
 } from "@/lib/paper-v2/running-summary";
-import type { RunningSummaryPagination, RunningSummarySortBy, RunningSummarySortDir, SelectablePackage, StrategyPackage, TradingDayStatus } from "@/lib/paper-v2/types";
+import type { JsonObject, RunningSummaryPagination, RunningSummarySortBy, RunningSummarySortDir, StrategyPackage, TradingDayStatus } from "@/lib/paper-v2/types";
+
+type PaperOverviewSummary = JsonObject & {
+  package_counts?: {
+    total?: number;
+    active?: number;
+    retired?: number;
+  };
+  selection_counts?: {
+    packages_with_latest_run?: number;
+    latest_run_count?: number;
+  };
+  portfolio_counts?: {
+    total?: number;
+    active?: number;
+  };
+};
+type OverviewRunningPortfolioSummary = RunningPortfolioSummary & { package?: StrategyPackage | JsonObject | null };
 
 function cashParam(value: string): number | null {
   if (!value.trim()) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function packageFromSummary(value: unknown): StrategyPackage | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  return value as StrategyPackage;
 }
 
 function latestRunLabel(row: RunningPortfolioSummary): string {
@@ -35,9 +57,8 @@ function latestRunLabel(row: RunningPortfolioSummary): string {
 }
 
 export default function PaperV2OverviewPage() {
-  const [packages, setPackages] = useState<StrategyPackage[]>([]);
-  const [selectable, setSelectable] = useState<SelectablePackage[]>([]);
-  const [rows, setRows] = useState<RunningPortfolioSummary[]>([]);
+  const [overviewSummary, setOverviewSummary] = useState<PaperOverviewSummary | null>(null);
+  const [rows, setRows] = useState<OverviewRunningPortfolioSummary[]>([]);
   const [tradingDayStatus, setTradingDayStatus] = useState<TradingDayStatus | null>(null);
   const [pagination, setPagination] = useState<RunningSummaryPagination | null>(null);
   const [page, setPage] = useState(1);
@@ -56,9 +77,8 @@ export default function PaperV2OverviewPage() {
     setLoading(true);
     setError(null);
     try {
-      const [pkgRows, selectableRows, runningPage, tradingStatus] = await Promise.all([
-        strategyPackageApi.list(undefined, 200),
-        selectionCenterApi.selectablePackages(300),
+      const [summary, runningPage, tradingStatus] = await Promise.all([
+        paperV2Api.overviewSummary(),
         paperV2Api.runningSummaryPage({
           page,
           pageSize,
@@ -74,9 +94,11 @@ export default function PaperV2OverviewPage() {
         }),
         paperV2Api.tradingDayStatus(),
       ]);
-      setPackages(pkgRows);
-      setSelectable(selectableRows);
-      setRows(runningPage.summaries.map(parseRunningSummaryItem));
+      setOverviewSummary(summary);
+      setRows(runningPage.summaries.map((item) => ({
+        ...parseRunningSummaryItem(item),
+        package: packageFromSummary(item.package),
+      })));
       setPagination(runningPage.pagination);
       setTradingDayStatus(tradingStatus);
     } catch (exc) {
@@ -88,11 +110,14 @@ export default function PaperV2OverviewPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const readyPackages = packages.filter((item) => String(item.package_status || "").toUpperCase() !== "RETIRED").length;
+  const packageCounts = overviewSummary?.package_counts || {};
+  const selectionCounts = overviewSummary?.selection_counts || {};
+  const readyPackages = Number(packageCounts.active ?? 0);
+  const totalPackages = Number(packageCounts.total ?? 0);
+  const selectableCount = Number(selectionCounts.packages_with_latest_run ?? 0);
   const activeTotal = pagination?.total ?? rows.length;
   const blockingErrors = rows.reduce((total, item) => total + item.counts.errors, 0);
   const latestRuns = rows.filter((item) => item.latestRun).length;
-  const staleModels = useMemo(() => selectable.filter((item) => String(item.model_state?.staleness_status || "").includes("STALE")).length, [selectable]);
   const totalPages = Math.max(1, pagination?.total_pages || 1);
   const pageStart = pagination?.total ? (page - 1) * pageSize + 1 : 0;
   const pageEnd = pagination?.total ? Math.min(page * pageSize, pagination.total) : 0;
@@ -103,10 +128,10 @@ export default function PaperV2OverviewPage() {
   }
 
   const workflowSteps = paperV2WorkflowSteps({
-    hasPackages: packages.length > 0,
+    hasPackages: totalPackages > 0,
     hasSelectionEnabledPackage: readyPackages > 0,
     hasPaperEnabledPackage: readyPackages > 0,
-    hasSelectionRun: selectable.some((item) => item.latest_selection_run),
+    hasSelectionRun: selectableCount > 0,
     hasPortfolio: rows.length > 0 || (pagination?.total ?? 0) > 0,
     hasReadyRun: latestRuns > 0,
   });
@@ -115,8 +140,8 @@ export default function PaperV2OverviewPage() {
     <main>
       <WorkflowStepper steps={workflowSteps} />
       <div className="pv2-grid pv2-grid-4">
-        <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${packages.length} 个策略包`} tone="success" />
-        <MetricCard label="可选策略包" value={selectable.length} hint={`${staleModels} 个模型过期提醒`} tone={staleModels ? "warning" : "success"} />
+        <MetricCard label="可用策略包" value={readyPackages} hint={`共 ${totalPackages} 个策略包`} tone="success" />
+        <MetricCard label="可选策略包" value={selectableCount} hint="数据库已记录选股运行" tone="success" />
         <MetricCard label="运行/暂停模拟盘" value={activeTotal} hint="RUNNING / PAUSED，READY 显示为未就绪" tone="info" />
         <MetricCard label="本页阻断错误" value={blockingErrors} hint="当前页 fail-fast 问题" tone={blockingErrors ? "danger" : "success"} />
       </div>
@@ -142,7 +167,7 @@ export default function PaperV2OverviewPage() {
       <SectionCard title="流程看板" eyebrow="v2 正确流程" action={<Link className="pv2-button" href="/paper-v2/selection">运行选股</Link>}>
         <div className="pv2-grid pv2-grid-4">
           <MetricCard label="1. 资产合格策略包" value={readyPackages} hint="资产合格即可进入选股/模拟盘" />
-          <MetricCard label="2. 选股可执行" value={selectable.length} hint="策略包选股中心" />
+          <MetricCard label="2. 选股可执行" value={selectableCount} hint="数据库选股运行记录" />
           <MetricCard label="3. 模拟盘已就绪" value={activeTotal} hint="后端分页统计" />
           <MetricCard label="4. 本页运行记录" value={latestRuns} hint="最近运行/回放" />
         </div>
@@ -185,8 +210,9 @@ export default function PaperV2OverviewPage() {
           columns={[
             { key: "name", header: "模拟盘", render: ({ portfolio }) => <Link href={`/paper-v2/portfolios/${portfolio.portfolio_id}`}>{portfolio.portfolio_name}</Link> },
             { key: "status", header: "状态", render: ({ portfolio }) => <StatusBadge status={portfolio.status} /> },
-            { key: "package", header: "策略包", render: ({ portfolio }) => {
-              const pkg = packages.find((item) => item.package_id === portfolio.package_id);
+            { key: "package", header: "策略包", render: (row) => {
+              const { portfolio } = row;
+              const pkg = row.package as StrategyPackage | undefined;
               const label = pkg ? packageDisplayLabel(pkg) : shortHash(portfolio.package_id, 7);
               return <span title={String(portfolio.package_id)}>{label}</span>;
             } },

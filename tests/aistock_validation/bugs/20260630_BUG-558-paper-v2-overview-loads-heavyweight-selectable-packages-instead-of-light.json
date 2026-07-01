@@ -1,0 +1,128 @@
+{
+  "actual": "Paper v2 overview Promise.all loads strategyPackageApi.list(200), selectionCenterApi.selectablePackages(300), running-summary and trading status together. selectable-packages expands to max(limit*5, limit), performs per-package eligibility/model_state/health processing, and blocks overview render on the slowest request.",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/page.tsx",
+    "frontend/src/lib/paper-v2/api.ts",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/selection_center/service.py",
+    "backend/tests/paper_trading_v2",
+    "frontend/tests/paper-v2",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260630_BUG-558-paper-v2-overview-loads-heavyweight-selectable-packages-instead-of-light.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-558",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T17:10:54.990358Z",
+  "description": "Paper v2 overview Promise.all loads strategyPackageApi.list(200), selectionCenterApi.selectablePackages(300), running-summary and trading status together. selectable-packages expands to max(limit*5, limit), performs per-package eligibility/model_state/health processing, and blocks overview render on the slowest request.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260630-27ad90ce4627",
+      "timestamp": "2026-06-29T17:10:54.990354Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\frontend\\src\\app\\paper-v2\\page.tsx:59; F:\\Dev\\AIstock\\frontend\\src\\app\\paper-v2\\page.tsx:61; F:\\Dev\\AIstock\\backend\\services\\selection_center\\service.py:713; F:\\Dev\\AIstock\\backend\\services\\selection_center\\service.py:716; F:\\Dev\\AIstock\\backend\\services\\selection_center\\service.py:720"
+  ],
+  "expected": "模拟盘总览页只查询页面展示所需的数据库状态/聚合字段；避免重型 selectable package 列表、避免 N+1；对 SQL 做聚合/批量化优化，必要时以合理并发度利用连接池，但不得制造 DB 压力。",
+  "first_seen_at": "2026-06-29T17:10:54.990358Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1751,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1751",
+  "last_seen_at": "2026-06-29T17:10:54.990358Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open Paper v2 overview and compare /api/v1/selection-center/selectable-packages?limit=300 latency; observed around 20.4-22.5s in runtime logs/probe.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 overview loads heavyweight selectable packages instead of lightweight database summary",
+  "trigger_condition": {
+    "fingerprint": "27ad90ce462733ca377fec91",
+    "source_event_id": "FE-20260630-27ad90ce4627"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/page.tsx",
+      "frontend/src/lib/paper-v2/api.ts",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/services/selection_center/service.py",
+      "backend/tests/paper_trading_v2"
+    ],
+    "ui_issue": true,
+    "ui_route": "/selectable-packages?limit=300",
+    "ui_routes": [
+      "/selectable-packages?limit=300",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

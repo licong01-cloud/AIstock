@@ -472,6 +472,10 @@ export const paperV2Api = {
       },
     };
   },
+  async overviewSummary(): Promise<JsonObject> {
+    const data = await apiFetch<{ summary?: JsonObject }>("/paper-v2/overview-summary");
+    return data.summary || {};
+  },
   async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; broker_backend?: "local_sim" | "minqmt_sim"; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));
     return data.portfolio;

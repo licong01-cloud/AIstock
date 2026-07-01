@@ -395,6 +395,9 @@ class PaperTradingV2PortfolioService:
             max_initial_cash=max_initial_cash,
         )
 
+    def overview_summary(self) -> dict[str, Any]:
+        return self.repository.overview_summary()
+
     def get_portfolio(self, portfolio_id: str) -> PaperPortfolio:
         return self.repository.get_portfolio(portfolio_id)
 

@@ -85,6 +85,7 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
     "latest_run_trade_date": "lr.trade_date",
     "latest_run_time": "COALESCE(lr.started_at, lr.completed_at)",
 }
+OVERVIEW_PACKAGE_RETIRED_STATUS = "RETIRED"
 TERMINAL_RUN_STATUSES = {RunStatus.SUCCEEDED, RunStatus.FAILED}
 RUN_SUCCESS_TERMINAL_ORDER_STATUSES = {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
 
@@ -768,6 +769,17 @@ class PaperTradingV2Repository:
 
                 cur.execute(
                     """
+                    SELECT package_id, package_name, package_version, package_status,
+                           manifest_sha256, alpha_mode, display_name, legacy_name, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE package_id = ANY(%s)
+                    """,
+                    (sorted({row["package_id"] for row in portfolio_rows}),),
+                )
+                packages_by_id = {row["package_id"]: dict(row) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
                     SELECT *
                     FROM (
                         SELECT s.*,
@@ -894,6 +906,7 @@ class PaperTradingV2Repository:
             summaries.append(
                 {
                     "portfolio": portfolio,
+                    "package": packages_by_id.get(portfolio.package_id),
                     "latest_run": latest_runs.get(portfolio_id),
                     "latest_session": latest_sessions.get(portfolio_id),
                     "operability": _running_summary_operability(
@@ -926,6 +939,70 @@ class PaperTradingV2Repository:
                 "search_fields": requested_search_fields,
                 "min_initial_cash": min_initial_cash,
                 "max_initial_cash": max_initial_cash,
+            },
+        }
+
+    def overview_summary(self) -> dict[str, Any]:
+        """Return Paper v2 overview counters from persisted database rows only.
+
+        This endpoint is intentionally lighter than StrategyPackage or
+        Selection Center listing APIs: it selects scalar columns and aggregate
+        counts, and must not instantiate manifests or refresh model state.
+        """
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH package_counts AS (
+                        SELECT
+                            COUNT(*) AS total_packages,
+                            COUNT(*) FILTER (WHERE package_status <> %s) AS active_packages,
+                            COUNT(*) FILTER (WHERE package_status = %s) AS retired_packages
+                        FROM strategy_pkg.package
+                    ),
+                    portfolio_counts AS (
+                        SELECT
+                            COUNT(*) AS portfolio_count,
+                            COUNT(*) FILTER (WHERE status = ANY(%s)) AS active_portfolio_count
+                        FROM paper_v2.portfolio
+                    ),
+                    selection_packages AS (
+                        SELECT DISTINCT pkg.package_id
+                        FROM selection.run run
+                        CROSS JOIN LATERAL jsonb_array_elements_text(run.package_ids) AS pkg(package_id)
+                        WHERE run.status = 'SUCCEEDED'
+                    ),
+                    selection_counts AS (
+                        SELECT
+                            COUNT(*) AS package_count,
+                            COUNT(*) AS latest_selection_run_count
+                        FROM selection_packages
+                    )
+                    SELECT *
+                    FROM package_counts, portfolio_counts, selection_counts
+                    """,
+                    (
+                        OVERVIEW_PACKAGE_RETIRED_STATUS,
+                        OVERVIEW_PACKAGE_RETIRED_STATUS,
+                        [PortfolioStatus.RUNNING.value, PortfolioStatus.PAUSED.value],
+                    ),
+                )
+                summary_counts = dict(cur.fetchone() or {})
+
+        return {
+            "package_counts": {
+                "total": int(summary_counts.get("total_packages") or 0),
+                "active": int(summary_counts.get("active_packages") or 0),
+                "retired": int(summary_counts.get("retired_packages") or 0),
+            },
+            "selection_counts": {
+                "packages_with_latest_run": int(summary_counts.get("package_count") or 0),
+                "latest_run_count": int(summary_counts.get("latest_selection_run_count") or 0),
+            },
+            "portfolio_counts": {
+                "total": int(summary_counts.get("portfolio_count") or 0),
+                "active": int(summary_counts.get("active_portfolio_count") or 0),
             },
         }
 
@@ -2992,6 +3069,14 @@ class InMemoryPaperTradingV2Repository:
             rows.append(
                 {
                     "portfolio": portfolio,
+                    "package": {
+                        "package_id": portfolio.package_id,
+                        "package_name": portfolio.frozen_manifest.package_name,
+                        "package_version": portfolio.frozen_manifest.package_version,
+                        "package_status": portfolio.frozen_manifest.package_status.value,
+                        "manifest_sha256": portfolio.manifest_sha256,
+                        "alpha_mode": portfolio.frozen_manifest.alpha_mode.value,
+                    },
                     "latest_run": runs[0] if runs else None,
                     "latest_session": sessions[0] if sessions else None,
                     "operability": _running_summary_operability(
@@ -3078,6 +3163,29 @@ class InMemoryPaperTradingV2Repository:
                 "search_fields": requested_search_fields,
                 "min_initial_cash": min_initial_cash,
                 "max_initial_cash": max_initial_cash,
+            },
+        }
+
+    def overview_summary(self) -> dict[str, Any]:
+        total_packages = len({portfolio.package_id for portfolio in self.portfolios.values()})
+        packages_with_portfolio = {portfolio.package_id for portfolio in self.portfolios.values()}
+        active_portfolios = {
+            PortfolioStatus.RUNNING,
+            PortfolioStatus.PAUSED,
+        }
+        return {
+            "package_counts": {
+                "total": total_packages,
+                "active": len(packages_with_portfolio),
+                "retired": 0,
+            },
+            "selection_counts": {
+                "packages_with_latest_run": 0,
+                "latest_run_count": 0,
+            },
+            "portfolio_counts": {
+                "total": len(self.portfolios),
+                "active": len([item for item in self.portfolios.values() if item.status in active_portfolios]),
             },
         }
 
