@@ -7,7 +7,10 @@
     "backend/tests/research_assistant/test_react_grounding.py",
     "backend/tests/research_assistant/test_service.py",
     "tests/aistock_validation/bugs/20260701_BUG-568-ra-evidence-guard-needs-hot-reloadable-guard-mode-off-annotate-strict.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_external_research_react_consumption.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-568",

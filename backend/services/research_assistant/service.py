@@ -2467,7 +2467,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         candidates: list[dict[str, Any]] = []
         react = cards.get("react_grounding") if isinstance(cards.get("react_grounding"), dict) else {}
         evidence_guard = react.get("evidence_guard") if isinstance(react.get("evidence_guard"), dict) else {}
-        react_grounding_allowed = bool(evidence_guard.get("allowed") and evidence_guard.get("reason") == "ok")
+        react_guard_reason = str(evidence_guard.get("reason") or "")
+        react_grounding_allowed = bool(
+            evidence_guard.get("allowed")
+            and (
+                react_guard_reason == "ok"
+                or react_guard_reason.startswith("guard_disabled")
+                or react_guard_reason.startswith("annotated:")
+            )
+        )
         if react_grounding_allowed:
             return None
         for item in react.get("tool_errors") or []:
@@ -7355,9 +7363,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if "max_tool_iterations" not in cfg:
             raise KeyError("Research Assistant runtime config missing react_grounding.max_tool_iterations")
         configured_iterations = int(cfg["max_tool_iterations"])
+        ra_cfg = runtime_config.get("research_assistant") if isinstance(runtime_config.get("research_assistant"), dict) else {}
+        guard_mode = ra_cfg.get("guard_mode") if "guard_mode" in ra_cfg else cfg.get("guard_mode")
         return ReactGroundingConfig(
             max_tool_iterations=max(configured_iterations, 10),
             evidence_required=bool(cfg.get("evidence_required", True)),
+            guard_mode=str(guard_mode) if guard_mode is not None else None,
             user_message=user_message,
             token_budget=int(cfg.get("token_budget") or token_budget) if (cfg.get("token_budget") or token_budget) else None,
             placeholder_patterns=tuple(str(item) for item in cfg.get("placeholder_patterns", [r"\bXX\b", r"\bX%\b", "approxX", "about X"])),
@@ -7734,7 +7745,13 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if (
             not react_active
             or react_guard.get("allowed") is not True
-            or react_guard.get("reason") not in {"ok", "read_only_partial_evidence_degraded"}
+        ):
+            return False
+        guard_reason = str(react_guard.get("reason") or "")
+        if not (
+            guard_reason in {"ok", "read_only_partial_evidence_degraded"}
+            or guard_reason.startswith("guard_disabled")
+            or guard_reason.startswith("annotated:")
         ):
             return False
         executed_tools = react_card.get("executed_tools") if isinstance(react_card.get("executed_tools"), list) else []
@@ -8082,6 +8099,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         skill_reuse = cards.get("skill_reuse_result") if isinstance(cards, dict) else None
         if isinstance(skill_reuse, dict) and skill_reuse.get("proposal_type") == "skill":
             return self._apply_main_reply_policy(self._render_skill_reuse_preflight_reply(skill_reuse), mode_decision)
+        react_guard_reason = str(react_guard.get("reason") or "")
         if (
             not grounded_business_answer_available
             and mode_decision.intent_type in {DialogueIntent.CAPABILITY_INQUIRY, DialogueIntent.MCP_CAPABILITY_INQUIRY}
@@ -8093,7 +8111,11 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if (
             react_active
             and react_guard.get("allowed") is True
-            and react_guard.get("reason") in {"ok", "read_only_partial_evidence_degraded"}
+            and (
+                react_guard_reason in {"ok", "read_only_partial_evidence_degraded"}
+                or react_guard_reason.startswith("guard_disabled")
+                or react_guard_reason.startswith("annotated:")
+            )
             and text
             and not self._is_insufficient_evidence_text(text)
             and not self._contains_agentic_template_marker(text)

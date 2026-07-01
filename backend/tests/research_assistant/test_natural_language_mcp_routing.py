@@ -313,7 +313,7 @@ def test_bug_326_chat_local_data_sync_check_uses_grounded_read_only_route() -> N
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is True
     assert execution["tool_name"] == "local_data_get_preset_daily_status"
-    assert result["cards"]["react_grounding"]["evidence_guard"]["reason"] == "ok"
+    assert result["cards"]["react_grounding"]["evidence_guard"]["reason"] == "guard_disabled"
     assert "max tool iterations reached without reliable evidence" not in result["assistant_message"]["content_text"]
     assert "Route decision" not in result["assistant_message"]["content_text"]
     assert "source=" not in result["assistant_message"]["content_text"]

@@ -22,6 +22,7 @@ logger = logging.getLogger("aistock.research_assistant.react_grounding")
 class ReactGroundingConfig:
     max_tool_iterations: int
     evidence_required: bool = True
+    guard_mode: str | None = None
     user_message: str = ""
     token_budget: int | None = None
     placeholder_patterns: tuple[str, ...] = (r"\bXX\b", r"\bX%\b", r"approxX", r"about X")
@@ -33,6 +34,11 @@ class ReactGroundingConfig:
     def __post_init__(self) -> None:
         if self.max_tool_iterations <= 0:
             raise ValueError("max_tool_iterations must be positive")
+        object.__setattr__(
+            self,
+            "guard_mode",
+            _normalize_guard_mode(self.guard_mode, evidence_required=self.evidence_required),
+        )
 
 
 @dataclass(frozen=True)
@@ -150,6 +156,14 @@ PROGRAM_ERROR_REASON_CODES = {
     "data_source_unavailable",
     "tool_result_compaction_error",
 }
+GUARD_MODE_VALUES = {"off", "annotate", "strict"}
+SOFT_EVIDENCE_GUARD_ANNOTATIONS = {
+    "factual_list_row_evidence_missing": "⚠️ 部分表格/列表数字未逐行标注来源或时间，请把这些数值当作待复核信息。",
+    "unsourced_numeric_fact": "⚠️ 部分数值未标注来源或时间，请把这些数值当作待复核信息。",
+    "unverified_evidence_risk_label_missing": "⚠️ 含未验证或回测类证据，请勿当作真实收益或生产结论。",
+    "future_answer_boundary_missing": "⚠️ 方向性判断仅供参考，不构成投资建议。",
+    "question_focus_mismatch": "⚠️ 回答可能未完全覆盖你提问中的状态焦点，请按需继续追问确认。",
+}
 READ_ONLY_PARTIAL_EVIDENCE_REASON_CODES = {
     "max_tool_iterations_exhausted",
 }
@@ -182,6 +196,16 @@ UNVERIFIED_RISK_TERMS = (
     "\u672a\u9a8c\u8bc1\u56de\u6d4b",
     "\u771f\u5b9e\u6536\u76ca",
 )
+
+
+def _normalize_guard_mode(value: str | None, *, evidence_required: bool) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "strict" if evidence_required else "off"
+    if raw in GUARD_MODE_VALUES:
+        return raw
+    logger.warning("invalid research_assistant.guard_mode=%r; falling back to strict", value)
+    return "strict"
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -670,12 +694,39 @@ def _render_no_data_source_reply(
     )
 
 
+def _render_guard_disabled_no_data_source_reply(
+    *,
+    collected_calls: list[McpToolCall],
+    collected_results: list[McpToolResult],
+    config: ReactGroundingConfig,
+) -> str:
+    attempted = _attempted_source_names(collected_calls, collected_results)
+    attempted_text = "、".join(attempted) if attempted else "本轮只读工具"
+    query = config.user_message.strip() or "这次问题"
+    return (
+        f"我尝试了 {attempted_text}，但没有拿到可用于回答「{query}」的有效数据；"
+        "不会把它包装成固定错误模板。你可以换一个数据口径、时间范围，或让我继续尝试其它只读来源。"
+    )
+
+
 def _no_data_source_guard(
     *,
     collected_calls: list[McpToolCall],
     collected_results: list[McpToolResult],
     config: ReactGroundingConfig,
 ) -> EvidenceGuardDecision:
+    if config.guard_mode == "off":
+        return EvidenceGuardDecision(
+            True,
+            _render_guard_disabled_no_data_source_reply(
+                collected_calls=collected_calls,
+                collected_results=collected_results,
+                config=config,
+            ),
+            "guard_disabled_no_data_source",
+            sum(1 for item in collected_results if _result_has_evidence_items(item) and item.source_refs),
+            sum(1 for item in collected_results if _result_has_evidence_items(item) and item.as_of),
+        )
     return EvidenceGuardDecision(
         False,
         _render_no_data_source_reply(collected_calls=collected_calls, collected_results=collected_results, config=config),
@@ -776,6 +827,24 @@ def _render_program_error_reply(results: list[McpToolResult]) -> str:
     return "\n".join(lines)
 
 
+def _render_guard_disabled_program_error_reply(results: list[McpToolResult]) -> str:
+    lines = ["工具调用未完成；我不会把它包装成证据不足报错，但需要把失败情况说明给你："]
+    for result in results[:3]:
+        error = result.error_json if isinstance(result.error_json, dict) else {}
+        tool = f"{result.server_key}/{result.tool_name}"
+        reason = str(error.get("reason_code") or error.get("code") or result.blocked_reason or "tool_execution_error")
+        message = str(error.get("human_reason") or error.get("message") or error.get("error_summary") or result.summary or "").strip()
+        suffix = f"：{message}" if message else ""
+        lines.append(f"- {tool} 调用失败，原因 {reason}{suffix}")
+    if len(results) > 3:
+        lines.append(f"- 另有 {len(results) - 3} 个工具失败，详见执行卡片。")
+    return "\n".join(lines)
+
+
+def _render_guard_disabled_no_final_reply() -> str:
+    return "我没有得到可直接返回的最终回答；如果本轮涉及写入或审批动作，需要你在审批卡中确认后才能继续。"
+
+
 def _text_reports_program_error(text: str, results: list[McpToolResult]) -> bool:
     lowered = text.lower()
     if "reason_code" not in lowered:
@@ -786,6 +855,34 @@ def _text_reports_program_error(text: str, results: list[McpToolResult]) -> bool
         if reason_code and reason_code.lower() in lowered:
             return True
     return False
+
+
+def _append_guard_annotation(text: str, reason: str) -> str:
+    annotation = SOFT_EVIDENCE_GUARD_ANNOTATIONS.get(reason)
+    if not annotation:
+        return text
+    stripped = text.rstrip()
+    if annotation in stripped:
+        return stripped
+    separator = "\n\n" if stripped else ""
+    return f"{stripped}{separator}{annotation}"
+
+
+def _maybe_annotate_soft_guard(
+    decision: EvidenceGuardDecision,
+    *,
+    text: str,
+    config: ReactGroundingConfig,
+) -> EvidenceGuardDecision:
+    if config.guard_mode != "annotate" or decision.reason not in SOFT_EVIDENCE_GUARD_ANNOTATIONS:
+        return decision
+    return EvidenceGuardDecision(
+        True,
+        _append_guard_annotation(text, decision.reason),
+        f"annotated:{decision.reason}",
+        decision.source_count,
+        decision.as_of_count,
+    )
 
 
 TERMINAL_SUMMARY_RESPONSE_MODES = {"local_data_daily_sync_status", "stock_analysis_evidence_card"}
@@ -1137,6 +1234,18 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
     source_count = len(known_sources)
     as_of_count = len(known_as_of)
     program_errors = _program_error_results(collected_results)
+    if config.guard_mode == "off":
+        if text:
+            return EvidenceGuardDecision(True, text, "guard_disabled", source_count, as_of_count)
+        if program_errors:
+            return EvidenceGuardDecision(
+                True,
+                _render_guard_disabled_program_error_reply(program_errors),
+                "guard_disabled_tool_error",
+                source_count,
+                as_of_count,
+            )
+        return EvidenceGuardDecision(True, text, "guard_disabled", source_count, as_of_count)
     placeholder = _contains_placeholder(text, config.placeholder_patterns)
     if placeholder:
         decision = EvidenceGuardDecision(False, "Insufficient evidence: placeholder tokens are not allowed in factual answers.", f"placeholder_blocked:{placeholder}", source_count, as_of_count)
@@ -1171,35 +1280,35 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and has_numbers and not (inline_source and inline_as_of):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: numeric facts require inline source/as_of.", "unsourced_numeric_fact", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and collected_results and not _matches_running_focus(text, config, collected_results):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested running-status focus.", "question_focus_mismatch", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and collected_results and not _matches_completed_focus(text, config, collected_results):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: answer did not address the requested completed-status focus.", "question_focus_mismatch", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and collected_results and not _passes_future_answer_discipline(text, config):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: future-looking answers must not make directional price predictions.", "future_answer_boundary_missing", source_count, as_of_count)
         if program_errors and _text_reports_program_error(text, program_errors):
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and collected_results and _has_unverified_evidence(collected_results) and not _passes_unverified_risk_labels(text):
         decision = EvidenceGuardDecision(
             False,
@@ -1212,7 +1321,7 @@ def compose_with_evidence_guard(answer_text: str, collected_results: list[McpToo
             return EvidenceGuardDecision(True, text, "explicit_tool_error", source_count, as_of_count)
         if program_errors:
             return EvidenceGuardDecision(False, _render_program_error_reply(program_errors), "explicit_tool_error", source_count, as_of_count)
-        return decision
+        return _maybe_annotate_soft_guard(decision, text=text, config=config)
     if config.evidence_required and collected_results and _contains_forbidden_marker(text, config.forbidden_answer_markers):
         decision = EvidenceGuardDecision(False, "Insufficient evidence: regenerated answer still matched a retired business template marker.", "post_guard_forbidden_answer_marker", source_count, as_of_count)
         if program_errors:
@@ -1431,7 +1540,7 @@ def run_react_grounding_loop(
                         return ReactGroundingResult(final_text, working_messages, collected_calls, collected_results, trace_steps, repaired_guard, iteration, stopped_reason, model_turns)
             if guard.allowed:
                 zero_evidence_calls = _zero_evidence_fallback_tool_calls(fallback_tool_calls, collected_calls, collected_results)
-                if config.evidence_required and zero_evidence_calls:
+                if config.guard_mode != "off" and config.evidence_required and zero_evidence_calls:
                     calls = zero_evidence_calls
                     trace_steps.append(
                         {
@@ -1547,14 +1656,21 @@ def run_react_grounding_loop(
     program_errors = _program_error_results(collected_results)
     if final_text:
         guard = compose_with_evidence_guard(final_text, collected_results, config)
-        if program_errors and (not guard.allowed or "insufficient evidence" in guard.text.lower()):
+        if config.guard_mode != "off" and program_errors and (not guard.allowed or "insufficient evidence" in guard.text.lower()):
             explicit = _render_program_error_reply(program_errors)
             guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
             stopped_reason = "tool_error"
     elif program_errors:
-        explicit = _render_program_error_reply(program_errors)
-        guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
-        stopped_reason = "tool_error"
+        if config.guard_mode == "off":
+            explicit = _render_guard_disabled_program_error_reply(program_errors)
+            guard = EvidenceGuardDecision(True, explicit, "guard_disabled_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+            stopped_reason = "tool_error_visible"
+        else:
+            explicit = _render_program_error_reply(program_errors)
+            guard = EvidenceGuardDecision(False, explicit, "explicit_tool_error", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
+            stopped_reason = "tool_error"
+    elif config.guard_mode == "off":
+        guard = EvidenceGuardDecision(True, _render_guard_disabled_no_final_reply(), "guard_disabled_no_final_text", sum(1 for item in collected_results if item.source_refs), sum(1 for item in collected_results if item.as_of))
     elif last_guard is not None:
         guard = last_guard
     else:

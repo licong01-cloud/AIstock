@@ -117,6 +117,9 @@ assembly:
 trace:
   response_preview_chars: 500
 
+research_assistant:
+  guard_mode: "off"
+
 react_grounding:
   # Safety cap only: the model may stop earlier once it has enough evidence.
   max_tool_iterations: 24

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+import pytest
 
 from backend.services.research_assistant.react_grounding import (
     McpToolCall,
@@ -9,6 +12,7 @@ from backend.services.research_assistant.react_grounding import (
     ReactGroundingConfig,
     ToolCatalogEntry,
     ToolGateDecision,
+    _no_data_source_guard,
     _should_force_external_research,
     compose_with_evidence_guard,
     run_react_grounding_loop,
@@ -56,6 +60,208 @@ def _business_evidence_result() -> McpToolResult:
         executed=True,
         side_effect_level="read_only",
     )
+
+
+def test_bug_568_guard_mode_off_returns_narrative_numeric_answer_without_row_sources() -> None:
+    answer = "华海清科主营 CMP 设备，2025 年收入约 40 亿元，客户包括晶圆厂，竞对包括海外设备商。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [_business_evidence_result()],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="介绍华海清科主营、客户和竞对"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+    assert "Insufficient evidence" not in decision.text
+
+
+def test_bug_568_guard_mode_off_does_not_block_directional_prediction() -> None:
+    answer = "国城矿业短期可能上涨，但这只是模型根据上下文给出的判断。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [_business_evidence_result()],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="这只票后面怎么看？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+
+
+def test_bug_568_guard_mode_off_does_not_block_unsourced_numeric_fact() -> None:
+    answer = "公司收入 40 亿元，毛利率 35%，这里没有逐项来源。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="给我一个概览"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+
+
+def test_bug_568_guard_mode_off_surfaces_program_error_without_insufficient_directive() -> None:
+    class FailingProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise RuntimeError("local data offline")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("read-only tool should not need approval")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-tool-error",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-local-data",
+                    tool_name="local_data_sync_status",
+                    stable_call_id="local-data-fail",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "看看本地数据同步状态"}],
+        model_complete=model_complete,
+        mcp_provider=FailingProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_sync_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, guard_mode="off", user_message="看看本地数据同步状态"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "guard_disabled_tool_error"
+    assert "Insufficient evidence" not in result.final_text
+    assert "aistock-local-data/local_data_sync_status" in result.final_text
+    assert "local data offline" in result.final_text
+    assert any("local_data_sync_status" in str(message.get("content", "")) for message in result.messages)
+
+
+def test_bug_568_guard_mode_off_keeps_write_action_approval_gate() -> None:
+    class RecordingProvider:
+        def __init__(self) -> None:
+            self.executed: list[McpToolCall] = []
+            self.preflighted: list[McpToolCall] = []
+
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            self.executed.append(call)
+            raise AssertionError("write tool must not auto-execute in guard_mode=off")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            self.preflighted.append(call)
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="preflight_required",
+                payload_json={"approval_required": True},
+                executed=False,
+                blocked_reason="preflight_confirmation_required",
+                side_effect_level=decision.side_effect_level,
+            )
+
+    provider = RecordingProvider()
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-write-tool",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-trading-ops",
+                    tool_name="submit_order_confirmed",
+                    stable_call_id="write-order",
+                    risk_level="production_sensitive",
+                    side_effect_level="production_sensitive",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "提交实盘订单"}],
+        model_complete=model_complete,
+        mcp_provider=provider,
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-trading-ops",
+                tool_name="submit_order_confirmed",
+                status="enabled",
+                risk_level="production_sensitive",
+                side_effect_level="production_sensitive",
+                requires_approval=True,
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, guard_mode="off", user_message="提交实盘订单"),
+    )
+
+    assert provider.executed == []
+    assert len(provider.preflighted) == 1
+    assert result.tool_results[0].executed is False
+    assert result.tool_results[0].status == "preflight_required"
+    assert result.tool_results[0].side_effect_level == "production_sensitive"
+
+
+def test_bug_568_guard_mode_annotate_keeps_soft_failure_answer_with_chinese_note() -> None:
+    answer = "- loop-001 CAGR 112.00%\nSources: qe_archive:leaderboard as_of 2026-06-24."
+
+    decision = compose_with_evidence_guard(
+        answer,
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="annotate", user_message="说说 QE loop 结果"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "annotated:factual_list_row_evidence_missing"
+    assert "- loop-001 CAGR 112.00%" in decision.text
+    assert "⚠️" in decision.text
+    assert "来源" in decision.text
+
+
+def test_bug_568_guard_mode_annotate_still_blocks_hard_placeholder_redline() -> None:
+    decision = compose_with_evidence_guard(
+        "收入 XX%；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="annotate", user_message="给我概览"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason.startswith("placeholder_blocked")
+
+
+def test_bug_568_invalid_guard_mode_falls_back_to_strict_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="aistock.research_assistant.react_grounding")
+
+    config = ReactGroundingConfig(max_tool_iterations=2, guard_mode="invalid-mode")
+    decision = compose_with_evidence_guard(
+        "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        config,
+    )
+
+    assert config.guard_mode == "strict"
+    assert "invalid research_assistant.guard_mode" in caplog.text
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
 
 
 def _external_research_call() -> McpToolCall:
@@ -195,6 +401,35 @@ def test_t9_2_external_stub_fallback_remains_honest_no_data() -> None:
     assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
     assert "reason_code=no_data_source_after_mcp_and_external_research" in result.final_text
     assert result.evidence_guard.source_count == 0
+
+
+def test_bug_568_guard_mode_off_no_data_source_is_visible_without_error_code() -> None:
+    guard = _no_data_source_guard(
+        collected_calls=[
+            McpToolCall(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                stable_call_id="quote-empty-001",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            McpToolCall(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                stable_call_id="external-empty-001",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        collected_results=[_empty_business_result(), _empty_external_research_result()],
+        config=ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="000688"),
+    )
+
+    assert guard.allowed is True
+    assert guard.reason == "guard_disabled_no_data_source"
+    assert "aistock-stock-analysis/stock_analysis_get_quote" in guard.text
+    assert "证据不足" not in guard.text
+    assert "reason_code=" not in guard.text
 
 
 def test_future_answer_allows_grounded_non_directional_answer_without_style_template() -> None:
