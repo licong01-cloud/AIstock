@@ -1,4 +1,4 @@
-﻿"""Strategy Package manifest v1 models."""
+"""Strategy Package manifest v1 models."""
 
 from __future__ import annotations
 
@@ -124,6 +124,38 @@ class FactorAsset(BaseModel):
     required: bool = True
 
 
+class ModelCodeAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    module_name: str
+    relative_path: str
+    asset_ref: str
+    sha256: str
+    size_bytes: int = Field(ge=0)
+    source_uri: str | None = None
+    required: bool = True
+
+
+class Alpha158SchemaAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    aliases: list[str] = Field(default_factory=list)
+    alias_count: int = 0
+    loader_class: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
+
+
+class RuntimeAssetManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["strategy_package_runtime_assets_v2"] = "strategy_package_runtime_assets_v2"
+    alpha158: Alpha158SchemaAsset = Field(default_factory=lambda: Alpha158SchemaAsset(enabled=False))
+
+
 class ModelAsset(BaseModel):
     model_id: str
     model_ref: str | None = None
@@ -132,6 +164,8 @@ class ModelAsset(BaseModel):
     sha256: str | None = None
     size_bytes: int | None = Field(default=None, ge=0)
     source_uri: str | None = None
+    model_code_required: bool = False
+    model_code_assets: list[ModelCodeAsset] = Field(default_factory=list)
 
 
 class UniversePolicy(BaseModel):
@@ -253,6 +287,7 @@ class StrategyPackageManifest(BaseModel):
     alpha_combination_policy: AlphaCombinationPolicy
     factor_set: list[FactorAsset]
     model_asset: ModelAsset | list[ModelAsset]
+    runtime_assets: RuntimeAssetManifest | None = None
     source_evidence: dict[str, Any] = Field(default_factory=dict)
     backtest_context: dict[str, Any] = Field(default_factory=dict)
     strategy_config: dict[str, Any] = Field(default_factory=dict)

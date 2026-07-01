@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
 import io
 import json
 import os
 import re
+import sys
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -31,15 +33,32 @@ from backend.services.trading_core.errors import (
 )
 
 from .manifest import freeze_manifest
-from .models import FactorAsset, ModelAsset, StrategyPackageManifest
+from .models import (
+    Alpha158SchemaAsset,
+    FactorAsset,
+    ModelAsset,
+    ModelCodeAsset,
+    RuntimeAssetManifest,
+    StrategyPackageManifest,
+)
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
+from .runtime_schema import (
+    alpha158_schema_bytes,
+    alpha158_schema_payload,
+    load_conf_yaml_bytes,
+    model_code_module_from_pt_uri,
+    pt_model_uri_from_conf,
+)
 
 
 @dataclass(frozen=True)
 class PackageAssetBytes:
     data: bytes
     source_uri: str | None = None
+    local_path: Path | None = None
+    source_root: Path | None = None
+    locator: QERuntimeAssetLocator | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +69,7 @@ class PackageAssetFreezeResult:
 
 ModelParamsReader = Callable[[StrategyPackageManifest], PackageAssetBytes]
 FactorCodeReader = Callable[[FactorAsset, StrategyPackageManifest], PackageAssetBytes]
+ConfYamlReader = Callable[[StrategyPackageManifest], PackageAssetBytes]
 QEWorkspaceClientFactory = Callable[[str], QEWorkspaceClient]
 
 
@@ -801,6 +821,85 @@ class StrategyPackageAssetSource:
 
         return _run_async_blocking(_download)
 
+    def workspace_file_bytes(self, manifest: StrategyPackageManifest, rel_path: str) -> PackageAssetBytes:
+        attempts: list[dict[str, Any]] = []
+        rel_path = _remote_relpath(rel_path)
+        locators = self._runtime_asset_locators(manifest, attempts=attempts)
+        node_locators = [locator for locator in locators if locator.qe_task_id and locator.qe_loop_id and locator.node_id]
+        for locator in node_locators:
+            try:
+                data = self._download_node_workspace_file(locator, rel_path=rel_path)
+                return PackageAssetBytes(
+                    data=_ensure_non_empty_bytes(
+                        data,
+                        reason_code="strategy_package_workspace_file_missing",
+                        context={"rel_path": rel_path, "locator": _locator_payload(locator)},
+                    ),
+                    source_uri=(
+                        f"qe-workspace://node/{quote(locator.node_id or '', safe='')}"
+                        f"/tasks/{quote(locator.qe_task_id or '', safe='')}"
+                        f"/loops/{quote(locator.qe_loop_id or '', safe='')}/{quote(rel_path, safe='/')}"
+                    ),
+                    locator=locator,
+                )
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "source": "qe_node",
+                        "method": "download_workspace_file_bytes",
+                        "rel_path": rel_path,
+                        "locator": _locator_payload(locator),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+
+        local_roots = self._resolved_local_workspace_roots(attempts)
+        for base_dir in _local_candidate_dirs(locators, local_roots):
+            path = base_dir / rel_path
+            try:
+                if path.exists() and path.is_file():
+                    return PackageAssetBytes(
+                        data=_read_non_empty(path, reason_code="strategy_package_workspace_file_missing"),
+                        source_uri=path.resolve(strict=False).as_uri(),
+                        local_path=path,
+                        source_root=base_dir,
+                        locator=_locator_for_local_candidate(base_dir, locators),
+                    )
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "source": "wsl_workspace",
+                        "method": "local_workspace_file_read",
+                        "rel_path": rel_path,
+                        "path": str(path),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        raise DataUnavailableError(
+            "strategy package QE workspace file is missing",
+            context={
+                "reason_code": "strategy_package_workspace_file_missing",
+                "package_id": manifest.package_id,
+                "rel_path": rel_path,
+                "source": manifest.source.model_dump(mode="json"),
+                "attempts": attempts,
+                "attempted_sources": attempts,
+            },
+        )
+
+    def conf_yaml_bytes(self, manifest: StrategyPackageManifest) -> PackageAssetBytes:
+        try:
+            return self.workspace_file_bytes(manifest, "conf.yaml")
+        except DataUnavailableError as exc:
+            raise DataUnavailableError(
+                "strategy package QE conf.yaml is missing",
+                context={
+                    **exc.context,
+                    "reason_code": "strategy_package_conf_yaml_missing",
+                    "package_id": manifest.package_id,
+                },
+            ) from exc
+
 
 class PackageAssetFreezeService:
     """Materialize MODEL_WEIGHT and FACTOR_CODE rows before package persistence."""
@@ -812,15 +911,20 @@ class PackageAssetFreezeService:
         source: StrategyPackageAssetSource | None = None,
         model_params_reader: ModelParamsReader | None = None,
         factor_code_reader: FactorCodeReader | None = None,
+        conf_yaml_reader: ConfYamlReader | None = None,
     ) -> None:
         self.asset_store = asset_store or LocalPackageAssetStore()
         self.source = source or StrategyPackageAssetSource()
         self._model_params_reader = model_params_reader
         self._factor_code_reader = factor_code_reader
+        self._conf_yaml_reader = conf_yaml_reader
 
     def freeze_manifest_assets(self, manifest: StrategyPackageManifest) -> PackageAssetFreezeResult:
         factor_assets: list[FactorAsset] = []
         ledger: list[StrategyPackageAssetRecord] = []
+        runtime_assets, schema_record = self._freeze_alpha158_schema(manifest)
+        if schema_record is not None:
+            ledger.append(schema_record)
         for factor in manifest.factor_set:
             frozen_factor, record = self._freeze_factor(factor, manifest)
             factor_assets.append(frozen_factor)
@@ -829,9 +933,9 @@ class PackageAssetFreezeService:
         model_input = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
         model_assets: list[ModelAsset] = []
         for model in model_input:
-            frozen_model, record = self._freeze_model(model, manifest)
+            frozen_model, records = self._freeze_model(model, manifest)
             model_assets.append(frozen_model)
-            ledger.append(record)
+            ledger.extend(records)
 
         model_value: ModelAsset | list[ModelAsset] = model_assets if isinstance(manifest.model_asset, list) else model_assets[0]
         frozen_manifest = freeze_manifest(
@@ -839,11 +943,48 @@ class PackageAssetFreezeService:
                 update={
                     "factor_set": factor_assets,
                     "model_asset": model_value,
+                    "runtime_assets": runtime_assets,
                     "manifest_sha256": None,
                 }
             )
         )
         return PackageAssetFreezeResult(manifest=frozen_manifest, assets=ledger)
+
+    def _freeze_alpha158_schema(
+        self,
+        manifest: StrategyPackageManifest,
+    ) -> tuple[RuntimeAssetManifest | None, StrategyPackageAssetRecord | None]:
+        if _is_multi_alpha_parent_manifest(manifest):
+            return manifest.runtime_assets, None
+        source = self._conf_yaml_bytes(manifest)
+        conf = load_conf_yaml_bytes(source.data, source_uri=source.source_uri)
+        payload = alpha158_schema_payload(conf)
+        if payload is None:
+            return RuntimeAssetManifest(alpha158=Alpha158SchemaAsset(enabled=False)), None
+
+        data = alpha158_schema_bytes(payload)
+        blob = self.asset_store.put(data, kind=StrategyPackageAssetType.FACTOR_SCHEMA.value)
+        logical_name = "alpha158_schema"
+        asset_ref = _logical_asset_ref(blob.uri, asset_type=StrategyPackageAssetType.FACTOR_SCHEMA, logical_name=logical_name)
+        alpha158 = Alpha158SchemaAsset(
+            enabled=True,
+            aliases=list(payload["aliases"]),
+            alias_count=int(payload["alias_count"]),
+            loader_class=str(payload["loader_class"]),
+            asset_ref=asset_ref,
+            sha256=blob.sha256,
+            size_bytes=blob.size_bytes,
+            source_uri=source.source_uri,
+        )
+        return RuntimeAssetManifest(alpha158=alpha158), self._asset_record(
+            manifest=manifest,
+            asset_type=StrategyPackageAssetType.FACTOR_SCHEMA,
+            asset_ref=asset_ref,
+            sha256=blob.sha256,
+            size_bytes=blob.size_bytes,
+            logical_name=logical_name,
+            source_uri=source.source_uri,
+        )
 
     def _freeze_factor(
         self,
@@ -900,7 +1041,7 @@ class PackageAssetFreezeService:
         self,
         model: ModelAsset,
         manifest: StrategyPackageManifest,
-    ) -> tuple[ModelAsset, StrategyPackageAssetRecord]:
+    ) -> tuple[ModelAsset, list[StrategyPackageAssetRecord]]:
         logical_name = str(model.model_id)
         if model.asset_ref and model.sha256:
             data = self._read_existing_asset(
@@ -912,7 +1053,7 @@ class PackageAssetFreezeService:
             )
             size_bytes = model.size_bytes if model.size_bytes is not None else len(data)
             frozen = model.model_copy(update={"size_bytes": size_bytes})
-            return frozen, self._asset_record(
+            weight_record = self._asset_record(
                 manifest=manifest,
                 asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
                 asset_ref=model.asset_ref,
@@ -920,6 +1061,16 @@ class PackageAssetFreezeService:
                 size_bytes=size_bytes,
                 logical_name=logical_name,
                 source_uri=model.source_uri,
+            )
+            code_required, code_assets, code_records = self._freeze_model_code_assets(frozen, manifest)
+            return (
+                frozen.model_copy(
+                    update={
+                        "model_code_required": code_required,
+                        "model_code_assets": code_assets,
+                    }
+                ),
+                [weight_record, *code_records],
             )
 
         source = (
@@ -937,7 +1088,7 @@ class PackageAssetFreezeService:
                 "source_uri": source.source_uri,
             }
         )
-        return frozen, self._asset_record(
+        weight_record = self._asset_record(
             manifest=manifest,
             asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
             asset_ref=asset_ref,
@@ -945,6 +1096,179 @@ class PackageAssetFreezeService:
             size_bytes=blob.size_bytes,
             logical_name=logical_name,
             source_uri=source.source_uri,
+        )
+        code_required, code_assets, code_records = self._freeze_model_code_assets(frozen, manifest)
+        return (
+            frozen.model_copy(
+                update={
+                    "model_code_required": code_required,
+                    "model_code_assets": code_assets,
+                }
+            ),
+            [weight_record, *code_records],
+        )
+
+    def _freeze_model_code_assets(
+        self,
+        model: ModelAsset,
+        manifest: StrategyPackageManifest,
+    ) -> tuple[bool, list[ModelCodeAsset], list[StrategyPackageAssetRecord]]:
+        existing = list(model.model_code_assets or [])
+        try:
+            conf_source = self._conf_yaml_bytes(manifest)
+            conf = load_conf_yaml_bytes(conf_source.data, source_uri=conf_source.source_uri)
+        except DataUnavailableError:
+            if existing:
+                return model.model_code_required, existing, [
+                    self._record_for_existing_model_code_asset(asset, manifest=manifest) for asset in existing
+                ]
+            if _is_multi_alpha_parent_manifest(manifest) and not model.model_code_required:
+                return False, [], []
+            raise
+        module_name = model_code_module_from_pt_uri(pt_model_uri_from_conf(conf))
+        if module_name is None:
+            if existing:
+                return model.model_code_required, existing, [
+                    self._record_for_existing_model_code_asset(asset, manifest=manifest) for asset in existing
+                ]
+            return False, [], []
+
+        discovered = self._discover_model_code_sources(manifest, root_module=module_name)
+        existing_by_path = {asset.relative_path: asset for asset in existing}
+        assets: list[ModelCodeAsset] = []
+        records: list[StrategyPackageAssetRecord] = []
+        for source in discovered:
+            existing_asset = existing_by_path.get(source["relative_path"])
+            if existing_asset is not None:
+                self._read_existing_asset(
+                    asset_ref=existing_asset.asset_ref,
+                    expected_sha256=existing_asset.sha256,
+                    package_id=manifest.package_id,
+                    logical_name=existing_asset.relative_path,
+                    asset_type=StrategyPackageAssetType.MODEL_CODE,
+                )
+                assets.append(existing_asset)
+                records.append(self._record_for_existing_model_code_asset(existing_asset, manifest=manifest))
+                continue
+            blob = self.asset_store.put(source["data"], kind=StrategyPackageAssetType.MODEL_CODE.value)
+            asset_ref = _logical_asset_ref(
+                blob.uri,
+                asset_type=StrategyPackageAssetType.MODEL_CODE,
+                logical_name=source["relative_path"],
+            )
+            asset = ModelCodeAsset(
+                module_name=source["module_name"],
+                relative_path=source["relative_path"],
+                asset_ref=asset_ref,
+                sha256=blob.sha256,
+                size_bytes=blob.size_bytes,
+                source_uri=source["source_uri"],
+                required=source["required"],
+            )
+            assets.append(asset)
+            records.append(
+                self._asset_record(
+                    manifest=manifest,
+                    asset_type=StrategyPackageAssetType.MODEL_CODE,
+                    asset_ref=asset_ref,
+                    sha256=blob.sha256,
+                    size_bytes=blob.size_bytes,
+                    logical_name=source["relative_path"],
+                    source_uri=source["source_uri"],
+                )
+            )
+        return True, assets, records
+
+    def _conf_yaml_bytes(self, manifest: StrategyPackageManifest) -> PackageAssetBytes:
+        return self._conf_yaml_reader(manifest) if self._conf_yaml_reader is not None else self.source.conf_yaml_bytes(manifest)
+
+    def _discover_model_code_sources(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        root_module: str,
+    ) -> list[dict[str, Any]]:
+        root_rel = _module_relpath(root_module)
+        root = self._required_workspace_code_file(
+            manifest,
+            rel_path=root_rel,
+            module_name=root_module,
+            required=True,
+        )
+        ordered: list[dict[str, Any]] = [root]
+        seen = {root_rel}
+        queue = [root]
+        while queue:
+            current = queue.pop(0)
+            for rel_path, module_name in _local_python_import_relpaths(
+                current["data"],
+                root_module=root_module,
+                source_path=current["relative_path"],
+            ):
+                if rel_path in seen:
+                    continue
+                seen.add(rel_path)
+                helper = self._required_workspace_code_file(
+                    manifest,
+                    rel_path=rel_path,
+                    module_name=module_name,
+                    required=True,
+                )
+                ordered.append(helper)
+                queue.append(helper)
+        return ordered
+
+    def _required_workspace_code_file(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        rel_path: str,
+        module_name: str,
+        required: bool,
+    ) -> dict[str, Any]:
+        try:
+            source = self.source.workspace_file_bytes(manifest, rel_path)
+        except DataUnavailableError as exc:
+            raise DataUnavailableError(
+                "strategy package custom model code is missing",
+                context={
+                    **exc.context,
+                    "reason_code": "strategy_package_model_code_missing",
+                    "package_id": manifest.package_id,
+                    "module_name": module_name,
+                    "relative_path": rel_path,
+                },
+            ) from exc
+        _validate_model_code_relpath(rel_path)
+        return {
+            "module_name": module_name,
+            "relative_path": rel_path,
+            "data": source.data,
+            "source_uri": source.source_uri,
+            "required": required,
+        }
+
+    def _record_for_existing_model_code_asset(
+        self,
+        asset: ModelCodeAsset,
+        *,
+        manifest: StrategyPackageManifest,
+    ) -> StrategyPackageAssetRecord:
+        data = self._read_existing_asset(
+            asset_ref=asset.asset_ref,
+            expected_sha256=asset.sha256,
+            package_id=manifest.package_id,
+            logical_name=asset.relative_path,
+            asset_type=StrategyPackageAssetType.MODEL_CODE,
+        )
+        return self._asset_record(
+            manifest=manifest,
+            asset_type=StrategyPackageAssetType.MODEL_CODE,
+            asset_ref=asset.asset_ref,
+            sha256=asset.sha256,
+            size_bytes=asset.size_bytes if asset.size_bytes is not None else len(data),
+            logical_name=asset.relative_path,
+            source_uri=asset.source_uri,
         )
 
     def _read_existing_asset(
@@ -1008,7 +1332,26 @@ def manifest_has_frozen_runtime_assets(manifest: StrategyPackageManifest) -> boo
         return False
     model_asset = getattr(manifest, "model_asset", None)
     models = model_asset if isinstance(model_asset, list) else [model_asset]
-    return bool(models) and all(model is not None and model.asset_ref and model.sha256 for model in models)
+    if not models or any(model is None or not model.asset_ref or not model.sha256 for model in models):
+        return False
+    for model in models:
+        code_assets = list(model.model_code_assets or [])
+        if model.model_code_required and not code_assets:
+            return False
+        if any(not asset.asset_ref or not asset.sha256 for asset in code_assets):
+            return False
+    runtime_assets = getattr(manifest, "runtime_assets", None)
+    if runtime_assets is not None and runtime_assets.alpha158.enabled:
+        alpha158 = runtime_assets.alpha158
+        return bool(alpha158.asset_ref and alpha158.sha256 and alpha158.aliases)
+    return True
+
+
+def _is_multi_alpha_parent_manifest(manifest: StrategyPackageManifest) -> bool:
+    return (
+        getattr(getattr(manifest, "alpha_mode", None), "value", None) == "multi_alpha"
+        and getattr(getattr(manifest.source, "source_type", None), "value", None) == "multi_alpha_combine_run"
+    )
 
 
 def _model_run_candidates(manifest: StrategyPackageManifest) -> list[str]:
@@ -1322,6 +1665,23 @@ def _local_candidate_dirs(
                 yield candidate
 
 
+def _locator_for_local_candidate(
+    base_dir: Path,
+    locators: Sequence[QERuntimeAssetLocator],
+) -> QERuntimeAssetLocator | None:
+    base_name = base_dir.name.lower()
+    for locator in locators:
+        task_id = _text_or_none(locator.qe_task_id)
+        loop_id = _short_loop_id(locator.qe_loop_id, task_id=task_id)
+        experiment_id = _text_or_none(locator.experiment_id) or _experiment_id_from_task_loop(task_id, loop_id)
+        keys = {str(loop_id or "").lower(), str(experiment_id or "").lower()}
+        if task_id and loop_id:
+            keys.add(f"{task_id}_{loop_id}".lower())
+        if base_name in keys:
+            return locator
+    return locators[0] if locators else None
+
+
 def _locator_payload(locator: QERuntimeAssetLocator) -> dict[str, Any]:
     return {
         "experiment_id": locator.experiment_id,
@@ -1411,6 +1771,104 @@ def _params_from_mlruns_archive(payload: bytes, *, locator: QERuntimeAssetLocato
             reason_code="strategy_package_model_params_missing",
             context={"locator": _locator_payload(locator), "member": matches[0].name},
         )
+
+
+_THIRD_PARTY_MODULE_PREFIXES = {
+    "catboost",
+    "lightgbm",
+    "numpy",
+    "pandas",
+    "qlib",
+    "sklearn",
+    "torch",
+    "xgboost",
+}
+_STDLIB_MODULE_NAMES = set(getattr(sys, "stdlib_module_names", ()))
+
+
+def _module_relpath(module_name: str) -> str:
+    parts = [part for part in str(module_name or "").strip().split(".") if part]
+    if not parts:
+        raise StrategyPackageValidationError(
+            "custom model module name is required",
+            context={"reason_code": "strategy_package_model_code_module_invalid", "module_name": module_name},
+        )
+    return str(PurePosixPath(*parts).with_suffix(".py"))
+
+
+def _validate_model_code_relpath(rel_path: str) -> None:
+    pure = PurePosixPath(str(rel_path or "").replace("\\", "/"))
+    if (
+        not str(pure)
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or pure.suffix != ".py"
+    ):
+        raise StrategyPackageValidationError(
+            "model code asset path must be a safe relative Python file path",
+            context={"reason_code": "strategy_package_model_code_path_invalid", "relative_path": rel_path},
+        )
+
+
+def _local_python_import_relpaths(
+    payload: bytes,
+    *,
+    root_module: str,
+    source_path: str,
+) -> list[tuple[str, str]]:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise StrategyPackageValidationError(
+            "model code asset is not UTF-8 Python source",
+            context={
+                "reason_code": "strategy_package_model_code_parse_failed",
+                "module_name": root_module,
+                "relative_path": source_path,
+                "error": str(exc),
+            },
+        ) from exc
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        raise StrategyPackageValidationError(
+            "model code asset cannot be parsed for import closure",
+            context={
+                "reason_code": "strategy_package_model_code_parse_failed",
+                "module_name": root_module,
+                "relative_path": source_path,
+                "line": exc.lineno,
+                "offset": exc.offset,
+                "error": str(exc),
+            },
+        ) from exc
+    root_package = root_module.split(".", 1)[0]
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for node in ast.walk(tree):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.module:
+                modules.append(f"{root_package}.{node.module}")
+            elif node.module:
+                modules.append(node.module)
+        for module in modules:
+            normalized = str(module or "").strip()
+            if not normalized:
+                continue
+            prefix = normalized.split(".", 1)[0]
+            if prefix == root_package and normalized == root_module:
+                continue
+            if prefix in _THIRD_PARTY_MODULE_PREFIXES or prefix in _STDLIB_MODULE_NAMES:
+                continue
+            rel_path = _module_relpath(normalized)
+            if rel_path in seen:
+                continue
+            seen.add(rel_path)
+            found.append((rel_path, normalized))
+    return found
 
 
 def _validate_tar_member(member: tarfile.TarInfo, *, locator: QERuntimeAssetLocator) -> None:

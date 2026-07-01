@@ -16,6 +16,7 @@ from backend.services.qe_archive.multi_alpha_provenance import MultiAlphaProvena
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .components import StrategyPackageComponentService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
 from .manifest import compute_manifest_sha256, freeze_manifest
 from .models import (
     AlphaCombinationPolicy,
@@ -35,7 +36,7 @@ from .models import (
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
 from .qe_source_resolver import QEExperimentSourceResolver
-from .repository import StrategyPackageRecord, StrategyPackageRepository
+from .repository import StrategyPackageRecord, StrategyPackageRepository, manifest_asset_keys
 from .validators import StrategyPackageValidator
 
 
@@ -109,6 +110,7 @@ class MultiAlphaPackagePromotionService:
         provenance_resolver: MultiAlphaProvenanceResolver | Any | None = None,
         source_resolver: QEExperimentSourceResolver | None = None,
         asset_freezer: PackageAssetFreezeService | None = None,
+        frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
         prediction_ref_roots: Sequence[str | Path] | None = None,
     ) -> None:
         self.combine_repository = combine_repository or MultiAlphaCombineBacktestRepository()
@@ -121,10 +123,14 @@ class MultiAlphaPackagePromotionService:
         self.provenance_resolver = provenance_resolver or MultiAlphaProvenanceResolver()
         self.source_resolver = source_resolver or QEExperimentSourceResolver()
         self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        self.frozen_runtime_self_check = frozen_runtime_self_check or FrozenRuntimeSelfCheckService(
+            asset_store=getattr(self.asset_freezer, "asset_store", None)
+        )
         if component_service is None:
             self.component_service = StrategyPackageComponentService(
                 repository=self.package_repository,
                 asset_freezer=self.asset_freezer,
+                frozen_runtime_self_check=self.frozen_runtime_self_check,
             )
         self.prediction_ref_roots = tuple(Path(root) for root in (prediction_ref_roots or ()))
 
@@ -345,6 +351,7 @@ class MultiAlphaPackagePromotionService:
             run_id=run_id,
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
         return _ComponentMaterializationPlan(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
@@ -1443,15 +1450,7 @@ def _component_from_child(leg: _LegEvidence) -> AlphaComponent:
 def _manifest_asset_keys(
     manifest: StrategyPackageManifest,
 ) -> set[tuple[StrategyPackageAssetType, str, str | None]]:
-    keys: set[tuple[StrategyPackageAssetType, str, str | None]] = set()
-    for factor in manifest.factor_set:
-        if factor.asset_ref and factor.sha256:
-            keys.add((StrategyPackageAssetType.FACTOR_CODE, factor.asset_ref, factor.sha256))
-    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
-    for asset in model_assets:
-        if asset.asset_ref and asset.sha256:
-            keys.add((StrategyPackageAssetType.MODEL_WEIGHT, asset.asset_ref, asset.sha256))
-    return keys
+    return set(manifest_asset_keys(manifest))
 
 
 def _merge_factor_assets(manifests: Sequence[StrategyPackageManifest]) -> list[FactorAsset]:

@@ -21,6 +21,11 @@ from backend.services.trading_core.errors import DataUnavailableError, PackageAs
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
+class NoopFrozenRuntimeSelfCheck:
+    def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
+        return None
+
+
 class FakeResolver:
     def __init__(self, manifest=None) -> None:  # noqa: ANN001
         self.manifest = manifest or make_manifest()
@@ -59,6 +64,7 @@ class FakeResolver:
 def _freezer(tmp_path: Path) -> PackageAssetFreezeService:
     return PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
+        conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
         model_params_reader=lambda manifest: PackageAssetBytes(
             b"model-params",
             f"unit://model/{manifest.package_id}/params.pkl",
@@ -107,7 +113,12 @@ def test_empty_asset_defaults_do_not_change_legacy_manifest_hash() -> None:
 
 def test_create_from_qe_experiment_freezes_runtime_assets_and_is_idempotent(tmp_path: Path) -> None:
     repo = InMemoryStrategyPackageRepository()
-    service = StrategyPackageService(repository=repo, resolver=FakeResolver(), asset_freezer=_freezer(tmp_path))
+    service = StrategyPackageService(
+        repository=repo,
+        resolver=FakeResolver(),
+        asset_freezer=_freezer(tmp_path),
+        frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
+    )
 
     first = service.create_from_qe_experiment("qe_asset_freeze_unit", resolve_runtime_assets=True)
     second = service.create_from_qe_experiment("qe_asset_freeze_unit", resolve_runtime_assets=True)
@@ -123,6 +134,8 @@ def test_create_from_qe_experiment_freezes_runtime_assets_and_is_idempotent(tmp_
     ]
     manifest = first.current_manifest()
     assert all(factor.asset_ref and factor.sha256 for factor in manifest.factor_set)
+    assert manifest.runtime_assets is not None
+    assert manifest.runtime_assets.alpha158.enabled is False
     model_asset = manifest.model_asset
     assert not isinstance(model_asset, list)
     assert model_asset.asset_ref and model_asset.sha256
@@ -143,7 +156,12 @@ def test_create_from_qe_experiment_is_idempotent_when_resolver_generates_fresh_p
             return freeze_manifest(manifest)
 
     repo = InMemoryStrategyPackageRepository()
-    service = StrategyPackageService(repository=repo, resolver=FreshPackageResolver(), asset_freezer=_freezer(tmp_path))
+    service = StrategyPackageService(
+        repository=repo,
+        resolver=FreshPackageResolver(),
+        asset_freezer=_freezer(tmp_path),
+        frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
+    )
 
     first = service.create_from_qe_experiment("qe_asset_freeze_fresh_pkg_id")
     second = service.create_from_qe_experiment("qe_asset_freeze_fresh_pkg_id")
@@ -166,10 +184,16 @@ def test_freeze_missing_factor_fails_before_package_save(tmp_path: Path) -> None
 
     freezer = PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
+        conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
         model_params_reader=lambda manifest: PackageAssetBytes(b"model", "unit://model/params.pkl"),
         factor_code_reader=factor_reader,
     )
-    service = StrategyPackageService(repository=repo, resolver=FakeResolver(), asset_freezer=freezer)
+    service = StrategyPackageService(
+        repository=repo,
+        resolver=FakeResolver(),
+        asset_freezer=freezer,
+        frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
+    )
 
     with pytest.raises(DataUnavailableError) as excinfo:
         service.create_from_qe_experiment("qe_missing_factor")
@@ -183,6 +207,7 @@ def test_freeze_missing_model_fails_before_package_save(tmp_path: Path) -> None:
     repo = InMemoryStrategyPackageRepository()
     freezer = PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
+        conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
         model_params_reader=lambda manifest: (_ for _ in ()).throw(
             DataUnavailableError(
                 "model missing",
@@ -191,7 +216,12 @@ def test_freeze_missing_model_fails_before_package_save(tmp_path: Path) -> None:
         ),
         factor_code_reader=lambda factor, manifest: PackageAssetBytes(b"factor", f"unit://factor/{factor.factor_name}.py"),
     )
-    service = StrategyPackageService(repository=repo, resolver=FakeResolver(), asset_freezer=freezer)
+    service = StrategyPackageService(
+        repository=repo,
+        resolver=FakeResolver(),
+        asset_freezer=freezer,
+        frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
+    )
 
     with pytest.raises(DataUnavailableError) as excinfo:
         service.create_from_qe_experiment("qe_missing_model")

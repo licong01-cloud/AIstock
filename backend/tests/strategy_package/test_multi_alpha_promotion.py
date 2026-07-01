@@ -83,6 +83,11 @@ class FakeQESourceResolver:
         return freeze_manifest(_single_manifest(f"auto_{qe_task_id}_{qe_loop_id}", run_id=source_key))
 
 
+class NoopFrozenRuntimeSelfCheck:
+    def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
+        return None
+
+
 class FakeAssetFreezer:
     def freeze_manifest_assets(self, manifest):  # noqa: ANN001, ANN201
         frozen = manifest if _manifest_has_assets(manifest) else _with_frozen_assets(manifest, label=manifest.package_name)
@@ -298,6 +303,7 @@ def _service(combine_repo, package_repo, *, provenance_resolver=None, source_res
         provenance_resolver=provenance_resolver,
         source_resolver=source_resolver,
         asset_freezer=asset_freezer or FakeAssetFreezer(),
+        frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
         prediction_ref_roots=prediction_ref_roots,
     )
 
@@ -667,6 +673,7 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
             combine_repository=combine_repo,
             package_repository=package_repo,
             asset_freezer=FakeAssetFreezer(),
+            frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
         )
 
     monkeypatch.setattr(router_module, "MultiAlphaPackagePromotionService", _factory)
@@ -721,7 +728,11 @@ def test_router_endpoint_negative_paths_are_loud(
     mutator((combine_repo, package_repo), (child_a1, child_fund))
 
     def _factory(*args, **kwargs):  # noqa: ANN001
-        return MultiAlphaPackagePromotionService(combine_repository=combine_repo, package_repository=package_repo)
+        return MultiAlphaPackagePromotionService(
+            combine_repository=combine_repo,
+            package_repository=package_repo,
+            frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
+        )
 
     monkeypatch.setattr(router_module, "MultiAlphaPackagePromotionService", _factory)
     app = FastAPI()
