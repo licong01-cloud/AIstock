@@ -1,0 +1,76 @@
+{
+  "actual": "react_grounding still uses _is_stock_depth_query and stock_depth_required_evidence_missing to hard-block answers based on keyword-classified depth coverage.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "tests/aistock_validation/bugs/20260701_BUG-566-ra-t9-4-stock-depth-forced-evidence-guard-should-move-to-prompt-guidance.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-566",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-01T03:07:13.281499Z",
+  "description": "react_grounding still uses _is_stock_depth_query and stock_depth_required_evidence_missing to hard-block answers based on keyword-classified depth coverage.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260701-a859c4d2568b",
+      "timestamp": "2026-07-01T03:07:13.281495Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Depth/multi-dimensional stock analysis is guided by prompt/model; guard only enforces grounded evidence, citations, no hallucination, no directional prediction, and approval boundaries.",
+  "first_seen_at": "2026-07-01T03:07:13.281499Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1785,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1785",
+  "last_seen_at": "2026-07-01T03:07:13.281499Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "research_assistant_backend",
+    "ra_phase7_full_accept",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA T9-4 stock depth forced evidence guard should move to prompt guidance",
+  "trigger_condition": {
+    "fingerprint": "a859c4d2568bd73ae445fc55",
+    "source_event_id": "FE-20260701-a859c4d2568b"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
