@@ -179,9 +179,14 @@ def _validate_asset_records_for_manifest(
                     "asset_ref": asset.asset_ref,
                 },
             )
-        if asset.asset_type not in {StrategyPackageAssetType.MODEL_WEIGHT, StrategyPackageAssetType.FACTOR_CODE}:
+        if asset.asset_type not in {
+            StrategyPackageAssetType.MODEL_WEIGHT,
+            StrategyPackageAssetType.FACTOR_CODE,
+            StrategyPackageAssetType.FACTOR_SCHEMA,
+            StrategyPackageAssetType.MODEL_CODE,
+        }:
             raise StrategyPackageValidationError(
-                "Batch 1 package freeze only accepts model_weight and factor_code assets",
+                "package freeze only accepts runtime-owned model, factor, schema, and model-code assets",
                 context={
                     "reason_code": "strategy_package_asset_unexpected_type",
                     "package_id": manifest.package_id,
@@ -229,7 +234,40 @@ def _expected_manifest_asset_keys(
                 },
             )
         expected.add((StrategyPackageAssetType.MODEL_WEIGHT, model.asset_ref, model.sha256))
+        for code_asset in model.model_code_assets:
+            if not (code_asset.asset_ref and code_asset.sha256):
+                raise StrategyPackageValidationError(
+                    "manifest model code asset is not frozen",
+                    context={
+                        "reason_code": "strategy_package_assets_incomplete",
+                        "package_id": manifest.package_id,
+                        "model_id": model.model_id,
+                        "relative_path": code_asset.relative_path,
+                    },
+                )
+            expected.add((StrategyPackageAssetType.MODEL_CODE, code_asset.asset_ref, code_asset.sha256))
+    runtime_assets = manifest.runtime_assets
+    alpha158 = runtime_assets.alpha158 if runtime_assets is not None else None
+    if alpha158 is not None and alpha158.enabled:
+        if not (alpha158.asset_ref and alpha158.sha256):
+            raise StrategyPackageValidationError(
+                "manifest Alpha158 schema asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "runtime_asset": "alpha158",
+                },
+            )
+        expected.add((StrategyPackageAssetType.FACTOR_SCHEMA, alpha158.asset_ref, alpha158.sha256))
     return expected
+
+
+def manifest_asset_keys(
+    manifest: StrategyPackageManifest,
+) -> set[tuple[StrategyPackageAssetType, str, str]]:
+    """Public helper for callers that need parity with repository ledger validation."""
+
+    return _expected_manifest_asset_keys(manifest)
 
 
 def _looks_like_backtest_prediction(asset_ref: str) -> bool:

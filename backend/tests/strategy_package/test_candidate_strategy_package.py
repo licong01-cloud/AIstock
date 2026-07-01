@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import re
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,6 +36,7 @@ from backend.services.strategy_package.models import (
     UniversePolicy,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services.trading_core.errors import StrategyPackageValidationError
@@ -88,6 +91,90 @@ def _make_manifest() -> StrategyPackageManifest:
         package_status=PackageStatus.BACKTEST_APPROVED,
     )
     return freeze_manifest(manifest)
+
+
+class _NoopFrozenRuntimeSelfCheck:
+    def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
+        return None
+
+
+class _FakeAssetFreezer:
+    def freeze_manifest_assets(self, manifest):  # noqa: ANN001, ANN201
+        frozen = _with_frozen_assets(manifest)
+        return SimpleNamespace(manifest=frozen, assets=_asset_records_from_manifest(frozen))
+
+
+def _asset_ref(kind: StrategyPackageAssetType, logical_name: str) -> tuple[str, str, int]:
+    payload = f"{kind.value}:{logical_name}".encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    return f"aistock-package-asset://blobs/{digest}", digest, len(payload)
+
+
+def _with_frozen_assets(manifest: StrategyPackageManifest) -> StrategyPackageManifest:
+    factors = []
+    for factor in manifest.factor_set:
+        ref, sha, size = _asset_ref(StrategyPackageAssetType.FACTOR_CODE, factor.factor_name)
+        factors.append(
+            factor.model_copy(
+                update={
+                    "asset_ref": ref,
+                    "sha256": sha,
+                    "size_bytes": size,
+                    "source_uri": f"unit://factor/{factor.factor_name}.py",
+                }
+            )
+        )
+    model_input = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    models = []
+    for model in model_input:
+        ref, sha, size = _asset_ref(StrategyPackageAssetType.MODEL_WEIGHT, model.model_id)
+        models.append(
+            model.model_copy(
+                update={
+                    "asset_ref": ref,
+                    "sha256": sha,
+                    "size_bytes": size,
+                    "source_uri": "unit://model/params.pkl",
+                }
+            )
+        )
+    return freeze_manifest(
+        manifest.model_copy(
+            update={
+                "factor_set": factors,
+                "model_asset": models if isinstance(manifest.model_asset, list) else models[0],
+                "manifest_sha256": None,
+            }
+        )
+    )
+
+
+def _asset_records_from_manifest(manifest: StrategyPackageManifest) -> list[StrategyPackageAssetRecord]:
+    records: list[StrategyPackageAssetRecord] = []
+    for factor in manifest.factor_set:
+        records.append(
+            StrategyPackageAssetRecord(
+                package_id=manifest.package_id,
+                asset_type=StrategyPackageAssetType.FACTOR_CODE,
+                asset_ref=factor.asset_ref or "",
+                asset_sha256=factor.sha256 or "",
+                asset_size_bytes=factor.size_bytes or 0,
+                source_uri=factor.source_uri,
+            )
+        )
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for model in model_assets:
+        records.append(
+            StrategyPackageAssetRecord(
+                package_id=manifest.package_id,
+                asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+                asset_ref=model.asset_ref or "",
+                asset_sha256=model.sha256 or "",
+                asset_size_bytes=model.size_bytes or 0,
+                source_uri=model.source_uri,
+            )
+        )
+    return records
 
 
 def test_strategy_package_source_type_accepts_candidate_source() -> None:
@@ -320,6 +407,8 @@ def test_candidate_snapshot_refresh_can_enrich_existing_legacy_candidate() -> No
     package_service = StrategyPackageService(
         repository=InMemoryStrategyPackageRepository(),
         candidate_service=service,
+        asset_freezer=_FakeAssetFreezer(),
+        frozen_runtime_self_check=_NoopFrozenRuntimeSelfCheck(),
     )
     package_record = package_service.create_from_candidate(refreshed.candidate_id)
     payload = _record_payload(package_record)
@@ -369,6 +458,8 @@ def test_strategy_package_can_be_created_from_candidate_manifest_snapshot() -> N
     service = StrategyPackageService(
         repository=package_repo,
         candidate_service=candidate_service,
+        asset_freezer=_FakeAssetFreezer(),
+        frozen_runtime_self_check=_NoopFrozenRuntimeSelfCheck(),
     )
 
     record = service.create_from_candidate(candidate.candidate_id)
@@ -397,6 +488,8 @@ def test_promoted_package_survives_candidate_soft_delete() -> None:
     service = StrategyPackageService(
         repository=package_repo,
         candidate_service=candidate_service,
+        asset_freezer=_FakeAssetFreezer(),
+        frozen_runtime_self_check=_NoopFrozenRuntimeSelfCheck(),
     )
 
     record = service.create_from_candidate(candidate.candidate_id)

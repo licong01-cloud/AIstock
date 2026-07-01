@@ -1,4 +1,4 @@
-﻿"""Strategy Package Center service layer."""
+"""Strategy Package Center service layer."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from .candidate import (
     CandidateStrategyPackageStatus,
 )
 from .asset_eligibility import StrategyPackageAssetEligibilityService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
 from .execution_policy import (
     BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
@@ -105,6 +106,7 @@ class StrategyPackageService:
         candidate_service: CandidateStrategyPackageService | None = None,
         asset_eligibility: StrategyPackageAssetEligibilityService | None = None,
         asset_freezer: PackageAssetFreezeService | None = None,
+        frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.resolver = resolver or QEExperimentSourceResolver()
@@ -112,6 +114,9 @@ class StrategyPackageService:
         self.candidate_service = candidate_service or CandidateStrategyPackageService()
         self.asset_eligibility = asset_eligibility or StrategyPackageAssetEligibilityService(validator=self.validator)
         self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        self.frozen_runtime_self_check = frozen_runtime_self_check or FrozenRuntimeSelfCheckService(
+            asset_store=getattr(self.asset_freezer, "asset_store", None)
+        )
 
     def create_from_qe_experiment(
         self,
@@ -126,6 +131,7 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
         return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_qe_evolution_loop(
@@ -143,6 +149,7 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
         return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_candidate(
@@ -173,8 +180,10 @@ class StrategyPackageService:
             }
         )
         manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         self.validator.validate_manifest(manifest)

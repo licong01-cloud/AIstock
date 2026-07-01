@@ -148,6 +148,8 @@ def _drop_empty_asset_fields(value: Any) -> Any:
             cleaned[key] = [_drop_empty_asset_field_defaults(asset) for asset in item]
         elif key == "model_asset" and isinstance(item, dict):
             cleaned[key] = _drop_empty_asset_field_defaults(item)
+        elif key == "runtime_assets" and item in (None, {}, []):
+            continue
         else:
             cleaned[key] = item
     return cleaned
@@ -156,8 +158,14 @@ def _drop_empty_asset_fields(value: Any) -> Any:
 def _drop_empty_asset_field_defaults(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
-    return {
-        key: item
-        for key, item in value.items()
-        if not (key in {"asset_ref", "sha256", "size_bytes", "source_uri"} and item in (None, "", [], {}))
-    }
+    empty_asset_keys = {"asset_ref", "sha256", "size_bytes", "source_uri"}
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in empty_asset_keys and item in (None, "", [], {}):
+            continue
+        if key == "model_code_assets" and item in (None, [], {}):
+            continue
+        if key == "model_code_required" and item is False:
+            continue
+        cleaned[key] = item
+    return cleaned

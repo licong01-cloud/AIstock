@@ -15,6 +15,8 @@
 本轮按用户要求只读打开真实 QE 源，不写生产 DB，不启动服务：
 
 - `pkg_006a42323f7c4e81a468fdaad2cb16a3`：生产只读 DB 显示 `source_type=qe_experiment`、`source_id=qe_20260413_084216`、`loop_id=Loop1`、`factor_count=32`，模型资产来自 `qe-workspace://node/wsl2-5080/tasks/qe_20260413_084216/loops/Loop1/mlruns/artifacts/params.pkl`。真实 WSL 路径 `F:\Dev\RD-Agent-main\qe_workspace\qe_20260413_084216\Loop1\conf.yaml` 存在 `qlib.contrib.data.loader.Alpha158DL` 节点，`kwargs.config.feature[1]` 为 20 个 aliases（首批 `RESI5/WVMA5/RSQR5/KLEN/RSQR10/...`）；该 workspace 根目录无 `model.py`，符合 qlib 原生 LGB 模型无需 `MODEL_CODE`。
+- Tier2 correction: `pkg_006a` MUST NOT be the positive Alpha158 fixture. Its `NestedDataLoader` also depends on `StaticDataLoader combined_factors_df.parquet`; the current freeze can only reconstruct dynamic 32 + Alpha158 20 = 52 while model expected=63, leaving a +11 gap. Use it only as a fail-closed negative fixture.
+- `pkg_99142cb1440c40a7824e83902f4e7da9` (`qe_20260416_082012/Loop1`) is the positive Alpha158 fixture. Real WSL oracle evidence: dynamic=50, Alpha158 aliases=20, model expected=70, factor_order=70.
 - `pkg_2a9fccb83da840c9a27a2d7a4118af9a`：生产只读 DB 显示 `source_type=qe_evolution_loop`、`source_id=qe_20260513_151128_12ea`、`loop_id=Loop1`、`factor_count=57`，模型资产来自 `qe-workspace://node/wsl2-5080/tasks/qe_20260513_151128_12ea/loops/Loop1/mlruns/artifacts/params.pkl`。真实 WSL 路径 `F:\Dev\RD-Agent-main\qe_workspace\qe_20260513_151128_12ea\Loop1\model.py` 存在，文件 932 bytes，定义 `class LSTM_10D_hs64_d02(nn.Module)` 与 `model_cls = LSTM_10D_hs64_d02`；同目录 `conf.yaml` 含 `pt_model_uri: model.model_cls`，`mlruns/.../artifacts/` 下只有 `params.pkl`，无 `model.py`。
 - `infra.compute_nodes` 只读显示 `wsl2-5080.workspace_base=/mnt/f/Dev/RD-Agent-main/qe_workspace`，映射到 `F:\Dev\RD-Agent-main\qe_workspace`；SSH 只读 `lc999@192.168.50.215` 的 `/home/lc999/projects/RD-Agent-main/qe_workspace` 存在但上述两个源路径不存在，因此本轮真实结构取证以 WSL 本机 workspace 为准。
 - 15 个生产包终态只读复核：2 个 retired（`pkg_b4ce634c24bd470fac2c7b581a4e106f`、`pkg_95523262439644e49ae52f9b5087165d`），2 个 self-contained（`pkg_5a5ccb56ea5c4e3daaf6d836c8edfc27`、`pkg_b668f8a633c44b72a5d557a2cb8970e3`），其余 active 11 个需要 deprecated 标记但不回填、不删 QE 源。
@@ -328,9 +330,9 @@ Rollback 不删除审计行，而是追加 `strategy_package_runtime_deprecation
 
 ### L2 integration / oracle
 
-- 用真实 `pkg_006a` 源（`qe_20260413_084216/Loop1`）在 dev/test DB 新建包：冻结后轻量自检应得到 `dynamic=32`、`alpha158=20`、`factor_order=52`（若模型期望还包含其他 static schema，必须由自检暴露并补设计/实现，不得 pad）。至少验证“启用 Alpha158 后 expected 与 prepared factor_order 不再因无条件 disable 下降”。
-- 用真实 `pkg_2a9` 源（`qe_20260513_151128_12ea/Loop1`）在 dev/test DB 新建包：冻结后 `model.py` 位于 `params.pkl` 同级，`load_model_from_pkl()` 不再报 `Can't get attribute 'LSTM_10D_hs64_d02' on module 'model'`。
-- 对上述两个新建包运行真实 WSL oracle：传入不存在 QE source id，断言 `origin=package_asset` 且新交易日 selection signal 可生成；不调用 artifact save，不写生产 selection artifact。
+- Positive `pkg_99142c` (`qe_20260416_082012/Loop1`): dev/test scratch package self-check must PASS with `dynamic=50`, `alpha158=20`, `model_expected_features=70`, `factor_order=70`, `feature_count_delta=0`; then a real WSL oracle must pass a nonexistent QE source id to force package-owned runtime, assert `origin=package_asset`, and produce a fresh 2026-06-30 selection signal without saving artifacts or writing production selection artifacts.
+- Positive `pkg_2a9` (`qe_20260513_151128_12ea/Loop1`): scratch freeze must materialize `model.py` beside `params.pkl`; the WSL probe must deserialize `LSTM_10D_hs64_d02` and report `dynamic=57`, `alpha158=0`, `model_expected_features=57`, `factor_order=57`; then a real WSL oracle must pass a nonexistent QE source id to force package-owned runtime, assert `origin=package_asset`, and produce a 2026-06-30 selection signal.
+- `pkg_006a` is negative/fail-closed only: self-check must explicitly report `dynamic=32` + `alpha158=20` still below expected=63 and include `feature_count_delta=11`; pad/truncate is forbidden, and this fixture must never be marked PASS.
 
 ### L3 regression / isolation
 
@@ -349,20 +351,20 @@ Rollback 不删除审计行，而是追加 `strategy_package_runtime_deprecation
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | planned: `package_asset_freeze.py`, `runtime_schema.py`, `models.py` | L1 Alpha158 freeze + pkg_006a source fixture | ready | - |
-| F-002 | planned: `live_inference.py:461`, `live_inference.py:695` | L1 runtime conf aliases + L2 pkg_006a oracle | ready | - |
-| F-003 | planned: `live_inference.py`, `package_asset_freeze.py` | L1 schema missing/sha mismatch fail-closed | ready | - |
-| F-004 | planned: `package_asset.py`, `models.py`, `package_asset_freeze.py` | L1 custom model freeze + pkg_2a9 fixture | ready | - |
-| F-005 | planned: `live_inference.py:695`, `backend/inference_engine.py:198` | L1 `load_model_from_pkl` custom class success | ready | - |
-| F-006 | planned: `frozen_runtime_self_check.py` | L1 LGB native no MODEL_CODE pass | ready | - |
-| F-007 | planned: `frozen_runtime_self_check.py`, service/component/promotion call sites | L1 self-check origin/model/features assertions | ready | - |
-| F-008 | planned: repository save remains after self-check | L1 no package row/asset row on self-check failure | ready | - |
-| F-009 | planned: `service.py`, `components.py`, `multi_alpha_promotion.py` | L1 single/multi parity test | ready | - |
-| F-010 | planned: `manifest.py` canonical drop-empty update | manifest integrity scan 15/15 stored==computed after code change | ready | - |
-| F-011 | DML plan only: `package_status_event` marker | dry-run target count 11; status preserved | ready | - |
-| F-012 | DML WHERE excludes good/retired packages | dry-run confirms zero rows for `pkg_5a5ccb56`/`pkg_b668f8a` | ready | - |
-| F-013 | no DB schema change; DML separate gate | `production_ddl_gate=noop`; DML requires dual authorization | ready | - |
-| F-014 | tests listed in Verification Plan | three killer tests + WSL oracle | ready | - |
+| F-001 | `backend/services/strategy_package/package_asset_freeze.py`; `backend/services/strategy_package/runtime_schema.py`; `backend/services/strategy_package/models.py` | `backend/tests/strategy_package/test_freeze_completeness_build_gate.py::test_alpha158_schema_freezes_full_node_and_runtime_conf_is_readable`; WSL oracle `pkg_99142c` dynamic=50 + alpha158=20 = expected=70 | verified | - |
+| F-002 | `backend/services/strategy_package/live_inference.py`; `backend/services/strategy_package/runtime_schema.py` | runtime conf aliases test; WSL oracle `pkg_99142c` `origin=package_asset`, `factor_order_count=70`, `score_count=1359` | verified | - |
+| F-003 | `backend/services/strategy_package/live_inference.py`; `backend/services/strategy_package/package_asset_freeze.py` | `test_alpha158_schema_missing_and_sha_mismatch_fail_closed`; reason_code `strategy_package_alpha158_schema_missing` / `strategy_package_alpha158_schema_sha_mismatch` | verified | - |
+| F-004 | `backend/services/strategy_package/package_asset.py`; `backend/services/strategy_package/models.py`; `backend/services/strategy_package/package_asset_freeze.py` | `test_model_code_freeze_and_runtime_materializes_next_to_params`; `test_custom_model_missing_code_fails_closed`; `test_custom_model_missing_import_helper_fails_closed`; WSL oracle `pkg_2a9` model_kind=pytorch | verified | - |
+| F-005 | `backend/services/strategy_package/live_inference.py`; `scripts/strategy_package_frozen_self_check.py`; `backend/inference_engine.py` | `MODEL_CODE` materialized beside `params.pkl`; WSL self-check probe `pkg_2a9` expected=57, factor_order=57, `score_count=1032` | verified | - |
+| F-006 | `backend/services/strategy_package/frozen_runtime_self_check.py`; `backend/services/strategy_package/package_asset_freeze.py` | `test_self_check_passes_when_model_expected_matches_alpha158_and_dynamic`; qlib-native `pkg_99142c` WSL probe model_kind=lgb without MODEL_CODE | verified | - |
+| F-007 | `backend/services/strategy_package/frozen_runtime_self_check.py`; `backend/services/strategy_package/service.py`; `backend/services/strategy_package/components.py`; `backend/services/strategy_package/multi_alpha_promotion.py` | L1 self-check origin/model/features assertions; WSL oracle `self_check.origin=package_asset`, `feature_count_delta=0` for both fixtures | verified | - |
+| F-008 | `backend/services/strategy_package/service.py`; `backend/services/strategy_package/repository.py`; `backend/tests/strategy_package/test_package_asset_freeze_batch1.py` | freeze missing factor/model tests keep repository empty; self-check failure happens before `save_manifest_with_assets` call sites | verified | - |
+| F-009 | `backend/services/strategy_package/service.py`; `backend/services/strategy_package/components.py`; `backend/services/strategy_package/multi_alpha_promotion.py` | `python -m pytest backend/tests/strategy_package/test_multi_alpha_promotion.py -q`; common `FrozenRuntimeSelfCheckService` injected into single/component/promotion paths | verified | - |
+| F-010 | `backend/services/strategy_package/manifest.py`; `backend/services/strategy_package/models.py` | `python scripts/strategy_package_manifest_hash_repair.py --env-file F:\Dev\AIstock\.env --target-db prod --limit 500` => total_scanned=15 clean_count=15 drifted_count=0 | verified | - |
+| F-011 | `scripts/strategy_package_runtime_deprecated_marker.py` | dry-run `counts.insert_deprecation_event=11`; SQL effect append-only `package_status_event`; no status/manifest/asset mutation | verified | explicitly approved by user for PR scope: production DML pending dual authorization; not executed in PR |
+| F-012 | `scripts/strategy_package_runtime_deprecated_marker.py` | dry-run protected exclusions include `pkg_5a5ccb56...`, `pkg_b668f8a...`, retired `pkg_b4ce...`, `pkg_9552...`; blocked_count=0 | verified | - |
+| F-013 | no DB schema change; `package_asset.asset_type` is TEXT; DML script gated | `production_ddl_gate=noop`; `production_dml_gate=pending_user_dual_authorization` | verified | - |
+| F-014 | `backend/tests/strategy_package/test_freeze_completeness_build_gate.py`; WSL oracle summary `rdagent_assets/strategy_package_runtime/freeze_completeness_oracle/oracle_summary.json` | three killer tests covered; real WSL oracle `pkg_99142c` and `pkg_2a9` both produced 2026-06-30 signals from package assets | verified | - |
 
 ## Rollout / Rollback / 发布回滚
 

@@ -50,6 +50,7 @@ def _freezer(tmp_path: Path, *, missing_factor: str | None = None) -> PackageAss
 
     return PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
+        conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
         model_params_reader=lambda manifest: PackageAssetBytes(
             f"model::{manifest.package_id}".encode("utf-8"),
             f"unit://model/{manifest.package_id}/params.pkl",

@@ -11,6 +11,7 @@ from typing import Any, Callable, Iterable
 from backend.services.model_store import ModelStoreService, PredictionArtifactStore
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
 from .manifest import freeze_manifest
 from .models import (
     AlphaMode,
@@ -19,7 +20,7 @@ from .models import (
     StrategyPackageComponentRecord,
     StrategyPackageManifest,
 )
-from .package_asset_freeze import PackageAssetFreezeService
+from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
 from .repository import StrategyPackageRecord, StrategyPackageRepository
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -36,11 +37,15 @@ class StrategyPackageComponentService:
         model_store: ModelStoreService | Any | None = None,
         artifact_store: PredictionArtifactStore | None = None,
         asset_freezer: PackageAssetFreezeService | Any | None = None,
+        frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.model_store = model_store or ModelStoreService()
         self.artifact_store = artifact_store or PredictionArtifactStore()
         self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        self.frozen_runtime_self_check = frozen_runtime_self_check or FrozenRuntimeSelfCheckService(
+            asset_store=getattr(self.asset_freezer, "asset_store", None)
+        )
 
     def build_display_name(
         self,
@@ -269,6 +274,9 @@ class StrategyPackageComponentService:
                     "multi-alpha component child package is retired",
                     context={"parent_package_id": parent_package_id, "child_package_id": child.package_id},
                 )
+            child_manifest = child.current_manifest()
+            if manifest_has_frozen_runtime_assets(child_manifest):
+                self.frozen_runtime_self_check.assert_manifest_self_contained(child_manifest)
             records.append(
                 StrategyPackageComponentRecord(
                     parent_package_id=parent_package_id,
@@ -340,7 +348,4 @@ def _sha256_of_payload(payload: bytes | str | Path) -> str:
 
 
 def _manifest_has_runtime_assets(manifest: StrategyPackageManifest) -> bool:
-    if not manifest.factor_set or any(not factor.asset_ref or not factor.sha256 for factor in manifest.factor_set):
-        return False
-    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
-    return bool(model_assets) and all(asset.asset_ref and asset.sha256 for asset in model_assets)
+    return manifest_has_frozen_runtime_assets(manifest)

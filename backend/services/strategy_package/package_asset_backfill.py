@@ -17,7 +17,7 @@ from .manifest import freeze_manifest
 from .models import AlphaMode, FactorAsset, ModelAsset, StrategyPackageComponentRecord, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
-from .repository import StrategyPackageRecord, StrategyPackageRepository
+from .repository import StrategyPackageRecord, StrategyPackageRepository, manifest_asset_keys
 
 
 STATUS_SKIPPED_ALREADY_FROZEN = "skipped_already_frozen"
@@ -503,15 +503,7 @@ class PackageAssetBackfillService:
 def _manifest_asset_keys(
     manifest: StrategyPackageManifest,
 ) -> set[tuple[StrategyPackageAssetType, str, str | None]]:
-    keys: set[tuple[StrategyPackageAssetType, str, str | None]] = set()
-    for factor in manifest.factor_set:
-        if factor.asset_ref and factor.sha256:
-            keys.add((StrategyPackageAssetType.FACTOR_CODE, factor.asset_ref, factor.sha256))
-    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
-    for asset in model_assets:
-        if asset.asset_ref and asset.sha256:
-            keys.add((StrategyPackageAssetType.MODEL_WEIGHT, asset.asset_ref, asset.sha256))
-    return keys
+    return set(manifest_asset_keys(manifest))
 
 
 def _merge_factor_assets(

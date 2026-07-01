@@ -29,7 +29,6 @@ from typing import Any, Callable, Iterator, Literal
 
 import pandas as pd
 import psycopg2.extras
-import yaml
 
 from backend.db.pg_pool import get_conn
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
@@ -46,9 +45,15 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 
-from .models import FactorAsset, ModelAsset, StrategyPackageManifest
+from .models import FactorAsset, ModelAsset, ModelCodeAsset, StrategyPackageManifest
 from .package_asset_freeze import manifest_has_frozen_runtime_assets
 from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
+from .runtime_schema import (
+    ALPHA158_SCHEMA_VERSION,
+    extract_alpha158_aliases,
+    load_conf_yaml_file,
+    minimal_conf_with_alpha158,
+)
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger(__name__)
@@ -258,34 +263,12 @@ def _parse_jsonish(value: Any) -> Any:
 
 
 def _load_qe_conf_yaml(conf_path: Path, *, purpose: str) -> dict[str, Any]:
-    text = conf_path.read_text(encoding="utf-8")
     try:
-        loaded = yaml.safe_load(text) or {}
-    except Exception as first_exc:
-        sanitized, changed = _sanitize_unresolved_jinja_for_yaml(text)
-        if not changed:
-            raise PackageAssetInvalidError(
-                f"failed to parse QE conf.yaml for {purpose}",
-                context={"conf_path": str(conf_path), "error": str(first_exc)},
-            ) from first_exc
-        try:
-            loaded = yaml.safe_load(sanitized) or {}
-        except Exception as second_exc:
-            raise PackageAssetInvalidError(
-                f"failed to parse QE conf.yaml for {purpose}",
-                context={
-                    "conf_path": str(conf_path),
-                    "error": str(second_exc),
-                    "original_error": str(first_exc),
-                    "template_placeholders_sanitized": True,
-                },
-            ) from second_exc
-    if not isinstance(loaded, dict):
-        raise PackageAssetInvalidError(
-            f"QE conf.yaml must be a mapping for {purpose}",
-            context={"conf_path": str(conf_path), "actual_type": type(loaded).__name__},
-        )
-    return loaded
+        return load_conf_yaml_file(conf_path, purpose=purpose)
+    except PackageAssetInvalidError as exc:
+        exc.context.setdefault("conf_path", str(conf_path))
+        exc.context.setdefault("purpose", purpose)
+        raise
 
 
 def _sanitize_unresolved_jinja_for_yaml(text: str) -> tuple[str, bool]:
@@ -421,6 +404,25 @@ def _runtime_factor_name(factor: FactorAsset, *, package_id: str) -> str:
     return name
 
 
+def _safe_model_code_relpath(asset: ModelCodeAsset) -> Path:
+    pure = PurePosixPath(str(asset.relative_path or "").replace("\\", "/"))
+    if (
+        not str(pure)
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or pure.suffix != ".py"
+    ):
+        raise PackageAssetInvalidError(
+            "frozen StrategyPackage model code asset path is invalid",
+            context={
+                "reason_code": "strategy_package_model_code_path_invalid",
+                "relative_path": asset.relative_path,
+                "module_name": asset.module_name,
+            },
+        )
+    return Path(*pure.parts)
+
+
 def _write_inside_runtime_source(target_path: Path, data: bytes, *, source_dir: Path, package_id: str) -> None:
     source_root = source_dir.resolve(strict=False)
     target = target_path.resolve(strict=False)
@@ -469,18 +471,25 @@ def _manifest_runtime_custom_params(manifest: StrategyPackageManifest) -> dict[s
         else:
             custom = {}
     runtime_custom = dict(custom)
-    raw_disable = runtime_custom.get("disable_alpha158")
-    if raw_disable is False or (isinstance(raw_disable, str) and raw_disable.strip().lower() in {"false", "0", "no"}):
+    runtime_assets = manifest.runtime_assets
+    if runtime_assets is None:
+        runtime_custom["disable_alpha158"] = True
+        runtime_custom["runtime_contract_source"] = "strategy_package_package_assets_legacy"
+        return runtime_custom
+    alpha158 = runtime_assets.alpha158
+    if alpha158.enabled and not (alpha158.asset_ref and alpha158.sha256 and alpha158.aliases):
         raise PackageAssetInvalidError(
-            "package-owned runtime assets do not include Alpha158 schema assets",
+            "package-owned runtime Alpha158 schema is incomplete",
             context={
-                "reason_code": "strategy_package_alpha158_runtime_assets_not_frozen",
+                "reason_code": "strategy_package_alpha158_schema_missing",
                 "package_id": manifest.package_id,
-                "disable_alpha158": raw_disable,
+                "asset_ref": alpha158.asset_ref,
+                "sha256": alpha158.sha256,
+                "alias_count": len(alpha158.aliases),
             },
         )
-    runtime_custom["disable_alpha158"] = True
-    runtime_custom["runtime_contract_source"] = "strategy_package_package_assets"
+    runtime_custom["disable_alpha158"] = not alpha158.enabled
+    runtime_custom["runtime_contract_source"] = "strategy_package_package_assets_v2"
     return runtime_custom
 
 
@@ -601,7 +610,9 @@ class QEExperimentRuntimeAssetResolver:
     ) -> QEExperimentRuntimeSource:
         """Resolve runtime source using the frozen StrategyPackage source identity."""
 
-        if manifest is not None and manifest_has_frozen_runtime_assets(manifest):
+        if manifest is not None and (
+            manifest_has_frozen_runtime_assets(manifest) or manifest.runtime_assets is not None
+        ):
             return self._source_from_package_assets(manifest, package_id=package_id)
 
         normalized_type = str(source_type or "").strip()
@@ -754,7 +765,17 @@ class QEExperimentRuntimeAssetResolver:
             source_dir=source_dir,
             package_id=package_key,
         )
-        (source_dir / "conf.yaml").write_text("task: {}\n", encoding="utf-8")
+        self._materialize_model_code_assets(
+            model_asset,
+            model_dir=model_dir,
+            source_dir=source_dir,
+            package_id=package_key,
+        )
+        self._materialize_alpha158_conf(
+            manifest,
+            source_dir=source_dir,
+            package_id=package_key,
+        )
 
         source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
         backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
@@ -776,6 +797,95 @@ class QEExperimentRuntimeAssetResolver:
             package_id=package_key,
             manifest_sha256=manifest_sha,
         )
+
+    def _materialize_alpha158_conf(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        source_dir: Path,
+        package_id: str,
+    ) -> None:
+        runtime_assets = manifest.runtime_assets
+        if runtime_assets is None or not runtime_assets.alpha158.enabled:
+            (source_dir / "conf.yaml").write_text("task: {}\n", encoding="utf-8")
+            return
+        alpha158 = runtime_assets.alpha158
+        try:
+            payload = self._read_package_asset_bytes(
+                asset_ref=alpha158.asset_ref,
+                expected_sha256=alpha158.sha256,
+                package_id=package_id,
+                asset_kind="factor_schema",
+                logical_name="alpha158_schema",
+            )
+        except PackageAssetInvalidError as exc:
+            reason_code = (exc.context or {}).get("reason_code")
+            mapped_reason = (
+                "strategy_package_alpha158_schema_sha_mismatch"
+                if reason_code == "strategy_package_asset_sha_mismatch"
+                else "strategy_package_alpha158_schema_missing"
+            )
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset is unavailable or invalid",
+                context={**(exc.context or {}), "reason_code": mapped_reason, "package_id": package_id},
+            ) from exc
+        try:
+            schema = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset is not valid JSON",
+                context={"reason_code": "strategy_package_alpha158_schema_invalid", "package_id": package_id, "error": str(exc)},
+            ) from exc
+        if schema.get("schema_version") != ALPHA158_SCHEMA_VERSION:
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset version is unsupported",
+                context={
+                    "reason_code": "strategy_package_alpha158_schema_invalid",
+                    "package_id": package_id,
+                    "schema_version": schema.get("schema_version"),
+                },
+            )
+        aliases = extract_alpha158_aliases(schema.get("loader_node"))
+        if aliases != list(alpha158.aliases):
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema aliases do not match manifest",
+                context={
+                    "reason_code": "strategy_package_alpha158_schema_alias_mismatch",
+                    "package_id": package_id,
+                    "manifest_aliases": list(alpha158.aliases),
+                    "schema_aliases": aliases,
+                },
+            )
+        (source_dir / "conf.yaml").write_text(minimal_conf_with_alpha158(schema), encoding="utf-8")
+
+    def _materialize_model_code_assets(
+        self,
+        model_asset: ModelAsset,
+        *,
+        model_dir: Path,
+        source_dir: Path,
+        package_id: str,
+    ) -> None:
+        assets = list(model_asset.model_code_assets or [])
+        if model_asset.model_code_required and not assets:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage model code asset is required but missing",
+                context={
+                    "reason_code": "strategy_package_model_code_missing",
+                    "package_id": package_id,
+                    "model_id": model_asset.model_id,
+                },
+            )
+        for asset in assets:
+            payload = self._read_package_asset_bytes(
+                asset_ref=asset.asset_ref,
+                expected_sha256=asset.sha256,
+                package_id=package_id,
+                asset_kind="model_code",
+                logical_name=asset.relative_path,
+            )
+            target = model_dir / _safe_model_code_relpath(asset)
+            _write_inside_runtime_source(target, payload, source_dir=source_dir, package_id=package_id)
 
     def _read_package_asset_bytes(
         self,
@@ -1350,6 +1460,10 @@ class QEExperimentRuntimeAssetResolver:
         model_code_source = source.asset_workspace_path / "model.py"
         if model_code_source.exists() and model_code_source.is_file():
             shutil.copy2(model_code_source, workspace_path / "model" / "model.py")
+        self._copy_model_code_siblings(
+            model_source_path=model_source_path,
+            model_dest_dir=workspace_path / "model",
+        )
         dataset_processor_source = self._resolve_dataset_processor_path(
             source=source,
             model_source_path=model_source_path,
@@ -1959,6 +2073,38 @@ class QEExperimentRuntimeAssetResolver:
             context={"path": str(path), "suffix": suffix},
         )
 
+    def _copy_model_code_siblings(self, *, model_source_path: Path, model_dest_dir: Path) -> None:
+        source_dir = model_source_path.parent.resolve(strict=False)
+        dest_root = model_dest_dir.resolve(strict=False)
+        if not source_dir.exists() or not source_dir.is_dir():
+            return
+        for source_path in sorted(source_dir.rglob("*.py")):
+            resolved_source = source_path.resolve(strict=False)
+            if source_dir not in resolved_source.parents:
+                raise ArtifactGenerationFailedError(
+                    "refusing to copy model code outside the materialized model source directory",
+                    context={"source_path": str(source_path), "model_source_dir": str(source_dir)},
+                )
+            rel_path = source_path.relative_to(source_dir)
+            if any(part in {"", ".", ".."} for part in rel_path.parts):
+                raise ArtifactGenerationFailedError(
+                    "model code relative path is unsafe for live inference workspace",
+                    context={"source_path": str(source_path), "relative_path": str(rel_path)},
+                )
+            dest_path = model_dest_dir / rel_path
+            resolved_dest = dest_path.resolve(strict=False)
+            if resolved_dest != dest_root and dest_root not in resolved_dest.parents:
+                raise ArtifactGenerationFailedError(
+                    "refusing to copy model code outside the inference workspace",
+                    context={
+                        "source_path": str(source_path),
+                        "dest_path": str(dest_path),
+                        "model_dest_dir": str(model_dest_dir),
+                    },
+                )
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, dest_path)
+
     def _extract_alpha158_aliases(self, conf_path: Path) -> list[str]:
         conf = _load_qe_conf_yaml(conf_path, purpose="alpha158 factors")
 
@@ -1971,25 +2117,7 @@ class QEExperimentRuntimeAssetResolver:
         return aliases
 
     def _find_alpha158_aliases(self, node: Any) -> list[str]:
-        if isinstance(node, dict):
-            if node.get("class") == "qlib.contrib.data.loader.Alpha158DL":
-                try:
-                    feature = node["kwargs"]["config"]["feature"]
-                    aliases = feature[1]
-                except Exception:
-                    aliases = None
-                if isinstance(aliases, list) and all(isinstance(item, str) for item in aliases):
-                    return [str(item) for item in aliases]
-            for value in node.values():
-                found = self._find_alpha158_aliases(value)
-                if found:
-                    return found
-        elif isinstance(node, list):
-            for value in node:
-                found = self._find_alpha158_aliases(value)
-                if found:
-                    return found
-        return []
+        return extract_alpha158_aliases(node)
 
     def _resolve_factor_source_dir(self, source: QEExperimentRuntimeSource) -> Path:
         candidates = [source.asset_workspace_path / "factors"]
