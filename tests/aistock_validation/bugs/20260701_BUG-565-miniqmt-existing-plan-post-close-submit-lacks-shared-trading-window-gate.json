@@ -60,8 +60,8 @@
   "expected": "All real broker submit paths share one scheduler-window authority and reject outside execution windows with durable evidence; side-effect-bearing historical MiniQMT active runs receive broker-authoritative terminalization after fresh reconcile.",
   "first_seen_at": "2026-06-30T17:54:52.875611Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "667b7528134c6e2d1d9ab42d4efb3c12359588c6",
+  "fixed_at": "2026-07-01T01:29:25.632459Z",
   "github_issue_number": 1779,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1779",
   "last_seen_at": "2026-06-30T17:54:52.875611Z",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1783",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,7 +81,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -89,6 +90,10 @@
     "fingerprint": "58d985415d53fc28b6b8fbaa",
     "source_event_id": "FE-20260701-58d985415d53"
   },
+  "validation_evidence": [
+    "gh pr checks 1783 -> 17 passed, 0 failed",
+    "local targeted simulation_runtime pytest/nox/ruff/py_compile/diff-check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
