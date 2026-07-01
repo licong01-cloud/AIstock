@@ -59,7 +59,7 @@ EXPECTED_TOOL_PROFILE_BY_SELECTED_TOOL = {
 
 PROMPT_CHECKSUMS = {
     "root.assistant": "bce85a0f793c68393bd7c6bbbd8a9f8dd18d0715ceae3330946df7b1c2fa63f4",
-    "mode.analysis": "ec5af00c6be71ed89678366170ae8edffbc8c02b3e023cd955c26afa73800ea5",
+    "mode.analysis": "13a6105771d438b383fca689c9be7bcfcde2c99f9d5fe219c8f64e64a48fadf1",
     "mode.planning": "f495971cd677edd51f1e1abb89b6115f1aff4be1441e858960d248314319203f",
     "domain.stock_analysis": "64709862585ca17ef151e5c9ab5a0937e1bf8f3cabd5a91a6f70abedff7a3dab",
 }
