@@ -34,8 +34,8 @@
   "expected": "guard_mode=off returns model answer without answer-level blocking; annotate preserves answer with Chinese warnings for soft guard reasons; strict preserves existing behavior; invalid config fails closed to strict with warning; write side-effect approval gates remain unchanged.",
   "first_seen_at": "2026-07-01T09:08:24.494634Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3fa86745",
+  "fixed_at": "2026-07-01T13:56:11.554998Z",
   "github_issue_number": 1793,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1793",
   "last_seen_at": "2026-07-01T09:08:24.494634Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1796",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -67,6 +68,9 @@
     "fingerprint": "b004250221863c55e4f296c2",
     "source_event_id": "FE-20260701-b00425022186"
   },
+  "validation_evidence": [
+    "test_react_grounding.py 37 passed; test_service.py 135 passed; research_assistant_backend 430 passed; research_assistant_mcp_contract 38 passed; ra_phase7_full_accept green; CI 17/17 passed; Tier2 diff review PASS (write-approval gate preserved under guard_mode=off)"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
