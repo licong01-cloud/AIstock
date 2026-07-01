@@ -60,6 +60,12 @@ from ..services.quantevolver.node_execution import (
     resolve_default_qe_node_id,
 )
 from ..services.quantevolver.seed_contract import normalize_single_experiment_seed_config
+from ..services.strategy_package.factor_usage import (
+    STRATEGY_PACKAGE_FACTOR_DELETE_BLOCK_REASON,
+    STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+    StrategyPackageFactorUsageQueryError,
+    find_strategy_package_factor_usage,
+)
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1029,6 +1035,38 @@ def delete_factor(
                     conn.rollback()
                     raise HTTPException(status_code=404, detail=f"因子 {factor_name} (source={source}) 不存在")
                 catalog_id = row[0]
+
+                try:
+                    package_usage = find_strategy_package_factor_usage(factor_name, conn=conn, limit=20)
+                except StrategyPackageFactorUsageQueryError as exc:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+                            "reason_code": STRATEGY_PACKAGE_FACTOR_USAGE_QUERY_FAILED,
+                            "message": "strategy package factor usage check failed; delete is fail-closed",
+                            "factor_name": factor_name,
+                            "source": source,
+                            "context": exc.context,
+                        },
+                    ) from exc
+                if package_usage["protected"]:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": STRATEGY_PACKAGE_FACTOR_DELETE_BLOCK_REASON,
+                            "reason_code": STRATEGY_PACKAGE_FACTOR_DELETE_BLOCK_REASON,
+                            "message": "factor is referenced by StrategyPackage assets; hard delete is blocked",
+                            "factor_name": factor_name,
+                            "source": source,
+                            "package_count": package_usage["package_count"],
+                            "reference_count": package_usage["reference_count"],
+                            "sample_references": package_usage["references"],
+                            "allowed_action": "deprecate_factor",
+                        },
+                    )
 
                 deleted_counts = {}
 

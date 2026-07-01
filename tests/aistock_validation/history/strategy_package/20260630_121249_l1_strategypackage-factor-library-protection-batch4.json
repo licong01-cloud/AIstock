@@ -1,0 +1,110 @@
+﻿{
+    "coverage":  {
+                     "branch":  100,
+                     "diff_branch":  null,
+                     "diff_line":  null,
+                     "line":  98,
+                     "quality_gates":  [
+
+                                       ],
+                     "schema_version":  "aistock_validation_coverage_snapshot_v1",
+                     "snapshot_path":  null,
+                     "status":  "collected_factor_usage_pytest_cov"
+                 },
+    "environment":  {
+                        "backend_port":  null,
+                        "frontend_port":  null,
+                        "next_public_api_base":  null,
+                        "paper_v2_api_base":  null,
+                        "paper_v2_skip_realtime":  null,
+                        "qe_api_base":  null,
+                        "qe_archive_api_base":  null,
+                        "qe_archive_l3_skip_ui":  null,
+                        "qe_read_l3_skip_ui":  null,
+                        "tdx_http_port":  null
+                    },
+    "evidence":  [
+                     {
+                         "command":  "rtk python scripts/aistock_feature_workflow.py validate --design docs/architecture/strategy_package_factor_library_protection_batch4_f2_design_20260630.md --tier F2",
+                         "result":  "PASS",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m compileall -q backend/services/strategy_package backend/routers backend/tests/quantevolver/test_factor_library_strategy_package_protection.py backend/tests/strategy_package/test_factor_usage.py",
+                         "result":  "PASS",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m pytest backend/tests/strategy_package/test_factor_usage.py --cov=backend.services.strategy_package.factor_usage --cov-branch --cov-report=term-missing -q",
+                         "result":  "4 passed; factor_usage.py 98% line, 4/4 branches",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m pytest backend/tests/quantevolver/test_factor_library_strategy_package_protection.py -q",
+                         "result":  "7 passed",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m pytest backend/tests/mcp/test_domain_modules.py backend/tests/quantevolver/test_payload_summary.py -q",
+                         "result":  "33 passed",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m pytest backend/tests/selection_center/test_runtime_selection.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py -q",
+                         "result":  "63 passed",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m pytest backend/tests/strategy_package -q",
+                         "result":  "254 passed",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "rtk python -m ruff check changed files",
+                         "result":  "All checks passed",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "git diff --check",
+                         "result":  "PASS",
+                         "kind":  "command"
+                     },
+                     {
+                         "command":  "git diff --name-only | rg \"(^backend/migrations/|qe_archive)\"",
+                         "result":  "no migration/qe_archive changes",
+                         "kind":  "command"
+                     }
+                 ],
+    "finished_at":  "2026-06-30T12:35:00",
+    "git_commit":  "56e4165e-precommit",
+    "level":  "L1",
+    "level_slug":  "l1",
+    "markdown_path":  "tests/aistock_validation/history/strategy_package/20260630_121249_l1_strategypackage-factor-library-protection-batch4.md",
+    "metadata_path":  "tests/aistock_validation/history/strategy_package/20260630_121249_l1_strategypackage-factor-library-protection-batch4.json",
+    "module":  "strategy_package",
+    "module_slug":  "strategy_package",
+    "operator":  "lc999",
+    "quality_gates":  [
+                          "F2 PASS",
+                          "compileall PASS",
+                          "targeted helper pytest PASS",
+                          "targeted router pytest PASS",
+                          "MCP/QE regression PASS",
+                          "selection/paper regression PASS",
+                          "strategy_package regression PASS",
+                          "ruff PASS",
+                          "git diff --check PASS",
+                          "no DDL/qe_archive diff"
+                      ],
+    "residual_risks":  [
+                           "manifest-only refs are matched conservatively by factor_name/factor_id and block hard delete fail-closed"
+                       ],
+    "schema_version":  "aistock_validation_run_v1",
+    "started_at":  "2026-06-30T12:12:49",
+    "status":  "passed",
+    "steps":  [
+
+              ],
+    "title":  "StrategyPackage factor library protection Batch4",
+    "title_slug":  "strategypackage-factor-library-protection-batch4"
+}
