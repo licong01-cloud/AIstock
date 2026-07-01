@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Readonly Triage"
+  short_description: "Run read-only AIstock triage and status checks."
+  default_prompt: "Analyze this AIstock state read-only and avoid edits, commits, cleanup, restarts, or DB writes."

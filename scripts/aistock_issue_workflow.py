@@ -714,8 +714,16 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 payload["client_manifest"],
                 "codex_skill_status",
                 "codex_feature_skill_status",
+                "codex_router_skill_status",
+                "codex_docs_handoff_skill_status",
+                "codex_merge_aftercare_skill_status",
+                "codex_readonly_triage_skill_status",
                 "claude_command_status",
                 "claude_feature_command_status",
+                "claude_router_command_status",
+                "claude_docs_handoff_command_status",
+                "claude_merge_aftercare_command_status",
+                "claude_readonly_triage_command_status",
                 "restart_recommended",
             )
         if "h7_code_intelligence" in payload:
@@ -5844,27 +5852,30 @@ def _mcp_config_snapshot() -> dict[str, Any]:
     return {"files": files, "stale_worktree_config_files": stale_paths}
 
 
+CLIENT_CODEX_SKILLS: tuple[tuple[str, str], ...] = (
+    ("issue", "fix-aistock-issue"),
+    ("feature", "verify-aistock-feature"),
+    ("router", "aistock-task-router"),
+    ("docs_handoff", "aistock-docs-handoff"),
+    ("merge_aftercare", "aistock-merge-aftercare"),
+    ("readonly_triage", "aistock-readonly-triage"),
+)
+
+CLIENT_CLAUDE_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("issue", "fix-aistock-issue.md"),
+    ("feature", "aistock-feature-workflow.md"),
+    ("router", "aistock-task-router.md"),
+    ("docs_handoff", "aistock-docs-handoff.md"),
+    ("merge_aftercare", "aistock-merge-aftercare.md"),
+    ("readonly_triage", "aistock-readonly-triage.md"),
+)
+
+
 def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = None) -> dict[str, Any]:
     codex_home = codex_home or _codex_home()
     claude_home = claude_home or _claude_home()
-    repo_issue_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
-    repo_feature_skill = REPO_ROOT / ".codex" / "skills" / "verify-aistock-feature"
-    global_issue_skill = codex_home / "skills" / "fix-aistock-issue"
-    global_feature_skill = codex_home / "skills" / "verify-aistock-feature"
-    repo_issue_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
-    repo_feature_claude = REPO_ROOT / ".claude" / "commands" / "aistock-feature-workflow.md"
-    global_issue_claude = claude_home / "commands" / "fix-aistock-issue.md"
-    global_feature_claude = claude_home / "commands" / "aistock-feature-workflow.md"
     cli = REPO_ROOT / "scripts" / "aistock_issue_workflow.py"
     repo_head = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=15)
-    issue_skill_sha = _sha256_tree(repo_issue_skill)
-    feature_skill_sha = _sha256_tree(repo_feature_skill)
-    global_issue_skill_sha = _sha256_tree(global_issue_skill)
-    global_feature_skill_sha = _sha256_tree(global_feature_skill)
-    issue_claude_sha = _sha256_file(repo_issue_claude)
-    feature_claude_sha = _sha256_file(repo_feature_claude)
-    global_issue_claude_sha = _sha256_file(global_issue_claude)
-    global_feature_claude_sha = _sha256_file(global_feature_claude)
     cli_sha = _sha256_file(cli)
 
     def _tree_status(repo_sha: str | None, global_sha: str | None) -> str:
@@ -5891,53 +5902,91 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
             return "missing_global"
         return "current"
 
-    issue_skill_status = _tree_status(issue_skill_sha, global_issue_skill_sha)
-    feature_skill_status = _tree_status(feature_skill_sha, global_feature_skill_sha)
-    issue_claude_status = _file_status(issue_claude_sha, global_issue_claude_sha)
-    feature_claude_status = _file_status(feature_claude_sha, global_feature_claude_sha)
+    codex_entries: dict[str, dict[str, Any]] = {}
+    for key, skill_name in CLIENT_CODEX_SKILLS:
+        repo_path = REPO_ROOT / ".codex" / "skills" / skill_name
+        global_path = codex_home / "skills" / skill_name
+        repo_sha = _sha256_tree(repo_path)
+        global_sha = _sha256_tree(global_path)
+        codex_entries[key] = {
+            "name": skill_name,
+            "repo_path": str(repo_path),
+            "global_path": str(global_path),
+            "repo_sha256": repo_sha,
+            "global_sha256": global_sha,
+            "status": _tree_status(repo_sha, global_sha),
+        }
+
+    claude_entries: dict[str, dict[str, Any]] = {}
+    for key, command_name in CLIENT_CLAUDE_COMMANDS:
+        repo_path = REPO_ROOT / ".claude" / "commands" / command_name
+        global_path = claude_home / "commands" / command_name
+        repo_sha = _sha256_file(repo_path)
+        global_sha = _sha256_file(global_path)
+        claude_entries[key] = {
+            "name": command_name,
+            "repo_path": str(repo_path),
+            "global_path": str(global_path),
+            "repo_sha256": repo_sha,
+            "global_sha256": global_sha,
+            "status": _file_status(repo_sha, global_sha),
+        }
+
     codex_status = _combined_status(
-        [issue_skill_status, feature_skill_status],
+        (entry["status"] for entry in codex_entries.values()),
         missing_repo_status="missing_repo_skill",
         stale_status="stale",
     )
     claude_status = _combined_status(
-        [issue_claude_status, feature_claude_status],
+        (entry["status"] for entry in claude_entries.values()),
         missing_repo_status="missing_repo",
         stale_status="stale_global",
     )
-    return {
-        "schema_version": "aistock_issue_workflow_client_manifest_v1",
+
+    paths: dict[str, str] = {"workflow_cli": str(cli)}
+    for key, entry in codex_entries.items():
+        paths[f"repo_codex_{key}_skill"] = entry["repo_path"]
+        paths[f"global_codex_{key}_skill"] = entry["global_path"]
+    for key, entry in claude_entries.items():
+        paths[f"claude_{key}_command"] = entry["repo_path"]
+        paths[f"global_claude_{key}_command"] = entry["global_path"]
+
+    payload: dict[str, Any] = {
+        "schema_version": "aistock_issue_workflow_client_manifest_v2",
         "repo_commit": repo_head.get("stdout") if repo_head.get("ok") else None,
         "workflow_cli_sha256": cli_sha,
-        "codex_skill_sha256": issue_skill_sha,
-        "global_codex_skill_sha256": global_issue_skill_sha,
-        "codex_feature_skill_sha256": feature_skill_sha,
-        "global_codex_feature_skill_sha256": global_feature_skill_sha,
-        "claude_command_sha256": issue_claude_sha,
-        "global_claude_command_sha256": global_issue_claude_sha,
-        "claude_feature_command_sha256": feature_claude_sha,
-        "global_claude_feature_command_sha256": global_feature_claude_sha,
         "codex_skill_status": codex_status,
-        "codex_issue_skill_status": issue_skill_status,
-        "codex_feature_skill_status": feature_skill_status,
         "claude_command_status": claude_status,
-        "claude_issue_command_status": issue_claude_status,
-        "claude_feature_command_status": feature_claude_status,
-        "paths": {
-            "repo_codex_skill": str(repo_issue_skill),
-            "global_codex_skill": str(global_issue_skill),
-            "repo_codex_feature_skill": str(repo_feature_skill),
-            "global_codex_feature_skill": str(global_feature_skill),
-            "claude_command": str(repo_issue_claude),
-            "global_claude_command": str(global_issue_claude),
-            "claude_feature_command": str(repo_feature_claude),
-            "global_claude_feature_command": str(global_feature_claude),
-            "workflow_cli": str(cli),
-        },
+        "codex_entries": codex_entries,
+        "claude_entries": claude_entries,
+        "paths": paths,
         "restart_recommended": codex_status != "current" or claude_status != "current",
         "install_client_next_command": f"python {REPO_ROOT / 'scripts' / 'aistock_issue_workflow.py'} install-client --apply",
     }
 
+    # Backward-compatible flat fields used by compact output and older tests.
+    if "issue" in codex_entries:
+        payload["codex_skill_sha256"] = codex_entries["issue"]["repo_sha256"]
+        payload["global_codex_skill_sha256"] = codex_entries["issue"]["global_sha256"]
+        payload["codex_issue_skill_status"] = codex_entries["issue"]["status"]
+    if "feature" in codex_entries:
+        payload["codex_feature_skill_sha256"] = codex_entries["feature"]["repo_sha256"]
+        payload["global_codex_feature_skill_sha256"] = codex_entries["feature"]["global_sha256"]
+        payload["codex_feature_skill_status"] = codex_entries["feature"]["status"]
+    if "issue" in claude_entries:
+        payload["claude_command_sha256"] = claude_entries["issue"]["repo_sha256"]
+        payload["global_claude_command_sha256"] = claude_entries["issue"]["global_sha256"]
+        payload["claude_issue_command_status"] = claude_entries["issue"]["status"]
+    if "feature" in claude_entries:
+        payload["claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
+        payload["global_claude_feature_command_sha256"] = claude_entries["feature"]["global_sha256"]
+        payload["claude_feature_command_status"] = claude_entries["feature"]["status"]
+    for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage"):
+        if key in codex_entries:
+            payload[f"codex_{key}_skill_status"] = codex_entries[key]["status"]
+        if key in claude_entries:
+            payload[f"claude_{key}_command_status"] = claude_entries[key]["status"]
+    return payload
 
 def _validation_center_runtime_safety(root: Path | None = None) -> dict[str, Any]:
     root = root or REPO_ROOT
@@ -6028,13 +6077,13 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
 
     client_manifest = _client_manifest()
     if client_manifest["codex_skill_status"] in {"stale", "missing_global"}:
-        warnings.append("global Codex issue skill is missing or stale; run install-client --apply and restart old client windows")
+        warnings.append("global Codex workflow skill set is missing or stale; run install-client --apply and restart old client windows")
     elif client_manifest["codex_skill_status"] == "missing_repo_skill":
-        blocking.append("repo Codex issue skill is missing")
+        blocking.append("repo Codex workflow skill set is missing")
     if client_manifest["claude_command_status"] == "missing_repo":
-        warnings.append("repo Claude Code issue command is missing; Claude can still call the repo CLI directly")
+        warnings.append("repo Claude Code workflow command set is missing; Claude can still call the repo CLI directly")
     elif client_manifest["claude_command_status"] in {"missing_global", "stale_global"}:
-        warnings.append("global Claude Code issue command is missing or stale; run install-client --apply")
+        warnings.append("global Claude Code workflow command set is missing or stale; run install-client --apply")
 
     code_intel = code_intelligence.build_doctor_report(REPO_ROOT, skip_external=skip_external)
     for warning in code_intel.get("warnings") or []:
@@ -6078,53 +6127,48 @@ def build_client_install_plan(
     codex_home: str | None = None,
     claude_home: str | None = None,
 ) -> dict[str, Any]:
-    source_issue_skill = REPO_ROOT / ".codex" / "skills" / "fix-aistock-issue"
-    source_feature_skill = REPO_ROOT / ".codex" / "skills" / "verify-aistock-feature"
-    source_issue_claude = REPO_ROOT / ".claude" / "commands" / "fix-aistock-issue.md"
-    source_feature_claude = REPO_ROOT / ".claude" / "commands" / "aistock-feature-workflow.md"
     target_home = Path(codex_home) if codex_home else _codex_home()
-    target_issue_skill = target_home / "skills" / "fix-aistock-issue"
-    target_feature_skill = target_home / "skills" / "verify-aistock-feature"
     target_claude_home = Path(claude_home) if claude_home else _claude_home()
-    target_issue_claude = target_claude_home / "commands" / "fix-aistock-issue.md"
-    target_feature_claude = target_claude_home / "commands" / "aistock-feature-workflow.md"
-    blocking: list[str] = []
-    if not source_issue_skill.exists():
-        blocking.append(f"missing repo Codex issue skill: {source_issue_skill}")
-    if not source_feature_skill.exists():
-        blocking.append(f"missing repo Codex feature skill: {source_feature_skill}")
-    if not source_issue_claude.exists():
-        blocking.append(f"missing repo Claude Code issue command: {source_issue_claude}")
-    if not source_feature_claude.exists():
-        blocking.append(f"missing repo Claude Code feature command: {source_feature_claude}")
-    actions = [
-        {
-            "action": "sync_global_codex_issue_skill",
-            "source": str(source_issue_skill),
-            "target": str(target_issue_skill),
-            "safe": source_issue_skill.exists() and not blocking,
-        },
-        {
-            "action": "sync_global_codex_feature_skill",
-            "source": str(source_feature_skill),
-            "target": str(target_feature_skill),
-            "safe": source_feature_skill.exists() and not blocking,
-        },
-        {
-            "action": "sync_claude_code_issue_command",
-            "source": str(source_issue_claude),
-            "target": str(target_issue_claude),
-            "safe": source_issue_claude.exists() and not blocking,
-        },
-        {
-            "action": "sync_claude_code_feature_command",
-            "source": str(source_feature_claude),
-            "target": str(target_feature_claude),
-            "safe": source_feature_claude.exists() and not blocking,
-        },
+    source_codex_skills = [
+        (key, name, REPO_ROOT / ".codex" / "skills" / name, target_home / "skills" / name)
+        for key, name in CLIENT_CODEX_SKILLS
     ]
+    source_claude_commands = [
+        (key, name, REPO_ROOT / ".claude" / "commands" / name, target_claude_home / "commands" / name)
+        for key, name in CLIENT_CLAUDE_COMMANDS
+    ]
+    blocking: list[str] = []
+    for _key, name, source, _target in source_codex_skills:
+        if not source.exists():
+            blocking.append(f"missing repo Codex skill {name}: {source}")
+    for _key, name, source, _target in source_claude_commands:
+        if not source.exists():
+            blocking.append(f"missing repo Claude Code command {name}: {source}")
+
+    actions: list[dict[str, Any]] = []
+    for key, name, source, target in source_codex_skills:
+        actions.append(
+            {
+                "action": f"sync_global_codex_{key}_skill",
+                "name": name,
+                "source": str(source),
+                "target": str(target),
+                "safe": source.exists() and not blocking,
+            }
+        )
+    for key, name, source, target in source_claude_commands:
+        actions.append(
+            {
+                "action": f"sync_claude_code_{key}_command",
+                "name": name,
+                "source": str(source),
+                "target": str(target),
+                "safe": source.exists() and not blocking,
+            }
+        )
+
     payload = {
-        "schema_version": "aistock_issue_workflow_client_install_v1",
+        "schema_version": "aistock_issue_workflow_client_install_v2",
         "generated_at": _utc_now(),
         "dry_run": not apply,
         "workflow_gate": "ready_for_install" if not blocking else "blocked",
@@ -6137,25 +6181,20 @@ def build_client_install_plan(
     if apply:
         if blocking:
             raise WorkflowError("; ".join(blocking))
-        for source, target in (
-            (source_issue_skill, target_issue_skill),
-            (source_feature_skill, target_feature_skill),
-        ):
+        installed: list[dict[str, str]] = []
+        for _key, _name, source, target in source_codex_skills:
             if target.exists():
                 shutil.rmtree(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source, target)
-        target_issue_claude.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_issue_claude, target_issue_claude)
-        shutil.copy2(source_feature_claude, target_feature_claude)
+            installed.append({"target": str(target)})
+        for _key, _name, source, target in source_claude_commands:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            installed.append({"target": str(target)})
         payload["workflow_gate"] = "installed"
         payload["dry_run"] = False
-        payload["installed"] = [
-            {"target": str(target_issue_skill)},
-            {"target": str(target_feature_skill)},
-            {"target": str(target_issue_claude)},
-            {"target": str(target_feature_claude)},
-        ]
+        payload["installed"] = installed
         payload["client_manifest_after"] = _client_manifest(target_home, target_claude_home)
     manifest_path = REPO_ROOT / WORKFLOW_ROOT / "client-manifest.json"
     _write_json(
@@ -6166,7 +6205,6 @@ def build_client_install_plan(
     )
     payload["client_manifest_path"] = _repo_rel(manifest_path)
     return payload
-
 
 def _state_roots_for_bug(bug_id: str) -> list[Path]:
     roots: list[Path] = [REPO_ROOT]

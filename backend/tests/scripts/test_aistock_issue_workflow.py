@@ -76,13 +76,12 @@ def _write_json(path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _write_repo_client_entrypoints(root: Path) -> None:
-    (root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (root / ".codex" / "skills" / "verify-aistock-feature").mkdir(parents=True)
-    (root / ".codex" / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
+    for _key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        (root / ".codex" / "skills" / skill_name).mkdir(parents=True)
+        (root / ".codex" / "skills" / skill_name / "SKILL.md").write_text("", encoding="utf-8")
     (root / ".claude" / "commands").mkdir(parents=True)
-    (root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
-    (root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
+    for _key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        (root / ".claude" / "commands" / command_name).write_text("", encoding="utf-8")
 
 
 def test_git_subprocess_env_unsets_powershell_shell_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1251,26 +1250,19 @@ def test_doctor_reports_ready_when_client_entries_exist(
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "backend").mkdir()
     (isolated_workflow_root / "backend" / "validation_app.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
-    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
-    (codex_home / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (codex_home / "skills" / "verify-aistock-feature").mkdir(parents=True)
-    (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").write_text("", encoding="utf-8")
+    for _key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        (codex_home / "skills" / skill_name).mkdir(parents=True)
+        (codex_home / "skills" / skill_name / "SKILL.md").write_text("", encoding="utf-8")
     claude_home = isolated_workflow_root / "claude_home"
     (claude_home / "commands").mkdir(parents=True)
-    (claude_home / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
-    (claude_home / "commands" / "aistock-feature-workflow.md").write_text("", encoding="utf-8")
+    for _key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        (claude_home / "commands" / command_name).write_text("", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
@@ -1329,10 +1321,7 @@ def test_doctor_blocks_noncanonical_main_worktree_with_stale_index(
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "backend").mkdir()
     (isolated_workflow_root / "backend" / "validation_app.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
-    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1534,8 +1523,7 @@ def test_doctor_compact_reports_codegraph_bootstrap_next_command(
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1587,8 +1575,7 @@ def test_doctor_omits_codegraph_bootstrap_when_ready(
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue").mkdir(parents=True)
-    (isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md").write_text("", encoding="utf-8")
+    _write_repo_client_entrypoints(isolated_workflow_root)
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
@@ -1650,31 +1637,28 @@ def test_doctor_reports_stale_global_skill_manifest(
 ) -> None:
     (isolated_workflow_root / "scripts").mkdir()
     (isolated_workflow_root / "scripts" / "aistock_issue_workflow.py").write_text("cli", encoding="utf-8")
-    repo_skill = isolated_workflow_root / ".codex" / "skills" / "fix-aistock-issue"
-    repo_skill.mkdir(parents=True)
-    (repo_skill / "SKILL.md").write_text("repo skill", encoding="utf-8")
-    repo_feature_skill = isolated_workflow_root / ".codex" / "skills" / "verify-aistock-feature"
-    repo_feature_skill.mkdir(parents=True)
-    (repo_feature_skill / "SKILL.md").write_text("repo feature skill", encoding="utf-8")
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        repo_skill = isolated_workflow_root / ".codex" / "skills" / skill_name
+        repo_skill.mkdir(parents=True)
+        (repo_skill / "SKILL.md").write_text(f"repo {key} skill", encoding="utf-8")
     (isolated_workflow_root / "scripts" / "issue_flow.py").write_text("", encoding="utf-8")
     (isolated_workflow_root / ".claude" / "commands").mkdir(parents=True)
-    (isolated_workflow_root / ".claude" / "commands" / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
-    (isolated_workflow_root / ".claude" / "commands" / "aistock-feature-workflow.md").write_text("feature claude", encoding="utf-8")
+    for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        (isolated_workflow_root / ".claude" / "commands" / command_name).write_text(f"repo {key} command", encoding="utf-8")
     (isolated_workflow_root / "docs" / "standards").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "standards" / "aistock_development_standard_v1.5_20260523.md").write_text("", encoding="utf-8")
     (isolated_workflow_root / "docs" / "architecture").mkdir(parents=True)
     (isolated_workflow_root / "docs" / "architecture" / "aistock_issue_workflow_opensource_cicd_design_v2_20260525.md").write_text("", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
-    global_skill = codex_home / "skills" / "fix-aistock-issue"
-    global_skill.mkdir(parents=True)
-    (global_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
-    global_feature_skill = codex_home / "skills" / "verify-aistock-feature"
-    global_feature_skill.mkdir(parents=True)
-    (global_feature_skill / "SKILL.md").write_text("repo feature skill", encoding="utf-8")
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        global_skill = codex_home / "skills" / skill_name
+        global_skill.mkdir(parents=True)
+        content = "old skill" if key == "issue" else f"repo {key} skill"
+        (global_skill / "SKILL.md").write_text(content, encoding="utf-8")
     claude_home = isolated_workflow_root / "claude_home"
     (claude_home / "commands").mkdir(parents=True)
-    (claude_home / "commands" / "fix-aistock-issue.md").write_text("claude", encoding="utf-8")
-    (claude_home / "commands" / "aistock-feature-workflow.md").write_text("feature claude", encoding="utf-8")
+    for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        (claude_home / "commands" / command_name).write_text(f"repo {key} command", encoding="utf-8")
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
     monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
@@ -2795,17 +2779,14 @@ def test_submit_bug_offline_github_scan_warns_but_uses_local_scan(
 def test_install_client_plan_can_copy_global_codex_skill(
     isolated_workflow_root: Path,
 ) -> None:
-    source = isolated_workflow_root / ".codex" / "skills"
-    issue_source = source / "fix-aistock-issue"
-    feature_source = source / "verify-aistock-feature"
-    issue_source.mkdir(parents=True)
-    feature_source.mkdir(parents=True)
-    (issue_source / "SKILL.md").write_text("issue skill", encoding="utf-8")
-    (feature_source / "SKILL.md").write_text("feature skill", encoding="utf-8")
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        source = isolated_workflow_root / ".codex" / "skills" / skill_name
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text(f"{key} skill", encoding="utf-8")
     claude = isolated_workflow_root / ".claude" / "commands"
     claude.mkdir(parents=True)
-    (claude / "fix-aistock-issue.md").write_text("issue command", encoding="utf-8")
-    (claude / "aistock-feature-workflow.md").write_text("feature command", encoding="utf-8")
+    for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        (claude / command_name).write_text(f"{key} command", encoding="utf-8")
     codex_home = isolated_workflow_root / "codex_home"
     claude_home = isolated_workflow_root / "claude_home"
 
@@ -2815,12 +2796,14 @@ def test_install_client_plan_can_copy_global_codex_skill(
 
     applied = workflow.build_client_install_plan(apply=True, codex_home=str(codex_home), claude_home=str(claude_home))
     assert applied["workflow_gate"] == "installed"
-    assert (codex_home / "skills" / "fix-aistock-issue" / "SKILL.md").read_text(encoding="utf-8") == "issue skill"
-    assert (codex_home / "skills" / "verify-aistock-feature" / "SKILL.md").read_text(encoding="utf-8") == "feature skill"
-    assert (claude_home / "commands" / "fix-aistock-issue.md").read_text(encoding="utf-8") == "issue command"
-    assert (claude_home / "commands" / "aistock-feature-workflow.md").read_text(encoding="utf-8") == "feature command"
+    for key, skill_name in workflow.CLIENT_CODEX_SKILLS:
+        assert (codex_home / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8") == f"{key} skill"
+    for key, command_name in workflow.CLIENT_CLAUDE_COMMANDS:
+        assert (claude_home / "commands" / command_name).read_text(encoding="utf-8") == f"{key} command"
     assert applied["client_manifest_after"]["codex_feature_skill_status"] == "current"
+    assert applied["client_manifest_after"]["codex_router_skill_status"] == "current"
     assert applied["client_manifest_after"]["claude_feature_command_status"] == "current"
+    assert applied["client_manifest_after"]["claude_router_command_status"] == "current"
 
 
 def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path) -> None:

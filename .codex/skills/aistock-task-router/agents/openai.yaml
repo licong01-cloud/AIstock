@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Task Router"
+  short_description: "Route AIstock work to the right workflow lane."
+  default_prompt: "Route this AIstock request to the correct workflow and follow the minimal required context."

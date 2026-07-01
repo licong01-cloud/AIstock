@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Merge Aftercare"
+  short_description: "Merge PRs, sync main, apply gates, and clean worktrees."
+  default_prompt: "Complete AIstock merge aftercare safely and report production gates."

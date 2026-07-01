@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Docs Handoff"
+  short_description: "Handle AIstock docs and handoff scratch workflows."
+  default_prompt: "Handle this AIstock documentation or handoff request with the lightweight docs lane."

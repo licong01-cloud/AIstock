@@ -42,6 +42,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Context Budget Rules
 
+- Broad or ambiguous AIstock tasks should first use the lightweight router entrypoint: Codex `aistock-task-router` skill, Claude Code `.claude/commands/aistock-task-router.md`.
 - Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
 - T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
 - Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
@@ -63,6 +64,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 ## Issue Workflow Rules
 
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint for submitting, fixing, triaging, batching, finishing, closing, syncing, or resuming AIstock BUG/GitHub Issues.
+- Developer-client workflow entrypoints are synced by `python scripts/aistock_issue_workflow.py install-client --apply`; after `.codex/**` or `.claude/**` changes, run it after merge before old client windows rely on the new wrappers.
 - `scripts/issue_flow.py` is a lower-level helper, not the default entrypoint.
 - New BUG records must stay synchronized with GitHub Issues; a BUG JSON without `github_issue_number` and `github_issue_url` is only a triage draft and must not be merged into `main`.
 - Fix work must respect `allowed_write_scope`. If the fix requires files outside scope, stop and update scope before editing further.
