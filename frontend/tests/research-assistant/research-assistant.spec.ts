@@ -629,3 +629,51 @@ test("Research Assistant audit LLM usage tab renders charts and KPI cards withou
   await expect(browserPage.getByTestId("ra-llm-status-chart")).toBeVisible();
   await expect(browserPage.getByTestId("ra-llm-usage-section").locator("table")).toHaveCount(0);
 });
+
+test("Research Assistant graph page renders React Flow read-only graph with local layout controls", async ({ page: browserPage }) => {
+  const graphSummary = {
+    namespace: "aistock",
+    entity_count: 3,
+    relation_count: 2,
+    evolution_path_count: 1,
+    entities: [
+      { entity_id: "entity_qe", entity_type: "module", entity_key: "qe", title: "QE 实验", summary: "量化实验与回测", source_refs: ["docs/qe.md"], confidence: 0.98, approval_status: "approved" },
+      { entity_id: "entity_paper", entity_type: "module", entity_key: "paper_v2", title: "Paper v2", summary: "模拟盘与策略包", source_refs: ["docs/paper.md"], confidence: 0.95, approval_status: "approved" },
+      { entity_id: "entity_factor", entity_type: "factor", entity_key: "alpha158", title: "Alpha158 因子", summary: "因子集合", source_refs: ["docs/factor.md"], confidence: 0.9, approval_status: "draft" },
+    ],
+    relations: [
+      { relation_id: "rel_qe_paper", source_entity_id: "entity_qe", target_entity_id: "entity_paper", relation_type: "promotes_to", evidence_refs: ["workflow:qe-to-paper"], confidence: 0.88, approval_status: "approved" },
+      { relation_id: "rel_missing", source_entity_id: "entity_qe", target_entity_id: "entity_missing", relation_type: "missing_target", evidence_refs: ["workflow:missing"], confidence: 0.5, approval_status: "draft" },
+    ],
+    evolution_paths: [{ path_id: "path_qe_paper", objective: "QE 到 Paper v2" }],
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/graph/summary")) return respond(graphSummary);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/graph");
+
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-graph-flow").locator(".react-flow")).toBeVisible();
+  await expect(browserPage.locator(".react-flow__minimap")).toBeVisible();
+  await expect(browserPage.locator(".react-flow__controls")).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "重置布局" })).toBeVisible();
+  await expect(browserPage.getByText("QE 实验").first()).toBeVisible();
+  await expect(browserPage.getByText("Paper v2").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-graph-degraded-relations")).toContainText("graph_relation_endpoint_missing");
+  await expect(browserPage.getByTestId("ra-graph-degraded-relations")).toContainText("未静默绘制成假边");
+
+  await browserPage.getByTestId("ra-graph-node").filter({ hasText: "QE 实验" }).first().click();
+  await expect(browserPage.getByTestId("ra-graph-inspector")).toContainText("实体：QE 实验");
+  await expect(browserPage.getByTestId("ra-graph-inspector")).toContainText("图谱可审计详情");
+
+  await browserPage.evaluate(() => window.localStorage.setItem("aistock.ra.graph.layout.aistock.v1", JSON.stringify({ entity_qe: { x: 17, y: 23 } })));
+  await browserPage.reload();
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toContainText("本地布局已恢复");
+  await browserPage.getByRole("button", { name: "重置布局" }).click();
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toContainText("自动布局");
+});

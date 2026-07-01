@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
+import "@xyflow/react/dist/style.css";
 import "./research-assistant.css";
 
 const TABS: Array<{ href: string; label: string; aliases?: string[] }> = [
