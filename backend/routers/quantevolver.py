@@ -50,6 +50,10 @@ from backend.services.quantevolver.factor_cache_coverage import (
     DEFAULT_WARMUP_TOLERANCE_DAYS,
     factor_cache_covers_window,
 )
+from backend.services.strategy_package.factor_reference_guard import (
+    FACTOR_DELETE_BLOCKED_REASON_CODE,
+    find_strategy_packages_referencing_factor,
+)
 from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
 from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
@@ -1029,6 +1033,28 @@ def delete_factor(
                     conn.rollback()
                     raise HTTPException(status_code=404, detail=f"因子 {factor_name} (source={source}) 不存在")
                 catalog_id = row[0]
+
+                package_references = find_strategy_packages_referencing_factor(conn, factor_name)
+                if package_references:
+                    referenced_packages = [reference.to_dict() for reference in package_references]
+                    logger.warning(
+                        "Blocked factor hard delete because StrategyPackage references exist: "
+                        "factor_name=%s, source=%s, referenced_packages=%s",
+                        factor_name,
+                        source,
+                        referenced_packages,
+                    )
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "reason_code": FACTOR_DELETE_BLOCKED_REASON_CODE,
+                            "message": "factor is referenced by non-retired StrategyPackage packages",
+                            "factor_name": factor_name,
+                            "source": source,
+                            "referenced_packages": referenced_packages,
+                        },
+                    )
 
                 deleted_counts = {}
 
