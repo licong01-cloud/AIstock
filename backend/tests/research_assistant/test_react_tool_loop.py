@@ -593,7 +593,7 @@ def _bug_509_stock_result(sections: list[dict[str, Any]], *, tool_name: str = "s
     )
 
 
-def test_bug_509_stock_depth_guard_blocks_undercovered_stock_answer() -> None:
+def test_t9_4_stock_depth_guard_no_longer_blocks_undercovered_but_sourced_answer() -> None:
     result = _bug_509_stock_result(
         [
             {"dataset": "quote", "source_refs": ["stock-ref:quote:000688"], "as_of": "2026-06-16"},
@@ -607,10 +607,10 @@ def test_bug_509_stock_depth_guard_blocks_undercovered_stock_answer() -> None:
         ReactGroundingConfig(max_tool_iterations=10, user_message="stock depth all-round fundamental analysis for 000688"),
     )
 
-    assert guard.allowed is False
-    assert guard.reason == "stock_depth_required_evidence_missing"
-    assert "reason_code=stock_depth_required_evidence_missing" in guard.text
-    assert "external_research" in guard.text
+    assert guard.allowed is True
+    assert guard.reason == "ok"
+    assert "stock_depth_required_evidence_missing" not in guard.text
+    assert "source stock-ref:quote:000688 as_of 2026-06-16" in guard.text
 
 
 def test_bug_509_stock_depth_guard_accepts_full_stock_card_with_web_evidence() -> None:

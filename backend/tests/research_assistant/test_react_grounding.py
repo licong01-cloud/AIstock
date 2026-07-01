@@ -578,13 +578,13 @@ def _stock_depth_partial_results() -> list[McpToolResult]:
     ]
 
 
-def test_read_only_partial_stock_depth_evidence_degrades_with_sources_and_gaps() -> None:
+def test_t9_4_stock_depth_forced_evidence_guard_removed_for_grounded_answer() -> None:
     class NoToolProvider:
         def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
-            raise AssertionError("preloaded partial read-only evidence should be enough to test degradation")
+            raise AssertionError("preloaded partial read-only evidence should be enough")
 
         def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
-            raise AssertionError("read-only degradation must not use preflight")
+            raise AssertionError("preflight should not run")
 
     def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
         return ModelTurn(
@@ -610,13 +610,60 @@ def test_read_only_partial_stock_depth_evidence_degrades_with_sources_and_gaps()
     )
 
     assert result.evidence_guard.allowed is True
-    assert result.evidence_guard.reason == "read_only_partial_evidence_degraded"
-    assert result.stopped_reason == "read_only_partial_evidence_degraded"
+    assert result.evidence_guard.reason == "ok"
+    assert result.stopped_reason == "final_answer"
     assert "Insufficient evidence" not in result.final_text
     assert "stock_quote:000688" in result.final_text
     assert "2026-06-24" in result.final_text
-    assert "Missing / not covered" in result.final_text
-    assert "original_reason=stock_depth_required_evidence_missing" in result.final_text
+    assert "stock_depth_required_evidence_missing" not in result.final_text
+
+
+def test_t9_4_stock_depth_without_source_still_fails_anti_hallucination() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line: available evidence covers market and fund flow only.",
+        _stock_depth_partial_results(),
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="stock depth analysis: limit down future trend and fundamental for 000688",
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "missing_inline_tool_evidence"
+
+
+def test_t9_4_stock_depth_directional_prediction_still_fails_guard() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line: 000688 will rise; stock_quote:000688 as_of 2026-06-24.",
+        _stock_depth_partial_results(),
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="stock depth analysis: limit down future trend and fundamental for 000688",
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_t9_4_stock_depth_wording_variants_do_not_trigger_forced_evidence_gate() -> None:
+    messages = (
+        "stock depth analysis: limit down future trend and fundamental for 000688",
+        "take a broad look at 000688 across recent price, money flow, and fundamentals",
+        "help me review 000688 from multiple angles",
+    )
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "Bottom-line: only partial read-only evidence is available; "
+            "stock_quote:000688 as_of 2026-06-24; "
+            "stock_kline:000688 as_of 2026-06-24; "
+            "stock_fund_flow:000688 as_of 2026-06-24.",
+            _stock_depth_partial_results(),
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is True
+        assert decision.reason == "ok"
 
 
 def test_non_read_only_partial_evidence_still_fails_closed() -> None:
