@@ -18,7 +18,7 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 
 - BUG registration/fix/GitHub Issue/P0/P1/Context Pack/allowed scope -> `.claude/commands/fix-aistock-issue.md`.
 - New feature or design acceptance -> `.claude/commands/aistock-feature-workflow.md`.
-- Ordinary docs, handoff docs, temporary Codex/Claude notes -> `.claude/commands/aistock-docs-handoff.md`.
+- Ordinary docs, handoff docs, temporary Codex/Claude notes, and small docs/scratch/root-pollution cleanup -> `.claude/commands/aistock-docs-handoff.md`.
 - Merge, close-sync, root/GitHub sync, DDL/dependency gates, install-client, cleanup -> `.claude/commands/aistock-merge-aftercare.md`.
 - Read-only analysis, open issue listing, nightly/CI status, branch/worktree audit -> `.claude/commands/aistock-readonly-triage.md`.
 
@@ -28,5 +28,6 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 - Ordinary BUG fixes do not read design docs unless the issue/user cites them or the task is T3.
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) require controlled workflow.
 - Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`, not tracked `docs/handoff/` root.
+- For cleanup-fast requests, do not productize scratch scripts, force-add ignored `debug_tools/`, or run code validation unless executable behavior is intentionally retained.
 
 Report the selected lane and continue only if the user asked to execute.

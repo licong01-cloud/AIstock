@@ -42,6 +42,8 @@ For `docs-fast-update` and `docs-fast-new`, use an isolated worktree/branch, kee
 
 Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching docs or issue workflow.
 
+For small root-pollution cleanup or docs/scratch relocation, use cleanup-fast rather than BUG or feature workflow: move/delete only the named files, avoid rewriting scratch scripts into reusable `debug_tools`, do not `git add -f` ignored tool directories, and run only `git diff --check` unless executable behavior is intentionally retained.
+
 ## Workflow
 
 1. Health-check the environment:
