@@ -223,7 +223,17 @@ def _refresh_data_stats_backend() -> Dict[str, Any]:
 
                 last_updated_at = None
                 if updated_column:
-                    cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
+                    if data_kind == KLINE_MINUTE_RAW_KIND:
+                        cur.execute(
+                            f"""
+                            SELECT MAX({_quote_identifier(updated_column)})
+                              FROM {table_name}
+                             WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
+                            """,
+                            (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
+                        )
+                    else:
+                        cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
                     last_updated_at = cur.fetchone()[0]
 
                 cur.execute(

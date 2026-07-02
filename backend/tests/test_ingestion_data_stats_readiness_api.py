@@ -275,13 +275,16 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
                         "kline_minute_raw",
                         "market.kline_minute_raw",
                         "trade_time",
-                        None,
+                        "trade_time",
                         {"desc": "minute raw"},
                     )
                 ]
             elif "COUNT(*)" in sql and "market" in sql and "kline_minute_raw" in sql:
                 self.description = [("count",), ("min",), ("max",)]
                 self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1))
+            elif "MAX(" in sql and "market" in sql and "kline_minute_raw" in sql:
+                self.description = [("max",)]
+                self._row = (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc),)
             elif "pg_total_relation_size" in sql:
                 self.description = [("table_bytes",), ("index_bytes",)]
                 self._row = (1000, 200)
@@ -316,6 +319,9 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
     count_sql, count_params = next((sql, params) for sql, params in executed if "COUNT(*)" in sql)
     assert "WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in count_sql
     assert count_params == ("3 months",)
+    minute_scans = [sql for sql, _params in executed if "FROM \"market\".\"kline_minute_raw\"" in sql]
+    assert minute_scans
+    assert all("WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in sql for sql in minute_scans)
     insert_sql, insert_params = next((sql, params) for sql, params in executed if "INSERT INTO market.data_stats" in sql)
     assert insert_params[0] == "kline_minute_raw"
     assert '"stats_scope": "recent_window"' in insert_params[-1]
