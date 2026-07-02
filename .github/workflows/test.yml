@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       backend_required: ${{ steps.classify.outputs.backend_required }}
+      backend_sessions: ${{ steps.classify.outputs.backend_sessions }}
       close_sync_metadata_only: ${{ steps.classify.outputs.close_sync_metadata_only }}
       workflow_validation_required: ${{ steps.classify.outputs.workflow_validation_required }}
       docs_lite_required: ${{ steps.classify.outputs.docs_lite_required }}
@@ -205,14 +206,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        session:
-          - paper_v2_backend
-          - qe_archive_backend
-          - model_registry_backend
-          - market_regime_label
-          - rl_execution_smoke
-          - validation_center_backend
-          - qe_data_contract_backend
+        session: ${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}
     services:
       postgres:
         image: timescale/timescaledb:latest-pg14

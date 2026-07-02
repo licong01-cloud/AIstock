@@ -273,6 +273,47 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
 
 
+def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "paper_v2",
+        "--changed-file",
+        "backend/services/paper_trading_v2/runtime.py",
+    ]) == 0
+    paper_payload = json.loads(capsys.readouterr().out)
+
+    assert "paper_v2_backend" in paper_payload["required_plans"]
+    assert "paper_v2_l3" not in paper_payload["required_plans"]
+    assert "paper_v2_l3" in paper_payload["recommended_plans"]
+
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "qe.core",
+        "--changed-file",
+        "backend/services/quantevolver/qe_evolution_service.py",
+    ]) == 0
+    qe_payload = json.loads(capsys.readouterr().out)
+
+    assert "qe_read_backend" in qe_payload["required_plans"]
+    assert "qe_read_l3" not in qe_payload["required_plans"]
+    assert "qe_read_l3" in qe_payload["recommended_plans"]
+
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "research_assistant",
+        "--changed-file",
+        "backend/services/research_assistant/service.py",
+    ]) == 0
+    ra_payload = json.loads(capsys.readouterr().out)
+
+    assert "research_assistant_backend" in ra_payload["required_plans"]
+    assert "ra_phase7_full_accept" not in ra_payload["required_plans"]
+    assert "ra_phase7_full_accept" in ra_payload["recommended_plans"]
+
+
 def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys: pytest.CaptureFixture[str]) -> None:
     assert flow.main([
         "validation-select",

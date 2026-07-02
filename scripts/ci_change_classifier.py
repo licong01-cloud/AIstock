@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "backend/tests/scripts/test_nightly_design_drift_audit.py",
     "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
     "backend/tests/scripts/test_verify_aistock_feature_guardrail_scan.py",
+    "backend/services/validation/plan_catalog.py",
     "backend/tests/test_aistock_guardrail_scan.py",
     "configs/validation/llm_triage.yaml",
     "configs/validation/design_drift_audit.yaml",
@@ -76,12 +78,33 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/nightly_design_drift_audit.py",
     "scripts/nightly_silent_degradation_audit.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
 }
 PROMPT_EVALUATION_PATH_PREFIXES = ("prompt_packs/validation_llm/",)
 PROMPT_EVALUATION_FILES = {
     "configs/validation/llm_triage.yaml",
     "scripts/llm_provider_adapter.py",
 }
+BACKEND_MATRIX_SESSIONS = (
+    "paper_v2_backend",
+    "qe_archive_backend",
+    "model_registry_backend",
+    "market_regime_label",
+    "rl_execution_smoke",
+    "validation_center_backend",
+    "qe_data_contract_backend",
+)
+BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("paper_v2_backend", ("backend/services/paper_trading_v2/**", "backend/routers/paper_v2.py", "backend/services/selection_center/**", "backend/routers/selection_center.py", "backend/services/strategy_package/**", "backend/routers/strategy_package*.py", "backend/tests/paper_trading_v2/**", "backend/tests/selection_center/**", "backend/tests/strategy_package/**")),
+    ("qe_archive_backend", ("backend/services/qe_archive/**", "backend/routers/qe_archive.py", "backend/tests/qe_archive/**", "scripts/qe_archive_*.py")),
+    ("qe_data_contract_backend", ("backend/services/quantevolver/**", "backend/routers/quantevolver*.py", "backend/tests/unified_engine/test_qe_*.py")),
+    ("model_registry_backend", ("backend/services/model_registry/**", "backend/routers/model_registry*.py", "backend/tests/model_registry/**", "backend/tests/test_model_registry*.py")),
+    ("market_regime_label", ("backend/services/market_regime/**", "backend/routers/market_regime*.py", "backend/tests/market_regime/**", "backend/tests/test_market_regime*.py")),
+    ("rl_execution_smoke", ("backend/services/rl_execution/**", "backend/routers/rl_execution.py", "backend/tests/test_rl_execution_module_visibility.py")),
+    ("validation_center_backend", ("backend/services/validation/**", "backend/routers/validation.py", "backend/tests/test_validation*.py", "backend/tests/scripts/test_*validation*.py", "tests/aistock_validation/catalog/**")),
+)
 
 
 def _normalize_path(value: str) -> str:
@@ -130,6 +153,16 @@ def _workflow_validation_fast_lane(path: str) -> bool:
 
 def _prompt_evaluation_required(path: str) -> bool:
     return path in PROMPT_EVALUATION_FILES or path.startswith(PROMPT_EVALUATION_PATH_PREFIXES)
+
+
+def _selected_backend_sessions(paths: list[str]) -> list[str]:
+    selected: list[str] = []
+    for session, patterns in BACKEND_SESSION_RULES:
+        if any(fnmatch.fnmatch(path, pattern) for path in paths for pattern in patterns):
+            selected.append(session)
+    if selected:
+        return [session for session in BACKEND_MATRIX_SESSIONS if session in selected]
+    return list(BACKEND_MATRIX_SESSIONS)
 
 
 def _is_bug_registry_metadata_path(path: str) -> bool:
@@ -279,6 +312,7 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
 
     backend_required = not (close_sync_metadata_only or workflow_validation_only or docs_lite_only)
+    backend_sessions = _selected_backend_sessions(normalized) if backend_required else []
     classification = "full_ci_required"
     if docs_lite_only:
         classification = docs_fast_tier or _docs_lite_kind(normalized)
@@ -310,6 +344,7 @@ def classify_changed_files(
         "prompt_evaluation_files": prompt_evaluation_files,
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
+        "backend_sessions": backend_sessions,
         "static_gate_required": not docs_lite_only,
         "pr_quality_required": True,
         "classification": classification,
@@ -327,6 +362,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 def _write_github_output(path: str, payload: dict[str, Any]) -> None:
     lines = [
         f"backend_required={str(payload['backend_required']).lower()}",
+        f"backend_sessions={json.dumps(payload['backend_sessions'])}",
         f"close_sync_metadata_only={str(payload['close_sync_metadata_only']).lower()}",
         f"workflow_validation_required={str(payload['workflow_validation_required']).lower()}",
         f"docs_lite_required={str(payload['docs_lite_required']).lower()}",
@@ -360,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         "workflow_gate": payload["workflow_gate"],
         "classification": payload["classification"],
         "backend_required": payload["backend_required"],
+        "backend_sessions": payload["backend_sessions"],
         "workflow_validation_required": payload["workflow_validation_required"],
         "docs_lite_required": payload["docs_lite_required"],
         "docs_fast_required": payload["docs_fast_required"],

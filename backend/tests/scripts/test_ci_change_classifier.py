@@ -74,6 +74,25 @@ def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
     assert payload["classification"] == "full_ci_required"
     assert payload["backend_required"] is True
     assert payload["non_bug_registry_files"] == ["scripts/aistock_issue_workflow.py"]
+    assert payload["backend_sessions"] == list(classifier.BACKEND_MATRIX_SESSIONS)
+
+
+def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/services/paper_trading_v2/runtime.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "full_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["paper_v2_backend"]
+
+    qe_payload = classifier.classify_changed_files(
+        ["backend/services/quantevolver/qe_evolution_service.py"],
+        repo_root=tmp_path,
+    )
+
+    assert qe_payload["backend_sessions"] == ["qe_data_contract_backend"]
 
 
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
@@ -336,7 +355,11 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["prompt_evaluation_required"].endswith(
         "steps.classify.outputs.prompt_evaluation_required }}"
     )
+    assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
+        "steps.classify.outputs.backend_sessions }}"
+    )
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
+    assert jobs["backend-tests"]["strategy"]["matrix"]["session"] == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     assert jobs["workflow-validation-tests"]["if"] == (
         "needs.classify-changes.outputs.workflow_validation_required == 'true'"
     )
@@ -485,6 +508,7 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
 
     assert json.loads(out.read_text(encoding="utf-8"))["backend_required"] is False
     assert "backend_required=false" in github_out.read_text(encoding="utf-8")
+    assert "backend_sessions=[]" in github_out.read_text(encoding="utf-8")
     assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
     assert "prompt_evaluation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"
