@@ -4163,6 +4163,7 @@ def build_task_card(
 ) -> dict[str, Any]:
     validation = fix_ready.get("validation_selection") if isinstance(fix_ready.get("validation_selection"), dict) else {}
     code_intel = _compact_code_intelligence_for_task_card(code_intelligence_summary)
+    verification_budget = record.get("verification_budget") if isinstance(record.get("verification_budget"), dict) else _verification_budget_for_record(record)
     return {
         "schema_version": "aistock_agent_task_card_v1",
         "generated_at": _utc_now(),
@@ -4197,13 +4198,13 @@ def build_task_card(
         "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or _production_gates_payload(),
-        "verification_budget": record.get("verification_budget"),
+        "verification_budget": verification_budget,
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "context_resume_digest": _workflow_context_resume_digest(
             {
                 "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
                 "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
-                "verification_budget": record.get("verification_budget"),
+                "verification_budget": verification_budget,
             },
             root=root,
         ),
@@ -5387,7 +5388,7 @@ def build_finish_plan(
             {
                 "allowed_write_scope": flow._as_list(record.get("allowed_write_scope")),
                 "required_verification": validation.get("required_plans") or [],
-                "verification_budget": record.get("verification_budget"),
+                "verification_budget": verification_budget,
             }
         ),
         production_gates=validation.get("production_gates") or {},
