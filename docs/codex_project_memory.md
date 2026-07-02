@@ -46,6 +46,8 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
 - T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
 - Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
+- After context compaction or client restart, use `resume` plus `task-card.md` Context Resume Digest hashes; do not re-read skills, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
+- Keep code exploration bounded: use precise `rg`, avoid reprinting the same source range, and pause to summarize before broad scans when exploratory commands exceed the soft budget.
 - Ordinary BUG fixes do not read feature, module, architecture, or historical design documents by default; load them only when the BUG/GitHub Issue cites them, the user asks, or the task is T3 design/architecture.
 - Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
 - Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
@@ -75,6 +77,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 - Use targeted tests first, then the selected module or gate validation required by the issue/design.
 - Do not run broad expensive validation repeatedly after every small change; rerun final gates once the patch is stable.
+- Successful workflow/validation commands should write compact stdout by default; JSON artifacts are diagnostic-only unless a command must persist state/evidence or `AISTOCK_WORKFLOW_ARTIFACTS=1` is set.
 - Before PR, run a preflight appropriate to the change: changed-file lint/static checks, targeted tests, scope check, `git diff --check`, PR body/evidence check, and production gates.
 - BUG fixes use verification budgets. Most fixes should pass only the smallest safe pre-merge gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, and production gates.
 - Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and should run once across all merged daily BUG fixes. Keep immediate deep validation only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.

@@ -22,7 +22,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-02T17:05:20.605590Z",
-  "description": "Many BUG fixes run broad module suites and repeated UI/backend validation per issue, even when the tests are not real business-flow evidence and can be deferred to nightly. Also, workflow policy should avoid inferring UI visual validation from generic words such as issue workflow.",
+  "description": "Many BUG fixes run broad module suites and repeated UI/backend validation per issue, even when the tests are not real business-flow evidence and can be deferred to nightly. Also, workflow policy should avoid inferring UI visual validation from generic words such as issue workflow. Added scope also covers compact resume digests, exploration budgets, and diagnostic-only JSON artifacts on successful workflow/validation paths.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -32,7 +32,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Most BUG fixes use risk-based lightweight PR validation; high-risk fixes keep only safety/contract gates before merge; nightly aggregates all daily BUG changes and runs deduplicated deep business-flow validation. Codex and Claude Code instructions should follow the same policy.",
+  "expected": "Most BUG fixes use risk-based lightweight PR validation; high-risk fixes keep only safety/contract gates before merge; nightly aggregates all daily BUG changes and runs deduplicated deep business-flow validation. Codex and Claude Code instructions should follow the same policy. Successful paths should avoid unused diagnostic JSON output; restarted Codex/Claude windows should use resume/task-card digests instead of repeatedly reading standards and source ranges.",
   "first_seen_at": "2026-07-02T17:05:20.605590Z",
   "fix_branch": null,
   "fix_commit": null,

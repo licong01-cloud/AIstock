@@ -6,6 +6,9 @@ Use this command when the user asks Claude Code to submit, fix, triage, batch, v
 
 Run the repo orchestrator before manual exploration. If standard selection is unclear, read `docs/standards/README.md` and use only its Active Standards list. Do not read `docs/standards/archive/` unless the user explicitly asks for historical context.
 
+After context compaction or a restarted turn, use `resume` compact output plus `task-card.md` Context Resume Digest hashes; do not re-read this command, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
+Keep exploration bounded: use precise `rg`, avoid repeating the same source range, and pause to summarize before broad scanning if exploration commands exceed roughly 40.
+
 ```powershell
 python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 ```
@@ -94,6 +97,7 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py resume --bug-id BUG-XXX
 ```
 
 Follow `next_command` and the state file rather than reconstructing context from the whole repo.
+Read only the compact resume digest and `task-card.md` before continuing. Do not replay the whole startup/read-standards sequence unless the digest says a rule file changed.
 
 ## Finish and PR
 
@@ -123,7 +127,7 @@ After PR creation, after merge, or when the workflow feels slow, run:
 python scripts\aistock_issue_workflow.py postmortem --bug-id BUG-XXX
 ```
 
-Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, duplicate active-worktree count, stale PR checks, and final report evidence. Do not reconstruct phase cost by rereading the whole repo. Report `verification_budget` and `deferred_nightly_verification` modules/scenarios in the final response.
+Use compact `postmortem` stdout for timing, context-token estimates, duplicate active-worktree count, stale PR checks, and final report evidence. Write `postmortem.json` / `postmortem.md` only for diagnostics with `--persist-artifacts` or `AISTOCK_WORKFLOW_ARTIFACTS=1`. Do not reconstruct phase cost by rereading the whole repo. Report `verification_budget` and `deferred_nightly_verification` modules/scenarios in the final response.
 
 ## Guardrails
 
