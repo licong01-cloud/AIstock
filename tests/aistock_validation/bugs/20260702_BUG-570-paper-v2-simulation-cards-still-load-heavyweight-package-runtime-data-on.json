@@ -49,8 +49,8 @@
   "expected": "Paper v2 card initial loads should query only data needed for visible state. Strategy package dropdowns/options must use lightweight DB projections without full manifest payloads, manifest/hash recomputation, or implicit model-state writes. Hidden details such as trades, per-portfolio auto-run status, execution policies, and model-state refreshes must be lazy or explicit. Portfolio list/search/sort/pagination should be pushed into SQL instead of loading 10k rows and filtering in Python.",
   "first_seen_at": "2026-07-02T01:34:57.221863Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bb132110284ef98d7fa24457f2366bfd3d975deb",
+  "fixed_at": "2026-07-02T04:29:32.033154Z",
   "github_issue_number": 1803,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1803",
   "last_seen_at": "2026-07-02T01:34:57.221863Z",
@@ -58,6 +58,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1805",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -72,7 +73,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -135,6 +136,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub PR #1805 CI rollup CLEAN; local validation passed: ruff changed files, targeted BUG-570 pytest 6 passed, frontend tsc --noEmit, nox l0, validation_module_registry_l0, paper_v2_backend, paper_v2_l3, focused Playwright 3 passed; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
