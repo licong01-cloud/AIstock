@@ -13,10 +13,10 @@ Use this command for AIstock documentation, README, handoff, and temporary Codex
 ## Rules
 
 - Use an isolated worktree/branch for tracked docs changes.
-- For docs-fast, run only `git diff --check`; do not run nox, pytest, backend, frontend, CodeGraph, or UA validation.
-- For cleanup-fast, keep the change mechanical: relocate/delete only the named files, do not rewrite them into reusable tools, do not add ignored `debug_tools/` content with `git add -f`, and do not run `py_compile`/`--help` unless the user explicitly asks to retain executable scripts.
+- For docs-fast, use `git diff --check` as the validation step.
+- For cleanup-fast, keep the change mechanical: relocate/delete only the named files, preserve executable behavior by default, and use `git diff --check`; add focused `py_compile`/`--help` only when the user asks to retain executable scripts.
 - For docs-controlled, use controlled workflow and run workflow smoke for changed client/workflow files.
-- Scratch notes are ignored by Git and are not durable PR, Issue, BUG, close-sync, or design acceptance evidence.
+- Scratch notes stay in ignored paths.
 - Promote scratch notes into `docs/handoff/` only when they become durable evidence, then use the matching tracked workflow.
 
 ## Report

@@ -26,9 +26,9 @@ Use this as the default lightweight entry for ambiguous AIstock work. Route firs
 
 - If the user says read-only, do not edit files, commit, push, merge, cleanup, restart, or write DB.
 - If the task is an ordinary BUG, do not read feature/module design docs unless the issue or user explicitly cites them or `fast-path` classifies T3.
-- If any controlled path is touched (`docs/standards/**`, `docs/codex_project_memory.md`, `.codex/**`, `.claude/**`, `AGENTS*`), use a controlled workflow, not docs-fast.
-- Do not use `docs/handoff/` root for temporary exchange notes; use `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
-- For cleanup-fast requests, do not productize scratch scripts, force-add ignored `debug_tools/`, or run code validation unless executable behavior is intentionally retained.
+- Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `.codex/**`, `.claude/**`, `AGENTS*`) use a controlled workflow.
+- Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
+- Cleanup-fast requests stay mechanical: move/archive/delete named files and use `git diff --check`; add focused executable checks only when executable behavior is intentionally retained.
 
 ## Output
 

@@ -27,7 +27,7 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 - If the user says read-only, do not edit, commit, push, merge, cleanup, restart, or write DB.
 - Ordinary BUG fixes do not read design docs unless the issue/user cites them or the task is T3.
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) require controlled workflow.
-- Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`, not tracked `docs/handoff/` root.
-- For cleanup-fast requests, do not productize scratch scripts, force-add ignored `debug_tools/`, or run code validation unless executable behavior is intentionally retained.
+- Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
+- Cleanup-fast requests stay mechanical: move/archive/delete named files and use `git diff --check`; add focused executable checks only when executable behavior is intentionally retained.
 
 Report the selected lane and continue only if the user asked to execute.

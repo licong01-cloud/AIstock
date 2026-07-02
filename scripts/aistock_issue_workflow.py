@@ -3356,7 +3356,7 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         recs.append("Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.")
     if cleanup_fast_candidate:
         recs.append(
-            "Use cleanup-fast for docs/scratch relocation: do not productize scratch scripts; run git diff --check only unless executable code is intentionally retained."
+            "Use cleanup-fast for docs/scratch relocation: keep changes mechanical and run git diff --check unless executable code is intentionally retained."
         )
     if any(str(item).startswith("validation_center_backend") for item in required):
         recs.append("Keep validation_center_backend only when the changed files actually affect Validation Center.")
