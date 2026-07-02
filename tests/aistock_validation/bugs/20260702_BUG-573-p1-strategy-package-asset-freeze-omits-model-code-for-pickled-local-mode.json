@@ -38,8 +38,8 @@
   "expected": "StrategyPackage freeze/backfill must include required model_code assets whenever frozen model_weight pickles reference local model namespace classes; prepare_workspace must loud fail strategy_package_model_code_missing before WSL subprocess if code is missing; affected package repair tool must default to dry-run and require explicit apply gates.",
   "first_seen_at": "2026-07-02T06:12:21.650127Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2a11ad15c4f90c9c5ee59b5b20ea4c7a2367f587",
+  "fixed_at": "2026-07-02T07:39:32.513699Z",
   "github_issue_number": 1811,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1811",
   "last_seen_at": "2026-07-02T06:12:21.650127Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1812",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -59,7 +60,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -68,6 +69,10 @@
     "fingerprint": "928fccbfde23c4a06e8085b2",
     "source_event_id": "FE-20260702-928fccbfde23"
   },
+  "validation_evidence": [
+    "PR #1812 CI checks: 17 passed, 0 failed",
+    "Tier2 PASS: freeze completeness + preflight fail-fast + dry-run only; no production apply"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
