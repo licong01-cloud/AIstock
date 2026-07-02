@@ -1,0 +1,128 @@
+{
+  "actual": "The UI remains in main navigation as a standalone strategy package governance page, shows no packages despite backend packages existing, and exposes legacy governance evidence unrelated to current simulation admission.",
+  "allowed_write_scope": [
+    "frontend/src/app/strategy-package-governance/page.tsx",
+    "frontend/src/lib/strategy-package-governance/api.ts",
+    "frontend/src/lib/navigation/nav-groups.ts",
+    "backend/routers/strategy_packages.py",
+    "backend/routers/strategy_governance.py",
+    "backend/mcp/modules/strategy_packages.py",
+    "backend/mcp/modules/strategy_governance.py",
+    "tests/aistock_validation/bugs/20260702_BUG-580-remove-obsolete-strategy-package-governance-ui-and-backend.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/strategy-package-governance/layout.tsx",
+    "frontend/tests/strategy-package-governance/governance.spec.ts",
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "noxfile.py",
+    "backend/mcp/tool_manifest.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/strategy_package/test_governance_eligibility.py",
+    "backend/tests/strategy_package/test_governance_readonly_smoke.py",
+    "scripts/strategy_package_governance_readonly_smoke.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-580",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T15:46:15.762500Z",
+  "description": "The UI remains in main navigation as a standalone strategy package governance page, shows no packages despite backend packages existing, and exposes legacy governance evidence unrelated to current simulation admission.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-e9b45b7e3592",
+      "timestamp": "2026-07-02T15:46:15.762497Z"
+    }
+  ],
+  "evidence_uris": [
+    "frontend/src/app/strategy-package-governance/page.tsx; frontend/src/lib/navigation/nav-groups.ts; backend/routers/strategy_packages.py; backend/routers/strategy_governance.py"
+  ],
+  "expected": "The obsolete strategy-package-governance route, navigation item, and backend governance eligibility/governance facade are removed; users use Paper v2/package center for strategy package operations and no stale governance gate UI remains.",
+  "first_seen_at": "2026-07-02T15:46:15.762500Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1836,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1836",
+  "last_seen_at": "2026-07-02T15:46:15.762500Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://localhost:3000/strategy-package-governance; page shows no packages while GET /api/v1/strategy-packages returns packages.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Remove obsolete strategy package governance UI and backend",
+  "trigger_condition": {
+    "fingerprint": "e9b45b7e359212c6065d7e72",
+    "source_event_id": "FE-20260702-e9b45b7e3592"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:strategy_package",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/strategy-package-governance/page.tsx",
+      "frontend/src/lib/strategy-package-governance/api.ts",
+      "frontend/src/lib/navigation/nav-groups.ts",
+      "backend/routers/strategy_packages.py",
+      "backend/routers/strategy_governance.py",
+      "backend/mcp/modules/strategy_packages.py",
+      "backend/mcp/modules/strategy_governance.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/strategy-package-governance/page.tsx",
+    "ui_routes": [
+      "/src/app/strategy-package-governance/page.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
