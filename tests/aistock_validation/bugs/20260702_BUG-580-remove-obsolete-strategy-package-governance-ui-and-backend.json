@@ -9,7 +9,20 @@
     "backend/mcp/modules/strategy_packages.py",
     "backend/mcp/modules/strategy_governance.py",
     "tests/aistock_validation/bugs/20260702_BUG-580-remove-obsolete-strategy-package-governance-ui-and-backend.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/strategy-package-governance/layout.tsx",
+    "frontend/tests/strategy-package-governance/governance.spec.ts",
+    "tests/aistock_validation/catalog/ui_targets.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "noxfile.py",
+    "backend/mcp/tool_manifest.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/strategy_package/test_governance_eligibility.py",
+    "backend/tests/strategy_package/test_governance_readonly_smoke.py",
+    "scripts/strategy_package_governance_readonly_smoke.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-580",
@@ -50,7 +63,8 @@
   "reproduce_command": "Open http://localhost:3000/strategy-package-governance; page shows no packages while GET /api/v1/strategy-packages returns packages.",
   "required_verification": [
     "l0",
-    "paper_v2_backend"
+    "paper_v2_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

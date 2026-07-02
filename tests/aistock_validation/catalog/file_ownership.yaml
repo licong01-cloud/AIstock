@@ -180,17 +180,6 @@ rules:
     layer: frontend_ui
     risk_level: high
     ownership_reason: QE UI exposes experiment detail, archive, and enhanced metric workflows.
-  - rule_id: strategy_package_governance_frontend
-    priority: 80
-    include:
-      - frontend/src/app/strategy-package-governance/**
-      - frontend/src/lib/strategy-package-governance/**
-      - frontend/tests/strategy-package-governance/**
-    primary_module: strategy_package
-    impact_modules: [paper_v2, validation.center]
-    layer: frontend_ui
-    risk_level: high
-    ownership_reason: Governance UI gates strategy_package paper enablement; UI must reflect 5-evidence eligibility.
   - rule_id: market_regime_frontend
     priority: 70
     include:

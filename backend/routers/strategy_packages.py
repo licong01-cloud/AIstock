@@ -1018,25 +1018,6 @@ def get_strategy_package_validation_stability(
         _raise_http(exc)
 
 
-@router.get("/{package_id}/governance-eligibility")
-def get_strategy_package_governance_eligibility(
-    package_id: str,
-    metric_key: str = "annual_return",
-    limit: int = 500,
-) -> dict[str, Any]:
-    """Return a read-only summary of paper-stage governance eligibility."""
-
-    try:
-        eligibility = StrategyPackageService().governance_eligibility(
-            package_id,
-            metric_key=metric_key,
-            limit=limit,
-        )
-        return {"ok": True, "package_id": package_id, "eligibility": eligibility}
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
 @router.get("/{package_id}/paper-simulation-admission")
 def get_strategy_package_paper_simulation_admission(
     package_id: str,

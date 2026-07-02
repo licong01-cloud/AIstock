@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-import backend.routers.strategy_packages as strategy_package_router
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
@@ -225,29 +222,3 @@ def test_governance_eligibility_blocks_disallowed_package_status() -> None:
     assert "manifest_identity" not in eligibility["satisfied_gates"]
     assert eligibility["manifest_identity"]["passed"] is False
     assert eligibility["manifest_identity"]["package_status"] == PackageStatus.DRAFT.value
-
-
-def test_governance_eligibility_router_exposes_read_only_summary(monkeypatch) -> None:
-    class FakeService:
-        def __init__(self) -> None:
-            self.service, self.real_package_id = _service_with_manifest()
-            _seed_paper_ready_package(self.service, self.real_package_id)
-
-        def governance_eligibility(self, package_id, *, metric_key="annual_return", limit=500):  # type: ignore[no-untyped-def]
-            assert package_id == "pkg_1"
-            assert metric_key == "rank_ic"
-            assert limit == 9
-            return self.service.governance_eligibility(self.real_package_id, metric_key=metric_key, limit=limit)
-
-    monkeypatch.setattr(strategy_package_router, "StrategyPackageService", lambda: FakeService())
-    app = FastAPI()
-    app.include_router(strategy_package_router.router)
-    client = TestClient(app)
-
-    response = client.get("/strategy-packages/pkg_1/governance-eligibility?metric_key=rank_ic&limit=9")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["package_id"] == "pkg_1"
-    assert payload["eligibility"]["live_strict_ready"] is True
-    assert payload["eligibility"]["original_fixed_weight_retest"]["status"] == "READY"

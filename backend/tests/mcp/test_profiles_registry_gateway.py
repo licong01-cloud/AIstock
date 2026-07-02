@@ -294,12 +294,12 @@ def test_gateway_loads_paper_v2_stable_profiles() -> None:
         base_url="http://127.0.0.1:8001/api/v1",
         env_name="test",
     )
-    assert stable_registry.tool_count("strategy_packages") == 50
+    assert stable_registry.tool_count("strategy_packages") == 49
     assert stable_registry.tool_count("selection_center") == 16
     assert stable_registry.tool_count("advisory") == 22
     assert stable_registry.tool_count("paper_v2_monitoring") == 32
     assert stable_registry.tool_count("qmt_broker_monitoring") == 10
-    assert stable_registry.total_tool_count() == 130
+    assert stable_registry.total_tool_count() == 129
 
 
 def test_gateway_loads_research_full_profile() -> None:
@@ -321,7 +321,7 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("factor_correlation") == 8
     assert registry.tool_count("model_registry") == 9
     assert registry.tool_count("strategy_governance") == 9
-    assert registry.tool_count("strategy_packages") == 50
+    assert registry.tool_count("strategy_packages") == 49
     assert registry.tool_count("execution_policy") == 7
     assert registry.tool_count("selection_center") == 16
     assert registry.tool_count("advisory") == 22
@@ -329,4 +329,4 @@ def test_gateway_loads_research_full_profile() -> None:
     assert registry.tool_count("qmt_broker_monitoring") == 10
     assert registry.tool_count("external_research") == 4
     assert registry.tool_count("stock_analysis") == 7
-    assert registry.total_tool_count() == 287
+    assert registry.total_tool_count() == 286

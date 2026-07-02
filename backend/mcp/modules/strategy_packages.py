@@ -45,7 +45,6 @@ SPECS = (
     ToolSpec("strategy_packages_list_validation_runs", "GET", "/{package_id}/validation-runs", path_params=("package_id",), query_defaults={"validation_type": None, "runtime_variant_id": None, "limit": 20}, limit_caps={"limit": 100}),
     ToolSpec("strategy_packages_get_validation_run", "GET", "/{package_id}/validation-runs/{validation_run_id}", path_params=("package_id", "validation_run_id")),
     ToolSpec("strategy_packages_get_validation_stability", "GET", "/{package_id}/validation-stability", path_params=("package_id",), query_defaults={"metric_key": "annual_return", "limit": 100}, limit_caps={"limit": 500}),
-    ToolSpec("strategy_packages_get_governance_eligibility", "GET", "/{package_id}/governance-eligibility", path_params=("package_id",), query_defaults={"metric_key": "annual_return", "limit": 100}, limit_caps={"limit": 500}),
     ToolSpec("strategy_packages_get_paper_admission", "GET", "/{package_id}/paper-simulation-admission", path_params=("package_id",), query_defaults={"metric_key": "annual_return", "governance_limit": 100}, limit_caps={"governance_limit": 500}),
     ToolSpec("strategy_packages_validate", "POST", "/{package_id}/validate", path_params=("package_id",)),
     ToolSpec("strategy_packages_get_delete_dependencies", "GET", "/{package_id}/delete-dependencies", path_params=("package_id",)),

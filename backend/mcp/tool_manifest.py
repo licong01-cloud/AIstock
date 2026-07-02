@@ -367,7 +367,6 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                        'strategy_packages_list_validation_runs',
                        'strategy_packages_get_validation_run',
                        'strategy_packages_get_validation_stability',
-                       'strategy_packages_get_governance_eligibility',
                        'strategy_packages_get_paper_admission',
                        'strategy_packages_validate',
                        'strategy_packages_get_delete_dependencies',
