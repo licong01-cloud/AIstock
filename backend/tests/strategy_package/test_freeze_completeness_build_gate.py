@@ -272,6 +272,28 @@ def test_model_code_freeze_and_runtime_materializes_next_to_params(tmp_path: Pat
     assert (prepared.model_params_path.parent / "helper.py").read_bytes() == helper_py
 
 
+def test_refreeze_reuses_existing_model_code_closure_without_workspace_source(tmp_path: Path) -> None:
+    model_py = b"from helper import scale\nclass LSTM_10D_hs64_d02:\n    pass\nmodel_cls = LSTM_10D_hs64_d02\n"
+    helper_py = b"def scale(value):\n    return value\n"
+    first_freezer = _freezer(
+        tmp_path,
+        conf_bytes=CUSTOM_MODEL_CONF,
+        model_code_files={"model.py": model_py, "helper.py": helper_py},
+    )
+    frozen = first_freezer.freeze_manifest_assets(_manifest("model_code_refreeze"))
+    frozen_manifest = frozen.manifest
+
+    second_freezer = _freezer(tmp_path, conf_bytes=CUSTOM_MODEL_CONF, model_code_files={})
+    second_freezer.asset_store = first_freezer.asset_store
+    refrozen = second_freezer.freeze_manifest_assets(frozen_manifest)
+
+    model = refrozen.manifest.model_asset
+    assert isinstance(model, ModelAsset)
+    assert model.model_code_required is True
+    assert sorted(asset.relative_path for asset in model.model_code_assets) == ["helper.py", "model.py"]
+    assert sum(row.asset_type == StrategyPackageAssetType.MODEL_CODE for row in refrozen.assets) == 2
+
+
 def test_pickled_local_model_freezes_code_without_pt_model_uri(tmp_path: Path) -> None:
     model_py = b"from helper import scale\nclass LSTM_10D_hs64_d02:\n    pass\n"
     helper_py = b"def scale(value):\n    return value\n"

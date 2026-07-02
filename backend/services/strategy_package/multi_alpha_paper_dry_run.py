@@ -243,6 +243,27 @@ class MultiAlphaPaperDryRunValidator:
             "targets_sha256": target_sha,
             "order_intents_sha256": order_sha,
         }
+        parent_asset_runtime = {
+            "runtime_source": artifact.metadata.get("runtime_source"),
+            "runtime_package_id": artifact.metadata.get("runtime_package_id"),
+            "model_params_origin": artifact.metadata.get("model_params_origin"),
+            "seed_runtime_mode": artifact.metadata.get("seed_runtime_mode"),
+            "legacy_child_ref_ignored": artifact.metadata.get("legacy_child_ref_ignored"),
+            "component_artifacts": {
+                leg_id: {
+                    "runtime_source": item.get("runtime_source"),
+                    "runtime_package_id": item.get("runtime_package_id"),
+                    "model_params_origin": item.get("model_params_origin"),
+                    "model_id": item.get("model_id"),
+                    "model_asset_sha256": item.get("model_asset_sha256"),
+                    "factor_count": item.get("factor_count"),
+                    "alpha158_schema_sha256": item.get("alpha158_schema_sha256"),
+                    "legacy_child_ref_ignored": item.get("legacy_child_ref_ignored"),
+                }
+                for leg_id, item in (artifact.metadata.get("component_artifacts") or {}).items()
+                if isinstance(item, Mapping)
+            },
+        }
         evidence_json = {
             "schema_version": "multi_alpha_paper_admission_evidence_v1",
             "package_id": package_id,
@@ -254,6 +275,7 @@ class MultiAlphaPaperDryRunValidator:
             "runtime_config_hash": artifact.runtime_config_hash,
             "selection_artifact_id": artifact.artifact_id,
             "selection_artifact_metadata": artifact.metadata,
+            "parent_asset_runtime": parent_asset_runtime,
             "target_count": len(targets_preview),
             "order_intent_count": len(intents_preview),
             "targets_preview": targets_preview,

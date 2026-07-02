@@ -15,12 +15,20 @@ from backend.services.multi_alpha.combine_backtest import InMemoryCombineBacktes
 from backend.services.qe_archive.multi_alpha_provenance import SeedProvenance
 from backend.services.strategy_package.asset_eligibility import MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import AlphaCombinationPolicy, AlphaMode, PackageStatus, SourceType
+from backend.services.strategy_package.models import (
+    Alpha158SchemaAsset,
+    AlphaCombinationPolicy,
+    AlphaMode,
+    PackageStatus,
+    RuntimeAssetManifest,
+    SourceType,
+)
 from backend.services.strategy_package.multi_alpha_promotion import (
     MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
     MultiAlphaPackagePromotionService,
 )
+from backend.services.strategy_package import multi_alpha_promotion as promotion_module
 from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
@@ -65,7 +73,7 @@ class FakeQESourceResolver:
         self.experiment_calls.append(experiment_id)
         if experiment_id in self.fail_on:
             raise StrategyPackageValidationError("fake QE experiment unavailable", context={"experiment_id": experiment_id})
-        return freeze_manifest(_single_manifest(f"auto_{experiment_id}", run_id=experiment_id))
+        return freeze_manifest(_single_manifest_for_parent_leg(f"auto_{experiment_id}", run_id=experiment_id))
 
     def build_from_evolution_loop(
         self,
@@ -81,7 +89,7 @@ class FakeQESourceResolver:
                 "fake QE loop unavailable",
                 context={"qe_task_id": qe_task_id, "qe_loop_id": qe_loop_id},
             )
-        return freeze_manifest(_single_manifest(f"auto_{qe_task_id}_{qe_loop_id}", run_id=source_key))
+        return freeze_manifest(_single_manifest_for_parent_leg(f"auto_{qe_task_id}_{qe_loop_id}", run_id=source_key))
 
 
 class NoopFrozenRuntimeSelfCheck:
@@ -144,7 +152,52 @@ def _seed_child(repo: InMemoryStrategyPackageRepository, name: str, leg_id: str,
     return child
 
 
+def _single_manifest_for_parent_leg(name: str, *, run_id: str | None = None):
+    manifest = _single_manifest(name, run_id=run_id)
+    safe = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
+    factor_set = [
+        factor.model_copy(update={"factor_id": f"{safe}_{factor.factor_id}", "factor_name": f"{safe}_{factor.factor_name}"})
+        for factor in manifest.factor_set
+    ]
+    factor_ids = [factor.factor_id for factor in factor_set]
+    model_id = f"model_{safe}"
+    component = manifest.alpha_components[0].model_copy(
+        update={
+            "factor_ids": factor_ids,
+            "model_id": model_id,
+            "model_ref": model_id,
+            "lineage": manifest.alpha_components[0].lineage.model_copy(
+                update={"factor_artifact_refs": factor_ids, "model_artifact_ref": model_id}
+            ),
+        }
+    )
+    model_asset = manifest.model_asset.model_copy(update={"model_id": model_id, "model_ref": model_id})
+    return manifest.model_copy(
+        update={
+            "alpha_components": [component],
+            "alpha_combination_policy": AlphaCombinationPolicy(method="identity", weights={component.alpha_id: 1.0}),
+            "factor_set": factor_set,
+            "model_asset": model_asset,
+            "manifest_sha256": None,
+        }
+    )
+
+
 def _with_frozen_assets(manifest, *, label: str):  # noqa: ANN001, ANN202
+    alpha158_payload = b'{"schema_version":"strategy_package_alpha158_schema_v1","loader_class":"qlib.contrib.data.loader.Alpha158DL","loader_node":{"class":"qlib.contrib.data.loader.Alpha158DL","kwargs":{"config":{"feature":[["Ref($close, 5) / $close"],["RESI5"]]}}},"aliases":["RESI5"],"expression_count":1,"alias_count":1,"source_conf_relpath":"conf.yaml"}'
+    alpha158_sha = hashlib.sha256(alpha158_payload).hexdigest()
+    runtime_assets = RuntimeAssetManifest(
+        alpha158=Alpha158SchemaAsset(
+            enabled=True,
+            aliases=["RESI5"],
+            alias_count=1,
+            loader_class="qlib.contrib.data.loader.Alpha158DL",
+            asset_ref=f"aistock-package-asset://blobs/{alpha158_sha}",
+            sha256=alpha158_sha,
+            size_bytes=len(alpha158_payload),
+            source_uri="unit://conf/alpha158_schema.json",
+        )
+    )
     factor_set = [
         factor.model_copy(
             update={
@@ -171,7 +224,16 @@ def _with_frozen_assets(manifest, *, label: str):  # noqa: ANN001, ANN202
             )
         )
     model_asset = model_assets if isinstance(manifest.model_asset, list) else model_assets[0]
-    return freeze_manifest(manifest.model_copy(update={"factor_set": factor_set, "model_asset": model_asset, "manifest_sha256": None}))
+    return freeze_manifest(
+        manifest.model_copy(
+            update={
+                "factor_set": factor_set,
+                "model_asset": model_asset,
+                "runtime_assets": runtime_assets,
+                "manifest_sha256": None,
+            }
+        )
+    )
 
 
 def _manifest_has_assets(manifest) -> bool:  # noqa: ANN001
@@ -206,6 +268,20 @@ def _asset_records_from_manifest(manifest) -> list[StrategyPackageAssetRecord]: 
                 asset_size_bytes=model_asset.size_bytes,
                 source_uri=model_asset.source_uri,
                 metadata={"logical_name": model_asset.model_id},
+            )
+        )
+    runtime_assets = manifest.runtime_assets
+    if runtime_assets is not None and runtime_assets.alpha158.enabled:
+        alpha158 = runtime_assets.alpha158
+        rows.append(
+            StrategyPackageAssetRecord(
+                package_id=manifest.package_id,
+                asset_type=StrategyPackageAssetType.FACTOR_SCHEMA,
+                asset_ref=alpha158.asset_ref,
+                asset_sha256=alpha158.sha256,
+                asset_size_bytes=alpha158.size_bytes,
+                source_uri=alpha158.source_uri,
+                metadata={"logical_name": "alpha158_schema"},
             )
         )
     return rows
@@ -301,8 +377,8 @@ def _service(combine_repo, package_repo, *, provenance_resolver=None, source_res
     return MultiAlphaPackagePromotionService(
         combine_repository=combine_repo,
         package_repository=package_repo,
-        provenance_resolver=provenance_resolver,
-        source_resolver=source_resolver,
+        provenance_resolver=provenance_resolver or FakeProvenanceResolver(),
+        source_resolver=source_resolver or FakeQESourceResolver(),
         asset_freezer=asset_freezer or FakeAssetFreezer(),
         frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
         prediction_ref_roots=prediction_ref_roots,
@@ -329,7 +405,6 @@ def _request(child_a1, child_fund):
         "topk": 50,
         "secondary_topk": [25],
         "package_name": "MA2_a1_plus3_LSTM_new_FUNDGROWTH_icw_h20",
-        "component_package_ids": {A1_LEG: child_a1.package_id, FUND_LEG: child_fund.package_id},
         "weight_policy": _weight_policy(),
         "confirmation": MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
     }
@@ -371,11 +446,11 @@ def _reason_code(exc: BaseException) -> str | None:
 
 
 def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() -> None:
-    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
+    combine_repo, package_repo = _seed_auto_repos()
     service = _service(combine_repo, package_repo)
 
-    first = _promote(service, child_a1, child_fund)
-    second = _promote(service, child_a1, child_fund)
+    first = service.promote_from_combine_run(**_auto_request())
+    second = service.promote_from_combine_run(**_auto_request())
 
     assert first.package.package_id == second.package.package_id
     assert first.package.manifest_sha256 == second.package.manifest_sha256
@@ -392,11 +467,18 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
     assert manifest.source.run_id == RUN_ID
     assert manifest.source_evidence["multi_alpha"]["combine_backtest_run_id"] == RUN_ID
     assert manifest.source_evidence["multi_alpha"]["paper_admission"]["blocking"] == [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
+    assert manifest.source_evidence["authority"] == "parent_package_asset_runtime_authority"
+    assert all("child_package_id" not in leg for leg in manifest.source_evidence["multi_alpha"]["legs"])
+    assert all(
+        component.lineage.model_artifact_ref == f"parent_package_asset:model_id:{component.model_id}"
+        for component in manifest.alpha_components
+    )
     assert manifest.backtest_context["daily_strategy"]["topk"] == 50
     assert manifest.backtest_context["daily_strategy"]["secondary_topk"] == [25]
-    assert sorted(component.child_package_id for component in first.components) == sorted(
-        [child_a1.package_id, child_fund.package_id]
-    )
+    assert first.components == []
+    assert package_repo.components == {}
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.SINGLE_ALPHA]) == 0
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.MULTI_ALPHA]) == 1
     eligibility = service.package_repository.get(first.package.package_id)
     assert eligibility.package_status == PackageStatus.ASSET_VALIDATED
 
@@ -458,7 +540,7 @@ def test_backtest_config_strategy_field_fills_stock_pool_and_execution_algo() ->
     assert context["execution"]["execution_algo"] == "V25_1_SMALL_CAP"
 
 
-def test_auto_path_materializes_components_and_is_idempotent() -> None:
+def test_auto_path_inlines_parent_leg_assets_without_child_packages_and_is_idempotent() -> None:
     combine_repo, package_repo = _seed_auto_repos()
     provenance_resolver = FakeProvenanceResolver()
     source_resolver = FakeQESourceResolver()
@@ -477,42 +559,40 @@ def test_auto_path_materializes_components_and_is_idempotent() -> None:
     assert first.package.manifest.source.source_type == SourceType.MULTI_ALPHA_COMBINE_RUN
     assert first.package.manifest.source.source_id == RUN_ID
     assert first.package.manifest.source.run_id == RUN_ID
-    assert sorted(component.child_package_id for component in first.components) == sorted(
-        component.child_package_id for component in second.components
-    )
+    assert first.components == []
+    assert second.components == []
     assert sorted(item["mode"] for item in first.auto_component_materialization) == [
-        "auto_created_component_package",
-        "auto_created_component_package",
+        "parent_leg_inlined_package_asset",
+        "parent_leg_inlined_package_asset",
     ]
     assert sorted(item["mode"] for item in second.auto_component_materialization) == [
-        "reused_existing_component_package",
-        "reused_existing_component_package",
+        "parent_leg_inlined_package_asset",
+        "parent_leg_inlined_package_asset",
     ]
-    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.SINGLE_ALPHA]) == 2
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.SINGLE_ALPHA]) == 0
     assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.MULTI_ALPHA]) == 1
-    for component in first.components:
-        child = package_repo.get(component.child_package_id)
-        assert child.source_type == SourceType.MULTI_ALPHA_COMBINE_RUN.value
-        assert child.source_id == RUN_ID
-        assert child.current_manifest().source_evidence["multi_alpha_component"]["combine_backtest_run_id"] == RUN_ID
-    assert source_resolver.experiment_calls == ["qe_exp_a1_seed_42"]
-    assert source_resolver.loop_calls == [("qe_new_FUNDGROWTH", "Loop5")]
-    for record in package_repo.records.values():
-        if record.alpha_mode == AlphaMode.SINGLE_ALPHA:
-            assert package_repo.list_package_assets(record.package_id)
-            assert all(factor.asset_ref and factor.sha256 for factor in record.current_manifest().factor_set)
+    assert package_repo.components == {}
+    assert package_repo.list_package_assets(first.package.package_id)
+    assert all(
+        component.lineage.model_artifact_ref == f"parent_package_asset:model_id:{component.model_id}"
+        for component in first.package.current_manifest().alpha_components
+    )
+    assert source_resolver.experiment_calls == ["qe_exp_a1_seed_42", "qe_exp_a1_seed_42"]
+    assert source_resolver.loop_calls == [("qe_new_FUNDGROWTH", "Loop5"), ("qe_new_FUNDGROWTH", "Loop5")]
 
 
-def test_explicit_unfrozen_child_is_rejected() -> None:
+def test_component_package_ids_are_rejected_for_parent_only_promotion() -> None:
     combine_repo, package_repo, child_a1, child_fund = _seed_repos()
-    legacy_manifest = _single_manifest("legacy", run_id=A1_SEED)
-    legacy_record = package_repo.save_manifest(freeze_manifest(legacy_manifest))
-    package_repo.records[child_a1.package_id] = legacy_record.model_copy(update={"package_id": child_a1.package_id})
 
     with pytest.raises(StrategyPackageValidationError) as excinfo:
-        _promote(_service(combine_repo, package_repo), child_a1, child_fund)
+        _promote(
+            _service(combine_repo, package_repo),
+            child_a1,
+            child_fund,
+            component_package_ids={A1_LEG: child_a1.package_id, FUND_LEG: child_fund.package_id},
+        )
 
-    assert _reason_code(excinfo.value) == "multi_alpha_child_package_assets_unfrozen"
+    assert _reason_code(excinfo.value) == "multi_alpha_promotion_component_package_ids_unsupported"
 
 
 def test_auto_path_unresolved_seed_fails_without_half_package() -> None:
@@ -559,20 +639,157 @@ def test_auto_path_materialization_failure_fails_without_half_package() -> None:
     assert package_repo.components == {}
 
 
-def test_explicit_child_manifest_sha_drift_is_rejected() -> None:
-    combine_repo, package_repo, child_a1, child_fund = _seed_repos()
-    package_repo.records[child_a1.package_id] = child_a1.model_copy(
-        update={
-            "manifest": child_a1.manifest.model_copy(
-                update={"source_evidence": {"seed_run_ids": ["different_seed"]}}
+class SameModelQESourceResolver(FakeQESourceResolver):
+    def _same_model_manifest(self, name: str, *, run_id: str):
+        manifest = _single_manifest_for_parent_leg(name, run_id=run_id)
+        component = manifest.alpha_components[0].model_copy(
+            update={
+                "model_id": "shared_model_id",
+                "model_ref": "shared_model_id",
+                "lineage": manifest.alpha_components[0].lineage.model_copy(
+                    update={"model_artifact_ref": "shared_model_id"}
+                ),
+            }
+        )
+        model_asset = manifest.model_asset.model_copy(update={"model_id": "shared_model_id", "model_ref": "shared_model_id"})
+        return manifest.model_copy(update={"alpha_components": [component], "model_asset": model_asset})
+
+    def build_from_experiment(self, experiment_id: str, *, resolve_runtime_assets: bool = False):
+        self.experiment_calls.append(experiment_id)
+        return freeze_manifest(self._same_model_manifest(f"same_{experiment_id}", run_id=experiment_id))
+
+    def build_from_evolution_loop(
+        self,
+        *,
+        qe_task_id: str,
+        qe_loop_id: str,
+        resolve_runtime_assets: bool = False,
+    ):
+        self.loop_calls.append((qe_task_id, qe_loop_id))
+        return freeze_manifest(self._same_model_manifest(f"same_{qe_task_id}_{qe_loop_id}", run_id=f"{qe_task_id}:{qe_loop_id}"))
+
+
+class MixedAlpha158QESourceResolver(FakeQESourceResolver):
+    def build_from_evolution_loop(
+        self,
+        *,
+        qe_task_id: str,
+        qe_loop_id: str,
+        resolve_runtime_assets: bool = False,
+    ):
+        self.loop_calls.append((qe_task_id, qe_loop_id))
+        manifest = _with_frozen_assets(
+            _single_manifest_for_parent_leg(f"mixed_{qe_task_id}_{qe_loop_id}", run_id=f"{qe_task_id}:{qe_loop_id}"),
+            label=f"mixed_{qe_task_id}_{qe_loop_id}",
+        )
+        return manifest.model_copy(update={"runtime_assets": RuntimeAssetManifest()})
+
+
+def test_parent_only_promotion_preserves_per_leg_alpha158_enabled_state() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+
+    result = _service(
+        combine_repo,
+        package_repo,
+        source_resolver=MixedAlpha158QESourceResolver(),
+    ).promote_from_combine_run(**_auto_request())
+
+    manifest = result.package.current_manifest()
+    assert manifest.runtime_assets is not None
+    assert manifest.runtime_assets.alpha158.enabled is True
+    evidence_by_leg = {
+        leg["leg_id"]: leg["runtime_assets"]["alpha158"]
+        for leg in manifest.source_evidence["multi_alpha"]["legs"]
+    }
+    assert evidence_by_leg[A1_LEG]["enabled"] is True
+    assert evidence_by_leg[A1_LEG]["sha256"] == manifest.runtime_assets.alpha158.sha256
+    assert evidence_by_leg[FUND_LEG]["enabled"] is False
+    assert evidence_by_leg[FUND_LEG]["sha256"] is None
+    assert len([record for record in package_repo.records.values() if record.alpha_mode == AlphaMode.SINGLE_ALPHA]) == 0
+    assert package_repo.components == {}
+
+
+def test_parent_leg_model_id_collision_is_rejected_without_half_package() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        _service(
+            combine_repo,
+            package_repo,
+            source_resolver=SameModelQESourceResolver(),
+        ).promote_from_combine_run(**_auto_request())
+
+    assert _reason_code(excinfo.value) == "multi_alpha_promotion_parent_model_id_collision"
+    assert excinfo.value.context["model_id"] == "shared_model_id"
+    assert excinfo.value.context["model_id_uniqueness_policy"] == "unique_per_leg"
+    assert package_repo.records == {}
+    assert package_repo.components == {}
+
+
+def test_merge_model_assets_collision_fails_closed() -> None:
+    first = _with_frozen_assets(_single_manifest_for_parent_leg("collision_model_a", run_id="run_a"), label="collision_model_a")
+    second = _with_frozen_assets(_single_manifest_for_parent_leg("collision_model_b", run_id="run_b"), label="collision_model_b")
+    first_model = first.model_asset
+    second_model = second.model_asset.model_copy(
+        update={"model_id": first_model.model_id, "model_ref": first_model.model_ref}
+    )
+    second = second.model_copy(update={"model_asset": second_model})
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        promotion_module._merge_model_assets([first, second])
+
+    assert _reason_code(excinfo.value) == "multi_alpha_promotion_parent_model_id_collision"
+    assert excinfo.value.context["model_id"] == first_model.model_id
+    assert excinfo.value.context["first_sha256"] != excinfo.value.context["second_sha256"]
+
+
+def test_merge_factor_assets_collision_fails_closed() -> None:
+    first = _with_frozen_assets(_single_manifest_for_parent_leg("collision_factor_a", run_id="run_a"), label="collision_factor_a")
+    second = _with_frozen_assets(_single_manifest_for_parent_leg("collision_factor_b", run_id="run_b"), label="collision_factor_b")
+    first_factor = first.factor_set[0]
+    second_factors = [
+        second.factor_set[0].model_copy(
+            update={"factor_id": first_factor.factor_id, "factor_name": first_factor.factor_name}
+        ),
+        *second.factor_set[1:],
+    ]
+    second = second.model_copy(update={"factor_set": second_factors})
+
+    with pytest.raises(StrategyPackageValidationError) as excinfo:
+        promotion_module._merge_factor_assets([first, second])
+
+    assert _reason_code(excinfo.value) == "multi_alpha_promotion_parent_factor_ref_collision"
+    assert excinfo.value.context["factor_key"] in {first_factor.factor_id, first_factor.factor_name}
+    assert excinfo.value.context["first_sha256"] != excinfo.value.context["second_sha256"]
+
+
+class FailingParentSelfCheck:
+    def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
+        if manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            raise StrategyPackageValidationError(
+                "fake parent self-check failure",
+                context={"reason_code": "multi_alpha_promotion_parent_self_check_failed", "package_id": manifest.package_id},
             )
-        }
+        return None
+
+
+def test_parent_self_check_failure_fails_without_half_package() -> None:
+    combine_repo, package_repo = _seed_auto_repos()
+    service = MultiAlphaPackagePromotionService(
+        combine_repository=combine_repo,
+        package_repository=package_repo,
+        provenance_resolver=FakeProvenanceResolver(),
+        source_resolver=FakeQESourceResolver(),
+        asset_freezer=FakeAssetFreezer(),
+        frozen_runtime_self_check=FailingParentSelfCheck(),
     )
 
     with pytest.raises(StrategyPackageValidationError) as excinfo:
-        _promote(_service(combine_repo, package_repo), child_a1, child_fund)
+        service.promote_from_combine_run(**_auto_request())
 
-    assert _reason_code(excinfo.value) == "multi_alpha_child_package_not_frozen"
+    assert _reason_code(excinfo.value) == "multi_alpha_promotion_parent_self_check_failed"
+    assert package_repo.records == {}
+    assert package_repo.components == {}
 
 
 def test_schema_allows_multi_alpha_combine_source_type() -> None:
@@ -591,24 +808,12 @@ def test_schema_allows_multi_alpha_combine_source_type() -> None:
 @pytest.mark.parametrize(
     ("mutator", "expected_reason_code"),
     [
-        (lambda repos, children: repos[1].records.pop(children[0].package_id), "multi_alpha_child_package_missing"),
-        (
-            lambda repos, children: repos[1].records.__setitem__(
-                children[0].package_id,
-                repos[1].records[children[0].package_id].model_copy(update={"manifest_sha256": ""}),
-            ),
-            "multi_alpha_child_package_not_frozen",
-        ),
         (lambda repos, children: repos[0].scheme_results.clear(), "multi_alpha_scheme_not_succeeded"),
         (
             lambda repos, children: repos[0].runs[RUN_ID].__setitem__(
                 "roster_json",
                 [{"leg_id": A1_LEG, "seed_run_ids": [A1_SEED]}, {"leg_id": "unexpected_leg", "seed_run_ids": ["seed"]}],
             ),
-            "multi_alpha_roster_mismatch",
-        ),
-        (
-            lambda repos, children: _replace_child_with_valid_missing_seed(repos[1], children[0]),
             "multi_alpha_roster_mismatch",
         ),
         (
@@ -686,6 +891,8 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
         return MultiAlphaPackagePromotionService(
             combine_repository=combine_repo,
             package_repository=package_repo,
+            provenance_resolver=FakeProvenanceResolver(),
+            source_resolver=FakeQESourceResolver(),
             asset_freezer=FakeAssetFreezer(),
             frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
         )
@@ -715,7 +922,6 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
 @pytest.mark.parametrize(
     ("mutator", "expected_reason_code", "expected_status"),
     [
-        (lambda repos, children: repos[1].records.pop(children[0].package_id), "multi_alpha_child_package_missing", 404),
         (lambda repos, children: repos[0].scheme_results.clear(), "multi_alpha_scheme_not_succeeded", 400),
         (
             lambda repos, children: repos[0].runs[RUN_ID].__setitem__(
@@ -726,8 +932,8 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
             400,
         ),
         (
-            lambda repos, children: _replace_child_with_valid_missing_seed(repos[1], children[0]),
-            "multi_alpha_roster_mismatch",
+            lambda repos, children: None,
+            "multi_alpha_promotion_component_package_ids_unsupported",
             400,
         ),
     ],
@@ -745,6 +951,9 @@ def test_router_endpoint_negative_paths_are_loud(
         return MultiAlphaPackagePromotionService(
             combine_repository=combine_repo,
             package_repository=package_repo,
+            provenance_resolver=FakeProvenanceResolver(),
+            source_resolver=FakeQESourceResolver(),
+            asset_freezer=FakeAssetFreezer(),
             frozen_runtime_self_check=NoopFrozenRuntimeSelfCheck(),
         )
 
@@ -752,7 +961,10 @@ def test_router_endpoint_negative_paths_are_loud(
     app = FastAPI()
     app.include_router(router_module.router)
 
-    response = TestClient(app).post("/strategy-packages/from-multi-alpha-combine-run", json=_request(child_a1, child_fund))
+    request = _request(child_a1, child_fund)
+    if expected_reason_code == "multi_alpha_promotion_component_package_ids_unsupported":
+        request["component_package_ids"] = {A1_LEG: child_a1.package_id, FUND_LEG: child_fund.package_id}
+    response = TestClient(app).post("/strategy-packages/from-multi-alpha-combine-run", json=request)
 
     assert response.status_code == expected_status, response.text
     detail = response.json()["detail"]

@@ -17,7 +17,7 @@ from backend.services.trading_core.errors import DataUnavailableError, StrategyP
 
 from .components import StrategyPackageComponentService
 from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
-from .manifest import compute_manifest_sha256, freeze_manifest
+from .manifest import freeze_manifest
 from .models import (
     AlphaCombinationPolicy,
     AlphaComponent,
@@ -28,15 +28,15 @@ from .models import (
     FactorAsset,
     ModelAsset,
     PackageStatus,
+    RuntimeAssetManifest,
     SourceType,
     StrategyPackageComponentRecord,
     StrategyPackageManifest,
     StrategyPackageSource,
 )
-from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
-from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
+from .package_asset_freeze import PackageAssetFreezeService
 from .qe_source_resolver import QEExperimentSourceResolver
-from .repository import StrategyPackageRecord, StrategyPackageRepository, manifest_asset_keys
+from .repository import StrategyPackageRecord, StrategyPackageRepository
 from .validators import StrategyPackageValidator
 
 
@@ -78,22 +78,12 @@ class MultiAlphaPackagePromotionResult:
 
 
 @dataclass(frozen=True)
-class _LegEvidence:
-    leg_id: str
-    seed_run_ids: tuple[str, ...]
-    child: StrategyPackageRecord
-    terminal_weight: float
-    materialization: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class _ComponentMaterializationPlan:
+class _ParentLegAssetPlan:
     leg_id: str
     seed_run_ids: tuple[str, ...]
     terminal_weight: float
-    existing_child: StrategyPackageRecord | None = None
-    manifest_to_save: StrategyPackageManifest | None = None
-    asset_records: list[StrategyPackageAssetRecord] = field(default_factory=list)
+    manifest: StrategyPackageManifest
+    seed_provenance: tuple[SeedProvenance, ...]
     materialization: dict[str, Any] = field(default_factory=dict)
 
 
@@ -209,11 +199,10 @@ class MultiAlphaPackagePromotionService:
         _validate_promotion_gate(scheme_result, promotion_gate or {}, run_id=run_id, weighting_scheme=scheme)
 
         requested_component_ids = _normalize_component_package_ids(component_package_ids)
-        roster_leg_ids = {item["leg_id"] for item in roster}
-        if requested_component_ids and set(requested_component_ids) != roster_leg_ids:
+        if requested_component_ids:
             _fail(
-                "component_package_ids must exactly match combine-backtest roster leg_ids",
-                reason_code="multi_alpha_roster_mismatch",
+                "component_package_ids are not supported for parent-only multi-alpha promotion",
+                reason_code="multi_alpha_promotion_component_package_ids_unsupported",
                 run_id=run_id,
                 roster_leg_ids=[item["leg_id"] for item in roster],
                 requested_leg_ids=sorted(requested_component_ids),
@@ -230,28 +219,16 @@ class MultiAlphaPackagePromotionService:
             weighting_scheme=scheme,
         )
 
-        if requested_component_ids:
-            leg_evidence = [
-                self._load_leg_evidence(
-                    leg_id=item["leg_id"],
-                    seed_run_ids=tuple(item["seed_run_ids"]),
-                    child_package_id=requested_component_ids[item["leg_id"]],
-                    terminal_weight=weights[item["leg_id"]],
-                    run_id=run_id,
-                )
-                for item in roster
-            ]
-        else:
-            component_plans = [
-                self._prepare_component_package(
-                    leg_id=item["leg_id"],
-                    seed_run_ids=tuple(item["seed_run_ids"]),
-                    terminal_weight=weights[item["leg_id"]],
-                    run_id=run_id,
-                )
-                for item in roster
-            ]
-            leg_evidence = self._save_component_plans(component_plans)
+        leg_evidence = [
+            self._prepare_parent_leg_asset_plan(
+                leg_id=item["leg_id"],
+                seed_run_ids=tuple(item["seed_run_ids"]),
+                terminal_weight=weights[item["leg_id"]],
+                run_id=run_id,
+            )
+            for item in roster
+        ]
+        _assert_unique_parent_leg_model_ids(leg_evidence, run_id=run_id)
         backtest_config = _as_mapping(run.get("backtest_config_json") or {}, field_name="backtest_config_json")
         strategy_snapshot = _build_strategy_snapshot(
             topk=topk_value,
@@ -286,18 +263,9 @@ class MultiAlphaPackagePromotionService:
         )
         frozen = freeze_manifest(manifest)
         self.validator.validate_manifest(frozen)
-        parent, components = self.component_service.create_multi_alpha_package(
-            manifest=frozen,
-            components=[
-                {
-                    "child_package_id": leg.child.package_id,
-                    "component_weight": leg.terminal_weight,
-                    "score_normalization": "rank",
-                    "position": index,
-                }
-                for index, leg in enumerate(leg_evidence, start=1)
-            ],
-        )
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(frozen)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        parent = self.package_repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
         parent = self.package_repository.update_artifact_refs(
             parent.package_id,
             prediction_ref_uri=prediction_ref["uri"],
@@ -305,20 +273,20 @@ class MultiAlphaPackagePromotionService:
         )
         return MultiAlphaPackagePromotionResult(
             package=parent,
-            components=components,
+            components=[],
             source_run_id=run_id,
             paper_admission=_paper_admission(),
             auto_component_materialization=[_jsonable(leg.materialization) for leg in leg_evidence],
         )
 
-    def _prepare_component_package(
+    def _prepare_parent_leg_asset_plan(
         self,
         *,
         leg_id: str,
         seed_run_ids: tuple[str, ...],
         terminal_weight: float,
         run_id: str,
-    ) -> _ComponentMaterializationPlan:
+    ) -> _ParentLegAssetPlan:
         if terminal_weight <= 0 or not math.isfinite(terminal_weight):
             _fail_manifest_incomplete(
                 "terminal component weight must be positive and finite",
@@ -326,25 +294,8 @@ class MultiAlphaPackagePromotionService:
                 leg_id=leg_id,
                 component_weight=terminal_weight,
             )
-        reusable = self._find_reusable_component_package(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
-        if reusable is not None:
-            self._ensure_child_assets_frozen(child=reusable, run_id=run_id, leg_id=leg_id)
-            return _ComponentMaterializationPlan(
-                leg_id=leg_id,
-                seed_run_ids=seed_run_ids,
-                terminal_weight=terminal_weight,
-                existing_child=reusable,
-                materialization={
-                    "leg_id": leg_id,
-                    "mode": "reused_existing_component_package",
-                    "child_package_id": reusable.package_id,
-                    "child_manifest_sha256": reusable.manifest_sha256,
-                    "seed_run_ids": list(seed_run_ids),
-                },
-            )
-
         seed_sources = self._resolve_leg_seed_sources(leg_id=leg_id, seed_run_ids=seed_run_ids, run_id=run_id)
-        manifest = self._build_auto_component_manifest(
+        manifest = self._build_parent_leg_asset_manifest(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
             seed_sources=seed_sources,
@@ -352,83 +303,35 @@ class MultiAlphaPackagePromotionService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return _ComponentMaterializationPlan(
+        component = frozen_assets.manifest.alpha_components[0]
+        model_assets = frozen_assets.manifest.model_asset if isinstance(frozen_assets.manifest.model_asset, list) else [frozen_assets.manifest.model_asset]
+        model = model_assets[0] if model_assets else None
+        return _ParentLegAssetPlan(
             leg_id=leg_id,
             seed_run_ids=seed_run_ids,
             terminal_weight=terminal_weight,
-            manifest_to_save=frozen_assets.manifest,
-            asset_records=frozen_assets.assets,
+            manifest=frozen_assets.manifest,
+            seed_provenance=tuple(seed_sources),
             materialization={
                 "leg_id": leg_id,
-                "mode": "auto_created_component_package",
-                "child_package_id": frozen_assets.manifest.package_id,
-                "child_manifest_sha256": frozen_assets.manifest.manifest_sha256,
+                "mode": "parent_leg_inlined_package_asset",
                 "seed_run_ids": list(seed_run_ids),
                 "seed_source_count": len(seed_sources),
+                "model_id": component.model_id,
+                "model_asset_sha256": getattr(model, "sha256", None),
+                "factor_count": len(frozen_assets.manifest.factor_set),
+                "alpha158_enabled": bool(
+                    frozen_assets.manifest.runtime_assets
+                    and frozen_assets.manifest.runtime_assets.alpha158.enabled
+                ),
+                "alpha158_schema_sha256": (
+                    frozen_assets.manifest.runtime_assets.alpha158.sha256
+                    if frozen_assets.manifest.runtime_assets
+                    and frozen_assets.manifest.runtime_assets.alpha158.enabled
+                    else None
+                ),
             },
         )
-
-    def _save_component_plans(self, plans: Sequence[_ComponentMaterializationPlan]) -> list[_LegEvidence]:
-        leg_evidence: list[_LegEvidence] = []
-        for plan in plans:
-            if plan.existing_child is not None:
-                child = plan.existing_child
-            elif plan.manifest_to_save is not None:
-                child = self.package_repository.save_manifest_with_assets(plan.manifest_to_save, plan.asset_records)
-            else:
-                _fail_manifest_incomplete(
-                    "multi-alpha component materialization plan has neither reusable child nor manifest",
-                    leg_id=plan.leg_id,
-                    seed_run_ids=list(plan.seed_run_ids),
-                )
-            materialization = dict(plan.materialization)
-            materialization["child_package_id"] = child.package_id
-            materialization["child_manifest_sha256"] = child.manifest_sha256
-            leg_evidence.append(
-                _LegEvidence(
-                    leg_id=plan.leg_id,
-                    seed_run_ids=plan.seed_run_ids,
-                    child=child,
-                    terminal_weight=plan.terminal_weight,
-                    materialization=materialization,
-                )
-            )
-        return leg_evidence
-
-    def _find_reusable_component_package(
-        self,
-        *,
-        leg_id: str,
-        seed_run_ids: tuple[str, ...],
-        run_id: str,
-    ) -> StrategyPackageRecord | None:
-        required = set(seed_run_ids)
-        for child in self.package_repository.list_single_alpha_candidates_for_seed_reuse(limit=5000):
-            child_seed_refs = _collect_seed_refs(child)
-            if not required.issubset(child_seed_refs):
-                continue
-            if not _is_sha256(child.manifest_sha256):
-                _fail(
-                    "multi-alpha child package is not frozen",
-                    reason_code="multi_alpha_child_package_not_frozen",
-                    run_id=run_id,
-                    leg_id=leg_id,
-                    child_package_id=child.package_id,
-                    child_manifest_sha256=child.manifest_sha256,
-                )
-            computed = compute_manifest_sha256(child.current_manifest())
-            if computed != child.manifest_sha256:
-                _fail(
-                    "multi-alpha child package manifest sha256 drift detected",
-                    reason_code="multi_alpha_child_package_not_frozen",
-                    run_id=run_id,
-                    leg_id=leg_id,
-                    child_package_id=child.package_id,
-                    child_manifest_sha256=child.manifest_sha256,
-                    computed_manifest_sha256=computed,
-                )
-            return child
-        return None
 
     def _resolve_leg_seed_sources(
         self,
@@ -490,7 +393,7 @@ class MultiAlphaPackagePromotionService:
             _fail("roster item requires seed_run_ids", reason_code="multi_alpha_roster_mismatch", run_id=run_id, leg_id=leg_id)
         return resolved
 
-    def _build_auto_component_manifest(
+    def _build_parent_leg_asset_manifest(
         self,
         *,
         leg_id: str,
@@ -533,7 +436,7 @@ class MultiAlphaPackagePromotionService:
             if exc.context.get("reason_code", "").startswith("multi_alpha_"):
                 raise
             raise StrategyPackageValidationError(
-                "failed to auto-materialize multi-alpha component package from QE source",
+                "failed to materialize multi-alpha parent leg assets from QE source",
                 context={
                     "reason_code": "multi_alpha_component_auto_materialize_failed",
                     "run_id": run_id,
@@ -548,7 +451,7 @@ class MultiAlphaPackagePromotionService:
             ) from exc
         except DataUnavailableError as exc:
             raise StrategyPackageValidationError(
-                "failed to auto-materialize multi-alpha component package from QE source",
+                "failed to materialize multi-alpha parent leg assets from QE source",
                 context={
                     "reason_code": "multi_alpha_component_auto_materialize_failed",
                     "run_id": run_id,
@@ -563,7 +466,7 @@ class MultiAlphaPackagePromotionService:
             ) from exc
         except TradingCoreError as exc:
             raise StrategyPackageValidationError(
-                "failed to auto-materialize multi-alpha component package from QE source",
+                "failed to materialize multi-alpha parent leg assets from QE source",
                 context={
                     "reason_code": "multi_alpha_component_auto_materialize_failed",
                     "run_id": run_id,
@@ -578,7 +481,7 @@ class MultiAlphaPackagePromotionService:
             ) from exc
         except Exception as exc:
             raise StrategyPackageValidationError(
-                "failed to auto-materialize multi-alpha component package from QE source",
+                "failed to materialize multi-alpha parent leg assets from QE source",
                 context={
                     "reason_code": "multi_alpha_component_auto_materialize_failed",
                     "run_id": run_id,
@@ -594,7 +497,7 @@ class MultiAlphaPackagePromotionService:
 
         if base.alpha_mode != AlphaMode.SINGLE_ALPHA:
             _fail(
-                "auto-materialized component source must resolve to a single-alpha QE package",
+                "parent leg asset source must resolve to a single-alpha QE manifest",
                 reason_code="multi_alpha_component_auto_materialize_failed",
                 run_id=run_id,
                 leg_id=leg_id,
@@ -602,7 +505,7 @@ class MultiAlphaPackagePromotionService:
                 source_alpha_mode=base.alpha_mode.value,
             )
         seed_digest = _seed_roster_digest(leg_id=leg_id, seed_run_ids=seed_run_ids, seed_sources=seed_sources)
-        package_id = _stable_component_package_id(run_id=run_id, leg_id=leg_id, seed_digest=seed_digest)
+        package_id = _stable_parent_leg_asset_id(run_id=run_id, leg_id=leg_id, seed_digest=seed_digest)
         component = base.alpha_components[0].model_copy(
             update={
                 "alpha_id": leg_id,
@@ -612,9 +515,9 @@ class MultiAlphaPackagePromotionService:
         )
         source_evidence = dict(base.source_evidence or {})
         source_evidence["seed_run_ids"] = list(seed_run_ids)
-        source_evidence["multi_alpha_component"] = {
-            "schema_version": "multi_alpha_component_auto_materialization_v1",
-            "component_materialization": "auto_from_combine_roster",
+        source_evidence["multi_alpha_parent_leg_asset"] = {
+            "schema_version": "multi_alpha_parent_leg_asset_materialization_v1",
+            "component_materialization": "parent_leg_inline_from_combine_roster",
             "combine_backtest_run_id": run_id,
             "leg_id": leg_id,
             "seed_run_ids": list(seed_run_ids),
@@ -626,7 +529,7 @@ class MultiAlphaPackagePromotionService:
             base.model_copy(
                 update={
                     "package_id": package_id,
-                    "package_name": _default_component_package_name(leg_id, run_id, package_id),
+                    "package_name": _default_parent_leg_asset_name(leg_id, run_id, package_id),
                     "source": StrategyPackageSource(
                         source_type=SourceType.MULTI_ALPHA_COMBINE_RUN,
                         source_id=run_id,
@@ -642,131 +545,6 @@ class MultiAlphaPackagePromotionService:
             )
         )
 
-    def _load_leg_evidence(
-        self,
-        *,
-        leg_id: str,
-        seed_run_ids: tuple[str, ...],
-        child_package_id: str,
-        terminal_weight: float,
-        run_id: str,
-    ) -> _LegEvidence:
-        if terminal_weight <= 0 or not math.isfinite(terminal_weight):
-            _fail_manifest_incomplete(
-                "terminal component weight must be positive and finite",
-                run_id=run_id,
-                leg_id=leg_id,
-                component_weight=terminal_weight,
-            )
-        try:
-            child = self.package_repository.get(child_package_id)
-        except DataUnavailableError as exc:
-            raise DataUnavailableError(
-                "multi-alpha child StrategyPackage does not exist",
-                context={
-                    "reason_code": "multi_alpha_child_package_missing",
-                    "run_id": run_id,
-                    "leg_id": leg_id,
-                    "child_package_id": child_package_id,
-                },
-            ) from exc
-        if child.alpha_mode != AlphaMode.SINGLE_ALPHA:
-            _fail_manifest_incomplete(
-                "multi-alpha child package must be SINGLE_ALPHA",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child_package_id,
-                child_alpha_mode=child.alpha_mode.value,
-            )
-        if not _is_sha256(child.manifest_sha256):
-            _fail(
-                "multi-alpha child package is not frozen",
-                reason_code="multi_alpha_child_package_not_frozen",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child_package_id,
-                child_manifest_sha256=child.manifest_sha256,
-            )
-        computed = compute_manifest_sha256(child.current_manifest())
-        if computed != child.manifest_sha256:
-            _fail(
-                "multi-alpha child package manifest sha256 drift detected",
-                reason_code="multi_alpha_child_package_not_frozen",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child.package_id,
-                child_manifest_sha256=child.manifest_sha256,
-                computed_manifest_sha256=computed,
-            )
-        child_seed_refs = _collect_seed_refs(child)
-        missing = sorted(set(seed_run_ids) - child_seed_refs)
-        if missing:
-            _fail(
-                "child package seed references do not cover the combine-backtest roster seed_run_ids",
-                reason_code="multi_alpha_roster_mismatch",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child_package_id,
-                missing_seed_run_ids=missing,
-                child_seed_refs=sorted(child_seed_refs),
-            )
-        self._ensure_child_assets_frozen(child=child, run_id=run_id, leg_id=leg_id)
-        return _LegEvidence(
-            leg_id=leg_id,
-            seed_run_ids=seed_run_ids,
-            child=child,
-            terminal_weight=terminal_weight,
-            materialization={
-                "leg_id": leg_id,
-                "mode": "explicit_component_package_ids",
-                "child_package_id": child.package_id,
-                "child_manifest_sha256": child.manifest_sha256,
-                "seed_run_ids": list(seed_run_ids),
-            },
-        )
-
-    def _ensure_child_assets_frozen(self, *, child: StrategyPackageRecord, run_id: str, leg_id: str) -> None:
-        manifest = child.current_manifest()
-        if not manifest_has_frozen_runtime_assets(manifest):
-            _fail(
-                "multi-alpha child package runtime assets are not frozen",
-                reason_code="multi_alpha_child_package_assets_unfrozen",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child.package_id,
-                child_manifest_sha256=child.manifest_sha256,
-            )
-        expected = _manifest_asset_keys(manifest)
-        try:
-            rows = self.package_repository.list_package_assets(child.package_id)
-        except Exception as exc:
-            _fail(
-                "multi-alpha child package frozen asset ledger cannot be read",
-                reason_code="multi_alpha_child_package_assets_unfrozen",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child.package_id,
-                child_manifest_sha256=child.manifest_sha256,
-                upstream_error_type=type(exc).__name__,
-                upstream_error=str(exc),
-            )
-        actual = {(row.asset_type, row.asset_ref, row.asset_sha256) for row in rows}
-        missing = sorted(
-            (asset_type.value, asset_ref, sha256)
-            for asset_type, asset_ref, sha256 in expected
-            if (asset_type, asset_ref, sha256) not in actual
-        )
-        if missing:
-            _fail(
-                "multi-alpha child package frozen asset ledger is incomplete",
-                reason_code="multi_alpha_child_package_assets_unfrozen",
-                run_id=run_id,
-                leg_id=leg_id,
-                child_package_id=child.package_id,
-                child_manifest_sha256=child.manifest_sha256,
-                missing_assets=missing,
-            )
-
     def _build_manifest(
         self,
         *,
@@ -778,25 +556,26 @@ class MultiAlphaPackagePromotionService:
         weighting_scheme: str,
         topk: int,
         secondary_topk: list[int],
-        leg_evidence: Sequence[_LegEvidence],
+        leg_evidence: Sequence[_ParentLegAssetPlan],
         weights: Mapping[str, float],
         prediction_ref: Mapping[str, str],
         weight_policy: Mapping[str, Any],
         strategy_snapshot: Mapping[str, Any],
     ) -> StrategyPackageManifest:
-        factor_set = _merge_factor_assets([leg.child.manifest for leg in leg_evidence])
-        model_assets = _merge_model_assets([leg.child.manifest for leg in leg_evidence])
+        factor_set = _merge_factor_assets([leg.manifest for leg in leg_evidence])
+        model_assets = _merge_model_assets([leg.manifest for leg in leg_evidence])
+        runtime_assets = _merge_runtime_assets([leg.manifest for leg in leg_evidence], package_id=package_id)
         if not factor_set or not model_assets:
             _fail_manifest_incomplete(
-                "multi-alpha parent manifest requires child factor_set and model_asset",
+                "multi-alpha parent manifest requires per-leg factor_set and model_asset",
                 package_id=package_id,
                 factor_count=len(factor_set),
                 model_asset_count=len(model_assets),
             )
-        components = [_component_from_child(leg) for leg in leg_evidence]
+        components = [_component_from_leg_plan(leg) for leg in leg_evidence]
         source_evidence = {
             "schema_version": "multi_alpha_package_promotion_source_evidence_v1",
-            "authority": "audit_only_not_runtime_authority",
+            "authority": "parent_package_asset_runtime_authority",
             "multi_alpha": {
                 "source_type": "multi_alpha_combine_backtest",
                 "combine_backtest_run_id": run["id"],
@@ -812,11 +591,20 @@ class MultiAlphaPackagePromotionService:
                 "legs": [
                     {
                         "leg_id": leg.leg_id,
-                        "child_package_id": leg.child.package_id,
-                        "child_manifest_sha256": leg.child.manifest_sha256,
                         "seed_run_ids": list(leg.seed_run_ids),
                         "ensemble_method": "mean_by_trade_date_instrument",
                         "terminal_weight": leg.terminal_weight,
+                        "model_id": leg.manifest.alpha_components[0].model_id,
+                        "factor_artifact_refs": list(
+                            leg.manifest.alpha_components[0].lineage.factor_artifact_refs
+                            or leg.manifest.alpha_components[0].factor_ids
+                        ),
+                        "runtime_assets": (
+                            leg.manifest.runtime_assets.model_dump(mode="json")
+                            if leg.manifest.runtime_assets is not None
+                            else RuntimeAssetManifest().model_dump(mode="json")
+                        ),
+                        "seed_provenance": [source.to_meta() for source in leg.seed_provenance],
                     }
                     for leg in leg_evidence
                 ],
@@ -867,6 +655,7 @@ class MultiAlphaPackagePromotionService:
             ),
             factor_set=factor_set,
             model_asset=model_assets,
+            runtime_assets=runtime_assets,
             source_evidence=source_evidence,
             backtest_context=backtest_context,
             backtest_summary=BacktestSummary(
@@ -1065,11 +854,14 @@ def _extract_terminal_weights(value: Any, *, expected_leg_ids: Sequence[str], ru
     weights: dict[str, float] = {}
     for leg_id in expected_leg_ids:
         if leg_id not in source:
-            _fail_manifest_incomplete(
+            _fail(
                 "weights_json missing terminal leg weight",
+                reason_code="multi_alpha_roster_mismatch",
                 run_id=run_id,
                 weighting_scheme=weighting_scheme,
                 leg_id=leg_id,
+                expected_leg_ids=list(expected_leg_ids),
+                actual_leg_ids=sorted(str(key) for key in source),
             )
         try:
             weight = float(source[leg_id])
@@ -1281,6 +1073,23 @@ def _normalize_component_package_ids(value: Mapping[str, str] | None) -> dict[st
     return normalized
 
 
+def _resolver_loop_id(provenance: SeedProvenance) -> str | None:
+    text = str(provenance.source_loop_id or "").strip()
+    if text.startswith("Loop"):
+        return text
+    if "_Loop" in text:
+        suffix = text.rsplit("_Loop", 1)[1]
+        if suffix.isdigit():
+            return f"Loop{suffix}"
+    if "_L" in text:
+        suffix = text.rsplit("_L", 1)[1]
+        if suffix.isdigit():
+            return f"Loop{suffix}"
+    if provenance.source_loop_index is not None:
+        return f"Loop{provenance.source_loop_index}"
+    return text or None
+
+
 def _validate_weight_policy(value: Mapping[str, Any], *, run_id: str, weighting_scheme: str) -> dict[str, Any]:
     payload = _as_mapping(value, field_name="weight_policy")
     mode = str(payload.get("mode") or "").strip()
@@ -1301,6 +1110,47 @@ def _validate_weight_policy(value: Mapping[str, Any], *, run_id: str, weighting_
             weight_policy_mode=mode,
         )
     return _jsonable(payload)
+
+
+def _stable_created_at(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value.strip():
+        text = value.strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _is_finite_number(value: Any) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _float_or_none(value: Any) -> float | None:
+    return float(value) if _is_finite_number(value) else None
+
+
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
+
+
+def _jsonable(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _paper_admission() -> dict[str, Any]:
+    return {"eligible": False, "blocking": [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]}
 
 
 def _build_strategy_snapshot(*, topk: int, secondary_topk: list[int], backtest_config: Mapping[str, Any]) -> dict[str, Any]:
@@ -1349,7 +1199,7 @@ def _stable_package_id(
     run_id: str,
     weighting_scheme: str,
     topk: int,
-    leg_evidence: Sequence[_LegEvidence],
+    leg_evidence: Sequence[_ParentLegAssetPlan],
     prediction_ref: Mapping[str, str],
     weight_policy: Mapping[str, Any],
     scheme_result_id: str,
@@ -1363,8 +1213,8 @@ def _stable_package_id(
             {
                 "leg_id": leg.leg_id,
                 "seed_run_ids": list(leg.seed_run_ids),
-                "child_package_id": leg.child.package_id,
-                "child_manifest_sha256": leg.child.manifest_sha256,
+                "leg_manifest_sha256": leg.manifest.manifest_sha256,
+                "model_id": leg.manifest.alpha_components[0].model_id,
                 "terminal_weight": leg.terminal_weight,
             }
             for leg in leg_evidence
@@ -1375,17 +1225,6 @@ def _stable_package_id(
     }
     digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
     return f"pkg_ma_{digest[:24]}"
-
-
-def _stable_component_package_id(*, run_id: str, leg_id: str, seed_digest: str) -> str:
-    payload = {
-        "run_id": run_id,
-        "leg_id": leg_id,
-        "seed_digest": seed_digest,
-        "materialization": "multi_alpha_component_auto_v1",
-    }
-    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-    return f"pkg_mac_{digest[:24]}"
 
 
 def _seed_roster_digest(
@@ -1413,19 +1252,30 @@ def _seed_roster_digest(
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _default_package_name(leg_evidence: Sequence[_LegEvidence], weighting_scheme: str, topk: int, package_id: str) -> str:
+def _default_package_name(leg_evidence: Sequence[_ParentLegAssetPlan], weighting_scheme: str, topk: int, package_id: str) -> str:
     legs = "_".join(leg.leg_id.split("_h20")[0][:12] for leg in leg_evidence)
     return f"MA{len(leg_evidence)}_{legs}_{weighting_scheme}_topk{topk}_{package_id[-8:]}"[:120]
 
 
-def _default_component_package_name(leg_id: str, run_id: str, package_id: str) -> str:
+def _stable_parent_leg_asset_id(*, run_id: str, leg_id: str, seed_digest: str) -> str:
+    payload = {
+        "run_id": run_id,
+        "leg_id": leg_id,
+        "seed_digest": seed_digest,
+        "materialization": "multi_alpha_parent_leg_asset_v1",
+    }
+    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+    return f"pkg_mal_{digest[:24]}"
+
+
+def _default_parent_leg_asset_name(leg_id: str, run_id: str, package_id: str) -> str:
     leg = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in leg_id)[:48]
     run_suffix = str(run_id)[-12:]
-    return f"MAC_{leg}_{run_suffix}_{package_id[-8:]}"[:120]
+    return f"MAL_{leg}_{run_suffix}_{package_id[-8:]}"[:120]
 
 
-def _component_from_child(leg: _LegEvidence) -> AlphaComponent:
-    child_component = leg.child.manifest.alpha_components[0]
+def _component_from_leg_plan(leg: _ParentLegAssetPlan) -> AlphaComponent:
+    child_component = leg.manifest.alpha_components[0]
     return AlphaComponent(
         alpha_id=leg.leg_id,
         alpha_name=child_component.alpha_name or leg.leg_id,
@@ -1442,22 +1292,90 @@ def _component_from_child(leg: _LegEvidence) -> AlphaComponent:
         lineage=AlphaLineage(
             qe_artifact_id="multi-seed",
             factor_artifact_refs=list(child_component.lineage.factor_artifact_refs or child_component.factor_ids),
-            model_artifact_ref=f"child_package:{leg.child.package_id}",
+            model_artifact_ref=f"parent_package_asset:model_id:{child_component.model_id}",
         ),
     )
 
 
-def _manifest_asset_keys(
-    manifest: StrategyPackageManifest,
-) -> set[tuple[StrategyPackageAssetType, str, str | None]]:
-    return set(manifest_asset_keys(manifest))
+def _assert_unique_parent_leg_model_ids(legs: Sequence[_ParentLegAssetPlan], *, run_id: str) -> None:
+    seen: dict[str, dict[str, Any]] = {}
+    for leg in legs:
+        component = leg.manifest.alpha_components[0]
+        model_id = str(component.model_id or "").strip()
+        models = leg.manifest.model_asset if isinstance(leg.manifest.model_asset, list) else [leg.manifest.model_asset]
+        model = models[0] if models else None
+        if not model_id:
+            _fail(
+                "multi-alpha parent leg model_id is required",
+                reason_code="multi_alpha_promotion_parent_model_id_collision",
+                run_id=run_id,
+                leg_id=leg.leg_id,
+            )
+        current = {
+            "leg_id": leg.leg_id,
+            "model_id": model_id,
+            "sha256": getattr(model, "sha256", None),
+            "asset_ref": getattr(model, "asset_ref", None),
+        }
+        previous = seen.get(model_id)
+        if previous is not None:
+            _fail(
+                "multi-alpha parent requires unique model_id per leg",
+                reason_code="multi_alpha_promotion_parent_model_id_collision",
+                run_id=run_id,
+                model_id=model_id,
+                first_leg_id=previous["leg_id"],
+                second_leg_id=leg.leg_id,
+                first_sha256=previous.get("sha256"),
+                second_sha256=current.get("sha256"),
+                first_asset_ref=previous.get("asset_ref"),
+                second_asset_ref=current.get("asset_ref"),
+                model_id_uniqueness_policy="unique_per_leg",
+            )
+        seen[model_id] = current
 
 
 def _merge_factor_assets(manifests: Sequence[StrategyPackageManifest]) -> list[FactorAsset]:
     merged: dict[str, FactorAsset] = {}
+    key_sources: dict[tuple[str, str], FactorAsset] = {}
     for manifest in manifests:
         for factor in manifest.factor_set:
-            merged.setdefault(factor.factor_id, factor)
+            for key_type, raw_key in (("factor_id", factor.factor_id), ("factor_name", factor.factor_name)):
+                key = str(raw_key or "").strip()
+                if not key:
+                    continue
+                existing = key_sources.get((key_type, key))
+                if existing is not None and str(existing.sha256 or "").strip().lower() != str(factor.sha256 or "").strip().lower():
+                    _fail(
+                        "multi-alpha parent factor ref collision detected while merging per-leg assets",
+                        reason_code="multi_alpha_promotion_parent_factor_ref_collision",
+                        factor_key_type=key_type,
+                        factor_key=key,
+                        first_factor_id=existing.factor_id,
+                        first_factor_name=existing.factor_name,
+                        first_sha256=existing.sha256,
+                        second_factor_id=factor.factor_id,
+                        second_factor_name=factor.factor_name,
+                        second_sha256=factor.sha256,
+                    )
+                key_sources[(key_type, key)] = factor
+            merge_key = str(factor.factor_id or factor.factor_name or "").strip()
+            if not merge_key:
+                _fail(
+                    "multi-alpha parent factor asset is missing id/name",
+                    reason_code="multi_alpha_promotion_parent_factor_ref_collision",
+                )
+            existing = merged.get(merge_key)
+            if existing is not None and str(existing.sha256 or "").strip().lower() != str(factor.sha256 or "").strip().lower():
+                _fail(
+                    "multi-alpha parent factor id collision detected while merging per-leg assets",
+                    reason_code="multi_alpha_promotion_parent_factor_ref_collision",
+                    factor_key_type="factor_id",
+                    factor_key=merge_key,
+                    first_sha256=existing.sha256,
+                    second_sha256=factor.sha256,
+                )
+            merged[merge_key] = factor
     return [merged[key] for key in sorted(merged)]
 
 
@@ -1466,86 +1384,72 @@ def _merge_model_assets(manifests: Sequence[StrategyPackageManifest]) -> list[Mo
     for manifest in manifests:
         assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
         for asset in assets:
-            merged.setdefault(asset.model_id, asset)
+            key = str(asset.model_id or "").strip()
+            if not key:
+                _fail(
+                    "multi-alpha parent model asset is missing model_id",
+                    reason_code="multi_alpha_promotion_parent_model_id_collision",
+                    package_id=manifest.package_id,
+                )
+            existing = merged.get(key)
+            if existing is not None and str(existing.sha256 or "").strip().lower() != str(asset.sha256 or "").strip().lower():
+                _fail(
+                    "multi-alpha parent model_id collision detected while merging per-leg assets",
+                    reason_code="multi_alpha_promotion_parent_model_id_collision",
+                    model_id=key,
+                    first_sha256=existing.sha256,
+                    second_sha256=asset.sha256,
+                    first_asset_ref=existing.asset_ref,
+                    second_asset_ref=asset.asset_ref,
+                )
+            merged[key] = asset
     return [merged[key] for key in sorted(merged)]
 
 
-def _collect_seed_refs(child: StrategyPackageRecord) -> set[str]:
-    refs = {str(child.run_id).strip()} if str(child.run_id or "").strip() else set()
-    refs.update(_collect_seed_refs_from_payload(child.manifest.source_evidence))
-    refs.update(_collect_seed_refs_from_payload(child.manifest.backtest_context))
-    return refs
-
-
-def _collect_seed_refs_from_payload(payload: Any) -> set[str]:
-    refs: set[str] = set()
-    if isinstance(payload, Mapping):
-        for key, value in payload.items():
-            key_text = str(key)
-            if key_text in {"seed_run_id", "run_id", "archive_run_id"} and isinstance(value, str):
-                refs.add(value.strip())
-            elif key_text in {"seed_run_ids", "run_ids", "qe_run_ids", "source_run_ids", "seed_refs"} and isinstance(value, Sequence):
-                refs.update(str(item).strip() for item in value if str(item or "").strip())
-            refs.update(_collect_seed_refs_from_payload(value))
-    elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
-        for item in payload:
-            refs.update(_collect_seed_refs_from_payload(item))
-    return {ref for ref in refs if ref}
-
-
-def _resolver_loop_id(provenance: SeedProvenance) -> str | None:
-    text = str(provenance.source_loop_id or "").strip()
-    if text.startswith("Loop"):
-        return text
-    if "_Loop" in text:
-        suffix = text.rsplit("_Loop", 1)[1]
-        if suffix.isdigit():
-            return f"Loop{suffix}"
-    if "_L" in text:
-        suffix = text.rsplit("_L", 1)[1]
-        if suffix.isdigit():
-            return f"Loop{suffix}"
-    if provenance.source_loop_index is not None:
-        return f"Loop{provenance.source_loop_index}"
-    return text or None
-
-
-def _stable_created_at(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    if isinstance(value, str) and value.strip():
-        text = value.strip().replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            return datetime(1970, 1, 1, tzinfo=timezone.utc)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return datetime(1970, 1, 1, tzinfo=timezone.utc)
-
-
-def _is_finite_number(value: Any) -> bool:
-    try:
-        return math.isfinite(float(value))
-    except (TypeError, ValueError):
-        return False
-
-
-def _float_or_none(value: Any) -> float | None:
-    return float(value) if _is_finite_number(value) else None
-
-
-def _is_sha256(value: Any) -> bool:
-    text = str(value or "").strip().lower()
-    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
-
-
-def _jsonable(value: Any) -> Any:
-    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-
-
-def _canonical_json(value: Any) -> str:
-    return json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _paper_admission() -> dict[str, Any]:
-    return {"eligible": False, "blocking": [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]}
+def _merge_runtime_assets(
+    manifests: Sequence[StrategyPackageManifest],
+    *,
+    package_id: str,
+) -> RuntimeAssetManifest:
+    selected: RuntimeAssetManifest | None = None
+    for manifest in manifests:
+        runtime_assets = manifest.runtime_assets
+        alpha158 = runtime_assets.alpha158 if runtime_assets is not None else None
+        if runtime_assets is None or alpha158 is None:
+            _fail(
+                "multi-alpha parent requires explicit per-leg runtime assets",
+                reason_code="multi_alpha_promotion_parent_runtime_assets_missing",
+                package_id=package_id,
+                leg_manifest_package_id=manifest.package_id,
+            )
+        if not alpha158.enabled:
+            continue
+        if not alpha158.asset_ref or not alpha158.sha256 or not alpha158.aliases:
+            _fail(
+                "multi-alpha parent requires complete Alpha158 runtime assets for enabled legs",
+                reason_code="multi_alpha_promotion_parent_runtime_assets_missing",
+                package_id=package_id,
+                leg_manifest_package_id=manifest.package_id,
+                asset_ref=alpha158.asset_ref,
+                sha256=alpha158.sha256,
+                alias_count=len(alpha158.aliases or []),
+            )
+        if selected is None:
+            selected = runtime_assets
+            continue
+        current = selected.alpha158
+        if (
+            current.asset_ref != alpha158.asset_ref
+            or str(current.sha256 or "").strip().lower() != str(alpha158.sha256 or "").strip().lower()
+            or list(current.aliases) != list(alpha158.aliases)
+        ):
+            _fail(
+                "multi-alpha parent Alpha158 runtime assets differ across legs",
+                reason_code="multi_alpha_promotion_parent_runtime_assets_missing",
+                package_id=package_id,
+                first_sha256=current.sha256,
+                second_sha256=alpha158.sha256,
+                first_alias_count=len(current.aliases),
+                second_alias_count=len(alpha158.aliases),
+            )
+    return selected or RuntimeAssetManifest()
