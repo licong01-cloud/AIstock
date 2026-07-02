@@ -1175,6 +1175,14 @@ class PackageAssetFreezeService:
                 raise conf_missing
             return False, [], []
 
+        existing_closure = self._model_code_assets_from_existing_closure(
+            existing,
+            manifest=manifest,
+            module_names=module_names,
+        )
+        if existing_closure is not None:
+            return True, existing_closure[0], existing_closure[1]
+
         discovered: list[dict[str, Any]] = []
         seen_sources: set[str] = set()
         for module_name in module_names:
@@ -1227,6 +1235,71 @@ class PackageAssetFreezeService:
                 )
             )
         return True, assets, records
+
+    def _model_code_assets_from_existing_closure(
+        self,
+        existing: Sequence[ModelCodeAsset],
+        *,
+        manifest: StrategyPackageManifest,
+        module_names: Sequence[str],
+    ) -> tuple[list[ModelCodeAsset], list[StrategyPackageAssetRecord]] | None:
+        """Reuse an already-frozen model-code closure when refreezing a parent.
+
+        Multi-alpha parent freeze merges leg manifests that were already frozen
+        from their QE workspaces. The parent manifest itself intentionally has
+        no QE source coordinates, so a second parent freeze must validate the
+        inherited immutable code assets instead of rediscovering them from QE.
+        """
+
+        if not existing:
+            return None
+        existing_by_path = {asset.relative_path: asset for asset in existing}
+        ordered: list[ModelCodeAsset] = []
+        records: list[StrategyPackageAssetRecord] = []
+        seen: set[str] = set()
+        queue: list[tuple[str, str, str]] = []
+        for module_name in module_names:
+            root_rel = _module_relpath(module_name)
+            if root_rel not in existing_by_path:
+                return None
+            queue.append((root_rel, module_name, module_name))
+
+        while queue:
+            rel_path, module_name, root_module = queue.pop(0)
+            if rel_path in seen:
+                continue
+            asset = existing_by_path.get(rel_path)
+            if asset is None:
+                return None
+            _validate_model_code_relpath(rel_path)
+            data = self._read_existing_asset(
+                asset_ref=asset.asset_ref,
+                expected_sha256=asset.sha256,
+                package_id=manifest.package_id,
+                logical_name=asset.relative_path,
+                asset_type=StrategyPackageAssetType.MODEL_CODE,
+            )
+            seen.add(rel_path)
+            ordered.append(asset)
+            records.append(
+                self._asset_record(
+                    manifest=manifest,
+                    asset_type=StrategyPackageAssetType.MODEL_CODE,
+                    asset_ref=asset.asset_ref,
+                    sha256=asset.sha256,
+                    size_bytes=asset.size_bytes if asset.size_bytes is not None else len(data),
+                    logical_name=asset.relative_path,
+                    source_uri=asset.source_uri,
+                )
+            )
+            for child_rel, child_module in _local_python_import_relpaths(
+                data,
+                root_module=root_module,
+                source_path=rel_path,
+            ):
+                if child_rel not in seen:
+                    queue.append((child_rel, child_module, root_module))
+        return ordered, records
 
     def _conf_yaml_bytes(self, manifest: StrategyPackageManifest) -> PackageAssetBytes:
         return self._conf_yaml_reader(manifest) if self._conf_yaml_reader is not None else self.source.conf_yaml_bytes(manifest)

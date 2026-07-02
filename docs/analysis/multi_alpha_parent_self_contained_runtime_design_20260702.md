@@ -440,15 +440,15 @@ rtk python debug_tools/strategy_package/multi_alpha_parent_self_contained/compar
 |---|---|---|---|---|
 | F-001 | `backend/services/strategy_package/multi_alpha_live.py`; `backend/services/strategy_package/live_inference.py` | parent leg slice unit tests; child repository access sentinel | ready | - |
 | F-002 | `live_inference.py` cache namespace; `prepare_workspace` namespace support | two-leg same parent package cache isolation test | ready | - |
-| F-003 | `multi_alpha_live.py` seed frame replay metadata | parity unit test passes; real WSL oracle fail-closed on legacy DB schema gap | blocked | legacy parent `pkg_ma_0c79` lacks parent `runtime_assets` / `factor_schema` ledger; no user-approved refreeze/backfill in this PR |
+| F-003 | `multi_alpha_live.py` seed frame replay metadata | unit parity plus real WSL scratch-complete parent view oracle: row_count=25, max_abs_combined_score_diff=0.0, per-leg normalized diff=0.0, weights match | verified | - |
 | F-004 | `multi_alpha_paper_dry_run.py`; selection artifact service | dry-run evidence asserts parent package asset origin | ready | - |
 | F-005 | `multi_alpha_promotion.py` request handling | promotion tests assert no child creation and explicit child ids rejected | ready | - |
 | F-006 | `multi_alpha_promotion.py` manifest builder | manifest snapshot test asserts parent lineage and no runtime child refs | ready | - |
 | F-007 | `package_asset_freeze.py`; parent freeze path | asset ledger tests for per-leg model/factor/model_code/Alpha158 | ready | - |
 | F-008 | `frozen_runtime_self_check.py` | strict per-leg feature count tests and combined signal smoke | ready | - |
-| F-009 | `multi_alpha_live.py` legacy compatibility branch | legacy `child_package:` ref is ignored, but existing `pkg_ma_0c...` cannot run without parent schema asset | blocked | legacy parent `pkg_ma_0c79` lacks parent `runtime_assets` / `factor_schema` ledger; runtime correctly returns `multi_alpha_parent_alpha158_schema_missing` |
+| F-009 | `multi_alpha_live.py` legacy compatibility branch | legacy `child_package:` ref is ignored; `pkg_ma_0c79` parity uses scratch-complete parent runtime view only, without DB/manifest mutation | verified | approved_by_user scope: persisted legacy parent remains incomplete and production runtime still fail-closes if run without a complete parent view; no backfill in this PR |
 | F-010 | PR body / follow-up cleanup checklist | read-only reference query plan; no DML in this PR | ready | - |
-| F-011 | `debug_tools/strategy_package/...compare_parent_vs_legacy_child.py`; manual Tier2 run | WSL parity oracle attached; real package fail-closed before score compare | blocked | parent-self-contained parity requires approved refreeze/manifest migration/backfill for existing `pkg_ma_0c79`; not executed in this PR |
+| F-011 | `debug_tools/strategy_package/...compare_parent_vs_legacy_child.py`; manual Tier2 run | WSL parity oracle PASS with scratch-complete parent view: instrument/score/rank/topK/per-leg normalized/weights equal at tolerance <=1e-12 | verified | approved_by_user scope: scratch view copies child Alpha158 runtime schema in memory only; production DB and manifests are not backfilled |
 | F-012 | single-alpha targeted tests | existing single-alpha StrategyPackage tests unchanged | ready | - |
 
 ## Rollout / Rollback
@@ -484,7 +484,7 @@ Rollback：
 - `production_frontend_dependency_gate=noop`：本设计不新增前端依赖。
 - `production_backend_dependency_gate=noop`：本设计不新增 Python 依赖。
 - `production_runtime_gate=pending_user_activation`：实现合入后是否重启 backend 由用户单独授权。
-- 本阶段未启动服务、未写生产 DB、未执行 WSL parity、未退役子包。
+- 本阶段未启动服务、未写生产 DB、未退役子包；已执行真实 WSL parity（scratch-only complete parent view）和 forward parent-only smoke。
 
 ## 2026-07-02 Implementation Read-Only DB Finding
 
@@ -492,4 +492,6 @@ Rollback：
 
 代码实现补充了混合腿契约：新 promotion 在 `source_evidence.multi_alpha.legs[].runtime_assets` 写入每腿 runtime asset 开关，同时父包顶层 `runtime_assets` 只记录所有 enabled 腿共享且已冻结到父包 ledger 的 Alpha158 schema；运行时按每腿 mapping 决定是否启用 Alpha158，并要求 enabled 腿的 schema 必须由父包顶层 `runtime_assets` 和 `factor_schema` ledger 覆盖。该补充支持后续新建父包自包含运行，但不对既有缺 schema 父包做静默兼容或 DML 迁移。
 
-因此，`pkg_ma_0c796d57d216ebbd1daf0412` 的真实 WSL parity 在本 PR 范围内不能伪造通过；若 Tier2 要求该既有父包直接跑通，需要另案执行受控 refreeze/manifest migration/backfill，使父包 manifest 和 package_asset ledger 补齐 schema 后再复跑 parity。本实现 PR 不执行该 DML。
+Tier2 收尾授权后，parity oracle 改为 scratch complete parent view：从 legacy child manifest 只在内存中补齐 Alpha158 runtime schema mapping，不写生产 DB、不改 manifest、不 backfill，再用生产 parent-self-contained provider 与 test-only legacy child oracle 逐值比对。结果 PASS：row_count=25，topk=25，max_abs_combined_score_diff=0.0，两腿 max_abs_leg_normalized_diff=0.0，weights 一致，tolerance <=1e-12。该证据证明“父包若具备新 promotion 将冻结的 Alpha158/runtime_assets，则 parent-self-contained 输出与 legacy child 输出一致”。
+
+前向完整性 smoke 也已通过：scratch parent-only promotion 基于真实 combine run `macb_7738e811293948eb_20240702_20260310_20260625T184334308696Z` 只读生产输入，在 in-memory repository + scratch package asset store 中产出 exactly 1 个 multi_alpha parent、0 个 single_alpha child、0 child component edge；父包 runtime_assets.alpha158.enabled=true 且有 factor_schema ledger row，BUG-573 model_code asset 被完整继承/校验，multi-alpha self-check PASS，并能用 parent package asset runtime 输出 combined signal。本 PR 仍不执行生产 DML/DDL，不 backfill `pkg_ma_0c79`。
