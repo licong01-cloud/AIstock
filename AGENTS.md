@@ -5,10 +5,11 @@
 
 ## Agent Workflow Entrypoints
 
-- All Codex and Claude Code sessions should read `docs/codex_project_memory.md` plus the active standard when the task touches architecture, backend, frontend, data pipeline, trading, issue workflow, CI/CD, or production-adjacent work.
-- Broad or ambiguous AIstock requests should start with the lightweight router: Codex uses `.codex/skills/aistock-task-router/SKILL.md`; Claude Code uses `.claude/commands/aistock-task-router.md`.
-- BUG fixes use `scripts/aistock_issue_workflow.py`; do not hand-write BUG JSON or skip GitHub sync.
-- New non-trivial features use `FEATURE-WORKFLOW-001`: classify `F0`/`F1`/`F2`, keep a stable `Design Acceptance Index`, maintain a design acceptance matrix, and run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` before PR or merge.
+- Read `docs/codex_project_memory.md` once for AIstock repo/workflow/runtime work, then use exactly one task-specific skill or Claude command; do not load unrelated standards or scenario instructions by default.
+- Broad or ambiguous requests start with the lightweight router: Codex `.codex/skills/aistock-task-router/SKILL.md`; Claude `.claude/commands/aistock-task-router.md`.
+- BUG fixes use `scripts/aistock_issue_workflow.py` through the issue skill; do not hand-write BUG JSON or skip GitHub sync.
+- New non-trivial features use the feature skill/command and `FEATURE-WORKFLOW-001` acceptance ids; read the approved design only after the task is confirmed as feature delivery.
+- Codex/Claude keep minimal local validation and delegate broad UI/API/business-flow or cross-module suites to Validation Center/CI/Nightly through the validation-delegation lane.
 - Never report simplified, POC, mock-only, static-success, partial, or silent-fallback delivery as complete unless the user explicitly approved the deviation and the acceptance matrix records it.
 
 

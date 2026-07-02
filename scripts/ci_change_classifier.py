@@ -27,6 +27,7 @@ DOCS_CONTROLLED_FILES = {"docs/codex_project_memory.md", "AGENTS.md", "AGENTS.ov
 DOCS_LIGHT_EXCLUDED_PREFIXES = DOCS_CONTROLLED_PREFIXES[:1]
 DOCS_LIGHT_EXCLUDED_FILES = DOCS_CONTROLLED_FILES
 WORKFLOW_VALIDATION_FAST_LANE_FILES = {
+    "AGENTS.md",
     ".github/workflows/issue-auto-link.yml",
     ".github/workflows/issue-on-test-fail.yml",
     ".github/workflows/nightly.yml",
@@ -42,11 +43,14 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".claude/commands/aistock-merge-aftercare.md",
     ".claude/commands/aistock-readonly-triage.md",
     ".claude/commands/aistock-task-router.md",
+    ".claude/commands/aistock-validation-delegation.md",
     ".claude/commands/fix-aistock-issue.md",
     ".codex/skills/aistock-docs-handoff/SKILL.md",
     ".codex/skills/aistock-merge-aftercare/SKILL.md",
     ".codex/skills/aistock-readonly-triage/SKILL.md",
     ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/SKILL.md",
+    ".codex/skills/aistock-validation-delegation/agents/openai.yaml",
     ".codex/skills/fix-aistock-issue/SKILL.md",
     ".codex/skills/verify-aistock-feature/SKILL.md",
     ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
@@ -69,6 +73,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
     "docs/codex_project_memory.md",
+    "docs/standards/README.md",
     "docs/standards/aistock_issue_workflow_quickstart.md",
     "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
     "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
@@ -168,7 +173,7 @@ def _bug_status(path: Path) -> str | None:
 
 
 def _workflow_validation_fast_lane(path: str) -> bool:
-    return path in WORKFLOW_VALIDATION_FAST_LANE_FILES
+    return path in WORKFLOW_VALIDATION_FAST_LANE_FILES or _is_docs_fast_path(path)
 
 
 def _prompt_evaluation_required(path: str) -> bool:
@@ -335,8 +340,17 @@ def classify_changed_files(
     if close_sync_metadata_only:
         reasons.append("only fixed/closed/verified BUG JSON metadata changed; backend matrix can be skipped")
 
+    workflow_fast_trigger = any(
+        path.startswith((".github/", ".claude/", ".codex/", "configs/validation/", "prompt_packs/validation_llm/"))
+        or path.startswith("scripts/")
+        or path.startswith("backend/tests/scripts/")
+        or path.startswith("backend/services/validation/")
+        or path.startswith("tests/aistock_validation/catalog/")
+        for path in non_bug_registry_files
+    )
     workflow_non_registry_only = (
         bool(non_bug_registry_files)
+        and workflow_fast_trigger
         and all(_workflow_validation_fast_lane(path) for path in non_bug_registry_files)
     )
     workflow_registry_metadata_only = (

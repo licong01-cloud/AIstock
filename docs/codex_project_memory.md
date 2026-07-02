@@ -42,16 +42,11 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Context Budget Rules
 
-- Broad or ambiguous AIstock tasks should first use the lightweight router entrypoint: Codex `aistock-task-router` skill, Claude Code `.claude/commands/aistock-task-router.md`.
-- Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
-- T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
-- Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
+- Read the project-level rules once, then route into exactly one task-specific skill or Claude command for execution.
+- The selected skill is the authority for that scenario; do not also load other scenario skills, quickstarts, full standards, or module designs unless the skill, issue evidence, or user explicitly requires it.
+- T0/T1 BUG, docs, cleanup, merge, and read-only tasks use compact context packs, task cards, ownership catalogs, CodeGraph/UA refs, and narrow code snippets instead of full standards.
 - After context compaction or client restart, use `resume` plus `task-card.md` Context Resume Digest hashes; do not re-read skills, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
 - Keep code exploration bounded: use precise `rg`, avoid reprinting the same source range, and pause to summarize before broad scans when exploratory commands exceed the soft budget.
-- Ordinary BUG fixes do not read feature, module, architecture, or historical design documents by default; load them only when the BUG/GitHub Issue cites them, the user asks, or the task is T3 design/architecture.
-- Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
-- Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
-- Do not read `docs/standards/archive/` by default; archived standards are historical evidence only and must not override the active standards index.
 
 
 ## Feature Workflow Rules
@@ -75,14 +70,11 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Validation And CI/CD Rules
 
-- Use targeted tests first, then the selected module or gate validation required by the issue/design.
-- Do not run broad expensive validation repeatedly after every small change; rerun final gates once the patch is stable.
+- Codex keeps the smallest safe local gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
+- Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and run once across the day's merged BUG/PR changes.
+- For complex validation, Codex should request a pipeline/Validation Center run; DeepSeek may select plans and diagnose failures, while allowlisted deterministic runners execute the tests and return a compact receipt.
 - Successful workflow/validation commands should write compact stdout by default; JSON artifacts are diagnostic-only unless a command must persist state/evidence or `AISTOCK_WORKFLOW_ARTIFACTS=1` is set.
-- Before PR, run a preflight appropriate to the change: changed-file lint/static checks, targeted tests, scope check, `git diff --check`, PR body/evidence check, and production gates.
-- BUG fixes use verification budgets. Most fixes should pass only the smallest safe pre-merge gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, and production gates.
-- Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and should run once across all merged daily BUG fixes. Keep immediate deep validation only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
-- GitHub Actions, nox sessions, PR Quality, Semgrep, CodeQL, and validation catalogs are the authoritative CI/CD foundation.
-- CI failures must be summarized by failed job, failed test, error signature, reproduce command, suspected module/files, and fingerprint before creating or promoting a BUG.
+- Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
 
 ## Production Safety Gates
 

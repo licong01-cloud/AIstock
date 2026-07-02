@@ -578,3 +578,33 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
     assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
     assert "prompt_evaluation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"
+
+
+def test_workflow_instruction_skill_changes_use_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "AGENTS.md",
+            "docs/codex_project_memory.md",
+            "docs/standards/README.md",
+            "docs/design/workflow_skill_token_lean_design_20260703.md",
+            ".codex/skills/aistock-task-router/SKILL.md",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".codex/skills/verify-aistock-feature/SKILL.md",
+            ".codex/skills/aistock-validation-delegation/SKILL.md",
+            ".codex/skills/aistock-validation-delegation/agents/openai.yaml",
+            ".claude/commands/aistock-task-router.md",
+            ".claude/commands/fix-aistock-issue.md",
+            ".claude/commands/aistock-feature-workflow.md",
+            ".claude/commands/aistock-validation-delegation.md",
+            "scripts/aistock_issue_workflow.py",
+            "scripts/ci_change_classifier.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            "backend/tests/scripts/test_ci_change_classifier.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["docs_controlled_required"] is True
