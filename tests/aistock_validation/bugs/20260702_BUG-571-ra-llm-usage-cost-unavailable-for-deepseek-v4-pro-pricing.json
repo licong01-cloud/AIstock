@@ -32,60 +32,60 @@
       "timestamp": "2026-07-02T03:28:57.455453Z"
     },
     {
-      "timestamp": "2026-07-02T03:33:16.530690+00:00",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Expand scope for BUG-571 implementation: RA LLM usage cost calculation/repricing read path, UI reason display, and backend tests. No DDL or production runtime changes."
+      "actor": "codex",
+      "note": "Expand scope for BUG-571 implementation: RA LLM usage cost calculation/repricing read path, UI reason display, and backend tests. No DDL or production runtime changes.",
+      "timestamp": "2026-07-02T03:33:16.530690+00:00"
     },
     {
-      "timestamp": "2026-07-02T05:26:00Z",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "User required BUG-571 to use upgraded native LiteLLM pricing only, no model-name fallback/mapping. Scope expanded to pin LiteLLM dependency in requirements.txt; deployment version unification documented in PR/runbook. No DDL, no production DB, no production service restart."
+      "actor": "codex",
+      "note": "User required BUG-571 to use upgraded native LiteLLM pricing only, no model-name fallback/mapping. Scope expanded to pin LiteLLM dependency in requirements.txt; deployment version unification documented in PR/runbook. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:26:00Z"
     },
     {
-      "timestamp": "2026-07-02T05:56:39.499232+00:00",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Add backend/requirements.txt so BUG-571 can pin the same LiteLLM/OpenAI dependency versions across Windows Conda/root requirements and backend/remote deployment requirements. No DDL, no production DB, no production service restart."
+      "actor": "codex",
+      "note": "Add backend/requirements.txt so BUG-571 can pin the same LiteLLM/OpenAI dependency versions across Windows Conda/root requirements and backend/remote deployment requirements. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:56:39.499232+00:00"
     },
     {
-      "timestamp": "2026-07-02T05:58:00.942154+00:00",
-      "actor": "codex",
       "action": "expand_allowed_write_scope",
-      "note": "Add .github/workflows/test.yml so CI backend dependency usage pins the same LiteLLM/OpenAI versions as Windows Conda/backend deployment requirements. No DDL, no production DB, no production service restart."
+      "actor": "codex",
+      "note": "Add .github/workflows/test.yml so CI backend dependency usage pins the same LiteLLM/OpenAI versions as Windows Conda/backend deployment requirements. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:58:00.942154+00:00"
     },
     {
-      "timestamp": "2026-07-02T06:26:13.035164+00:00",
-      "actor": "codex",
       "action": "set_backend_dependency_gate_pending",
-      "note": "BUG-571 now changes backend Python dependency pins: LiteLLM must be upgraded uniformly to 1.90.2 and OpenAI to 2.44.0 in Windows Conda AIstock runtime, WSL, and remote machines before production cost readiness; no DDL, no production DB, no service restart performed by Codex."
+      "actor": "codex",
+      "note": "BUG-571 now changes backend Python dependency pins: LiteLLM must be upgraded uniformly to 1.90.2 and OpenAI to 2.44.0 in Windows Conda AIstock runtime, WSL, and remote machines before production cost readiness; no DDL, no production DB, no service restart performed by Codex.",
+      "timestamp": "2026-07-02T06:26:13.035164+00:00"
     },
     {
-      "timestamp": "2026-07-02T07:41:20.786731+00:00",
-      "actor": "codex",
       "action": "implementation",
-      "note": "Implemented BUG-571 with LiteLLM native-pricing-only path: pinned litellm==1.90.2 and openai==2.44.0 across root/backend/CI dependency surfaces, removed DeepSeek v4-pro manual/model-name fallback pricing, made repricing fail loud when native pricing/version is unavailable, preserved current-price display repricing, and added dependency/version/native pricing tests. Verified LiteLLM 1.90.2 wheel contains deepseek/deepseek-v4-pro pricing matching DeepSeek official pricing. No DDL, no production DB, no production service restart."
+      "actor": "codex",
+      "note": "Implemented BUG-571 with LiteLLM native-pricing-only path: pinned litellm==1.90.2 and openai==2.44.0 across root/backend/CI dependency surfaces, removed DeepSeek v4-pro manual/model-name fallback pricing, made repricing fail loud when native pricing/version is unavailable, preserved current-price display repricing, and added dependency/version/native pricing tests. Verified LiteLLM 1.90.2 wheel contains deepseek/deepseek-v4-pro pricing matching DeepSeek official pricing. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T07:41:20.786731+00:00"
     },
     {
-      "timestamp": "2026-07-02T09:03:05.651192+00:00",
-      "actor": "codex",
       "action": "validation_refresh",
-      "note": "Rebased BUG-571 onto origin/main c9e8ee75 and revalidated native LiteLLM pricing-only fix. Verified LiteLLM 1.90.2 wheel native price map contains deepseek/deepseek-v4-pro with DeepSeek official pricing; no model-name mapping/manual fallback added. Full ra_phase7 wrapper repeated the known Playwright webServer cleanup hang after all subprocess tests passed; no production services/DB/DDL touched."
+      "actor": "codex",
+      "note": "Rebased BUG-571 onto origin/main c9e8ee75 and revalidated native LiteLLM pricing-only fix. Verified LiteLLM 1.90.2 wheel native price map contains deepseek/deepseek-v4-pro with DeepSeek official pricing; no model-name mapping/manual fallback added. Full ra_phase7 wrapper repeated the known Playwright webServer cleanup hang after all subprocess tests passed; no production services/DB/DDL touched.",
+      "timestamp": "2026-07-02T09:03:05.651192+00:00"
     },
     {
-      "timestamp": "2026-07-02T09:07:19.259951+00:00",
-      "actor": "codex",
       "action": "native_pricing_source_verification",
-      "note": "Confirmed PyPI latest LiteLLM 1.90.2 exposes deepseek/deepseek-v4-pro in litellm.model_cost with official DeepSeek prices; BUG-571 remains native-pricing-only with no model-name mapping or manual fallback. Deployment dependency gate remains pending until Windows Conda, WSL, and remote runtimes all run litellm==1.90.2/openai==2.44.0."
+      "actor": "codex",
+      "note": "Confirmed PyPI latest LiteLLM 1.90.2 exposes deepseek/deepseek-v4-pro in litellm.model_cost with official DeepSeek prices; BUG-571 remains native-pricing-only with no model-name mapping or manual fallback. Deployment dependency gate remains pending until Windows Conda, WSL, and remote runtimes all run litellm==1.90.2/openai==2.44.0.",
+      "timestamp": "2026-07-02T09:07:19.259951+00:00"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-02T03:28:57.455458Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "73282884066cb817cd95cfd0b2f840fb06269b00",
+  "fixed_at": "2026-07-02T09:54:12.168565Z",
   "github_issue_number": 1804,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1804",
   "last_seen_at": "2026-07-02T03:28:57.455458Z",
@@ -93,6 +93,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1822",
   "production_backend_dependency_gate": "pending",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -107,7 +108,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -142,6 +143,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1822 checks all SUCCESS/SKIPPED; merge commit 73282884066cb817cd95cfd0b2f840fb06269b00; local validation per PR body passed; ra_phase7 wrapper cleanup hang was environment-only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -155,23 +159,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "validation_evidence": [
-    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py -q -k llm_usage_or_missing_fake_usage -> 13 passed, 128 deselected",
-    "rtk proxy python -m pytest backend/tests/research_assistant/test_service.py -q -> 141 passed",
-    "rtk proxy python -m pip install --dry-run litellm==1.90.2 openai==2.44.0 -> would install litellm-1.90.2 openai-2.44.0",
-    "rtk proxy python -c wheel probe for litellm==1.90.2 -> litellm/model_prices_and_context_window_backup.json contains deepseek/deepseek-v4-pro with input_cost_per_token=4.35e-07, cache_read_input_token_cost=3.625e-09, output_cost_per_token=8.7e-07, source=https://api-docs.deepseek.com/quick_start/pricing",
-    "rtk proxy python -c no-deps import probe for litellm==1.90.2 -> litellm.model_cost contains deepseek/deepseek-v4-pro with input_cost_per_token=4.35e-07, cache_read_input_token_cost=3.625e-09, output_cost_per_token=8.7e-07, source=https://api-docs.deepseek.com/quick_start/pricing",
-    "rtk proxy python -c urllib DeepSeek pricing check -> official page contains deepseek-v4-pro, 0.435, 0.003625, 0.87",
-    "rtk proxy python -m nox -s l0 -> successful",
-    "rtk proxy python -m nox -s research_assistant_backend -> 436 passed, 4 warnings",
-    "rtk proxy python -m nox -s research_assistant_mcp_contract -> 38 passed",
-    "rtk proxy python -m nox -s validation_module_registry_l0 -> 8 passed + ownership scan mapped=14/unmapped=0/ambiguous=0",
-    "rtk proxy npm exec -- tsc --noEmit --incremental false (from frontend/) -> passed",
-    "rtk proxy npm run lint (from frontend/) -> passed with pre-existing react-hooks warnings",
-    "rtk proxy npm run build (from frontend/) -> passed with pre-existing react-hooks warnings",
-    "rtk proxy ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed",
-    "rtk proxy git diff --check -> passed",
-    "rtk proxy python -m nox -s ra_phase7_full_accept -> backend 436 passed + frontend lint/build passed + Playwright 4/4 passed, but wrapper hung after Playwright webServer cleanup; stopped phase7 Node children and recorded wrapper as failed due environment cleanup hang, not product test failure"
-  ]
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
