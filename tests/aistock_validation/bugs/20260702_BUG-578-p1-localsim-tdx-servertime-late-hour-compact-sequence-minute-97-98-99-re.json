@@ -1,0 +1,74 @@
+{
+  "actual": "2026-07-02 LocalSim runs paper_e225bf8a68244c54b4cc25506dadad81 and paper_b26d2312d986441f8497f7484c05f0ec are FAILED_RETRYABLE/PRE_RUN_FAILED with REALTIME_QUOTE_TIMESTAMP_INVALID on raw timestamps 13984048 and 13990274; broker_called=false and submitted_intents=0.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "tests/aistock_validation/bugs/20260702_BUG-578-p1-localsim-tdx-servertime-late-hour-compact-sequence-minute-97-98-99-re.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-578",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T13:44:21.521894Z",
+  "description": "2026-07-02 LocalSim runs paper_e225bf8a68244c54b4cc25506dadad81 and paper_b26d2312d986441f8497f7484c05f0ec are FAILED_RETRYABLE/PRE_RUN_FAILED with REALTIME_QUOTE_TIMESTAMP_INVALID on raw timestamps 13984048 and 13990274; broker_called=false and submitted_intents=0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-15d7da6f2012",
+      "timestamp": "2026-07-02T13:44:21.521889Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_worktrees\\localsim-tdx-timestamp-rca-20260702\\docs\\handoff\\localsim_tdx_realtime_quote_timestamp_invalid_rca_20260702.md"
+  ],
+  "expected": "TDX compact ServerTime late-hour sentinel minutes 97/98/99 are conservatively clamped to HH:59:00 and still pass through the existing date, 300s freshness, and future-skew guards; malformed or unobserved encodings remain loud invalid.",
+  "first_seen_at": "2026-07-02T13:44:21.521894Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1830,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1830",
+  "last_seen_at": "2026-07-02T13:44:21.521894Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only RCA: F:\\Dev\\AIstock_worktrees\\localsim-tdx-timestamp-rca-20260702\\docs\\handoff\\localsim_tdx_realtime_quote_timestamp_invalid_rca_20260702.md; targeted parser test should show 13984048/13990274 currently invalid.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][LocalSim] TDX ServerTime late-hour compact sequence minute 97/98/99 rejected as invalid timestamp",
+  "trigger_condition": {
+    "fingerprint": "15d7da6f2012177d75d1d1ec",
+    "source_event_id": "FE-20260702-15d7da6f2012"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
