@@ -2,7 +2,7 @@
 
 ## Background / 背景
 
-2026-07-01 战略 session 在真实 WSL `rdagent-gpu` qlib 环境（非 stub，交易日 2026-06-30，只读）验证：现有资产固化对 13 个 active 存量包只有 2 个真正 self-contained，其余 11 个在删除 QE 源后会失败。该结论来自 `F:\Dev\AIstock\docs\analysis\strategy_package_asset_freeze_runtime_oracle_findings_20260701.md`（当前为战略 session 取证文档；本设计把验收关键事实内嵌，避免依赖未合入文件）。
+2026-07-01 Tier2 read-only oracle evidence (real WSL `rdagent-gpu` qlib, not stub, trade_date=2026-06-30, production DB read-only) showed that existing asset freeze is self-contained for only 2 of 13 active packages; 11 would fail after QE source deletion. Evidence is now tracked in `docs/analysis/strategy_package_asset_freeze_runtime_oracle_findings_20260701.md`; this design also embeds the acceptance facts for review.
 
 已定性缺陷在公共冻结路径 `backend/services/strategy_package/package_asset_freeze.py:821`：
 
