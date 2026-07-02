@@ -16,6 +16,7 @@ from backend.services.selection_center.repository import InMemorySelectionCenter
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.strategy_package.asset_eligibility import (
+    MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED,
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
     StrategyPackageAssetEligibilityService,
 )
@@ -185,7 +186,7 @@ def test_multi_alpha_parent_enable_lifecycle_uses_shared_status_machine_after_dr
     )
 
 
-def test_multi_alpha_parent_enable_paper_without_dry_run_fails_before_transition() -> None:
+def test_multi_alpha_parent_enable_paper_without_dry_run_is_allowed_for_localsim_default() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
     admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
     service = StrategyPackageService(
@@ -198,18 +199,40 @@ def test_multi_alpha_parent_enable_paper_without_dry_run_fails_before_transition
         reason="approve_backtest_for_multi_alpha_lifecycle_test",
     )
 
-    with pytest.raises(StrategyPackageValidationError) as exc_info:
-        service.enable_paper(parent.package_id)
+    paper_enabled = service.enable_paper(parent.package_id)
+    summary = service.asset_eligibility.summarize(parent, broker_backend="local_sim")
 
-    err = exc_info.value
-    context = err.context or {}
-    assert context.get("package_id") == parent.package_id
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in context.get("blockers", [])
-    assert package_repo.get(parent.package_id).package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper_enabled.package_status == PackageStatus.PAPER_ENABLED
+    assert summary.eligible is True
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in summary.warnings
+    check = next(item for item in summary.checks if item.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+    assert check.status == "WARN"
+    assert check.context["reason_code"] == MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
+    assert admission_repo.records == {}
     assert [event.reason for event in service.list_status_events(parent.package_id)] == [
         "package_created",
         "approve_backtest_for_multi_alpha_lifecycle_test",
+        "enable_paper",
     ]
+
+
+def test_selection_full_path_lists_multi_alpha_without_localsim_dry_run_admission() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    _artifact_service_instance, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
+
+    selectable = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        package_health_service=SelectionPackageHealthService(artifact_repository=artifact_repo),
+    ).list_selectable_packages(view="full")
+
+    row = next(item for item in selectable if item["package_id"] == parent.package_id)
+    assert row["asset_eligibility"]["eligible"] is True
+    assert row["asset_eligibility"]["blockers"] == []
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in row["asset_eligibility"]["warnings"]
+    assert admission_repo.records == {}
 
 
 def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_closed() -> None:
@@ -240,6 +263,40 @@ def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_cl
         service.create_portfolio(
             package_id=parent.package_id,
             portfolio_name="multi alpha minqmt",
+            initial_cash=1_000_000,
+            start_date=date(2024, 7, 3),
+            data_source=MinuteDataSource.MINIQMT_REALTIME,
+            broker_backend="minqmt_sim",
+        )
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in getattr(excinfo.value, "context", {}).get("blockers", [])
+
+
+def test_local_sim_portfolio_create_succeeds_without_admission_and_minqmt_stays_closed() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
+    service = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=InMemoryPaperTradingV2Repository(),
+        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+    )
+
+    portfolio = service.create_portfolio(
+        package_id=parent.package_id,
+        portfolio_name="multi alpha local sim no admission",
+        initial_cash=1_000_000,
+        start_date=date(2024, 7, 3),
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        broker_backend="local_sim",
+    )
+
+    assert portfolio.package_id == parent.package_id
+    assert portfolio.broker_backend == "local_sim"
+    assert admission_repo.records == {}
+
+    with pytest.raises(Exception) as excinfo:
+        service.create_portfolio(
+            package_id=parent.package_id,
+            portfolio_name="multi alpha minqmt no admission",
             initial_cash=1_000_000,
             start_date=date(2024, 7, 3),
             data_source=MinuteDataSource.MINIQMT_REALTIME,
@@ -328,6 +385,38 @@ def test_single_alpha_paper_create_still_passes_without_admission_reader() -> No
 
     assert portfolio.package_id == manifest.package_id
     assert portfolio.broker_backend == "local_sim"
+
+
+def test_unknown_multi_alpha_paper_admission_blocker_still_blocks_localsim() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = deepcopy(manifest.source_evidence)
+    source_evidence["multi_alpha"]["paper_admission"] = {
+        "eligible": False,
+        "blocking": ["unsupported_multi_alpha_policy"],
+    }
+    updated = package_repo.save_manifest(
+        freeze_manifest(
+            manifest.model_copy(
+                update={
+                    "package_id": f"{parent.package_id}_unknown_blocker",
+                    "package_name": f"{parent.package_name} unknown blocker",
+                    "source_evidence": source_evidence,
+                    "manifest_sha256": None,
+                }
+            )
+        )
+    )
+
+    summary = StrategyPackageAssetEligibilityService(
+        admission_reader=InMemoryMultiAlphaPaperAdmissionRepository()
+    ).summarize(updated, broker_backend="local_sim")
+
+    assert summary.eligible is False
+    assert "unsupported_multi_alpha_policy" in summary.blockers
+    check = next(item for item in summary.checks if item.name == "unsupported_multi_alpha_policy")
+    assert check.status == "FAIL"
+    assert check.context["reason_code"] == "unsupported_multi_alpha_policy"
 
 
 def test_router_paper_runtime_dry_run_success_and_loud_error(monkeypatch: pytest.MonkeyPatch) -> None:

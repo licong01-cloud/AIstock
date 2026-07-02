@@ -19,6 +19,7 @@ from backend.services.strategy_package.validation_run import (
 )
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_multi_alpha_live_selection import _make_parent
 
 import pytest
 
@@ -1146,6 +1147,45 @@ def test_strategy_package_summary_listing_omits_heavy_manifest_and_runtime_contr
     assert rows[0]["asset_eligibility"] == {"eligible": True, "summary_only": True, "blockers": []}
     assert "manifest" not in rows[0]
     assert "runtime_config_contract" not in rows[0]
+
+
+def test_strategy_package_summary_listing_treats_localsim_multi_alpha_dry_run_blocker_as_warning() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=10)
+    row = next(item for item in rows if item["package_id"] == parent.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is True
+    assert row["asset_eligibility"]["blockers"] == []
+    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
+
+
+def test_strategy_package_summary_listing_keeps_unknown_multi_alpha_blocker_hard_blocked() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    source_evidence["multi_alpha"]["paper_admission"] = {
+        "eligible": False,
+        "blocking": ["multi_alpha_runtime_not_validated_until_dry_run", "unsupported_multi_alpha_policy"],
+    }
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_unknown_summary_blocker",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["unsupported_multi_alpha_policy"]
+    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
 
 
 def test_strategy_package_summary_listing_does_not_hash_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1475,6 +1475,36 @@ def test_selectable_packages_summary_path_filters_summary_ineligible_rows() -> N
     assert [item["package_id"] for item in packages] == [manifest.package_id]
 
 
+def test_selectable_packages_summary_path_preserves_localsim_multi_alpha_warning_rows() -> None:
+    class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            rows = super().list_summaries(status=status, limit=limit)
+            rows[0]["alpha_mode"] = "multi_alpha"
+            rows[0]["asset_eligibility"] = {
+                "eligible": True,
+                "summary_only": True,
+                "blockers": [],
+                "warnings": ["multi_alpha_runtime_not_validated_until_dry_run"],
+            }
+            return rows[:limit]
+
+    package_repo = SummaryOnlyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable_multi_alpha_warn", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=10, view="summary")
+
+    assert [item["package_id"] for item in packages] == [manifest.package_id]
+    assert packages[0]["asset_eligibility"]["eligible"] is True
+    assert packages[0]["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
+
+
 def test_selection_center_authoritative_mode_uses_platform_risk_policy_and_display_top_n() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = st_pit_manifest_with_score_rows(

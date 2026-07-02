@@ -188,6 +188,20 @@ export const strategyPackageApi = {
       manifest_sha256: data.manifest_sha256 || data.package?.manifest_sha256 || "",
     };
   },
+  async paperRuntimeDryRun(packageId: string, payload: {
+    broker_backend: "local_sim" | "minqmt_sim";
+    trade_date: string;
+    runtime_variant: "top_k=25" | "top_k=50";
+    confirmation: string;
+    validated_by?: string;
+    runtime_config?: JsonObject;
+    initial_cash?: number;
+  }): Promise<JsonObject> {
+    return apiFetch(
+      `/strategy-packages/${encodeURIComponent(packageId)}/paper-runtime-dry-run`,
+      body(payload),
+    );
+  },
   async createFromCandidate(candidateId: string, payload: { manifest_json?: JsonObject | null } = {}): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(
       `/strategy-packages/from-candidate/${encodeURIComponent(candidateId)}`,

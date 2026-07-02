@@ -13,6 +13,7 @@ from backend.db import init_trading_core_v2_schema
 from backend.routers import strategy_packages as router_module
 from backend.services.multi_alpha.combine_backtest import InMemoryCombineBacktestRepository
 from backend.services.qe_archive.multi_alpha_provenance import SeedProvenance
+from backend.services.strategy_package.asset_eligibility import MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import AlphaCombinationPolicy, AlphaMode, PackageStatus, SourceType
 from backend.services.strategy_package.multi_alpha_promotion import (
@@ -653,16 +654,29 @@ def test_promote_rejects_live_rolling_weight_policy_in_p0() -> None:
     assert excinfo.value.context["weight_policy_mode"] == "live_rolling_ic_weighted"
 
 
-def test_asset_eligibility_blocks_multi_alpha_until_dry_run() -> None:
+def test_asset_eligibility_warns_multi_alpha_localsim_without_dry_run_and_blocks_minqmt() -> None:
     combine_repo, package_repo, child_a1, child_fund = _seed_repos()
     service = _service(combine_repo, package_repo)
     result = _promote(service, child_a1, child_fund)
 
     eligibility = service.component_service.repository.get(result.package.package_id)
-    summary = router_module.StrategyPackageAssetEligibilityService().summarize(eligibility)
+    eligibility_service = router_module.StrategyPackageAssetEligibilityService()
+    local_summary = eligibility_service.summarize(eligibility, broker_backend="local_sim")
+    minqmt_summary = eligibility_service.summarize(eligibility, broker_backend="minqmt_sim")
 
-    assert summary.eligible is False
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in summary.blockers
+    assert local_summary.eligible is True
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER not in local_summary.blockers
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in local_summary.warnings
+    local_check = next(check for check in local_summary.checks if check.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+    assert local_check.status == "WARN"
+    assert local_check.context["reason_code"] == MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
+    assert local_check.context["original_blocker"] == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER
+
+    assert minqmt_summary.eligible is False
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in minqmt_summary.blockers
+    minqmt_check = next(check for check in minqmt_summary.checks if check.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+    assert minqmt_check.status == "FAIL"
+    assert minqmt_check.context["reason_code"] == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER
 
 
 def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.MonkeyPatch) -> None:
