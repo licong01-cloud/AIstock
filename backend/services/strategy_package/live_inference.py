@@ -45,7 +45,7 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 
-from .models import FactorAsset, ModelAsset, ModelCodeAsset, RuntimeAssetManifest, StrategyPackageManifest
+from .models import AlphaMode, FactorAsset, ModelAsset, ModelCodeAsset, RuntimeAssetManifest, StrategyPackageManifest
 from .package_asset_freeze import manifest_has_frozen_runtime_assets, pickled_model_code_references_from_params_bytes
 from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
 from .runtime_schema import (
@@ -1086,6 +1086,17 @@ class QEExperimentRuntimeAssetResolver:
 
         checks: list[LiveInferencePreflightCheck] = []
 
+        if manifest is not None and manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            return self._preflight_for_multi_alpha_parent_package(
+                source_type=source_type,
+                source_id=source_id,
+                loop_id=loop_id,
+                run_id=run_id,
+                artifact_config=artifact_config,
+                manifest=manifest,
+                package_id=package_id,
+            )
+
         # ---- Check 1: qe_source ----
         try:
             source_kwargs: dict[str, Any] = {
@@ -1312,6 +1323,289 @@ class QEExperimentRuntimeAssetResolver:
                     "candidate_count": candidate_count,
                     "referenced_model_modules": referenced_model_modules,
                 },
+            )
+        )
+
+        return LiveInferencePreflightResult(passed=True, checks=checks)
+
+    def _preflight_for_multi_alpha_parent_package(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        run_id: str | None,
+        artifact_config: dict[str, Any],
+        manifest: StrategyPackageManifest,
+        package_id: str | None,
+    ) -> LiveInferencePreflightResult:
+        """Run cold-start preflight for MULTI_ALPHA parent-owned leg assets."""
+
+        package_key = str(package_id or manifest.package_id or "").strip()
+        checks: list[LiveInferencePreflightCheck] = []
+        try:
+            from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+
+            evidence = _multi_alpha_evidence(manifest)
+            leg_slices = _parent_leg_runtime_slices(manifest, evidence=evidence, package_id=package_key)
+        except TradingCoreError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "verify the MULTI_ALPHA parent package embeds every leg model, "
+                        "factor source, and Alpha158 runtime schema asset"
+                    ),
+                    context={
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "loop_id": loop_id,
+                        "run_id": run_id,
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        leg_sources: list[tuple[Any, QEExperimentRuntimeSource]] = []
+        for leg_slice in leg_slices:
+            try:
+                source = self.load_source_for_strategy_package_leg(
+                    manifest=manifest,
+                    package_id=package_key,
+                    leg_id=leg_slice.leg_id,
+                    model_asset=leg_slice.model_asset,
+                    factor_set=list(leg_slice.factor_set),
+                    runtime_assets=leg_slice.runtime_assets,
+                )
+            except TradingCoreError as exc:
+                checks.append(
+                    LiveInferencePreflightCheck(
+                        name=PREFLIGHT_CHECK_QE_SOURCE,
+                        status=PREFLIGHT_STATUS_BLOCKED,
+                        message=exc.message,
+                        suggestion=(
+                            "verify the MULTI_ALPHA parent package embeds the missing or mismatched "
+                            "asset for this leg"
+                        ),
+                        context={
+                            "source_type": source_type,
+                            "source_id": source_id,
+                            "loop_id": loop_id,
+                            "run_id": run_id,
+                            "package_id": package_key,
+                            "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                            "leg_id": leg_slice.leg_id,
+                            "model_id": leg_slice.component.model_id,
+                            **(exc.context or {}),
+                        },
+                    )
+                )
+                checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE))
+                return LiveInferencePreflightResult(passed=False, checks=checks)
+            leg_sources.append((leg_slice, source))
+
+        leg_context = [
+            {
+                "leg_id": leg_slice.leg_id,
+                "model_id": leg_slice.component.model_id,
+                "factor_count": len(leg_slice.factor_set),
+                "source_workspace_type": source.source_workspace_type,
+                "model_params_origin": source.model_params_origin,
+            }
+            for leg_slice, source in leg_sources
+        ]
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA parent package leg runtime assets resolved",
+                context={
+                    "package_id": package_key,
+                    "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                    "leg_count": len(leg_sources),
+                    "legs": leg_context,
+                },
+            )
+        )
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_NODE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA parent package assets do not require QE node access",
+                context={
+                    "package_id": package_key,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "leg_count": len(leg_sources),
+                },
+            )
+        )
+
+        conf_paths: list[dict[str, Any]] = []
+        active_leg_context: dict[str, Any] = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                conf_paths.append(
+                    {
+                        **active_leg_context,
+                        "conf_path": str(self._resolve_conf_path(source)),
+                    }
+                )
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_CONF_YAML,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify the parent package Alpha158 schema asset can materialize conf.yaml for each leg",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_CONF_YAML))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_CONF_YAML,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg conf.yaml files are present",
+                context={"package_id": package_key, "leg_count": len(conf_paths), "legs": conf_paths},
+            )
+        )
+
+        factor_summaries: list[dict[str, Any]] = []
+        active_leg_context = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                factor_source_dir = self._resolve_factor_source_dir(source)
+                missing_factor_samples: list[str] = []
+                sample_factors = list(source.factor_names[:3])
+                for factor_name in sample_factors:
+                    candidate = factor_source_dir / f"{factor_name}.py"
+                    if not candidate.exists() or not candidate.is_file():
+                        missing_factor_samples.append(factor_name)
+                if missing_factor_samples and len(missing_factor_samples) == len(sample_factors):
+                    checks.append(
+                        LiveInferencePreflightCheck(
+                            name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                            status=PREFLIGHT_STATUS_BLOCKED,
+                            message="MULTI_ALPHA leg factor source files are missing for declared factors",
+                            suggestion="verify the parent package factor_set contains the leg factor source assets",
+                            context={
+                                "package_id": package_key,
+                                "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                                **active_leg_context,
+                                "factor_source_dir": str(factor_source_dir),
+                                "missing_factor_samples": missing_factor_samples,
+                                "factor_names_count": len(source.factor_names),
+                            },
+                        )
+                    )
+                    checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+                    return LiveInferencePreflightResult(passed=False, checks=checks)
+                factor_summaries.append(
+                    {
+                        "leg_id": leg_slice.leg_id,
+                        "model_id": leg_slice.component.model_id,
+                        "factor_source_dir": str(factor_source_dir),
+                        "factor_names_count": len(source.factor_names),
+                        "sampled_factors": sample_factors,
+                    }
+                )
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify the parent package factor_set contains every leg factor source asset",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg factor source directories and sampled factors are present",
+                context={"package_id": package_key, "leg_count": len(factor_summaries), "legs": factor_summaries},
+            )
+        )
+
+        model_summaries: list[dict[str, Any]] = []
+        active_leg_context = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                model_params_path, candidate_count = self._resolve_model_params_path(source, artifact_config)
+                referenced_model_modules = _require_model_code_for_pickled_local_modules(
+                    model_params_path=model_params_path,
+                    model_code_roots=[source.asset_workspace_path, model_params_path.parent],
+                    package_id=source.package_id,
+                    experiment_id=source.experiment_id,
+                    source_workspace_type=source.source_workspace_type,
+                    phase="preflight",
+                )
+                model_summaries.append(
+                    {
+                        **active_leg_context,
+                        "model_params_path": str(model_params_path),
+                        "candidate_count": candidate_count,
+                        "referenced_model_modules": referenced_model_modules,
+                    }
+                )
+        except TradingCoreError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify every MULTI_ALPHA leg has a parent-owned model weight and required model code assets",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg model params.pkl files are locatable",
+                context={"package_id": package_key, "leg_count": len(model_summaries), "legs": model_summaries},
             )
         )
 

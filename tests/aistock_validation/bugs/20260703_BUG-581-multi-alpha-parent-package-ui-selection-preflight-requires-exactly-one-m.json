@@ -2,7 +2,10 @@
   "actual": "UI selection preflight for multi-alpha parent StrategyPackage calls the single-model package asset path and fails with 'single-alpha runtime package asset path requires exactly one model asset' before the multi-alpha live inference provider can run. Preflight must branch on alpha_mode=MULTI_ALPHA, validate each leg from parent package assets only, keep single-alpha preflight unchanged, and fail closed with leg/model/asset reason codes.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260703_BUG-581-multi-alpha-parent-package-ui-selection-preflight-requires-exactly-one-m.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/tests/strategy_package/test_multi_alpha_live_preflight.py",
+    "backend/tests/selection_center/test_live_inference_preflight_wiring.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-581",
@@ -20,6 +23,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260703-e21eccad78f4",
       "timestamp": "2026-07-02T16:14:07.959422Z"
+    },
+    {
+      "timestamp": "2026-07-03T00:20:00+08:00",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded after graph-first refs showed initial BUG intake only covered registry files; fix requires multi-alpha preflight code and targeted tests."
     }
   ],
   "evidence_uris": [],
@@ -94,5 +103,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
