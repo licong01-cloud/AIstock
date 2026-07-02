@@ -35,8 +35,8 @@
   "expected": "Backend-only service/repository/runtime/test changes should default to targeted backend/contract validation. Frontend/Playwright L3 plans should be required only when frontend files, UI routes, Playwright specs, API schemas/DTOs, response contracts, or page-visible fields change; otherwise they should be recommended/final-acceptance only. CI backend matrix should select only relevant backend sessions when possible.",
   "first_seen_at": "2026-07-02T09:24:39.296874Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e6462e8559077adfc4453793f8eb3049017ccaed",
+  "fixed_at": "2026-07-02T10:21:45.509031Z",
   "github_issue_number": 1823,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1823",
   "last_seen_at": "2026-07-02T09:24:39.296874Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1826",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -67,6 +68,12 @@
     "fingerprint": "82f7ca929e13cfa0b85f16c4",
     "source_event_id": "FE-20260702-82f7ca929e13"
   },
+  "validation_evidence": [
+    "GitHub PR #1826 CI -> 11 passed, 0 failed",
+    "python -m nox -s validation_center_backend -> 465 passed",
+    "python -m nox -s validation_module_registry_l0 validation_catalog_integrity -> passed",
+    "python -m nox -s l0 guardrail_changed_files -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
