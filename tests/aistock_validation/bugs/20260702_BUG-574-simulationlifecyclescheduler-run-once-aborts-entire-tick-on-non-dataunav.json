@@ -1,0 +1,114 @@
+{
+  "actual": "RCA verified 2026-07-02: SimulationLifecycleScheduler.run_once() only catches DataUnavailableError and RuntimeConfigInvalidError at the per-binding loop. A LiveInferencePreflightError from selection/preflight (strategy_package_model_code_missing for pkg_378...) escaped the per-binding boundary, aborted the whole tick, skipped later eligible MiniQMT/LocalSim bindings, and only landed in background last_result/logs without durable simulation_daily_run failure evidence. Fix must isolate non-fatal per-binding exceptions, persist durable pre-run failure with loud reason/context, continue later bindings, preserve raise_on_error/system-exception semantics, and expose true lifecycle scheduler status fields.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_router_summary.py",
+    "tests/aistock_validation/bugs/20260702_BUG-574-simulationlifecyclescheduler-run-once-aborts-entire-tick-on-non-dataunav.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md",
+    "docs/handoff/bug_574_simulation_lifecycle_scheduler_per_binding_isolation_handoff_20260702.md"
+  ],
+  "assigned_agent": "Codex",
+  "bug_id": "BUG-574",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T07:28:55.176698Z",
+  "description": "RCA verified 2026-07-02: SimulationLifecycleScheduler.run_once() only catches DataUnavailableError and RuntimeConfigInvalidError at the per-binding loop. A LiveInferencePreflightError from selection/preflight (strategy_package_model_code_missing for pkg_378...) escaped the per-binding boundary, aborted the whole tick, skipped later eligible MiniQMT/LocalSim bindings, and only landed in background last_result/logs without durable simulation_daily_run failure evidence. Fix must isolate non-fatal per-binding exceptions, persist durable pre-run failure with loud reason/context, continue later bindings, preserve raise_on_error/system-exception semantics, and expose true lifecycle scheduler status fields.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-da8986c555ec",
+      "timestamp": "2026-07-02T07:28:55.176693Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "timestamp": "2026-07-02T07:46:01Z",
+      "note": "Scope expanded from registry-only intake to the user-authorized simulation_runtime scheduler/ops code, focused scheduler/router tests, and durable handoff evidence before product edits."
+    },
+    {
+      "action": "validation_passed_pending_pr",
+      "actor": "codex",
+      "timestamp": "2026-07-02T08:42:42.155230Z",
+      "note": "Implemented per-binding exception isolation, durable pre-run failure, scheduler status projection, and regression coverage; PR pending, not merged."
+    },
+    {
+      "action": "pr_opened_pending_tier2",
+      "actor": "codex",
+      "timestamp": "2026-07-02T08:53:51.781897Z",
+      "note": "PR #1818 opened from BUG-574 worktree; not merged by develop-only window, awaiting strategic session Tier2 review."
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md",
+    "docs/handoff/bug_574_simulation_lifecycle_scheduler_per_binding_isolation_handoff_20260702.md"
+  ],
+  "expected": "SimulationLifecycleScheduler isolates every non-fatal per-binding pre-run/selection/preflight exception, persists a durable simulation_daily_run pre-run failure with package/reason/preflight context, continues later eligible bindings, preserves raise_on_error and BaseException semantics, and exposes lifecycle scheduler running/thread/last-run/error status via the read-only status API.",
+  "first_seen_at": "2026-07-02T07:28:55.176698Z",
+  "fix_branch": "bug/BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702",
+  "fix_commit": "f6e167d888ff869e4bec375bb8aa562cb820ea6d",
+  "fixed_at": null,
+  "github_issue_number": 1813,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1813",
+  "last_seen_at": "2026-07-02T07:28:55.176698Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "See docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md; unit regression injects LiveInferencePreflightError in the first binding and verifies later bindings still run.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "SimulationLifecycleScheduler run_once aborts entire tick on non-DataUnavailable per-binding exception; one bad binding starves all bindings",
+  "trigger_condition": {
+    "fingerprint": "da8986c555ecf7d9cdf2a8ab",
+    "source_event_id": "FE-20260702-da8986c555ec"
+  },
+  "verification_run_id": "BUG-574 local validation 2026-07-02",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "pr_opened_pending_tier2",
+  "validation_evidence": [
+    "rtk python -m py_compile backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 104 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_router_summary.py -q -> 8 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 12 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 127 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> 834 passed, 1 skipped, 2 xfailed",
+    "rtk python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-574 --module simulation_runtime ... -> passed",
+    "rtk git diff --check -> passed"
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1818"
+}
