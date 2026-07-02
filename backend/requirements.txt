@@ -1,7 +1,8 @@
 fastapi==0.127.0
 httpx==0.28.1
 numpy==2.4.0
-openai==2.14.0
+litellm==1.90.2
+openai==2.44.0
 pandas==2.3.3
 psycopg2-binary==2.9.11
 pydantic_settings==2.12.0

@@ -15,7 +15,7 @@ export function formatUsageNumber(value: unknown): string {
 
 export function formatUsageUsd(value: unknown, reason?: unknown): string {
   if (value === null || value === undefined || value === "") {
-    const detail = reason ? `：${String(reason)}` : "";
+    const detail = reason ? `(${String(reason)})` : "";
     return `成本不可用${detail}`;
   }
   const number = Number(value);
@@ -32,4 +32,3 @@ export function usageStatusText(summary?: AssistantLlmUsageTotals | null): strin
 export function usageTotalCost(summary?: AssistantLlmUsageTotals | null): string {
   return formatUsageUsd(summary?.total_cost_usd, summary?.cost_reason_code || summary?.reason_code);
 }
-
