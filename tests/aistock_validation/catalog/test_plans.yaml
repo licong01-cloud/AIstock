@@ -344,6 +344,23 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest]
+  - plan_key: qe_read_backend
+    title: QE read-path backend regression
+    module: qe
+    level: L2
+    command_key: nox_qe_read_backend
+    nox_session: qe_read_backend
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: false
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [pytest]
   - plan_key: strategy_package_governance_ui
     title: Strategy Package Governance UI Playwright tests
     module: strategy_package

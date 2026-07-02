@@ -9,7 +9,9 @@
     "backend/tests/scripts/test_issue_flow.py",
     "backend/tests/scripts/test_ci_change_classifier.py",
     "tests/aistock_validation/bugs/20260702_BUG-577-issue-workflow-requires-frontend-l3-validation-for-backend-only-changes.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/test.yml",
+    "backend/services/validation/plan_catalog.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-577",

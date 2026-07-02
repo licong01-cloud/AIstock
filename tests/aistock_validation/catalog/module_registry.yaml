@@ -19,7 +19,8 @@ modules:
     description: Shared QE service layer and runtime contracts.
     description_zh: 覆盖 QE 共享服务层、运行时配置、任务编排、完成回调与跨实验契约，为各类 QE 实验提供统一基础能力。
     test_plans:
-      required_on_change: [l0, qe_read_l3]
+      required_on_change: [l0, qe_read_backend]
+      recommended: [qe_read_l3]
   - module_id: qe.single_experiment
     display_name: QE single experiment
     parent_module: qe
@@ -30,8 +31,8 @@ modules:
     ui_routes: [/quantevolver, /quantevolver/compose, /quantevolver/experiments, /quantevolver/templates]
     api_routes: [/api/v1/quantevolver/*]
     test_plans:
-      required_on_change: [l0, qe_read_l3]
-      recommended: [qe_data_contract_backend]
+      required_on_change: [l0, qe_read_backend]
+      recommended: [qe_read_l3, qe_data_contract_backend]
   - module_id: qe.custom_evolution
     display_name: QE custom evolution
     parent_module: qe
@@ -41,7 +42,8 @@ modules:
     description_zh: 覆盖用户自定义 loop 演进、选中 loop 复跑、参数调整和组合探索流程。
     ui_routes: [/quantevolver/evolution]
     test_plans:
-      required_on_change: [l0, qe_read_l3]
+      required_on_change: [l0, qe_read_backend]
+      recommended: [qe_read_l3]
   - module_id: qe.auto_evolution
     display_name: QE auto evolution
     parent_module: qe
@@ -51,7 +53,8 @@ modules:
     description_zh: 覆盖自动演进、智能体编排、候选生成、SOTA/优先级判断和自动化 loop 调度。
     ui_routes: [/quantevolver/evolution, /quantevolver/evolution/sota, /quantevolver/multi-alpha/combine-backtest, /quantevolver/multi-alpha/orthogonality]
     test_plans:
-      required_on_change: [l0, qe_read_l3]
+      required_on_change: [l0, qe_read_backend]
+      recommended: [qe_read_l3]
   - module_id: qe.enhanced_metrics
     display_name: QE enhanced metrics
     parent_module: qe
@@ -61,7 +64,8 @@ modules:
     description_zh: 覆盖 QE loop 的增强指标、持仓审计、交易明细、训练摘要、收益曲线和结果完整性展示。
     ui_routes: [/quantevolver/experiments, /qe-archive]
     test_plans:
-      required_on_change: [l0, qe_data_contract_backend, qe_read_l3]
+      required_on_change: [l0, qe_data_contract_backend, qe_read_backend]
+      recommended: [qe_read_l3]
   - module_id: qe.data_completeness
     display_name: QE data completeness
     parent_module: qe
@@ -81,8 +85,8 @@ modules:
     ui_routes: [/qe-archive]
     api_routes: [/api/v1/qe-archive/*]
     test_plans:
-      required_on_change: [l0, qe_archive_l3]
-      recommended: [qe_archive_data_quality]
+      required_on_change: [l0, qe_archive_backend]
+      recommended: [qe_archive_l3, qe_archive_data_quality]
   - module_id: paper_v2
     display_name: Paper Trading v2
     module_type: product_feature
@@ -92,8 +96,8 @@ modules:
     ui_routes: [/paper-v2, /paper-v2/packages, /paper-v2/selection, /paper-v2/portfolios, /paper-v2/model-hmm]
     api_routes: [/api/v1/paper-v2/*]
     test_plans:
-      required_on_change: [l0, paper_v2_l3]
-      recommended: [paper_v2_backend]
+      required_on_change: [l0, paper_v2_backend]
+      recommended: [paper_v2_l3]
   - module_id: selection_center
     display_name: Selection Center
     module_type: product_feature
@@ -256,8 +260,8 @@ modules:
     ui_routes: [/research-assistant, /research-assistant/chat, /research-assistant/workbench, /research-assistant/tasks, /research-assistant/streams, /research-assistant/memory, /research-assistant/graph, /research-assistant/mcp-tools, /research-assistant/skills, /research-assistant/approvals, /research-assistant/reports, /research-assistant/models, /research-assistant/settings, /research-assistant/external-agents, /research-assistant/trace, /research-assistant/notifications, /research-assistant/issue-candidates]
     api_routes: [/api/v1/research-assistant/*]
     test_plans:
-      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept]
-      recommended: [mcp_gateway_phase5_assistant, research_assistant_ui]
+      required_on_change: [l0, research_assistant_backend, research_assistant_mcp_contract]
+      recommended: [ra_phase7_full_accept, mcp_gateway_phase5_assistant, research_assistant_ui]
   - module_id: research_assistant.memory_tree
     display_name: Research Assistant Memory Tree
     parent_module: research_assistant
@@ -311,8 +315,8 @@ modules:
     description: Evidence-first answer contract, placeholder blocking, source_refs checks, and factual downgrade rules.
     description_zh: 覆盖证据优先回答契约、占位符阻断、来源检查与事实降级规则。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend, ra_phase7_full_accept]
-      recommended: [research_assistant_mcp_contract]
+      required_on_change: [l0, ra_phase0_baseline, research_assistant_backend]
+      recommended: [ra_phase7_full_accept, research_assistant_mcp_contract]
   - module_id: research_assistant.external_research
     display_name: Research Assistant External Research MCP
     parent_module: research_assistant
@@ -333,8 +337,8 @@ modules:
     description: Orchestrator-worker team runtime, agent runs, parallel task delegation, and worker audit trail.
     description_zh: 覆盖主从编排、并行任务、agent run 账本与 worker 审计轨迹。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend, ra_phase7_full_accept]
-      recommended: [research_assistant_mcp_contract]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase5_agent_teams, research_assistant_backend]
+      recommended: [ra_phase7_full_accept, research_assistant_mcp_contract]
   - module_id: research_assistant.qe_autonomy
     display_name: Research Assistant QE Autonomy
     parent_module: research_assistant
@@ -344,8 +348,8 @@ modules:
     description: QE autonomous loop design, evaluator callbacks, stop conditions, budget guards, and submission boundary.
     description_zh: 覆盖 QE 自主 loop、评估回调、停止条件、预算守护与提交边界。
     test_plans:
-      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend, ra_phase7_full_accept]
-      recommended: [research_assistant_mcp_contract]
+      required_on_change: [l0, ra_phase0_baseline, ra_phase6_qe_autonomy, research_assistant_backend]
+      recommended: [ra_phase7_full_accept, research_assistant_mcp_contract]
   - module_id: research_assistant.code_intelligence
     display_name: Research Assistant Code Intelligence
     parent_module: research_assistant
