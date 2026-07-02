@@ -226,6 +226,16 @@ rules:
     layer: product_feature
     risk_level: critical
     ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: qmt_infra
+    priority: 85
+    include:
+      - backend/infra/qmt_client.py
+      - backend/infra/realtime_quote_subscriber.py
+    primary_module: qmt
+    impact_modules: [paper_v2]
+    layer: trading_infra
+    risk_level: critical
+    ownership_reason: MiniQMT client and realtime quote subscription infrastructure are trading-infra boundaries consumed by Paper v2.
   - rule_id: selection_center_services
     priority: 80
     include:

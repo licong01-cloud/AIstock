@@ -9,7 +9,7 @@ Design goals:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import os
 from pathlib import Path
@@ -272,6 +272,160 @@ def _subscribe_best_effort(trader: Any, account: Any) -> None:
         logger.debug("miniQMT subscribe failed; continuing with query APIs: %r", exc, exc_info=True)
 
 
+
+def _normalize_qmt_symbols(stock_list: List[str]) -> List[str]:
+    return list(dict.fromkeys(str(symbol or "").strip() for symbol in stock_list if str(symbol or "").strip()))
+
+
+def _looks_like_yyyymmdd(value: str) -> bool:
+    if len(value) != 8 or not value.startswith(("19", "20")):
+        return False
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        return False
+    return True
+
+
+def _parse_miniqmt_intraday_centisecond_time(value: str, *, trade_date: date) -> datetime | None:
+    try:
+        if len(value) == 7:
+            hour = int(value[0])
+            minute = int(value[1:3])
+            second = int(value[3:5])
+            centisecond = int(value[5:7])
+        elif len(value) == 8:
+            hour = int(value[0:2])
+            minute = int(value[2:4])
+            second = int(value[4:6])
+            centisecond = int(value[6:8])
+        else:
+            return None
+    except ValueError:
+        return None
+    if hour > 23 or centisecond > 99:
+        return None
+    if minute > 59:
+        if minute == 99 and second > 59:
+            # xtdata can expose late-session sequence sentinels in compact time.
+            minute = 59
+            second = 0
+            centisecond = 0
+        else:
+            return None
+    if second > 59:
+        # Preserve freshness semantics for HHMM plus a non-clock sequence tail.
+        second = 0
+        centisecond = 0
+    return datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute) + timedelta(
+        seconds=second,
+        milliseconds=centisecond * 10,
+    )
+
+
+def _parse_miniqmt_quote_timestamp(value: Any, *, trade_date: date | None = None) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            if len(text) == 14:
+                return datetime.strptime(text, "%Y%m%d%H%M%S")
+            if trade_date is not None and len(text) in (7, 8):
+                if len(text) == 8 and _looks_like_yyyymmdd(text):
+                    return None
+                compact = _parse_miniqmt_intraday_centisecond_time(text, trade_date=trade_date)
+                if compact is not None:
+                    return compact
+            numeric = int(text)
+            if numeric >= 10**12:
+                return datetime.fromtimestamp(numeric / 1000)
+            if numeric >= 10**9:
+                return datetime.fromtimestamp(numeric)
+            if len(text) <= 6 and trade_date is not None:
+                padded = text.zfill(6)
+                hour = int(padded[:2])
+                minute = int(padded[2:4])
+                second = int(padded[4:6])
+                if hour <= 23 and minute <= 59 and second <= 59:
+                    return datetime(trade_date.year, trade_date.month, trade_date.day, hour, minute, second)
+        except (TypeError, ValueError, OSError):
+            return None
+    normalized = text.replace("/", "-")
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=None) if parsed.tzinfo is not None else parsed
+
+
+def _extract_miniqmt_quote_timestamp(row: Dict[str, Any], *, trade_date: date | None = None) -> tuple[Any, datetime | None]:
+    for key in ("time", "timetag", "datetime", "quote_time", "quoteTime", "timestamp", "ServerTime", "server_time"):
+        if key in row and row.get(key) not in (None, ""):
+            raw = row.get(key)
+            return raw, _parse_miniqmt_quote_timestamp(raw, trade_date=trade_date)
+    return None, None
+
+
+def _quote_staleness_evidence(
+    payload: Dict[str, Any],
+    symbols: List[str],
+    *,
+    max_age_seconds: float,
+    as_of_time: datetime,
+    trade_date: date | None = None,
+) -> Dict[str, Any]:
+    stale_symbols: list[dict[str, Any]] = []
+    missing_quote_symbols: list[str] = []
+    missing_timestamp_symbols: list[str] = []
+    fresh_symbols: list[str] = []
+    as_of_cmp = as_of_time.replace(tzinfo=None) if as_of_time.tzinfo is not None else as_of_time
+    effective_trade_date = trade_date or as_of_cmp.date()
+    for symbol in symbols:
+        row = payload.get(symbol)
+        if row is None:
+            raw_code = symbol.split(".")[0]
+            for key, value in payload.items():
+                if str(key).split(".")[0] == raw_code:
+                    row = value
+                    break
+        if not isinstance(row, dict):
+            missing_quote_symbols.append(symbol)
+            continue
+        raw_ts, parsed = _extract_miniqmt_quote_timestamp(row, trade_date=effective_trade_date)
+        if parsed is None:
+            missing_timestamp_symbols.append(symbol)
+            continue
+        age = (as_of_cmp - parsed).total_seconds()
+        if age > max_age_seconds:
+            stale_symbols.append(
+                {
+                    "symbol": symbol,
+                    "quote_timestamp": parsed.isoformat(),
+                    "quote_age_seconds": age,
+                    "raw_timestamp": raw_ts,
+                }
+            )
+        else:
+            fresh_symbols.append(symbol)
+    return {
+        "schema_version": "miniqmt_quote_staleness_evidence_v1",
+        "checked_symbols": symbols,
+        "fresh_symbols": fresh_symbols,
+        "stale_symbols": stale_symbols,
+        "missing_quote_symbols": missing_quote_symbols,
+        "missing_timestamp_symbols": missing_timestamp_symbols,
+        "max_age_seconds": float(max_age_seconds),
+        "as_of_time": as_of_cmp.isoformat(),
+        "is_stale": bool(stale_symbols or missing_timestamp_symbols or missing_quote_symbols),
+    }
+
 def _register_xtquant_dll_dir(path: Path) -> None:
     add_dll_directory = getattr(os, "add_dll_directory", None)
     if not callable(add_dll_directory):
@@ -331,8 +485,23 @@ class BaseQMTClient:
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         raise NotImplementedError
 
-    def get_full_tick(self, stock_list: List[str]) -> Dict[str, Any]:
+    def get_full_tick(
+        self,
+        stock_list: List[str],
+        *,
+        ensure_subscription: bool = True,
+        ensure_fresh: bool = True,
+        max_age_seconds: float | None = None,
+        trade_date: date | None = None,
+        as_of_time: datetime | None = None,
+    ) -> Dict[str, Any]:
         raise NotImplementedError
+
+    def ensure_realtime_quote_subscription(self, stock_list: List[str], *, force: bool = False) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def get_realtime_quote_health(self) -> Dict[str, Any]:
+        return {}
 
 
 def get_qmt_client_singleton() -> BaseQMTClient:
@@ -434,6 +603,34 @@ class SimulatorQMTClient(BaseQMTClient):
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         return []
 
+    def get_full_tick(
+        self,
+        stock_list: List[str],
+        *,
+        ensure_subscription: bool = True,
+        ensure_fresh: bool = True,
+        max_age_seconds: float | None = None,
+        trade_date: date | None = None,
+        as_of_time: datetime | None = None,
+    ) -> Dict[str, Any]:
+        if ensure_subscription or ensure_fresh:
+            raise QMTNotAvailableError(
+                "MINIQMT_QUOTE_SUBSCRIPTION_UNAVAILABLE: simulator QMT client has no xtdata feed"
+            )
+        return {}
+
+    def ensure_realtime_quote_subscription(self, stock_list: List[str], *, force: bool = False) -> Dict[str, Any]:
+        raise QMTNotAvailableError("MINIQMT_QUOTE_SUBSCRIPTION_UNAVAILABLE: simulator QMT client has no xtdata feed")
+
+    def get_realtime_quote_health(self) -> Dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_quote_feed_health_v1",
+            "status": "unavailable",
+            "reason_code": "MINIQMT_QUOTE_SUBSCRIPTION_UNAVAILABLE",
+            "provider": "simulator",
+        }
+
+
 class XtQuantQMTClient(BaseQMTClient):
     """xtquant-backed QMT client.
 
@@ -470,6 +667,10 @@ Notes:
         self._last_autoconnect_ts: float = 0.0
         self._last_order_diagnostic: Dict[str, Any] | None = None
         self._last_cancel_diagnostic: Dict[str, Any] | None = None
+        self._quote_subscription_key = f"miniqmt_quote_feed:{self._account_id or 'unknown'}:{self._mode}"
+        self._quote_feed_last_ticks: Dict[str, Dict[str, Any]] = {}
+        self._last_quote_feed_health: Dict[str, Any] | None = None
+        self._quote_self_heal_count = 0
         self._active_tasks: Dict[str, Dict[str, Any]] = {}
         self._task_lock = threading.Lock()
 
@@ -1170,16 +1371,170 @@ Notes:
             self._active_tasks[task_id].update(status_data)
             self._active_tasks[task_id]["updated_at"] = time.time()
 
-    def get_full_tick(self, stock_list: List[str]) -> Dict[str, Any]:
+    def ensure_realtime_quote_subscription(self, stock_list: List[str], *, force: bool = False) -> Dict[str, Any]:
+        symbols = _normalize_qmt_symbols(stock_list)
+        if not symbols:
+            raise QMTNotAvailableError("MINIQMT_QUOTE_SUBSCRIPTION_SYMBOLS_EMPTY: no stocks requested")
+        with self._lock:
+            if not self._probe_connection_locked():
+                raise QMTNotAvailableError(self._last_error or "miniQMT not connected for quote subscription")
+            self._require_connected()
+            try:
+                self._ensure_xtquant()
+                from backend.infra.realtime_quote_subscriber import get_realtime_quote_subscriber
+
+                subscriber = get_realtime_quote_subscriber()
+
+                def _record_tick(stock_code: str, quote: Dict[str, Any]) -> None:
+                    if isinstance(quote, dict):
+                        self._quote_feed_last_ticks[str(stock_code)] = {
+                            "received_at": datetime.now(UTC).isoformat(),
+                            "raw_timestamp": quote.get("time") or quote.get("timetag") or quote.get("datetime"),
+                        }
+
+                subscription = subscriber.ensure_subscription(
+                    key=self._quote_subscription_key,
+                    stocks=symbols,
+                    callback=_record_tick,
+                    force=force,
+                )
+                health = {
+                    "schema_version": "miniqmt_quote_feed_health_v1",
+                    "status": "subscribed",
+                    "reason_code": "MINIQMT_QUOTE_FEED_SUBSCRIBED",
+                    "account_id": self._account_id,
+                    "mode": self._mode,
+                    "symbols": symbols,
+                    "subscription": subscription,
+                    "self_heal_count": self._quote_self_heal_count,
+                    "last_tick_by_symbol": dict(self._quote_feed_last_ticks),
+                    "checked_at": datetime.now(UTC).isoformat(),
+                }
+                self._last_quote_feed_health = health
+                return dict(health)
+            except Exception as e:  # noqa: BLE001
+                health = {
+                    "schema_version": "miniqmt_quote_feed_health_v1",
+                    "status": "subscription_failed",
+                    "reason_code": "MINIQMT_QUOTE_SUBSCRIPTION_FAILED",
+                    "account_id": self._account_id,
+                    "mode": self._mode,
+                    "symbols": symbols,
+                    "force": bool(force),
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "checked_at": datetime.now(UTC).isoformat(),
+                }
+                self._last_quote_feed_health = health
+                raise QMTNotAvailableError(
+                    "MINIQMT_QUOTE_SUBSCRIPTION_FAILED: xtdata whole-quote subscription failed; refusing stale cache"
+                ) from e
+
+    def get_realtime_quote_health(self) -> Dict[str, Any]:
+        with self._lock:
+            if self._last_quote_feed_health is None:
+                return {
+                    "schema_version": "miniqmt_quote_feed_health_v1",
+                    "status": "unknown",
+                    "reason_code": "MINIQMT_QUOTE_FEED_NOT_CHECKED",
+                    "account_id": self._account_id,
+                    "mode": self._mode,
+                    "self_heal_count": self._quote_self_heal_count,
+                    "last_tick_by_symbol": dict(self._quote_feed_last_ticks),
+                }
+            return {
+                **self._last_quote_feed_health,
+                "self_heal_count": self._quote_self_heal_count,
+                "last_tick_by_symbol": dict(self._quote_feed_last_ticks),
+            }
+
+    def get_full_tick(
+        self,
+        stock_list: List[str],
+        *,
+        ensure_subscription: bool = True,
+        ensure_fresh: bool = True,
+        max_age_seconds: float | None = None,
+        trade_date: date | None = None,
+        as_of_time: datetime | None = None,
+    ) -> Dict[str, Any]:
+        symbols = _normalize_qmt_symbols(stock_list)
+        if not symbols:
+            return {}
         with self._lock:
             try:
+                if ensure_subscription or ensure_fresh:
+                    if not self._probe_connection_locked():
+                        ok, message = self.connect()
+                        if not ok:
+                            raise QMTNotAvailableError(
+                                f"MINIQMT_QUOTE_CONNECTION_UNAVAILABLE: reconnect before quote fetch failed: {message}"
+                            )
+                    self._require_connected()
+                    self.ensure_realtime_quote_subscription(symbols)
                 self._ensure_xtquant()
                 from xtquant import xtdata
 
                 timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
-                return _call_with_timeout(lambda: xtdata.get_full_tick(stock_list), timeout_s) or {}
+                payload = _call_with_timeout(lambda: xtdata.get_full_tick(symbols), timeout_s) or {}
+                if ensure_fresh:
+                    max_age = (
+                        float(max_age_seconds)
+                        if max_age_seconds is not None
+                        else _env_float("MINIQMT_REALTIME_QUOTE_MAX_AGE_SECONDS", default=300.0)
+                    )
+                    as_of = as_of_time or datetime.now()
+                    staleness = _quote_staleness_evidence(
+                        payload,
+                        symbols,
+                        max_age_seconds=max_age,
+                        as_of_time=as_of,
+                        trade_date=trade_date,
+                    )
+                    if staleness["is_stale"]:
+                        self._quote_self_heal_count += 1
+                        self.ensure_realtime_quote_subscription(symbols, force=True)
+                        payload = _call_with_timeout(lambda: xtdata.get_full_tick(symbols), timeout_s) or {}
+                        after = _quote_staleness_evidence(
+                            payload,
+                            symbols,
+                            max_age_seconds=max_age,
+                            as_of_time=as_of,
+                            trade_date=trade_date,
+                        )
+                        self._last_quote_feed_health = {
+                            "schema_version": "miniqmt_quote_feed_health_v1",
+                            "status": "self_heal_succeeded" if not after["is_stale"] else "self_heal_still_stale",
+                            "reason_code": (
+                                "MINIQMT_QUOTE_SELF_HEAL_SUCCEEDED"
+                                if not after["is_stale"]
+                                else "MINIQMT_QUOTE_STILL_STALE_AFTER_SELF_HEAL"
+                            ),
+                            "account_id": self._account_id,
+                            "mode": self._mode,
+                            "symbols": symbols,
+                            "before": staleness,
+                            "after": after,
+                            "self_heal_count": self._quote_self_heal_count,
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
+                    else:
+                        self._last_quote_feed_health = {
+                            "schema_version": "miniqmt_quote_feed_health_v1",
+                            "status": "fresh",
+                            "reason_code": "MINIQMT_QUOTE_FEED_FRESH",
+                            "account_id": self._account_id,
+                            "mode": self._mode,
+                            "symbols": symbols,
+                            "staleness": staleness,
+                            "self_heal_count": self._quote_self_heal_count,
+                            "checked_at": datetime.now(UTC).isoformat(),
+                        }
+                return payload
+            except QMTNotAvailableError:
+                raise
             except Exception as e:  # noqa: BLE001
-                raise QMTNotAvailableError(f"?? miniQMT tick ????: {e!r}") from e
+                raise QMTNotAvailableError(f"miniQMT tick query failed: {e!r}") from e
 
     def get_latest_trading_day(self) -> str:
         """获取最新交易日，带有超时保护."""

@@ -578,6 +578,9 @@ def quote_tradability_evidence(
         "book_empty": book_empty,
         "no_tradable_market": no_tradable_market,
     }
+    quote_feed_health = quote.get("quote_feed_health")
+    if isinstance(quote_feed_health, dict):
+        common_payload["quote_feed_health"] = dict(quote_feed_health)
     if no_tradable_market:
         return common_payload
     st_status = _require_st_status(
@@ -696,6 +699,7 @@ def _require_tdx_quote_timestamp(
     max_quote_age: timedelta,
 ) -> datetime:
     raw_timestamp = _extract_tdx_quote_timestamp_raw(quote)
+    quote_feed_health = _quote_feed_health_payload(quote)
     if raw_timestamp is None:
         raise DataUnavailableError(
             f"{_quote_source_label(source)} realtime quote timestamp is missing",
@@ -706,6 +710,7 @@ def _require_tdx_quote_timestamp(
                 "as_of_time": as_of_time.isoformat(),
                 "quote_source": source,
                 "timestamp_fields_checked": _tdx_quote_timestamp_field_names(),
+                "quote_feed_health": quote_feed_health,
             },
         )
     try:
@@ -721,6 +726,7 @@ def _require_tdx_quote_timestamp(
                 "quote_source": source,
                 "raw_timestamp": raw_timestamp,
                 "parse_error": str(exc),
+                "quote_feed_health": quote_feed_health,
             },
         ) from exc
     if quote_timestamp.date() != trade_date:
@@ -734,6 +740,7 @@ def _require_tdx_quote_timestamp(
                 "quote_source": source,
                 "quote_timestamp": quote_timestamp.isoformat(),
                 "raw_timestamp": raw_timestamp,
+                "quote_feed_health": quote_feed_health,
             },
         )
     as_of_cmp = _normalize_datetime_for_compare(as_of_time)
@@ -751,6 +758,7 @@ def _require_tdx_quote_timestamp(
                 "quote_age_seconds": age.total_seconds(),
                 "max_quote_age_seconds": max_quote_age.total_seconds(),
                 "raw_timestamp": raw_timestamp,
+                "quote_feed_health": quote_feed_health,
             },
         )
     if quote_timestamp - as_of_cmp > TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW:
@@ -765,9 +773,15 @@ def _require_tdx_quote_timestamp(
                 "quote_timestamp": quote_timestamp.isoformat(),
                 "max_future_skew_seconds": TDX_REALTIME_QUOTE_MAX_FUTURE_SKEW.total_seconds(),
                 "raw_timestamp": raw_timestamp,
+                "quote_feed_health": quote_feed_health,
             },
         )
     return quote_timestamp
+
+
+def _quote_feed_health_payload(quote: dict[str, Any]) -> dict[str, Any] | None:
+    payload = quote.get("quote_feed_health")
+    return dict(payload) if isinstance(payload, dict) else None
 
 
 def _extract_tdx_quote_timestamp_raw(quote: dict[str, Any]) -> Any | None:

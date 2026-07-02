@@ -16,10 +16,14 @@ from datetime import datetime
 from typing import Callable, Iterator, List, Optional
 
 import queue
+import logging
 import threading
 import time
 
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 _xtdata_run_lock = threading.Lock()
@@ -333,6 +337,7 @@ def subscribe_quotes_xt(
                         return
                     on_batch(XtQuoteBatch(timestamp=datetime.now(), data=df))
                 except Exception:
+                    logger.warning("xtquant push quote callback failed", exc_info=True)
                     return
 
             seq = xtdata.subscribe_whole_quote(code_list=universe, callback=_on_quote)
@@ -343,12 +348,11 @@ def subscribe_quotes_xt(
                 try:
                     xtdata.unsubscribe_quote(seq)
                 except Exception:
-                    pass
+                    logger.warning("xtquant unsubscribe_quote failed", exc_info=True)
 
             return _stop_push
         except Exception:
-            # If push subscription fails (e.g. miniQMT not ready), fall back to polling.
-            pass
+            logger.warning("xtquant push subscription unavailable; falling back to polling", exc_info=True)
 
     stop_event = threading.Event()
 
@@ -360,7 +364,7 @@ def subscribe_quotes_xt(
                     batch = XtQuoteBatch(timestamp=datetime.now(), data=df)
                     on_batch(batch)
             except Exception:
-                pass
+                logger.warning("xtquant polling quote fetch failed", exc_info=True)
             time.sleep(1.0)
 
     thread = threading.Thread(target=_worker_poll, name="xtquant_quote_subscriber", daemon=True)
