@@ -27,6 +27,55 @@ from backend.services.trading_core.exit_guard import ExitGuardPolicy
 
 router = APIRouter(prefix="/selection-center", tags=["selection-center"])
 
+SELECTION_MULTI_PACKAGE_ADHOC_COMBINE_DEPRECATED = "selection_multi_package_adhoc_combine_deprecated"
+
+
+def _manual_multipackage_deprecated_detail(
+    *,
+    path: str,
+    package_ids: list[str] | None = None,
+    mode: SelectionMode | str | None = None,
+    source_run_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "error_code": "SELECTION_MULTI_PACKAGE_ADHOC_COMBINE_DEPRECATED",
+        "reason_code": SELECTION_MULTI_PACKAGE_ADHOC_COMBINE_DEPRECATED,
+        "message": (
+            "手工多包组合选股已废弃；请使用已验证的多Alpha策略包"
+            "(from-multi-alpha-combine-run)组合alpha，再以单个 package_id 运行选股。"
+        ),
+        "context": {
+            "path": path,
+            "package_count": len(package_ids or []),
+            "package_ids": package_ids or [],
+            "source_run_count": len(source_run_ids or []),
+            "source_run_ids": source_run_ids or [],
+            "mode": mode.value if isinstance(mode, SelectionMode) else mode,
+            "allowed_mode": SelectionMode.SINGLE_PACKAGE.value,
+            "replacement": "strategy_packages.from_multi_alpha_combine_run",
+            "replacement_route": "from-multi-alpha-combine-run",
+            "history_policy": "existing_multi_package_selection_runs_readonly",
+        },
+    }
+
+
+def _raise_manual_multipackage_deprecated(
+    *,
+    path: str,
+    package_ids: list[str] | None = None,
+    mode: SelectionMode | str | None = None,
+    source_run_ids: list[str] | None = None,
+) -> None:
+    raise HTTPException(
+        status_code=410,
+        detail=_manual_multipackage_deprecated_detail(
+            path=path,
+            package_ids=package_ids,
+            mode=mode,
+            source_run_ids=source_run_ids,
+        ),
+    )
+
 
 class RunSelectionRequest(BaseModel):
     package_ids: list[str] = Field(min_length=1)
@@ -133,6 +182,12 @@ def run_selection(
     req: RunSelectionRequest,
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
+    if len(req.package_ids) > 1 or req.mode != SelectionMode.SINGLE_PACKAGE:
+        _raise_manual_multipackage_deprecated(
+            path="selection_center.runs",
+            package_ids=req.package_ids,
+            mode=req.mode,
+        )
     try:
         run = service.run_packages(
             package_ids=req.package_ids,
@@ -172,17 +227,12 @@ def get_selection_industry_tree(
 @router.post("/aggregate-runs")
 def aggregate_existing_selection_runs(
     req: AggregateExistingRunsRequest,
-    service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
-    try:
-        run = service.aggregate_existing_runs(
-            source_run_ids=req.source_run_ids,
-            mode=req.mode,
-            runtime_config=req.runtime_config,
-        )
-        return {"ok": True, "run": run.model_dump(mode="json")}
-    except TradingCoreError as exc:
-        _raise_http(exc)
+    _raise_manual_multipackage_deprecated(
+        path="selection_center.aggregate_runs",
+        mode=req.mode,
+        source_run_ids=req.source_run_ids,
+    )
 
 
 @router.get("/runs")

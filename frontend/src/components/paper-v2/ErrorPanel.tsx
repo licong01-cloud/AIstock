@@ -16,6 +16,7 @@ function buildDiagnostic(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const payload = {
     error_code: apiError?.errorCode || null,
+    reason_code: apiError?.reasonCode || null,
     http_status: apiError?.status || null,
     message,
     context: apiError?.context || null,
@@ -24,6 +25,7 @@ function buildDiagnostic(error: unknown): string {
   return [
     "Paper v2 错误诊断",
     `错误码: ${payload.error_code || "-"}`,
+    `Reason Code: ${payload.reason_code || "-"}`,
     `HTTP: ${payload.http_status || "-"}`,
     `说明: ${message}`,
     "",
@@ -67,6 +69,7 @@ export default function ErrorPanel({ error, title = "操作失败" }: { error: u
         {apiError?.errorCode ? <strong>{apiError.errorCode}: </strong> : null}
         {summary}
       </div>
+      {apiError?.reasonCode ? <div className="pv2-error-meta">reason_code: {apiError.reasonCode}</div> : null}
       {summary !== message ? <div className="pv2-error-meta">原始说明：{message}</div> : null}
       {apiError ? <div className="pv2-error-meta">HTTP {apiError.status}</div> : null}
       <textarea className="pv2-input pv2-diagnostic-text" readOnly rows={7} value={diagnostic} />

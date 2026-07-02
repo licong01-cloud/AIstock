@@ -23,8 +23,8 @@ def test_gateway_cli_list_tools_profiles() -> None:
     qlib = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=qlib_data")
     data_full = _run_json("scripts/aistock_mcp_gateway.py", "--list-tools", "--profile=data_full")
     assert lite["tool_count"] == 6
-    assert full["legacy_tool_count"] == 372
-    assert full["tool_count"] == 378
+    assert full["legacy_tool_count"] == 370
+    assert full["tool_count"] == 376
     assert validation["tool_count"] == 20
     assert qe["tool_count"] == 80
     assert qlib["modules"] == ["qlib_export"]

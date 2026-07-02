@@ -53,14 +53,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/
 export class PaperV2ApiError extends Error {
   status: number;
   errorCode?: string;
+  reasonCode?: string;
   context?: JsonObject;
   raw: unknown;
 
-  constructor(message: string, status: number, raw: unknown, errorCode?: string, context?: JsonObject) {
+  constructor(message: string, status: number, raw: unknown, errorCode?: string, context?: JsonObject, reasonCode?: string) {
     super(message);
     this.name = "PaperV2ApiError";
     this.status = status;
     this.errorCode = errorCode;
+    this.reasonCode = reasonCode;
     this.context = context;
     this.raw = raw;
   }
@@ -74,14 +76,13 @@ function parseError(payload: unknown, status: number): PaperV2ApiError {
   if (isObject(payload)) {
     const detail = payload.detail;
     if (isObject(detail)) {
+      const reasonCode = typeof detail.reason_code === "string" ? detail.reason_code : undefined;
       const errorCode = typeof detail.error_code === "string"
         ? detail.error_code
-        : typeof detail.reason_code === "string"
-          ? detail.reason_code
-          : undefined;
+        : reasonCode;
       const message = typeof detail.message === "string" ? detail.message : JSON.stringify(detail);
       const context = isObject(detail.context) ? detail.context : undefined;
-      return new PaperV2ApiError(message, status, payload, errorCode, context);
+      return new PaperV2ApiError(message, status, payload, errorCode, context, reasonCode);
     }
     if (typeof detail === "string") return new PaperV2ApiError(detail, status, payload);
     if (typeof payload.error === "string") return new PaperV2ApiError(payload.error, status, payload);
@@ -372,10 +373,6 @@ export const selectionCenterApi = {
     if (payload.cutoff_date) qs.set("cutoff_date", payload.cutoff_date);
     const data = await apiFetch<{ point_in_time_context: JsonObject }>(`/selection-center/pit-cutoff?${qs.toString()}`);
     return data.point_in_time_context;
-  },
-  async aggregateRuns(payload: { source_run_ids: string[]; mode: SelectionMode; runtime_config: JsonObject }): Promise<SelectionRun> {
-    const data = await apiFetch<{ run: SelectionRun }>("/selection-center/aggregate-runs", body(payload));
-    return data.run;
   },
   async excludedResults(runId: string): Promise<Record<string, unknown[]>> {
     const data = await apiFetch<{ excluded_results: Record<string, unknown[]> }>(`/selection-center/runs/${runId}/excluded-results`);
