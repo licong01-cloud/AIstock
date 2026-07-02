@@ -15,6 +15,7 @@ from .multi_alpha_paper_admission import MultiAlphaPaperAdmissionRepository
 from .validators import StrategyPackageValidator
 
 MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
+MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED = "multi_alpha_localsim_dry_run_not_required"
 
 
 @dataclass(frozen=True)
@@ -442,7 +443,10 @@ def _multi_alpha_runtime_blockers(
             )
             continue
         context = {
-            "reason_code": reason_text,
+            "reason_code": MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
+            if broker_backend == "local_sim"
+            else reason_text,
+            "original_blocker": reason_text,
             "package_id": manifest.package_id,
             "alpha_mode": "multi_alpha",
             "manifest_sha256": getattr(manifest, "manifest_sha256", None),
@@ -451,6 +455,17 @@ def _multi_alpha_runtime_blockers(
         }
         if lookup_error:
             context["admission_lookup_error"] = lookup_error
+        if broker_backend == "local_sim":
+            checks.append(
+                _check(
+                    reason_text,
+                    "WARN",
+                    "warning",
+                    "MULTI_ALPHA LocalSim does not require blocking dry-run admission; runtime will validate through LocalSim execution and frozen self-check",
+                    context,
+                )
+            )
+            continue
         checks.append(
             _check(
                 reason_text,

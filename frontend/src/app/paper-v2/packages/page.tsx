@@ -12,7 +12,7 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
+import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type {
   ExecutionPolicy,
   JsonObject,
@@ -29,6 +29,7 @@ type PackagingSourceKind = "all" | "qe_experiment" | "qe_evolution_loop" | "mult
 const MULTI_ALPHA_PROMOTE_CONFIRMATION = "MULTI_ALPHA_PACKAGE_PROMOTE";
 const MULTI_ALPHA_SUPPORTED_SCHEME = "ic_weighted";
 const MULTI_ALPHA_WEIGHT_POLICY = { mode: "frozen_backtest_terminal_weights" };
+const MULTI_ALPHA_DRY_RUN_CONFIRMATION = "MULTI_ALPHA_LOCALSIM_DRY_RUN";
 
 function sourceKey(source: QEPackagingSource): string {
   return `${source.source_kind}:${source.experiment_id}:${source.qe_task_id || ""}:${source.qe_loop_id || ""}`;
@@ -110,6 +111,18 @@ function totalDependencyCount(deps: JsonObject | null): number {
   return Object.values(deps).reduce<number>((total, value) => total + arrayCount(value), 0);
 }
 
+function dryRunTopKFromVariant(variant: "top_k=25" | "top_k=50"): 25 | 50 {
+  return variant === "top_k=50" ? 50 : 25;
+}
+
+function dryRunArtifactSummary(payload: JsonObject | null): JsonObject {
+  if (!payload) return {};
+  const dryRun = objectValue(payload.dry_run);
+  const admission = objectValue(payload.admission);
+  const artifactShas = objectValue(dryRun.artifact_shas || admission.artifact_shas || {});
+  return { dryRun, admission, artifactShas };
+}
+
 function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "source" | "dependencies" | "model" }) {
   if (kind === "dependencies") {
     const rows = Object.entries(value).map(([key, item]) => ({ key, count: arrayCount(item), value: item }));
@@ -182,6 +195,11 @@ export default function PaperV2PackagesPage() {
   const [selectedCombineRunId, setSelectedCombineRunId] = useState("");
   const [combineRunDetail, setCombineRunDetail] = useState<MultiAlphaCombineRunDetail | null>(null);
   const [multiAlphaTopk, setMultiAlphaTopk] = useState<25 | 50>(25);
+  const [multiAlphaDryRunBroker, setMultiAlphaDryRunBroker] = useState<"local_sim" | "minqmt_sim">("local_sim");
+  const [multiAlphaDryRunVariant, setMultiAlphaDryRunVariant] = useState<"top_k=25" | "top_k=50">("top_k=25");
+  const [multiAlphaDryRunTradeDate, setMultiAlphaDryRunTradeDate] = useState(todayIso());
+  const [multiAlphaDryRunInitialCash, setMultiAlphaDryRunInitialCash] = useState(1000000);
+  const [multiAlphaDryRunResult, setMultiAlphaDryRunResult] = useState<JsonObject | null>(null);
   const [resolveRuntimeAssets, setResolveRuntimeAssets] = useState(true);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [events, setEvents] = useState<JsonObject[]>([]);
@@ -245,6 +263,10 @@ export default function PaperV2PackagesPage() {
   }, [isMultiAlphaSource, selectedCombineRunId, selectedId, sourceKind, sourceKeyValue]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setMultiAlphaDryRunResult(null);
+  }, [selected?.package_id, multiAlphaDryRunBroker, multiAlphaDryRunVariant, multiAlphaDryRunTradeDate]);
 
   useEffect(() => {
     if (!isMultiAlphaSource || !selectedCombineRun?.id) {
@@ -324,6 +346,38 @@ export default function PaperV2PackagesPage() {
     }
   }
 
+  async function runMultiAlphaDryRun() {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setMultiAlphaDryRunResult(null);
+    try {
+      const topK = dryRunTopKFromVariant(multiAlphaDryRunVariant);
+      const result = await strategyPackageApi.paperRuntimeDryRun(selected.package_id, {
+        broker_backend: multiAlphaDryRunBroker,
+        trade_date: multiAlphaDryRunTradeDate,
+        runtime_variant: multiAlphaDryRunVariant,
+        confirmation: MULTI_ALPHA_DRY_RUN_CONFIRMATION,
+        validated_by: "paper_v2_packages_ui",
+        runtime_config: {
+          runtime_profile: { selection: { top_k: topK } },
+          selection_artifact_config: {
+            auto_generate: true,
+            multi_alpha_live_inference_enabled: true,
+            component_coverage_threshold: topK,
+          },
+        },
+        initial_cash: multiAlphaDryRunInitialCash,
+      });
+      setMultiAlphaDryRunResult(result);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function sourceAction(action: "preview" | "readiness" | "create") {
     setError(null);
     setSourcePreview(null);
@@ -356,7 +410,7 @@ export default function PaperV2PackagesPage() {
           paper_admission: created.paper_admission || {},
           components_created_or_reused: created.components?.length ?? 0,
           auto_component_materialization: created.auto_component_materialization || [],
-          next_step: "多Alpha 包已建成 ASSET_VALIDATED，但 paper_admission.eligible=false。请执行 POST /strategy-packages/{id}/paper-runtime-dry-run（local_sim, top_k=25 或 50）清门，之后才会进入 selectable-packages、荐股下拉与 create_portfolio。",
+          next_step: "多Alpha 包已建成 ASSET_VALIDATED。LocalSim 缺 dry-run admission 不再阻断准入，可直接进入 selectable-packages 与 create_portfolio；dry-run 仍可在本页作为可选留证。MiniQMT/真实 paper 仍保持严格准入。",
         });
         await load();
       } catch (exc) {
@@ -421,9 +475,18 @@ export default function PaperV2PackagesPage() {
         ? `后端只接受 succeeded run，当前状态为 ${selectedCombineRun.status || "-"}`
         : !combineDetailLoaded
           ? "正在加载选中 run 的 scheme_results"
-          : !selectedScheme
-          ? "选中 run 缺少 ic_weighted scheme_result，创建会被后端拒绝"
-          : "";
+           : !selectedScheme
+           ? "选中 run 缺少 ic_weighted scheme_result，创建会被后端拒绝"
+           : "";
+  const selectedIsMultiAlpha = String(selected?.alpha_mode || "").toLowerCase() === "multi_alpha";
+  const selectedTopK = selected?.portfolio_topk === 50 ? 50 : selected?.portfolio_topk === 25 ? 25 : dryRunTopKFromVariant(multiAlphaDryRunVariant);
+  const selectedAssetWarnings = Array.isArray(assetEligibility.warnings) ? assetEligibility.warnings.map(String) : [];
+  const selectedAssetBlockers = Array.isArray(assetEligibility.blockers) ? assetEligibility.blockers.map(String) : [];
+  const hasLocalSimDryRunWarning = selectedAssetWarnings.includes("multi_alpha_runtime_not_validated_until_dry_run");
+  const dryRunSummary = dryRunArtifactSummary(multiAlphaDryRunResult);
+  const dryRunResult = objectValue(dryRunSummary.dryRun);
+  const dryRunAdmission = objectValue(dryRunSummary.admission);
+  const dryRunArtifacts = objectValue(dryRunSummary.artifactShas);
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
@@ -497,7 +560,7 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="ic_weighted 指标" value={selectedScheme ? "可创建" : "缺失"} hint={combineSchemeMetricText(selectedScheme)} tone={selectedScheme ? "success" : "warning"} />
             </div>
             <NoticePanel title="多Alpha 创建后的下一步" tone="warning">
-              创建只冻结 multi_alpha 父包并自动建/复用 component 单包。父包会是 ASSET_VALIDATED，但 paper_admission.eligible=false；需 POST /strategy-packages/{`<package_id>`}/paper-runtime-dry-run（local_sim，runtime_variant=top_k={multiAlphaTopk}）通过后，才会进入 selectable-packages、荐股下拉和模拟盘 create_portfolio。
+              创建只冻结 multi_alpha 父包并自动建/复用 component 单包。LocalSim 缺 dry-run admission 现在是 WARN/PASS：可进入 selectable-packages、荐股下拉和 LocalSim create_portfolio；dry-run 仍可选做留证。MiniQMT/真实 paper 仍保持 fail-closed，必须有专门准入。
             </NoticePanel>
           </>
         ) : (
@@ -548,13 +611,65 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="模拟盘准入" value={assetEligible ? "可创建模拟盘" : "不可创建"} hint="不再需要旧的模拟盘启用状态或治理就绪状态。" tone={assetEligible ? "success" : "warning"} />
             </div>
             <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
-              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟盘</Link>
+              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${selectedTopK}`}>用此包创建 LocalSim 模拟盘</Link>
               <ConfirmAction label="退役策略包" confirmText={selected.package_id} onConfirm={retireSelected} danger disabled={busy || selectedStatus === "RETIRED"} testId="strategy-package-retire" mode="dialog" />
               <ConfirmAction label="彻底删除策略包" confirmText={selected.package_id} onConfirm={deleteSelected} danger disabled={busy || !canDelete} testId="strategy-package-delete" mode="dialog" />
             </div>
             <NoticePanel title="退役与删除的区别" tone={depsCount ? "warning" : "info"}>
               退役只归档策略包，不删除历史组合和证据；彻底删除会物理删除没有任何运行时引用的策略包。当前删除依赖数量：{depsCount}。
             </NoticePanel>
+            {selectedIsMultiAlpha ? (
+              <div className="pv2-card" style={{ marginTop: 14 }}>
+                <div className="pv2-eyebrow">MultiAlpha LocalSim 准入</div>
+                <NoticePanel title={hasLocalSimDryRunWarning ? "LocalSim 缺 dry-run admission 是 WARN/PASS" : "LocalSim 准入状态"} tone={selectedAssetBlockers.length ? "warning" : "success"}>
+                  LocalSim 不再要求阻断式 dry-run admission；运行时仍由 frozen self-check、preflight 和 LocalSim 真实运行 fail-fast 校验。MiniQMT/真实 paper 未放宽，缺 admission 仍 hard FAIL。当前 blockers：{selectedAssetBlockers.join(", ") || "无"}；warnings：{selectedAssetWarnings.join(", ") || "无"}。
+                </NoticePanel>
+                <div className="pv2-form-grid" style={{ marginTop: 12 }}>
+                  <div className="pv2-field">
+                    <label>Broker</label>
+                    <select className="pv2-select" value={multiAlphaDryRunBroker} onChange={(event) => setMultiAlphaDryRunBroker(event.target.value as "local_sim" | "minqmt_sim")}>
+                      <option value="local_sim">local_sim（可选留证）</option>
+                      <option value="minqmt_sim">minqmt_sim（仍严格门控）</option>
+                    </select>
+                  </div>
+                  <div className="pv2-field">
+                    <label>Runtime variant</label>
+                    <select className="pv2-select" value={multiAlphaDryRunVariant} onChange={(event) => setMultiAlphaDryRunVariant(event.target.value as "top_k=25" | "top_k=50")}>
+                      <option value="top_k=25">top_k=25</option>
+                      <option value="top_k=50">top_k=50</option>
+                    </select>
+                  </div>
+                  <div className="pv2-field">
+                    <label>Trade date</label>
+                    <input className="pv2-input" type="date" value={multiAlphaDryRunTradeDate} onChange={(event) => setMultiAlphaDryRunTradeDate(event.target.value)} />
+                  </div>
+                  <div className="pv2-field">
+                    <label>Initial cash</label>
+                    <input className="pv2-input" type="number" min={1} value={multiAlphaDryRunInitialCash} onChange={(event) => setMultiAlphaDryRunInitialCash(Number(event.target.value))} />
+                  </div>
+                </div>
+                <div className="pv2-row-actions" style={{ marginTop: 12 }}>
+                  <button className="pv2-button" onClick={runMultiAlphaDryRun} disabled={busy} type="button">执行 paper-runtime-dry-run</button>
+                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${dryRunTopKFromVariant(multiAlphaDryRunVariant)}`}>进入 LocalSim 建组合</Link>
+                </div>
+                {multiAlphaDryRunBroker !== "local_sim" ? (
+                  <NoticePanel title="MiniQMT 仍 fail-closed" tone="warning">
+                    当前 dry-run 后端只支持 local_sim；选择 minqmt_sim 会真实调用接口并展示后端 reason_code/context，不会伪造 admission 或静默成功。
+                  </NoticePanel>
+                ) : null}
+                {multiAlphaDryRunResult ? (
+                  <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+                    <div className="pv2-readable-table">
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">dry_run_run_id</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunResult.dry_run_run_id)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">admission_id</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunAdmission.admission_id)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">targets / orders</div><div className="pv2-readable-value">{textValue(dryRunResult.target_count)} / {textValue(dryRunResult.order_intent_count)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">combined artifact</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunArtifacts.combined_score_artifact_sha256 || dryRunResult.selection_artifact_sha256)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">component artifacts</div><div className="pv2-readable-value">{Object.keys(objectValue(dryRunArtifacts.component_score_artifact_sha256)).length || "-"}</div></div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {deleteDependencies ? <PackagePayloadSummary value={deleteDependencies} kind="dependencies" /> : null}
             <div className="pv2-grid pv2-grid-3" style={{ marginTop: 14 }}>
               <MetricCard label="年化收益" value={formatPercent(metrics.annual_return)} />

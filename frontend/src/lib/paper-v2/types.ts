@@ -75,6 +75,9 @@ export type StrategyPackage = {
   run_id?: string | null;
   package_status: string;
   manifest_sha256: string;
+  alpha_mode?: string;
+  alpha_count?: number;
+  portfolio_topk?: number;
   paper_portfolio_count?: number;
   created_at?: string;
   updated_at?: string;

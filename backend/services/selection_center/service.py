@@ -732,10 +732,11 @@ class SelectionCenterService:
                 if ((row.get("asset_eligibility") or {}).get("eligible") is False):
                     continue
                 latest_run = latest_runs.get(str(row["package_id"]))
+                summary_asset_eligibility = dict(row.get("asset_eligibility") or {})
                 items.append(
                     {
                         **row,
-                        "asset_eligibility": {"eligible": True, "summary_only": True},
+                        "asset_eligibility": {**summary_asset_eligibility, "eligible": True, "summary_only": True},
                         "selection_health": {"status": "NOT_EVALUATED", "summary_only": True},
                         "model_state": {"package_id": row["package_id"], "staleness_status": "UNKNOWN", "summary_only": True},
                         "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,

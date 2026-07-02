@@ -101,10 +101,13 @@ export default function PaperV2PortfoliosPage() {
   const [selectedPortfolioIds, setSelectedPortfolioIds] = useState<Record<string, boolean>>({});
   const [created, setCreated] = useState<PaperPortfolio | null>(null);
   const [sessionProgress, setSessionProgress] = useState<PaperSessionProgress | null>(null);
+  const [queryPackageId, setQueryPackageId] = useState("");
+  const [queryPackageApplied, setQueryPackageApplied] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const requestedBrokerBackend: "local_sim" = "local_sim";
   const selectedPackage = useMemo(() => packages.find((item) => item.package_id === packageId), [packages, packageId]);
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,9 +130,9 @@ export default function PaperV2PortfoliosPage() {
       setRunningPagination(runningRows.pagination);
       setPackages(packageRows);
       setHmmConfigs(configRows);
-      const initialPackage = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("package_id") : null;
-      const nextPackageId = packageId || initialPackage || packageRows[0]?.package_id || "";
-      if (!packageId) setPackageId(nextPackageId);
+      const nextPackageId = queryPackageId && !queryPackageApplied ? queryPackageId : packageId || packageRows[0]?.package_id || "";
+      if (packageId !== nextPackageId) setPackageId(nextPackageId);
+      if (queryPackageId && !queryPackageApplied) setQueryPackageApplied(true);
       const pkg = packageRows.find((item) => item.package_id === nextPackageId);
       if (pkg && name === defaultPortfolioName()) setName(defaultPortfolioName(pkg.package_name || pkg.package_id));
       if (!hmmConfigId && configRows[0]) setHmmConfigId(configRows[0].config_id);
@@ -138,7 +141,17 @@ export default function PaperV2PortfoliosPage() {
     } finally {
       setLoading(false);
     }
-  }, [hmmConfigId, name, packageId, portfolioPage, portfolioSearch, showRetired]);
+  }, [hmmConfigId, name, packageId, portfolioPage, portfolioSearch, queryPackageApplied, queryPackageId, showRetired]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    setQueryPackageId(params.get("package_id") || "");
+    const requestedTopK = Number(params.get("top_k") || "");
+    if (Number.isFinite(requestedTopK) && requestedTopK >= 1 && requestedTopK <= 50) {
+      setTopK(requestedTopK);
+    }
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -219,6 +232,7 @@ export default function PaperV2PortfoliosPage() {
         initial_cash: initialCash,
         start_date: portfolioStartDate,
         data_source: dataSource,
+        broker_backend: requestedBrokerBackend,
         execution_policy: policyId ? { validated_execution_policy_id: policyId } : undefined,
       });
       setCreated(portfolio);
@@ -325,11 +339,17 @@ export default function PaperV2PortfoliosPage() {
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="组合操作失败" />
       <SectionCard title="从单个策略包启动模拟盘" eyebrow="单包执行主链路" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新</button>}>
+          {queryPackageId ? (
+            <NoticePanel title="来自策略包页的 LocalSim 创建入口" tone="info">
+              已按 query 预选 StrategyPackage、broker_backend=local_sim 与 TopK；本入口只创建 LocalSim 组合，不放宽 MiniQMT/真实 paper 门禁。
+            </NoticePanel>
+          ) : null}
           <div className="pv2-form-grid">
             <div className="pv2-field"><label>StrategyPackage</label><select className="pv2-select" data-testid="portfolio-package" value={packageId} onChange={(event) => setPackageId(event.target.value)}>{packages.map((item) => <option value={item.package_id} key={item.package_id}>{item.package_name} / {item.package_status}</option>)}</select></div>
             <div className="pv2-field"><label>模拟盘名称</label><input className="pv2-input" data-testid="portfolio-name" value={name} onChange={(event) => setName(event.target.value)} /></div>
             <div className="pv2-field"><label>初始资金</label><input className="pv2-input" data-testid="portfolio-initial-cash" type="number" min={1} value={initialCash} onChange={(event) => setInitialCash(Number(event.target.value))} /></div>
             <div className="pv2-field"><label>运行场景</label><select className="pv2-select" data-testid="portfolio-start-mode" value={sessionMode} onChange={(event) => setSessionMode(event.target.value as PaperSessionMode)}>{SESSION_MODE_OPTIONS.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></div>
+            <div className="pv2-field"><label>Broker</label><input className="pv2-input" data-testid="portfolio-broker-backend" value={requestedBrokerBackend} readOnly /></div>
             <div className="pv2-field"><label>数据源</label><input className="pv2-input" data-testid="portfolio-data-source" value={dataSourceLabel(dataSource)} readOnly /></div>
             <div className="pv2-field"><label>执行策略</label><select className="pv2-select" data-testid="portfolio-policy" value={policyId} onChange={(event) => setPolicyId(event.target.value)}><option value="">平台默认：使用 manifest 默认执行策略，运行前 fail-fast 校验</option>{policies.map((item) => <option value={item.policy_id} key={item.policy_id}>{item.policy_name || item.policy_id} / {item.algo_code || "-"}</option>)}</select></div>
             {sessionMode !== "LIVE_ONLY" ? <>

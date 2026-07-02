@@ -60,6 +60,7 @@ ConnFactory = Callable[[], Iterator[Any]]
 
 
 SAFE_MANIFEST_REPAIR_CLASSIFICATION = "A_schema_evolution_stale_hash"
+MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
 
 
 def _manifest_drift_repair_plan(
@@ -91,6 +92,32 @@ def _manifest_drift_repair_plan(
             "audit_event_reason": "manifest_hash_repaired",
         },
     }
+
+
+def _summary_asset_eligibility_from_manifest(
+    manifest: StrategyPackageManifest,
+    package_status: PackageStatus,
+) -> dict[str, Any]:
+    blockers = ["package_retired"] if package_status == PackageStatus.RETIRED else []
+    warnings: list[str] = []
+    alpha_mode = getattr(manifest.alpha_mode, "value", manifest.alpha_mode)
+    if package_status != PackageStatus.RETIRED and alpha_mode == AlphaMode.MULTI_ALPHA.value:
+        evidence = manifest.source_evidence or {}
+        multi_alpha = evidence.get("multi_alpha") if isinstance(evidence, dict) else None
+        paper_admission = multi_alpha.get("paper_admission") if isinstance(multi_alpha, dict) else None
+        blocking = paper_admission.get("blocking") if isinstance(paper_admission, dict) else []
+        blocking_reasons = [str(item) for item in (blocking or []) if str(item)]
+        if MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in blocking_reasons:
+            warnings.append(MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+        blockers.extend(reason for reason in blocking_reasons if reason != MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+    payload: dict[str, Any] = {
+        "eligible": not blockers,
+        "summary_only": True,
+        "blockers": blockers,
+    }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
 
 
 def _manifest_json_for_record_classification(record: "StrategyPackageRecord") -> dict[str, Any]:
@@ -888,24 +915,30 @@ class StrategyPackageRepository:
                            (
                                package_status <> 'RETIRED'
                                AND (
-                                   NOT (paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run')
-                                   OR EXISTS (
+                                   alpha_mode <> 'multi_alpha'
+                                   OR NOT EXISTS (
                                        SELECT 1
-                                       FROM strategy_pkg.multi_alpha_paper_admission admission
-                                       WHERE admission.package_id = package_summary.package_id
-                                         AND admission.manifest_sha256 = package_summary.manifest_sha256
-                                         AND admission.broker_backend = 'local_sim'
-                                         AND admission.runtime_variant = CASE
-                                             WHEN package_summary.portfolio_topk IS NULL THEN 'top_k=unknown'
-                                             ELSE 'top_k=' || package_summary.portfolio_topk
-                                         END
-                                         AND admission.eligible = TRUE
+                                       FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                       WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
                                    )
                                )
                            ) AS summary_asset_eligible,
                            CASE
                                WHEN package_status = 'RETIRED' THEN ARRAY['package_retired']::text[]
-                               WHEN paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
+                               WHEN alpha_mode <> 'multi_alpha' THEN ARRAY[]::text[]
+                               ELSE COALESCE(
+                                   (
+                                       SELECT ARRAY_AGG(blocker.reason)::text[]
+                                       FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                       WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                   ),
+                                   ARRAY[]::text[]
+                               )
+                           END AS summary_asset_blockers,
+                           CASE
+                               WHEN package_status <> 'RETIRED'
+                                    AND alpha_mode = 'multi_alpha'
+                                    AND paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
                                     AND NOT EXISTS (
                                         SELECT 1
                                         FROM strategy_pkg.multi_alpha_paper_admission admission
@@ -920,7 +953,7 @@ class StrategyPackageRepository:
                                     )
                                    THEN ARRAY['multi_alpha_runtime_not_validated_until_dry_run']::text[]
                                ELSE ARRAY[]::text[]
-                           END AS summary_asset_blockers
+                           END AS summary_asset_warnings
                     FROM package_summary
                     ORDER BY created_at DESC
                     LIMIT %s
@@ -2412,7 +2445,15 @@ class StrategyPackageRepository:
         alpha_count = row.get("alpha_count")
         portfolio_topk = row.get("portfolio_topk")
         asset_blockers = [str(item) for item in (row.get("summary_asset_blockers") or []) if str(item)]
+        asset_warnings = [str(item) for item in (row.get("summary_asset_warnings") or []) if str(item)]
         asset_eligible = bool(row.get("summary_asset_eligible", row["package_status"] != PackageStatus.RETIRED.value))
+        asset_eligibility = {
+            "eligible": asset_eligible,
+            "summary_only": True,
+            "blockers": asset_blockers,
+        }
+        if asset_warnings:
+            asset_eligibility["warnings"] = asset_warnings
         return {
             "package_id": row["package_id"],
             "package_name": row["package_name"],
@@ -2436,11 +2477,7 @@ class StrategyPackageRepository:
             "created_at": row["created_at"].isoformat(),
             "updated_at": row["updated_at"].isoformat(),
             "metrics_summary": metrics_summary,
-            "asset_eligibility": {
-                "eligible": asset_eligible,
-                "summary_only": True,
-                "blockers": asset_blockers,
-            },
+            "asset_eligibility": asset_eligibility,
             "alpha_count": int(alpha_count) if alpha_count is not None else 0,
             "portfolio_topk": int(portfolio_topk) if portfolio_topk not in (None, "") else None,
         }
@@ -2974,11 +3011,7 @@ class InMemoryStrategyPackageRepository:
                     "created_at": record.created_at.isoformat(),
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
-                    "asset_eligibility": {
-                        "eligible": record.package_status != PackageStatus.RETIRED,
-                        "summary_only": True,
-                        "blockers": [],
-                    },
+                    "asset_eligibility": _summary_asset_eligibility_from_manifest(manifest, record.package_status),
                     "alpha_count": len(manifest.alpha_components),
                     "portfolio_topk": int(portfolio_topk) if portfolio_topk is not None else None,
                 }
