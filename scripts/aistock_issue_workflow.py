@@ -1163,14 +1163,39 @@ def _events_path(bug_id: str, root: Path | None = None) -> Path:
 
 def _remove_synthetic_smoke_workflow_dir(path: Path, bug_id: str) -> None:
     canonical_bug_id = bug_id.strip().upper()
-    expected = (REPO_ROOT / WORKFLOW_ROOT / "BUG-000").resolve()
-    if canonical_bug_id != "BUG-000" or path.resolve() != expected:
+    is_synthetic = canonical_bug_id == "BUG-000" or re.fullmatch(r"BUG-9\d{15,17}", canonical_bug_id)
+    expected = (REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id).resolve()
+    if not is_synthetic or path.resolve() != expected:
         raise WorkflowError("refusing to remove non-synthetic workflow-smoke state")
     if not path.exists():
         return
     if not path.is_dir() or path.is_symlink():
         raise WorkflowError(f"refusing to remove unsafe workflow-smoke path: {path}")
     shutil.rmtree(path)
+
+
+def _synthetic_smoke_bug_id() -> str:
+    return f"BUG-9{os.getpid() % 100000:05d}{time.time_ns() % 10_000_000_000:010d}"
+
+
+def _cleanup_synthetic_smoke_artifacts(paths: list[Path], bug_id: str) -> list[str]:
+    warnings: list[str] = []
+    canonical_bug_id = bug_id.strip().upper()
+    for path in paths:
+        try:
+            if path.is_dir():
+                _remove_synthetic_smoke_workflow_dir(path, canonical_bug_id)
+            elif path.exists():
+                expected_parent = (REPO_ROOT / WORKFLOW_ROOT / "smoke").resolve()
+                expected_name = f"synthetic-{canonical_bug_id}.json"
+                if path.resolve().parent != expected_parent or path.name != expected_name:
+                    raise WorkflowError("refusing to remove non-synthetic workflow-smoke issue file")
+                path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            warnings.append(f"synthetic workflow-smoke cleanup skipped for {_repo_rel(path)}: {exc}")
+    return warnings
 
 
 def _task_card_json_path(bug_id: str, root: Path | None = None) -> Path:
@@ -3251,6 +3276,13 @@ def _text_indicates_cleanup_fast(title: str | None, description: str | None = No
     return any(term in haystack for term in cleanup_terms) and any(term in haystack for term in docs_terms)
 
 
+def _text_indicates_workflow_policy(title: str | None, description: str | None = None, module: str | None = None) -> bool:
+    haystack = _small_text_blob([str(title or ""), str(description or ""), str(module or "")]).lower()
+    workflow_terms = ("workflow", "流水线", "流程", "validation", "ci", "nightly", "bug处理")
+    policy_terms = ("budget", "token", "over-validates", "验证预算", "过度验证", "规范", "policy")
+    return any(term in haystack for term in workflow_terms) and any(term in haystack for term in policy_terms)
+
+
 def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str], description: str | None = None) -> bool:
     normalized_paths = [path.replace("\\", "/") for path in changed_files]
     has_frontend_scope = any(path.startswith("frontend/") or "/frontend/" in path for path in normalized_paths)
@@ -3266,6 +3298,8 @@ def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str]
     if changed_files and not any(path.startswith(("frontend/", "tests/e2e/", "playwright")) for path in normalized_paths):
         return False
     if not changed_files and _text_indicates_cleanup_fast(title, description):
+        return False
+    if not changed_files and _text_indicates_workflow_policy(title, description, module):
         return False
     haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or "")]).lower()
     keywords = UI_KEYWORDS
@@ -3283,6 +3317,52 @@ def _is_cleanup_fast_candidate(record: dict[str, Any]) -> bool:
         str(record.get("actual") or ""),
         str(record.get("expected") or ""),
     )
+
+
+def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, Any] | None = None) -> dict[str, Any]:
+    module = _normalize_module_label(record.get("module"))
+    severity = str(record.get("severity") or "").upper().split()[0] if str(record.get("severity") or "").strip() else ""
+    required = [str(item) for item in flow._as_list(record.get("required_verification"))]
+    has_production_gate = any(
+        str(record.get(key) or "noop") not in {"", "noop"}
+        for key in ("production_ddl_gate", "production_backend_dependency_gate", "production_frontend_dependency_gate")
+    )
+    high_risk_modules = {"paper_v2", "strategy_package", "selection_center", "research_assistant", "validation_center"}
+    runtime_markers = ("runtime", "order", "cash", "position", "miniqmt", "broker", "ddl", "migration")
+    text = _small_text_blob(
+        [str(record.get("title") or ""), str(record.get("description") or ""), str(record.get("actual") or ""), str(record.get("expected") or "")]
+    ).lower()
+    if has_production_gate or any(marker in text for marker in ("ddl", "migration", "production db")):
+        budget = "deep"
+        target_pct = "60-70%"
+    elif severity in {"P0", "P1"} or module in high_risk_modules or any(marker in text for marker in runtime_markers):
+        budget = "standard"
+        target_pct = "35-60%"
+    elif ui_hints:
+        budget = "light_ui"
+        target_pct = "30-40%"
+    else:
+        budget = "light"
+        target_pct = "25-35%"
+    deferred_modules = flow._unique_strings(
+        [module, *[str(item).replace("_backend", "").replace("_ui", "") for item in required if item not in {"l0", "validation_module_registry_l0"}]]
+    )
+    return {
+        "schema_version": "aistock_verification_budget_v1",
+        "budget": budget,
+        "target_cost_percent_of_legacy": target_pct,
+        "premerge_gate": [
+            "changed-file lint/compile",
+            "direct fix-point targeted test or API/contract smoke",
+            "git diff --check",
+            "production gates",
+        ],
+        "deferred_nightly_verification": {
+            "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
+            "modules": [item for item in deferred_modules if item],
+            "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly",
+        },
+    }
 
 
 def _ui_intake_hints(
@@ -3360,6 +3440,7 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         )
     if any(str(item).startswith("validation_center_backend") for item in required):
         recs.append("Keep validation_center_backend only when the changed files actually affect Validation Center.")
+    recs.append("Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly.")
     return {
         "schema_version": "aistock_workflow_efficiency_recommendations_v1",
         "batch_candidate": batch_candidate,
@@ -3367,6 +3448,7 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         "docs_only_merge_with_related_code": True,
         "compact_success_output": True,
         "full_json_on_failure_only": True,
+        "verification_budget": _verification_budget_for_record(record, ui_hints),
         "recommendations": recs,
     }
 
@@ -3577,6 +3659,7 @@ def build_submit_bug_plan(
                 flow._as_list(record.get("required_verification")) + list(ui_hints.get("recommended_verification") or [])
             )
         record["workflow_efficiency_recommendations"] = _workflow_efficiency_recommendations(record, ui_hints)
+        record["verification_budget"] = record["workflow_efficiency_recommendations"]["verification_budget"]
 
         output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
         candidate_path = output_dir / "candidate.json"
@@ -4537,13 +4620,13 @@ def build_workflow_smoke_plan(
     cleanup_paths: list[Path] = []
     if not bug_id and not issue_json:
         synthetic_record = True
-        smoke_bug_id = "BUG-000"
+        smoke_bug_id = _synthetic_smoke_bug_id()
         smoke_dir = REPO_ROOT / WORKFLOW_ROOT / "smoke"
         smoke_workflow_dir = REPO_ROOT / WORKFLOW_ROOT / smoke_bug_id
         if smoke_workflow_dir.exists():
             _remove_synthetic_smoke_workflow_dir(smoke_workflow_dir, smoke_bug_id)
         cleanup_paths.append(smoke_workflow_dir)
-        issue_path = smoke_dir / "synthetic-BUG-000.json"
+        issue_path = smoke_dir / f"synthetic-{smoke_bug_id}.json"
         record = {
             "bug_id": smoke_bug_id,
             "title": "Workflow smoke synthetic issue",
@@ -4611,6 +4694,8 @@ def build_workflow_smoke_plan(
         }
     except Exception as exc:
         blocking.append(str(exc))
+    if synthetic_record:
+        warnings.extend(_cleanup_synthetic_smoke_artifacts(list(reversed(cleanup_paths)), bug_id or "BUG-000"))
     dirty_after = _git_status_paths(REPO_ROOT)
     before_paths = {row["path"] for row in dirty_before}
     after_paths = {row["path"] for row in dirty_after}
@@ -4627,7 +4712,7 @@ def build_workflow_smoke_plan(
     if unexpected:
         blocking.append(f"workflow smoke created unexpected git-status paths: {unexpected}")
     if synthetic_record:
-        warnings.append("used isolated synthetic BUG-000 record under ignored tmp/issue_workflow")
+        warnings.append("used isolated synthetic BUG-000-compatible record under ignored tmp/issue_workflow")
     return {
         "schema_version": "aistock_issue_workflow_smoke_v1",
         "generated_at": _utc_now(),

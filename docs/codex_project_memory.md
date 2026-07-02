@@ -76,6 +76,8 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Use targeted tests first, then the selected module or gate validation required by the issue/design.
 - Do not run broad expensive validation repeatedly after every small change; rerun final gates once the patch is stable.
 - Before PR, run a preflight appropriate to the change: changed-file lint/static checks, targeted tests, scope check, `git diff --check`, PR body/evidence check, and production gates.
+- BUG fixes use verification budgets. Most fixes should pass only the smallest safe pre-merge gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, and production gates.
+- Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and should run once across all merged daily BUG fixes. Keep immediate deep validation only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
 - GitHub Actions, nox sessions, PR Quality, Semgrep, CodeQL, and validation catalogs are the authoritative CI/CD foundation.
 - CI failures must be summarized by failed job, failed test, error signature, reproduce command, suspected module/files, and fingerprint before creating or promoting a BUG.
 

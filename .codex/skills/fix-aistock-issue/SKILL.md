@@ -29,6 +29,8 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Use graph-first context for every issue: read `task-card.md` Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg`/file reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise keep UA missing as warning-only.
 - For UI BUG intake, use `submit-bug` returned `ui_intake_hints` as the first route/scope/reproduce checklist; do not broad-scan frontend until those hints fail or prove stale.
 - Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
+- Use verification budgets for BUG fixes. Default to the smallest safe pre-merge gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, and production gates.
+- For high-risk BUGs, keep only safety-critical PR gates before merge: fail-closed/state-machine/invariant tests, API schema/route contracts, DDL dry-run, and side-effect guards. Defer broad module matrices, UI journeys, and cross-module business-flow validation to nightly so all merged daily BUG fixes are deduplicated into one deep run.
 
 ## Documentation Fast Path
 
@@ -64,7 +66,7 @@ For small root-pollution cleanup or docs/scratch relocation, use cleanup-fast: m
    `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`
 7. After code changes, run:
    `python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only`
-8. Run every required validation plan.
+8. Run the selected pre-merge verification budget. Prefer targeted tests and contract/smoke checks; run broad module plans only when DDL, production writes, order/cash/position invariants, fail-closed safety, or an explicit user request requires immediate deep validation.
 9. Re-run `finish` or `run --mode pr` with `--validation-evidence` entries for the commands/results that passed.
 10. Commit only the task files. If the user requested automated PR flow and validation evidence exists, run `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr`. The wrapper runs the pre-PR gate for scope, validation evidence, uncommitted task files, temp artifacts, and changed-file Ruff lint.
 11. If PR automation reports canonical-root/main blocking, switch to the returned issue worktree and resume there. Never push/create PR from root main.
@@ -99,7 +101,7 @@ After a compatible batch PR merges, prefer one aftercare PR:
 
 ## Completion Report
 
-Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary (`queue_seconds`, `active_fix_seconds`, validation, PR/CI, and aftercare), and whether production runtime or DB was untouched.
+Report branch, PR URL, commit hash, changed files, validation evidence, production gates, postmortem timing/context summary (`queue_seconds`, `active_fix_seconds`, validation, PR/CI, and aftercare), and whether production runtime or DB was untouched. Include `verification_budget` and any `deferred_nightly_verification` modules/scenarios so nightly can batch deep validation for the day.
 
 ## Post-Merge Sync And Cleanup
 

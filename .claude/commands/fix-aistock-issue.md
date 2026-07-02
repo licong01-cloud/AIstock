@@ -39,6 +39,13 @@ Use graph-first context before broad searches. After `run --mode plan`, read the
 
 For ordinary BUG fixes, do not read feature, module, architecture, or historical design documents by default. Load a design document only when the BUG/GitHub Issue explicitly cites it, the user asks for design/historical context, or `fast-path` classifies the task as T3 design/architecture.
 
+Use verification budgets for BUG fixes:
+
+- Default PR gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, and production gates.
+- High-risk PR gate: add only safety-critical checks such as fail-closed/state-machine/invariant tests, route/API schema contracts, DDL dry-run, and side-effect guards.
+- Nightly-deferred verification: broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression. Report affected modules/scenarios so nightly can deduplicate all merged daily BUG fixes.
+- Run broad module plans before merge only when DDL, production writes, order/cash/position invariants, fail-closed safety, or an explicit user request requires immediate deep validation.
+
 
 ## Non-BUG feature requests
 
@@ -96,7 +103,7 @@ After changing code:
 python scripts\aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only
 ```
 
-Run the required validation, then attach evidence:
+Run the selected pre-merge verification budget, then attach evidence:
 
 ```powershell
 python scripts\aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "python -m nox -s l0 -> passed"
@@ -116,7 +123,7 @@ After PR creation, after merge, or when the workflow feels slow, run:
 python scripts\aistock_issue_workflow.py postmortem --bug-id BUG-XXX
 ```
 
-Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, duplicate active-worktree count, stale PR checks, and final report evidence. Do not reconstruct phase cost by rereading the whole repo.
+Use `postmortem.json` / `postmortem.md` for timing, context-token estimates, duplicate active-worktree count, stale PR checks, and final report evidence. Do not reconstruct phase cost by rereading the whole repo. Report `verification_budget` and `deferred_nightly_verification` modules/scenarios in the final response.
 
 ## Guardrails
 

@@ -29,5 +29,6 @@ python F:\Dev\AIstock\scripts\aistock_issue_workflow.py doctor
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/**`, `.claude/**`) require controlled workflow.
 - Temporary exchange notes go to `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - Cleanup-fast requests stay mechanical: move/archive/delete named files and use `git diff --check`; add focused executable checks only when executable behavior is intentionally retained.
+- BUG fixes use verification budgets: choose the smallest safe pre-merge gate and defer broad UI/API/business-flow validation to nightly for daily deduplicated execution.
 
 Report the selected lane and continue only if the user asked to execute.

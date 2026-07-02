@@ -7028,6 +7028,46 @@ def test_submit_bug_does_not_infer_ui_hints_from_cleanup_route_wording(
     assert any("cleanup-fast" in item for item in efficiency["recommendations"])
 
 
+def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 581})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Issue workflow over-validates bug fixes instead of using risk-based verification budgets",
+        module="validation_llm_pipeline",
+        severity="P1",
+        description="Workflow budget should defer broad UI/API/business-flow validation to nightly.",
+        expected="No UI intake is inferred; verification_budget is recorded for compact PR validation.",
+        actual="The word issue previously looked like a route and broad validation was encouraged.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=[],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-582",
+        github_issue_number="1841",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/1841",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=True,
+    )
+
+    assert payload["ui_intake_hints"] is None
+    record = payload["record"]
+    assert "ui_intake_hints" not in record
+    budget = record["verification_budget"]
+    assert budget["budget"] == "standard"
+    assert budget["deferred_nightly_verification"]["required"] is True
+    assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
+
+
 def test_postmortem_reports_queue_time_from_bug_created_at(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
