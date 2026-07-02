@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -47,6 +49,7 @@ from backend.services.research_assistant.service import (
     STOCK_DEPTH_MIN_TOOL_EXECUTIONS,
     STOCK_DEPTH_REQUIRED_TOOL_REFS,
     STOCK_DEPTH_STOCK_TOOL_NAMES,
+    LITELLM_NATIVE_PRICING_REQUIRED_VERSION,
     _calculate_litellm_cost,
     _normalize_litellm_usage,
 )
@@ -3425,6 +3428,8 @@ def test_llm_usage_normalizes_dict_and_object_usage_without_prompt_text() -> Non
 
 def test_llm_usage_missing_provider_usage_is_explicitly_estimated_or_unavailable() -> None:
     class FakeLiteLlm:
+        model_cost = {"fake/model": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "source": "pytest"}}
+
         def token_counter(self, **kwargs: object) -> int:
             if kwargs.get("messages") is not None:
                 return 11
@@ -3465,6 +3470,284 @@ def test_llm_usage_missing_provider_usage_is_explicitly_estimated_or_unavailable
     assert cost["total_cost_usd"] == 0.003
     assert unavailable["usage_status"] == "unavailable"
     assert unavailable["usage_reason_code"] == "provider_usage_missing_litellm_unavailable"
+
+
+def test_llm_usage_cost_uses_attribute_adapter_for_deepseek_usage_objects() -> None:
+    class FakeLiteLlm:
+        model_cost = {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "cache_read_input_token_cost": 0.0001,
+                "litellm_provider": "deepseek",
+                "source": "pytest",
+            }
+        }
+
+        def cost_per_token(self, **kwargs: object) -> tuple[float, float]:
+            usage_object = kwargs["usage_object"]
+            assert getattr(usage_object, "prompt_tokens") == 10
+            assert getattr(usage_object, "completion_tokens") == 4
+            assert usage_object.get("prompt_cache_hit_tokens") == 3
+            return (0.0073, 0.008)
+
+    cost = _calculate_litellm_cost(
+        litellm_module=FakeLiteLlm(),
+        response=None,
+        model_id="deepseek/deepseek-v4-pro",
+        normalized_usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "cache_read_input_tokens": 3,
+            "usage_status": "recorded",
+            "usage_raw_json": {"prompt_tokens_details": {"cached_tokens": 3}},
+        },
+        duration_ms=1,
+    )
+
+    assert cost["cost_status"] == "recorded"
+    assert cost["prompt_cost_usd"] == 0.0073
+    assert cost["completion_cost_usd"] == 0.008
+    assert cost["pricing_snapshot_json"]["pricing_hash"]
+
+
+def test_llm_usage_cost_requires_litellm_native_deepseek_v4_pricing() -> None:
+    class OldLiteLlm:
+        __version__ = "1.80.11"
+        model_cost: dict[str, dict[str, object]] = {}
+
+        def cost_per_token(self, **_kwargs: object) -> tuple[float, float]:
+            raise AssertionError("old/missing native price maps must not be used")
+
+        def completion_cost(self, **_kwargs: object) -> float:
+            raise AssertionError("manual or alias fallback pricing is forbidden")
+
+    cost = _calculate_litellm_cost(
+        litellm_module=OldLiteLlm(),
+        response=None,
+        model_id="deepseek/deepseek-v4-pro",
+        normalized_usage={
+            "prompt_tokens": 301_066,
+            "completion_tokens": 1_482,
+            "total_tokens": 302_548,
+            "cache_read_input_tokens": 2_688,
+            "usage_status": "recorded",
+            "usage_raw_json": {"prompt_cache_hit_tokens": 2_688, "prompt_tokens_details": {"cached_tokens": 2_688}},
+        },
+        duration_ms=1,
+    )
+
+    assert cost["cost_status"] == "unavailable"
+    assert cost["total_cost_usd"] is None
+    assert cost["cost_reason_code"] == "litellm_native_pricing_unavailable"
+    assert cost["pricing_snapshot_json"]["pricing_available"] is False
+    assert cost["pricing_snapshot_json"]["litellm_version"] == "1.80.11"
+    assert cost["pricing_snapshot_json"]["required_litellm_version"] == LITELLM_NATIVE_PRICING_REQUIRED_VERSION
+    assert cost["pricing_snapshot_json"]["pricing_hash"]
+
+
+def test_llm_usage_cost_uses_litellm_native_deepseek_v4_pricing_without_alias_mapping() -> None:
+    class NativeLiteLlm:
+        __version__ = LITELLM_NATIVE_PRICING_REQUIRED_VERSION
+        model_cost = {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 4.35e-7,
+                "output_cost_per_token": 8.7e-7,
+                "cache_read_input_token_cost": 3.625e-9,
+                "input_cost_per_token_cache_hit": 3.625e-9,
+                "litellm_provider": "deepseek",
+                "source": "https://api-docs.deepseek.com/quick_start/pricing",
+            },
+        }
+
+        @classmethod
+        def cost_per_token(cls, **kwargs: object) -> tuple[float, float]:
+            assert kwargs["model"] == "deepseek/deepseek-v4-pro"
+            usage_object = kwargs["usage_object"]
+            prompt_tokens = int(getattr(usage_object, "prompt_tokens"))
+            completion_tokens = int(getattr(usage_object, "completion_tokens"))
+            cached_tokens = int(usage_object.prompt_tokens_details.get("cached_tokens") or 0)
+            input_price = cls.model_cost["deepseek/deepseek-v4-pro"]["input_cost_per_token"]
+            cache_price = cls.model_cost["deepseek/deepseek-v4-pro"]["cache_read_input_token_cost"]
+            output_price = cls.model_cost["deepseek/deepseek-v4-pro"]["output_cost_per_token"]
+            return (
+                float(((prompt_tokens - cached_tokens) * input_price) + (cached_tokens * cache_price)),
+                float(completion_tokens * output_price),
+            )
+
+    cost = _calculate_litellm_cost(
+        litellm_module=NativeLiteLlm(),
+        response=None,
+        model_id="deepseek/deepseek-v4-pro",
+        normalized_usage={
+            "prompt_tokens": 301_066,
+            "completion_tokens": 1_482,
+            "total_tokens": 302_548,
+            "cache_read_input_tokens": 2_688,
+            "usage_status": "recorded",
+            "usage_raw_json": {"prompt_cache_hit_tokens": 2_688, "prompt_tokens_details": {"cached_tokens": 2_688}},
+        },
+        duration_ms=1,
+    )
+
+    assert cost["cost_status"] == "recorded"
+    assert cost["prompt_cost_usd"] == pytest.approx(0.129804174)
+    assert cost["completion_cost_usd"] == pytest.approx(0.00128934)
+    assert cost["total_cost_usd"] == pytest.approx(0.131093514)
+    assert cost["pricing_snapshot_json"]["pricing_available"] is True
+    assert cost["pricing_snapshot_json"]["source"] == "https://api-docs.deepseek.com/quick_start/pricing"
+    assert cost["pricing_snapshot_json"]["litellm_version"] == LITELLM_NATIVE_PRICING_REQUIRED_VERSION
+
+
+def test_llm_usage_read_path_reprices_unavailable_cost_with_current_litellm_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    class CurrentLiteLlm:
+        model_cost = {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "cache_read_input_token_cost": 0.0001,
+                "litellm_provider": "deepseek",
+                "source": "pytest-current",
+            }
+        }
+
+        @classmethod
+        def cost_per_token(cls, **kwargs: object) -> tuple[float, float]:
+            usage_object = kwargs["usage_object"]
+            prompt_tokens = int(getattr(usage_object, "prompt_tokens"))
+            completion_tokens = int(getattr(usage_object, "completion_tokens"))
+            cached_tokens = int(usage_object.get("prompt_cache_hit_tokens") or 0)
+            prompt_cost = ((prompt_tokens - cached_tokens) * cls.model_cost["deepseek/deepseek-v4-pro"]["input_cost_per_token"]) + (
+                cached_tokens * cls.model_cost["deepseek/deepseek-v4-pro"]["cache_read_input_token_cost"]
+            )
+            completion_cost = completion_tokens * cls.model_cost["deepseek/deepseek-v4-pro"]["output_cost_per_token"]
+            return (float(prompt_cost), float(completion_cost))
+
+    monkeypatch.setitem(sys.modules, "litellm", CurrentLiteLlm)
+    svc = _chat_service(FakeLlmClient())
+    svc.repository.create_record(
+        "llm_usage_events",
+        {
+            "usage_event_id": "llmu_reprice",
+            "trace_id": "trace_reprice",
+            "task_id": "task_reprice",
+            "conversation_id": "conv_reprice",
+            "call_group_id": "task_reprice",
+            "call_index": 1,
+            "phase": "initial_chat",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-v4-pro",
+            "litellm_model": "deepseek/deepseek-v4-pro",
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "cache_read_input_tokens": 3,
+            "usage_status": "recorded",
+            "usage_source": "litellm_usage_object",
+            "cost_status": "unavailable",
+            "cost_source": "unavailable",
+            "cost_reason_code": "litellm_cost_per_token_failed:Exception",
+            "usage_raw_json": {"prompt_cache_hit_tokens": 3, "prompt_tokens_details": {"cached_tokens": 3}},
+            "pricing_snapshot_json": {"model": "deepseek/deepseek-v4-pro", "pricing_hash": "old"},
+            "request_meta_json": {"prompt_text_retained": False},
+            "completed_at": "2026-07-02T09:00:00+08:00",
+        },
+    )
+
+    page = svc.list_llm_usage_events(trace_id="trace_reprice")
+    item = page["items"][0]
+    summary = svc.llm_usage_summary(trace_id="trace_reprice")["summary"]
+
+    assert item["cost_source"] == "litellm_model_cost_repriced"
+    assert item["display_cost_status"] == "repriced"
+    assert item["total_cost_usd"] == pytest.approx(0.0153)
+    assert summary["total_cost_usd"] == "0.0153000000"
+    assert summary["cost_status"] == "recorded"
+
+
+def test_llm_usage_read_path_reprices_stale_recorded_cost_when_litellm_price_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    class CurrentLiteLlm:
+        model_cost = {
+            "deepseek/deepseek-v4-pro": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "cache_read_input_token_cost": 0.0001,
+                "litellm_provider": "deepseek",
+                "source": "pytest-current-price",
+            }
+        }
+
+        @classmethod
+        def cost_per_token(cls, **kwargs: object) -> tuple[float, float]:
+            usage_object = kwargs["usage_object"]
+            prompt_tokens = int(getattr(usage_object, "prompt_tokens"))
+            completion_tokens = int(getattr(usage_object, "completion_tokens"))
+            cached_tokens = int(usage_object.get("prompt_cache_hit_tokens") or 0)
+            prompt_cost = ((prompt_tokens - cached_tokens) * cls.model_cost["deepseek/deepseek-v4-pro"]["input_cost_per_token"]) + (
+                cached_tokens * cls.model_cost["deepseek/deepseek-v4-pro"]["cache_read_input_token_cost"]
+            )
+            completion_cost = completion_tokens * cls.model_cost["deepseek/deepseek-v4-pro"]["output_cost_per_token"]
+            return (float(prompt_cost), float(completion_cost))
+
+    monkeypatch.setitem(sys.modules, "litellm", CurrentLiteLlm)
+    svc = _chat_service(FakeLlmClient())
+    svc.repository.create_record(
+        "llm_usage_events",
+        {
+            "usage_event_id": "llmu_reprice_stale",
+            "trace_id": "trace_reprice_stale",
+            "task_id": "task_reprice_stale",
+            "conversation_id": "conv_reprice_stale",
+            "call_group_id": "task_reprice_stale",
+            "call_index": 1,
+            "phase": "initial_chat",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-v4-pro",
+            "litellm_model": "deepseek/deepseek-v4-pro",
+            "prompt_tokens": 10,
+            "completion_tokens": 4,
+            "total_tokens": 14,
+            "cache_read_input_tokens": 3,
+            "usage_status": "recorded",
+            "usage_source": "litellm_usage_object",
+            "prompt_cost_usd": "999.0000000000",
+            "completion_cost_usd": "999.0000000000",
+            "total_cost_usd": "999.0000000000",
+            "cost_status": "recorded",
+            "cost_source": "litellm_model_cost",
+            "usage_raw_json": {"prompt_cache_hit_tokens": 3, "prompt_tokens_details": {"cached_tokens": 3}},
+            "pricing_snapshot_json": {"model": "deepseek/deepseek-v4-pro", "pricing_hash": "stale"},
+            "request_meta_json": {"prompt_text_retained": False},
+            "completed_at": "2026-07-02T09:00:00+08:00",
+        },
+    )
+
+    item = svc.list_llm_usage_events(trace_id="trace_reprice_stale")["items"][0]
+
+    assert item["cost_source"] == "litellm_model_cost_repriced"
+    assert item["display_cost_status"] == "repriced"
+    assert item["original_cost_status"] == "recorded"
+    assert item["display_pricing_hash"] != "stale"
+    assert item["total_cost_usd"] == pytest.approx(0.0153)
+
+
+def test_litellm_dependency_pin_supports_deepseek_v4_native_pricing() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    root_requirements = repo_root / "requirements.txt"
+    backend_requirements = repo_root / "backend" / "requirements.txt"
+    root_lines = root_requirements.read_text(encoding="utf-16").splitlines()
+    backend_lines = backend_requirements.read_text(encoding="utf-8").splitlines()
+
+    assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in root_lines
+    assert "openai==2.44.0" in root_lines
+    assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in backend_lines
+    assert "openai==2.44.0" in backend_lines
+    ci_text = (repo_root / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    assert f"litellm=={LITELLM_NATIVE_PRICING_REQUIRED_VERSION}" in ci_text
+    assert "openai==2.44.0" in ci_text
 
 
 def test_chat_turn_writes_llm_usage_ledger_and_trace_cost_summary() -> None:
@@ -3590,7 +3873,18 @@ def test_llm_usage_summary_aggregates_multiple_react_model_turns() -> None:
 
 
 
-def test_llm_usage_report_aggregates_chart_ready_hour_buckets_and_statuses() -> None:
+def test_llm_usage_report_aggregates_chart_ready_hour_buckets_and_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    class ReportLiteLlm:
+        model_cost = {"deepseek-chat": {"input_cost_per_token": 0.00001, "output_cost_per_token": 0.00002, "source": "pytest-report"}}
+
+        @classmethod
+        def cost_per_token(cls, **kwargs: object) -> tuple[float, float]:
+            if kwargs["model"] != "deepseek-chat":
+                raise Exception("This model is not mapped in pytest")
+            usage_object = kwargs["usage_object"]
+            return (float(getattr(usage_object, "prompt_tokens") * 0.00001), float(getattr(usage_object, "completion_tokens") * 0.00002))
+
+    monkeypatch.setitem(sys.modules, "litellm", ReportLiteLlm)
     svc = _chat_service(FakeLlmClient())
     rows = [
         {
@@ -3625,7 +3919,7 @@ def test_llm_usage_report_aggregates_chart_ready_hour_buckets_and_statuses() -> 
             "phase": "react_iteration",
             "component": "research_assistant.llm",
             "provider": "deepseek",
-            "model": "deepseek-reasoner",
+            "model": "pytest-unmapped-cost-model-20260702",
             "prompt_tokens": 50,
             "completion_tokens": 20,
             "total_tokens": 70,
@@ -3672,7 +3966,7 @@ def test_llm_usage_report_aggregates_chart_ready_hour_buckets_and_statuses() -> 
     assert report["status_breakdown"]["usage"]["estimated"] == 1
     assert report["status_breakdown"]["cost"]["recorded"] == 1
     assert report["status_breakdown"]["cost"]["unavailable"] == 1
-    assert {item["model"] for item in report["model_breakdown"]} == {"deepseek-chat", "deepseek-reasoner"}
+    assert {item["model"] for item in report["model_breakdown"]} == {"deepseek-chat", "pytest-unmapped-cost-model-20260702"}
     assert "999999" not in json.dumps(report, ensure_ascii=False)
     assert all("private prompt" not in json.dumps(bucket, ensure_ascii=False) for bucket in report["time_series"])
 

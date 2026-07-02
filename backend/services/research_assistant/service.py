@@ -7,15 +7,16 @@ fall back to in-memory storage unless tests inject that repository explicitly.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
 import logging
 import os
 import re
-import hashlib
 import subprocess
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from time import perf_counter
@@ -1855,6 +1856,186 @@ def _normalize_litellm_usage(
     }
 
 
+LITELLM_NATIVE_PRICING_REQUIRED_VERSION = "1.90.2"
+
+
+class _LiteLlmAttributeAdapter:
+    """Minimal dict/attribute bridge for LiteLLM Usage detail fields."""
+
+    def __init__(self, values: dict[str, Any]) -> None:
+        self._values = {str(key): value for key, value in values.items()}
+        for key, value in self._values.items():
+            setattr(self, key, value)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._values.get(key, default)
+
+    def __bool__(self) -> bool:
+        return any(value not in (None, "", 0) for value in self._values.values())
+
+
+class _LiteLlmUsageAdapter:
+    """Attribute-friendly usage object for LiteLLM native cost calculators."""
+
+    def __init__(self, usage: dict[str, Any]) -> None:
+        self.prompt_tokens = int(usage.get("prompt_tokens") or 0)
+        self.completion_tokens = int(usage.get("completion_tokens") or 0)
+        self.total_tokens = int(usage.get("total_tokens") or (self.prompt_tokens + self.completion_tokens))
+        prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+        completion_details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+        self.prompt_tokens_details = _LiteLlmAttributeAdapter(prompt_details)
+        self.completion_tokens_details = _LiteLlmAttributeAdapter(completion_details)
+        self.prompt_cache_hit_tokens = int(usage.get("prompt_cache_hit_tokens") or 0)
+        self.prompt_cache_miss_tokens = int(usage.get("prompt_cache_miss_tokens") or 0)
+        self.cache_creation_input_tokens = int(usage.get("cache_creation_input_tokens") or 0)
+        self.cache_read_input_tokens = int(usage.get("cache_read_input_tokens") or 0)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
+def _usage_object_for_litellm_cost(normalized_usage: dict[str, Any]) -> _LiteLlmUsageAdapter:
+    usage_raw = normalized_usage.get("usage_raw_json")
+    usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        usage.setdefault(key, normalized_usage.get(key))
+    if "prompt_cache_hit_tokens" not in usage and normalized_usage.get("cache_read_input_tokens") is not None:
+        usage["prompt_cache_hit_tokens"] = normalized_usage.get("cache_read_input_tokens")
+    prompt_details = usage.get("prompt_tokens_details") if isinstance(usage.get("prompt_tokens_details"), dict) else {}
+    if normalized_usage.get("cache_read_input_tokens") is not None:
+        prompt_details.setdefault("cached_tokens", normalized_usage.get("cache_read_input_tokens"))
+    if normalized_usage.get("cache_creation_input_tokens") is not None:
+        prompt_details.setdefault("cache_creation_tokens", normalized_usage.get("cache_creation_input_tokens"))
+    usage["cache_creation_input_tokens"] = normalized_usage.get("cache_creation_input_tokens")
+    usage["cache_read_input_tokens"] = normalized_usage.get("cache_read_input_tokens")
+    usage["prompt_tokens_details"] = prompt_details
+    completion_details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+    if normalized_usage.get("reasoning_tokens") is not None:
+        completion_details.setdefault("reasoning_tokens", normalized_usage.get("reasoning_tokens"))
+    usage["completion_tokens_details"] = completion_details
+    return _LiteLlmUsageAdapter(usage)
+
+
+def _litellm_package_version(litellm_module: Any) -> str | None:
+    module_version = getattr(litellm_module, "__version__", None)
+    if isinstance(module_version, str) and module_version.strip():
+        return module_version.strip()
+    module_name = getattr(litellm_module, "__name__", "")
+    if module_name != "litellm":
+        return None
+    try:
+        return importlib.metadata.version("litellm")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _version_tuple(value: str | None) -> tuple[int, ...] | None:
+    if not value:
+        return None
+    parts: list[int] = []
+    for raw in str(value).split("."):
+        match = re.match(r"^(\d+)", raw)
+        if match is None:
+            break
+        parts.append(int(match.group(1)))
+    return tuple(parts) if parts else None
+
+
+def _litellm_version_below_required(version: str | None) -> bool:
+    actual = _version_tuple(version)
+    required = _version_tuple(LITELLM_NATIVE_PRICING_REQUIRED_VERSION)
+    if actual is None or required is None:
+        return False
+    padded_actual = actual + (0,) * max(0, len(required) - len(actual))
+    padded_required = required + (0,) * max(0, len(actual) - len(required))
+    return padded_actual < padded_required
+
+
+def _litellm_pricing_snapshot(litellm_module: Any, model_id: str) -> dict[str, Any]:
+    version = _litellm_package_version(litellm_module)
+    if _litellm_version_below_required(version):
+        return {
+            "model": model_id,
+            "source": "litellm.model_cost",
+            "pricing_available": False,
+            "pricing_unavailable_reason": "litellm_version_below_required",
+            "litellm_version": version,
+            "required_litellm_version": LITELLM_NATIVE_PRICING_REQUIRED_VERSION,
+        }
+    model_cost = getattr(litellm_module, "model_cost", None)
+    if not isinstance(model_cost, dict):
+        return {
+            "model": model_id,
+            "source": "litellm.model_cost",
+            "pricing_available": False,
+            "pricing_unavailable_reason": "litellm_model_cost_missing",
+            "litellm_version": version,
+            "required_litellm_version": LITELLM_NATIVE_PRICING_REQUIRED_VERSION,
+        }
+    pricing = model_cost.get(model_id)
+    if not isinstance(pricing, dict):
+        return {
+            "model": model_id,
+            "source": "litellm.model_cost",
+            "pricing_available": False,
+            "pricing_unavailable_reason": "litellm_native_pricing_missing",
+            "litellm_version": version,
+            "required_litellm_version": LITELLM_NATIVE_PRICING_REQUIRED_VERSION,
+        }
+    keys = (
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "input_cost_per_token_cache_hit",
+        "cache_read_input_token_cost",
+        "cache_creation_input_token_cost",
+        "litellm_provider",
+        "source",
+        "source_url",
+        "source_checked_at",
+    )
+    return {
+        "model": model_id,
+        "source": "litellm.model_cost",
+        "pricing_available": True,
+        "litellm_version": version,
+        "required_litellm_version": LITELLM_NATIVE_PRICING_REQUIRED_VERSION,
+        **{key: pricing.get(key) for key in keys if key in pricing},
+    }
+
+
+def _pricing_hash(snapshot: dict[str, Any]) -> str:
+    price_shape = {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"calculation_method", "split_cost_unavailable_reason", "error", "pricing_hash"}
+    }
+    return hashlib.sha256(json.dumps(price_shape, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
+
+
+def _normalized_usage_from_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "prompt_tokens": _as_nonnegative_int(event.get("prompt_tokens")),
+        "completion_tokens": _as_nonnegative_int(event.get("completion_tokens")),
+        "total_tokens": _as_nonnegative_int(event.get("total_tokens")),
+        "reasoning_tokens": _as_nonnegative_int(event.get("reasoning_tokens")),
+        "cache_creation_input_tokens": _as_nonnegative_int(event.get("cache_creation_input_tokens")),
+        "cache_read_input_tokens": _as_nonnegative_int(event.get("cache_read_input_tokens")),
+        "usage_status": event.get("usage_status") or "recorded",
+        "usage_raw_json": event.get("usage_raw_json") if isinstance(event.get("usage_raw_json"), dict) else {},
+    }
+
+
+def _parse_llm_usage_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("llm_usage_event_missing_completed_at")
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=ZoneInfo("UTC"))
+
+
 def _calculate_litellm_cost(
     *,
     litellm_module: Any | None,
@@ -1865,19 +2046,38 @@ def _calculate_litellm_cost(
 ) -> dict[str, Any]:
     if litellm_module is None:
         return {"cost_source": "unavailable", "cost_status": "unavailable", "cost_reason_code": "litellm_unavailable", "pricing_snapshot_json": {}}
+    pricing_snapshot = _litellm_pricing_snapshot(litellm_module, model_id)
     prompt_tokens = int(normalized_usage.get("prompt_tokens") or 0)
     completion_tokens = int(normalized_usage.get("completion_tokens") or 0)
     if prompt_tokens == 0 and completion_tokens == 0:
-        return {"cost_source": "unavailable", "cost_status": "unavailable", "cost_reason_code": "usage_tokens_unavailable", "pricing_snapshot_json": {"model": model_id}}
+        return {"cost_source": "unavailable", "cost_status": "unavailable", "cost_reason_code": "usage_tokens_unavailable", "pricing_snapshot_json": pricing_snapshot}
+    if pricing_snapshot.get("pricing_available") is not True:
+        pricing_snapshot["calculation_method"] = "litellm.native_model_cost_required"
+        pricing_snapshot["pricing_hash"] = _pricing_hash(pricing_snapshot)
+        return {
+            "prompt_cost_usd": None,
+            "completion_cost_usd": None,
+            "total_cost_usd": None,
+            "currency": "USD",
+            "cost_source": "unavailable",
+            "cost_status": "unavailable",
+            "cost_reason_code": "litellm_native_pricing_unavailable",
+            "pricing_snapshot_json": pricing_snapshot,
+        }
     try:
+        usage_object = _usage_object_for_litellm_cost(normalized_usage)
         prompt_cost, completion_cost = litellm_module.cost_per_token(
             model=model_id,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             response_time_ms=float(duration_ms),
-            usage_object=normalized_usage.get("usage_raw_json") if isinstance(normalized_usage.get("usage_raw_json"), dict) else None,
+            usage_object=usage_object,
         )
+        if prompt_cost is None or completion_cost is None:
+            raise ValueError("litellm_cost_per_token_returned_none")
         total_cost = float(prompt_cost or 0) + float(completion_cost or 0)
+        pricing_snapshot["calculation_method"] = "litellm.cost_per_token"
+        pricing_snapshot["pricing_hash"] = _pricing_hash(pricing_snapshot)
         return {
             "prompt_cost_usd": prompt_cost,
             "completion_cost_usd": completion_cost,
@@ -1886,33 +2086,23 @@ def _calculate_litellm_cost(
             "cost_source": "litellm_model_cost",
             "cost_status": "estimated" if normalized_usage.get("usage_status") == "estimated" else "recorded",
             "cost_reason_code": None,
-            "pricing_snapshot_json": {"model": model_id, "source": "litellm.cost_per_token"},
+            "pricing_snapshot_json": pricing_snapshot,
         }
     except Exception as cost_exc:
         reason = f"litellm_cost_per_token_failed:{type(cost_exc).__name__}"
-        try:
-            total_cost = litellm_module.completion_cost(completion_response=response, model=model_id) if response is not None else None
-            return {
-                "prompt_cost_usd": None,
-                "completion_cost_usd": None,
-                "total_cost_usd": total_cost,
-                "currency": "USD",
-                "cost_source": "litellm_model_cost",
-                "cost_status": "estimated" if normalized_usage.get("usage_status") == "estimated" else "recorded",
-                "cost_reason_code": None,
-                "pricing_snapshot_json": {"model": model_id, "source": "litellm.completion_cost", "split_cost_unavailable_reason": reason},
-            }
-        except Exception as fallback_exc:  # noqa: BLE001 - record concrete no-silent cost failure.
-            return {
-                "prompt_cost_usd": None,
-                "completion_cost_usd": None,
-                "total_cost_usd": None,
-                "currency": "USD",
-                "cost_source": "unavailable",
-                "cost_status": "unavailable",
-                "cost_reason_code": f"{reason};completion_cost_failed:{type(fallback_exc).__name__}",
-                "pricing_snapshot_json": {"model": model_id, "source": "litellm", "error": str(fallback_exc)[:200]},
-            }
+        pricing_snapshot["calculation_method"] = "litellm.cost_per_token"
+        pricing_snapshot["error"] = str(cost_exc)[:200]
+        pricing_snapshot["pricing_hash"] = _pricing_hash(pricing_snapshot)
+        return {
+            "prompt_cost_usd": None,
+            "completion_cost_usd": None,
+            "total_cost_usd": None,
+            "currency": "USD",
+            "cost_source": "unavailable",
+            "cost_status": "unavailable",
+            "cost_reason_code": reason,
+            "pricing_snapshot_json": pricing_snapshot,
+        }
 
 
 def _llm_usage_summary_dict(payload: dict[str, Any]) -> dict[str, Any]:
@@ -4126,7 +4316,41 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             page = self.repository.list_records("llm_usage_events", filters=filters, limit=resolved_limit, offset=offset)
         page.setdefault("source_of_truth", "assistant_llm_usage_events")
         page.setdefault("prompt_text_retained", False)
+        page["items"] = self._reprice_llm_usage_events_for_display(page.get("items") or [])
+        page.setdefault("pricing_mode", "current_litellm_for_display")
         return page
+
+    def _list_all_llm_usage_events_for_display(
+        self,
+        *,
+        trace_id: str | None = None,
+        task_id: str | None = None,
+        conversation_id: str | None = None,
+        model: str | None = None,
+        provider: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        limit = self.configured_limit("api_list_max_page_size")
+        offset = 0
+        items: list[dict[str, Any]] = []
+        while True:
+            page = self.list_llm_usage_events(
+                trace_id=trace_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                model=model,
+                provider=provider,
+                date_from=date_from,
+                date_to=date_to,
+                limit=limit,
+                offset=offset,
+            )
+            batch = page.get("items") or []
+            items.extend(batch)
+            if not page.get("has_more") or not batch:
+                return items
+            offset += len(batch)
 
     def llm_usage_summary(
         self,
@@ -4150,18 +4374,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             date_to=date_to,
             limit=limit or self.configured_limit("api_list_llm_usage_events"),
         )
-        filters = {
-            "trace_id": trace_id,
-            "task_id": task_id,
-            "conversation_id": conversation_id,
-            "model": model,
-            "provider": provider,
-        }
-        summary = (
-            self.repository.summarize_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to)
-            if hasattr(self.repository, "summarize_llm_usage_events")
-            else self._llm_usage_summary_from_events(page["items"])
+        all_items = self._list_all_llm_usage_events_for_display(
+            trace_id=trace_id,
+            task_id=task_id,
+            conversation_id=conversation_id,
+            model=model,
+            provider=provider,
+            date_from=date_from,
+            date_to=date_to,
         )
+        summary = self._llm_usage_summary_from_events(all_items)
         return {
             "schema_version": "aistock_research_assistant_llm_usage_summary_v1",
             "source_of_truth": "assistant_llm_usage_events",
@@ -4200,14 +4422,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise ValueError(f"invalid_timezone: {timezone_name}") from exc
         if limit_models < 1:
             raise ValueError("limit_models must be positive")
-        filters = {
-            "trace_id": trace_id,
-            "task_id": task_id,
-            "conversation_id": conversation_id,
-            "model": model,
-            "provider": provider,
-        }
-        page = self.list_llm_usage_events(
+        all_items = self._list_all_llm_usage_events_for_display(
             trace_id=trace_id,
             task_id=task_id,
             conversation_id=conversation_id,
@@ -4215,22 +4430,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             provider=provider,
             date_from=date_from,
             date_to=date_to,
-            limit=self.configured_limit("api_list_max_page_size"),
         )
-        summary = (
-            self.repository.summarize_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to)
-            if hasattr(self.repository, "summarize_llm_usage_events")
-            else self._llm_usage_summary_from_events(page["items"])
-        )
-        report_parts = self.repository.report_llm_usage_events(
-            filters=filters,
-            date_from=date_from,
-            date_to=date_to,
+        summary = self._llm_usage_summary_from_events(all_items)
+        report_parts = self._llm_usage_report_parts_from_events(
+            all_items,
             granularity=granularity,
             timezone_name=timezone_name,
             limit_models=limit_models,
         )
-        status_breakdown = self._llm_usage_status_breakdown_from_report(report_parts.get("time_series") or [], page.get("items") or [])
+        status_breakdown = self._llm_usage_status_breakdown_from_report(report_parts.get("time_series") or [], all_items)
         summary = dict(summary)
         summary["usage_status"] = self._llm_usage_rollup_status(status_breakdown["usage"])
         summary["cost_status"] = self._llm_usage_rollup_status(status_breakdown["cost"])
@@ -4254,9 +4462,222 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "model_breakdown": report_parts.get("model_breakdown") or [],
             "status_breakdown": status_breakdown,
             "prompt_text_retained": False,
+            "pricing_mode": "current_litellm_for_display",
             "degraded": False,
             "reason_code": None,
         }
+
+    def _reprice_llm_usage_events_for_display(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        try:
+            import litellm
+        except Exception as exc:  # noqa: BLE001 - report explicit no-silent repricing status.
+            return [
+                {
+                    **event,
+                    "display_cost_status": "unavailable",
+                    "display_cost_reason_code": f"litellm_unavailable_for_display_repricing:{type(exc).__name__}",
+                }
+                for event in events
+            ]
+        return [self._reprice_llm_usage_event_for_display(event, litellm) for event in events]
+
+    @staticmethod
+    def _reprice_llm_usage_event_for_display(event: dict[str, Any], litellm_module: Any) -> dict[str, Any]:
+        model_id = str(event.get("litellm_model") or event.get("model") or "").strip()
+        if not model_id:
+            return {**event, "display_cost_status": "unavailable", "display_cost_reason_code": "llm_usage_event_missing_model"}
+        prompt_tokens = int(event.get("prompt_tokens") or 0)
+        completion_tokens = int(event.get("completion_tokens") or 0)
+        if prompt_tokens == 0 and completion_tokens == 0:
+            reason_code = event.get("cost_reason_code") or "usage_tokens_unavailable"
+            return {
+                **event,
+                "display_cost_status": "unavailable",
+                "display_cost_reason_code": reason_code,
+            }
+        snapshot = _litellm_pricing_snapshot(litellm_module, model_id)
+        current_hash = _pricing_hash(snapshot)
+        existing_snapshot = event.get("pricing_snapshot_json") if isinstance(event.get("pricing_snapshot_json"), dict) else {}
+        existing_hash = str(existing_snapshot.get("pricing_hash") or "")
+        should_reprice = event.get("total_cost_usd") is None or event.get("cost_status") in {"unavailable", "failed"} or existing_hash != current_hash
+        if not should_reprice:
+            return {**event, "display_cost_status": event.get("cost_status") or "recorded", "display_pricing_hash": existing_hash}
+        repriced = _calculate_litellm_cost(
+            litellm_module=litellm_module,
+            response=None,
+            model_id=model_id,
+            normalized_usage=_normalized_usage_from_event(event),
+            duration_ms=int(event.get("duration_ms") or 0),
+        )
+        if repriced.get("total_cost_usd") is None:
+            reason_code = repriced.get("cost_reason_code") or "display_repricing_unavailable"
+            return {
+                **event,
+                "cost_source": "unavailable",
+                "cost_status": "unavailable",
+                "cost_reason_code": reason_code,
+                "display_cost_status": "unavailable",
+                "display_cost_reason_code": reason_code,
+                "display_pricing_snapshot_json": repriced.get("pricing_snapshot_json") or snapshot,
+                "original_cost_status": event.get("cost_status"),
+                "original_cost_reason_code": event.get("cost_reason_code"),
+            }
+        return {
+            **event,
+            "prompt_cost_usd": repriced.get("prompt_cost_usd"),
+            "completion_cost_usd": repriced.get("completion_cost_usd"),
+            "total_cost_usd": repriced.get("total_cost_usd"),
+            "cost_source": "litellm_model_cost_repriced",
+            "cost_status": "recorded" if event.get("usage_status") == "recorded" else "estimated",
+            "cost_reason_code": None,
+            "display_cost_status": "repriced",
+            "display_pricing_snapshot_json": repriced.get("pricing_snapshot_json") or snapshot,
+            "display_pricing_hash": current_hash,
+            "original_cost_status": event.get("cost_status"),
+            "original_cost_reason_code": event.get("cost_reason_code"),
+        }
+
+    @staticmethod
+    def _llm_usage_report_parts_from_events(events: list[dict[str, Any]], *, granularity: str, timezone_name: str, limit_models: int) -> dict[str, Any]:
+        tz = ZoneInfo(timezone_name)
+        grouped: dict[tuple[datetime, str], list[dict[str, Any]]] = {}
+        by_model: dict[str, list[dict[str, Any]]] = {}
+        for event in events:
+            dt = _parse_llm_usage_datetime(event.get("completed_at") or event.get("created_at")).astimezone(tz)
+            bucket = dt.replace(minute=0, second=0, microsecond=0) if granularity == "hour" else dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            model = str(event.get("model") or event.get("litellm_model") or "unknown")
+            grouped.setdefault((bucket, model), []).append(event)
+            by_model.setdefault(model, []).append(event)
+        time_series = [ResearchAssistantService._llm_usage_bucket_from_events(items, bucket, granularity, model=model) for (bucket, model), items in sorted(grouped.items(), key=lambda item: (item[0][0], item[0][1]))]
+        model_rows = sorted(
+            (ResearchAssistantService._llm_usage_model_row(model, items) for model, items in by_model.items()),
+            key=lambda row: int(row.get("total_tokens") or 0),
+            reverse=True,
+        )
+        compact_models, kept_models = ResearchAssistantService._compact_llm_usage_model_rows(model_rows, limit_models)
+        return {
+            "time_series": ResearchAssistantService._compact_llm_usage_time_series(time_series, kept_models, granularity),
+            "model_breakdown": compact_models,
+        }
+
+    @staticmethod
+    def _llm_usage_bucket_from_events(items: list[dict[str, Any]], bucket_start: datetime, granularity: str, *, model: str) -> dict[str, Any]:
+        summary = ResearchAssistantService._llm_usage_summary_from_events(items)
+        usage_counts = ResearchAssistantService._llm_usage_status_counts(items, "usage_status")
+        cost_counts = ResearchAssistantService._llm_usage_status_counts(items, "cost_status")
+        providers = sorted({str(item.get("provider") or "unknown") for item in items})
+        return {
+            "bucket_start": bucket_start.isoformat(),
+            "bucket_end": (bucket_start + (timedelta(hours=1) if granularity == "hour" else timedelta(days=1))).isoformat(),
+            "provider": providers[0] if len(providers) == 1 else "mixed",
+            "model": model,
+            "call_count": summary["call_count"],
+            "prompt_tokens": summary["prompt_tokens"],
+            "completion_tokens": summary["completion_tokens"],
+            "total_tokens": summary["total_tokens"],
+            "total_cost_usd": summary["total_cost_usd"],
+            "usage_status": ResearchAssistantService._llm_usage_rollup_status(usage_counts),
+            "cost_status": ResearchAssistantService._llm_usage_rollup_status(cost_counts),
+            "usage_status_counts": usage_counts,
+            "cost_status_counts": cost_counts,
+        }
+
+    @staticmethod
+    def _llm_usage_model_row(model: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+        summary = ResearchAssistantService._llm_usage_summary_from_events(items)
+        usage_counts = ResearchAssistantService._llm_usage_status_counts(items, "usage_status")
+        cost_counts = ResearchAssistantService._llm_usage_status_counts(items, "cost_status")
+        providers = sorted({str(item.get("provider") or "unknown") for item in items})
+        return {
+            "provider": providers[0] if len(providers) == 1 else "mixed",
+            "model": model,
+            "call_count": summary["call_count"],
+            "prompt_tokens": summary["prompt_tokens"],
+            "completion_tokens": summary["completion_tokens"],
+            "total_tokens": summary["total_tokens"],
+            "total_cost_usd": summary["total_cost_usd"],
+            "usage_status": ResearchAssistantService._llm_usage_rollup_status(usage_counts),
+            "cost_status": ResearchAssistantService._llm_usage_rollup_status(cost_counts),
+            "usage_status_counts": usage_counts,
+            "cost_status_counts": cost_counts,
+        }
+
+    @staticmethod
+    def _compact_llm_usage_model_rows(rows: list[dict[str, Any]], limit_models: int) -> tuple[list[dict[str, Any]], set[str]]:
+        limit = max(1, int(limit_models))
+        if len(rows) <= limit:
+            return rows, {str(row.get("model") or "unknown") for row in rows}
+        kept = rows[: max(0, limit - 1)]
+        rest = rows[max(0, limit - 1) :]
+        usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        for row in rest:
+            for key, value in (row.get("usage_status_counts") or {}).items():
+                usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+            for key, value in (row.get("cost_status_counts") or {}).items():
+                cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+        other_cost_available = any(row.get("total_cost_usd") is not None for row in rest)
+        other = {
+            "provider": "mixed",
+            "model": "other",
+            "call_count": sum(int(row.get("call_count") or 0) for row in rest),
+            "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in rest),
+            "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in rest),
+            "total_tokens": sum(int(row.get("total_tokens") or 0) for row in rest),
+            "total_cost_usd": f"{sum(float(row.get('total_cost_usd') or 0) for row in rest if row.get('total_cost_usd') is not None):.10f}" if other_cost_available else None,
+            "usage_status": ResearchAssistantService._llm_usage_rollup_status(usage_counts),
+            "cost_status": ResearchAssistantService._llm_usage_rollup_status(cost_counts),
+            "usage_status_counts": usage_counts,
+            "cost_status_counts": cost_counts,
+        }
+        kept_models = {str(row.get("model") or "unknown") for row in kept}
+        return [*kept, other], kept_models
+
+    @staticmethod
+    def _compact_llm_usage_time_series(time_series: list[dict[str, Any]], kept_models: set[str], granularity: str) -> list[dict[str, Any]]:
+        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for bucket in time_series:
+            model = str(bucket.get("model") or "unknown")
+            bucket_start = str(bucket.get("bucket_start") or "")
+            grouped.setdefault((bucket_start, model if model in kept_models else "other"), []).append(bucket)
+        compacted: list[dict[str, Any]] = []
+        for (bucket_start, model), rows in sorted(grouped.items(), key=lambda item: item[0]):
+            usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+            cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+            for row in rows:
+                for key, value in (row.get("usage_status_counts") or {}).items():
+                    usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+                for key, value in (row.get("cost_status_counts") or {}).items():
+                    cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+            bucket_start_dt = datetime.fromisoformat(bucket_start)
+            cost_available = any(row.get("total_cost_usd") is not None for row in rows)
+            providers = {str(row.get("provider") or "unknown") for row in rows}
+            compacted.append(
+                {
+                    "bucket_start": bucket_start,
+                    "bucket_end": (bucket_start_dt + (timedelta(hours=1) if granularity == "hour" else timedelta(days=1))).isoformat(),
+                    "provider": rows[0].get("provider") if model != "other" and len(providers) == 1 else "mixed",
+                    "model": model,
+                    "call_count": sum(int(row.get("call_count") or 0) for row in rows),
+                    "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in rows),
+                    "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in rows),
+                    "total_tokens": sum(int(row.get("total_tokens") or 0) for row in rows),
+                    "total_cost_usd": f"{sum(float(row.get('total_cost_usd') or 0) for row in rows if row.get('total_cost_usd') is not None):.10f}" if cost_available else None,
+                    "usage_status": ResearchAssistantService._llm_usage_rollup_status(usage_counts),
+                    "cost_status": ResearchAssistantService._llm_usage_rollup_status(cost_counts),
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        return compacted
+
+    @staticmethod
+    def _llm_usage_status_counts(events: list[dict[str, Any]], field: str) -> dict[str, int]:
+        counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        for event in events:
+            status = str(event.get(field) or "unavailable")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
 
     @staticmethod
     def _llm_usage_status_breakdown_from_report(time_series: list[dict[str, Any]], events: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -4435,6 +4856,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "currency": "USD",
             "usage_status": "recorded" if events else "unavailable",
             "cost_status": "recorded" if events else "unavailable",
+            "cost_reason_code": None,
         }
         cost_available = False
         for event in events:
@@ -4446,8 +4868,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 totals["unavailable_usage_event_count"] += 1
             if event.get("cost_status") == "unavailable":
                 totals["unavailable_cost_event_count"] += 1
+                totals["cost_reason_code"] = totals["cost_reason_code"] or event.get("cost_reason_code")
             if event.get("cost_status") == "failed":
                 totals["failed_cost_event_count"] += 1
+                totals["cost_reason_code"] = totals["cost_reason_code"] or event.get("cost_reason_code")
             if event.get("total_cost_usd") is not None:
                 cost_available = True
                 totals["total_cost_usd"] += float(event.get("total_cost_usd") or 0)
