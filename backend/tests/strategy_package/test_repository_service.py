@@ -1131,3 +1131,33 @@ def test_repair_manifest_hash_requires_explicit_confirmation():
     assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == legacy_hash
     assert repo.records["pkg"].manifest_sha256 == legacy_hash
 
+
+
+def test_strategy_package_summary_listing_omits_heavy_manifest_and_runtime_contract() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg_summary", "package_name": "summary"}))
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    rows = service.list_package_summaries(limit=10)
+
+    assert rows[0]["package_id"] == "pkg_summary"
+    assert rows[0]["metrics_summary"]["package_id"] == "pkg_summary"
+    assert rows[0]["asset_eligibility"] == {"eligible": True, "summary_only": True, "blockers": []}
+    assert "manifest" not in rows[0]
+    assert "runtime_config_contract" not in rows[0]
+
+
+def test_strategy_package_summary_listing_does_not_hash_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg_no_hash_on_list"}))
+    repo.save_manifest(manifest)
+
+    def fail_hash(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("summary listing must not compute manifest hash")
+
+    monkeypatch.setattr("backend.services.strategy_package.repository.compute_manifest_sha256", fail_hash)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=10)
+
+    assert rows[0]["package_id"] == "pkg_no_hash_on_list"

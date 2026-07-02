@@ -148,7 +148,7 @@ export default function PaperV2ModelHmmPage() {
   const loadPackages = useCallback(async () => {
     setError(null);
     try {
-      const rows = await strategyPackageApi.list(undefined, 300);
+      const rows = await strategyPackageApi.listSummary(undefined, 100);
       setPackages(rows);
       if (!packageId) setPackageId(rows[0]?.package_id || "");
     } catch (exc) {

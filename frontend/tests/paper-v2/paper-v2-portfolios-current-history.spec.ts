@@ -129,9 +129,12 @@ async function mockPortfolioPageApi(page: Page) {
       return respond(route, { execution_policies: [] });
     }
     if (method === "GET" && path === "/strategy-packages") {
+      expect(url.searchParams.get("view")).toBe("summary");
       return respond(route, { packages: [packageRow] });
     }
     if (method === "GET" && path === "/paper-v2/running-summary") {
+      expect(url.searchParams.get("snapshot_limit")).toBe("1");
+      expect(url.searchParams.get("position_limit")).toBe("1");
       return respond(route, ok({
         summaries: [
           runningSummary(activeLocalPortfolio, true),

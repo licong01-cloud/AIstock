@@ -215,7 +215,7 @@ export default function PaperV2PackagesPage() {
     setError(null);
     try {
       const [packageRows, sourceRows, combineRows] = await Promise.all([
-        strategyPackageApi.list(undefined, 300),
+        strategyPackageApi.listSummary(undefined, 100),
         isMultiAlphaSource ? Promise.resolve([]) : strategyPackageApi.qeSources(sourceKind, 300),
         isMultiAlphaSource ? strategyPackageApi.listCombineRuns(200) : Promise.resolve([]),
       ]);

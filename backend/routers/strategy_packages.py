@@ -280,6 +280,13 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
     }
 
 
+def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(row)
+    payload.pop("manifest", None)
+    payload.pop("runtime_config_contract", None)
+    return payload
+
+
 def _candidate_payload(record: CandidateStrategyPackageRecord) -> dict[str, Any]:
     return record.model_dump(mode="json")
 
@@ -403,9 +410,22 @@ def create_package_from_multi_alpha_combine_run(req: CreateFromMultiAlphaCombine
 
 
 @router.get("")
-def list_strategy_packages(status: PackageStatus | None = None, limit: int = 100) -> dict[str, Any]:
+def list_strategy_packages(
+    status: PackageStatus | None = None,
+    limit: int = 100,
+    view: str = "full",
+) -> dict[str, Any]:
     try:
-        records = StrategyPackageService().list_packages(status=status, limit=limit)
+        service = StrategyPackageService()
+        if view == "summary":
+            records = service.list_package_summaries(status=status, limit=limit)
+            return {"ok": True, "packages": [_summary_payload(record) for record in records]}
+        if view != "full":
+            raise StrategyPackageValidationError(
+                "strategy package list view is invalid",
+                context={"view": view, "allowed_views": ["full", "summary"]},
+            )
+        records = service.list_packages(status=status, limit=limit)
         return {"ok": True, "packages": [_record_payload(record) for record in records]}
     except TradingCoreError as exc:
         _raise_http(exc)

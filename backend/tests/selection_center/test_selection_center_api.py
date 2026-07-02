@@ -29,8 +29,9 @@ class FakeSelectionCenterService:
         self.calls.append(kwargs)
         return self.run
 
-    def list_selectable_packages(self, *, limit: int = 200):
+    def list_selectable_packages(self, *, limit: int = 200, view: str = "full"):
         assert limit > 0
+        assert view in {"full", "summary"}
         return [
             {
                 "package_id": "pkg_a",

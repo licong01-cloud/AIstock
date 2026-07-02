@@ -273,8 +273,10 @@ function listPayload(runs: MockRun[]) {
 
 async function mockApi(page: Page) {
   const writeMethods: string[] = [];
-  await page.route("**/api/v1/qmt/status", async (route) =>
-    route.fulfill({
+  const requestLog: string[] = [];
+  await page.route("**/api/v1/qmt/status", async (route) => {
+    requestLog.push("GET /api/v1/qmt/status");
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -285,17 +287,21 @@ async function mockApi(page: Page) {
         provider: "xtquant",
         client_class: "MiniQMTGateway",
       }),
-    }),
-  );
-  await page.route("**/api/v1/paper-v2/portfolios?*", async (route) =>
-    route.fulfill({
+    });
+  });
+  await page.route("**/api/v1/paper-v2/portfolios?*", async (route) => {
+    const url = new URL(route.request().url());
+    requestLog.push(`GET /api/v1/paper-v2/portfolios?${url.searchParams.toString()}`);
+    expect(url.searchParams.get("broker_backend")).toBe("minqmt_sim");
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ portfolios: [qmtPortfolio] }),
-    }),
-  );
-  await page.route("**/api/v1/paper-v2/portfolios/*/auto-run/status", async (route) =>
-    route.fulfill({
+    });
+  });
+  await page.route("**/api/v1/paper-v2/portfolios/*/auto-run/status", async (route) => {
+    requestLog.push("GET /api/v1/paper-v2/portfolios/*/auto-run/status");
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
@@ -309,8 +315,8 @@ async function mockApi(page: Page) {
           },
         },
       }),
-    }),
-  );
+    });
+  });
   await page.route("**/api/v1/paper-v2/session-scheduler/bootstrap-status", async (route) =>
     route.fulfill({
       status: 200,
@@ -325,13 +331,16 @@ async function mockApi(page: Page) {
       }),
     }),
   );
-  await page.route("**/api/v1/strategy-packages?*", async (route) =>
-    route.fulfill({
+  await page.route("**/api/v1/strategy-packages?*", async (route) => {
+    const url = new URL(route.request().url());
+    requestLog.push(`GET /api/v1/strategy-packages?${url.searchParams.toString()}`);
+    expect(url.searchParams.get("view")).toBe("summary");
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({ packages: [strategyPackage] }),
-    }),
-  );
+    });
+  });
   await page.route("**/api/v1/strategy-packages/*/execution-policies", async (route) =>
     route.fulfill({
       status: 200,
@@ -438,7 +447,7 @@ async function mockApi(page: Page) {
 
     return respond({ detail: `unexpected simulation-runtime route: ${path}` }, 404);
   });
-  return writeMethods;
+  return { writeMethods, requestLog };
 }
 
 test("simulation runtime ops page displays controlled scheduler, provider, shared run trace, and filters", async ({ page }) => {
@@ -452,7 +461,7 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   page.on("response", (response) => {
     if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
   });
-  const writeMethods = await mockApi(page);
+  const { writeMethods } = await mockApi(page);
 
   await page.goto("/paper-v2/simulation-runtime");
 
@@ -507,7 +516,7 @@ test("MiniQMT sim page hosts controlled operator command with Chinese labels and
   page.on("response", (response) => {
     if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
   });
-  const writeMethods = await mockApi(page);
+  const { writeMethods, requestLog } = await mockApi(page);
 
   await page.goto("/paper-v2/miniqmt-sim");
   await expect(page.getByTestId("miniqmt-operator-command-panel")).toBeVisible();
@@ -518,6 +527,9 @@ test("MiniQMT sim page hosts controlled operator command with Chinese labels and
   await expect(page.getByText("confirm_text")).toHaveCount(0);
   await expect(page.getByTestId("miniqmt-operator-alpha-book")).toHaveCount(0);
   await expect(page.getByTestId("miniqmt-operator-submit")).toBeDisabled();
+  expect(requestLog.some((item) => item.includes("view=summary"))).toBe(true);
+  expect(requestLog.some((item) => item.includes("broker_backend=minqmt_sim"))).toBe(true);
+  expect(requestLog.some((item) => item.includes("qmt/trades"))).toBe(false);
 
   await expect(page.getByTestId("miniqmt-operator-selected-run")).toContainText(QMT_RUN_ID);
   await page.getByTestId("miniqmt-operator-command-type").selectOption("REPLACE_ALPHA_SIGNAL_BOOK");

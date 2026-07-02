@@ -261,6 +261,12 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ packages: StrategyPackage[] }>(`/strategy-packages?${qs.toString()}`);
     return data.packages || [];
   },
+  async listSummary(status?: string, limit = 200): Promise<StrategyPackage[]> {
+    const qs = new URLSearchParams({ limit: String(limit), view: "summary" });
+    if (status) qs.set("status", status);
+    const data = await apiFetch<{ packages: StrategyPackage[] }>(`/strategy-packages?${qs.toString()}`);
+    return data.packages || [];
+  },
   async get(packageId: string): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}`);
     return data.package;
@@ -305,8 +311,10 @@ export const strategyPackageApi = {
 };
 
 export const selectionCenterApi = {
-  async selectablePackages(limit = 300): Promise<SelectablePackage[]> {
-    const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?limit=${limit}`);
+  async selectablePackages(limit = 300, view: "full" | "summary" = "full"): Promise<SelectablePackage[]> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (view !== "full") qs.set("view", view);
+    const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?${qs.toString()}`);
     return data.packages || [];
   },
   async industryTree(): Promise<JsonObject[]> {
@@ -394,6 +402,7 @@ export const paperV2Api = {
     pageSize?: number;
     limit?: number;
     statuses?: string[];
+    brokerBackend?: string;
     search?: string;
     sortBy?: string;
     sortDir?: string;
@@ -408,6 +417,7 @@ export const paperV2Api = {
     for (const status of params.statuses || []) {
       if (status) qs.append("status", status);
     }
+    if (params.brokerBackend) qs.set("broker_backend", params.brokerBackend);
     if (params.search?.trim()) qs.set("search", params.search.trim());
     const data = await apiFetch<{ portfolios: PaperPortfolio[]; pagination?: JsonObject }>(`/paper-v2/portfolios?${qs.toString()}`);
     return {

@@ -563,9 +563,109 @@ class PaperTradingV2Repository:
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT portfolio_id FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
-                ids = [row["portfolio_id"] for row in cur.fetchall()]
-        return [self.get_portfolio(portfolio_id) for portfolio_id in ids]
+                cur.execute("SELECT * FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
+                rows = cur.fetchall()
+        return [self._portfolio_from_row(dict(row)) for row in rows]
+
+    def list_portfolios_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        statuses: list[str] | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+        broker_backend: str | None = None,
+    ) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise DataUnavailableError(
+                "paper v2 portfolio pagination requires positive limits",
+                context={"page": page, "page_size": page_size},
+            )
+        status_values = [str(item).strip().upper() for item in (statuses or []) if str(item).strip()]
+        invalid_statuses = [item for item in status_values if item not in {status.value for status in PortfolioStatus}]
+        if invalid_statuses:
+            raise DataUnavailableError(
+                "paper v2 portfolio status filter is invalid",
+                context={"statuses": statuses, "invalid_statuses": invalid_statuses},
+            )
+        sort_columns = {
+            "portfolio_name": "portfolio_name",
+            "status": "status",
+            "initial_cash": "initial_cash",
+            "start_date": "start_date",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        }
+        normalized_sort_by = str(sort_by or "created_at").strip().lower()
+        if normalized_sort_by not in sort_columns:
+            raise DataUnavailableError(
+                "paper v2 portfolio sort field is invalid",
+                context={"sort_by": sort_by, "allowed_sort_fields": sorted(sort_columns)},
+            )
+        normalized_sort_dir = str(sort_dir or "desc").strip().lower()
+        if normalized_sort_dir not in {"asc", "desc"}:
+            raise DataUnavailableError(
+                "paper v2 portfolio sort direction is invalid",
+                context={"sort_dir": sort_dir, "allowed_sort_dirs": ["asc", "desc"]},
+            )
+
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if status_values:
+            where_clauses.append("status = ANY(%s)")
+            params.append(status_values)
+        normalized_broker_backend = str(broker_backend or "").strip()
+        if normalized_broker_backend:
+            where_clauses.append("broker_backend = %s")
+            params.append(normalized_broker_backend)
+        normalized_search = str(search or "").strip()
+        if normalized_search:
+            where_clauses.append(
+                "(portfolio_name ILIKE %s OR portfolio_id ILIKE %s OR package_id ILIKE %s)"
+            )
+            search_like = f"%{normalized_search}%"
+            params.extend([search_like, search_like, search_like])
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        order_col = sort_columns[normalized_sort_by]
+        secondary_order_sql = (
+            "created_at DESC NULLS LAST,\n                             "
+            if normalized_sort_by != "created_at"
+            else ""
+        )
+        offset = (page - 1) * page_size
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"SELECT COUNT(*) AS total FROM paper_v2.portfolio {where_sql}", tuple(params))
+                total = int((cur.fetchone() or {}).get("total") or 0)
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM paper_v2.portfolio
+                    {where_sql}
+                    ORDER BY {order_col} {normalized_sort_dir.upper()} NULLS LAST,
+                             {secondary_order_sql}portfolio_id ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple(params + [page_size, offset]),
+                )
+                rows = cur.fetchall()
+        return {
+            "portfolios": [item.model_dump(mode="json") for item in (self._portfolio_from_row(dict(row)) for row in rows)],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "statuses": status_values,
+                "search": normalized_search or None,
+                "broker_backend": normalized_broker_backend or None,
+                "sort_by": normalized_sort_by,
+                "sort_dir": normalized_sort_dir,
+            },
+        }
 
     def list_running_summaries(
         self,
@@ -3011,6 +3111,66 @@ class InMemoryPaperTradingV2Repository:
 
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return list(self.portfolios.values())[:limit]
+
+    def list_portfolios_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        statuses: list[str] | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+        broker_backend: str | None = None,
+    ) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise DataUnavailableError(
+                "paper v2 portfolio pagination requires positive limits",
+                context={"page": page, "page_size": page_size},
+            )
+        rows = list(self.portfolios.values())
+        status_filter = {str(item).strip().upper() for item in (statuses or []) if str(item).strip()}
+        if status_filter:
+            rows = [item for item in rows if item.status.value.upper() in status_filter]
+        normalized_broker_backend = str(broker_backend or "").strip()
+        if normalized_broker_backend:
+            rows = [item for item in rows if item.broker_backend == normalized_broker_backend]
+        if search and search.strip():
+            needle = search.strip().lower()
+            rows = [
+                item
+                for item in rows
+                if needle in item.portfolio_name.lower()
+                or needle in item.portfolio_id.lower()
+                or needle in item.package_id.lower()
+            ]
+        sort_keys = {
+            "portfolio_name": lambda item: item.portfolio_name.lower(),
+            "status": lambda item: item.status.value,
+            "initial_cash": lambda item: item.initial_cash,
+            "start_date": lambda item: item.start_date.isoformat(),
+            "created_at": lambda item: item.created_at,
+            "updated_at": lambda item: item.updated_at,
+        }
+        normalized_sort_dir = "asc" if str(sort_dir).lower() == "asc" else "desc"
+        rows = sorted(rows, key=sort_keys.get(sort_by, sort_keys["created_at"]), reverse=normalized_sort_dir != "asc")
+        total = len(rows)
+        start = (page - 1) * page_size
+        page_rows = rows[start : start + page_size]
+        return {
+            "portfolios": [item.model_dump(mode="json") for item in page_rows],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "statuses": sorted(status_filter),
+                "search": search,
+                "broker_backend": normalized_broker_backend or None,
+                "sort_by": sort_by,
+                "sort_dir": normalized_sort_dir,
+            },
+        }
 
     def list_running_summaries(
         self,

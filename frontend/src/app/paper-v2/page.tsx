@@ -82,8 +82,8 @@ export default function PaperV2OverviewPage() {
         paperV2Api.runningSummaryPage({
           page,
           pageSize,
-          snapshotLimit: 30,
-          positionLimit: 8,
+          snapshotLimit: 1,
+          positionLimit: 1,
           statuses: statusFilterToStatuses(statusFilter),
           sortBy,
           sortDir,

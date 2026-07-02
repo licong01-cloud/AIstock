@@ -849,6 +849,87 @@ class StrategyPackageRepository:
                 rows = cur.fetchall()
         return [record for record in (self._record_from_row(dict(row), quarantine=True) for row in rows) if record is not None]
 
+    def list_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        """Return scalar StrategyPackage rows for UI lists without manifest validation."""
+
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        params: list[Any] = []
+        where = ""
+        if status is not None:
+            where = "WHERE package_status = %s"
+            params.append(status.value)
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH package_summary AS (
+                        SELECT package_id, package_name, package_version, source_type,
+                               source_id, loop_id, run_id, package_status,
+                               manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                               data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                               model_artifact_uri, model_artifact_sha256, paper_portfolio_count,
+                               created_at, updated_at,
+                               manifest_json #> '{{backtest_summary}}' AS backtest_summary,
+                               jsonb_array_length(COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)) AS alpha_count,
+                               COALESCE(
+                                   NULLIF(manifest_json #>> '{{backtest_context,daily_strategy,topk}}', ''),
+                                   NULLIF(manifest_json #>> '{{portfolio_policy,topk}}', '')
+                               ) AS portfolio_topk,
+                               COALESCE(
+                                   manifest_json #> '{{source_evidence,multi_alpha,paper_admission,blocking}}',
+                                   '[]'::jsonb
+                               ) AS paper_admission_blocking
+                        FROM strategy_pkg.package
+                        {where}
+                    )
+                    SELECT *,
+                           (
+                               package_status <> 'RETIRED'
+                               AND (
+                                   NOT (paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run')
+                                   OR EXISTS (
+                                       SELECT 1
+                                       FROM strategy_pkg.multi_alpha_paper_admission admission
+                                       WHERE admission.package_id = package_summary.package_id
+                                         AND admission.manifest_sha256 = package_summary.manifest_sha256
+                                         AND admission.broker_backend = 'local_sim'
+                                         AND admission.runtime_variant = CASE
+                                             WHEN package_summary.portfolio_topk IS NULL THEN 'top_k=unknown'
+                                             ELSE 'top_k=' || package_summary.portfolio_topk
+                                         END
+                                         AND admission.eligible = TRUE
+                                   )
+                               )
+                           ) AS summary_asset_eligible,
+                           CASE
+                               WHEN package_status = 'RETIRED' THEN ARRAY['package_retired']::text[]
+                               WHEN paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
+                                    AND NOT EXISTS (
+                                        SELECT 1
+                                        FROM strategy_pkg.multi_alpha_paper_admission admission
+                                        WHERE admission.package_id = package_summary.package_id
+                                          AND admission.manifest_sha256 = package_summary.manifest_sha256
+                                          AND admission.broker_backend = 'local_sim'
+                                          AND admission.runtime_variant = CASE
+                                              WHEN package_summary.portfolio_topk IS NULL THEN 'top_k=unknown'
+                                              ELSE 'top_k=' || package_summary.portfolio_topk
+                                          END
+                                          AND admission.eligible = TRUE
+                                    )
+                                   THEN ARRAY['multi_alpha_runtime_not_validated_until_dry_run']::text[]
+                               ELSE ARRAY[]::text[]
+                           END AS summary_asset_blockers
+                    FROM package_summary
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._summary_from_row(dict(row)) for row in rows]
+
     def list_single_alpha_candidates_for_seed_reuse(self, *, limit: int = 2000) -> list[StrategyPackageRecord]:
         """Return frozen single-alpha packages for deterministic seed-coverage matching."""
 
@@ -2310,6 +2391,60 @@ class StrategyPackageRepository:
                     conn.autocommit = original_autocommit
         return self.get(package_id)
 
+    @staticmethod
+    def _summary_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        backtest_summary = row.get("backtest_summary") or {}
+        raw_metrics = backtest_summary.get("raw_metrics") if isinstance(backtest_summary, dict) else {}
+        raw_metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        metrics_summary = {
+            "ic": backtest_summary.get("ic", raw_metrics.get("ic")) if isinstance(backtest_summary, dict) else raw_metrics.get("ic"),
+            "rank_ic": backtest_summary.get("rank_ic", raw_metrics.get("rank_ic")) if isinstance(backtest_summary, dict) else raw_metrics.get("rank_ic"),
+            "icir": backtest_summary.get("icir", raw_metrics.get("icir")) if isinstance(backtest_summary, dict) else raw_metrics.get("icir"),
+            "sharpe": backtest_summary.get("sharpe", raw_metrics.get("sharpe")) if isinstance(backtest_summary, dict) else raw_metrics.get("sharpe"),
+            "annual_return": backtest_summary.get("annual_return", raw_metrics.get("annual_return")) if isinstance(backtest_summary, dict) else raw_metrics.get("annual_return"),
+            "max_drawdown": backtest_summary.get("max_drawdown", raw_metrics.get("max_drawdown")) if isinstance(backtest_summary, dict) else raw_metrics.get("max_drawdown"),
+            "final_nav": backtest_summary.get("final_nav", raw_metrics.get("final_nav")) if isinstance(backtest_summary, dict) else raw_metrics.get("final_nav"),
+            "turnover": backtest_summary.get("turnover", raw_metrics.get("turnover")) if isinstance(backtest_summary, dict) else raw_metrics.get("turnover"),
+            "n_trading_days": backtest_summary.get("n_trading_days", raw_metrics.get("n_trading_days")) if isinstance(backtest_summary, dict) else raw_metrics.get("n_trading_days"),
+            "sample_start": backtest_summary.get("sample_start", raw_metrics.get("sample_start")) if isinstance(backtest_summary, dict) else raw_metrics.get("sample_start"),
+            "sample_end": backtest_summary.get("sample_end", raw_metrics.get("sample_end")) if isinstance(backtest_summary, dict) else raw_metrics.get("sample_end"),
+        }
+        alpha_count = row.get("alpha_count")
+        portfolio_topk = row.get("portfolio_topk")
+        asset_blockers = [str(item) for item in (row.get("summary_asset_blockers") or []) if str(item)]
+        asset_eligible = bool(row.get("summary_asset_eligible", row["package_status"] != PackageStatus.RETIRED.value))
+        return {
+            "package_id": row["package_id"],
+            "package_name": row["package_name"],
+            "package_version": row["package_version"],
+            "source_type": row["source_type"],
+            "source_id": row["source_id"],
+            "loop_id": row.get("loop_id"),
+            "run_id": row.get("run_id"),
+            "package_status": row["package_status"],
+            "manifest_sha256": row["manifest_sha256"],
+            "alpha_mode": row.get("alpha_mode") or "single_alpha",
+            "signal_domain": row.get("signal_domain"),
+            "display_name": row.get("display_name") or row["package_name"],
+            "legacy_name": row.get("legacy_name"),
+            "data_vintage": row.get("data_vintage").isoformat() if row.get("data_vintage") else None,
+            "prediction_ref_uri": row.get("prediction_ref_uri"),
+            "prediction_ref_sha256": row.get("prediction_ref_sha256"),
+            "model_artifact_uri": row.get("model_artifact_uri"),
+            "model_artifact_sha256": row.get("model_artifact_sha256"),
+            "paper_portfolio_count": int(row.get("paper_portfolio_count") or 0),
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+            "metrics_summary": metrics_summary,
+            "asset_eligibility": {
+                "eligible": asset_eligible,
+                "summary_only": True,
+                "blockers": asset_blockers,
+            },
+            "alpha_count": int(alpha_count) if alpha_count is not None else 0,
+            "portfolio_topk": int(portfolio_topk) if portfolio_topk not in (None, "") else None,
+        }
+
     def _record_from_row(self, row: dict[str, Any], *, quarantine: bool = False) -> StrategyPackageRecord | None:
         manifest_json = row["manifest_json"]
         manifest = StrategyPackageManifest.model_validate(manifest_json)
@@ -2799,6 +2934,56 @@ class InMemoryStrategyPackageRepository:
                 continue
             result.append(record)
         return result
+
+    def list_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        from .metrics_summary import metrics_summary_from_record
+
+        records = list(self.records.values())
+        if status is not None:
+            records = [record for record in records if record.package_status == status]
+        rows: list[dict[str, Any]] = []
+        for record in records[:limit]:
+            manifest = record.manifest
+            daily_strategy = (manifest.backtest_context or {}).get("daily_strategy")
+            portfolio_topk = daily_strategy.get("topk") if isinstance(daily_strategy, dict) else None
+            if portfolio_topk is None and getattr(manifest, "is_legacy_runtime_manifest", False) and manifest.portfolio_policy is not None:
+                portfolio_topk = manifest.portfolio_policy.topk
+            rows.append(
+                {
+                    "package_id": record.package_id,
+                    "package_name": record.package_name,
+                    "package_version": record.package_version,
+                    "source_type": record.source_type,
+                    "source_id": record.source_id,
+                    "loop_id": record.loop_id,
+                    "run_id": record.run_id,
+                    "package_status": record.package_status.value,
+                    "manifest_sha256": record.manifest_sha256,
+                    "alpha_mode": record.alpha_mode.value,
+                    "signal_domain": record.signal_domain,
+                    "display_name": record.display_name,
+                    "legacy_name": record.legacy_name,
+                    "data_vintage": record.data_vintage.isoformat() if record.data_vintage else None,
+                    "prediction_ref_uri": record.prediction_ref_uri,
+                    "prediction_ref_sha256": record.prediction_ref_sha256,
+                    "model_artifact_uri": record.model_artifact_uri,
+                    "model_artifact_sha256": record.model_artifact_sha256,
+                    "paper_portfolio_count": record.paper_portfolio_count,
+                    "created_at": record.created_at.isoformat(),
+                    "updated_at": record.updated_at.isoformat(),
+                    "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
+                    "asset_eligibility": {
+                        "eligible": record.package_status != PackageStatus.RETIRED,
+                        "summary_only": True,
+                        "blockers": [],
+                    },
+                    "alpha_count": len(manifest.alpha_components),
+                    "portfolio_topk": int(portfolio_topk) if portfolio_topk is not None else None,
+                }
+            )
+        return rows
 
     def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
         self.get(package_id)

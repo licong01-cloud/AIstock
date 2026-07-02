@@ -103,7 +103,7 @@ export default function PaperV2SelectionPage() {
     setLoading(true);
     setError(null);
     const tasks = [
-      selectionCenterApi.selectablePackages(300).then((rows) => {
+      selectionCenterApi.selectablePackages(100, "summary").then((rows) => {
         setPackages(rows);
         setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
         const firstPackageId = rows[0]?.package_id;

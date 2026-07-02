@@ -381,47 +381,32 @@ export default function PaperV2MiniQMTSimPage() {
     setLoading(true);
     setError(null);
     try {
-      const [nextStatus, portfolioRows, packageRows] = await Promise.all([
+      const [nextStatus, portfolioPage, packageRows] = await Promise.all([
         qmtApi.status(),
-        paperV2Api.listPortfolios(300),
-        strategyPackageApi.list(undefined, 300),
+        paperV2Api.listPortfoliosPage({ page: 1, pageSize: 50, brokerBackend: "minqmt_sim" }),
+        strategyPackageApi.listSummary(undefined, 100),
       ]);
+      const portfolioRows = portfolioPage.portfolios;
       setStatus(nextStatus);
       setBrokerAccountId((current) => current || String(nextStatus.account_id || ""));
       setPortfolios(portfolioRows);
       setPackages(packageRows);
       setBootstrapStatus(await paperV2Api.schedulerBootstrapStatus());
-      const miniRows = miniqmtPortfolios(portfolioRows).slice(0, 50);
-      const statusRows = await Promise.all(
-        miniRows.map(async (row) => {
-          try {
-            return [row.portfolio_id, await paperV2Api.autoRunStatus(row.portfolio_id)] as const;
-        } catch {
-          return [row.portfolio_id, undefined] as const;
-        }
-      }),
-      );
-      const nextAutoRunByPortfolio: Record<string, PaperAutoRunSummary> = {};
-      for (const [portfolioId, value] of statusRows) {
-        if (value) nextAutoRunByPortfolio[portfolioId] = value;
-      }
-      setAutoRunByPortfolio(nextAutoRunByPortfolio);
       const runsPayload = await simulationRuntimeApi.listRuns({
         brokerBackend: "minqmt_sim",
-        limit: 100,
+        limit: 50,
       });
       setRuntimeRuns(runsPayload.runs);
       if (nextStatus.connected) {
-        const [nextAccount, nextPositions, nextOrders, nextTrades] = await Promise.all([
+        const [nextAccount, nextPositions, nextOrders] = await Promise.all([
           qmtApi.account(),
           qmtApi.positions(),
           qmtApi.orders(false),
-          qmtApi.trades(),
         ]);
         setAccount(nextAccount);
         setPositions(nextPositions);
         setOrders(nextOrders);
-        setTrades(nextTrades);
+        setTrades([]);
       } else {
         setAccount(null);
         setPositions([]);
@@ -435,10 +420,50 @@ export default function PaperV2MiniQMTSimPage() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
-
   const connected = Boolean(status?.connected);
   const simMode = String(status?.mode || "").toUpperCase() === "SIM";
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    let alive = true;
+    const miniRows = miniqmtPortfolios(portfolios).slice(0, 50);
+    if (!miniRows.length) {
+      setAutoRunByPortfolio({});
+      return () => { alive = false; };
+    }
+    Promise.all(
+      miniRows.map(async (row) => {
+        try {
+          return [row.portfolio_id, await paperV2Api.autoRunStatus(row.portfolio_id)] as const;
+        } catch {
+          return [row.portfolio_id, undefined] as const;
+        }
+      }),
+    ).then((statusRows) => {
+      if (!alive) return;
+      const nextAutoRunByPortfolio: Record<string, PaperAutoRunSummary> = {};
+      for (const [portfolioId, value] of statusRows) {
+        if (value) nextAutoRunByPortfolio[portfolioId] = value;
+      }
+      setAutoRunByPortfolio(nextAutoRunByPortfolio);
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [portfolios]);
+
+  useEffect(() => {
+    if (!connected || !tradesExpanded || trades.length) return;
+    let alive = true;
+    qmtApi.trades().then((nextTrades) => {
+      if (alive) setTrades(nextTrades);
+    }).catch((exc) => {
+      if (alive) setError(exc);
+    });
+    return () => { alive = false; };
+  }, [connected, trades.length, tradesExpanded]);
+
   const miniPortfolios = useMemo(() => miniqmtPortfolios(portfolios), [portfolios]);
   const activeMiniPortfolios = miniPortfolios.filter((row) => ["READY", "RUNNING", "PAUSED"].includes(row.status));
   const eligiblePackages = useMemo(
