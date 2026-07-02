@@ -244,3 +244,126 @@ def test_auto_range_with_audit_cursor_requires_reconcile_when_audit_missing(monk
     assert response["audit_missing"] is True
     assert response["needs_reconcile"] is True
     assert response["up_to_date"] is False
+
+
+
+def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
+    executed: list[tuple[str, tuple]] = []
+
+    class _Cursor:
+        description = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.split())
+            executed.append((normalized, params))
+            if "FROM market.data_stats_config" in sql:
+                self.description = [
+                    ("data_kind",),
+                    ("table_name",),
+                    ("date_column",),
+                    ("updated_column",),
+                    ("extra_info",),
+                ]
+                self._rows = [
+                    (
+                        "kline_minute_raw",
+                        "market.kline_minute_raw",
+                        "trade_time",
+                        "trade_time",
+                        {"desc": "minute raw"},
+                    )
+                ]
+            elif "COUNT(*)" in sql and "market" in sql and "kline_minute_raw" in sql:
+                self.description = [("count",), ("min",), ("max",)]
+                self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1))
+            elif "MAX(" in sql and "market" in sql and "kline_minute_raw" in sql:
+                self.description = [("max",)]
+                self._row = (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc),)
+            elif "pg_total_relation_size" in sql:
+                self.description = [("table_bytes",), ("index_bytes",)]
+                self._row = (1000, 200)
+            elif "INSERT INTO market.data_stats" in sql:
+                self.description = None
+                self._row = None
+            else:
+                raise AssertionError(f"unexpected SQL: {sql}")
+
+        def fetchall(self):
+            return self._rows
+
+        def fetchone(self):
+            return self._row
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _Cursor()
+
+    monkeypatch.setattr(ingestion, "get_conn", lambda: _Conn())
+
+    response = ingestion.refresh_data_stats()
+
+    assert response["success"] is True
+    assert response["items"][0]["stats_scope"] == "recent_window"
+    count_sql, count_params = next((sql, params) for sql, params in executed if "COUNT(*)" in sql)
+    assert "WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in count_sql
+    assert count_params == ("3 months",)
+    minute_scans = [sql for sql, _params in executed if "FROM \"market\".\"kline_minute_raw\"" in sql]
+    assert minute_scans
+    assert all("WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in sql for sql in minute_scans)
+    insert_sql, insert_params = next((sql, params) for sql, params in executed if "INSERT INTO market.data_stats" in sql)
+    assert insert_params[0] == "kline_minute_raw"
+    assert '"stats_scope": "recent_window"' in insert_params[-1]
+    assert '"window_months": 3' in insert_params[-1]
+    assert '"full_history_count": false' in insert_params[-1]
+
+
+def test_list_data_stats_exposes_recent_window_scope_label(monkeypatch):
+    def _fake_fetchall(sql, params=()):
+        if "FROM market.data_stats ds" in sql:
+            return [
+                {
+                    "data_kind": "kline_minute_raw",
+                    "table_name": "market.kline_minute_raw",
+                    "min_date": dt.date(2026, 4, 2),
+                    "max_date": dt.date(2026, 7, 1),
+                    "row_count": 123,
+                    "table_bytes": 1,
+                    "index_bytes": 1,
+                    "last_updated_at": None,
+                    "stat_generated_at": None,
+                    "extra_info": {
+                        "stats_scope": "recent_window",
+                        "window_months": 3,
+                        "full_history_count": False,
+                    },
+                    "audit_ready_date": dt.date(2026, 7, 1),
+                    "audit_row_count": 1000,
+                    "audit_refreshed_at": None,
+                    "audit_quality_status": "ok",
+                }
+            ]
+        if "FROM market.data_sync_targets" in sql:
+            return []
+        return []
+
+    monkeypatch.setattr(ingestion, "_fetchall", _fake_fetchall)
+
+    item = ingestion.list_data_stats()["items"][0]
+
+    assert item["stats_scope"] == "recent_window"
+    assert item["stats_window_months"] == 3
+    assert item["full_history_count"] is False
+    assert "3" in item["stats_scope_label"]
+    assert item["stats_scope_label"]
