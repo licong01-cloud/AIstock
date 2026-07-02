@@ -3227,6 +3227,30 @@ def _csv_arg(items: Iterable[str]) -> str:
     return result
 
 
+def _matches_ui_keyword(haystack: str, token: str) -> bool:
+    normalized = token.lower()
+    if normalized.isascii():
+        return re.search(rf"(?<![A-Za-z0-9_-]){re.escape(normalized)}(?![A-Za-z0-9_-])", haystack) is not None
+    return normalized in haystack
+
+
+def _text_indicates_cleanup_fast(title: str | None, description: str | None = None, actual: str | None = None, expected: str | None = None) -> bool:
+    haystack = _small_text_blob([str(title or ""), str(description or ""), str(actual or ""), str(expected or "")]).lower()
+    cleanup_terms = (
+        "cleanup",
+        "scratch",
+        "untracked",
+        "root pollution",
+        "temporary file",
+        "临时",
+        "污染",
+        "清理",
+        "归档",
+    )
+    docs_terms = ("docs", "documentation", "handoff", "analysis doc", "文档")
+    return any(term in haystack for term in cleanup_terms) and any(term in haystack for term in docs_terms)
+
+
 def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str], description: str | None = None) -> bool:
     normalized_paths = [path.replace("\\", "/") for path in changed_files]
     has_frontend_scope = any(path.startswith("frontend/") or "/frontend/" in path for path in normalized_paths)
@@ -3241,13 +3265,24 @@ def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str]
     # must not create false visual-acceptance routes.
     if changed_files and not any(path.startswith(("frontend/", "tests/e2e/", "playwright")) for path in normalized_paths):
         return False
+    if not changed_files and _text_indicates_cleanup_fast(title, description):
+        return False
     haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or "")]).lower()
     keywords = UI_KEYWORDS
     if not changed_files:
         # Text-only BUG reports often mention BUG JSON or paths such as
         # "historical/design"; neither is enough to infer a visual UI issue.
         keywords = tuple(token for token in UI_KEYWORDS if token.lower() != "json")
-    return any(token.lower() in haystack for token in keywords)
+    return any(_matches_ui_keyword(haystack, token) for token in keywords)
+
+
+def _is_cleanup_fast_candidate(record: dict[str, Any]) -> bool:
+    return _text_indicates_cleanup_fast(
+        str(record.get("title") or ""),
+        str(record.get("description") or ""),
+        str(record.get("actual") or ""),
+        str(record.get("expected") or ""),
+    )
 
 
 def _ui_intake_hints(
@@ -3309,6 +3344,7 @@ def _issue_labels_for_bug(*, module: str, severity: str, ui_hints: dict[str, Any
 def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[str, Any] | None = None) -> dict[str, Any]:
     module = _normalize_module_label(record.get("module"))
     required = record.get("required_verification") or []
+    cleanup_fast_candidate = _is_cleanup_fast_candidate(record)
     recs = [
         "Use compact success output; request full JSON only for failures or diagnostics.",
         "Run targeted validation first, then final gates once the patch is stable.",
@@ -3318,11 +3354,16 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         recs.append("Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.")
     if ui_hints:
         recs.append("Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.")
+    if cleanup_fast_candidate:
+        recs.append(
+            "Use cleanup-fast for docs/scratch relocation: keep changes mechanical and run git diff --check unless executable code is intentionally retained."
+        )
     if any(str(item).startswith("validation_center_backend") for item in required):
         recs.append("Keep validation_center_backend only when the changed files actually affect Validation Center.")
     return {
         "schema_version": "aistock_workflow_efficiency_recommendations_v1",
         "batch_candidate": batch_candidate,
+        "cleanup_fast_candidate": cleanup_fast_candidate,
         "docs_only_merge_with_related_code": True,
         "compact_success_output": True,
         "full_json_on_failure_only": True,

@@ -26,11 +26,12 @@ Docs fast path rules:
 
 - create or reuse an isolated worktree
 - keep only a version/date and 1-3 bullet change summary in the document
-- run `git diff --check` only
-- do not run backend, frontend, nox, pytest, CodeGraph, or UA validation for ordinary docs
-- if the change is `docs-controlled`, fall back to the full issue workflow instead of docs fast path
+- run `git diff --check`
+- route `docs-controlled` changes through the controlled workflow
 
-Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching docs or issue workflow.
+Temporary Codex/Claude handoff notes go to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`). Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching tracked workflow.
+
+For small root-pollution cleanup or docs/scratch relocation, use cleanup-fast: move/delete only the named files, keep scratch scripts as scratch unless explicitly promoted, and run `git diff --check` unless executable behavior is intentionally retained.
 
 If `doctor` reports `client_manifest.codex_skill_status=stale|missing_global` or `restart_recommended=true`, the repo CLI is still canonical for this run, but old Codex/Claude windows should be refreshed after `install-client --apply` lands on `main`.
 

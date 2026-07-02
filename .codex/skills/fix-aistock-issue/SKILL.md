@@ -32,15 +32,17 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 
 ## Documentation Fast Path
 
-Use the three-tier docs flow instead of the BUG workflow for ordinary documentation work:
+For ordinary documentation work, use the three-tier docs flow:
 
 - `docs-fast-update`: update an existing ordinary doc under `docs/architecture/`, `docs/analysis/`, `docs/design/`, `docs/handoff/`, `docs/operations/`, `docs/operations_*.md`, or `README.md`.
 - `docs-fast-new`: create a new doc in the same ordinary documentation set.
-- `docs-controlled`: any change under `docs/standards/`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/`, or `.claude/`; do not use the docs fast path.
+- `docs-controlled`: any change under `docs/standards/`, `docs/codex_project_memory.md`, `AGENTS*`, `.codex/`, or `.claude/`; use the controlled workflow.
 
-For `docs-fast-update` and `docs-fast-new`, use an isolated worktree/branch, keep a version/date plus 1-3 change bullets in the document, run only `git diff --check`, create the PR, and after authorized merge sync root and clean the task worktree/branch. Do not create BUG JSON, Context Pack, CodeGraph/UA artifacts, nox, pytest, backend, or frontend validation for ordinary docs.
+For `docs-fast-update` and `docs-fast-new`, use an isolated worktree/branch, keep a version/date plus 1-3 change bullets in the document, run `git diff --check`, create the PR, and after authorized merge sync root and clean the task worktree/branch.
 
-Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`) instead of the tracked `docs/handoff/` root. Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching docs or issue workflow.
+Temporary Codex/Claude handoff notes go to ignored scratch paths (`tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`). Promote a scratch note into `docs/handoff/` only when it becomes durable PR, Issue, BUG, or feature-design evidence, then use the matching tracked workflow.
+
+For small root-pollution cleanup or docs/scratch relocation, use cleanup-fast: move/delete only the named files, keep scratch scripts as scratch unless explicitly promoted, and run `git diff --check` unless executable behavior is intentionally retained.
 
 ## Workflow
 

@@ -1,0 +1,95 @@
+{
+  "actual": "Cleanup or docs/scratch file relocation can be executed through an unnecessarily heavy full development path: agents may create a full BUG/feature-style worktree, productize scratch scripts into ignored debug_tools, run py_compile/help checks, and spend tens of minutes/tokens for a low-risk file relocation. Expected: task router and workflow guidance provide a lightweight cleanup-fast lane for docs/analysis and scratch relocation, explicitly forbid scope expansion/productization in cleanup tasks, and recommend only git diff --check plus minimal file placement evidence unless executable code is intentionally retained.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260702_BUG-579-cleanup-docs-scratch-tasks-can-be-over-routed-into-full-development-work.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".claude/commands/aistock-task-router.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-579",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T15:30:44.790508Z",
+  "description": "Cleanup or docs/scratch file relocation can be executed through an unnecessarily heavy full development path: agents may create a full BUG/feature-style worktree, productize scratch scripts into ignored debug_tools, run py_compile/help checks, and spend tens of minutes/tokens for a low-risk file relocation. Expected: task router and workflow guidance provide a lightweight cleanup-fast lane for docs/analysis and scratch relocation, explicitly forbid scope expansion/productization in cleanup tasks, and recommend only git diff --check plus minimal file placement evidence unless executable code is intentionally retained.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-47c451b4f494",
+      "timestamp": "2026-07-02T15:30:44.790504Z"
+    },
+    {
+      "timestamp": "2026-07-02T15:45:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "BUG-579 fixes workflow routing/client guidance, not business code."
+    },
+    {
+      "timestamp": "2026-07-02T16:05:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include CI classifier so client-instruction workflow changes do not trigger full backend matrix."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-02T15:30:44.790508Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1834,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1834",
+  "last_seen_at": "2026-07-02T15:30:44.790508Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "cleanup/docs scratch tasks can be over-routed into full development workflow",
+  "trigger_condition": {
+    "fingerprint": "47c451b4f49495f2171b1257",
+    "source_event_id": "FE-20260702-47c451b4f494"
+  },
+  "ui_intake_hints": null,
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "open"
+}
