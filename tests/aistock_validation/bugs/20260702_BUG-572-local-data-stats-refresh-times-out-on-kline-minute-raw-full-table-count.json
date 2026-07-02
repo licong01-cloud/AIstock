@@ -4,7 +4,9 @@
     "backend/routers/ingestion.py",
     "frontend/src",
     "tests/aistock_validation/bugs/20260702_BUG-572-local-data-stats-refresh-times-out-on-kline-minute-raw-full-table-count.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/local-data/page.tsx",
+    "backend/tests/test_ingestion_data_stats_readiness_api.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-572",
