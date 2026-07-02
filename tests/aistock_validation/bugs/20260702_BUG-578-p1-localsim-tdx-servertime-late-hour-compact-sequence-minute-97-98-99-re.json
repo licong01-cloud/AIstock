@@ -45,7 +45,8 @@
   "reproduce_command": "Read-only RCA: F:\\Dev\\AIstock_worktrees\\localsim-tdx-timestamp-rca-20260702\\docs\\handoff\\localsim_tdx_realtime_quote_timestamp_invalid_rca_20260702.md; targeted parser test should show 13984048/13990274 currently invalid.",
   "required_verification": [
     "l0",
-    "paper_v2_backend"
+    "paper_v2_backend",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
