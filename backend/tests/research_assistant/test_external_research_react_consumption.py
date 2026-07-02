@@ -57,7 +57,7 @@ def test_external_research_tool_result_is_backfilled_into_react_messages_before_
     svc = ResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
     svc.seed_catalogs()
 
-    result = svc.chat_turn(ChatTurnRequest(message="Search external research about HMM factor timing.", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="Search external research about HMM factor timing.", dialogue_mode_override="analysis"))
 
     assert len(fake.calls) >= 2
     second_messages = fake.calls[1]["messages"]
@@ -137,7 +137,7 @@ def test_external_save_evidence_is_preflight_only_not_approved_memory_write(monk
     monkeypatch.setattr(svc, "create_memory", forbidden_create_memory)
     monkeypatch.setattr(svc, "execute_action_proposal", forbidden_execute_action_proposal)
 
-    result = svc.chat_turn(ChatTurnRequest(message="Save this external paper evidence candidate."))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="Save this external paper evidence candidate."))
 
     assert executed_calls == []
     assert memory_calls == []

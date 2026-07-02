@@ -195,7 +195,7 @@ def test_high_risk_tool_creates_preflight_card_without_execute() -> None:
     svc = GuardedResearchAssistantService(repository=InMemoryResearchAssistantRepository(), llm_client=fake)
     svc.seed_catalogs()
 
-    result = svc.chat_turn(ChatTurnRequest(message="Sync BUG-120 GitHub issue status"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="Sync BUG-120 GitHub issue status"))
 
     assert svc.execute_calls == []
     execution = result["cards"]["mcp_execution_result"]

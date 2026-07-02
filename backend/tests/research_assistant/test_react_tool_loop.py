@@ -75,7 +75,7 @@ def test_chat_turn_reacts_tool_result_back_into_messages_before_final_answer() -
     fake = DeterministicToolLoopLlm()
     svc = _service(fake)
 
-    result = svc.chat_turn(ChatTurnRequest(message="List factor library entries as a compact summary."))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="List factor library entries as a compact summary."))
 
     assert len(fake.calls) >= 2
     second_messages = fake.calls[1]["messages"]

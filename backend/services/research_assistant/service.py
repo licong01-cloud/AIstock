@@ -3311,6 +3311,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         confirmation_text: str | None,
         approval_type: str,
         required_summary_fragment: str | None = None,
+        allow_chat_inline_approval: bool = False,
+        decided_by: str = "research_assistant_gate",
+        decision_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not approval_id:
             raise ValueError(f"{approval_type} requires approval_id")
@@ -3322,7 +3325,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if approval.get("approval_type") != approval_type:
             raise ValueError(f"approval_type mismatch: expected {approval_type}, got {approval.get('approval_type')}")
         expected = approval.get("required_confirmation_text")
-        if confirmation_text != expected:
+        if not allow_chat_inline_approval and confirmation_text != expected:
             raise ValueError("confirmation_text does not match approval.required_confirmation_text")
         if required_summary_fragment and required_summary_fragment not in str(approval.get("summary") or ""):
             raise ValueError("approval summary does not match requested action")
@@ -3330,7 +3333,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             approval_id,
             action="approve",
             confirmation_text=confirmation_text or "",
-            decided_by="research_assistant_gate",
+            decided_by=decided_by,
+            allow_chat_inline_approval=allow_chat_inline_approval,
+            decision_metadata=decision_metadata,
         )
 
     @staticmethod
@@ -3363,15 +3368,168 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if not text:
             return False
         lower = text.lower()
-        negative_terms = ("不同意", "不确认", "不要", "别", "拒绝", "取消", "否", "no", "reject", "cancel")
-        if any(term in lower for term in negative_terms):
+        if ResearchAssistantService._message_is_clear_rejection(message):
             return False
-        direct = {"同意", "确认", "批准", "确认执行", "同意执行", "可以执行", "继续执行", "approve", "approved", "yes"}
+        direct = {"同意", "确认", "确认执行", "同意执行", "执行", "好", "好的", "可以", "批准", "approve", "approved", "yes", "ok", "okay"}
         if lower in direct:
             return True
-        affirmative_terms = ("同意", "确认", "批准", "approve", "yes")
-        reference_terms = ("执行", "审批", "批准", "这个", "该操作", "上一步", "上一轮", "继续", "确认它")
+        ordinal_terms = ("第一个", "第1个", "选1", "选择1", "option 1", "first", "第一个选项")
+        if any(term in lower for term in ordinal_terms):
+            return True
+        affirmative_terms = ("同意", "确认", "批准", "approve", "yes", "ok", "可以")
+        reference_terms = ("执行", "运行", "通过", "这个", "这项", "方案", "操作", "继续")
         return any(term in lower for term in affirmative_terms) and any(term in lower for term in reference_terms)
+
+    @staticmethod
+    def _decision_id_for_approval(approval_id: str) -> str:
+        return f"dec_approve_action_{approval_id}"
+
+    @staticmethod
+    def _approval_id_from_decision_id(decision_id: str | None) -> str | None:
+        if not decision_id:
+            return None
+        prefix = "dec_approve_action_"
+        if decision_id.startswith(prefix):
+            return decision_id[len(prefix) :]
+        return None
+
+    @staticmethod
+    def _decision_option_is_approval(option_id: str | None) -> bool:
+        return str(option_id or "").strip().lower() in {"approve", "execute", "yes", "confirm", "option_approve"}
+
+    @staticmethod
+    def _decision_option_is_rejection(option_id: str | None) -> bool:
+        return str(option_id or "").strip().lower() in {"reject", "cancel", "no", "deny", "option_reject"}
+
+    @staticmethod
+    def _message_is_clear_rejection(message: str) -> bool:
+        text = message.strip().lower()
+        if not text:
+            return False
+        rejection_terms = (
+            "不同意",
+            "不确认",
+            "不要",
+            "不执行",
+            "别执行",
+            "拒绝",
+            "取消",
+            "否",
+            "no",
+            "reject",
+            "cancel",
+            "第2个",
+            "第二个",
+            "选2",
+            "选择2",
+            "option 2",
+            "second",
+            "do not",
+            "don't",
+        )
+        return any(term in text for term in rejection_terms)
+
+    def _resolve_chat_decision_action(self, data: ChatTurnRequest) -> str | None:
+        if self._decision_option_is_approval(data.decision_option_id):
+            return "approve"
+        if self._decision_option_is_rejection(data.decision_option_id):
+            return "reject"
+        if self._message_is_clear_approval_affirmation(data.message):
+            return "approve"
+        if self._message_is_clear_rejection(data.message):
+            return "reject"
+        return None
+
+    @staticmethod
+    def _chat_approval_confirmation_text(approval: dict[str, Any], decision_action: str, source_text: str | None) -> str:
+        if decision_action == "approve":
+            return str(source_text or approval.get("required_confirmation_text") or "chat_inline_approval")
+        return str(source_text or "chat_inline_rejection")
+
+    @staticmethod
+    def _pending_action_from_proposal(proposal: dict[str, Any], approval: dict[str, Any]) -> dict[str, Any]:
+        payload = proposal.get("input_json") if isinstance(proposal.get("input_json"), dict) else {}
+        selected = payload.get("selected_tool") if isinstance(payload.get("selected_tool"), dict) else {}
+        route = payload.get("mcp_route_decision") if isinstance(payload.get("mcp_route_decision"), dict) else payload.get("route")
+        route = route if isinstance(route, dict) else {}
+        server_key = str(
+            selected.get("server_key")
+            or route.get("server_key")
+            or payload.get("server_key")
+            or ""
+        )
+        tool_name = str(
+            selected.get("tool_name")
+            or route.get("tool_name")
+            or payload.get("tool_name")
+            or proposal.get("capability_key")
+            or ""
+        )
+        risk_level = str(proposal.get("risk_level") or approval.get("risk_level") or "medium")
+        return {
+            "approval_id": approval.get("approval_id"),
+            "action_proposal_id": proposal.get("action_proposal_id"),
+            "server_key": server_key,
+            "tool_name": tool_name,
+            "tool_args": dict(payload),
+            "risk_level": risk_level,
+        }
+
+    def _decision_request_for_approval(self, approval: dict[str, Any], proposal: dict[str, Any]) -> dict[str, Any]:
+        approval_id = str(approval.get("approval_id") or "")
+        title = str(proposal.get("title") or proposal.get("capability_key") or "待审批操作")
+        risk_level = str(proposal.get("risk_level") or approval.get("risk_level") or "medium")
+        side_effect = str(proposal.get("side_effect_level") or self._approval_context(approval).get("side_effect_level") or "")
+        return {
+            "decision_id": self._decision_id_for_approval(approval_id),
+            "kind": "approve_action",
+            "prompt_text": (
+                f"是否确认执行：{title}？确认前不会执行写入/训练/回补/晋升。"
+                f" 风险={risk_level}；side_effect={side_effect or 'unknown'}。"
+            ),
+            "options": [
+                {"id": "approve", "label": "确认执行", "description": "通过人在环审批并执行 pending_action。"},
+                {"id": "reject", "label": "取消", "description": "拒绝本次 pending_action；不会执行。"},
+            ],
+            "allow_free_text": True,
+            "pending_action": self._pending_action_from_proposal(proposal, approval),
+        }
+
+    def _first_pending_decision_request(self, cards: dict[str, Any]) -> dict[str, Any] | None:
+        for approval, proposal in self._approval_proposals_from_cards(cards):
+            return self._decision_request_for_approval(approval, proposal)
+        return None
+
+    def _approval_proposals_from_cards(self, cards: dict[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        seen: set[str] = set()
+        for approval_id in self._approval_ids_from_cards(cards):
+            if approval_id in seen:
+                continue
+            seen.add(approval_id)
+            approval = self.repository.get_record("approvals", approval_id)
+            if not approval or approval.get("status") != "pending":
+                continue
+            proposal = self._action_proposal_for_approval(approval)
+            if proposal:
+                pairs.append((approval, proposal))
+        return pairs
+
+    @staticmethod
+    def _approval_ids_from_cards(cards: dict[str, Any]) -> list[str]:
+        ids: list[str] = []
+        for proposal in cards.get("action_proposals") or []:
+            if isinstance(proposal, dict) and proposal.get("approval_id") and proposal.get("approval_required"):
+                ids.append(str(proposal["approval_id"]))
+        for key in ("mcp_execution_result", "skill_reuse_result"):
+            item = cards.get(key) if isinstance(cards.get(key), dict) else {}
+            if item.get("approval_id"):
+                ids.append(str(item["approval_id"]))
+        decision = cards.get("decision_request") if isinstance(cards.get("decision_request"), dict) else {}
+        pending = decision.get("pending_action") if isinstance(decision.get("pending_action"), dict) else {}
+        if pending.get("approval_id"):
+            ids.append(str(pending["approval_id"]))
+        return ids
 
     @staticmethod
     def _approval_confirmation_reason(exc: BaseException) -> str:
@@ -3395,6 +3553,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         action_proposal_id: str | None = None,
         expected_confirmation_text: str | None = None,
     ) -> dict[str, Any]:
+        del expected_confirmation_text
         return {
             "reason_code": reason_code,
             "code": reason_code,
@@ -3402,8 +3561,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "approval_id": approval_id,
             "action_proposal_id": action_proposal_id,
             "message": message,
-            "expected_confirmation_text": expected_confirmation_text,
-            "operator_action": "请在同一对话中显式提供 confirm_approval_id，并让 confirmation_text 完全等于审批卡片上的确认口令。",
+            "operator_action": "请在同一对话中自然语言确认或取消；如存在多个待审批动作，请带上 decision_id 或 approval_id。",
         }
 
     def _required_confirmation_text_for_chat_approval(
@@ -3573,6 +3731,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             execution = cards.get("mcp_execution_result") if isinstance(cards.get("mcp_execution_result"), dict) else {}
             if execution.get("approval_id") and execution.get("status") == "approval_required":
                 ids.add(str(execution["approval_id"]))
+            decision = content_json.get("decision_request") if isinstance(content_json.get("decision_request"), dict) else {}
+            pending_action = decision.get("pending_action") if isinstance(decision.get("pending_action"), dict) else {}
+            if decision.get("kind") == "approve_action" and pending_action.get("approval_id"):
+                ids.add(str(pending_action["approval_id"]))
             return ids
         return set()
 
@@ -3616,17 +3778,24 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         user_message: dict[str, Any],
         dialogue_intent: DialogueIntent,
         mode_decision: ModeDecision,
-    ) -> dict[str, Any] | None:
-        if data.confirm_approval_id or data.confirmation_text:
+        ) -> dict[str, Any] | None:
+        decision_approval_id = self._approval_id_from_decision_id(data.decision_id)
+        decision_action = self._resolve_chat_decision_action(data)
+        explicit_approval_id = data.confirm_approval_id or decision_approval_id
+        if (data.decision_id or data.decision_option_id) and not explicit_approval_id:
+            # Non-approval decisions (for example free-text clarification replies)
+            # stay in the normal history-aware agent path.
+            return None
+        if explicit_approval_id or data.decision_id or data.decision_option_id or data.confirmation_text:
             if data.created_by != "user":
                 error = self._approval_confirmation_error(
                     reason_code="approval_confirmation_requires_user_message",
                     message=f"审批确认只能来自用户消息，created_by={data.created_by}",
-                    approval_id=data.confirm_approval_id,
+                    approval_id=explicit_approval_id,
                 )
                 return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
-            if data.confirm_approval_id:
-                approval, proposal, error = self._chat_action_approval_context(data.confirm_approval_id, conversation_id)
+            if explicit_approval_id:
+                approval, proposal, error = self._chat_action_approval_context(explicit_approval_id, conversation_id)
                 if error:
                     return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
             else:
@@ -3634,19 +3803,37 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 if len(pending) != 1:
                     error = self._approval_confirmation_error(
                         reason_code="approval_confirmation_ambiguous_pending_approval",
-                        message=f"当前对话上一轮 pending approval 数量为 {len(pending)}；请显式提供 confirm_approval_id。",
+                        message=f"当前对话上一轮 pending approval 数量为 {len(pending)}；请通过内联选项或 decision_id 指定要处理的动作。",
                     )
                     return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
                 approval, proposal = pending[0]
-            if not data.confirmation_text:
+            if decision_action is None and data.confirmation_text:
+                confirmation_text = str(data.confirmation_text)
+                if self._message_is_clear_approval_affirmation(confirmation_text) or confirmation_text == str(approval.get("required_confirmation_text") or ""):
+                    decision_action = "approve"
+                elif self._message_is_clear_rejection(confirmation_text):
+                    decision_action = "reject"
+            if decision_action is None:
                 error = self._approval_confirmation_error(
-                    reason_code="approval_confirmation_text_required",
-                    message="缺少 confirmation_text；必须完全等于审批卡片上的确认口令。",
-                    approval_id=str((approval or {}).get("approval_id") or data.confirm_approval_id or ""),
+                    reason_code="approval_confirmation_unresolved_decision",
+                    message="没有识别出确认或取消意图；请回复“确认执行/同意/执行”或“取消/不执行”。",
+                    approval_id=str((approval or {}).get("approval_id") or explicit_approval_id or ""),
                     action_proposal_id=str((proposal or {}).get("action_proposal_id") or ""),
-                    expected_confirmation_text=str((approval or {}).get("required_confirmation_text") or ""),
                 )
                 return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
+            if decision_action == "reject":
+                return self._reject_chat_approval_decision(
+                    data,
+                    conversation_id,
+                    task,
+                    user_message,
+                    dialogue_intent,
+                    mode_decision,
+                    approval=approval,
+                    proposal=proposal,
+                    confirmation_text=self._chat_approval_confirmation_text(approval, "reject", data.confirmation_text or data.message),
+                    confirmation_source="decision_request_rejection" if data.decision_id or data.decision_option_id else "user_natural_language_rejection",
+                )
             return self._consume_and_execute_chat_approval(
                 data,
                 conversation_id,
@@ -3656,11 +3843,12 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 mode_decision,
                 approval=approval,
                 proposal=proposal,
-                confirmation_text=data.confirmation_text,
-                confirmation_source="explicit_request_field",
+                confirmation_text=self._chat_approval_confirmation_text(approval, "approve", data.confirmation_text or data.message),
+                confirmation_source="decision_request_option" if data.decision_option_id else "decision_request_text" if data.decision_id else "legacy_explicit_request_field",
             )
 
-        if not self._message_is_clear_approval_affirmation(data.message):
+        decision_action = self._resolve_chat_decision_action(data)
+        if decision_action is None:
             return None
         pending = self._pending_chat_action_approvals(conversation_id, last_assistant_only=True)
         if not pending:
@@ -3674,19 +3862,23 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if len(pending) != 1:
             error = self._approval_confirmation_error(
                 reason_code="approval_confirmation_ambiguous_pending_approval",
-                message=f"当前对话上一轮有 {len(pending)} 个 pending approval；“同意/确认”存在歧义，请显式提供 approval_id 和确认口令。",
+                message=f"当前对话上一轮有 {len(pending)} 个 pending approval；请通过内联选项或 decision_id 指定要处理的动作。",
             )
             return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
         approval, proposal = pending[0]
-        if self._approval_requires_explicit_token(approval, proposal):
-            error = self._approval_confirmation_error(
-                reason_code="approval_confirmation_l2_requires_explicit_token",
-                message="该审批为 L2/production_sensitive，裸“同意/确认”不能映射为确认口令；必须显式回填确认口令。",
-                approval_id=str(approval.get("approval_id") or ""),
-                action_proposal_id=str(proposal.get("action_proposal_id") or ""),
-                expected_confirmation_text=str(approval.get("required_confirmation_text") or ""),
+        if decision_action == "reject":
+            return self._reject_chat_approval_decision(
+                data,
+                conversation_id,
+                task,
+                user_message,
+                dialogue_intent,
+                mode_decision,
+                approval=approval,
+                proposal=proposal,
+                confirmation_text=self._chat_approval_confirmation_text(approval, "reject", data.message),
+                confirmation_source="user_natural_language_rejection",
             )
-            return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
         return self._consume_and_execute_chat_approval(
             data,
             conversation_id,
@@ -3696,8 +3888,52 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             mode_decision,
             approval=approval,
             proposal=proposal,
-            confirmation_text=str(approval.get("required_confirmation_text") or ""),
+            confirmation_text=self._chat_approval_confirmation_text(approval, "approve", data.message),
             confirmation_source="user_natural_language_affirmation",
+        )
+
+    def _reject_chat_approval_decision(
+        self,
+        data: ChatTurnRequest,
+        conversation_id: str,
+        task: dict[str, Any],
+        user_message: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+        *,
+        approval: dict[str, Any],
+        proposal: dict[str, Any],
+        confirmation_text: str,
+        confirmation_source: str,
+    ) -> dict[str, Any]:
+        approval_id = str(approval.get("approval_id") or "")
+        action_proposal_id = str(proposal.get("action_proposal_id") or "")
+        rejected = self.decide_approval(
+            approval_id,
+            action="reject",
+            confirmation_text=confirmation_text,
+            decided_by="research_assistant_chat_inline",
+            allow_chat_inline_approval=True,
+            decision_metadata={
+                "decision_id": data.decision_id or self._decision_id_for_approval(approval_id),
+                "decision_option_id": data.decision_option_id,
+                "confirmation_source": confirmation_source,
+                "action_proposal_id": action_proposal_id,
+            },
+        )
+        proposal = self.repository.update_record("action_proposals", action_proposal_id, {"status": "rejected", "approval_id": approval_id})
+        return self._chat_approval_response(
+            data,
+            conversation_id,
+            task,
+            user_message,
+            dialogue_intent,
+            mode_decision,
+            approval=rejected,
+            proposal=proposal,
+            executed=None,
+            confirmation_source=confirmation_source,
+            rejected=True,
         )
 
     def _consume_and_execute_chat_approval(
@@ -3722,6 +3958,14 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 confirmation_text=confirmation_text,
                 approval_type=ACTION_PROPOSAL_EXECUTE_APPROVAL_TYPE,
                 required_summary_fragment=action_proposal_id,
+                allow_chat_inline_approval=True,
+                decided_by="research_assistant_chat_inline",
+                decision_metadata={
+                    "decision_id": data.decision_id or self._decision_id_for_approval(approval_id),
+                    "decision_option_id": data.decision_option_id,
+                    "confirmation_source": confirmation_source,
+                    "action_proposal_id": action_proposal_id,
+                },
             )
         except (KeyError, ValueError) as exc:
             error = self._approval_confirmation_error(
@@ -3729,7 +3973,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 message=str(exc),
                 approval_id=approval_id,
                 action_proposal_id=action_proposal_id,
-                expected_confirmation_text=str(approval.get("required_confirmation_text") or ""),
             )
             return self._chat_approval_response(data, conversation_id, task, user_message, dialogue_intent, mode_decision, error=error)
         proposal = self.repository.update_record("action_proposals", action_proposal_id, {"status": "approved", "approval_id": approval_id})
@@ -3767,6 +4010,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         executed: dict[str, Any] | None = None,
         confirmation_source: str | None = None,
         error: dict[str, Any] | None = None,
+        rejected: bool = False,
     ) -> dict[str, Any]:
         mode_decision_json = mode_decision.as_dict()
         cards: dict[str, Any] = {
@@ -3778,7 +4022,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "safety": {
                 "no_silent_error": True,
                 "fail_closed": bool(error),
-                "confirmation_text_exact_match": error is None,
+                "chat_inline_decision": True,
                 "agent_self_approval_prevented": True,
             },
         }
@@ -3794,6 +4038,33 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             cards["approval_confirmation"] = {"status": "blocked", **error}
             cards["mcp_execution_result"] = {"auto_executed": False, "executed": False, "status": "blocked", "error": error}
             trace_status = "blocked"
+        elif rejected:
+            if approval is None or proposal is None:
+                raise ValueError(
+                    "chat approval rejection response requires approval and proposal; "
+                    f"approval_present={approval is not None} proposal_present={proposal is not None}"
+                )
+            assistant_text = (
+                "已取消本次待审批操作；未执行任何写入、训练、回补或晋升。"
+                f"（approval_id={approval['approval_id']}，action_proposal_id={proposal['action_proposal_id']}）"
+            )
+            cards["approval_confirmation"] = {
+                "status": "rejected",
+                "approval_id": approval["approval_id"],
+                "approval_type": approval.get("approval_type"),
+                "action_proposal_id": proposal["action_proposal_id"],
+                "confirmation_source": confirmation_source,
+                "proposal_status": proposal.get("status"),
+            }
+            cards["mcp_execution_result"] = {
+                "auto_executed": False,
+                "executed": False,
+                "status": "rejected",
+                "approval_id": approval["approval_id"],
+                "action_proposal_id": proposal["action_proposal_id"],
+                "triggered_by_approval": False,
+            }
+            trace_status = "rejected"
         else:
             if approval is None or proposal is None or executed is None:
                 raise ValueError(
@@ -3859,6 +4130,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 content_text=assistant_text,
                 content_json={
                     "cards": cards,
+                    "decision_request": cards.get("decision_request"),
                     "dialogue_intent": dialogue_intent.value,
                     "dialogue_mode": mode_decision.mode.value,
                     "mode_decision": mode_decision_json,
@@ -3869,7 +4141,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 is_visible=True,
             )
         )
-        followup_event_type = "rejected" if error else "mcp_done" if executed and executed.get("executed") else "mcp_failed"
+        followup_event_type = "rejected" if error or rejected else "mcp_done" if executed and executed.get("executed") else "mcp_failed"
         self.add_task_event(
             task["task_id"],
             TaskEventCreate(
@@ -3892,7 +4164,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "trace": {"trace_id": trace["trace_id"], "status": trace["status"], "duration_ms": trace.get("duration_ms"), "model_profile_id": trace.get("model_profile_id")},
             "mode_decision": mode_decision_json,
             "context_health": {"show_badge": False},
-            "cards": self._public_chat_cards(cards),
+            "cards": self._public_chat_cards(cards, developer_diagnostics=data.developer_diagnostics),
+            "decision_request": None,
         }
 
     def seed_catalogs(self) -> dict[str, Any]:
@@ -5318,6 +5591,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "mode_decision": mode_decision_json,
                     "confirm_approval_id": data.confirm_approval_id,
                     "confirmation_text_present": bool(data.confirmation_text),
+                    "decision_id": data.decision_id,
+                    "decision_option_id": data.decision_option_id,
+                    "developer_diagnostics": data.developer_diagnostics,
                 },
                 created_by=data.created_by,
             )
@@ -5335,6 +5611,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     "mode_decision": mode_decision_json,
                     "confirm_approval_id": data.confirm_approval_id,
                     "confirmation_text_present": bool(data.confirmation_text),
+                    "decision_id": data.decision_id,
+                    "decision_option_id": data.decision_option_id,
+                    "developer_diagnostics": data.developer_diagnostics,
                 },
             )
         )
@@ -5451,6 +5730,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         )
         context_health = self._context_health_payload(conversation_id, budget_plan, mode_decision=mode_decision)
         cards = self._build_human_cards(data.message, task, bundle, route, dialogue_intent, mode_decision, route_decision=route_decision)
+        cards["ui_display"] = {
+            **dict(cards.get("ui_display") if isinstance(cards.get("ui_display"), dict) else {}),
+            "developer_diagnostics": bool(data.developer_diagnostics),
+        }
         if isinstance(route_decision, dict) and route_decision.get("server_key") and route_decision.get("tool_name"):
             existing_route = cards.get("mcp_route_decision") if isinstance(cards.get("mcp_route_decision"), dict) else {}
             route_card = dict(existing_route)
@@ -5467,13 +5750,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
             route_card.setdefault("auto_execute", self._read_only_mcp_auto_execution_eligibility(route_card, mode_decision))
             cards["mcp_route_decision"] = route_card
-        elif isinstance(route_decision, dict) and route_decision.get("requires_clarification"):
-            cards["mcp_route_decision"] = route_decision
-            cards["clarification_card"] = {
-                "title": "需要先确认比较口径",
-                "questions": list(route_decision.get("clarification_questions") or []),
-                "default_collapsed": False,
-            }
         self._process_agentic_skill_calls(
             list(llm_result.skill_calls or []),
             task=task,
@@ -5549,6 +5825,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         trace = self.repository.update_record("trace_events", trace["trace_id"], {"cost_json": cost_json})
         cards["context_health"] = context_health
         cards["runtime_code"] = self.runtime_code_visibility()
+        decision_request = self._first_pending_decision_request(cards)
+        if decision_request:
+            cards["decision_request"] = decision_request
         assistant_text = self._compose_assistant_reply(data.message, llm_result.content, cards, mode_decision)
         assistant_message = self.add_conversation_message(
             ConversationMessageCreate(
@@ -5565,6 +5844,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                         "prompt_bundle_checksum": bundle["checksum"],
                         "context_pack_checksum": context_pack["checksum"],
                     },
+                    "decision_request": decision_request,
                 },
                 task_id=task["task_id"],
                 model_profile_id=model_profile["model_profile_id"],
@@ -5607,7 +5887,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             model_profile=model_profile,
         )
         task_events = self.repository.list_records("task_events", filters={"task_id": task["task_id"]}, limit=self.configured_limit("task_events_detail"))["items"]
-        public_cards = self._public_chat_cards(cards)
+        public_cards = self._public_chat_cards(cards, developer_diagnostics=data.developer_diagnostics)
         return {
             "conversation": self._public_conversation(self.repository.get_record("conversations", conversation_id)),
             "user_message": self._public_conversation_message(user_message),
@@ -5621,6 +5901,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mode_decision": mode_decision_json,
             "context_health": context_health,
             "cards": public_cards,
+            "decision_request": decision_request,
         }
 
     def _chat_turn_error_response(self, request: ChatTurnRequest | dict[str, Any], exc: BaseException) -> dict[str, Any]:
@@ -5768,7 +6049,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "trace": {"trace_id": (trace or {}).get("trace_id"), "status": "failed", "duration_ms": None, "model_profile_id": None},
             "mode_decision": {"mode": "recovery", "intent_type": "error"},
             "context_health": {"show_badge": False},
-            "cards": self._public_chat_cards(cards),
+            "cards": self._public_chat_cards(cards, developer_diagnostics=data.developer_diagnostics),
+            "decision_request": None,
         }
 
     @staticmethod
@@ -5806,6 +6088,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if message.get("role") == "assistant":
             public["content_json"] = {
                 "audit_summary": content_json.get("audit_summary") if isinstance(content_json.get("audit_summary"), dict) else {},
+                "decision_request": content_json.get("decision_request") if isinstance(content_json.get("decision_request"), dict) else None,
             }
         else:
             public["content_json"] = {
@@ -5847,38 +6130,54 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         ]
 
     @classmethod
-    def _public_chat_cards(cls, cards: dict[str, Any]) -> dict[str, Any]:
+    def _public_chat_cards(cls, cards: dict[str, Any], *, developer_diagnostics: bool = False) -> dict[str, Any]:
         public_keys = {
             "intent_type",
             "dialogue_mode",
             "mode_decision",
-            "action_proposals",
-            "capability_cards",
-            "missing_capability_keys",
             "status_rail",
             "capability_summary",
             "safety",
             "main_reply_policy",
             "ui_display",
-            "mcp_route_decision",
-            "runtime_mcp_catalog",
-            "plan_card",
-            "clarification_card",
             "context_health",
-            "runtime_code",
             "local_data_management",
             "local_data_phases",
-            "mcp_summary_result",
-            "mcp_result_cards",
-            "mcp_tool_event",
-            "mcp_execution_result",
-            "skill_reuse_result",
-            "react_grounding",
-            "tool_errors",
-            "error_card",
+            "decision_request",
             "approval_confirmation",
         }
+        if developer_diagnostics:
+            public_keys.update(
+                {
+                    "action_proposals",
+                    "capability_cards",
+                    "missing_capability_keys",
+                    "mcp_route_decision",
+                    "runtime_mcp_catalog",
+                    "plan_card",
+                    "clarification_card",
+                    "runtime_code",
+                    "mcp_summary_result",
+                    "mcp_result_cards",
+                    "mcp_tool_event",
+                    "mcp_execution_result",
+                    "skill_reuse_result",
+                    "react_grounding",
+                    "tool_errors",
+                    "error_card",
+                    "mcp_preflight_result",
+                }
+            )
+        elif isinstance(cards.get("mcp_execution_result"), dict):
+            execution = cards["mcp_execution_result"]
+            if execution.get("status") in {"failed", "blocked", "rejected"} or execution.get("error"):
+                public_keys.add("mcp_execution_result")
+        elif cards.get("error_card"):
+            public_keys.add("error_card")
         public = {key: value for key, value in cards.items() if key in public_keys}
+        ui_display = dict(public.get("ui_display") if isinstance(public.get("ui_display"), dict) else {})
+        ui_display["developer_diagnostics"] = bool(developer_diagnostics)
+        public["ui_display"] = ui_display
         if isinstance(public.get("mcp_summary_result"), dict):
             public["mcp_summary_result"] = cls._compact_chat_mcp_summary_result(public["mcp_summary_result"])
         if isinstance(public.get("mcp_result_cards"), list):
@@ -6206,19 +6505,32 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
 
     def _semantic_or_legacy_route_decision(self, user_message: str, *, model_profile: dict[str, Any]) -> dict[str, Any]:
         semantic_plan = self._semantic_tool_plan(user_message, model_profile=model_profile)
+        clarification_seed: dict[str, Any] | None = None
         if semantic_plan is not None:
             route = semantic_plan.to_route()
             if route.get("requires_clarification"):
-                return route
-            if route.get("semantic_status") == "no_tool":
+                clarification_seed = {
+                    "planner_source": route.get("planner_source") or "llm_semantic_tool_planner",
+                    "semantic_status": route.get("semantic_status") or "clarification",
+                    "domain": route.get("domain"),
+                    "confidence": route.get("confidence"),
+                    "reason": route.get("reason"),
+                    "clarification_questions": list(route.get("clarification_questions") or []),
+                }
+            elif route.get("semantic_status") == "no_tool":
                 route = self._agentic_read_route_override(user_message, route)
                 return self._with_agentic_route_candidates(user_message, route)
-            if route.get("server_key") and route.get("tool_name"):
+            elif route.get("server_key") and route.get("tool_name"):
                 route = self._agentic_read_route_override(user_message, self._canonicalize_mcp_route(route))
                 return self._with_agentic_route_candidates(user_message, route)
         legacy_route = self._canonicalize_mcp_route(dict(route_request(user_message)))
         legacy_route = self._agentic_read_route_override(user_message, legacy_route)
-        return self._with_agentic_route_candidates(user_message, legacy_route)
+        route_card = self._with_agentic_route_candidates(user_message, legacy_route)
+        if clarification_seed:
+            route_card["clarification_seed"] = clarification_seed
+            route_card["pre_route_policy"] = "candidate_seed_only_no_hard_clarification"
+            route_card.pop("requires_clarification", None)
+        return route_card
 
     def _with_agentic_route_candidates(self, user_message: str, route: dict[str, Any]) -> dict[str, Any]:
         route_card = dict(route)
@@ -6304,7 +6616,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return ordered[:limit]
 
     def _should_seed_multi_tool_route(self, user_message: str, route: dict[str, Any], candidates: list[dict[str, Any]]) -> bool:
-        if len(candidates) < 2 or route.get("requires_clarification"):
+        if len(candidates) < 2:
             return False
         if str(route.get("side_effect") or "read_only") != "read_only":
             return False
@@ -7574,12 +7886,6 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "questions": clarification_questions,
                 "default_collapsed": details_default_collapsed,
             }
-        if mcp_route.get("requires_clarification"):
-            cards["clarification_card"] = {
-                "title": "需要先确认比较口径",
-                "questions": list(mcp_route.get("clarification_questions") or []),
-                "default_collapsed": False,
-            }
         return cards
 
     def _react_messages_for_agentic_synthesis(
@@ -7853,8 +8159,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         mode_decision: ModeDecision,
     ) -> bool:
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else {}
-        if isinstance(route, dict) and route.get("requires_clarification"):
-            return False
+        # Pre-route clarification is only a seed for the history-aware agent loop.
+        # It must not block ReAct grounding or override the assistant answer.
         if (
             mode_decision.intent_type == DialogueIntent.EXPERIMENT_DRAFT_REQUEST
             and isinstance(route, dict)
@@ -8518,8 +8824,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         if tool_error:
             return self._apply_main_reply_policy(self._render_tool_error_reply(tool_error), mode_decision)
         route = cards.get("mcp_route_decision") if isinstance(cards, dict) else None
-        if isinstance(route, dict) and route.get("requires_clarification"):
-            return self._apply_main_reply_policy(self._render_semantic_clarification_reply(route, cards), mode_decision)
+        # Clarification is handled by the main agent reply with full history.
+        # Legacy stateless route hints never hard-return over the LLM answer.
         skill_reuse = cards.get("skill_reuse_result") if isinstance(cards, dict) else None
         if isinstance(skill_reuse, dict) and skill_reuse.get("proposal_type") == "skill":
             return self._apply_main_reply_policy(self._render_skill_reuse_preflight_reply(skill_reuse), mode_decision)
@@ -8805,7 +9111,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             f"{label}需要先做方案/预检；本轮未执行写入、训练、回补或晋升。",
         ]
         if side_effect in {"approval_required", "preflight_required", "preflight_failed", "confirmed_action"}:
-            lines.append("安全边界：需先展示预检结果和确认口令，获得明确授权后才能进入下一步。")
+            lines.append("安全边界：需先展示预检结果，并在对话内获得明确确认后才能进入下一步。")
         else:
             lines.append("安全边界：只会生成方案或预检说明，不会直接提交高风险操作。")
         failed_checks = preflight.get("failed_checks") if isinstance(preflight.get("failed_checks"), list) else []
@@ -8816,15 +9122,15 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 if isinstance(item, dict)
             )
             lines.append(f"预检阻断：{rendered}。")
-        missing = preflight.get("missing_confirmations") if isinstance(preflight.get("missing_confirmations"), list) else []
-        if missing:
-            lines.append("需要确认：" + "，".join(str(item) for item in missing[:3]) + "。")
         approval_id = str(route_or_execution.get("approval_id") or preflight.get("approval_id") or "")
-        required_confirmation = str(route_or_execution.get("required_confirmation_text") or preflight.get("required_confirmation_text") or "")
-        if approval_id and required_confirmation:
+        missing = preflight.get("missing_confirmations") if isinstance(preflight.get("missing_confirmations"), list) else []
+        if missing and not approval_id:
+            lines.append("需要确认：" + "，".join(str(item) for item in missing[:3]) + "。")
+        elif missing:
+            lines.append("需要确认：用户在对话内明确批准本次 pending_action。")
+        if approval_id:
             lines.append(f"审批 ID：{approval_id}")
-            lines.append(f"确认口令：{required_confirmation}")
-            lines.append("如需在对话内执行，请回填该 approval_id，并让 confirmation_text 与确认口令完全一致。")
+            lines.append("如需执行，请直接回复“确认执行/同意/执行”；如不同意，请回复“取消/不执行”。不再需要逐字确认口令。")
         lines.append("下一步：请先补充必要 ID/参数，或明确说“先给预检”、“我确认执行”等边界。")
         return "\n".join(lines)
 
@@ -8836,11 +9142,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "安全边界：LLM 只能选择技能并生成 Action Proposal，执行必须由用户确认。",
         ]
         approval_id = str(skill_reuse.get("approval_id") or "")
-        required_confirmation = str(skill_reuse.get("required_confirmation_text") or "")
-        if approval_id and required_confirmation:
+        if approval_id:
             lines.append(f"审批 ID：{approval_id}")
-            lines.append(f"确认口令：{required_confirmation}")
-            lines.append("如需在对话内继续，请回填该 approval_id，并让 confirmation_text 与确认口令完全一致。")
+            lines.append("如需继续，请直接回复“确认执行/同意/执行”；如不同意，请回复“取消/不执行”。不再需要逐字确认口令。")
         else:
             reason_codes = skill_reuse.get("reason_codes") if isinstance(skill_reuse.get("reason_codes"), list) else []
             if reason_codes:
@@ -9785,7 +10089,16 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             self.add_task_event(data.task_id, TaskEventCreate(event_type="approval_required", message=f"等待审批：{data.summary}", payload_json={"approval_id": approval["approval_id"]}))
         return approval
 
-    def decide_approval(self, approval_id: str, *, action: str, confirmation_text: str, decided_by: str = "user") -> dict[str, Any]:
+    def decide_approval(
+        self,
+        approval_id: str,
+        *,
+        action: str,
+        confirmation_text: str,
+        decided_by: str = "user",
+        allow_chat_inline_approval: bool = False,
+        decision_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         approval = self.repository.get_record("approvals", approval_id)
         if not approval:
             raise KeyError(f"approval not found: {approval_id}")
@@ -9793,7 +10106,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             raise ValueError(f"approval is not pending: {approval.get('status')}")
         if action == "approve":
             expected = approval.get("required_confirmation_text")
-            if confirmation_text != expected:
+            if not allow_chat_inline_approval and confirmation_text != expected:
                 raise ValueError("confirmation_text does not match approval.required_confirmation_text")
             status = "approved"
             event_type = "approved"
@@ -9802,6 +10115,9 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             event_type = "rejected"
         else:
             raise ValueError("action must be approve or reject")
+        context = dict(approval.get("approval_context_json") or {})
+        if decision_metadata:
+            context["chat_inline_decision"] = dict(decision_metadata)
         updated = self.repository.update_record(
             "approvals",
             approval_id,
@@ -9811,10 +10127,18 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 "approved_at": utc_now().isoformat() if status == "approved" else None,
                 "decided_at": utc_now().isoformat(),
                 "approval_text": confirmation_text,
+                "approval_context_json": context,
             },
         )
         if approval.get("task_id"):
-            self.add_task_event(str(approval["task_id"]), TaskEventCreate(event_type=event_type, message=f"审批已{status}", payload_json={"approval_id": approval_id}))
+            self.add_task_event(
+                str(approval["task_id"]),
+                TaskEventCreate(
+                    event_type=event_type,
+                    message=f"审批已{status}",
+                    payload_json={"approval_id": approval_id, "chat_inline_decision": dict(decision_metadata or {})},
+                ),
+            )
         return updated
 
     def create_issue_candidate(self, request: IssueCandidateCreate | dict[str, Any]) -> dict[str, Any]:

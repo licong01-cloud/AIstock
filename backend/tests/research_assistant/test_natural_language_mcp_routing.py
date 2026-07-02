@@ -303,7 +303,7 @@ def test_bug_326_chat_local_data_sync_check_uses_grounded_read_only_route() -> N
     svc.seed_catalogs()
     svc.local_data_service_factory = _FakeLocalDataDailyStatusService
 
-    result = svc.chat_turn(ChatTurnRequest(message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="\u68c0\u67e5\u672c\u5730\u6570\u636e\u540c\u6b65\u60c5\u51b5"))
 
     route = result["cards"]["mcp_route_decision"]
     assert route["domain"] == "local_data"

@@ -300,7 +300,7 @@ export const LOCAL_DATA_MANAGEMENT_PHASES: LocalDataPhase[] = [
     key: "confirm",
     title: "等待用户确认",
     shortTitle: "确认",
-    description: "展示将调用的工具、写入范围、长任务风险和确认口令；确认前禁止执行。",
+    description: "在对话内展示将调用的工具、写入范围和长任务风险；确认前禁止执行。",
     primaryTools: [
       "local_data_apply_repair_confirmed",
       "local_data_run_dataset_sync_confirmed",
@@ -720,6 +720,28 @@ export type AssistantConversationMessage = JsonObject & {
   created_at?: string;
 };
 
+export type AssistantDecisionOption = JsonObject & {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type AssistantDecisionRequest = JsonObject & {
+  decision_id: string;
+  kind: "clarify" | "approve_action";
+  prompt_text: string;
+  options: AssistantDecisionOption[];
+  allow_free_text: boolean;
+  pending_action?: (JsonObject & {
+    server_key?: string;
+    tool_name?: string;
+    tool_args?: JsonObject;
+    risk_level?: string;
+    approval_id?: string;
+    action_proposal_id?: string;
+  }) | null;
+};
+
 export type AssistantChatTurnResult = JsonObject & {
   conversation?: JsonObject;
   user_message?: AssistantConversationMessage;
@@ -732,6 +754,7 @@ export type AssistantChatTurnResult = JsonObject & {
   trace?: JsonObject;
   cards?: JsonObject;
   mode_decision?: AssistantModeDecision;
+  decision_request?: AssistantDecisionRequest | null;
 };
 
 export type AssistantCatalogReadinessCheck = JsonObject & {

@@ -84,7 +84,7 @@ def _service() -> ResearchAssistantService:
     seeded = svc.seed_catalogs()
     assert seeded["seeded"]["runtime_config_activations"] == 0
     assert seeded["seeded"]["capabilities"] == 0
-    assert seeded["seeded"]["mcp_tools"] == 378
+    assert seeded["seeded"]["mcp_tools"] == len(svc._manifest_mcp_catalog_records())
     return svc
 
 

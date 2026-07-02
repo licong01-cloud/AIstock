@@ -422,7 +422,7 @@ def test_600584_react_smoke_returns_evidence_card_not_blocker() -> None:
     svc.stock_analysis_facade_factory = _FakeStockEvidenceService
     svc.external_research_provider_factory = _FakeExternalResearchProvider
 
-    result = svc.chat_turn(ChatTurnRequest(message="Analyze 600584 and produce a stock evidence card with quote, financials, fund flow, and web fundamentals."))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="Analyze 600584 and produce a stock evidence card with quote, financials, fund flow, and web fundamentals."))
     text = result["assistant_message"]["content_text"]
 
     assert "600584" in text
@@ -455,7 +455,7 @@ def test_bug_403_guocheng_mining_agentic_stock_analysis_uses_native_tool_call() 
     svc.stock_analysis_facade_factory = _FakeStockEvidenceService
     svc.external_research_provider_factory = _FakeExternalResearchProvider
 
-    result = svc.chat_turn(ChatTurnRequest(message="国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
     text = result["assistant_message"]["content_text"]
 
     assert "国城矿业" in text
@@ -486,7 +486,7 @@ def test_a2_stock_question_can_execute_external_research_native_tool_call() -> N
     svc.stock_analysis_facade_factory = _FakeStockEvidenceService
     svc.external_research_provider_factory = _FakeExternalResearchProvider
 
-    result = svc.chat_turn(ChatTurnRequest(message="国城矿业 基本情况/近期走势/未来趋势，需要联网资料和行情一起看", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="国城矿业 基本情况/近期走势/未来趋势，需要联网资料和行情一起看", dialogue_mode_override="analysis"))
     text = result["assistant_message"]["content_text"]
     registry_pairs = {(item["server_key"], item["tool_name"]) for item in fake_llm.first_registry.values()}
 
@@ -512,7 +512,7 @@ def test_bug_529_guocheng_real_style_guard_failure_no_longer_forces_regeneration
     svc.stock_analysis_facade_factory = _FakeStockEvidenceService
     svc.external_research_provider_factory = _FakeExternalResearchProvider
 
-    result = svc.chat_turn(ChatTurnRequest(message="给我国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="给我国城矿业 基本情况/近期走势/未来趋势 全方位分析"))
     text = result["assistant_message"]["content_text"]
     guard = result["cards"]["react_grounding"]["evidence_guard"]
 

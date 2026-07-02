@@ -8,11 +8,12 @@ import {
   ThreadPrimitive,
   useLocalRuntime,
   useMessage,
+  useThreadRuntime,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
 
 import { BlockerCard } from "@/components/research-assistant/BlockerCard";
 import { EvidenceCard, evidenceCompleteness, normalizeEvidenceRef } from "@/components/research-assistant/EvidenceCard";
@@ -25,6 +26,8 @@ import {
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type AssistantDecisionOption,
+  type AssistantDecisionRequest,
   type AssistantBlockerCard,
   type AssistantEvidenceCard,
   type AssistantLlmUsageTotals,
@@ -101,8 +104,11 @@ type ChatCards = {
     show_clarification_card?: boolean;
     show_context_health_badge?: boolean;
     details_default_collapsed?: boolean;
+    developer_diagnostics?: boolean;
   };
 };
+
+type PendingDecisionState = AssistantDecisionRequest | null;
 
 type CatalogNotReadyDetail = {
   code?: string;
@@ -438,12 +444,24 @@ function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: Ch
   return hasPlan || hasClarification || hasProposal || Boolean(routeDecision(cards)) || hasMcpExecutionCards(cards) || hasLocalDataContext(cards);
 }
 
+function decisionFromResult(result: AssistantChatTurnResult): PendingDecisionState {
+  const direct = asRecord(result.decision_request);
+  if (direct?.decision_id && direct.kind) return direct as AssistantDecisionRequest;
+  const contentJson = asRecord(result.assistant_message?.content_json);
+  const nested = asRecord(contentJson?.decision_request);
+  if (nested?.decision_id && nested.kind) return nested as AssistantDecisionRequest;
+  return null;
+}
+
 function createAdapter(
   onTurn: (result: AssistantChatTurnResult) => void,
   onStage: (steps: RailStep[]) => void,
   onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void,
   conversationId: string | null,
   setConversationId: (id: string) => void,
+  pendingDecision: PendingDecisionState,
+  setPendingDecision: (decision: PendingDecisionState) => void,
+  developerDiagnostics: boolean,
 ): ChatModelAdapter {
   return {
     async run(options) {
@@ -453,8 +471,15 @@ function createAdapter(
       }
       onStage(thinkingSteps);
       let result: AssistantChatTurnResult;
-      const payload: Record<string, unknown> = { message, phase: "planning", risk_level: "medium", allow_execute: false };
+      const payload: Record<string, unknown> = {
+        message,
+        phase: "planning",
+        risk_level: "medium",
+        allow_execute: false,
+        developer_diagnostics: developerDiagnostics,
+      };
       if (conversationId) payload.conversation_id = conversationId;
+      if (pendingDecision) payload.decision_id = pendingDecision.decision_id;
       try {
         result = await researchAssistantApi.chatTurn(payload);
       } catch (error) {
@@ -470,6 +495,7 @@ function createAdapter(
       const newConversationId = (result.conversation as Record<string, unknown> | null)?.conversation_id as string | undefined;
       if (newConversationId && !conversationId) setConversationId(newConversationId);
       onTurn(result);
+      setPendingDecision(decisionFromResult(result));
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
       const rawReply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
@@ -884,13 +910,165 @@ function CatalogSetupCard({
   );
 }
 
-function AssistantThread() {
+function DeveloperDiagnosticsToggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: Dispatch<SetStateAction<boolean>>;
+}) {
+  return (
+    <button
+      className={`ra-chat-debug-toggle${enabled ? " ra-chat-debug-toggle-on" : ""}`}
+      type="button"
+      onClick={() => onChange((current) => !current)}
+      aria-pressed={enabled}
+    >
+      开发者调试 {enabled ? "开" : "关"}
+    </button>
+  );
+}
+
+function InlineDecisionBar({
+  decision,
+  conversationId,
+  developerDiagnostics,
+  onTurn,
+  onStage,
+  onCatalogIssue,
+  setConversationId,
+  setPendingDecision,
+}: {
+  decision: PendingDecisionState;
+  conversationId: string | null;
+  developerDiagnostics: boolean;
+  onTurn: (result: AssistantChatTurnResult) => void;
+  onStage: (steps: RailStep[]) => void;
+  onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void;
+  setConversationId: (id: string) => void;
+  setPendingDecision: (decision: PendingDecisionState) => void;
+}) {
+  const runtime = useThreadRuntime();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const options = decision?.options || [];
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [decision?.decision_id]);
+
+  const submitOption = useCallback(
+    async (option: AssistantDecisionOption) => {
+      if (!decision || submitting) return;
+      setSubmitting(true);
+      onStage(thinkingSteps);
+      runtime.append({ role: "user", content: [{ type: "text", text: option.label }], startRun: false });
+      const payload: Record<string, unknown> = {
+        message: option.label,
+        phase: "planning",
+        risk_level: "medium",
+        allow_execute: false,
+        decision_id: decision.decision_id,
+        decision_option_id: option.id,
+        developer_diagnostics: developerDiagnostics,
+      };
+      if (conversationId) payload.conversation_id = conversationId;
+      try {
+        const result = await researchAssistantApi.chatTurn(payload);
+        onCatalogIssue(null);
+        const newConversationId = (result.conversation as Record<string, unknown> | null)?.conversation_id as string | undefined;
+        if (newConversationId && !conversationId) setConversationId(newConversationId);
+        onTurn(result);
+        setPendingDecision(decisionFromResult(result));
+        const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+        if (cards.status_rail?.length) onStage(cards.status_rail);
+        runtime.append({
+          role: "assistant",
+          content: [{ type: "text", text: stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards)) }],
+          startRun: false,
+        });
+      } catch (error) {
+        const detail = catalogNotReadyDetail(error);
+        if (detail) {
+          onCatalogIssue(detail);
+          onStage(initialSteps);
+          runtime.append({ role: "assistant", content: [{ type: "text", text: catalogSetupReply(detail) }], startRun: false });
+        } else {
+          runtime.append({
+            role: "assistant",
+            content: [{ type: "text", text: error instanceof Error ? error.message : "decision_request 提交失败" }],
+            startRun: false,
+          });
+        }
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [conversationId, decision, developerDiagnostics, onCatalogIssue, onStage, onTurn, runtime, setConversationId, setPendingDecision, submitting],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (!options.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedIndex((index) => (index + 1) % options.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedIndex((index) => (index - 1 + options.length) % options.length);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        void submitOption(options[selectedIndex]);
+      }
+    },
+    [options, selectedIndex, submitOption],
+  );
+
+  if (!decision) return null;
+  return (
+    <div className="ra-inline-decision" role="group" aria-label="对话内决策" tabIndex={0} onKeyDown={handleKeyDown}>
+      <span className="ra-chat-eyebrow">{decision.kind === "approve_action" ? "Approval" : "Clarify"}</span>
+      <strong>{decision.prompt_text}</strong>
+      {options.length ? (
+        <div className="ra-inline-decision-options">
+          {options.map((option, index) => (
+            <button
+              className={`ra-inline-decision-option${index === selectedIndex ? " ra-inline-decision-option-selected" : ""}`}
+              type="button"
+              key={option.id}
+              onMouseEnter={() => setSelectedIndex(index)}
+              onClick={() => void submitOption(option)}
+              disabled={submitting}
+            >
+              <span>{index === selectedIndex ? ">" : " "}</span>
+              <strong>{option.label}</strong>
+              {option.description ? <small>{option.description}</small> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {decision.allow_free_text ? <p>也可以直接在输入框用自然语言回复。</p> : null}
+    </div>
+  );
+}
+
+function AssistantThread(props: {
+  pendingDecision: PendingDecisionState;
+  conversationId: string | null;
+  developerDiagnostics: boolean;
+  onTurn: (result: AssistantChatTurnResult) => void;
+  onStage: (steps: RailStep[]) => void;
+  onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void;
+  setConversationId: (id: string) => void;
+  setPendingDecision: (decision: PendingDecisionState) => void;
+}) {
   return (
     <ThreadPrimitive.Root className="ra-chat-thread-root">
       <ThreadPrimitive.Viewport className="ra-chat-viewport">
         <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
         <ThreadPrimitive.ViewportFooter />
       </ThreadPrimitive.Viewport>
+      <InlineDecisionBar {...props} decision={props.pendingDecision} />
       <ComposerPrimitive.Root className="ra-chat-composer">
         <ComposerPrimitive.Input
           className="ra-chat-input"
@@ -912,6 +1090,8 @@ export default function ResearchAssistantChatPage() {
   const [catalogInitMessage, setCatalogInitMessage] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [turnUsageHistory, setTurnUsageHistory] = useState<AssistantChatTurnResult[]>([]);
+  const [pendingDecision, setPendingDecision] = useState<PendingDecisionState>(null);
+  const [developerDiagnostics, setDeveloperDiagnostics] = useState(false);
 
   const newConversation = useCallback(() => {
     setConversationId(null);
@@ -920,6 +1100,7 @@ export default function ResearchAssistantChatPage() {
     setSteps(initialSteps);
     setCatalogIssue(null);
     setCatalogInitMessage(null);
+    setPendingDecision(null);
   }, []);
 
   const initializeCatalogs = useCallback(async () => {
@@ -948,7 +1129,20 @@ export default function ResearchAssistantChatPage() {
     setTurnUsageHistory((prev) => [...prev, result]);
   }, []);
 
-  const adapter = useMemo(() => createAdapter(handleTurn, setSteps, setCatalogIssue, conversationId, setConversationId), [conversationId, handleTurn]);
+  const adapter = useMemo(
+    () =>
+      createAdapter(
+        handleTurn,
+        setSteps,
+        setCatalogIssue,
+        conversationId,
+        setConversationId,
+        pendingDecision,
+        setPendingDecision,
+        developerDiagnostics,
+      ),
+    [conversationId, developerDiagnostics, handleTurn, pendingDecision],
+  );
   const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
@@ -959,6 +1153,7 @@ export default function ResearchAssistantChatPage() {
           <span className="ra-chat-eyebrow">{chatCopy.hero.eyebrow}</span>
           <h1>{chatCopy.hero.title}</h1>
           <p>{chatCopy.hero.body}</p>
+          <DeveloperDiagnosticsToggle enabled={developerDiagnostics} onChange={setDeveloperDiagnostics} />
           {conversationId ? (
             <button className="ra-chat-new-session-button" type="button" onClick={newConversation}>
               {chatCopy.hero.newConversation}
@@ -966,7 +1161,16 @@ export default function ResearchAssistantChatPage() {
           ) : null}
         </div>
         <AssistantRuntimeProvider runtime={runtime}>
-          <AssistantThread />
+          <AssistantThread
+            pendingDecision={pendingDecision}
+            conversationId={conversationId}
+            developerDiagnostics={developerDiagnostics}
+            onTurn={handleTurn}
+            onStage={setSteps}
+            onCatalogIssue={setCatalogIssue}
+            setConversationId={setConversationId}
+            setPendingDecision={setPendingDecision}
+          />
         </AssistantRuntimeProvider>
       </section>
       {catalogIssue ? (
@@ -977,12 +1181,14 @@ export default function ResearchAssistantChatPage() {
           onInitialize={initializeCatalogs}
         />
       ) : (
-        <>
-          <Phase7EvidencePanel latest={latest} />
-          <TurnUsagePanel latest={latest} history={turnUsageHistory} />
-          <RuntimeCodePanel latest={latest} />
-          <PlanSummary latest={latest} />
-        </>
+        developerDiagnostics ? (
+          <>
+            <Phase7EvidencePanel latest={latest} />
+            <TurnUsagePanel latest={latest} history={turnUsageHistory} />
+            <RuntimeCodePanel latest={latest} />
+            <PlanSummary latest={latest} />
+          </>
+        ) : null
       )}
     </main>
   );

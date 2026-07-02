@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -317,7 +317,7 @@ def test_t9_6_llm_selected_skill_creates_approval_gated_proposal_not_execution()
     service.seed_catalogs()
     repo.write_calls.clear()
 
-    result = service.chat_turn({"message": "请按可复用流程处理这个研究请求", "dialogue_mode_override": "analysis"})
+    result = service.chat_turn({"developer_diagnostics": True, "message": "请按可复用流程处理这个研究请求", "dialogue_mode_override": "analysis"})
     proposal_card = result["cards"]["action_proposals"][-1]
     proposal = service.repository.get_record("action_proposals", proposal_card["action_proposal_id"])
     approval = service.repository.get_record("approvals", proposal_card["approval_id"])
@@ -330,7 +330,8 @@ def test_t9_6_llm_selected_skill_creates_approval_gated_proposal_not_execution()
     assert approval["required_confirmation_text"] == SKILL_LIBRARY_REUSE_CONFIRMATION
     assert result["cards"]["skill_reuse_result"]["executed"] is False
     assert ("create_record", "mcp_tool_events") not in repo.write_calls
-    assert SKILL_LIBRARY_REUSE_CONFIRMATION in result["assistant_message"]["content_text"]
+    assert SKILL_LIBRARY_REUSE_CONFIRMATION not in result["assistant_message"]["content_text"]
+    assert result["decision_request"]["kind"] == "approve_action"
 
 
 def test_t9_6_skill_approval_gate_must_be_consumed_before_execution() -> None:
@@ -340,7 +341,7 @@ def test_t9_6_skill_approval_gate_must_be_consumed_before_execution() -> None:
         llm_client=_SkillSelectingLlmClient("analyze-factor-library", {"topic": "factor quality"}),
     )
     service.seed_catalogs()
-    result = service.chat_turn({"message": "请按可复用流程处理这个研究请求", "dialogue_mode_override": "analysis"})
+    result = service.chat_turn({"developer_diagnostics": True, "message": "请按可复用流程处理这个研究请求", "dialogue_mode_override": "analysis"})
     proposal_id = result["cards"]["action_proposals"][-1]["action_proposal_id"]
 
     blocked = service.execute_action_proposal(proposal_id)
