@@ -302,6 +302,43 @@ def test_workflow_validation_only_allows_fixed_same_task_bug_metadata_and_client
     assert payload["workflow_bug_metadata_files"] == [bug_rel]
 
 
+def test_workflow_client_instruction_cleanup_change_skips_backend_matrix(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260702_BUG-579-cleanup-fast.json"
+    allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    bug = tmp_path / bug_rel
+    allocator = tmp_path / allocator_rel
+    workflow_files = [
+        "scripts/aistock_issue_workflow.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
+        ".codex/skills/fix-aistock-issue/SKILL.md",
+        ".claude/commands/aistock-docs-handoff.md",
+        ".claude/commands/aistock-task-router.md",
+        ".claude/commands/fix-aistock-issue.md",
+    ]
+    _write_bug(
+        bug,
+        status="open",
+        module="validation_llm_pipeline",
+        allowed_write_scope=[*workflow_files, bug_rel, allocator_rel],
+    )
+    allocator.write_text(json.dumps({"last_allocated": 579}), encoding="utf-8")
+
+    payload = classifier.classify_changed_files(
+        [*workflow_files, bug_rel, allocator_rel],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_bug_metadata_files"] == [bug_rel]
+
+
 def test_workflow_bug_metadata_with_business_scope_keeps_backend_matrix(tmp_path: Path) -> None:
     bug_rel = "tests/aistock_validation/bugs/20260604_BUG-258-business-scope.json"
     bug = tmp_path / bug_rel

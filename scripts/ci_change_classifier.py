@@ -36,8 +36,19 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/test.yml",
     ".github/requirements/pr-quality.txt",
     ".github/requirements/semgrep.txt",
+    ".claude/commands/aistock-docs-handoff.md",
+    ".claude/commands/aistock-feature-workflow.md",
+    ".claude/commands/aistock-issue-doctor.md",
+    ".claude/commands/aistock-merge-aftercare.md",
+    ".claude/commands/aistock-readonly-triage.md",
+    ".claude/commands/aistock-task-router.md",
     ".claude/commands/fix-aistock-issue.md",
+    ".codex/skills/aistock-docs-handoff/SKILL.md",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".codex/skills/aistock-readonly-triage/SKILL.md",
+    ".codex/skills/aistock-task-router/SKILL.md",
     ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
     ".codex/skills/verify-aistock-feature/scripts/scan_quality_guardrails.py",
     "backend/tests/scripts/test_aistock_issue_workflow.py",
     "backend/tests/scripts/test_bug_registry_metadata_check.py",
@@ -214,7 +225,7 @@ def _workflow_bug_metadata_file(rel_path: str, *, repo_root: Path) -> bool:
         return False
     status = str(payload.get("status") or "").strip().lower()
     module = str(payload.get("module") or payload.get("affected_module") or "").strip().lower()
-    if status not in WORKFLOW_BUG_METADATA_STATUSES or module != "validation":
+    if status not in WORKFLOW_BUG_METADATA_STATUSES or module not in {"validation", "validation_llm_pipeline"}:
         return False
     allowed_scope = payload.get("allowed_write_scope") or payload.get("suggested_scope") or []
     if not isinstance(allowed_scope, list) or not allowed_scope:

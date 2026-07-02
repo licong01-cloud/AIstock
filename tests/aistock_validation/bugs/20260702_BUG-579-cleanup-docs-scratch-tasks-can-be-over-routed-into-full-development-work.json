@@ -10,7 +10,9 @@
     ".codex/skills/aistock-docs-handoff/SKILL.md",
     ".claude/commands/aistock-docs-handoff.md",
     ".codex/skills/fix-aistock-issue/SKILL.md",
-    ".claude/commands/fix-aistock-issue.md"
+    ".claude/commands/fix-aistock-issue.md",
+    "scripts/ci_change_classifier.py",
+    "backend/tests/scripts/test_ci_change_classifier.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-579",
@@ -34,6 +36,12 @@
       "actor": "codex",
       "action": "expand_allowed_write_scope",
       "note": "BUG-579 fixes workflow routing/client guidance, not business code."
+    },
+    {
+      "timestamp": "2026-07-02T16:05:00Z",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Include CI classifier so client-instruction workflow changes do not trigger full backend matrix."
     }
   ],
   "evidence_uris": [],
