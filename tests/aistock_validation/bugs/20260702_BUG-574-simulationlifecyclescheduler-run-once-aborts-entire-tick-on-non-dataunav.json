@@ -30,20 +30,20 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "timestamp": "2026-07-02T07:46:01Z",
-      "note": "Scope expanded from registry-only intake to the user-authorized simulation_runtime scheduler/ops code, focused scheduler/router tests, and durable handoff evidence before product edits."
+      "note": "Scope expanded from registry-only intake to the user-authorized simulation_runtime scheduler/ops code, focused scheduler/router tests, and durable handoff evidence before product edits.",
+      "timestamp": "2026-07-02T07:46:01Z"
     },
     {
       "action": "validation_passed_pending_pr",
       "actor": "codex",
-      "timestamp": "2026-07-02T08:42:42.155230Z",
-      "note": "Implemented per-binding exception isolation, durable pre-run failure, scheduler status projection, and regression coverage; PR pending, not merged."
+      "note": "Implemented per-binding exception isolation, durable pre-run failure, scheduler status projection, and regression coverage; PR pending, not merged.",
+      "timestamp": "2026-07-02T08:42:42.155230Z"
     },
     {
       "action": "pr_opened_pending_tier2",
       "actor": "codex",
-      "timestamp": "2026-07-02T08:53:51.781897Z",
-      "note": "PR #1818 opened from BUG-574 worktree; not merged by develop-only window, awaiting strategic session Tier2 review."
+      "note": "PR #1818 opened from BUG-574 worktree; not merged by develop-only window, awaiting strategic session Tier2 review.",
+      "timestamp": "2026-07-02T08:53:51.781897Z"
     }
   ],
   "evidence_uris": [
@@ -53,8 +53,8 @@
   "expected": "SimulationLifecycleScheduler isolates every non-fatal per-binding pre-run/selection/preflight exception, persists a durable simulation_daily_run pre-run failure with package/reason/preflight context, continues later eligible bindings, preserves raise_on_error and BaseException semantics, and exposes lifecycle scheduler running/thread/last-run/error status via the read-only status API.",
   "first_seen_at": "2026-07-02T07:28:55.176698Z",
   "fix_branch": "bug/BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702",
-  "fix_commit": "f6e167d888ff869e4bec375bb8aa562cb820ea6d",
-  "fixed_at": null,
+  "fix_commit": "284798064bd67ff179e89588b8b9e4953bad7c88",
+  "fixed_at": "2026-07-02T10:14:40.329889Z",
   "github_issue_number": 1813,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1813",
   "last_seen_at": "2026-07-02T07:28:55.176698Z",
@@ -62,6 +62,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1818",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -74,7 +75,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -83,6 +84,13 @@
     "fingerprint": "da8986c555ecf7d9cdf2a8ab",
     "source_event_id": "FE-20260702-da8986c555ec"
   },
+  "validation_evidence": [
+    "rebase origin/main only resolved tests/aistock_validation/bugs/.bug_id_allocator.json; no source/test conflicts",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -q -> 112 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "gh pr checks 1818 --watch=false -> CI 17 passed / 0 failed"
+  ],
   "verification_run_id": "BUG-574 local validation 2026-07-02",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -95,20 +103,5 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "pr_opened_pending_tier2",
-  "validation_evidence": [
-    "rtk python -m py_compile backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 104 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_router_summary.py -q -> 8 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 12 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
-    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 127 passed",
-    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
-    "rtk python -m nox -s l0 -> passed",
-    "rtk python -m nox -s validation_module_registry_l0 -> passed",
-    "rtk python -m nox -s paper_v2_backend -> 834 passed, 1 skipped, 2 xfailed",
-    "rtk python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-574 --module simulation_runtime ... -> passed",
-    "rtk git diff --check -> passed"
-  ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1818"
+  "workflow_gate": "pr_opened_pending_tier2"
 }
