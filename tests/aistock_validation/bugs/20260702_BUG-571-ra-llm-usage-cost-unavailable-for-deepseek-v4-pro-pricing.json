@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-571",
-  "closed_at": null,
+  "closed_at": "2026-07-02T10:06:57Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -78,6 +78,12 @@
       "actor": "codex",
       "note": "Confirmed PyPI latest LiteLLM 1.90.2 exposes deepseek/deepseek-v4-pro in litellm.model_cost with official DeepSeek prices; BUG-571 remains native-pricing-only with no model-name mapping or manual fallback. Deployment dependency gate remains pending until Windows Conda, WSL, and remote runtimes all run litellm==1.90.2/openai==2.44.0.",
       "timestamp": "2026-07-02T09:07:19.259951+00:00"
+    },
+    {
+      "action": "closed_after_merge_metadata",
+      "actor": "codex",
+      "note": "Persist final BUG-571 closed status after PR #1822 squash merge and close-sync PR #1825; GitHub Issue #1804 already closed with status:fixed; production_ddl_gate=noop, production_frontend_dependency_gate=noop, production_backend_dependency_gate=pending.",
+      "timestamp": "2026-07-02T10:06:57Z"
     }
   ],
   "evidence_uris": [],
@@ -108,7 +114,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed",
+  "status": "closed",
   "suspected_modules": [
     "research_assistant"
   ],
