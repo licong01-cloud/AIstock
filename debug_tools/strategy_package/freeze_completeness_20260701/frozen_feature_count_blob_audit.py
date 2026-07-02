@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import pickle
 import os
 import sys
 from pathlib import Path
@@ -44,9 +46,6 @@ def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-import io
-import pickle
 
 
 def _parse_args() -> argparse.Namespace:

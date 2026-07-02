@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import json
 import os
 import sys
@@ -44,8 +45,6 @@ def _write_json(path: Path | None, payload: dict[str, Any]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-from datetime import date
 
 
 def _parse_args() -> argparse.Namespace:
