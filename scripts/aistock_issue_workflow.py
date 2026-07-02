@@ -5388,7 +5388,7 @@ def build_finish_plan(
             {
                 "allowed_write_scope": flow._as_list(record.get("allowed_write_scope")),
                 "required_verification": validation.get("required_plans") or [],
-                "verification_budget": verification_budget,
+                "verification_budget": record.get("verification_budget"),
             }
         ),
         production_gates=validation.get("production_gates") or {},
