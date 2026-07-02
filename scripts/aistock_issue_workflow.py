@@ -216,6 +216,66 @@ def _sha256_tree(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+WORKFLOW_RULE_DIGEST_REFS = (
+    ".codex/skills/aistock-task-router/SKILL.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/aistock-task-router.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "docs/codex_project_memory.md",
+    "docs/standards/README.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+)
+
+
+def _workflow_rule_digests(root: Path | None = None) -> list[dict[str, Any]]:
+    base = root or REPO_ROOT
+    refs: list[dict[str, Any]] = []
+    for rel in WORKFLOW_RULE_DIGEST_REFS:
+        path = base / rel
+        stat = path.stat() if path.exists() and path.is_file() else None
+        digest = _sha256_file(path)
+        refs.append(
+            {
+                "path": rel,
+                "exists": bool(stat),
+                "sha256_12": digest[:12] if digest else None,
+                "bytes": stat.st_size if stat else 0,
+                "mtime_utc": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat().replace("+00:00", "Z")
+                if stat
+                else None,
+            }
+        )
+    return refs
+
+
+def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    allowed = flow._as_list(state.get("allowed_write_scope"))
+    required = flow._as_list(state.get("required_verification"))
+    verification_budget = state.get("verification_budget") if isinstance(state.get("verification_budget"), dict) else None
+    return {
+        "schema_version": "aistock_workflow_context_resume_digest_v1",
+        "rule_digests": _workflow_rule_digests(root),
+        "reuse_policy": [
+            "After context compaction, read this resume digest and task-card.md first.",
+            "Do not re-read skills, project memory, standards README, quickstart, or RTK unless a listed hash changed, state is missing, or the user explicitly asks.",
+            "Do not re-print the same source range; use precise rg and record a scoped miss reason before broad scans.",
+        ],
+        "allowed_write_scope_count": len(allowed),
+        "required_verification_count": len(required),
+        "verification_budget": verification_budget,
+        "nightly_deferred_verification": verification_budget.get("deferred_nightly_verification") if verification_budget else None,
+        "exploration_command_budget": {
+            "soft_limit": 40,
+            "action": "pause_and_summarize_before_more_search_or_repeated_file_reads",
+        },
+        "success_artifact_policy": {
+            "stdout": "compact_by_default",
+            "json": "diagnostic_only_on_failure_or_AISTOCK_WORKFLOW_ARTIFACTS=1",
+            "required_runtime_state": ["state.json", "events.jsonl", "task-card.md", "context-pack.md", "pr-body.md"],
+        },
+    }
+
+
 def _resolve_output_path(output: str | None) -> Path | None:
     if not output or output == "-":
         return None
@@ -395,6 +455,7 @@ def _compact_finish(value: Any) -> dict[str, Any] | None:
         "pr_body_path",
         "state_path",
         "events_path",
+        "artifact_policy",
         "error",
     )
     if "validation_evidence" in value:
@@ -788,6 +849,7 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "task_card_md",
                 "state_path",
                 "events_path",
+                "context_resume_digest",
                 "stop_conditions",
             )
         )
@@ -1163,14 +1225,39 @@ def _events_path(bug_id: str, root: Path | None = None) -> Path:
 
 def _remove_synthetic_smoke_workflow_dir(path: Path, bug_id: str) -> None:
     canonical_bug_id = bug_id.strip().upper()
-    expected = (REPO_ROOT / WORKFLOW_ROOT / "BUG-000").resolve()
-    if canonical_bug_id != "BUG-000" or path.resolve() != expected:
+    is_synthetic = canonical_bug_id == "BUG-000" or re.fullmatch(r"BUG-9\d{15,17}", canonical_bug_id)
+    expected = (REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id).resolve()
+    if not is_synthetic or path.resolve() != expected:
         raise WorkflowError("refusing to remove non-synthetic workflow-smoke state")
     if not path.exists():
         return
     if not path.is_dir() or path.is_symlink():
         raise WorkflowError(f"refusing to remove unsafe workflow-smoke path: {path}")
     shutil.rmtree(path)
+
+
+def _synthetic_smoke_bug_id() -> str:
+    return f"BUG-9{os.getpid() % 100000:05d}{time.time_ns() % 10_000_000_000:010d}"
+
+
+def _cleanup_synthetic_smoke_artifacts(paths: list[Path], bug_id: str) -> list[str]:
+    warnings: list[str] = []
+    canonical_bug_id = bug_id.strip().upper()
+    for path in paths:
+        try:
+            if path.is_dir():
+                _remove_synthetic_smoke_workflow_dir(path, canonical_bug_id)
+            elif path.exists():
+                expected_parent = (REPO_ROOT / WORKFLOW_ROOT / "smoke").resolve()
+                expected_name = f"synthetic-{canonical_bug_id}.json"
+                if path.resolve().parent != expected_parent or path.name != expected_name:
+                    raise WorkflowError("refusing to remove non-synthetic workflow-smoke issue file")
+                path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            warnings.append(f"synthetic workflow-smoke cleanup skipped for {_repo_rel(path)}: {exc}")
+    return warnings
 
 
 def _task_card_json_path(bug_id: str, root: Path | None = None) -> Path:
@@ -3251,6 +3338,13 @@ def _text_indicates_cleanup_fast(title: str | None, description: str | None = No
     return any(term in haystack for term in cleanup_terms) and any(term in haystack for term in docs_terms)
 
 
+def _text_indicates_workflow_policy(title: str | None, description: str | None = None, module: str | None = None) -> bool:
+    haystack = _small_text_blob([str(title or ""), str(description or ""), str(module or "")]).lower()
+    workflow_terms = ("workflow", "流水线", "流程", "validation", "ci", "nightly", "bug处理")
+    policy_terms = ("budget", "token", "over-validates", "验证预算", "过度验证", "规范", "policy")
+    return any(term in haystack for term in workflow_terms) and any(term in haystack for term in policy_terms)
+
+
 def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str], description: str | None = None) -> bool:
     normalized_paths = [path.replace("\\", "/") for path in changed_files]
     has_frontend_scope = any(path.startswith("frontend/") or "/frontend/" in path for path in normalized_paths)
@@ -3266,6 +3360,8 @@ def _is_ui_issue(title: str | None, module: str | None, changed_files: list[str]
     if changed_files and not any(path.startswith(("frontend/", "tests/e2e/", "playwright")) for path in normalized_paths):
         return False
     if not changed_files and _text_indicates_cleanup_fast(title, description):
+        return False
+    if not changed_files and _text_indicates_workflow_policy(title, description, module):
         return False
     haystack = _small_text_blob([str(title or ""), str(module or ""), str(description or "")]).lower()
     keywords = UI_KEYWORDS
@@ -3283,6 +3379,52 @@ def _is_cleanup_fast_candidate(record: dict[str, Any]) -> bool:
         str(record.get("actual") or ""),
         str(record.get("expected") or ""),
     )
+
+
+def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, Any] | None = None) -> dict[str, Any]:
+    module = _normalize_module_label(record.get("module"))
+    severity = str(record.get("severity") or "").upper().split()[0] if str(record.get("severity") or "").strip() else ""
+    required = [str(item) for item in flow._as_list(record.get("required_verification"))]
+    has_production_gate = any(
+        str(record.get(key) or "noop") not in {"", "noop"}
+        for key in ("production_ddl_gate", "production_backend_dependency_gate", "production_frontend_dependency_gate")
+    )
+    high_risk_modules = {"paper_v2", "strategy_package", "selection_center", "research_assistant", "validation_center"}
+    runtime_markers = ("runtime", "order", "cash", "position", "miniqmt", "broker", "ddl", "migration")
+    text = _small_text_blob(
+        [str(record.get("title") or ""), str(record.get("description") or ""), str(record.get("actual") or ""), str(record.get("expected") or "")]
+    ).lower()
+    if has_production_gate or any(marker in text for marker in ("ddl", "migration", "production db")):
+        budget = "deep"
+        target_pct = "60-70%"
+    elif severity in {"P0", "P1"} or module in high_risk_modules or any(marker in text for marker in runtime_markers):
+        budget = "standard"
+        target_pct = "35-60%"
+    elif ui_hints:
+        budget = "light_ui"
+        target_pct = "30-40%"
+    else:
+        budget = "light"
+        target_pct = "25-35%"
+    deferred_modules = flow._unique_strings(
+        [module, *[str(item).replace("_backend", "").replace("_ui", "") for item in required if item not in {"l0", "validation_module_registry_l0"}]]
+    )
+    return {
+        "schema_version": "aistock_verification_budget_v1",
+        "budget": budget,
+        "target_cost_percent_of_legacy": target_pct,
+        "premerge_gate": [
+            "changed-file lint/compile",
+            "direct fix-point targeted test or API/contract smoke",
+            "git diff --check",
+            "production gates",
+        ],
+        "deferred_nightly_verification": {
+            "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
+            "modules": [item for item in deferred_modules if item],
+            "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly",
+        },
+    }
 
 
 def _ui_intake_hints(
@@ -3360,6 +3502,7 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         )
     if any(str(item).startswith("validation_center_backend") for item in required):
         recs.append("Keep validation_center_backend only when the changed files actually affect Validation Center.")
+    recs.append("Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly.")
     return {
         "schema_version": "aistock_workflow_efficiency_recommendations_v1",
         "batch_candidate": batch_candidate,
@@ -3367,6 +3510,7 @@ def _workflow_efficiency_recommendations(record: dict[str, Any], ui_hints: dict[
         "docs_only_merge_with_related_code": True,
         "compact_success_output": True,
         "full_json_on_failure_only": True,
+        "verification_budget": _verification_budget_for_record(record, ui_hints),
         "recommendations": recs,
     }
 
@@ -3577,6 +3721,7 @@ def build_submit_bug_plan(
                 flow._as_list(record.get("required_verification")) + list(ui_hints.get("recommended_verification") or [])
             )
         record["workflow_efficiency_recommendations"] = _workflow_efficiency_recommendations(record, ui_hints)
+        record["verification_budget"] = record["workflow_efficiency_recommendations"]["verification_budget"]
 
         output_dir = registry_root / WORKFLOW_ROOT / canonical_bug_id
         candidate_path = output_dir / "candidate.json"
@@ -4045,6 +4190,16 @@ def build_task_card(
         "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or _production_gates_payload(),
+        "verification_budget": record.get("verification_budget"),
+        "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
+        "context_resume_digest": _workflow_context_resume_digest(
+            {
+                "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
+                "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
+                "verification_budget": record.get("verification_budget"),
+            },
+            root=root,
+        ),
         "code_intelligence": code_intel,
         "fast_path": _pick(fast_path or {}, "task_tier", "module", "workflow_gate", "required_validation", "recommended_validation"),
         "stop_conditions": [
@@ -4056,7 +4211,9 @@ def build_task_card(
         "next_client_steps": [
             "switch_to_worktree_if_created",
             "read task-card.md first, then context-pack.md only when needed",
+            "after context compaction, use Context Resume Digest hashes instead of re-reading standards/quickstart/RTK",
             "read Code Intelligence refs before rg; record a scoped miss reason before broad scans",
+            "stop and summarize before more search if exploration commands exceed the soft budget",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -4073,6 +4230,9 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
     artifacts = task_card.get("artifact_refs") if isinstance(task_card.get("artifact_refs"), dict) else {}
     github_issue = task_card.get("github_issue") if isinstance(task_card.get("github_issue"), dict) else {}
     code_intel = task_card.get("code_intelligence") if isinstance(task_card.get("code_intelligence"), dict) else {}
+    resume_digest = task_card.get("context_resume_digest") if isinstance(task_card.get("context_resume_digest"), dict) else {}
+    budget = task_card.get("verification_budget") if isinstance(task_card.get("verification_budget"), dict) else {}
+    deferred = budget.get("deferred_nightly_verification") if isinstance(budget.get("deferred_nightly_verification"), dict) else {}
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -4096,6 +4256,21 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Required Verification",
         *[f"- `{item}`" for item in task_card.get("required_verification") or ["l0"]],
+        "",
+        "## Verification Budget",
+        f"- budget: `{budget.get('budget') or 'not_recorded'}`",
+        f"- target_cost_percent_of_legacy: `{budget.get('target_cost_percent_of_legacy') or 'not_recorded'}`",
+        f"- deferred_nightly_required: `{str(bool(deferred.get('required'))).lower()}`",
+        f"- deferred_nightly_modules: `{', '.join(deferred.get('modules') or []) or 'none'}`",
+        "",
+        "## Context Resume Digest",
+        f"- rule_digest_count: `{len(resume_digest.get('rule_digests') or [])}`",
+        f"- exploration_soft_limit: `{((resume_digest.get('exploration_command_budget') or {}).get('soft_limit')) or 40}`",
+        f"- json_artifact_policy: `{((resume_digest.get('success_artifact_policy') or {}).get('json')) or 'diagnostic_only'}`",
+        *[
+            f"- rule: `{item.get('path')}` sha256_12=`{item.get('sha256_12') or 'missing'}`"
+            for item in resume_digest.get("rule_digests") or []
+        ],
         "",
         "## Artifacts",
         *[f"- {key}: `{value}`" for key, value in artifacts.items() if value],
@@ -4537,13 +4712,13 @@ def build_workflow_smoke_plan(
     cleanup_paths: list[Path] = []
     if not bug_id and not issue_json:
         synthetic_record = True
-        smoke_bug_id = "BUG-000"
+        smoke_bug_id = _synthetic_smoke_bug_id()
         smoke_dir = REPO_ROOT / WORKFLOW_ROOT / "smoke"
         smoke_workflow_dir = REPO_ROOT / WORKFLOW_ROOT / smoke_bug_id
         if smoke_workflow_dir.exists():
             _remove_synthetic_smoke_workflow_dir(smoke_workflow_dir, smoke_bug_id)
         cleanup_paths.append(smoke_workflow_dir)
-        issue_path = smoke_dir / "synthetic-BUG-000.json"
+        issue_path = smoke_dir / f"synthetic-{smoke_bug_id}.json"
         record = {
             "bug_id": smoke_bug_id,
             "title": "Workflow smoke synthetic issue",
@@ -4611,6 +4786,8 @@ def build_workflow_smoke_plan(
         }
     except Exception as exc:
         blocking.append(str(exc))
+    if synthetic_record:
+        warnings.extend(_cleanup_synthetic_smoke_artifacts(list(reversed(cleanup_paths)), bug_id or "BUG-000"))
     dirty_after = _git_status_paths(REPO_ROOT)
     before_paths = {row["path"] for row in dirty_before}
     after_paths = {row["path"] for row in dirty_after}
@@ -4627,7 +4804,7 @@ def build_workflow_smoke_plan(
     if unexpected:
         blocking.append(f"workflow smoke created unexpected git-status paths: {unexpected}")
     if synthetic_record:
-        warnings.append("used isolated synthetic BUG-000 record under ignored tmp/issue_workflow")
+        warnings.append("used isolated synthetic BUG-000-compatible record under ignored tmp/issue_workflow")
     return {
         "schema_version": "aistock_issue_workflow_smoke_v1",
         "generated_at": _utc_now(),
@@ -5168,16 +5345,22 @@ def build_finish_plan(
     output_dir = REPO_ROOT / WORKFLOW_ROOT / canonical_bug_id
     pr_body_path = output_dir / "pr-body.md"
     pr_body = render_pr_body(canonical_bug_id, record, changed, validation, pr_quality, evidence, closure_ready)
-    _write_json(output_dir / "finish-plan.json", {
-        "bug_id": canonical_bug_id,
-        "changed_files": changed,
-        "selected_validation": validation,
-        "pr_quality": pr_quality,
-        "validation_evidence": evidence,
-        "closure_ready": closure_ready,
-        "code_intelligence": code_intelligence_summary,
-        "h7_code_intelligence": h7_code_intelligence,
-    })
+    finish_plan_path = output_dir / "finish-plan.json"
+    persist_finish_plan = _workflow_artifacts_enabled() or not closure_ready
+    if persist_finish_plan:
+        _write_json(finish_plan_path, {
+            "bug_id": canonical_bug_id,
+            "changed_files": changed,
+            "selected_validation": validation,
+            "pr_quality": pr_quality,
+            "validation_evidence": evidence,
+            "closure_ready": closure_ready,
+            "code_intelligence": code_intelligence_summary,
+            "h7_code_intelligence": h7_code_intelligence,
+        })
+    elif finish_plan_path.exists():
+        with contextlib.suppress(OSError):
+            finish_plan_path.unlink()
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
     _write_state(
@@ -5186,6 +5369,16 @@ def build_finish_plan(
         changed_files=changed,
         validation_evidence=evidence,
         pr_body_path=_repo_rel(pr_body_path),
+        allowed_write_scope=flow._as_list(record.get("allowed_write_scope")),
+        required_verification=validation.get("required_plans") or [],
+        verification_budget=record.get("verification_budget"),
+        context_resume_digest=_workflow_context_resume_digest(
+            {
+                "allowed_write_scope": flow._as_list(record.get("allowed_write_scope")),
+                "required_verification": validation.get("required_plans") or [],
+                "verification_budget": record.get("verification_budget"),
+            }
+        ),
         production_gates=validation.get("production_gates") or {},
         code_intelligence={
             "status": code_intelligence_summary.get("status"),
@@ -5243,8 +5436,9 @@ def build_finish_plan(
         "events_path": _repo_rel(_events_path(canonical_bug_id)),
         "artifact_metrics": {
             "pr_body": _size_and_token_estimate(pr_body_path),
-            "finish_plan": _size_and_token_estimate(output_dir / "finish-plan.json"),
+            "finish_plan": _size_and_token_estimate(finish_plan_path),
         },
+        "artifact_policy": "diagnostic_json_persisted" if persist_finish_plan else "compact_success_no_finish_plan_json",
     }
     payload["pre_pr_gate"] = _pre_pr_gate(finish=payload, validation_evidence=evidence, root=REPO_ROOT, run_lint=False)
     if not closure_ready:
@@ -6286,6 +6480,11 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     stop_conditions = ["commit task files before PR automation"] if dirty_stop else []
     if planned_only:
         stop_conditions.append("planned worktree has not been created; rerun plan with --create-worktree")
+    resume_state = {
+        **state,
+        "allowed_write_scope": state.get("allowed_write_scope") or state.get("scope") or [],
+        "required_verification": state.get("required_verification") or state.get("validation_evidence") or [],
+    }
     return {
         "schema_version": "aistock_issue_workflow_resume_v1",
         "generated_at": _utc_now(),
@@ -6300,6 +6499,7 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "task_card_md": state.get("task_card_md") or _repo_rel(_task_card_md_path(canonical_bug_id, root), root),
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
+        "context_resume_digest": _workflow_context_resume_digest(resume_state, root=root),
         "state": state,
         "recent_events": events,
         "stop_conditions": stop_conditions,

@@ -105,6 +105,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             "scripts/ci_change_classifier.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
+            "docs/codex_project_memory.md",
         ],
         repo_root=tmp_path,
     )
@@ -278,6 +279,7 @@ def test_workflow_validation_only_allows_fixed_same_task_bug_metadata_and_client
             "backend/tests/scripts/test_aistock_issue_workflow.py",
             ".codex/skills/fix-aistock-issue/SKILL.md",
             ".claude/commands/fix-aistock-issue.md",
+            "docs/codex_project_memory.md",
             bug_rel,
             allocator_rel,
         ],
@@ -314,10 +316,11 @@ def test_workflow_client_instruction_cleanup_change_skips_backend_matrix(tmp_pat
         "backend/tests/scripts/test_ci_change_classifier.py",
         ".codex/skills/aistock-docs-handoff/SKILL.md",
         ".codex/skills/aistock-task-router/SKILL.md",
-        ".codex/skills/fix-aistock-issue/SKILL.md",
-        ".claude/commands/aistock-docs-handoff.md",
-        ".claude/commands/aistock-task-router.md",
-        ".claude/commands/fix-aistock-issue.md",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/aistock-docs-handoff.md",
+            ".claude/commands/aistock-task-router.md",
+            ".claude/commands/fix-aistock-issue.md",
+            "docs/codex_project_memory.md",
     ]
     _write_bug(
         bug,
@@ -378,6 +381,32 @@ def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) ->
     assert payload["classification"] == "full_ci_required"
     assert payload["backend_required"] is True
     assert payload["workflow_validation_required"] is False
+
+
+def test_obsolete_surface_removal_skips_backend_matrix_and_defers_nightly(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260703_BUG-580-remove-obsolete-surface.json"
+    _write_bug(tmp_path / bug_rel, status="open", module="strategy_package")
+
+    payload = classifier.classify_changed_files(
+        [
+            "frontend/src/app/strategy-package-governance/page.tsx",
+            "frontend/src/lib/navigation/nav-groups.ts",
+            "frontend/tests/strategy-package-governance/governance.spec.ts",
+            "backend/routers/strategy_packages.py",
+            "backend/tests/strategy_package/test_governance_eligibility.py",
+            "tests/aistock_validation/catalog/ui_targets.yaml",
+            "tests/aistock_validation/catalog/test_plans.yaml",
+            "noxfile.py",
+            bug_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "obsolete_surface_removal"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["obsolete_surface_removal"] is True
+    assert payload["nightly_deferred_verification"]["required"] is True
 
 
 def test_github_workflow_wires_workflow_validation_fast_lane() -> None:

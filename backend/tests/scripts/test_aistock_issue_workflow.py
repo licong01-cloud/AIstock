@@ -643,7 +643,9 @@ def test_finish_plan_selects_validation_and_requires_evidence(
     assert ready["workflow_gate"] == "ready_for_pr"
     assert "l0" in ready["required_verification"]
     assert "artifact_metrics" not in ready
+    assert ready["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert (isolated_workflow_root / ready["pr_body_path"]).exists()
+    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
 
 
 def test_finish_plan_only_can_draft_pr_body_without_evidence(
@@ -671,6 +673,7 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     )
 
     assert payload["closure_ready"] is True
+    assert payload["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     pr_body = isolated_workflow_root / payload["pr_body_path"]
@@ -678,6 +681,30 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     assert "Code intelligence" in pr_body_text
     assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body_text
     assert "missing - run required validation" in pr_body_text
+    assert not (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
+
+
+def test_finish_failure_persists_diagnostic_json(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_finish_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=["scripts/aistock_issue_workflow.py"],
+        base="origin/main",
+        head="HEAD",
+        validation_evidence=[],
+        plan_only=False,
+        allow_missing_evidence=False,
+    )
+
+    assert payload["workflow_gate"] == "validation_evidence_missing"
+    assert payload["artifact_policy"] == "diagnostic_json_persisted"
+    assert (isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").exists()
 
 
 def test_triage_p0_groups_open_issues_and_flags_missing_linkage(
@@ -1068,6 +1095,7 @@ def test_workflow_smoke_uses_synthetic_issue_and_no_unexpected_dirty_paths(
     assert payload["fast_path"]["task_tier"] == "T1"
     assert payload["start"]["worktree_plan"]["dry_run"] is True
     assert payload["finish"]["workflow_gate"] == "ready_for_pr"
+    assert payload["finish"]["artifact_policy"] == "compact_success_no_finish_plan_json"
     assert payload["postmortem_preview"]["stale_pr_check"] == "skipped_in_smoke_to_avoid_external_github_reads"
     assert not list((isolated_workflow_root / "tests" / "aistock_validation" / "bugs").glob("*BUG-000*.json"))
 
@@ -2836,6 +2864,10 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     assert resume["state"]["context_pack_md"].endswith("context-pack.md")
     assert resume["task_card_md"].endswith("task-card.md")
     assert resume["state"]["task_card_json"].endswith("task-card.json")
+    digest = resume["context_resume_digest"]
+    assert digest["schema_version"] == "aistock_workflow_context_resume_digest_v1"
+    assert "standards README" in digest["reuse_policy"][1]
+    assert digest["exploration_command_budget"]["soft_limit"] == 40
     assert resume["worktree"] is None
     assert "run --bug-id BUG-199 --mode plan --create-worktree" in resume["next_command"]
 
@@ -7026,6 +7058,46 @@ def test_submit_bug_does_not_infer_ui_hints_from_cleanup_route_wording(
     efficiency = payload["record"]["workflow_efficiency_recommendations"]
     assert efficiency["cleanup_fast_candidate"] is True
     assert any("cleanup-fast" in item for item in efficiency["recommendations"])
+
+
+def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allocator = workflow.BUGS_ROOT / ".bug_id_allocator.json"
+    _write_json(allocator, {"schema_version": "aistock_bug_id_allocator_v1", "last_allocated": 581})
+    monkeypatch.setattr(workflow, "_validate_registry_apply_target", lambda root: {"blocking": [], "warnings": [], "target_root": str(root)})
+
+    payload = workflow.build_submit_bug_plan(
+        title="Issue workflow over-validates bug fixes instead of using risk-based verification budgets",
+        module="validation_llm_pipeline",
+        severity="P1",
+        description="Workflow budget should defer broad UI/API/business-flow validation to nightly.",
+        expected="No UI intake is inferred; verification_budget is recorded for compact PR validation.",
+        actual="The word issue previously looked like a route and broad validation was encouraged.",
+        reproduce_command="n/a",
+        evidence_refs=[],
+        changed_files=[],
+        plan_key=None,
+        nox_session=None,
+        candidate_type="bug",
+        bug_id="BUG-582",
+        github_issue_number="1841",
+        github_issue_url="https://github.com/licong01-cloud/AIstock/issues/1841",
+        create_github=False,
+        apply=False,
+        create_registry_worktree=False,
+        registry_pr_only=False,
+        dry_run=True,
+    )
+
+    assert payload["ui_intake_hints"] is None
+    record = payload["record"]
+    assert "ui_intake_hints" not in record
+    budget = record["verification_budget"]
+    assert budget["budget"] == "standard"
+    assert budget["deferred_nightly_verification"]["required"] is True
+    assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
 
 
 def test_postmortem_reports_queue_time_from_bug_created_at(

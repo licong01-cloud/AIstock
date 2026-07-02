@@ -68,6 +68,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "configs/validation/silent_degradation_audit.yaml",
     "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
     "docs/architecture/aistock_issue_workflow_efficiency_hardening_design_v2_2_20260529.md",
+    "docs/codex_project_memory.md",
     "docs/standards/aistock_issue_workflow_quickstart.md",
     "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
     "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
@@ -116,6 +117,14 @@ BACKEND_SESSION_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rl_execution_smoke", ("backend/services/rl_execution/**", "backend/routers/rl_execution.py", "backend/tests/test_rl_execution_module_visibility.py")),
     ("validation_center_backend", ("backend/services/validation/**", "backend/routers/validation.py", "backend/tests/test_validation*.py", "backend/tests/scripts/test_*validation*.py", "tests/aistock_validation/catalog/**")),
 )
+OBSOLETE_SURFACE_REMOVAL_PREFIXES = (
+    "frontend/src/app/",
+    "frontend/src/lib/",
+    "frontend/tests/",
+    "backend/tests/",
+    "tests/",
+)
+OBSOLETE_SURFACE_REMOVAL_FILES = {"noxfile.py"}
 
 
 def _normalize_path(value: str) -> str:
@@ -174,6 +183,36 @@ def _selected_backend_sessions(paths: list[str]) -> list[str]:
     if selected:
         return [session for session in BACKEND_MATRIX_SESSIONS if session in selected]
     return list(BACKEND_MATRIX_SESSIONS)
+
+
+def _is_obsolete_surface_removal_candidate(paths: list[str]) -> bool:
+    if not paths:
+        return False
+    has_removed_surface = any(
+        path.startswith("frontend/src/app/")
+        or path.startswith("frontend/tests/")
+        or path.startswith("tests/aistock_validation/catalog/")
+        for path in paths
+    )
+    if not has_removed_surface:
+        return False
+    for path in paths:
+        if path.startswith(BUG_REGISTRY_PREFIX):
+            continue
+        if path in OBSOLETE_SURFACE_REMOVAL_FILES:
+            continue
+        if path.startswith(OBSOLETE_SURFACE_REMOVAL_PREFIXES):
+            continue
+        if path in {
+            "backend/mcp/tool_manifest.py",
+            "backend/mcp/modules/strategy_packages.py",
+            "tests/mcp/test_mcp_tool_manifest.py",
+        }:
+            continue
+        if path.startswith("backend/routers/"):
+            continue
+        return False
+    return True
 
 
 def _is_bug_registry_metadata_path(path: str) -> bool:
@@ -260,6 +299,7 @@ def classify_changed_files(
     docs_controlled_only = bool(normalized) and all(_is_docs_controlled_path(path) for path in normalized)
     docs_controlled_required = any(_is_docs_controlled_path(path) for path in normalized)
     docs_only = bool(normalized) and all(_is_docs_path(path) for path in normalized)
+    obsolete_surface_removal = _is_obsolete_surface_removal_candidate(normalized)
 
     if not normalized:
         reasons.append("no changed files detected; keep full backend CI")
@@ -321,8 +361,10 @@ def classify_changed_files(
         reasons.append("documentation files changed but include standards or agent instructions; keep normal guardrails")
     if prompt_evaluation_files:
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
+    if obsolete_surface_removal:
+        reasons.append("obsolete surface removal uses targeted static/catalog/API-contract validation; defer full business-flow suites to nightly")
 
-    backend_required = not (close_sync_metadata_only or workflow_validation_only or docs_lite_only)
+    backend_required = not (close_sync_metadata_only or workflow_validation_only or docs_lite_only or obsolete_surface_removal)
     backend_sessions = _selected_backend_sessions(normalized) if backend_required else []
     classification = "full_ci_required"
     if docs_lite_only:
@@ -333,6 +375,8 @@ def classify_changed_files(
         classification = "workflow_validation_only"
     elif docs_controlled_only:
         classification = "docs_controlled"
+    elif obsolete_surface_removal:
+        classification = "obsolete_surface_removal"
     return {
         "schema_version": "aistock_ci_change_classifier_v1",
         "changed_files": normalized,
@@ -356,6 +400,13 @@ def classify_changed_files(
         "prompt_evaluation_required": bool(prompt_evaluation_files),
         "backend_required": backend_required,
         "backend_sessions": backend_sessions,
+        "obsolete_surface_removal": obsolete_surface_removal,
+        "nightly_deferred_verification": {
+            "required": obsolete_surface_removal,
+            "reason": "full UI/API/business-flow regression is deduplicated in nightly for obsolete surface removal"
+            if obsolete_surface_removal
+            else None,
+        },
         "static_gate_required": not docs_lite_only,
         "pr_quality_required": True,
         "classification": classification,
