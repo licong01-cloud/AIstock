@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+import pickle
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -36,6 +39,20 @@ class _ForbiddenConn:
 def _put(store: LocalPackageAssetStore, payload: bytes, *, kind: str) -> tuple[str, str]:
     blob = store.put(payload, kind=kind)
     return blob.uri, blob.sha256
+
+
+def _pickled_model_instance_payload(tmp_path: Path) -> bytes:
+    module_root = tmp_path / "pickle_model_module"
+    module_root.mkdir()
+    (module_root / "model.py").write_text("class LSTM_10D_hs64_d02:\n    pass\n", encoding="utf-8")
+    sys.path.insert(0, str(module_root))
+    try:
+        sys.modules.pop("model", None)
+        module = importlib.import_module("model")
+        return pickle.dumps(module.LSTM_10D_hs64_d02(), protocol=4)
+    finally:
+        sys.modules.pop("model", None)
+        sys.path.remove(str(module_root))
 
 
 def _frozen_manifest(
@@ -287,7 +304,7 @@ def test_preflight_rejects_package_asset_params_with_missing_pickled_model_code(
     store = LocalPackageAssetStore(tmp_path / "asset_store")
     manifest = _frozen_manifest(
         store,
-        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+        model_payload=_pickled_model_instance_payload(tmp_path),
     )
     resolver = QEExperimentRuntimeAssetResolver(
         conn_factory=lambda: _ForbiddenConn(),
@@ -310,6 +327,7 @@ def test_preflight_rejects_package_asset_params_with_missing_pickled_model_code(
     assert context["reason_code"] == "strategy_package_model_code_missing"
     assert context["missing_modules"] == ["model"]
     assert context["missing_relative_paths"] == ["model.py"]
+    assert context["referenced_classes"] == ["model.LSTM_10D_hs64_d02"]
 
     with pytest.raises(LiveInferencePreflightError) as excinfo:
         resolver.require_preflight_or_raise(
@@ -326,7 +344,7 @@ def test_prepare_workspace_rejects_package_asset_params_with_missing_pickled_mod
     store = LocalPackageAssetStore(tmp_path / "asset_store")
     manifest = _frozen_manifest(
         store,
-        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+        model_payload=_pickled_model_instance_payload(tmp_path),
     )
     resolver = QEExperimentRuntimeAssetResolver(
         conn_factory=lambda: _ForbiddenConn(),
@@ -356,7 +374,7 @@ def test_package_asset_params_with_model_code_materialize_successfully(tmp_path:
     model_py = b"class LSTM_10D_hs64_d02:\n    pass\nmodel_cls = LSTM_10D_hs64_d02\n"
     manifest = _frozen_manifest(
         store,
-        model_payload=b"cmodel\nLSTM_10D_hs64_d02\n.",
+        model_payload=_pickled_model_instance_payload(tmp_path),
         model_code_files={"model.py": model_py},
     )
     resolver = QEExperimentRuntimeAssetResolver(

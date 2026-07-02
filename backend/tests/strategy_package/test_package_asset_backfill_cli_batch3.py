@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -246,7 +247,12 @@ def test_build_report_dry_run_apply_and_apply_blocked() -> None:
     applied = cli.build_report(service, mode="apply", limit=7, target={}, operator="unit")
 
     assert dry["mode"] == "dry_run"
-    assert dry["filter"] == {"package_ids": ["pkg_ok"], "package_id_prefix": "pkg_"}
+    assert dry["filter"] == {
+        "package_ids": ["pkg_ok"],
+        "package_id_prefix": "pkg_",
+        "model_code_repair_preview": False,
+        "model_weight_backfilled_date": None,
+    }
     assert service.build_kwargs["limit"] == 7
     assert applied["mode"] == "apply"
     assert service.apply_calls == ["unit"]
@@ -267,6 +273,90 @@ def test_build_report_dry_run_apply_and_apply_blocked() -> None:
 
     assert blocked["mode"] == "apply_blocked"
     assert blocked["apply_blocked_reason"] == "unrecoverable_packages_present"
+
+
+def test_model_weight_backfilled_date_query_is_readonly(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {}
+
+    class Cursor:
+        def __enter__(self):  # noqa: ANN201
+            return self
+
+        def __exit__(self, *_args):  # noqa: ANN001, ANN201
+            return None
+
+        def execute(self, sql, params):  # noqa: ANN001, ANN201
+            calls["sql"] = sql
+            calls["params"] = params
+
+        def fetchall(self):  # noqa: ANN201
+            return [("pkg_a",), ("pkg_b",)]
+
+    class Conn:
+        def cursor(self):  # noqa: ANN201
+            return Cursor()
+
+    @contextmanager
+    def fake_conn_factory(**kwargs):  # noqa: ANN001
+        calls["readonly"] = kwargs.get("readonly")
+        yield Conn()
+
+    monkeypatch.setattr(cli, "_env_conn_factory", fake_conn_factory)  # noqa: SLF001
+
+    package_ids = cli._package_ids_from_model_weight_backfilled_date(  # noqa: SLF001
+        env_file=None,
+        target_db=cli.TARGET_PROD,
+        date_text="2026-07-01",
+    )
+
+    assert package_ids == ["pkg_a", "pkg_b"]
+    assert calls["readonly"] is True
+    assert calls["params"] == (date(2026, 7, 1), date(2026, 7, 2))
+    assert "model_weight" in calls["sql"]
+
+
+def test_model_code_repair_preview_summarizes_added_assets() -> None:
+    plan = PackageAssetBackfillPlan(
+        items=[
+            PackageAssetBackfillItem(
+                package_id="pkg_fix",
+                package_name="fix",
+                alpha_mode="single_alpha",
+                old_manifest_sha256="a" * 64,
+                new_manifest_sha256="b" * 64,
+                status=STATUS_PLANNED_FREEZE,
+                asset_count=3,
+                context={
+                    "model_code_repair": {
+                        "model_code_asset_count_to_add": 1,
+                        "model_code_assets_to_add": [
+                            {
+                                "model_id": "model_1",
+                                "relative_path": "model.py",
+                                "sha256": "c" * 64,
+                                "source_uri": "unit://workspace/model.py",
+                            }
+                        ],
+                    }
+                },
+            )
+        ]
+    )
+
+    report = cli.build_report(
+        FakeBackfillService(plan),
+        mode="dry_run",
+        limit=13,
+        operator="unit",
+        model_code_repair_preview=True,
+    )
+
+    preview = report["model_code_repair_preview"]
+    assert report["filter"]["model_code_repair_preview"] is True
+    assert preview["dry_run_only"] is True
+    assert preview["impacted_package_count"] == 1
+    assert preview["impacted_packages"][0]["package_id"] == "pkg_fix"
+    assert preview["impacted_packages"][0]["model_code_assets_to_add"][0]["relative_path"] == "model.py"
 
 
 def test_parse_args_and_main_write_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

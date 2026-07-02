@@ -1,5 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import importlib
+import pickle
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,6 +61,20 @@ class ShaOverrideStore(PackageAssetStore):
 def _manifest(label: str = "complete"):
     base = make_manifest()
     return base.model_copy(update={"package_id": f"pkg_{label}", "manifest_sha256": None})
+
+
+def _pickled_model_instance_payload(tmp_path: Path) -> bytes:
+    module_root = tmp_path / "pickle_model_module"
+    module_root.mkdir()
+    (module_root / "model.py").write_text("class LSTM_10D_hs64_d02:\n    pass\n", encoding="utf-8")
+    sys.path.insert(0, str(module_root))
+    try:
+        sys.modules.pop("model", None)
+        module = importlib.import_module("model")
+        return pickle.dumps(module.LSTM_10D_hs64_d02(), protocol=4)
+    finally:
+        sys.modules.pop("model", None)
+        sys.path.remove(str(module_root))
 
 
 def _freezer(
@@ -253,6 +270,69 @@ def test_model_code_freeze_and_runtime_materializes_next_to_params(tmp_path: Pat
 
     assert (prepared.model_params_path.parent / "model.py").read_bytes() == model_py
     assert (prepared.model_params_path.parent / "helper.py").read_bytes() == helper_py
+
+
+def test_pickled_local_model_freezes_code_without_pt_model_uri(tmp_path: Path) -> None:
+    model_py = b"from helper import scale\nclass LSTM_10D_hs64_d02:\n    pass\n"
+    helper_py = b"def scale(value):\n    return value\n"
+    freezer = _freezer(
+        tmp_path,
+        conf_bytes=b"task: {}\n",
+        model_params=_pickled_model_instance_payload(tmp_path),
+        model_code_files={"model.py": model_py, "helper.py": helper_py},
+    )
+
+    frozen = freezer.freeze_manifest_assets(_manifest("pickle_model_code"))
+    manifest = frozen.manifest
+    model = manifest.model_asset
+    assert isinstance(model, ModelAsset)
+    assert model.model_code_required is True
+    assert sorted(asset.relative_path for asset in model.model_code_assets) == ["helper.py", "model.py"]
+    assert sum(row.asset_type == StrategyPackageAssetType.MODEL_CODE for row in frozen.assets) == 2
+
+    resolver = QEExperimentRuntimeAssetResolver(cache_root=tmp_path / "runtime_pickle", asset_store=freezer.asset_store)
+    source = resolver.load_source_for_strategy_package(
+        source_type=manifest.source.source_type.value,
+        source_id="missing",
+        loop_id="missing",
+        run_id="missing",
+        manifest=manifest,
+        package_id=manifest.package_id,
+    )
+    prepared = resolver.prepare_workspace(
+        package_id=manifest.package_id,
+        manifest_sha256=manifest.manifest_sha256,
+        source=source,
+    )
+
+    assert (prepared.model_params_path.parent / "model.py").read_bytes() == model_py
+    assert (prepared.model_params_path.parent / "helper.py").read_bytes() == helper_py
+    sys.path.insert(0, str(prepared.model_params_path.parent))
+    try:
+        sys.modules.pop("model", None)
+        with prepared.model_params_path.open("rb") as handle:
+            loaded = pickle.load(handle)  # noqa: S301 - unit fixture asserts self-contained trusted pickle payload.
+    finally:
+        sys.modules.pop("model", None)
+        sys.path.remove(str(prepared.model_params_path.parent))
+    assert type(loaded).__name__ == "LSTM_10D_hs64_d02"
+
+
+def test_pickled_local_model_missing_source_code_fails_closed(tmp_path: Path) -> None:
+    freezer = _freezer(
+        tmp_path,
+        conf_bytes=b"task: {}\n",
+        model_params=_pickled_model_instance_payload(tmp_path),
+        model_code_files={},
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        freezer.freeze_manifest_assets(_manifest("pickle_model_code_missing"))
+
+    context = getattr(excinfo.value, "context", {})
+    assert context["reason_code"] == "strategy_package_model_code_missing"
+    assert context["relative_path"] == "model.py"
+    assert context["module_name"] == "model"
 
 
 def test_custom_model_missing_code_fails_closed(tmp_path: Path) -> None:

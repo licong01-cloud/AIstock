@@ -21,7 +21,6 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
-import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
@@ -47,7 +46,7 @@ from backend.services.trading_core.errors import (
 )
 
 from .models import FactorAsset, ModelAsset, ModelCodeAsset, StrategyPackageManifest
-from .package_asset_freeze import manifest_has_frozen_runtime_assets
+from .package_asset_freeze import manifest_has_frozen_runtime_assets, pickled_model_code_references_from_params_bytes
 from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
 from .runtime_schema import (
     ALPHA158_SCHEMA_VERSION,
@@ -427,60 +426,6 @@ def _safe_model_code_relpath(asset: ModelCodeAsset) -> Path:
 _LOCAL_PICKLED_MODEL_MODULES = frozenset({"model"})
 
 
-def _pickle_payloads_from_params(model_params_path: Path) -> list[bytes]:
-    data = model_params_path.read_bytes()
-    payloads = [data]
-    try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            for name in archive.namelist():
-                if name.endswith(".pkl"):
-                    payloads.append(archive.read(name))
-    except zipfile.BadZipFile:
-        pass
-    return payloads
-
-
-def _pickle_arg_text(value: Any) -> str:
-    text = str(value or "").strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
-        text = text[1:-1]
-    return text
-
-
-def _pickle_payload_references_module(payload: bytes, module_names: set[str]) -> set[str]:
-    import pickletools
-
-    found: set[str] = set()
-    stack: list[str] = []
-    try:
-        for opcode, arg, _pos in pickletools.genops(payload):
-            name = opcode.name
-            if name in {"STRING", "BINSTRING", "SHORT_BINSTRING", "UNICODE", "BINUNICODE", "SHORT_BINUNICODE"}:
-                stack.append(_pickle_arg_text(arg))
-                continue
-            if name == "GLOBAL":
-                module = _pickle_arg_text(arg).split(" ", 1)[0]
-                if module in module_names:
-                    found.add(module)
-                continue
-            if name == "STACK_GLOBAL" and len(stack) >= 2:
-                _class_name = stack.pop()
-                module = stack.pop()
-                if module in module_names:
-                    found.add(module)
-    except Exception:
-        for module in module_names:
-            encoded = module.encode("utf-8")
-            if (
-                b"c" + encoded + b"\n" in payload
-                or bytes([0x8C, len(encoded)]) + encoded in payload
-                or b"X" + len(encoded).to_bytes(4, "little") + encoded in payload
-                or b"U" + bytes([len(encoded)]) + encoded in payload
-            ):
-                found.add(module)
-    return found
-
-
 def _model_code_module_exists(module_name: str, roots: list[Path]) -> bool:
     relative_path = Path(*module_name.split(".")) if "." in module_name else Path(f"{module_name}.py")
     if "." in module_name:
@@ -502,13 +447,16 @@ def _require_model_code_for_pickled_local_modules(
 ) -> list[str]:
     if not model_params_path.exists() or not model_params_path.is_file():
         return []
-    referenced: set[str] = set()
-    for payload in _pickle_payloads_from_params(model_params_path):
-        referenced.update(_pickle_payload_references_module(payload, set(_LOCAL_PICKLED_MODEL_MODULES)))
+    referenced_refs = pickled_model_code_references_from_params_bytes(
+        model_params_path.read_bytes(),
+        _LOCAL_PICKLED_MODEL_MODULES,
+    )
+    referenced = {ref.module_name for ref in referenced_refs}
     if not referenced:
         return []
     missing = [module for module in sorted(referenced) if not _model_code_module_exists(module, model_code_roots)]
     if missing:
+        missing_set = set(missing)
         raise DataUnavailableError(
             "StrategyPackage model params.pkl references local model code that is missing from the runtime workspace",
             context={
@@ -518,6 +466,10 @@ def _require_model_code_for_pickled_local_modules(
                 "model_params_path": str(model_params_path),
                 "missing_modules": missing,
                 "missing_relative_paths": [f"{module}.py" for module in missing],
+                "referenced_classes": [ref.qualified_name for ref in referenced_refs],
+                "missing_referenced_classes": [
+                    ref.qualified_name for ref in referenced_refs if ref.module_name in missing_set
+                ],
                 "model_code_roots": [str(path) for path in model_code_roots],
                 "source_workspace_type": source_workspace_type,
                 "phase": phase,

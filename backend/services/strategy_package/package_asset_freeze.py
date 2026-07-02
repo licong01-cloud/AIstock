@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import tarfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import Thread
@@ -1062,7 +1063,11 @@ class PackageAssetFreezeService:
                 logical_name=logical_name,
                 source_uri=model.source_uri,
             )
-            code_required, code_assets, code_records = self._freeze_model_code_assets(frozen, manifest)
+            code_required, code_assets, code_records = self._freeze_model_code_assets(
+                frozen,
+                manifest,
+                model_weight_data=data,
+            )
             return (
                 frozen.model_copy(
                     update={
@@ -1097,7 +1102,11 @@ class PackageAssetFreezeService:
             logical_name=logical_name,
             source_uri=source.source_uri,
         )
-        code_required, code_assets, code_records = self._freeze_model_code_assets(frozen, manifest)
+        code_required, code_assets, code_records = self._freeze_model_code_assets(
+            frozen,
+            manifest,
+            model_weight_data=source.data,
+        )
         return (
             frozen.model_copy(
                 update={
@@ -1112,28 +1121,46 @@ class PackageAssetFreezeService:
         self,
         model: ModelAsset,
         manifest: StrategyPackageManifest,
+        *,
+        model_weight_data: bytes,
     ) -> tuple[bool, list[ModelCodeAsset], list[StrategyPackageAssetRecord]]:
         existing = list(model.model_code_assets or [])
+        conf_missing: DataUnavailableError | None = None
+        conf_module_name: str | None = None
         try:
             conf_source = self._conf_yaml_bytes(manifest)
             conf = load_conf_yaml_bytes(conf_source.data, source_uri=conf_source.source_uri)
-        except DataUnavailableError:
+            conf_module_name = model_code_module_from_pt_uri(pt_model_uri_from_conf(conf))
+        except DataUnavailableError as exc:
+            conf_missing = exc
+
+        module_names: list[str] = []
+        if conf_module_name:
+            module_names.append(conf_module_name)
+        pickle_refs = pickled_model_code_references_from_params_bytes(model_weight_data)
+        for ref in pickle_refs:
+            if ref.module_name not in module_names:
+                module_names.append(ref.module_name)
+
+        if not module_names:
             if existing:
                 return model.model_code_required, existing, [
                     self._record_for_existing_model_code_asset(asset, manifest=manifest) for asset in existing
                 ]
             if _is_multi_alpha_parent_manifest(manifest) and not model.model_code_required:
                 return False, [], []
-            raise
-        module_name = model_code_module_from_pt_uri(pt_model_uri_from_conf(conf))
-        if module_name is None:
-            if existing:
-                return model.model_code_required, existing, [
-                    self._record_for_existing_model_code_asset(asset, manifest=manifest) for asset in existing
-                ]
+            if conf_missing is not None:
+                raise conf_missing
             return False, [], []
 
-        discovered = self._discover_model_code_sources(manifest, root_module=module_name)
+        discovered: list[dict[str, Any]] = []
+        seen_sources: set[str] = set()
+        for module_name in module_names:
+            for source in self._discover_model_code_sources(manifest, root_module=module_name):
+                if source["relative_path"] in seen_sources:
+                    continue
+                seen_sources.add(source["relative_path"])
+                discovered.append(source)
         existing_by_path = {asset.relative_path: asset for asset in existing}
         assets: list[ModelCodeAsset] = []
         records: list[StrategyPackageAssetRecord] = []
@@ -1784,6 +1811,142 @@ _THIRD_PARTY_MODULE_PREFIXES = {
     "xgboost",
 }
 _STDLIB_MODULE_NAMES = set(getattr(sys, "stdlib_module_names", ()))
+_LOCAL_PICKLED_MODEL_MODULES = frozenset({"model"})
+
+
+@dataclass(frozen=True, order=True)
+class PickledModelCodeReference:
+    module_name: str
+    class_name: str | None = None
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.module_name}.{self.class_name}" if self.class_name else self.module_name
+
+
+def pickled_model_code_references_from_params_bytes(
+    data: bytes,
+    module_names: Iterable[str] | None = None,
+) -> list[PickledModelCodeReference]:
+    """Return local model-code references embedded in pickle/torch params bytes."""
+
+    modules = {str(item).strip() for item in (module_names or _LOCAL_PICKLED_MODEL_MODULES) if str(item).strip()}
+    if not data or not modules:
+        return []
+    found: dict[tuple[str, str | None], PickledModelCodeReference] = {}
+    for payload in _pickle_payloads_from_params_bytes(data):
+        for ref in _pickle_payload_model_refs(payload, modules):
+            found[(ref.module_name, ref.class_name)] = ref
+    return sorted(found.values(), key=lambda item: (item.module_name, item.class_name or ""))
+
+
+def _pickle_payloads_from_params_bytes(data: bytes) -> list[bytes]:
+    payloads = [bytes(data)]
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if name.endswith(".pkl"):
+                    payloads.append(archive.read(name))
+    except zipfile.BadZipFile:
+        pass
+    return payloads
+
+
+def _pickle_arg_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1]
+    return text
+
+
+def _pickle_payload_model_refs(
+    payload: bytes,
+    module_names: set[str],
+) -> list[PickledModelCodeReference]:
+    import pickletools
+
+    found: dict[tuple[str, str | None], PickledModelCodeReference] = {}
+    memo: dict[int, Any] = {}
+    stack: list[Any] = []
+    mark = object()
+    try:
+        for opcode, arg, _pos in pickletools.genops(payload):
+            name = opcode.name
+            if name in {"STRING", "BINSTRING", "SHORT_BINSTRING", "UNICODE", "BINUNICODE", "SHORT_BINUNICODE"}:
+                stack.append(_pickle_arg_text(arg))
+                continue
+            if name == "GLOBAL":
+                parts = _pickle_arg_text(arg).split(" ", 1)
+                module = parts[0] if parts else ""
+                class_name = parts[1] if len(parts) > 1 and parts[1] else None
+                _record_pickle_ref(found, module, class_name, module_names)
+                stack.append(f"{module}.{class_name}" if class_name else module)
+                continue
+            if name == "STACK_GLOBAL":
+                class_name = stack.pop() if stack else None
+                module = stack.pop() if stack else None
+                module_text = module if isinstance(module, str) else ""
+                class_text = class_name if isinstance(class_name, str) else None
+                _record_pickle_ref(found, module_text, class_text, module_names)
+                stack.append(f"{module_text}.{class_text}" if class_text else module_text)
+                continue
+            if name == "MEMOIZE":
+                if stack:
+                    memo[len(memo)] = stack[-1]
+                continue
+            if name in {"BINPUT", "LONG_BINPUT", "PUT"}:
+                if stack:
+                    memo[int(arg)] = stack[-1]
+                continue
+            if name in {"BINGET", "LONG_BINGET", "GET"}:
+                stack.append(memo.get(int(arg)))
+                continue
+            if name == "MARK":
+                stack.append(mark)
+                continue
+            if name == "POP":
+                if stack:
+                    stack.pop()
+                continue
+            if name == "POP_MARK":
+                while stack and stack[-1] is not mark:
+                    stack.pop()
+                if stack and stack[-1] is mark:
+                    stack.pop()
+                continue
+        return sorted(found.values(), key=lambda item: (item.module_name, item.class_name or ""))
+    except Exception:
+        return _fallback_pickle_payload_model_refs(payload, module_names)
+
+
+def _record_pickle_ref(
+    found: dict[tuple[str, str | None], PickledModelCodeReference],
+    module: str,
+    class_name: str | None,
+    module_names: set[str],
+) -> None:
+    module_text = str(module or "").strip()
+    if module_text not in module_names:
+        return
+    class_text = str(class_name or "").strip() or None
+    found[(module_text, class_text)] = PickledModelCodeReference(module_text, class_text)
+
+
+def _fallback_pickle_payload_model_refs(
+    payload: bytes,
+    module_names: set[str],
+) -> list[PickledModelCodeReference]:
+    found: dict[tuple[str, str | None], PickledModelCodeReference] = {}
+    for module in module_names:
+        encoded = module.encode("utf-8")
+        if (
+            b"c" + encoded + b"\n" in payload
+            or bytes([0x8C, len(encoded)]) + encoded in payload
+            or b"X" + len(encoded).to_bytes(4, "little") + encoded in payload
+            or b"U" + bytes([len(encoded)]) + encoded in payload
+        ):
+            _record_pickle_ref(found, module, None, module_names)
+    return sorted(found.values(), key=lambda item: (item.module_name, item.class_name or ""))
 
 
 def _module_relpath(module_name: str) -> str:
