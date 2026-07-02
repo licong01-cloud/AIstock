@@ -1,0 +1,70 @@
+{
+  "actual": "RCA verified 2026-07-02: SimulationLifecycleScheduler.run_once() only catches DataUnavailableError and RuntimeConfigInvalidError at the per-binding loop. A LiveInferencePreflightError from selection/preflight (strategy_package_model_code_missing for pkg_378...) escaped the per-binding boundary, aborted the whole tick, skipped later eligible MiniQMT/LocalSim bindings, and only landed in background last_result/logs without durable simulation_daily_run failure evidence. Fix must isolate non-fatal per-binding exceptions, persist durable pre-run failure with loud reason/context, continue later bindings, preserve raise_on_error/system-exception semantics, and expose true lifecycle scheduler status fields.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260702_BUG-574-simulationlifecyclescheduler-run-once-aborts-entire-tick-on-non-dataunav.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-574",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T07:28:55.176698Z",
+  "description": "RCA verified 2026-07-02: SimulationLifecycleScheduler.run_once() only catches DataUnavailableError and RuntimeConfigInvalidError at the per-binding loop. A LiveInferencePreflightError from selection/preflight (strategy_package_model_code_missing for pkg_378...) escaped the per-binding boundary, aborted the whole tick, skipped later eligible MiniQMT/LocalSim bindings, and only landed in background last_result/logs without durable simulation_daily_run failure evidence. Fix must isolate non-fatal per-binding exceptions, persist durable pre-run failure with loud reason/context, continue later bindings, preserve raise_on_error/system-exception semantics, and expose true lifecycle scheduler status fields.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-da8986c555ec",
+      "timestamp": "2026-07-02T07:28:55.176693Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-02T07:28:55.176698Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1813,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1813",
+  "last_seen_at": "2026-07-02T07:28:55.176698Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "SimulationLifecycleScheduler run_once aborts entire tick on non-DataUnavailable per-binding exception; one bad binding starves all bindings",
+  "trigger_condition": {
+    "fingerprint": "da8986c555ecf7d9cdf2a8ab",
+    "source_event_id": "FE-20260702-da8986c555ec"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
