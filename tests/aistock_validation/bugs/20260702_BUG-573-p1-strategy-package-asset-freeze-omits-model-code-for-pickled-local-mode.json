@@ -1,0 +1,83 @@
+{
+  "actual": "Backfilled packages have model_code_required=null and model_code_assets=[] while params.pkl references local model classes; runtime workspace lacks model/model.py and inference fails later in WSL pickle.load AttributeError.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/package_asset_freeze.py",
+    "backend/services/strategy_package/package_asset_backfill.py",
+    "scripts/strategy_package_asset_backfill.py",
+    "tests/aistock_validation/bugs/20260702_BUG-573-p1-strategy-package-asset-freeze-omits-model-code-for-pickled-local-mode.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/strategy_package/test_runtime_package_assets_batch2.py",
+    "backend/tests/strategy_package/test_freeze_completeness_build_gate.py",
+    "backend/tests/strategy_package/test_package_asset_backfill_batch3.py",
+    "backend/tests/strategy_package/test_package_asset_backfill_cli_batch3.py",
+    "docs/handoff/BUG-573-strategy-package-model-code-freeze-dry-run.md",
+    "docs/handoff/miniqmt_prerun_multifailure_wsl_qe_readonly_rootcause_2026-07-02.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-573",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T06:12:21.650127Z",
+  "description": "Backfilled packages have model_code_required=null and model_code_assets=[] while params.pkl references local model classes; runtime workspace lacks model/model.py and inference fails later in WSL pickle.load AttributeError.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-928fccbfde23",
+      "timestamp": "2026-07-02T06:12:21.650123Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_worktrees\\miniqmt-prerun-multifailure-readonly-20260702\\docs\\handoff\\miniqmt_prerun_multifailure_wsl_qe_readonly_rootcause_2026-07-02.md"
+  ],
+  "expected": "StrategyPackage freeze/backfill must include required model_code assets whenever frozen model_weight pickles reference local model namespace classes; prepare_workspace must loud fail strategy_package_model_code_missing before WSL subprocess if code is missing; affected package repair tool must default to dry-run and require explicit apply gates.",
+  "first_seen_at": "2026-07-02T06:12:21.650127Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1811,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1811",
+  "last_seen_at": "2026-07-02T06:12:21.650127Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "RCA: docs/handoff/miniqmt_prerun_multifailure_wsl_qe_readonly_rootcause_2026-07-02.md; inspect affected package manifest/package_asset and materialized workspace model/params.pkl without model/model.py, then run live inference preflight.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "P1 strategy package asset freeze omits model_code for pickled local model classes",
+  "trigger_condition": {
+    "fingerprint": "928fccbfde23c4a06e8085b2",
+    "source_event_id": "FE-20260702-928fccbfde23"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

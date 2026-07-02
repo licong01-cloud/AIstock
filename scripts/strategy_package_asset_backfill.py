@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -207,6 +208,8 @@ def build_report(
     package_ids: list[str] | None = None,
     package_id_prefix: str | None = None,
     operator: str,
+    model_code_repair_preview: bool = False,
+    model_weight_backfilled_date: str | None = None,
 ) -> dict[str, Any]:
     plan = service.build_plan(limit=limit, package_ids=package_ids, package_id_prefix=package_id_prefix)
     if mode == "apply" and plan.to_report()["counts"].get("unrecoverable", 0):
@@ -218,7 +221,11 @@ def build_report(
         report["filter"] = {
             "package_ids": package_ids or [],
             "package_id_prefix": package_id_prefix,
+            "model_code_repair_preview": model_code_repair_preview,
+            "model_weight_backfilled_date": model_weight_backfilled_date,
         }
+        if model_code_repair_preview:
+            report["model_code_repair_preview"] = _model_code_repair_preview(report)
         return report
     result = service.apply_plan(plan, operator=operator) if mode == "apply" else plan
     report = result.to_report()
@@ -228,8 +235,71 @@ def build_report(
     report["filter"] = {
         "package_ids": package_ids or [],
         "package_id_prefix": package_id_prefix,
+        "model_code_repair_preview": model_code_repair_preview,
+        "model_weight_backfilled_date": model_weight_backfilled_date,
     }
+    if model_code_repair_preview:
+        report["model_code_repair_preview"] = _model_code_repair_preview(report)
     return report
+
+
+def _model_code_repair_preview(report: dict[str, Any]) -> dict[str, Any]:
+    impacted: list[dict[str, Any]] = []
+    for item in report.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        context = item.get("context") if isinstance(item.get("context"), dict) else {}
+        repair = context.get("model_code_repair") if isinstance(context.get("model_code_repair"), dict) else {}
+        additions = repair.get("model_code_assets_to_add") if isinstance(repair.get("model_code_assets_to_add"), list) else []
+        if not additions:
+            continue
+        impacted.append(
+            {
+                "package_id": item.get("package_id"),
+                "old_manifest_sha256": item.get("old_manifest_sha256"),
+                "new_manifest_sha256": item.get("new_manifest_sha256"),
+                "model_code_asset_count_to_add": repair.get("model_code_asset_count_to_add", len(additions)),
+                "model_code_assets_to_add": additions,
+            }
+        )
+    return {
+        "schema_version": "strategy_package_model_code_repair_preview_v1",
+        "dry_run_only": report.get("mode") != "apply",
+        "impacted_package_count": len(impacted),
+        "impacted_packages": impacted,
+    }
+
+
+def _package_ids_from_model_weight_backfilled_date(
+    *,
+    env_file: Path | None,
+    target_db: str,
+    date_text: str,
+) -> list[str]:
+    try:
+        start = date.fromisoformat(str(date_text or "").strip())
+    except ValueError as exc:
+        raise AssetBackfillScriptError("--model-weight-backfilled-date must be YYYY-MM-DD") from exc
+    end = start + timedelta(days=1)
+    with _env_conn_factory(env_file=env_file, target_db=target_db, readonly=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.package_id
+                FROM strategy_pkg.package_asset a
+                JOIN strategy_pkg.package p ON p.package_id = a.package_id
+                WHERE a.asset_type = 'model_weight'
+                  AND a.created_at >= %s
+                  AND a.created_at < %s
+                  AND jsonb_array_length(
+                        COALESCE(p.manifest_json->'model_asset'->'model_code_assets', '[]'::jsonb)
+                      ) = 0
+                GROUP BY p.package_id
+                ORDER BY MIN(a.created_at) ASC, p.package_id ASC
+                """,
+                (start, end),
+            )
+            return [str(row[0]) for row in cur.fetchall()]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -240,7 +310,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target-db", choices=(TARGET_PROD, TARGET_DEV), default=TARGET_PROD)
     parser.add_argument("--package-id", action="append", default=[], help="specific package_id to scan; repeatable")
     parser.add_argument("--package-id-prefix", help="optional package_id prefix filter")
+    parser.add_argument(
+        "--model-weight-backfilled-date",
+        help="read-only select packages whose model_weight package_asset rows were created on YYYY-MM-DD",
+    )
     parser.add_argument("--operator", default=DEFAULT_OPERATOR)
+    parser.add_argument(
+        "--model-code-repair-preview",
+        action="store_true",
+        help="include a dry-run preview of model_code assets that would be added; does not bypass apply gates",
+    )
     parser.add_argument("--apply", action="store_true", help="perform DML; dry-run is the default")
     parser.add_argument(
         "--confirm-production-dml",
@@ -274,6 +353,16 @@ def main() -> int:
     _load_env_file(args.env_file)
     _validate_apply_gate(args)
     target = _target_metadata(_db_config(target_db=args.target_db), target_db=args.target_db)
+    package_ids = list(args.package_id)
+    if args.model_weight_backfilled_date:
+        package_ids.extend(
+            _package_ids_from_model_weight_backfilled_date(
+                env_file=args.env_file,
+                target_db=args.target_db,
+                date_text=args.model_weight_backfilled_date,
+            )
+        )
+        package_ids = list(dict.fromkeys(package_ids))
     service = _service_from_env(env_file=args.env_file, target_db=args.target_db, readonly=not args.apply)
     mode = "apply" if args.apply else "dry_run"
     report = build_report(
@@ -281,9 +370,11 @@ def main() -> int:
         mode=mode,
         limit=args.limit,
         target=target,
-        package_ids=args.package_id,
+        package_ids=package_ids,
         package_id_prefix=args.package_id_prefix,
         operator=args.operator,
+        model_code_repair_preview=args.model_code_repair_preview,
+        model_weight_backfilled_date=args.model_weight_backfilled_date,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.output:

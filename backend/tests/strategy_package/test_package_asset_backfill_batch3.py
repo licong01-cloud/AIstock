@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import importlib
+import pickle
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package import package_asset_backfill as backfill_module
@@ -12,6 +16,7 @@ from backend.services.strategy_package.models import (
     SourceType,
     StrategyPackageComponentRecord,
 )
+from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.package_asset_backfill import (
     STATUS_APPLIED,
     STATUS_PLANNED_FREEZE,
@@ -32,7 +37,13 @@ from backend.services.trading_core.errors import DataUnavailableError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 
-def _freezer(tmp_path: Path, *, missing_factor: str | None = None) -> PackageAssetFreezeService:
+def _freezer(
+    tmp_path: Path,
+    *,
+    missing_factor: str | None = None,
+    model_params: bytes | None = None,
+    model_code_files: dict[str, bytes] | None = None,
+) -> PackageAssetFreezeService:
     def factor_reader(factor, manifest):  # noqa: ANN001, ANN202
         if missing_factor and factor.factor_name == missing_factor:
             raise DataUnavailableError(
@@ -48,15 +59,41 @@ def _freezer(tmp_path: Path, *, missing_factor: str | None = None) -> PackageAss
             f"unit://factor/{factor.factor_name}.py",
         )
 
+    model_code_files = model_code_files or {}
+
+    def workspace_file(_manifest, rel_path: str):  # noqa: ANN001, ANN202
+        rel = rel_path.replace("\\", "/")
+        if rel not in model_code_files:
+            raise DataUnavailableError(
+                "model code missing",
+                context={"reason_code": "unit_model_code_missing", "rel_path": rel},
+            )
+        return PackageAssetBytes(model_code_files[rel], f"unit://workspace/{rel}")
+
     return PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
+        source=SimpleNamespace(workspace_file_bytes=workspace_file),
         conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
         model_params_reader=lambda manifest: PackageAssetBytes(
-            f"model::{manifest.package_id}".encode("utf-8"),
+            model_params if model_params is not None else f"model::{manifest.package_id}".encode("utf-8"),
             f"unit://model/{manifest.package_id}/params.pkl",
         ),
         factor_code_reader=factor_reader,
     )
+
+
+def _pickled_model_instance_payload(tmp_path: Path) -> bytes:
+    module_root = tmp_path / "pickle_model_module"
+    module_root.mkdir()
+    (module_root / "model.py").write_text("class LSTM_10D_hs64_d02:\n    pass\n", encoding="utf-8")
+    sys.path.insert(0, str(module_root))
+    try:
+        sys.modules.pop("model", None)
+        module = importlib.import_module("model")
+        return pickle.dumps(module.LSTM_10D_hs64_d02(), protocol=4)
+    finally:
+        sys.modules.pop("model", None)
+        sys.path.remove(str(module_root))
 
 
 def _single_manifest(name: str):
@@ -217,6 +254,69 @@ def test_already_frozen_manifest_with_complete_ledger_is_skipped(tmp_path: Path)
     assert plan.items[0].status == STATUS_SKIPPED_ALREADY_FROZEN
     assert plan.items[0].asset_count == 2
     assert repo.events[-1].reason == "package_created"
+
+
+def test_already_frozen_manifest_with_pickled_model_but_missing_code_is_repaired(tmp_path: Path) -> None:
+    repo = InMemoryStrategyPackageRepository()
+    model_payload = _pickled_model_instance_payload(tmp_path)
+    model_py = b"class LSTM_10D_hs64_d02:\n    pass\n"
+    freezer = _freezer(tmp_path, model_params=model_payload, model_code_files={"model.py": model_py})
+    store = freezer.asset_store
+    manifest = _single_manifest("legacy_missing_model_code")
+    factor_blob = store.put(b"# factor legacy\nVALUE = 1\n", kind=StrategyPackageAssetType.FACTOR_CODE.value)
+    model_blob = store.put(model_payload, kind=StrategyPackageAssetType.MODEL_WEIGHT.value)
+    factor = manifest.factor_set[0].model_copy(
+        update={
+            "asset_ref": factor_blob.uri,
+            "sha256": factor_blob.sha256,
+            "size_bytes": factor_blob.size_bytes,
+            "source_uri": "unit://factor/legacy.py",
+        }
+    )
+    model = manifest.model_asset.model_copy(
+        update={
+            "asset_ref": model_blob.uri,
+            "sha256": model_blob.sha256,
+            "size_bytes": model_blob.size_bytes,
+            "source_uri": "unit://model/legacy/params.pkl",
+            "model_code_required": False,
+            "model_code_assets": [],
+        }
+    )
+    broken = freeze_manifest(manifest.model_copy(update={"factor_set": [factor], "model_asset": model, "manifest_sha256": None}))
+    record = repo.save_manifest_with_assets(
+        broken,
+        [
+            StrategyPackageAssetRecord(
+                package_id=broken.package_id,
+                asset_type=StrategyPackageAssetType.FACTOR_CODE,
+                asset_ref=factor_blob.uri,
+                asset_sha256=factor_blob.sha256,
+                asset_size_bytes=factor_blob.size_bytes,
+            ),
+            StrategyPackageAssetRecord(
+                package_id=broken.package_id,
+                asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+                asset_ref=model_blob.uri,
+                asset_sha256=model_blob.sha256,
+                asset_size_bytes=model_blob.size_bytes,
+            ),
+        ],
+    )
+    service = PackageAssetBackfillService(repository=repo, asset_freezer=freezer)
+
+    plan = service.build_plan(package_ids=[record.package_id])
+
+    item = plan.items[0]
+    assert item.status == STATUS_PLANNED_FREEZE
+    assert item.old_manifest_sha256 == record.manifest_sha256
+    assert item.new_manifest_sha256 != record.manifest_sha256
+    repair = item.context["model_code_repair"]
+    assert repair["model_code_asset_count_before"] == 0
+    assert repair["model_code_asset_count_after"] == 1
+    assert repair["model_code_assets_to_add"][0]["relative_path"] == "model.py"
+    assert item.frozen_manifest.model_asset.model_code_required is True
+    assert repo.get(record.package_id).manifest_sha256 == record.manifest_sha256
 
 
 def test_missing_source_is_reported_unrecoverable_without_writes(tmp_path: Path) -> None:

@@ -16,7 +16,11 @@ from backend.services.trading_core.errors import (
 from .manifest import freeze_manifest
 from .models import AlphaMode, FactorAsset, ModelAsset, StrategyPackageComponentRecord, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
-from .package_asset_freeze import PackageAssetFreezeService, manifest_has_frozen_runtime_assets
+from .package_asset_freeze import (
+    PackageAssetFreezeService,
+    manifest_has_frozen_runtime_assets,
+    pickled_model_code_references_from_params_bytes,
+)
 from .repository import StrategyPackageRecord, StrategyPackageRepository, manifest_asset_keys
 
 
@@ -421,6 +425,7 @@ class PackageAssetBackfillService:
                 manifest_has_frozen_runtime_assets(frozen_candidate)
                 and frozen_candidate.manifest_sha256 == record.manifest_sha256
                 and self._ledger_covers(frozen_candidate)
+                and not self._manifest_missing_pickled_model_code_assets(frozen_candidate)
             ):
                 return PackageAssetBackfillItem(
                     package_id=record.package_id,
@@ -469,8 +474,26 @@ class PackageAssetBackfillService:
                 "old_manifest_sha256": record.manifest_sha256,
                 "new_manifest_sha256": frozen_assets.manifest.manifest_sha256,
                 "asset_refs": _asset_key_payload(frozen_assets.assets),
+                "model_code_repair": _model_code_repair_payload(desired, frozen_assets.manifest),
             },
         )
+
+    def _manifest_missing_pickled_model_code_assets(self, manifest: StrategyPackageManifest) -> bool:
+        model_asset = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+        for model in model_asset:
+            if model is None or model.model_code_assets or model.model_code_required:
+                continue
+            if not model.asset_ref:
+                continue
+            try:
+                payload = self.asset_freezer.asset_store.get(model.asset_ref)
+            except Exception as exc:
+                if isinstance(exc, TradingCoreError):
+                    return True
+                raise
+            if pickled_model_code_references_from_params_bytes(payload):
+                return True
+        return False
 
     def _ledger_covers(self, manifest: StrategyPackageManifest) -> bool:
         expected = _manifest_asset_keys(manifest)
@@ -632,6 +655,40 @@ def _asset_key_payload(assets: Sequence[StrategyPackageAssetRecord]) -> list[dic
         }
         for asset in assets
     ]
+
+
+def _model_code_repair_payload(
+    old_manifest: StrategyPackageManifest,
+    new_manifest: StrategyPackageManifest,
+) -> dict[str, Any]:
+    old_by_id = {model.model_id: model for model in _model_assets(old_manifest)}
+    additions: list[dict[str, Any]] = []
+    for model in _model_assets(new_manifest):
+        old_paths = {asset.relative_path for asset in old_by_id.get(model.model_id, model).model_code_assets}
+        for asset in model.model_code_assets:
+            if asset.relative_path not in old_paths:
+                additions.append(
+                    {
+                        "model_id": model.model_id,
+                        "module_name": asset.module_name,
+                        "relative_path": asset.relative_path,
+                        "asset_ref": asset.asset_ref,
+                        "sha256": asset.sha256,
+                        "source_uri": asset.source_uri,
+                    }
+                )
+    return {
+        "model_code_asset_count_before": sum(len(model.model_code_assets) for model in _model_assets(old_manifest)),
+        "model_code_asset_count_after": sum(len(model.model_code_assets) for model in _model_assets(new_manifest)),
+        "model_code_assets_to_add": additions,
+        "model_code_asset_count_to_add": len(additions),
+        "model_code_required_after": any(model.model_code_required for model in _model_assets(new_manifest)),
+    }
+
+
+def _model_assets(manifest: StrategyPackageManifest) -> list[ModelAsset]:
+    model_asset = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    return [model for model in model_asset if model is not None]
 
 
 def _reason_code(exc: BaseException, *, default: str = REASON_UNEXPECTED) -> str:
