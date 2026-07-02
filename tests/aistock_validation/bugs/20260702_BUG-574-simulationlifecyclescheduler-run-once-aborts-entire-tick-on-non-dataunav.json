@@ -38,6 +38,12 @@
       "actor": "codex",
       "timestamp": "2026-07-02T08:42:42.155230Z",
       "note": "Implemented per-binding exception isolation, durable pre-run failure, scheduler status projection, and regression coverage; PR pending, not merged."
+    },
+    {
+      "action": "pr_opened_pending_tier2",
+      "actor": "codex",
+      "timestamp": "2026-07-02T08:53:51.781897Z",
+      "note": "PR #1818 opened from BUG-574 worktree; not merged by develop-only window, awaiting strategic session Tier2 review."
     }
   ],
   "evidence_uris": [
@@ -47,7 +53,7 @@
   "expected": "SimulationLifecycleScheduler isolates every non-fatal per-binding pre-run/selection/preflight exception, persists a durable simulation_daily_run pre-run failure with package/reason/preflight context, continues later eligible bindings, preserves raise_on_error and BaseException semantics, and exposes lifecycle scheduler running/thread/last-run/error status via the read-only status API.",
   "first_seen_at": "2026-07-02T07:28:55.176698Z",
   "fix_branch": "bug/BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702",
-  "fix_commit": null,
+  "fix_commit": "f6e167d888ff869e4bec375bb8aa562cb820ea6d",
   "fixed_at": null,
   "github_issue_number": 1813,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1813",
@@ -89,7 +95,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "ready_for_pr",
+  "workflow_gate": "pr_opened_pending_tier2",
   "validation_evidence": [
     "rtk python -m py_compile backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
     "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 104 passed",
@@ -103,5 +109,6 @@
     "rtk python -m nox -s paper_v2_backend -> 834 passed, 1 skipped, 2 xfailed",
     "rtk python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-574 --module simulation_runtime ... -> passed",
     "rtk git diff --check -> passed"
-  ]
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1818"
 }

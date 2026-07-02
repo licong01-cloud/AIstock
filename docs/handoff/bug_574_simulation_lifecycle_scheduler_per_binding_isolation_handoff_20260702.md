@@ -4,6 +4,8 @@
 > 分支：`bug/BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702`
 > Worktree：`F:\Dev\AIstock_worktrees\BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702`
 > GitHub Issue：https://github.com/licong01-cloud/AIstock/issues/1813
+> PR：https://github.com/licong01-cloud/AIstock/pull/1818
+> Fix commit：`f6e167d888ff869e4bec375bb8aa562cb820ea6d`
 > 约束：develop-only；未合并；未启停服务；未写生产 DB；未跑 apply/operator；未发/撤券商订单。
 
 ## 1. 根因与证据
@@ -129,7 +131,13 @@ Changed files：
 - 不触碰 BUG-567 manifest guard / package admission 逻辑。
 - 不改 frontend、RA、migration、operator/apply、broker submit/cancel API。
 
-## 11. Production gates
+## 11. PR 与交接状态
+
+- PR：https://github.com/licong01-cloud/AIstock/pull/1818
+- Fix commit：`f6e167d888ff869e4bec375bb8aa562cb820ea6d`
+- 状态：PR 已打开，develop-only 窗口不合并，交战略 session Tier2。
+
+## 12. Production gates
 
 - `production_ddl_gate`: `noop`
 - `production_backend_dependency_gate`: `noop`
