@@ -886,9 +886,9 @@ def _parse_tdx_intraday_centisecond_time(value: str, *, trade_date: date) -> dat
     if hour > 23 or centisecond > 99:
         raise ValueError(f"invalid TDX centisecond intraday timestamp {value!r}")
     if minute > 59:
-        if minute == 99 and second > 59:
-            # TDX quote ServerTime can use 99:SScc as a late-session sequence
-            # sentinel; treat only that narrow encoding as the 59th minute.
+        if minute in {97, 98, 99}:
+            # TDX ServerTime is the Go bridge's raw ReversedBytes0 sequence.
+            # RCA evidence shows 97/98/99 are late-hour sentinels, not HHMM.
             minute = 59
             second = 0
             centisecond = 0

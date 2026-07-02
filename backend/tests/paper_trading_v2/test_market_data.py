@@ -681,16 +681,21 @@ def test_pre_trade_tdx_quote_fails_closed_when_timestamp_is_stale() -> None:
 
 
 @pytest.mark.parametrize(
-        ("server_time", "as_of_time", "expected_timestamp"),
-        [
-            ("9594403", datetime(2026, 6, 16, 9, 59, 45), "2026-06-16T09:59:44.030000"),
-            ("10151103", datetime(2026, 6, 16, 10, 15, 12), "2026-06-16T10:15:11.030000"),
-            ("10158777", datetime(2026, 6, 16, 10, 15, 30), "2026-06-16T10:15:00"),
-            ("14999733", datetime(2026, 6, 16, 15, 0, 0), "2026-06-16T14:59:00"),
-        ],
+    ("server_time", "trade_date", "as_of_time", "expected_timestamp"),
+    [
+        ("9594403", date(2026, 6, 16), datetime(2026, 6, 16, 9, 59, 45), "2026-06-16T09:59:44.030000"),
+        ("10151103", date(2026, 6, 16), datetime(2026, 6, 16, 10, 15, 12), "2026-06-16T10:15:11.030000"),
+        ("10158777", date(2026, 6, 16), datetime(2026, 6, 16, 10, 15, 30), "2026-06-16T10:15:00"),
+        ("14999733", date(2026, 6, 16), datetime(2026, 6, 16, 15, 0, 0), "2026-06-16T14:59:00"),
+        ("13990274", date(2026, 7, 2), datetime(2026, 7, 2, 14, 1, 0), "2026-07-02T13:59:00"),
+        ("13984048", date(2026, 7, 2), datetime(2026, 7, 2, 14, 1, 0), "2026-07-02T13:59:00"),
+        ("14993094", date(2026, 7, 2), datetime(2026, 7, 2, 15, 0, 0), "2026-07-02T14:59:00"),
+        ("14993374", date(2026, 7, 2), datetime(2026, 7, 2, 15, 0, 0), "2026-07-02T14:59:00"),
+    ],
 )
 def test_pre_trade_tdx_quote_accepts_compact_servertime_with_centiseconds(
     server_time: str,
+    trade_date: date,
     as_of_time: datetime,
     expected_timestamp: str,
 ) -> None:
@@ -698,7 +703,7 @@ def test_pre_trade_tdx_quote_accepts_compact_servertime_with_centiseconds(
 
     statuses = provider.get_statuses(
         ["000001.SZ"],
-        date(2026, 6, 16),
+        trade_date,
         require_realtime_quote=True,
         as_of_time=as_of_time,
         side_by_symbol={"000001.SZ": "BUY"},
@@ -710,7 +715,7 @@ def test_pre_trade_tdx_quote_accepts_compact_servertime_with_centiseconds(
     assert status["quote_evidence"]["quote_timestamp"] == expected_timestamp
 
 
-@pytest.mark.parametrize("server_time", ["14608733", "24999733"])
+@pytest.mark.parametrize("server_time", ["14608733", "14968733", "24999733", "20260702", "123456789"])
 def test_pre_trade_tdx_quote_fails_closed_for_invalid_compact_servertime(server_time: str) -> None:
     provider = pre_trade_provider(make_tdx_quote(server_time=server_time))
 
@@ -724,6 +729,24 @@ def test_pre_trade_tdx_quote_fails_closed_for_invalid_compact_servertime(server_
         )
 
     assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_TIMESTAMP_INVALID"
+
+
+def test_pre_trade_tdx_quote_stale_guard_still_applies_after_compact_sentinel_clamp() -> None:
+    provider = pre_trade_provider(make_tdx_quote(server_time="13984048"))
+
+    with pytest.raises(DataUnavailableError) as exc_info:
+        provider.get_statuses(
+            ["000001.SZ"],
+            date(2026, 7, 2),
+            require_realtime_quote=True,
+            as_of_time=datetime(2026, 7, 2, 14, 5, 1),
+            side_by_symbol={"000001.SZ": "BUY"},
+        )
+
+    assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_STALE"
+    assert exc_info.value.context["raw_timestamp"] == "13984048"
+    assert exc_info.value.context["quote_timestamp"] == "2026-07-02T13:59:00"
+    assert exc_info.value.context["quote_age_seconds"] == pytest.approx(361.0)
 
 
 def test_fetch_tdx_realtime_quotes_chunks_batch_quote_requests(monkeypatch: pytest.MonkeyPatch) -> None:
