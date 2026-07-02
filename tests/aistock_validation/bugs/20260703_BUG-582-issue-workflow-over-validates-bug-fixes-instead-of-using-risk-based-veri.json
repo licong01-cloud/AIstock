@@ -35,8 +35,8 @@
   "expected": "Most BUG fixes use risk-based lightweight PR validation; high-risk fixes keep only safety/contract gates before merge; nightly aggregates all daily BUG changes and runs deduplicated deep business-flow validation. Codex and Claude Code instructions should follow the same policy. Successful paths should avoid unused diagnostic JSON output; restarted Codex/Claude windows should use resume/task-card digests instead of repeatedly reading standards and source ranges.",
   "first_seen_at": "2026-07-02T17:05:20.605590Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "42ed19343ca8c0afba2310fe1a4d3eca86dc16df",
+  "fixed_at": "2026-07-02T18:06:45.080379Z",
   "github_issue_number": 1841,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1841",
   "last_seen_at": "2026-07-02T17:05:20.605590Z",
@@ -44,6 +44,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1842",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -65,6 +66,15 @@
     "source_event_id": "FE-20260703-36b9b986a96d"
   },
   "ui_issue": false,
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -k finish_plan_or_workflow_smoke_or_resume_digest -> passed",
+    "pytest backend/tests/scripts/test_ci_change_classifier.py -k obsolete_surface_removal -> passed",
+    "ruff targeted workflow files -> passed",
+    "git diff --check -> passed",
+    "workflow-smoke scripts/client/project-memory -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
