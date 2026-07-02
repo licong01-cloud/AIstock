@@ -1,0 +1,4 @@
+interface:
+  display_name: "AIstock Validation Delegation"
+  short_description: "Delegate broad validation to VC/CI/Nightly and read compact receipts."
+  default_prompt: "Create a compact validation handoff, keep Codex local checks minimal, and consume only the compact receipt unless failures require details."

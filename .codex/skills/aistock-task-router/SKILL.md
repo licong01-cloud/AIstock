@@ -5,7 +5,7 @@ description: "Route AIstock work to the correct lightweight workflow lane before
 
 # AIstock Task Router
 
-Use this as the default lightweight entry for ambiguous AIstock work. Route first; do not load full standards or module design docs unless the selected lane requires them.
+Use this as the default lightweight entry for ambiguous AIstock work. Read the project-level rules once, route first, then load only the selected scenario skill/command and task artifacts.
 
 ## Required first checks
 
@@ -24,6 +24,7 @@ Use this as the default lightweight entry for ambiguous AIstock work. Route firs
 
 ## Hard stops
 
+- The selected lane owns its own details; do not load other scenario skills, quickstarts, or full standards unless explicitly required.
 - If the user says read-only, do not edit files, commit, push, merge, cleanup, restart, or write DB.
 - If the task is an ordinary BUG, do not read feature/module design docs unless the issue or user explicitly cites them or `fast-path` classifies T3.
 - Controlled paths (`docs/standards/**`, `docs/codex_project_memory.md`, `.codex/**`, `.claude/**`, `AGENTS*`) use a controlled workflow.

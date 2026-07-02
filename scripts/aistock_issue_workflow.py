@@ -779,12 +779,14 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 "codex_docs_handoff_skill_status",
                 "codex_merge_aftercare_skill_status",
                 "codex_readonly_triage_skill_status",
+                "codex_validation_delegation_skill_status",
                 "claude_command_status",
                 "claude_feature_command_status",
                 "claude_router_command_status",
                 "claude_docs_handoff_command_status",
                 "claude_merge_aftercare_command_status",
                 "claude_readonly_triage_command_status",
+                "claude_validation_delegation_command_status",
                 "restart_recommended",
             )
         if "h7_code_intelligence" in payload:
@@ -3419,10 +3421,15 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             "git diff --check",
             "production gates",
         ],
+        "delegated_validation": {
+            "skill": "aistock-validation-delegation",
+            "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
+            "receipt_default": "compact",
+        },
         "deferred_nightly_verification": {
             "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
             "modules": [item for item in deferred_modules if item],
-            "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly",
+            "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
         },
     }
 
@@ -4156,6 +4163,7 @@ def build_task_card(
 ) -> dict[str, Any]:
     validation = fix_ready.get("validation_selection") if isinstance(fix_ready.get("validation_selection"), dict) else {}
     code_intel = _compact_code_intelligence_for_task_card(code_intelligence_summary)
+    verification_budget = record.get("verification_budget") if isinstance(record.get("verification_budget"), dict) else _verification_budget_for_record(record)
     return {
         "schema_version": "aistock_agent_task_card_v1",
         "generated_at": _utc_now(),
@@ -4190,13 +4198,13 @@ def build_task_card(
         "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or validation.get("recommended_plans") or [],
         "production_gates": validation.get("production_gates") or _production_gates_payload(),
-        "verification_budget": record.get("verification_budget"),
+        "verification_budget": verification_budget,
         "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations"),
         "context_resume_digest": _workflow_context_resume_digest(
             {
                 "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
                 "required_verification": fix_ready.get("required_verification") or validation.get("required_plans") or [],
-                "verification_budget": record.get("verification_budget"),
+                "verification_budget": verification_budget,
             },
             root=root,
         ),
@@ -4211,6 +4219,7 @@ def build_task_card(
         "next_client_steps": [
             "switch_to_worktree_if_created",
             "read task-card.md first, then context-pack.md only when needed",
+            "use exactly one task-specific skill/command; do not load other scenario skills or full standards unless task-card/user requires it",
             "after context compaction, use Context Resume Digest hashes instead of re-reading standards/quickstart/RTK",
             "read Code Intelligence refs before rg; record a scoped miss reason before broad scans",
             "stop and summarize before more search if exploration commands exceed the soft budget",
@@ -4233,6 +4242,7 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
     resume_digest = task_card.get("context_resume_digest") if isinstance(task_card.get("context_resume_digest"), dict) else {}
     budget = task_card.get("verification_budget") if isinstance(task_card.get("verification_budget"), dict) else {}
     deferred = budget.get("deferred_nightly_verification") if isinstance(budget.get("deferred_nightly_verification"), dict) else {}
+    delegated = budget.get("delegated_validation") if isinstance(budget.get("delegated_validation"), dict) else {}
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -4262,6 +4272,8 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- target_cost_percent_of_legacy: `{budget.get('target_cost_percent_of_legacy') or 'not_recorded'}`",
         f"- deferred_nightly_required: `{str(bool(deferred.get('required'))).lower()}`",
         f"- deferred_nightly_modules: `{', '.join(deferred.get('modules') or []) or 'none'}`",
+        f"- delegated_validation_skill: `{delegated.get('skill') or 'none'}`",
+        f"- delegated_receipt_default: `{delegated.get('receipt_default') or 'none'}`",
         "",
         "## Context Resume Digest",
         f"- rule_digest_count: `{len(resume_digest.get('rule_digests') or [])}`",
@@ -6094,6 +6106,7 @@ CLIENT_CODEX_SKILLS: tuple[tuple[str, str], ...] = (
     ("docs_handoff", "aistock-docs-handoff"),
     ("merge_aftercare", "aistock-merge-aftercare"),
     ("readonly_triage", "aistock-readonly-triage"),
+    ("validation_delegation", "aistock-validation-delegation"),
 )
 
 CLIENT_CLAUDE_COMMANDS: tuple[tuple[str, str], ...] = (
@@ -6103,6 +6116,7 @@ CLIENT_CLAUDE_COMMANDS: tuple[tuple[str, str], ...] = (
     ("docs_handoff", "aistock-docs-handoff.md"),
     ("merge_aftercare", "aistock-merge-aftercare.md"),
     ("readonly_triage", "aistock-readonly-triage.md"),
+    ("validation_delegation", "aistock-validation-delegation.md"),
 )
 
 
@@ -6216,7 +6230,7 @@ def _client_manifest(codex_home: Path | None = None, claude_home: Path | None = 
         payload["claude_feature_command_sha256"] = claude_entries["feature"]["repo_sha256"]
         payload["global_claude_feature_command_sha256"] = claude_entries["feature"]["global_sha256"]
         payload["claude_feature_command_status"] = claude_entries["feature"]["status"]
-    for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage"):
+    for key in ("router", "docs_handoff", "merge_aftercare", "readonly_triage", "validation_delegation"):
         if key in codex_entries:
             payload[f"codex_{key}_skill_status"] = codex_entries[key]["status"]
         if key in claude_entries:

@@ -534,6 +534,8 @@ def test_start_writes_fix_ready_and_context_pack(
     assert task_card["code_intelligence"]["affected_tests_count"] == 0
     assert task_card["code_intelligence"]["blocking_for_issue_workflow"] is False
     assert task_card["token_budget"]["large_graph_payload_inlined"] is False
+    assert task_card["verification_budget"]["delegated_validation"]["skill"] == "aistock-validation-delegation"
+    assert "delegated_validation_skill: `aistock-validation-delegation`" in task_card_md.read_text(encoding="utf-8")
     assert "suggested_tests" not in json.dumps(task_card, ensure_ascii=False)
     assert "skip_reasons" not in json.dumps(task_card, ensure_ascii=False)
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
@@ -7097,6 +7099,7 @@ def test_submit_bug_workflow_budget_defers_deep_validation_without_ui_hints(
     budget = record["verification_budget"]
     assert budget["budget"] == "standard"
     assert budget["deferred_nightly_verification"]["required"] is True
+    assert budget["delegated_validation"]["receipt_default"] == "compact"
     assert any("nightly" in item for item in record["workflow_efficiency_recommendations"]["recommendations"])
 
 
