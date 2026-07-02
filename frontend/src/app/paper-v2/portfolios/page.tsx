@@ -59,20 +59,16 @@ function ActiveStateBadge({ row }: { row: RunningPortfolioSummary }) {
 
 
 async function loadRunningSummaryRows(): Promise<{ summaries: RunningPortfolioSummary[]; pagination: JsonObject }> {
-  const params = {
+  const page = await paperV2Api.runningSummaryPage({
     pageSize: RUNNING_SUMMARY_PAGE_SIZE,
     statuses: ["RUNNING", "PAUSED"],
-    snapshotLimit: 5,
-    positionLimit: 5,
-  };
-  const first = await paperV2Api.runningSummaryPage({ ...params, page: 1 });
-  const totalPages = Math.max(1, Number(first.pagination.total_pages || 1));
-  const rest = totalPages > 1
-    ? await Promise.all(Array.from({ length: totalPages - 1 }, (_, index) => paperV2Api.runningSummaryPage({ ...params, page: index + 2 })))
-    : [];
+    snapshotLimit: 1,
+    positionLimit: 1,
+    page: 1,
+  });
   return {
-    summaries: [first, ...rest].flatMap((page) => page.summaries.map((item) => parseRunningSummaryItem(item))),
-    pagination: first.pagination,
+    summaries: page.summaries.map((item) => parseRunningSummaryItem(item)),
+    pagination: page.pagination,
   };
 }
 
@@ -122,7 +118,7 @@ export default function PaperV2PortfoliosPage() {
           statuses: showRetired ? undefined : ["READY", "RUNNING", "PAUSED", "COMPLETED", "FAILED"],
         }),
         loadRunningSummaryRows(),
-        strategyPackageApi.list(undefined, 300),
+        strategyPackageApi.listSummary(undefined, 100),
         hmmTrainingApi.configs(),
       ]);
       setPortfolios(portfolioRows.portfolios);

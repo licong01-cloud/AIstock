@@ -149,10 +149,11 @@ def run_selection(
 @router.get("/selectable-packages")
 def list_selectable_packages(
     limit: int = 200,
+    view: str = "full",
     service: SelectionCenterService = Depends(get_selection_center_service),
 ) -> dict[str, Any]:
     try:
-        packages = service.list_selectable_packages(limit=limit)
+        packages = service.list_selectable_packages(limit=limit, view=view)
         return {"ok": True, "packages": packages}
     except TradingCoreError as exc:
         _raise_http(exc)

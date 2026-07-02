@@ -192,6 +192,15 @@ class StrategyPackageService:
     def list_packages(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[StrategyPackageRecord]:
         return self.repository.list(status=status, limit=limit)
 
+    def list_package_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        list_summaries = getattr(self.repository, "list_summaries", None)
+        if callable(list_summaries):
+            return list_summaries(status=status, limit=limit)
+        raise StrategyPackageValidationError(
+            "strategy package summary listing is unsupported by repository",
+            context={"reason_code": "STRATEGY_PACKAGE_SUMMARY_LIST_UNSUPPORTED"},
+        )
+
     def get_package(self, package_id: str) -> StrategyPackageRecord:
         return self.repository.get(package_id)
 

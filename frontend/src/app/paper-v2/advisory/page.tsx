@@ -752,7 +752,7 @@ function AdvisoryPageContent() {
 
   async function loadSelectablePackageOptions() {
     try {
-      applyPackageOptions(await selectionCenterApi.selectablePackages(300));
+      applyPackageOptions(await selectionCenterApi.selectablePackages(100, "summary"));
     } catch {
       applyPackageOptions([]);
     }

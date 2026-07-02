@@ -712,9 +712,41 @@ class SelectionCenterService:
     def delete_runs(self, run_ids: list[str]) -> dict[str, Any]:
         return self.repository.delete_runs(run_ids)
 
-    def list_selectable_packages(self, *, limit: int = 200) -> list[dict[str, Any]]:
+    def list_selectable_packages(self, *, limit: int = 200, view: str = "full") -> list[dict[str, Any]]:
         if limit <= 0:
             raise RuntimeConfigInvalidError("limit must be positive")
+        normalized_view = str(view or "full").strip().lower()
+        if normalized_view not in {"full", "summary"}:
+            raise RuntimeConfigInvalidError(
+                "selectable package view is invalid",
+                context={"view": view, "allowed_views": ["full", "summary"]},
+            )
+        list_summaries = getattr(self.package_repository, "list_summaries", None)
+        if normalized_view == "summary" and callable(list_summaries):
+            summary_rows = list_summaries(limit=limit)
+            latest_runs = self._latest_run_by_package(limit=max(limit, 200))
+            items: list[dict[str, Any]] = []
+            for row in summary_rows:
+                if str(row.get("package_status") or "").upper() == "RETIRED":
+                    continue
+                if ((row.get("asset_eligibility") or {}).get("eligible") is False):
+                    continue
+                latest_run = latest_runs.get(str(row["package_id"]))
+                items.append(
+                    {
+                        **row,
+                        "asset_eligibility": {"eligible": True, "summary_only": True},
+                        "selection_health": {"status": "NOT_EVALUATED", "summary_only": True},
+                        "model_state": {"package_id": row["package_id"], "staleness_status": "UNKNOWN", "summary_only": True},
+                        "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
+                    }
+                )
+            return items[:limit]
+        if normalized_view == "summary":
+            raise RuntimeConfigInvalidError(
+                "selectable package summary listing is unsupported by repository",
+                context={"reason_code": "SELECTION_CENTER_SUMMARY_LIST_UNSUPPORTED"},
+            )
         records = self.package_repository.list(limit=max(limit * 5, limit))
         latest_runs = self._latest_run_by_package(limit=max(limit * 5, 200))
         package_service = StrategyPackageService(repository=self.package_repository)

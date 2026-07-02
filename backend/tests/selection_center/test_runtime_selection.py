@@ -1409,6 +1409,72 @@ def test_selection_center_lists_selectable_packages_with_metrics_and_latest_run(
     assert packages[0]["latest_selection_run"]["run_id"] == run.run_id
 
 
+def test_selectable_packages_summary_path_does_not_expand_limit_or_upsert_model_state() -> None:
+    class CountingPackageRepository(InMemoryStrategyPackageRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.summary_limits: list[int] = []
+            self.model_state_upserts = 0
+
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            self.summary_limits.append(limit)
+            return super().list_summaries(status=status, limit=limit)
+
+        def upsert_model_state(self, state):  # noqa: ANN001, ANN202
+            self.model_state_upserts += 1
+            return super().upsert_model_state(state)
+
+    package_repo = CountingPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=7, view="summary")
+
+    assert package_repo.summary_limits == [7]
+    assert package_repo.model_state_upserts == 0
+    assert len(packages) == 1
+    assert packages[0]["model_state"]["summary_only"] is True
+    assert packages[0]["selection_health"]["summary_only"] is True
+    assert "manifest" not in packages[0]
+    assert "runtime_config_contract" not in packages[0]
+
+
+def test_selectable_packages_summary_path_filters_summary_ineligible_rows() -> None:
+    class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            rows = super().list_summaries(status=status, limit=limit)
+            rows.append({
+                **rows[0],
+                "package_id": "pkg_blocked_summary",
+                "asset_eligibility": {
+                    "eligible": False,
+                    "summary_only": True,
+                    "blockers": ["multi_alpha_runtime_not_validated_until_dry_run"],
+                },
+            })
+            return rows[:limit]
+
+    package_repo = SummaryOnlyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable_filter", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=10, view="summary")
+
+    assert [item["package_id"] for item in packages] == [manifest.package_id]
+
+
 def test_selection_center_authoritative_mode_uses_platform_risk_policy_and_display_top_n() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     manifest = st_pit_manifest_with_score_rows(
