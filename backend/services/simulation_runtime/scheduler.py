@@ -2220,30 +2220,16 @@ class SimulationLifecycleScheduler:
                         as_of_time=as_of_time,
                     )
                 )
-            except (DataUnavailableError, RuntimeConfigInvalidError) as exc:
+            except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
                 if raise_on_error:
                     raise
-                effective_data_source = self._effective_market_data_source_for_binding(
-                    binding=binding,
-                    trade_date=trade_date,
-                    default_data_source=data_source,
-                )
-                failed_run = self._persist_pre_run_binding_failure(
-                    binding=binding,
-                    trade_date=trade_date,
-                    data_source=effective_data_source,
-                    created_by=created_by,
-                    exc=exc,
-                )
                 results.append(
-                    SimulationSchedulerBindingResult(
-                        binding_id=binding.binding_id,
-                        strategy_id=binding.strategy_id,
-                        broker_backend=binding.broker_backend,
-                        status=failed_run.status.value,
-                        run=failed_run,
-                        error=self._pre_run_failure_error_payload(failed_run, exc=exc),
-                        data_source=effective_data_source,
+                    self._record_pre_run_binding_failure_result(
+                        binding=binding,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        created_by=created_by,
+                        exc=exc,
                     )
                 )
         return SimulationSchedulerRunOnceResult(
@@ -2257,6 +2243,114 @@ class SimulationLifecycleScheduler:
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
         )
 
+    def _record_pre_run_binding_failure_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        created_by: str,
+        exc: Exception,
+    ) -> SimulationSchedulerBindingResult:
+        if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)) and self._has_broker_side_effect_evidence(
+            binding=binding,
+            trade_date=trade_date,
+        ):
+            logger.exception(
+                "Simulation lifecycle scheduler will not mark side-effect-bearing binding failure as pre-run failure",
+                extra={
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "package_id": binding.package_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise exc
+        effective_data_source = self._effective_market_data_source_for_binding(
+            binding=binding,
+            trade_date=trade_date,
+            default_data_source=data_source,
+        )
+        failed_run = self._persist_pre_run_binding_failure(
+            binding=binding,
+            trade_date=trade_date,
+            data_source=effective_data_source,
+            created_by=created_by,
+            exc=exc,
+        )
+        if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)):
+            pre_run_failure = failed_run.run_payload_json.get("pre_run_failure")
+            reason_code = (
+                str(pre_run_failure.get("reason_code"))
+                if isinstance(pre_run_failure, dict) and pre_run_failure.get("reason_code")
+                else self._pre_run_failure_reason_code(exc, self._exception_context(exc))
+            )
+            failure_stage = (
+                str(pre_run_failure.get("failure_stage"))
+                if isinstance(pre_run_failure, dict) and pre_run_failure.get("failure_stage")
+                else self._pre_run_failure_stage(exc, self._exception_context(exc))
+            )
+            logger.warning(
+                "Simulation lifecycle scheduler isolated per-binding failure; continuing later bindings: %s",
+                {
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "package_id": binding.package_id,
+                    "reason_code": reason_code,
+                    "failure_stage": failure_stage,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status=failed_run.status.value,
+            run=failed_run,
+            error=self._pre_run_failure_error_payload(failed_run, exc=exc),
+            data_source=effective_data_source,
+        )
+
+    def _has_broker_side_effect_evidence(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> bool:
+        existing = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+            trade_date=trade_date,
+        )
+        if existing is None:
+            return False
+        return self._run_has_broker_side_effect_evidence(existing)
+
+    @staticmethod
+    def _run_has_broker_side_effect_evidence(run: SimulationDailyRun) -> bool:
+        payload = run.run_payload_json
+        if bool(payload.get("broker_called")):
+            return True
+        for key in ("submitted_intents", "failed_intents"):
+            try:
+                if int(payload.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                return True
+        return any(
+            payload.get(key)
+            for key in (
+                "broker_order_handles",
+                "qmt_batch_id",
+                "qmt_batch_result",
+                "local_sim_persistence",
+                "reconcile_after_submit",
+                "tail_handling",
+            )
+        )
+
     def _persist_pre_run_binding_failure(
         self,
         *,
@@ -2264,7 +2358,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
         created_by: str,
-        exc: DataUnavailableError | RuntimeConfigInvalidError,
+        exc: Exception,
     ) -> SimulationDailyRun:
         runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
         existing = self.repository.get_simulation_daily_run_by_key(
@@ -2305,6 +2399,34 @@ class SimulationLifecycleScheduler:
                 )
             )
         if not self._is_pre_run_failure_run(existing):
+            terminal_statuses = {
+                SimulationDailyRunStatus.SUCCEEDED,
+                SimulationDailyRunStatus.FAILED_TERMINAL,
+                SimulationDailyRunStatus.CANCELLED,
+            }
+            if (
+                not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+                and existing.status not in terminal_statuses
+                and not self._run_has_broker_side_effect_evidence(existing)
+            ):
+                return self.repository.update_simulation_daily_run(
+                    existing.run_id,
+                    status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+                    payload_patch={
+                        "last_stage": "PRE_RUN_FAILED",
+                        "broker_called": False,
+                        "submitted_intents": 0,
+                        "failed_intents": 0,
+                        "pre_run_failure": diagnostic,
+                        "submit_failure": {
+                            "stage": "PRE_RUN_FAILED",
+                            "failure_stage": diagnostic.get("failure_stage"),
+                            "type": diagnostic["error_type"],
+                            "message": diagnostic["message"],
+                            "context": diagnostic,
+                        },
+                    },
+                )
             return existing
         diagnostic = self._with_pre_run_failure_observation(existing, diagnostic)
         terminal_statuses = {
@@ -2331,6 +2453,7 @@ class SimulationLifecycleScheduler:
                 "pre_run_failure": diagnostic,
                 "submit_failure": {
                     "stage": "PRE_RUN_FAILED",
+                    "failure_stage": diagnostic.get("failure_stage"),
                     "type": diagnostic["error_type"],
                     "message": diagnostic["message"],
                     "context": diagnostic,
@@ -2380,20 +2503,33 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
         created_by: str,
-        exc: DataUnavailableError | RuntimeConfigInvalidError,
+        exc: Exception,
     ) -> dict[str, Any]:
-        raw_context = getattr(exc, "context", None)
-        context = _json_safe_preview(raw_context) if isinstance(raw_context, dict) else {}
-        reason_code = str(context.get("reason_code") or getattr(exc, "error_code", type(exc).__name__))
+        context = SimulationLifecycleScheduler._exception_context(exc)
+        reason_code = SimulationLifecycleScheduler._pre_run_failure_reason_code(exc, context)
+        failure_stage = SimulationLifecycleScheduler._pre_run_failure_stage(exc, context)
+        blocked_check = SimulationLifecycleScheduler._pre_run_failure_blocked_check(context)
+        blocked_context = SimulationLifecycleScheduler._pre_run_failure_blocked_check_context(context)
+        missing_relative_paths = SimulationLifecycleScheduler._pre_run_failure_missing_relative_paths(
+            context,
+            blocked_context=blocked_context,
+        )
         observed_at = datetime.now(UTC).isoformat()
-        return {
+        legacy_pre_run_error = isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+        diagnostic = {
             "schema_version": "simulation_pre_run_failure_v1",
-            "stage": "PRE_RUN_FAILED",
+            "stage": "PRE_RUN_FAILED" if legacy_pre_run_error else failure_stage,
+            "lifecycle_stage": "PRE_RUN_FAILED",
+            "failure_stage": failure_stage,
             "reason_code": reason_code,
             "reason": "simulation_runtime_unattended_pre_run_binding_failed",
             "strategy_id": binding.strategy_id,
             "binding_id": binding.binding_id,
             "broker_backend": binding.broker_backend.value,
+            "package_id": binding.package_id,
+            "release_id": binding.release_id,
+            "release_hash": binding.release_hash,
+            "manifest_sha256": binding.manifest_sha256,
             "trade_date": trade_date.isoformat(),
             "data_source": data_source,
             "created_by": created_by,
@@ -2411,6 +2547,13 @@ class SimulationLifecycleScheduler:
                 "no broker order was submitted before this failure"
             ),
         }
+        if blocked_check:
+            diagnostic["blocked_check"] = blocked_check
+        if blocked_context:
+            diagnostic["blocked_check_context"] = blocked_context
+        if missing_relative_paths:
+            diagnostic["missing_relative_paths"] = missing_relative_paths
+        return diagnostic
 
     @staticmethod
     def _with_pre_run_failure_observation(
@@ -2434,7 +2577,7 @@ class SimulationLifecycleScheduler:
     def _pre_run_failure_error_payload(
         run: SimulationDailyRun,
         *,
-        exc: DataUnavailableError | RuntimeConfigInvalidError | None = None,
+        exc: Exception | None = None,
     ) -> dict[str, Any]:
         pre_run_failure = run.run_payload_json.get("pre_run_failure")
         if isinstance(pre_run_failure, dict):
@@ -2477,12 +2620,104 @@ class SimulationLifecycleScheduler:
             "pre_run_failure": context,
             "reason_code": str(context.get("reason_code") or nested.get("reason_code") or "PRE_RUN_FAILED"),
             "stage": str(context.get("stage") or "PRE_RUN_FAILED"),
+            "failure_stage": context.get("failure_stage") or nested.get("failure_stage"),
             "binding_id": context.get("binding_id") or nested.get("binding_id"),
             "strategy_id": context.get("strategy_id") or nested.get("strategy_id"),
+            "package_id": context.get("package_id") or nested.get("package_id"),
+            "release_id": context.get("release_id") or nested.get("release_id"),
+            "manifest_sha256": context.get("manifest_sha256") or nested.get("manifest_sha256"),
+            "blocked_check": context.get("blocked_check") or nested.get("blocked_check"),
+            "missing_relative_paths": context.get("missing_relative_paths") or nested.get("missing_relative_paths"),
             "trade_date": context.get("trade_date") or nested.get("trade_date"),
             "broker_backend": context.get("broker_backend"),
             "data_source": context.get("data_source"),
         }
+
+    @staticmethod
+    def _exception_context(exc: Exception) -> dict[str, Any]:
+        raw_context = getattr(exc, "context", None)
+        return _json_safe_preview(raw_context) if isinstance(raw_context, dict) else {}
+
+    @staticmethod
+    def _pre_run_failure_reason_code(exc: Exception, context: dict[str, Any]) -> str:
+        reason_code = context.get("reason_code")
+        if reason_code:
+            return str(reason_code)
+        blocked_context = SimulationLifecycleScheduler._pre_run_failure_blocked_check_context(context)
+        if blocked_context and blocked_context.get("reason_code"):
+            return str(blocked_context["reason_code"])
+        return str(getattr(exc, "error_code", type(exc).__name__))
+
+    @staticmethod
+    def _pre_run_failure_stage(exc: Exception, context: dict[str, Any]) -> str:
+        for key in ("failure_stage", "phase", "stage"):
+            value = str(context.get(key) or "").strip().lower()
+            if value in {"context", "selection", "preflight", "validate", "validation", "build_plan", "planning"}:
+                return "validate" if value == "validation" else value
+            if value in {"submit_preflight", "pre_submit"}:
+                return "pre_submit"
+        if isinstance(context.get("preflight"), dict) or context.get("blocked_check"):
+            return "preflight"
+        if type(exc).__name__ == "LiveInferencePreflightError":
+            return "preflight"
+        return "pre_run"
+
+    @staticmethod
+    def _pre_run_failure_blocked_check(context: dict[str, Any]) -> str | None:
+        raw_blocked = context.get("blocked_check")
+        if isinstance(raw_blocked, dict):
+            name = raw_blocked.get("name")
+            return str(name) if name else None
+        if raw_blocked:
+            return str(raw_blocked)
+        check = SimulationLifecycleScheduler._pre_run_failure_blocked_check_payload(context)
+        if not check:
+            return None
+        name = check.get("name")
+        return str(name) if name else None
+
+    @staticmethod
+    def _pre_run_failure_blocked_check_context(context: dict[str, Any]) -> dict[str, Any]:
+        raw_blocked = context.get("blocked_check")
+        if isinstance(raw_blocked, dict):
+            raw_context = raw_blocked.get("context")
+            return dict(raw_context) if isinstance(raw_context, dict) else {}
+        check = SimulationLifecycleScheduler._pre_run_failure_blocked_check_payload(context)
+        if check:
+            raw_context = check.get("context")
+            return dict(raw_context) if isinstance(raw_context, dict) else {}
+        return {}
+
+    @staticmethod
+    def _pre_run_failure_blocked_check_payload(context: dict[str, Any]) -> dict[str, Any] | None:
+        preflight = context.get("preflight")
+        checks = preflight.get("checks") if isinstance(preflight, dict) else None
+        if not isinstance(checks, list):
+            return None
+        for check in checks:
+            if isinstance(check, dict) and str(check.get("status") or "").upper() == "BLOCKED":
+                return check
+        return None
+
+    @staticmethod
+    def _pre_run_failure_missing_relative_paths(
+        context: dict[str, Any],
+        *,
+        blocked_context: dict[str, Any] | None = None,
+    ) -> list[str]:
+        paths = SimulationLifecycleScheduler._string_list(context.get("missing_relative_paths"))
+        if paths:
+            return paths
+        return SimulationLifecycleScheduler._string_list((blocked_context or {}).get("missing_relative_paths"))
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if isinstance(value, list | tuple | set):
+            return [str(item) for item in value if str(item).strip()]
+        if value is None:
+            return []
+        text = str(value).strip()
+        return [text] if text else []
 
     def _clear_pre_run_failure_after_planning(
         self,

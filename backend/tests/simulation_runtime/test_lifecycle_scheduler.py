@@ -73,6 +73,15 @@ from backend.services.strategy_package.models import (
     StrategyPackageManifest,
     StrategyPackageSource,
 )
+from backend.services.strategy_package.live_inference import (
+    PREFLIGHT_CHECK_MODEL_PARAMS,
+    PREFLIGHT_CHECK_NAMES,
+    PREFLIGHT_STATUS_BLOCKED,
+    PREFLIGHT_STATUS_PASS,
+    LiveInferencePreflightCheck,
+    LiveInferencePreflightError,
+    LiveInferencePreflightResult,
+)
 from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
 from backend.services.trading_core.models import MinuteBar, OrderIntent, OrderSide, OrderType, PositionLot
 from backend.services.miniqmt_execution_runtime import (
@@ -157,6 +166,28 @@ def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | No
         created_reason="scheduler test",
     )
     return release, local_binding, qmt_binding, repo
+
+
+def _create_scheduler_release(
+    repo: InMemorySimulationRuntimeRepository,
+    *,
+    package_id: str,
+    manifest_sha256: str,
+):
+    return StrategyRuntimeReleaseService(repository=repo).create_release(
+        package_id=package_id,
+        manifest_sha256=manifest_sha256,
+        runtime_profile_id=f"runtime_profile_{package_id}",
+        runtime_profile_version_id=f"runtime_profile_{package_id}_v1",
+        runtime_profile_sha256=f"runtime_profile_{package_id}_hash",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="exec_policy_v25_1_small_cap",
+        execution_policy_sha256=f"exec_policy_{package_id}_hash",
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256=f"tail_policy_{package_id}_hash",
+        created_by="unit-test",
+        created_reason="scheduler multi-release test",
+    )
 
 
 def _create_extra_binding(
@@ -284,6 +315,75 @@ class FakeSelectionService:
             valid_no_candidate=self.valid_no_candidate,
             no_candidate_reason=no_candidate_reason,
         )
+
+
+class PackageRoutingSelectionService:
+    def __init__(
+        self,
+        releases_by_package: dict[str, Any],
+        *,
+        failing_package_id: str,
+        exc: Exception | None = None,
+    ) -> None:
+        self.releases_by_package = dict(releases_by_package)
+        self.failing_package_id = failing_package_id
+        self.exc = exc or _live_inference_preflight_error(package_id=failing_package_id)
+        self.calls: list[dict[str, Any]] = []
+
+    def run_selection(self, **kwargs):
+        self.calls.append(kwargs)
+        package_id = kwargs["package_ids"][0]
+        if package_id == self.failing_package_id:
+            raise self.exc
+        release = self.releases_by_package[package_id]
+        candidates = _candidate_rows()
+        evidence = _evidence(release, candidates=candidates, target_trade_date=kwargs.get("trade_date") or TRADE_DATE)
+        return StrategyPackageSelectionResult(
+            runtime_config={
+                "runtime_profile": {
+                    "selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}
+                }
+            },
+            package_results={release.package_id: candidates},
+            aggregate_results=candidates,
+            excluded_results={release.package_id: []},
+            manifest_sha256_by_package={release.package_id: release.manifest_sha256},
+            evidence_by_package={release.package_id: evidence},
+        )
+
+
+def _live_inference_preflight_error(*, package_id: str) -> LiveInferencePreflightError:
+    checks = [
+        LiveInferencePreflightCheck(
+            name=name,
+            status=PREFLIGHT_STATUS_BLOCKED if name == PREFLIGHT_CHECK_MODEL_PARAMS else PREFLIGHT_STATUS_PASS,
+            message=(
+                "StrategyPackage model params.pkl references local model code that is missing"
+                if name == PREFLIGHT_CHECK_MODEL_PARAMS
+                else f"{name} passed"
+            ),
+            context={
+                "reason_code": "strategy_package_model_code_missing",
+                "package_id": package_id,
+                "missing_relative_paths": ["model.py"],
+            }
+            if name == PREFLIGHT_CHECK_MODEL_PARAMS
+            else {},
+        )
+        for name in PREFLIGHT_CHECK_NAMES
+    ]
+    preflight = LiveInferencePreflightResult(passed=False, checks=checks)
+    return LiveInferencePreflightError(
+        "live inference cold-start preflight failed: StrategyPackage model code missing",
+        context={
+            "source_type": "live_qe_model_inference_v1",
+            "source_id": "exp_bad",
+            "package_id": package_id,
+            "phase": "preflight",
+            "blocked_check": PREFLIGHT_CHECK_MODEL_PARAMS,
+            "preflight": preflight.to_dict(),
+        },
+    )
 
 
 class CountingContextProvider(StaticSimulationRunContextProvider):
@@ -1519,6 +1619,161 @@ def test_scheduler_pre_run_binding_failure_does_not_block_other_bindings() -> No
     assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
     assert qmt_run is not None
     assert qmt_run.execution_plan_id is not None
+
+
+def test_scheduler_isolates_live_inference_preflight_failure_and_continues_later_bindings() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    good_release = _create_scheduler_release(repo, package_id="pkg_good", manifest_sha256="manifest_good")
+    bad_release = _create_scheduler_release(repo, package_id="pkg_bad", manifest_sha256="manifest_bad")
+    good_binding = service.create_binding(
+        strategy_id="strategy_good_after_bad",
+        release=good_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="good binding processed after bad preflight",
+    )
+    bad_binding = service.create_binding(
+        strategy_id="strategy_bad_preflight",
+        release=bad_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="bad binding with live inference preflight failure",
+    )
+    selection = PackageRoutingSelectionService(
+        {good_release.package_id: good_release, bad_release.package_id: bad_release},
+        failing_package_id=bad_release.package_id,
+    )
+    context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={
+            bad_binding.binding_id: _position_context(portfolio_id="portfolio_bad"),
+            good_binding.binding_id: _position_context(portfolio_id="portfolio_good"),
+        }
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=context_provider,
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    by_binding_id = {item.binding_id: item for item in result.results}
+    failed_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=bad_binding.strategy_id,
+        binding_id=bad_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+    good_run = repo.get_simulation_daily_run_by_key(
+        strategy_id=good_binding.strategy_id,
+        binding_id=good_binding.binding_id,
+        trade_date=TRADE_DATE,
+    )
+
+    assert result.total_bindings == 2
+    assert result.failed_count == 1
+    assert result.planned_count == 1
+    assert [call["package_ids"][0] for call in selection.calls] == ["pkg_bad", "pkg_good"]
+    assert by_binding_id[bad_binding.binding_id].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert by_binding_id[good_binding.binding_id].status == "PLANNED"
+    assert failed_run is not None
+    assert failed_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert failed_run.execution_plan_id is None
+    assert failed_run.run_payload_json["broker_called"] is False
+    assert failed_run.run_payload_json["submitted_intents"] == 0
+    assert good_run is not None
+    assert good_run.execution_plan_id is not None
+    pre_run_failure = failed_run.run_payload_json["pre_run_failure"]
+    assert pre_run_failure["stage"] == "preflight"
+    assert pre_run_failure["failure_stage"] == "preflight"
+    assert pre_run_failure["reason_code"] == "strategy_package_model_code_missing"
+    assert pre_run_failure["package_id"] == bad_release.package_id
+    assert pre_run_failure["manifest_sha256"] == bad_release.manifest_sha256
+    assert pre_run_failure["blocked_check"] == PREFLIGHT_CHECK_MODEL_PARAMS
+    assert pre_run_failure["missing_relative_paths"] == ["model.py"]
+    assert pre_run_failure["broker_called"] is False
+    assert pre_run_failure["submitted_intents"] == 0
+    assert by_binding_id[bad_binding.binding_id].error["context"]["reason_code"] == "strategy_package_model_code_missing"
+    assert by_binding_id[bad_binding.binding_id].error["context"]["blocked_check"] == PREFLIGHT_CHECK_MODEL_PARAMS
+    detail = SimulationRuntimeOpsService(repository=repo).get_run_detail(failed_run.run_id)
+    assert detail["run"]["errors"][0]["code"] == "PRE_RUN_FAILED"
+    assert detail["run"]["errors"][0]["context"]["reason_code"] == "strategy_package_model_code_missing"
+
+
+def test_scheduler_raise_on_error_reraises_live_inference_preflight_failure() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    selection = PackageRoutingSelectionService(
+        {release.package_id: release},
+        failing_package_id=release.package_id,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_raise")}
+        ),
+    )
+
+    with pytest.raises(LiveInferencePreflightError):
+        scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+            raise_on_error=True,
+        )
+
+    assert (
+        repo.get_simulation_daily_run_by_key(
+            strategy_id=local_binding.strategy_id,
+            binding_id=local_binding.binding_id,
+            trade_date=TRADE_DATE,
+        )
+        is None
+    )
+
+
+def test_scheduler_does_not_swallow_system_exit_from_binding_boundary() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+
+    class SystemExitSelectionService:
+        def run_selection(self, **_kwargs):
+            raise SystemExit("fatal scheduler stop signal")
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=SystemExitSelectionService(),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_system_exit")}
+        ),
+    )
+
+    with pytest.raises(SystemExit):
+        scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+        )
+
+    assert (
+        repo.get_simulation_daily_run_by_key(
+            strategy_id=local_binding.strategy_id,
+            binding_id=local_binding.binding_id,
+            trade_date=TRADE_DATE,
+        )
+        is None
+    )
 
 
 def test_scheduler_sizes_miniqmt_targets_from_dynamic_strategy_slot_equity() -> None:

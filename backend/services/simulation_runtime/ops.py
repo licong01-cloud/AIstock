@@ -59,10 +59,22 @@ class SimulationRuntimeOpsService:
 
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
+        last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
+        last_result_errors = (
+            list(last_result.get("errors") or [])
+            if isinstance(last_result, dict) and isinstance(last_result.get("errors"), list)
+            else []
+        )
         return {
             "ok": True,
             "scheduler": status.get("scheduler") or "simulation_lifecycle_scheduler",
             "autostart": bool(status.get("autostart", False)),
+            "running": bool(status.get("running", False)),
+            "thread_alive": bool(status.get("thread_alive", False)),
+            "last_run_at": status.get("last_run_at"),
+            "last_result": last_result,
+            "last_result_errors": last_result_errors,
+            "last_error_count": len(last_result_errors),
             "default_submit": bool(status.get("default_submit", False)),
             "approval_states": list(status.get("approval_states") or []),
             "schedule_windows": list(status.get("schedule_windows") or []),

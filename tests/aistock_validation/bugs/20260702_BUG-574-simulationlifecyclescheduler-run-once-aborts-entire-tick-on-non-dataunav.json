@@ -10,7 +10,7 @@
     "docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md",
     "docs/handoff/bug_574_simulation_lifecycle_scheduler_per_binding_isolation_handoff_20260702.md"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "Codex",
   "bug_id": "BUG-574",
   "closed_at": null,
   "closure_requirements": [
@@ -32,14 +32,21 @@
       "actor": "codex",
       "timestamp": "2026-07-02T07:46:01Z",
       "note": "Scope expanded from registry-only intake to the user-authorized simulation_runtime scheduler/ops code, focused scheduler/router tests, and durable handoff evidence before product edits."
+    },
+    {
+      "action": "validation_passed_pending_pr",
+      "actor": "codex",
+      "timestamp": "2026-07-02T08:42:42.155230Z",
+      "note": "Implemented per-binding exception isolation, durable pre-run failure, scheduler status projection, and regression coverage; PR pending, not merged."
     }
   ],
   "evidence_uris": [
-    "docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md"
+    "docs/handoff/simulation_lifecycle_scheduler_stall_readonly_rca_20260702.md",
+    "docs/handoff/bug_574_simulation_lifecycle_scheduler_per_binding_isolation_handoff_20260702.md"
   ],
   "expected": "SimulationLifecycleScheduler isolates every non-fatal per-binding pre-run/selection/preflight exception, persists a durable simulation_daily_run pre-run failure with package/reason/preflight context, continues later eligible bindings, preserves raise_on_error and BaseException semantics, and exposes lifecycle scheduler running/thread/last-run/error status via the read-only status API.",
   "first_seen_at": "2026-07-02T07:28:55.176698Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-574-simulationlifecyclescheduler-run-once-aborts-ent-20260702",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 1813,
@@ -70,7 +77,7 @@
     "fingerprint": "da8986c555ecf7d9cdf2a8ab",
     "source_event_id": "FE-20260702-da8986c555ec"
   },
-  "verification_run_id": null,
+  "verification_run_id": "BUG-574 local validation 2026-07-02",
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "compact_success_output": true,
@@ -82,5 +89,19 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1"
   },
-  "workflow_gate": "scope_expanded_for_fix"
+  "workflow_gate": "ready_for_pr",
+  "validation_evidence": [
+    "rtk python -m py_compile backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 104 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_router_summary.py -q -> 8 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_ops_api.py -q -> 12 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 3 passed",
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py backend/tests/simulation_runtime/test_ops_api.py backend/tests/simulation_runtime/test_selection_artifact_hmm_preflight.py -q -> 127 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/ops.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_router_summary.py -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> 834 passed, 1 skipped, 2 xfailed",
+    "rtk python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-574 --module simulation_runtime ... -> passed",
+    "rtk git diff --check -> passed"
+  ]
 }

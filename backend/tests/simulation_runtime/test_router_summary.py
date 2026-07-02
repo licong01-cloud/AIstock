@@ -29,6 +29,19 @@ class _StaticScheduler:
     def status(self) -> dict:
         return {
             "scheduler": "simulation_lifecycle_scheduler",
+            "running": True,
+            "thread_alive": True,
+            "last_run_at": "2026-07-02T13:47:00+08:00",
+            "last_result": {
+                "started_at": "2026-07-02T13:47:00+08:00",
+                "errors": [
+                    {
+                        "type": "LiveInferencePreflightError",
+                        "message": "strategy package model code missing",
+                        "context": {"reason_code": "strategy_package_model_code_missing"},
+                    }
+                ],
+            },
             "miniqmt_shadow": {
                 "env_var": "MINIQMT_SHADOW_ENABLED",
                 "enabled": True,
@@ -306,6 +319,13 @@ def test_scheduler_status_exposes_miniqmt_shadow_flag() -> None:
     response = client.get("/api/v1/simulation-runtime/scheduler/status")
 
     assert response.status_code == 200
-    shadow = response.json()["scheduler"]["miniqmt_shadow"]
+    scheduler = response.json()["scheduler"]
+    shadow = scheduler["miniqmt_shadow"]
     assert shadow["env_var"] == "MINIQMT_SHADOW_ENABLED"
     assert shadow["enabled"] is True
+    assert scheduler["running"] is True
+    assert scheduler["thread_alive"] is True
+    assert scheduler["last_run_at"] == "2026-07-02T13:47:00+08:00"
+    assert scheduler["last_result"]["errors"][0]["type"] == "LiveInferencePreflightError"
+    assert scheduler["last_result_errors"][0]["context"]["reason_code"] == "strategy_package_model_code_missing"
+    assert scheduler["last_error_count"] == 1
