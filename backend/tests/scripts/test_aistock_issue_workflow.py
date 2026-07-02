@@ -651,11 +651,12 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issue = _write_json(isolated_workflow_root / "bug.json", _bug())
+    suggested_tests = [f"backend/tests/scripts/test_aistock_issue_workflow_{index}.py" for index in range(12)]
     monkeypatch.setattr(
         workflow,
         "_build_code_intelligence_summary",
         lambda **kwargs: _fake_code_intelligence_summary(
-            affected_tests={"suggested_tests": ["backend/tests/scripts/test_aistock_issue_workflow.py"]}
+            affected_tests={"suggested_tests": suggested_tests}
         ),
     )
 
@@ -671,13 +672,29 @@ def test_finish_plan_only_can_draft_pr_body_without_evidence(
     )
 
     assert payload["closure_ready"] is True
-    assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
+    assert payload["codegraph_suggested_tests"] == suggested_tests
     assert payload["code_intelligence"]["affected_tests_ref"].endswith("affected-tests.json")
     pr_body = isolated_workflow_root / payload["pr_body_path"]
     pr_body_text = pr_body.read_text(encoding="utf-8")
     assert "Code intelligence" in pr_body_text
-    assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body_text
+    assert suggested_tests[0] in pr_body_text
+    assert suggested_tests[9] in pr_body_text
+    assert suggested_tests[10] not in pr_body_text
+    assert "CodeGraph suggested tests omitted: `2` more" in pr_body_text
     assert "missing - run required validation" in pr_body_text
+    finish_plan = json.loads((isolated_workflow_root / "tmp" / "issue_workflow" / "BUG-199" / "finish-plan.json").read_text(encoding="utf-8"))
+    assert finish_plan["code_intelligence"]["full_payload_inlined"] is False
+    assert finish_plan["code_intelligence"]["suggested_tests_count"] == 12
+    assert len(finish_plan["code_intelligence"]["suggested_tests_preview"]) == workflow.PR_BODY_CODEGRAPH_TEST_LIMIT
+    assert finish_plan["selected_validation"]["full_payload_inlined"] is False
+    assert finish_plan["selected_validation"]["codegraph_suggested_tests"]["count"] == 12
+    assert finish_plan["selected_validation"]["codegraph_suggested_tests"]["omitted_count"] == 2
+    assert finish_plan["pr_quality"]["selected_validation_inlined"] is False
+    assert finish_plan["pr_quality"]["llm_summary_inlined"] is False
+    finish_plan_text = json.dumps(finish_plan, ensure_ascii=False)
+    assert "skip_reasons" not in finish_plan_text
+    assert "matched_rules" not in finish_plan_text
+    assert "llm_triage_summary" not in finish_plan_text
 
 
 def test_triage_p0_groups_open_issues_and_flags_missing_linkage(
@@ -857,12 +874,13 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     bugs_root = workflow.BUGS_ROOT
     _write_json(bugs_root / "bug199.json", _bug())
     _write_json(bugs_root / "bug200.json", _bug(bug_id="BUG-200", github_issue_number=200, github_issue_url="https://github.example/issues/200"))
+    suggested_tests = [f"backend/tests/scripts/test_aistock_issue_workflow_{index}.py" for index in range(11)]
     monkeypatch.setattr(
         workflow,
         "_build_batch_code_intelligence_summary",
         lambda **kwargs: _fake_code_intelligence_summary(
             item_id=kwargs["batch_id"],
-            affected_tests={"suggested_tests": ["backend/tests/scripts/test_aistock_issue_workflow.py"]},
+            affected_tests={"suggested_tests": suggested_tests},
         ),
     )
 
@@ -882,13 +900,16 @@ def test_finish_batch_plan_generates_per_issue_pr_body(
     assert payload["workflow_gate"] == "ready_for_pr"
     assert payload["scope_check"]["status"] == "passed"
     assert payload["per_issue_commit_map"] == {"BUG-199": "abc1234", "BUG-200": "def5678"}
-    assert payload["codegraph_suggested_tests"] == ["backend/tests/scripts/test_aistock_issue_workflow.py"]
+    assert payload["codegraph_suggested_tests"] == suggested_tests
     pr_body = (isolated_workflow_root / payload["pr_body_path"]).read_text(encoding="utf-8")
     assert "Closes #199" in pr_body
     assert "Closes #200" in pr_body
     assert "Per-issue closure map" in pr_body
     assert "Code intelligence" in pr_body
-    assert "backend/tests/scripts/test_aistock_issue_workflow.py" in pr_body
+    assert suggested_tests[0] in pr_body
+    assert suggested_tests[9] in pr_body
+    assert suggested_tests[10] not in pr_body
+    assert "CodeGraph suggested tests omitted: `1` more" in pr_body
 
 
 def test_finish_batch_blocks_scope_expansion(
@@ -3328,6 +3349,7 @@ def test_merge_uses_cleanup_owned_branch_deletion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[list[str]] = []
+    event_evidence: list[dict[str, Any]] = []
 
     def fake_run(args: list[str], **kwargs: Any) -> dict[str, Any]:
         commands.append(args)
@@ -3350,6 +3372,13 @@ def test_merge_uses_cleanup_owned_branch_deletion(
         return {"ok": True, "returncode": 0, "stdout": "", "stderr": ""}
 
     monkeypatch.setattr(workflow, "_run_command", fake_run)
+    original_append_event = workflow._append_event
+
+    def capture_append_event(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        event_evidence.append(dict(kwargs.get("evidence") or {}))
+        return original_append_event(*args, **kwargs)
+
+    monkeypatch.setattr(workflow, "_append_event", capture_append_event)
     monkeypatch.setattr(
         workflow,
         "_verify_pr_merged",
@@ -3366,6 +3395,8 @@ def test_merge_uses_cleanup_owned_branch_deletion(
     assert payload["verified"]["merged"] is True
     merge_commands = [args for args in commands if args[:3] == ["gh", "pr", "merge"]]
     assert merge_commands == [["gh", "pr", "merge", "https://github.example/pull/199", "--squash"]]
+    assert all("statusCheckRollup" not in json.dumps(item) for item in event_evidence)
+    assert any(item.get("raw_status_check_rollup_inlined") is False for item in event_evidence)
 
 
 def test_generic_merge_helper_uses_cleanup_owned_branch_deletion(

@@ -51,6 +51,7 @@ ARTIFACT_PATH_PATTERNS = (
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
+PR_BODY_CODEGRAPH_TEST_LIMIT = 10
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
 SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
@@ -1222,6 +1223,14 @@ def _append_event(
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event_payload, ensure_ascii=False, sort_keys=True) + "\n")
     return event_payload
+
+
+def _compact_command_evidence(result: dict[str, Any], *, include_stdout: bool = True) -> dict[str, Any]:
+    evidence: dict[str, Any] = {"returncode": result.get("returncode")}
+    if include_stdout:
+        evidence["stdout_excerpt"] = str(result.get("stdout") or "")[:1000]
+    evidence["stderr_excerpt"] = str(result.get("stderr") or "")[:1000]
+    return evidence
 
 
 def _parse_utc_timestamp(value: str | None) -> datetime | None:
@@ -3995,6 +4004,15 @@ def build_task_card(
             "state_json": _repo_rel(state_path, root),
             "events_jsonl": _repo_rel(events_path, root),
         },
+        "debug_only_artifacts": {
+            "machine_json": [
+                _repo_rel(context_pack_json_path, root),
+                _repo_rel(fix_ready_path, root),
+                _repo_rel(state_path, root),
+                _repo_rel(events_path, root),
+            ],
+            "read_policy": "Do not read these machine artifacts by default; use task-card.md, context-pack.md, and compact command output unless debugging a workflow failure or resuming corrupted state.",
+        },
         "problem": {
             "title": record.get("title"),
             "statement": context_pack.get("problem_statement"),
@@ -4058,6 +4076,7 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Artifacts",
         *[f"- {key}: `{value}`" for key, value in artifacts.items() if value],
+        "- machine JSON policy: debug/resume only; do not read `state.json`, `events.jsonl`, or `fix-ready.json` during ordinary fixes.",
         "",
         "## Code Intelligence",
         f"- status: `{code_intel.get('status') or 'unknown'}`",
@@ -5130,12 +5149,13 @@ def build_finish_plan(
     _write_json(output_dir / "finish-plan.json", {
         "bug_id": canonical_bug_id,
         "changed_files": changed,
-        "selected_validation": validation,
-        "pr_quality": pr_quality,
+        "selected_validation": _compact_validation_for_finish(validation),
+        "pr_quality": _compact_pr_quality_for_finish(pr_quality),
         "validation_evidence": evidence,
         "closure_ready": closure_ready,
-        "code_intelligence": code_intelligence_summary,
+        "code_intelligence": _compact_code_intelligence_for_finish(code_intelligence_summary, codegraph_tests),
         "h7_code_intelligence": h7_code_intelligence,
+        "artifact_policy": "compact_finish_plan_no_full_selected_validation_pr_quality_or_code_intelligence_payload",
     })
     _write_text(pr_body_path, pr_body)
     next_state = "validation_passed" if evidence else ("validation_planned" if plan_only else "blocked")
@@ -5211,6 +5231,128 @@ def build_finish_plan(
     return payload
 
 
+def _codegraph_test_lines(tests: Iterable[Any], *, limit: int = PR_BODY_CODEGRAPH_TEST_LIMIT) -> list[str]:
+    normalized = [str(item).strip() for item in tests or [] if str(item).strip()]
+    if not normalized:
+        return ["- CodeGraph suggested tests: `none`"]
+    visible = normalized[:limit]
+    lines = [f"- CodeGraph suggested test: `{path}`" for path in visible]
+    omitted = len(normalized) - len(visible)
+    if omitted > 0:
+        lines.append(f"- CodeGraph suggested tests omitted: `{omitted}` more; see `affected-tests.json` / task card artifacts.")
+    return lines
+
+
+def _compact_code_intelligence_for_finish(code_intelligence_summary: dict[str, Any], tests: list[Any]) -> dict[str, Any]:
+    return {
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "fallback_reason": code_intelligence_summary.get("fallback_reason"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "suggested_tests_count": len(tests),
+        "suggested_tests_preview": [str(item) for item in tests[:PR_BODY_CODEGRAPH_TEST_LIMIT]],
+        "full_payload_inlined": False,
+    }
+
+
+def _list_preview(items: Iterable[Any], *, limit: int = PR_BODY_CODEGRAPH_TEST_LIMIT) -> dict[str, Any]:
+    values = [str(item) for item in items or [] if str(item)]
+    return {
+        "count": len(values),
+        "preview": values[:limit],
+        "omitted_count": max(0, len(values) - limit),
+    }
+
+
+def _compact_ownership_for_finish(ownership: dict[str, Any]) -> dict[str, Any]:
+    matched_rules = ownership.get("matched_rules") or []
+    return {
+        "changed_file_count": len(ownership.get("changed_files") or []),
+        "impacted_modules": ownership.get("impacted_modules") or [],
+        "matched_rule_count": len(matched_rules),
+        "unmatched_file_count": len(ownership.get("unmatched_files") or []),
+        "risk_levels": ownership.get("risk_levels") or [],
+        "suggested_scope": _list_preview(ownership.get("suggested_scope") or []),
+        "full_payload_inlined": False,
+    }
+
+
+def _compact_validation_for_finish(validation: dict[str, Any]) -> dict[str, Any]:
+    codegraph_tests = validation.get("codegraph_suggested_tests") or []
+    return {
+        "schema_version": validation.get("schema_version"),
+        "impacted_modules": validation.get("impacted_modules") or [],
+        "primary_modules": validation.get("primary_modules") or [],
+        "required_plans": validation.get("required_plans") or [],
+        "recommended_plans": validation.get("recommended_plans") or [],
+        "plan_promotions_count": len(validation.get("plan_promotions") or []),
+        "nightly_plans": validation.get("nightly_plans") or [],
+        "production_gates": validation.get("production_gates") or {},
+        "docs_lite": bool(validation.get("docs_lite")),
+        "docs_lite_validation": validation.get("docs_lite_validation"),
+        "docs_fast_tier": validation.get("docs_fast_tier"),
+        "docs_fast_validation": validation.get("docs_fast_validation"),
+        "docs_controlled_required": bool(validation.get("docs_controlled_required")),
+        "ownership": _compact_ownership_for_finish(validation.get("ownership") or {}),
+        "codegraph_suggested_tests": _list_preview(codegraph_tests),
+        "full_payload_inlined": False,
+        "token_policy": "skip maps, ownership rule bodies, and full CodeGraph test lists stay in source artifacts only.",
+    }
+
+
+def _compact_scope_check_for_finish(scope_check: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": scope_check.get("status"),
+        "status_source": scope_check.get("status_source"),
+        "violations": _list_preview(scope_check.get("violations") or []),
+        "allowed_write_scope": _list_preview(scope_check.get("allowed_write_scope") or []),
+    }
+
+
+def _compact_gate_for_finish(gate: Any) -> Any:
+    if not isinstance(gate, dict):
+        return gate
+    compact = _pick(gate, "workflow_gate", "status", "result", "required", "passed")
+    if gate.get("blocking"):
+        compact["blocking"] = _list_preview(gate.get("blocking") or [])
+    if gate.get("warnings"):
+        compact["warnings_count"] = len(gate.get("warnings") or [])
+    if gate.get("errors"):
+        compact["errors_count"] = len(gate.get("errors") or [])
+    return compact
+
+
+def _compact_pr_quality_for_finish(pr_quality: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": pr_quality.get("schema_version"),
+        "base": pr_quality.get("base"),
+        "head": pr_quality.get("head"),
+        "task_tier": pr_quality.get("task_tier"),
+        "linked_issues": pr_quality.get("linked_issues") or [],
+        "changed_files_count": len(pr_quality.get("changed_files") or []),
+        "impacted_modules": pr_quality.get("impacted_modules") or [],
+        "scope_check": _compact_scope_check_for_finish(pr_quality.get("scope_check") or {}),
+        "docs_lite": bool(pr_quality.get("docs_lite")),
+        "docs_lite_validation": pr_quality.get("docs_lite_validation"),
+        "validation_results": pr_quality.get("validation_results"),
+        "data_acceptance": pr_quality.get("data_acceptance"),
+        "production_ddl_gate": pr_quality.get("production_ddl_gate"),
+        "production_frontend_dependency_gate": pr_quality.get("production_frontend_dependency_gate"),
+        "production_backend_dependency_gate": pr_quality.get("production_backend_dependency_gate"),
+        "p0p1_evidence_gate": _compact_gate_for_finish(pr_quality.get("p0p1_evidence_gate")),
+        "design_compliance_gate": _compact_gate_for_finish(pr_quality.get("design_compliance_gate")),
+        "feature_linkage_gate": _compact_gate_for_finish(pr_quality.get("feature_linkage_gate")),
+        "selected_validation_inlined": False,
+        "llm_summary_inlined": False,
+        "full_payload_inlined": False,
+    }
+
+
 def render_pr_body(
     bug_id: str,
     record: dict[str, Any],
@@ -5237,7 +5379,7 @@ def render_pr_body(
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
         "",
         "## Code intelligence",
-        *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
+        *_codegraph_test_lines(validation.get("codegraph_suggested_tests") or []),
         f"- H7 readiness: `{code_intel.get('workflow_gate') or 'unknown'}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- readiness_next_command: `{code_intel.get('readiness_next_command') or 'not_required'}`",
@@ -5662,7 +5804,7 @@ def render_batch_pr_body(
         f"- context_ref: `{code_intelligence_summary.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intelligence_summary.get('affected_tests_ref') or 'not_generated'}`",
         f"- fallback_used: `{str(bool(code_intelligence_summary.get('fallback_used'))).lower()}`",
-        *[f"- CodeGraph suggested test: `{path}`" for path in codegraph_tests or ["none"]],
+        *_codegraph_test_lines(codegraph_tests),
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
@@ -7635,6 +7777,7 @@ def _execute_workflow_command(
     event: str | None = None,
     root: Path | None = None,
     allow_failure: bool = False,
+    include_stdout_evidence: bool = True,
 ) -> dict[str, Any]:
     started = time.monotonic()
     result = _run_command(args, cwd=cwd, timeout=timeout)
@@ -7648,11 +7791,7 @@ def _execute_workflow_command(
         root=root,
         duration_seconds=duration,
         result="ok" if result.get("ok") else "failed",
-        evidence={
-            "returncode": result.get("returncode"),
-            "stdout_excerpt": str(result.get("stdout") or "")[:1000],
-            "stderr_excerpt": str(result.get("stderr") or "")[:1000],
-        },
+        evidence=_compact_command_evidence(result, include_stdout=include_stdout_evidence),
     )
     if not result.get("ok") and not allow_failure:
         raise WorkflowError(result.get("stderr") or result.get("stdout") or f"command failed: {' '.join(args)}")
@@ -8494,9 +8633,17 @@ def _merge_pr_if_ready_for_bug(bug_id: str, pr_url: str) -> dict[str, Any]:
         cwd=REPO_ROOT,
         timeout=60,
         event="command:gh_pr_view_before_merge",
+        include_stdout_evidence=False,
     )
     payload = json.loads(str(view.get("stdout") or "{}"))
     check_summary = _classify_pr_checks(payload.get("statusCheckRollup") or [])
+    _append_event(
+        bug_id,
+        event="pr_check_summary_before_merge",
+        state="ci_green",
+        result="ok",
+        evidence={"check_summary": _checks_summary_payload(check_summary), "raw_status_check_rollup_inlined": False},
+    )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
     if payload.get("state") == "MERGED":

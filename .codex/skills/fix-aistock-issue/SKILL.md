@@ -29,6 +29,9 @@ English trigger example: `fix BUG-112 according to AIstock standards; do not mer
 - Use graph-first context for every issue: read `task-card.md` Code Intelligence refs (`codegraph-context.md`, `affected-tests.json`, and `ua-<module>-summary.md`) before `rg`/file reads. If Understand Anything is configured but missing a graph and the task is T2/T3 or graph-specific, run `/understand F:\Dev\AIstock --language zh --no-auto-update`; otherwise keep UA missing as warning-only.
 - For UI BUG intake, use `submit-bug` returned `ui_intake_hints` as the first route/scope/reproduce checklist; do not broad-scan frontend until those hints fail or prove stale.
 - Successful workflow/validation commands should stay compact: do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, or skipped-plan maps into chat. Use default compact stdout for decisions, and use `--output-format full-json` or `--output tmp/issue_workflow/<BUG>/...json` only when exact diagnostics are needed.
+- Treat machine artifacts as debug-only unless the command fails or state recovery needs them: do not open `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, or dependency cache JSON during ordinary fixes. Prefer `task-card.md`, `context-pack.md`, compact stdout, and postmortem summary fields.
+- CodeGraph suggested tests are candidates, not required validation. Read only the top summary and artifact refs; run only selected required/targeted validation unless the issue scope proves more tests are needed.
+- Avoid broad searches over `node_modules/`, `tmp/litellm_*`, `tmp/miniqmt_execution_runtime/`, `.next/`, `.pytest_cache/`, and `tmp/issue_workflow/**/{state,events,finish-plan}.json*` unless debugging that artifact producer.
 
 ## Documentation Fast Path
 
@@ -56,7 +59,7 @@ Temporary Codex/Claude handoff notes are not ordinary docs. Write them to ignore
    If an active state/worktree already exists, the wrapper returns `workflow_gate=resume` or `blocked`; follow `next_command` instead of creating another worktree. Use `--force-new-worktree --reason "<why>"` only for an audited recovery exception.
    Compatibility fallback:
    `python scripts/aistock_issue_workflow.py start --bug-id BUG-XXX --create-worktree`
-4. Switch to the returned worktree when one is created, then read `context_pack_md`, `fix_ready_path`, `state_path`, and `events_path` from the output.
+4. Switch to the returned worktree when one is created, then read `task-card.md` first and `context_pack_md` only when needed. Treat `fix_ready_path`, `state_path`, and `events_path` as debug/resume artifacts, not ordinary context.
 5. Read graph-first refs from the task card, then fix only within `allowed_write_scope`; run targeted `rg`/reads inside that scope only when graph refs are insufficient. If more files are needed, stop and ask for scope expansion.
 6. If the window restarts, run:
    `python scripts/aistock_issue_workflow.py resume --bug-id BUG-XXX`

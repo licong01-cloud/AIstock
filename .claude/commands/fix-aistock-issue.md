@@ -38,6 +38,13 @@ Use graph-first context before broad searches. After `run --mode plan`, read the
 
 For ordinary BUG fixes, do not read feature, module, architecture, or historical design documents by default. Load a design document only when the BUG/GitHub Issue explicitly cites it, the user asks for design/historical context, or `fast-path` classifies the task as T3 design/architecture.
 
+Token discipline for Claude Code:
+
+- Default context is `task-card.md`, compact command stdout, `context-pack.md` only when needed, and top-level postmortem summary fields.
+- Do not open machine artifacts such as `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, large dependency pricing/config JSON, or full `statusCheckRollup` unless debugging a failed workflow command or recovering state.
+- Treat CodeGraph suggested tests as candidates, not required validation. Use the required validation list plus targeted evidence; do not run or read every affected-test candidate by default.
+- Exclude `node_modules/`, `tmp/litellm_*`, `tmp/miniqmt_execution_runtime/`, `.next/`, `.pytest_cache/`, and `tmp/issue_workflow/**/{state,events,finish-plan}.json*` from broad searches unless the task is specifically about those artifacts.
+
 
 ## Non-BUG feature requests
 
@@ -69,11 +76,10 @@ If the command returns `workflow_gate=resume`, do not create another worktree; s
 
 Then switch to the returned worktree and read:
 
-- `context_pack_md`
-- `fix_ready_path`
-- `state_path`
-- `events_path`
 - `task_card_md` Code Intelligence refs
+- `context_pack_md` only when the task card does not contain enough context
+
+Do not read `fix_ready_path`, `state_path`, or `events_path` during ordinary fixes; use them only for explicit resume/debug needs.
 
 Fix only inside `allowed_write_scope`. Use graph-first refs before targeted `rg`; if more files are needed, stop and request scope expansion.
 
