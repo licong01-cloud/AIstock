@@ -1,0 +1,74 @@
+{
+  "actual": "Recent workflow audit found BUG-570 finish-plan.json around 20.9k estimated tokens, state.json around 19.7k, BUG-571 temporary litellm pricing backup around 386k if accidentally read, and PR #1805 listing 45 CodeGraph suggested tests in PR body. Existing skills say compact output but do not hard-stop default JSON reads.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "docs/standards/aistock_issue_workflow_quickstart.md",
+    "tests/aistock_validation/bugs/20260702_BUG-576-codex-and-claude-issue-workflow-still-exposes-token-heavy-json-and-overs.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-576",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T08:37:10.392020Z",
+  "description": "Recent workflow audit found BUG-570 finish-plan.json around 20.9k estimated tokens, state.json around 19.7k, BUG-571 temporary litellm pricing backup around 386k if accidentally read, and PR #1805 listing 45 CodeGraph suggested tests in PR body. Existing skills say compact output but do not hard-stop default JSON reads.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-24be4b4cd0e0",
+      "timestamp": "2026-07-02T08:37:10.392015Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Codex/Claude default path should read task-card/context summaries only, treat machine JSON as debug-only, cap CodeGraph suggested tests in PR bodies, persist only compact CI check summaries, and document heavy artifact exclusions so ordinary BUG handling avoids unnecessary token and test expansion without reducing validation quality.",
+  "first_seen_at": "2026-07-02T08:37:10.392020Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1817,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1817",
+  "last_seen_at": "2026-07-02T08:37:10.392020Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Codex and Claude issue workflow still exposes token-heavy JSON and oversized CodeGraph test lists",
+  "trigger_condition": {
+    "fingerprint": "24be4b4cd0e043c4b1af27e3",
+    "source_event_id": "FE-20260702-24be4b4cd0e0"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
