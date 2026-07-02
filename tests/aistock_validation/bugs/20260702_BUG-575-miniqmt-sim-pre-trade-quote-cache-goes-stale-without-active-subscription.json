@@ -37,8 +37,8 @@
   "expected": "MiniQMT pre-trade quote path ensures active whole-quote subscription for requested symbols, attempts bounded re-subscribe/reconnect when returned ticks are stale or connection is invalid, exposes feed health evidence, and preserves the 300s REALTIME_QUOTE_STALE fail-closed guard.",
   "first_seen_at": "2026-07-02T08:02:33.557669Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0ffd76d9e900dc6cfe2080b339ae7430273d0d23",
+  "fixed_at": "2026-07-02T10:00:37.480070Z",
   "github_issue_number": 1816,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1816",
   "last_seen_at": "2026-07-02T08:02:33.557669Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1821",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -71,6 +72,9 @@
     "fingerprint": "f2d2d67219752b2b2d7b7fbb",
     "source_event_id": "FE-20260702-f2d2d6721975"
   },
+  "validation_evidence": [
+    "PR #1821 CI all real checks green; mergeStateStatus=CLEAN before squash merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
