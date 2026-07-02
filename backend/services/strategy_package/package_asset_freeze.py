@@ -956,7 +956,29 @@ class PackageAssetFreezeService:
         manifest: StrategyPackageManifest,
     ) -> tuple[RuntimeAssetManifest | None, StrategyPackageAssetRecord | None]:
         if _is_multi_alpha_parent_manifest(manifest):
-            return manifest.runtime_assets, None
+            runtime_assets = manifest.runtime_assets
+            alpha158 = runtime_assets.alpha158 if runtime_assets is not None else None
+            if alpha158 is None or not alpha158.enabled:
+                return runtime_assets, None
+            data = self._read_existing_asset(
+                asset_ref=alpha158.asset_ref,
+                expected_sha256=alpha158.sha256,
+                package_id=manifest.package_id,
+                logical_name="alpha158_schema",
+                asset_type=StrategyPackageAssetType.FACTOR_SCHEMA,
+            )
+            size_bytes = alpha158.size_bytes if alpha158.size_bytes is not None else len(data)
+            frozen_alpha158 = alpha158.model_copy(update={"size_bytes": size_bytes})
+            frozen_runtime_assets = runtime_assets.model_copy(update={"alpha158": frozen_alpha158})
+            return frozen_runtime_assets, self._asset_record(
+                manifest=manifest,
+                asset_type=StrategyPackageAssetType.FACTOR_SCHEMA,
+                asset_ref=alpha158.asset_ref,
+                sha256=alpha158.sha256,
+                size_bytes=size_bytes,
+                logical_name="alpha158_schema",
+                source_uri=alpha158.source_uri,
+            )
         source = self._conf_yaml_bytes(manifest)
         conf = load_conf_yaml_bytes(source.data, source_uri=source.source_uri)
         payload = alpha158_schema_payload(conf)
@@ -1464,16 +1486,21 @@ def _manifest_runtime_locators(manifest: StrategyPackageManifest) -> list[QERunt
     locators: list[QERuntimeAssetLocator] = []
     locators.extend(_locators_from_mapping(evidence, source="manifest.source_evidence"))
 
-    component = evidence.get("multi_alpha_component") if isinstance(evidence, Mapping) else None
-    if isinstance(component, Mapping):
+    component_entries = []
+    if isinstance(evidence, Mapping):
+        for key in ("multi_alpha_parent_leg_asset", "multi_alpha_component"):
+            component = evidence.get(key)
+            if isinstance(component, Mapping):
+                component_entries.append((key, component))
+    for evidence_key, component in component_entries:
         primary = component.get("primary_qe_source")
         if isinstance(primary, Mapping):
-            locators.extend(_locators_from_mapping(primary, source="manifest.multi_alpha_component.primary_qe_source"))
+            locators.extend(_locators_from_mapping(primary, source=f"manifest.{evidence_key}.primary_qe_source"))
         seed_provenance = component.get("seed_provenance")
         if isinstance(seed_provenance, list):
             for index, item in enumerate(seed_provenance):
                 if isinstance(item, Mapping):
-                    locators.extend(_locators_from_mapping(item, source=f"manifest.seed_provenance[{index}]"))
+                    locators.extend(_locators_from_mapping(item, source=f"manifest.{evidence_key}.seed_provenance[{index}]"))
 
     source = manifest.source
     source_type = source.source_type.value

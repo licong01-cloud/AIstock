@@ -15,20 +15,22 @@ from backend.services.strategy_package.live_inference import (
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.multi_alpha_live import (
     LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE,
-    REASON_CHILD_MANIFEST_MISMATCH,
     REASON_COMPONENT_COVERAGE_LOW,
     REASON_DEADLINE_EXCEEDED,
     REASON_LABEL_WINDOW_INSUFFICIENT,
-    REASON_LEG_MISSING,
+    REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+    REASON_PARENT_LEG_FACTOR_REFS_MISSING,
+    REASON_PARENT_LEG_INFERENCE_EMPTY,
+    REASON_PARENT_LEG_MODEL_ASSET_MISSING,
     REASON_PREDICTION_NOT_AUTHORITATIVE,
     REASON_RUNTIME_NOT_ENABLED,
-    REASON_SEED_PREDICTION_MISSING,
     REASON_TOPK_RUNTIME_MISMATCH,
     REASON_WEIGHT_ALL_NON_POSITIVE,
     REASON_WEIGHT_UNAVAILABLE,
     MultiAlphaLivePredictionProvider,
     MultiAlphaWeightService,
 )
+from backend.services.strategy_package.models import RuntimeAssetManifest
 from backend.services.strategy_package.runtime import StrategyPackageRuntime
 from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
@@ -54,17 +56,27 @@ TRADING_DAYS = [date(2024, 5, 1) + timedelta(days=offset) for offset in range(63
 class FakeResolver:
     def __init__(self) -> None:
         self.load_calls: list[dict] = []
+        self.legacy_load_calls: list[dict] = []
         self.prepare_calls: list[dict] = []
 
-    def load_source_for_strategy_package(self, **kwargs):
-        self.load_calls.append(kwargs)
-        return SimpleNamespace(experiment_id=kwargs["run_id"])
+    def load_source_for_strategy_package(self, **kwargs):  # noqa: ANN001, ANN201
+        self.legacy_load_calls.append(kwargs)
+        raise AssertionError("multi-alpha parent runtime must not call legacy child/package source loader")
 
-    def prepare_workspace(self, **kwargs):
+    def load_source_for_strategy_package_leg(self, **kwargs):  # noqa: ANN001, ANN201
+        self.load_calls.append(kwargs)
+        return SimpleNamespace(
+            experiment_id=f"{kwargs['package_id']}:{kwargs['leg_id']}",
+            model_params_origin="package_asset",
+            source_workspace_type="strategy_package_asset_store",
+            leg_id=kwargs["leg_id"],
+        )
+
+    def prepare_workspace(self, **kwargs):  # noqa: ANN001, ANN201
         self.prepare_calls.append(kwargs)
         artifact_config = kwargs["runtime_config"]["selection_artifact_config"]
         return SimpleNamespace(
-            workspace_path=f"workspace/{kwargs['package_id']}/{artifact_config['multi_alpha_seed_run_id']}",
+            workspace_path=f"workspace/{kwargs['package_id']}/{artifact_config['multi_alpha_leg_id']}",
             seed_run_id=artifact_config["multi_alpha_seed_run_id"],
             leg_id=artifact_config["multi_alpha_leg_id"],
         )
@@ -73,17 +85,32 @@ class FakeResolver:
 class FakeProvider:
     backend_name = "fake_live"
 
-    def __init__(self, scores_by_seed: dict[str, list[dict]]) -> None:
-        self.scores_by_seed = scores_by_seed
+    def __init__(self, scores_by_leg: dict[str, list[dict]]) -> None:
+        self.scores_by_leg = scores_by_leg
         self.calls: list[dict] = []
 
-    def run(self, **kwargs):
+    def run(self, **kwargs):  # noqa: ANN001, ANN201
         self.calls.append(kwargs)
-        seed_run_id = kwargs["workspace"].seed_run_id
+        leg_id = kwargs["workspace"].leg_id
         return LiveInferenceResult(
-            scores=deepcopy(self.scores_by_seed.get(seed_run_id, [])),
-            metadata={"seed_run_id": seed_run_id},
+            scores=deepcopy(self.scores_by_leg.get(leg_id, [])),
+            metadata={"leg_id": leg_id, "seed_run_id": kwargs["workspace"].seed_run_id},
         )
+
+
+class ChildFailingRepository:
+    def __init__(self, delegate) -> None:  # noqa: ANN001
+        self.delegate = delegate
+        self.get_calls: list[str] = []
+
+    def get(self, package_id: str):  # noqa: ANN201
+        self.get_calls.append(package_id)
+        if str(package_id).startswith("pkg_mac"):
+            raise AssertionError("multi-alpha parent runtime attempted to read legacy child package")
+        return self.delegate.get(package_id)
+
+    def __getattr__(self, name: str):  # noqa: ANN204
+        return getattr(self.delegate, name)
 
 
 def _score_rows(*, reverse: bool = False, count: int = 60) -> list[dict]:
@@ -153,14 +180,14 @@ def _make_parent(*, live_weight_policy: bool = True):
     return package_repo, live_parent
 
 
-def _artifact_service(package_repo, provider_scores: dict[str, list[dict]] | None = None):
+def _artifact_service(package_repo, provider_scores: dict[str, list[dict]] | None = None):  # noqa: ANN001
     artifact_repo = InMemorySelectionScoreArtifactRepository()
     resolver = FakeResolver()
     provider = FakeProvider(
         provider_scores
         or {
-            A1_SEED: _score_rows(reverse=False),
-            FUND_SEED: _score_rows(reverse=True),
+            A1_LEG: _score_rows(reverse=False),
+            FUND_LEG: _score_rows(reverse=True),
         }
     )
     service = StrategyPackageSelectionArtifactService(
@@ -176,7 +203,7 @@ def _reason(exc: BaseException) -> str | None:
     return getattr(exc, "context", {}).get("reason_code")
 
 
-def _generate(service, parent, runtime_config: dict):
+def _generate(service, parent, runtime_config: dict):  # noqa: ANN001
     return service.generate_from_live_inference(
         package_id=parent.package_id,
         trade_date=TRADE_DATE,
@@ -199,6 +226,12 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     assert first.metadata["component_score_artifact_ids"].keys() == {A1_LEG, FUND_LEG}
     assert first.metadata["weight_artifact_id"].startswith("maw_")
     assert first.metadata["component_manifest_sha256"][A1_LEG]
+    assert first.metadata["runtime_source"] == "parent_package_asset"
+    assert first.metadata["runtime_package_id"] == parent.package_id
+    assert first.metadata["model_params_origin"] == "package_asset"
+    assert first.metadata["component_artifacts"][A1_LEG]["runtime_source"] == "parent_package_asset"
+    assert first.metadata["component_artifacts"][FUND_LEG]["model_params_origin"] == "package_asset"
+    assert first.metadata["component_artifacts"][A1_LEG]["child_package_id"] is None
     assert first.metadata["seed_run_ids"] == {A1_LEG: [A1_SEED], FUND_LEG: [FUND_SEED]}
     assert first.metadata["normalization_method"] == "zscore"
     assert first.metadata["final_topk"] == 25
@@ -207,7 +240,12 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     assert first.artifact_sha256 == second.artifact_sha256
     assert first.scores_json == second.scores_json
     assert len(provider.calls) == 4
-    assert {call["run_id"] for call in resolver.load_calls} == {A1_SEED, FUND_SEED}
+    assert resolver.legacy_load_calls == []
+    assert {call["leg_id"] for call in resolver.load_calls} == {A1_LEG, FUND_LEG}
+    assert all(call["package_id"] == parent.package_id for call in resolver.load_calls)
+    assert all(call["model_asset"].asset_ref for call in resolver.load_calls)
+    assert all(call["factor_set"] for call in resolver.load_calls)
+    assert all(str(call["cache_namespace"]).startswith("leg_") for call in resolver.prepare_calls)
 
     snapshot = StrategyPackageRuntime(artifact_repository=artifact_repo).build_signal_snapshot(
         manifest=parent.current_manifest(),
@@ -249,7 +287,7 @@ def test_multi_alpha_runtime_rejects_non_authoritative_artifact() -> None:
     assert _reason(excinfo.value) == REASON_PREDICTION_NOT_AUTHORITATIVE
 
 
-def first_multi_alpha_hash(manifest, runtime_config):
+def first_multi_alpha_hash(manifest, runtime_config):  # noqa: ANN001, ANN201
     from backend.services.strategy_package.multi_alpha_live import multi_alpha_selection_artifact_runtime_hash
 
     return multi_alpha_selection_artifact_runtime_hash(manifest, runtime_config)
@@ -259,17 +297,16 @@ def first_multi_alpha_hash(manifest, runtime_config):
     ("mutator", "expected_reason"),
     [
         (
-            lambda package_repo, parent, runtime_config: package_repo.records.pop(
-                parent.manifest.source_evidence["multi_alpha"]["legs"][0]["child_package_id"]
-            ),
-            REASON_LEG_MISSING,
+            lambda _package_repo, parent, _runtime_config: _remove_first_leg_model_asset(parent),
+            REASON_PARENT_LEG_MODEL_ASSET_MISSING,
         ),
         (
-            lambda _package_repo, parent, _runtime_config: parent.manifest.source_evidence["multi_alpha"]["legs"][0].__setitem__(
-                "child_manifest_sha256",
-                "0" * 64,
-            ),
-            REASON_CHILD_MANIFEST_MISMATCH,
+            lambda _package_repo, parent, _runtime_config: _clear_first_leg_factor_refs(parent),
+            REASON_PARENT_LEG_FACTOR_REFS_MISSING,
+        ),
+        (
+            lambda _package_repo, parent, _runtime_config: _remove_parent_alpha158_schema(parent),
+            REASON_PARENT_ALPHA158_SCHEMA_MISSING,
         ),
         (
             lambda _package_repo, _parent, runtime_config: runtime_config["selection_artifact_config"].__setitem__(
@@ -280,7 +317,7 @@ def first_multi_alpha_hash(manifest, runtime_config):
         ),
     ],
 )
-def test_multi_alpha_live_selection_negative_manifest_and_coverage(mutator, expected_reason) -> None:
+def test_multi_alpha_live_selection_negative_manifest_and_coverage(mutator, expected_reason) -> None:  # noqa: ANN001
     package_repo, parent = _make_parent(live_weight_policy=False)
     runtime_config = _runtime_config()
     service, _artifact_repo, _resolver, _provider = _artifact_service(package_repo)
@@ -292,15 +329,15 @@ def test_multi_alpha_live_selection_negative_manifest_and_coverage(mutator, expe
     assert _reason(excinfo.value) == expected_reason
 
 
-def test_multi_alpha_live_selection_fails_loud_when_seed_scores_missing() -> None:
+def test_multi_alpha_live_selection_fails_loud_when_leg_scores_missing() -> None:
     package_repo, parent = _make_parent(live_weight_policy=False)
     runtime_config = _runtime_config()
-    service, _artifact_repo, _resolver, _provider = _artifact_service(package_repo, provider_scores={A1_SEED: _score_rows()})
+    service, _artifact_repo, _resolver, _provider = _artifact_service(package_repo, provider_scores={A1_LEG: _score_rows()})
 
     with pytest.raises(DataUnavailableError) as excinfo:
         _generate(service, parent, runtime_config)
 
-    assert _reason(excinfo.value) == REASON_SEED_PREDICTION_MISSING
+    assert _reason(excinfo.value) == REASON_PARENT_LEG_INFERENCE_EMPTY
 
 
 @pytest.mark.parametrize(
@@ -311,7 +348,7 @@ def test_multi_alpha_live_selection_fails_loud_when_seed_scores_missing() -> Non
         (_live_weight_history(a1_value=-0.1, fund_value=-0.2), REASON_WEIGHT_ALL_NON_POSITIVE),
     ],
 )
-def test_multi_alpha_live_rolling_weight_failures(history, expected_reason) -> None:
+def test_multi_alpha_live_rolling_weight_failures(history, expected_reason) -> None:  # noqa: ANN001
     package_repo, parent = _make_parent(live_weight_policy=True)
     runtime_config = _runtime_config(extra_artifact={"multi_alpha_weight_history": history})
     service, _artifact_repo, _resolver, _provider = _artifact_service(package_repo)
@@ -336,7 +373,7 @@ def test_multi_alpha_deadline_gate_fails_before_inference() -> None:
     package_repo, parent = _make_parent(live_weight_policy=False)
     artifact_repo = InMemorySelectionScoreArtifactRepository()
     resolver = FakeResolver()
-    provider = FakeProvider({A1_SEED: _score_rows(), FUND_SEED: _score_rows(reverse=True)})
+    provider = FakeProvider({A1_LEG: _score_rows(), FUND_LEG: _score_rows(reverse=True)})
     gate = MultiAlphaLivePredictionProvider(
         package_repository=package_repo,
         artifact_repository=artifact_repo,
@@ -375,15 +412,62 @@ def test_multi_alpha_runtime_disabled_fails_loud() -> None:
     assert _reason(excinfo.value) == REASON_RUNTIME_NOT_ENABLED
 
 
-def test_multi_alpha_frozen_child_runtime_does_not_require_seed_run_id_binding() -> None:
+def test_multi_alpha_legacy_child_ref_is_ignored_and_child_repository_is_not_read() -> None:
     package_repo, parent = _make_parent(live_weight_policy=False)
-    first_leg = parent.manifest.source_evidence["multi_alpha"]["legs"][0]
-    child = package_repo.get(first_leg["child_package_id"])
-    package_repo.records[child.package_id] = child.model_copy(update={"run_id": "different_seed_runtime_binding"})
-    service, _artifact_repo, resolver, provider = _artifact_service(package_repo)
+    manifest = parent.manifest
+    first = manifest.alpha_components[0]
+    updated_component = first.model_copy(
+        update={
+            "lineage": first.lineage.model_copy(update={"model_artifact_ref": "child_package:pkg_mac_legacy"})
+        }
+    )
+    parent.manifest = manifest.model_copy(update={"alpha_components": [updated_component, *manifest.alpha_components[1:]]})
+    sentinel_repo = ChildFailingRepository(package_repo)
+    service, _artifact_repo, resolver, provider = _artifact_service(sentinel_repo)
 
     artifact = _generate(service, parent, _runtime_config())
 
     assert artifact.status.value == "SUCCEEDED"
-    assert {call["run_id"] for call in resolver.load_calls} == {A1_SEED, FUND_SEED}
+    assert sentinel_repo.get_calls == [parent.package_id, parent.package_id]
+    assert resolver.legacy_load_calls == []
+    assert artifact.metadata["legacy_child_ref_ignored"][A1_LEG] is True
+    assert artifact.metadata["component_artifacts"][A1_LEG]["legacy_child_ref_ignored"] is True
+    assert artifact.metadata["runtime_source"] == "parent_package_asset"
     assert len(provider.calls) == 2
+
+
+def test_multi_alpha_runtime_uses_per_leg_alpha158_disabled_mapping() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    manifest = parent.manifest
+    source_evidence = deepcopy(manifest.source_evidence)
+    for leg in source_evidence["multi_alpha"]["legs"]:
+        if leg["leg_id"] == FUND_LEG:
+            leg["runtime_assets"] = RuntimeAssetManifest().model_dump(mode="json")
+    parent.manifest = manifest.model_copy(update={"source_evidence": source_evidence})
+    service, _artifact_repo, resolver, _provider = _artifact_service(package_repo)
+
+    artifact = _generate(service, parent, _runtime_config())
+
+    by_leg = {call["leg_id"]: call["runtime_assets"] for call in resolver.load_calls}
+    assert by_leg[A1_LEG].alpha158.enabled is True
+    assert by_leg[FUND_LEG].alpha158.enabled is False
+    assert artifact.metadata["component_artifacts"][FUND_LEG]["alpha158_schema_sha256"] is None
+
+
+def _remove_first_leg_model_asset(parent) -> None:  # noqa: ANN001
+    manifest = parent.manifest
+    first_model_id = manifest.alpha_components[0].model_id
+    models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    parent.manifest = manifest.model_copy(update={"model_asset": [model for model in models if model.model_id != first_model_id]})
+
+
+def _clear_first_leg_factor_refs(parent) -> None:  # noqa: ANN001
+    manifest = parent.manifest
+    first = manifest.alpha_components[0]
+    updated = first.model_copy(update={"lineage": first.lineage.model_copy(update={"factor_artifact_refs": []})})
+    parent.manifest = manifest.model_copy(update={"alpha_components": [updated, *manifest.alpha_components[1:]]})
+
+
+def _remove_parent_alpha158_schema(parent) -> None:  # noqa: ANN001
+    manifest = parent.manifest
+    parent.manifest = manifest.model_copy(update={"runtime_assets": None})

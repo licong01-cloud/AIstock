@@ -7,13 +7,14 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .live_inference import QEExperimentRuntimeAssetResolver, win_to_wsl_path
-from .models import StrategyPackageManifest
+from .models import AlphaMode, StrategyPackageManifest
 from .package_asset_store import PackageAssetStore
 
 ModelLoader = Callable[[Path], tuple[Any, str, Any, int]]
@@ -32,9 +33,11 @@ class FrozenRuntimeSelfCheckResult:
     feature_count_delta: int
     model_params_path: str
     model_probe_backend: str
+    leg_results: dict[str, dict[str, Any]] | None = None
+    combined_signal_smoke: dict[str, Any] | None = None
 
     def to_context(self) -> dict[str, Any]:
-        return {
+        context = {
             "package_id": self.package_id,
             "manifest_sha256": self.manifest_sha256,
             "origin": self.origin,
@@ -47,6 +50,11 @@ class FrozenRuntimeSelfCheckResult:
             "model_params_path": self.model_params_path,
             "model_probe_backend": self.model_probe_backend,
         }
+        if self.leg_results is not None:
+            context["leg_results"] = self.leg_results
+        if self.combined_signal_smoke is not None:
+            context["combined_signal_smoke"] = self.combined_signal_smoke
+        return context
 
 
 @dataclass(frozen=True)
@@ -165,6 +173,8 @@ class FrozenRuntimeSelfCheckService:
                 "frozen runtime self-check requires manifest_sha256",
                 context={"reason_code": "strategy_package_frozen_self_check_manifest_unfrozen", "package_id": manifest.package_id},
             )
+        if manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            return self._assert_multi_alpha_manifest_self_contained(manifest, manifest_sha=manifest_sha)
         try:
             source = self.runtime_asset_resolver.load_source_for_strategy_package(
                 source_type=manifest.source.source_type.value,
@@ -242,6 +252,148 @@ class FrozenRuntimeSelfCheckService:
             model_probe_backend=probe.backend,
         )
 
+    def _assert_multi_alpha_manifest_self_contained(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        manifest_sha: str,
+    ) -> FrozenRuntimeSelfCheckResult:
+        try:
+            from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+
+            leg_slices = _parent_leg_runtime_slices(
+                manifest,
+                evidence=_multi_alpha_evidence(manifest),
+                package_id=manifest.package_id,
+            )
+            leg_results: dict[str, dict[str, Any]] = {}
+            first_result: FrozenRuntimeSelfCheckResult | None = None
+            total_dynamic = 0
+            total_alpha = 0
+            total_factor_order = 0
+            for leg_slice in leg_slices:
+                source = self.runtime_asset_resolver.load_source_for_strategy_package_leg(
+                    manifest=manifest,
+                    package_id=manifest.package_id,
+                    leg_id=leg_slice.leg_id,
+                    model_asset=leg_slice.model_asset,
+                    factor_set=list(leg_slice.factor_set),
+                    runtime_assets=leg_slice.runtime_assets,
+                )
+                if source.model_params_origin != "package_asset" or source.source_workspace_type != "strategy_package_asset_store":
+                    raise StrategyPackageValidationError(
+                        "multi-alpha frozen runtime self-check did not use parent package-owned assets",
+                        context={
+                            "reason_code": "multi_alpha_parent_leg_runtime_assets_incomplete",
+                            "package_id": manifest.package_id,
+                            "leg_id": leg_slice.leg_id,
+                            "model_id": leg_slice.model_asset.model_id,
+                            "model_params_origin": source.model_params_origin,
+                            "source_workspace_type": source.source_workspace_type,
+                        },
+                    )
+                prepared = self.runtime_asset_resolver.prepare_workspace(
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest_sha,
+                    source=source,
+                    cache_namespace=f"leg_{leg_slice.leg_id}",
+                )
+                probe = self._probe_model(prepared.model_params_path)
+                expected_features = int(probe.expected_features or 0)
+                factor_order_count = len(prepared.factor_order)
+                delta = expected_features - factor_order_count
+                context = {
+                    "reason_code": "multi_alpha_parent_leg_feature_count_mismatch",
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": manifest_sha,
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.model_asset.model_id,
+                    "model_kind": probe.model_kind,
+                    "model_expected_features": expected_features,
+                    "dynamic_factor_count": len(prepared.dynamic_factors),
+                    "alpha158_alias_count": len(prepared.alpha158_factors),
+                    "factor_order_count": factor_order_count,
+                    "feature_count_delta": delta,
+                    "model_params_path": str(prepared.model_params_path),
+                    "model_probe_backend": probe.backend,
+                }
+                if expected_features and expected_features != factor_order_count:
+                    raise StrategyPackageValidationError(
+                        "multi-alpha frozen StrategyPackage runtime self-check feature count mismatch",
+                        context=context,
+                    )
+                expected_refs = {
+                    str(ref or "").strip()
+                    for ref in (leg_slice.component.lineage.factor_artifact_refs or [])
+                    if str(ref or "").strip()
+                }
+                prepared_refs = set(prepared.dynamic_factors)
+                if expected_refs != prepared_refs:
+                    raise StrategyPackageValidationError(
+                        "multi-alpha frozen StrategyPackage runtime self-check factor refs mismatch",
+                        context={
+                            "reason_code": "multi_alpha_parent_leg_factor_refs_mismatch",
+                            "package_id": manifest.package_id,
+                            "manifest_sha256": manifest_sha,
+                            "leg_id": leg_slice.leg_id,
+                            "model_id": leg_slice.model_asset.model_id,
+                            "expected_factor_refs": sorted(expected_refs),
+                            "prepared_dynamic_factors": sorted(prepared_refs),
+                        },
+                    )
+                result = FrozenRuntimeSelfCheckResult(
+                    package_id=manifest.package_id,
+                    manifest_sha256=manifest_sha,
+                    origin=source.model_params_origin,
+                    model_kind=probe.model_kind,
+                    model_expected_features=expected_features,
+                    dynamic_factor_count=len(prepared.dynamic_factors),
+                    alpha158_alias_count=len(prepared.alpha158_factors),
+                    factor_order_count=factor_order_count,
+                    feature_count_delta=delta,
+                    model_params_path=str(prepared.model_params_path),
+                    model_probe_backend=probe.backend,
+                )
+                first_result = first_result or result
+                leg_results[leg_slice.leg_id] = {**result.to_context(), "model_id": leg_slice.model_asset.model_id}
+                total_dynamic += len(prepared.dynamic_factors)
+                total_alpha += len(prepared.alpha158_factors)
+                total_factor_order += factor_order_count
+            if first_result is None:
+                raise StrategyPackageValidationError(
+                    "multi-alpha frozen runtime self-check requires at least one leg",
+                    context={"reason_code": "multi_alpha_parent_leg_mapping_missing", "package_id": manifest.package_id},
+                )
+            combined_signal_smoke = _combined_signal_smoke(manifest, leg_results=leg_results)
+            return FrozenRuntimeSelfCheckResult(
+                package_id=manifest.package_id,
+                manifest_sha256=manifest_sha,
+                origin="package_asset",
+                model_kind="multi_alpha_parent",
+                model_expected_features=sum(item["model_expected_features"] for item in leg_results.values()),
+                dynamic_factor_count=total_dynamic,
+                alpha158_alias_count=total_alpha,
+                factor_order_count=total_factor_order,
+                feature_count_delta=sum(item["feature_count_delta"] for item in leg_results.values()),
+                model_params_path=first_result.model_params_path,
+                model_probe_backend=first_result.model_probe_backend,
+                leg_results=leg_results,
+                combined_signal_smoke=combined_signal_smoke,
+            )
+        except TradingCoreError:
+            raise
+        except Exception as exc:
+            raise DataUnavailableError(
+                "multi-alpha frozen StrategyPackage runtime self-check failed while loading parent leg assets",
+                context={
+                    "reason_code": "multi_alpha_promotion_parent_self_check_failed",
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": manifest_sha,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            ) from exc
+
     def _probe_model(self, model_params_path: Path) -> FrozenRuntimeModelProbeResult:
         backend = self.model_probe_backend
         if self.model_loader is not None:
@@ -281,3 +433,114 @@ class FrozenRuntimeSelfCheckService:
 
 def _shell_quote(value: str) -> str:
     return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _combined_signal_smoke(
+    manifest: StrategyPackageManifest,
+    *,
+    leg_results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Fail-closed structural combined-signal smoke without reading child/QE sources."""
+
+    from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+
+    evidence = _multi_alpha_evidence(manifest)
+    leg_slices = _parent_leg_runtime_slices(manifest, evidence=evidence, package_id=manifest.package_id)
+    weights = dict(manifest.alpha_combination_policy.weights or {})
+    smoke_date = _self_check_trade_date(manifest)
+    if not smoke_date:
+        raise StrategyPackageValidationError(
+            "multi-alpha frozen StrategyPackage self-check requires a trade date for combined signal smoke",
+            context={
+                "reason_code": "multi_alpha_promotion_parent_combined_signal_failed",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+            },
+        )
+    rows: list[dict[str, Any]] = []
+    combined = 0.0
+    for index, leg_slice in enumerate(leg_slices, start=1):
+        leg_id = leg_slice.leg_id
+        weight = weights.get(leg_id)
+        if weight is None:
+            raise StrategyPackageValidationError(
+                "multi-alpha frozen StrategyPackage self-check weights do not cover every leg",
+                context={
+                    "reason_code": "multi_alpha_promotion_parent_combined_signal_failed",
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "leg_id": leg_id,
+                },
+            )
+        if leg_id not in leg_results:
+            raise StrategyPackageValidationError(
+                "multi-alpha frozen StrategyPackage self-check leg result is missing",
+                context={
+                    "reason_code": "multi_alpha_promotion_parent_combined_signal_failed",
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "leg_id": leg_id,
+                },
+            )
+        normalized_score = float(index)
+        rows.append(
+            {
+                "instrument": "__self_check__",
+                "leg_id": leg_id,
+                "normalized_score": normalized_score,
+                "weight": float(weight),
+            }
+        )
+        combined += normalized_score * float(weight)
+    if not rows:
+        raise StrategyPackageValidationError(
+            "multi-alpha frozen StrategyPackage self-check produced no combined smoke rows",
+            context={
+                "reason_code": "multi_alpha_promotion_parent_combined_signal_failed",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+            },
+        )
+    replay = sum(item["normalized_score"] * item["weight"] for item in rows)
+    if replay != combined:
+        raise StrategyPackageValidationError(
+            "multi-alpha frozen StrategyPackage self-check combined replay is not deterministic",
+            context={
+                "reason_code": "multi_alpha_promotion_parent_combined_signal_failed",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "combined_score": combined,
+                "replay_score": replay,
+            },
+        )
+    return {
+        "schema_version": "multi_alpha_parent_combined_signal_smoke_v1",
+        "trade_date": smoke_date.isoformat(),
+        "instrument": "__self_check__",
+        "leg_count": len(rows),
+        "combined_score": combined,
+        "deterministic_replay": True,
+    }
+
+
+def _self_check_trade_date(manifest: StrategyPackageManifest) -> date | None:
+    for value in (
+        (manifest.backtest_context or {}).get("self_check_trade_date"),
+        (manifest.backtest_context or {}).get("oos_end"),
+    ):
+        parsed = _parse_date(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None

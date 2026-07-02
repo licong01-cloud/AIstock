@@ -7,7 +7,6 @@ does not touch Paper v2 execution runtimes, schedulers, brokers, or portfolios.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import math
 from dataclasses import dataclass
@@ -19,8 +18,15 @@ import pandas as pd
 from backend.services.multi_alpha.orthogonality import normalize_prediction_frame
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, win_to_wsl_path
-from backend.services.strategy_package.package_asset_freeze import manifest_has_frozen_runtime_assets
-from backend.services.strategy_package.models import AlphaMode, SelectionScoreArtifactStatus, StrategyPackageManifest
+from backend.services.strategy_package.models import (
+    AlphaComponent,
+    AlphaMode,
+    FactorAsset,
+    ModelAsset,
+    RuntimeAssetManifest,
+    SelectionScoreArtifactStatus,
+    StrategyPackageManifest,
+)
 from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
     selection_artifact_runtime_hash,
@@ -31,6 +37,7 @@ from backend.services.trading_core.errors import (
     DataUnavailableError,
     RuntimeConfigInvalidError,
     StrategyPackageValidationError,
+    TradingCoreError,
     UnsupportedFeatureError,
 )
 
@@ -49,6 +56,18 @@ REASON_WEIGHT_ALL_NON_POSITIVE = "multi_alpha_weight_all_non_positive"
 REASON_TOPK_RUNTIME_MISMATCH = "multi_alpha_topk_runtime_mismatch"
 REASON_PREDICTION_NOT_AUTHORITATIVE = "multi_alpha_prediction_not_authoritative"
 REASON_DEADLINE_EXCEEDED = "multi_alpha_selection_artifact_deadline_exceeded"
+REASON_PARENT_LEG_MAPPING_MISSING = "multi_alpha_parent_leg_mapping_missing"
+REASON_PARENT_LEG_SEED_METADATA_MISSING = "multi_alpha_parent_leg_seed_metadata_missing"
+REASON_PARENT_LEG_MODEL_ID_MISSING = "multi_alpha_parent_leg_model_id_missing"
+REASON_PARENT_LEG_MODEL_ASSET_MISSING = "multi_alpha_parent_leg_model_asset_missing"
+REASON_PARENT_LEG_MODEL_ASSET_AMBIGUOUS = "multi_alpha_parent_leg_model_asset_ambiguous"
+REASON_PARENT_LEG_FACTOR_REFS_MISSING = "multi_alpha_parent_leg_factor_refs_missing"
+REASON_PARENT_LEG_FACTOR_ASSET_MISSING = "multi_alpha_parent_leg_factor_asset_missing"
+REASON_PARENT_LEG_FACTOR_ASSET_AMBIGUOUS = "multi_alpha_parent_leg_factor_asset_ambiguous"
+REASON_PARENT_ALPHA158_SCHEMA_MISSING = "multi_alpha_parent_alpha158_schema_missing"
+REASON_PARENT_ALPHA158_SCHEMA_MISMATCH = "multi_alpha_parent_alpha158_schema_mismatch"
+REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE = "multi_alpha_parent_leg_runtime_assets_incomplete"
+REASON_PARENT_LEG_INFERENCE_EMPTY = "multi_alpha_parent_leg_inference_empty"
 
 
 @dataclass(frozen=True)
@@ -57,6 +76,21 @@ class MultiAlphaWeightArtifact:
     artifact_sha256: str
     weights: dict[str, float]
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ParentLegRuntimeSlice:
+    parent_package_id: str
+    parent_manifest_sha256: str
+    leg_id: str
+    component: AlphaComponent
+    model_asset: ModelAsset
+    factor_set: tuple[FactorAsset, ...]
+    runtime_assets: RuntimeAssetManifest
+    seed_run_ids: tuple[str, ...]
+    ensemble_method: str
+    terminal_weight: float | None
+    legacy_child_ref_ignored: bool
 
 
 class MultiAlphaLiveError(RuntimeError):
@@ -369,17 +403,17 @@ class MultiAlphaLivePredictionProvider:
         coverage_threshold = self._coverage_threshold(config, topk=topk)
         normalization_method = _normalization_method(manifest)
         runtime_hash = multi_alpha_selection_artifact_runtime_hash(manifest, config)
+        leg_slices = _parent_leg_runtime_slices(manifest, evidence=evidence, package_id=package_id)
 
         artifacts: list[SelectionScoreArtifact] = []
         for current_date in sorted(set(trade_dates)):
             score_trade_date = cutoff_date or current_date
             leg_frames: dict[str, pd.DataFrame] = {}
             component_metadata: dict[str, Any] = {}
-            for leg in legs:
-                child = self._validate_child(leg, parent_manifest=manifest)
-                seed_frames = self._run_seed_live_inference(
-                    leg=leg,
-                    child_record=child,
+            for leg_slice in leg_slices:
+                seed_frames = self._run_parent_leg_live_inference(
+                    manifest=manifest,
+                    leg_slice=leg_slice,
                     trade_date=current_date,
                     cutoff_date=cutoff_date,
                     runtime_config=config,
@@ -387,21 +421,39 @@ class MultiAlphaLivePredictionProvider:
                 )
                 ensemble = _ensemble_seed_frames(
                     seed_frames,
-                    leg_id=leg["leg_id"],
+                    leg_id=leg_slice.leg_id,
+                    model_id=leg_slice.model_asset.model_id,
                     package_id=package_id,
                     trade_date=score_trade_date,
                 )
-                normalized = _normalize_leg_frame(ensemble, leg_id=leg["leg_id"], method=normalization_method)
-                leg_frames[leg["leg_id"]] = normalized
+                normalized = _normalize_leg_frame(
+                    ensemble,
+                    package_id=package_id,
+                    leg_id=leg_slice.leg_id,
+                    model_id=leg_slice.model_asset.model_id,
+                    method=normalization_method,
+                )
+                leg_frames[leg_slice.leg_id] = normalized
                 component_sha = _frame_sha256(normalized, score_column="normalized_score")
-                component_metadata[leg["leg_id"]] = {
+                component_metadata[leg_slice.leg_id] = {
                     "component_score_artifact_id": f"macs_{component_sha[:24]}",
                     "component_score_artifact_sha256": component_sha,
-                    "child_package_id": leg["child_package_id"],
-                    "child_manifest_sha256": leg["child_manifest_sha256"],
-                    "seed_run_ids": list(leg["seed_run_ids"]),
+                    "child_package_id": None,
+                    "child_manifest_sha256": None,
+                    "runtime_source": "parent_package_asset",
+                    "runtime_package_id": leg_slice.parent_package_id,
+                    "model_params_origin": "package_asset",
+                    "model_id": leg_slice.model_asset.model_id,
+                    "model_asset_ref": leg_slice.model_asset.asset_ref,
+                    "model_asset_sha256": leg_slice.model_asset.sha256,
+                    "factor_count": len(leg_slice.factor_set),
+                    "factor_artifact_refs": [factor.factor_name or factor.factor_id for factor in leg_slice.factor_set],
+                    "alpha158_schema_sha256": leg_slice.runtime_assets.alpha158.sha256,
+                    "seed_run_ids": list(leg_slice.seed_run_ids),
                     "seed_count": len(seed_frames),
-                    "ensemble_method": leg.get("ensemble_method") or "mean_by_trade_date_instrument",
+                    "ensemble_method": leg_slice.ensemble_method,
+                    "seed_runtime_mode": "frozen_representative_model_replayed_for_legacy_seed_metadata",
+                    "legacy_child_ref_ignored": leg_slice.legacy_child_ref_ignored,
                     "candidate_count": int(len(normalized)),
                 }
 
@@ -448,10 +500,15 @@ class MultiAlphaLivePredictionProvider:
                 "weight_artifact_id": weight_artifact.artifact_id,
                 "weight_artifact_sha256": weight_artifact.artifact_sha256,
                 "combined_score_artifact_sha256": combined_sha,
-                "component_manifest_sha256": {
-                    leg["leg_id"]: leg["child_manifest_sha256"] for leg in legs
+                "component_manifest_sha256": {leg_slice.leg_id: manifest.manifest_sha256 for leg_slice in leg_slices},
+                "runtime_source": "parent_package_asset",
+                "runtime_package_id": package_id,
+                "model_params_origin": "package_asset",
+                "seed_runtime_mode": "frozen_representative_model_replayed_for_legacy_seed_metadata",
+                "legacy_child_ref_ignored": {
+                    leg_slice.leg_id: leg_slice.legacy_child_ref_ignored for leg_slice in leg_slices
                 },
-                "seed_run_ids": {leg["leg_id"]: list(leg["seed_run_ids"]) for leg in legs},
+                "seed_run_ids": {leg_slice.leg_id: list(leg_slice.seed_run_ids) for leg_slice in leg_slices},
                 "combine_backtest_run_id": evidence.get("combine_backtest_run_id"),
                 "normalization_method": normalization_method,
                 "final_topk": topk,
@@ -569,114 +626,90 @@ class MultiAlphaLivePredictionProvider:
         threshold = _positive_int(raw, default=topk, field_name="component_coverage_threshold")
         return max(topk, threshold)
 
-    def _validate_child(self, leg: Mapping[str, Any], *, parent_manifest: StrategyPackageManifest) -> Any:
-        child_package_id = str(leg.get("child_package_id") or "").strip()
-        if not child_package_id:
-            _raise(
-                "MULTI_ALPHA leg is missing child_package_id",
-                REASON_LEG_MISSING,
-                package_id=parent_manifest.package_id,
-                leg_id=leg.get("leg_id"),
-            )
-        try:
-            child = self.package_repository.get(child_package_id)
-        except DataUnavailableError as exc:
-            raise DataUnavailableError(
-                "MULTI_ALPHA child package does not exist",
-                context={
-                    "reason_code": REASON_LEG_MISSING,
-                    "package_id": parent_manifest.package_id,
-                    "leg_id": leg.get("leg_id"),
-                    "child_package_id": child_package_id,
-                },
-            ) from exc
-        expected_sha = str(leg.get("child_manifest_sha256") or "").strip().lower()
-        if child.manifest_sha256 != expected_sha:
-            _raise(
-                "MULTI_ALPHA child manifest sha does not match frozen parent manifest",
-                REASON_CHILD_MANIFEST_MISMATCH,
-                package_id=parent_manifest.package_id,
-                leg_id=leg.get("leg_id"),
-                child_package_id=child_package_id,
-                expected_child_manifest_sha256=expected_sha,
-                actual_child_manifest_sha256=child.manifest_sha256,
-            )
-        return child
-
-    def _run_seed_live_inference(
+    def _run_parent_leg_live_inference(
         self,
         *,
-        leg: Mapping[str, Any],
-        child_record: Any,
+        manifest: StrategyPackageManifest,
+        leg_slice: ParentLegRuntimeSlice,
         trade_date: date,
         cutoff_date: date | None,
         runtime_config: Mapping[str, Any],
         inference_backend: str,
     ) -> dict[str, pd.DataFrame]:
-        seed_run_ids = [str(item or "").strip() for item in leg.get("seed_run_ids") or [] if str(item or "").strip()]
-        if not seed_run_ids:
+        if not leg_slice.seed_run_ids:
             _raise(
                 "MULTI_ALPHA leg has no seed_run_ids",
-                REASON_SEED_PREDICTION_MISSING,
-                leg_id=leg.get("leg_id"),
-                child_package_id=child_record.package_id,
+                REASON_PARENT_LEG_SEED_METADATA_MISSING,
+                package_id=leg_slice.parent_package_id,
+                leg_id=leg_slice.leg_id,
+                model_id=leg_slice.model_asset.model_id,
             )
-        frames: dict[str, pd.DataFrame] = {}
-        for seed_run_id in seed_run_ids:
-            seed_config = _runtime_config_for_seed(runtime_config, leg=leg, seed_run_id=seed_run_id, child_record=child_record)
-            if not _seed_has_runtime_binding(seed_config, child_record=child_record, seed_run_id=seed_run_id):
-                _raise(
-                    "MULTI_ALPHA seed runtime asset binding is missing",
-                    REASON_SEED_PREDICTION_MISSING,
-                    leg_id=leg.get("leg_id"),
-                    child_package_id=child_record.package_id,
-                    seed_run_id=seed_run_id,
-                    child_record_run_id=child_record.run_id,
-                )
-            source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package", None)
-            if callable(source_loader):
-                source_kwargs: dict[str, Any] = {
-                    "source_type": child_record.source_type,
-                    "source_id": child_record.source_id,
-                    "loop_id": child_record.loop_id,
-                    "run_id": seed_run_id,
-                }
-                if _callable_accepts_keyword(source_loader, "manifest"):
-                    source_kwargs["manifest"] = child_record.current_manifest()
-                    source_kwargs["package_id"] = child_record.package_id
-                source = source_loader(**source_kwargs)
-            else:
-                source = self.runtime_asset_resolver.load_source(child_record.source_id)
+        representative_seed = leg_slice.seed_run_ids[0]
+        seed_config = _runtime_config_for_parent_leg(runtime_config, leg_slice=leg_slice, seed_run_id=representative_seed)
+        source_loader = getattr(self.runtime_asset_resolver, "load_source_for_strategy_package_leg", None)
+        if not callable(source_loader):
+            _raise(
+                "MULTI_ALPHA parent package runtime resolver does not support per-leg package assets",
+                REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE,
+                package_id=leg_slice.parent_package_id,
+                leg_id=leg_slice.leg_id,
+                model_id=leg_slice.model_asset.model_id,
+            )
+        try:
+            source = source_loader(
+                manifest=manifest,
+                package_id=leg_slice.parent_package_id,
+                leg_id=leg_slice.leg_id,
+                model_asset=leg_slice.model_asset,
+                factor_set=list(leg_slice.factor_set),
+                runtime_assets=leg_slice.runtime_assets,
+            )
             prepared = self.runtime_asset_resolver.prepare_workspace(
-                package_id=child_record.package_id,
-                manifest_sha256=child_record.manifest_sha256,
+                package_id=leg_slice.parent_package_id,
+                manifest_sha256=leg_slice.parent_manifest_sha256,
                 source=source,
                 runtime_config=seed_config,
                 path_converter=win_to_wsl_path if inference_backend == "wsl" else None,
+                cache_namespace=f"leg_{leg_slice.leg_id}",
             )
             result = self.live_inference_provider.run(
                 workspace=prepared,
                 trade_date=trade_date,
                 cutoff_date=cutoff_date,
             )
-            frame = _live_result_to_frame(
-                result.scores,
-                package_id=child_record.package_id,
-                leg_id=str(leg.get("leg_id")),
-                seed_run_id=seed_run_id,
-                trade_date=cutoff_date or trade_date,
+        except TradingCoreError as exc:
+            exc.context.setdefault("package_id", leg_slice.parent_package_id)
+            exc.context.setdefault("leg_id", leg_slice.leg_id)
+            exc.context.setdefault("model_id", leg_slice.model_asset.model_id)
+            exc.context.setdefault("runtime_source", "parent_package_asset")
+            raise
+        if not result.scores:
+            _raise(
+                "MULTI_ALPHA parent leg live inference returned no score rows",
+                REASON_PARENT_LEG_INFERENCE_EMPTY,
+                package_id=leg_slice.parent_package_id,
+                leg_id=leg_slice.leg_id,
+                model_id=leg_slice.model_asset.model_id,
+                trade_date=(cutoff_date or trade_date).isoformat(),
             )
-            if frame.empty:
-                _raise(
-                    "MULTI_ALPHA seed live inference returned no usable scores",
-                    REASON_SEED_PREDICTION_MISSING,
-                    leg_id=leg.get("leg_id"),
-                    child_package_id=child_record.package_id,
-                    seed_run_id=seed_run_id,
-                    trade_date=trade_date.isoformat(),
-                )
-            frames[seed_run_id] = frame
-        return frames
+        representative = _live_result_to_frame(
+            result.scores,
+            package_id=leg_slice.parent_package_id,
+            leg_id=leg_slice.leg_id,
+            model_id=leg_slice.model_asset.model_id,
+            seed_run_id=representative_seed,
+            trade_date=cutoff_date or trade_date,
+        )
+        if representative.empty:
+            _raise(
+                "MULTI_ALPHA parent leg live inference returned no usable scores",
+                REASON_PARENT_LEG_INFERENCE_EMPTY,
+                package_id=leg_slice.parent_package_id,
+                leg_id=leg_slice.leg_id,
+                model_id=leg_slice.model_asset.model_id,
+                trade_date=trade_date.isoformat(),
+            )
+        return {seed_run_id: representative.copy() for seed_run_id in leg_slice.seed_run_ids}
 
     def _artifact_rows(
         self,
@@ -738,7 +771,7 @@ def _multi_alpha_evidence(manifest: StrategyPackageManifest) -> dict[str, Any]:
     if not isinstance(evidence, Mapping):
         _raise(
             "MULTI_ALPHA manifest is missing source_evidence.multi_alpha",
-            REASON_LEG_MISSING,
+            REASON_PARENT_LEG_MAPPING_MISSING,
             package_id=manifest.package_id,
         )
     return dict(evidence)
@@ -791,85 +824,460 @@ def _terminal_weights(evidence: Mapping[str, Any], *, expected_leg_ids: Sequence
 def _legs(evidence: Mapping[str, Any], *, package_id: str) -> list[dict[str, Any]]:
     raw = evidence.get("legs")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
-        _raise("MULTI_ALPHA evidence legs must be a list", REASON_LEG_MISSING, package_id=package_id)
+        _raise("MULTI_ALPHA evidence legs must be a list", REASON_PARENT_LEG_MAPPING_MISSING, package_id=package_id)
     legs: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw:
         if not isinstance(item, Mapping):
-            _raise("MULTI_ALPHA leg entry must be an object", REASON_LEG_MISSING, package_id=package_id)
+            _raise("MULTI_ALPHA leg entry must be an object", REASON_PARENT_LEG_MAPPING_MISSING, package_id=package_id)
         leg_id = str(item.get("leg_id") or "").strip()
         child_package_id = str(item.get("child_package_id") or "").strip()
         child_sha = str(item.get("child_manifest_sha256") or "").strip().lower()
         seed_run_ids = [str(seed or "").strip() for seed in item.get("seed_run_ids") or [] if str(seed or "").strip()]
-        if not leg_id or not child_package_id or not child_sha:
+        if not leg_id:
             _raise(
                 "MULTI_ALPHA leg is incomplete",
-                REASON_LEG_MISSING,
+                REASON_PARENT_LEG_MAPPING_MISSING,
                 package_id=package_id,
                 leg_id=leg_id,
-                child_package_id=child_package_id,
             )
         if leg_id in seen:
-            _raise("MULTI_ALPHA leg_id must be unique", REASON_LEG_MISSING, package_id=package_id, leg_id=leg_id)
+            _raise("MULTI_ALPHA leg_id must be unique", REASON_PARENT_LEG_MAPPING_MISSING, package_id=package_id, leg_id=leg_id)
+        if not seed_run_ids:
+            _raise(
+                "MULTI_ALPHA leg seed_run_ids are required",
+                REASON_PARENT_LEG_SEED_METADATA_MISSING,
+                package_id=package_id,
+                leg_id=leg_id,
+            )
         seen.add(leg_id)
         legs.append(
             {
                 "leg_id": leg_id,
-                "child_package_id": child_package_id,
-                "child_manifest_sha256": child_sha,
+                "child_package_id": child_package_id or None,
+                "child_manifest_sha256": child_sha or None,
                 "seed_run_ids": seed_run_ids,
                 "ensemble_method": item.get("ensemble_method") or "mean_by_trade_date_instrument",
-                "seed_runtime_assets": item.get("seed_runtime_assets") if isinstance(item.get("seed_runtime_assets"), Mapping) else {},
+                "terminal_weight": item.get("terminal_weight"),
+                "runtime_assets": (
+                    item.get("runtime_assets")
+                    if isinstance(item.get("runtime_assets"), Mapping)
+                    else item.get("seed_runtime_assets")
+                    if isinstance(item.get("seed_runtime_assets"), Mapping)
+                    else None
+                ),
             }
         )
     if len(legs) < 2:
-        _raise("MULTI_ALPHA live inference requires at least two legs", REASON_LEG_MISSING, package_id=package_id)
+        _raise("MULTI_ALPHA live inference requires at least two legs", REASON_PARENT_LEG_MAPPING_MISSING, package_id=package_id)
     return legs
 
 
-def _runtime_config_for_seed(
+def _parent_leg_runtime_slices(
+    manifest: StrategyPackageManifest,
+    *,
+    evidence: Mapping[str, Any],
+    package_id: str,
+) -> list[ParentLegRuntimeSlice]:
+    manifest_sha = str(manifest.manifest_sha256 or "").strip().lower()
+    components = {component.alpha_id: component for component in manifest.alpha_components}
+    legs = _legs(evidence, package_id=package_id)
+    leg_ids = [leg["leg_id"] for leg in legs]
+    if set(components) != set(leg_ids):
+        _raise(
+            "MULTI_ALPHA parent component ids and source_evidence legs do not match",
+            REASON_PARENT_LEG_MAPPING_MISSING,
+            package_id=package_id,
+            component_leg_ids=sorted(components),
+            evidence_leg_ids=sorted(leg_ids),
+        )
+    weight_ids = set(manifest.alpha_combination_policy.weights)
+    if weight_ids and weight_ids != set(leg_ids):
+        _raise(
+            "MULTI_ALPHA parent weights do not match source_evidence legs",
+            REASON_PARENT_LEG_MAPPING_MISSING,
+            package_id=package_id,
+            weight_leg_ids=sorted(weight_ids),
+            evidence_leg_ids=sorted(leg_ids),
+        )
+    parent_runtime_assets = _parent_runtime_assets(manifest, package_id=package_id)
+    model_index = _parent_model_index(manifest, package_id=package_id)
+    factor_index = _parent_factor_index(manifest, package_id=package_id)
+    slices: list[ParentLegRuntimeSlice] = []
+    seen_component_model_ids: dict[str, str] = {}
+    for leg in legs:
+        leg_id = str(leg["leg_id"])
+        component = components[leg_id]
+        model_id = str(component.model_id or "").strip()
+        if not model_id:
+            _raise(
+                "MULTI_ALPHA parent component is missing model_id",
+                REASON_PARENT_LEG_MODEL_ID_MISSING,
+                package_id=package_id,
+                leg_id=leg_id,
+            )
+        previous_leg_id = seen_component_model_ids.get(model_id)
+        if previous_leg_id is not None:
+            _raise(
+                "MULTI_ALPHA parent runtime requires unique model_id per leg",
+                REASON_PARENT_LEG_MODEL_ASSET_AMBIGUOUS,
+                package_id=package_id,
+                model_id=model_id,
+                first_leg_id=previous_leg_id,
+                second_leg_id=leg_id,
+                model_id_uniqueness_policy="unique_per_leg",
+            )
+        seen_component_model_ids[model_id] = leg_id
+        model_asset = model_index.get(model_id)
+        if model_asset is None:
+            _raise(
+                "MULTI_ALPHA parent model_asset is missing for leg model_id",
+                REASON_PARENT_LEG_MODEL_ASSET_MISSING,
+                package_id=package_id,
+                leg_id=leg_id,
+                model_id=model_id,
+            )
+        factor_refs = [str(ref or "").strip() for ref in component.lineage.factor_artifact_refs or [] if str(ref or "").strip()]
+        if not factor_refs:
+            _raise(
+                "MULTI_ALPHA parent component is missing factor_artifact_refs",
+                REASON_PARENT_LEG_FACTOR_REFS_MISSING,
+                package_id=package_id,
+                leg_id=leg_id,
+                model_id=model_id,
+            )
+        runtime_assets = _leg_runtime_assets(
+            leg,
+            parent_runtime_assets=parent_runtime_assets,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+        )
+        factors = tuple(_resolve_parent_factor_ref(ref, factor_index=factor_index, package_id=package_id, leg_id=leg_id, model_id=model_id) for ref in factor_refs)
+        _ensure_leg_runtime_assets_complete(
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+            model_asset=model_asset,
+            factors=factors,
+            runtime_assets=runtime_assets,
+        )
+        legacy_ref = str(component.lineage.model_artifact_ref or "").strip()
+        slices.append(
+            ParentLegRuntimeSlice(
+                parent_package_id=package_id,
+                parent_manifest_sha256=manifest_sha,
+                leg_id=leg_id,
+                component=component,
+                model_asset=model_asset,
+                factor_set=factors,
+                runtime_assets=runtime_assets,
+                seed_run_ids=tuple(leg["seed_run_ids"]),
+                ensemble_method=str(leg.get("ensemble_method") or "mean_by_trade_date_instrument"),
+                terminal_weight=_finite_float(leg.get("terminal_weight")),
+                legacy_child_ref_ignored=legacy_ref.startswith("child_package:"),
+            )
+        )
+    return slices
+
+
+def _runtime_config_for_parent_leg(
     runtime_config: Mapping[str, Any],
     *,
-    leg: Mapping[str, Any],
+    leg_slice: ParentLegRuntimeSlice,
     seed_run_id: str,
-    child_record: Any,
 ) -> dict[str, Any]:
     config = dict(runtime_config)
     artifact = dict(_artifact_config(config))
-    artifact["multi_alpha_leg_id"] = leg.get("leg_id")
+    artifact["multi_alpha_leg_id"] = leg_slice.leg_id
     artifact["multi_alpha_seed_run_id"] = seed_run_id
-    explicit_model_path = _seed_model_params_path(artifact, leg=leg, seed_run_id=seed_run_id)
-    if explicit_model_path:
-        artifact["model_params_path"] = explicit_model_path
+    artifact["multi_alpha_runtime_source"] = "parent_package_asset"
+    artifact.pop("model_params_path", None)
     config["selection_artifact_config"] = artifact
     return config
 
 
-def _seed_model_params_path(artifact_config: Mapping[str, Any], *, leg: Mapping[str, Any], seed_run_id: str) -> str | None:
-    mapping = artifact_config.get("seed_model_params_paths") or artifact_config.get("multi_alpha_seed_model_params_paths")
-    leg_id = str(leg.get("leg_id") or "")
-    if isinstance(mapping, Mapping):
-        direct = mapping.get(seed_run_id)
-        nested = mapping.get(leg_id)
-        if direct:
-            return str(direct)
-        if isinstance(nested, Mapping) and nested.get(seed_run_id):
-            return str(nested[seed_run_id])
-    leg_assets = leg.get("seed_runtime_assets")
-    if isinstance(leg_assets, Mapping):
-        seed_asset = leg_assets.get(seed_run_id)
-        if isinstance(seed_asset, Mapping) and seed_asset.get("model_params_path"):
-            return str(seed_asset["model_params_path"])
-    return None
+
+def _parent_runtime_assets(manifest: StrategyPackageManifest, *, package_id: str) -> RuntimeAssetManifest | None:
+    runtime_assets = manifest.runtime_assets
+    alpha158 = runtime_assets.alpha158 if runtime_assets is not None else None
+    if (
+        runtime_assets is not None
+        and alpha158 is not None
+        and alpha158.enabled
+        and (not alpha158.asset_ref or not alpha158.sha256 or not alpha158.aliases)
+    ):
+        _raise(
+            "MULTI_ALPHA parent package has incomplete frozen Alpha158 schema",
+            REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+            package_id=package_id,
+            asset_ref=getattr(alpha158, "asset_ref", None),
+            sha256=getattr(alpha158, "sha256", None),
+            alias_count=len(getattr(alpha158, "aliases", []) or []),
+        )
+    return runtime_assets
 
 
-def _seed_has_runtime_binding(config: Mapping[str, Any], *, child_record: Any, seed_run_id: str) -> bool:
-    artifact = _artifact_config(config)
-    if artifact.get("model_params_path"):
-        return True
-    if manifest_has_frozen_runtime_assets(child_record.current_manifest()):
-        return True
-    return str(child_record.run_id or "").strip() == seed_run_id
+def _leg_runtime_assets(
+    leg: Mapping[str, Any],
+    *,
+    parent_runtime_assets: RuntimeAssetManifest | None,
+    package_id: str,
+    leg_id: str,
+    model_id: str,
+) -> RuntimeAssetManifest:
+    raw = leg.get("runtime_assets")
+    if isinstance(raw, Mapping):
+        try:
+            runtime_assets = RuntimeAssetManifest.model_validate(raw)
+        except Exception as exc:
+            _raise(
+                "MULTI_ALPHA parent leg runtime_assets payload is invalid",
+                REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE,
+                package_id=package_id,
+                leg_id=leg_id,
+                model_id=model_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+    elif parent_runtime_assets is not None:
+        runtime_assets = parent_runtime_assets
+    else:
+        _raise(
+            "MULTI_ALPHA parent leg is missing runtime asset mapping",
+            REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+        )
+    alpha158 = runtime_assets.alpha158
+    if alpha158.enabled and (not alpha158.asset_ref or not alpha158.sha256 or not alpha158.aliases):
+        _raise(
+            "MULTI_ALPHA parent leg Alpha158 schema mapping is incomplete",
+            REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+            asset_ref=alpha158.asset_ref,
+            sha256=alpha158.sha256,
+            alias_count=len(alpha158.aliases or []),
+        )
+    if alpha158.enabled:
+        parent_alpha158 = parent_runtime_assets.alpha158 if parent_runtime_assets is not None else None
+        if parent_alpha158 is None or not parent_alpha158.enabled:
+            _raise(
+                "MULTI_ALPHA parent package is missing leg Alpha158 schema asset",
+                REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+                package_id=package_id,
+                leg_id=leg_id,
+                model_id=model_id,
+                leg_asset_ref=alpha158.asset_ref,
+                leg_sha256=alpha158.sha256,
+            )
+        if (
+            parent_alpha158.asset_ref != alpha158.asset_ref
+            or str(parent_alpha158.sha256 or "").strip().lower() != str(alpha158.sha256 or "").strip().lower()
+            or list(parent_alpha158.aliases) != list(alpha158.aliases)
+        ):
+            _raise(
+                "MULTI_ALPHA parent leg Alpha158 schema is not backed by parent runtime_assets",
+                REASON_PARENT_ALPHA158_SCHEMA_MISMATCH,
+                package_id=package_id,
+                leg_id=leg_id,
+                model_id=model_id,
+                leg_asset_ref=alpha158.asset_ref,
+                leg_sha256=alpha158.sha256,
+                parent_asset_ref=getattr(parent_alpha158, "asset_ref", None),
+                parent_sha256=getattr(parent_alpha158, "sha256", None),
+            )
+    return runtime_assets
+
+
+def _parent_model_index(manifest: StrategyPackageManifest, *, package_id: str) -> dict[str, ModelAsset]:
+    models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    index: dict[str, ModelAsset] = {}
+    seen_sha: dict[str, str | None] = {}
+    for model in models:
+        if not isinstance(model, ModelAsset):
+            _raise(
+                "MULTI_ALPHA parent model_asset entry is invalid",
+                REASON_PARENT_LEG_MODEL_ASSET_MISSING,
+                package_id=package_id,
+            )
+        model_id = str(model.model_id or "").strip()
+        if not model_id:
+            _raise(
+                "MULTI_ALPHA parent model_asset is missing model_id",
+                REASON_PARENT_LEG_MODEL_ID_MISSING,
+                package_id=package_id,
+            )
+        sha = str(model.sha256 or "").strip().lower() or None
+        if model_id in index:
+            if seen_sha.get(model_id) != sha:
+                _raise(
+                    "MULTI_ALPHA parent has multiple model assets for one model_id",
+                    REASON_PARENT_LEG_MODEL_ASSET_AMBIGUOUS,
+                    package_id=package_id,
+                    model_id=model_id,
+                    first_sha256=seen_sha.get(model_id),
+                    second_sha256=sha,
+                )
+            _raise(
+                "MULTI_ALPHA parent model_id maps to multiple model assets",
+                REASON_PARENT_LEG_MODEL_ASSET_AMBIGUOUS,
+                package_id=package_id,
+                model_id=model_id,
+                sha256=sha,
+            )
+        index[model_id] = model
+        seen_sha[model_id] = sha
+    return index
+
+
+def _parent_factor_index(
+    manifest: StrategyPackageManifest,
+    *,
+    package_id: str,
+) -> dict[str, dict[str, FactorAsset]]:
+    index: dict[str, dict[str, FactorAsset]] = {"factor_id": {}, "factor_name": {}}
+    sha_seen: dict[tuple[str, str], str | None] = {}
+    for factor in manifest.factor_set:
+        if not isinstance(factor, FactorAsset):
+            _raise(
+                "MULTI_ALPHA parent factor_set entry is invalid",
+                REASON_PARENT_LEG_FACTOR_ASSET_MISSING,
+                package_id=package_id,
+            )
+        for key_name, raw_key in (("factor_id", factor.factor_id), ("factor_name", factor.factor_name)):
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            sha = str(factor.sha256 or "").strip().lower() or None
+            seen_key = (key_name, key)
+            if key in index[key_name]:
+                if sha_seen.get(seen_key) != sha:
+                    _raise(
+                        "MULTI_ALPHA parent factor ref collides with different sha256",
+                        REASON_PARENT_LEG_FACTOR_ASSET_AMBIGUOUS,
+                        package_id=package_id,
+                        factor_key_type=key_name,
+                        factor_key=key,
+                        first_sha256=sha_seen.get(seen_key),
+                        second_sha256=sha,
+                    )
+                _raise(
+                    "MULTI_ALPHA parent factor ref maps to multiple factor assets",
+                    REASON_PARENT_LEG_FACTOR_ASSET_AMBIGUOUS,
+                    package_id=package_id,
+                    factor_key_type=key_name,
+                    factor_key=key,
+                    sha256=sha,
+                )
+            index[key_name][key] = factor
+            sha_seen[seen_key] = sha
+    return index
+
+
+def _resolve_parent_factor_ref(
+    ref: str,
+    *,
+    factor_index: Mapping[str, Mapping[str, FactorAsset]],
+    package_id: str,
+    leg_id: str,
+    model_id: str,
+) -> FactorAsset:
+    matches: dict[tuple[str, str], FactorAsset] = {}
+    by_name = factor_index.get("factor_name", {}).get(ref)
+    if by_name is not None:
+        matches[("factor_name", ref)] = by_name
+    by_id = factor_index.get("factor_id", {}).get(ref)
+    if by_id is not None:
+        matches[("factor_id", ref)] = by_id
+    unique = {id(asset): asset for asset in matches.values()}
+    if not unique:
+        _raise(
+            "MULTI_ALPHA parent factor asset is missing for component ref",
+            REASON_PARENT_LEG_FACTOR_ASSET_MISSING,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+            factor_ref=ref,
+        )
+    if len(unique) > 1:
+        _raise(
+            "MULTI_ALPHA parent factor ref is ambiguous",
+            REASON_PARENT_LEG_FACTOR_ASSET_AMBIGUOUS,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+            factor_ref=ref,
+            match_keys=[f"{kind}:{key}" for kind, key in matches],
+        )
+    return next(iter(unique.values()))
+
+
+def _ensure_leg_runtime_assets_complete(
+    *,
+    package_id: str,
+    leg_id: str,
+    model_id: str,
+    model_asset: ModelAsset,
+    factors: Sequence[FactorAsset],
+    runtime_assets: RuntimeAssetManifest,
+) -> None:
+    missing: list[dict[str, Any]] = []
+    if not model_asset.asset_ref or not model_asset.sha256:
+        missing.append(
+            {
+                "asset_kind": "model_weight",
+                "model_id": model_id,
+                "asset_ref": model_asset.asset_ref,
+                "sha256": model_asset.sha256,
+            }
+        )
+    if model_asset.model_code_required and not model_asset.model_code_assets:
+        missing.append({"asset_kind": "model_code", "model_id": model_id, "reason": "model_code_required"})
+    for code_asset in model_asset.model_code_assets or []:
+        if not code_asset.asset_ref or not code_asset.sha256:
+            missing.append(
+                {
+                    "asset_kind": "model_code",
+                    "model_id": model_id,
+                    "relative_path": code_asset.relative_path,
+                    "asset_ref": code_asset.asset_ref,
+                    "sha256": code_asset.sha256,
+                }
+            )
+    for factor in factors:
+        if not factor.asset_ref or not factor.sha256:
+            missing.append(
+                {
+                    "asset_kind": "factor_code",
+                    "factor_id": factor.factor_id,
+                    "factor_name": factor.factor_name,
+                    "asset_ref": factor.asset_ref,
+                    "sha256": factor.sha256,
+                }
+            )
+    alpha158 = runtime_assets.alpha158
+    if alpha158.enabled and (not alpha158.asset_ref or not alpha158.sha256 or not alpha158.aliases):
+        missing.append(
+            {
+                "asset_kind": "factor_schema",
+                "logical_name": "alpha158_schema",
+                "asset_ref": alpha158.asset_ref,
+                "sha256": alpha158.sha256,
+                "alias_count": len(alpha158.aliases or []),
+            }
+        )
+    if missing:
+        _raise(
+            "MULTI_ALPHA parent leg runtime assets are incomplete",
+            REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE,
+            package_id=package_id,
+            leg_id=leg_id,
+            model_id=model_id,
+            missing_assets=missing,
+        )
 
 
 def _live_result_to_frame(
@@ -877,6 +1285,7 @@ def _live_result_to_frame(
     *,
     package_id: str,
     leg_id: str,
+    model_id: str,
     seed_run_id: str,
     trade_date: date,
 ) -> pd.DataFrame:
@@ -886,6 +1295,7 @@ def _live_result_to_frame(
             REASON_SEED_PREDICTION_MISSING,
             package_id=package_id,
             leg_id=leg_id,
+            model_id=model_id,
             seed_run_id=seed_run_id,
             trade_date=trade_date.isoformat(),
         )
@@ -902,6 +1312,7 @@ def _live_result_to_frame(
             REASON_SEED_PREDICTION_MISSING,
             package_id=package_id,
             leg_id=leg_id,
+            model_id=model_id,
             seed_run_id=seed_run_id,
             trade_date=trade_date.isoformat(),
         )
@@ -912,6 +1323,7 @@ def _ensemble_seed_frames(
     seed_frames: Mapping[str, pd.DataFrame],
     *,
     leg_id: str,
+    model_id: str,
     package_id: str,
     trade_date: date,
 ) -> pd.DataFrame:
@@ -925,6 +1337,7 @@ def _ensemble_seed_frames(
             REASON_SEED_PREDICTION_MISSING,
             package_id=package_id,
             leg_id=leg_id,
+            model_id=model_id,
             trade_date=trade_date.isoformat(),
             seed_run_ids=list(seed_frames),
         )
@@ -933,13 +1346,25 @@ def _ensemble_seed_frames(
     return merged[["trade_date", "instrument", "score"]].sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
 
-def _normalize_leg_frame(frame: pd.DataFrame, *, leg_id: str, method: str) -> pd.DataFrame:
+def _normalize_leg_frame(
+    frame: pd.DataFrame,
+    *,
+    package_id: str,
+    leg_id: str,
+    model_id: str,
+    method: str,
+) -> pd.DataFrame:
     data = frame.copy()
     data["raw_score"] = pd.to_numeric(data["score"], errors="coerce")
     if data["raw_score"].isna().any():
         raise ArtifactGenerationFailedError(
             "MULTI_ALPHA leg score contains non-finite values",
-            context={"reason_code": REASON_SEED_PREDICTION_MISSING, "leg_id": leg_id},
+            context={
+                "reason_code": REASON_SEED_PREDICTION_MISSING,
+                "package_id": package_id,
+                "leg_id": leg_id,
+                "model_id": model_id,
+            },
         )
     if method == "zscore":
         data["normalized_score"] = data.groupby("trade_date")["raw_score"].transform(_zscore)
@@ -1023,15 +1448,6 @@ def _artifact_config(runtime_config: Mapping[str, Any] | None) -> dict[str, Any]
             context={"selection_artifact_config_type": type(artifact).__name__},
         )
     return dict(artifact)
-
-
-def _callable_accepts_keyword(func: Callable[..., Any], keyword: str) -> bool:
-    try:
-        signature = inspect.signature(func)
-    except (TypeError, ValueError):
-        return True
-    return keyword in signature.parameters
-
 
 def _normalize_positive_weights(raw: Mapping[str, float], *, reason_code: str, context: Mapping[str, Any]) -> dict[str, float]:
     values = {str(key): float(value) for key, value in raw.items()}
@@ -1133,6 +1549,18 @@ def _raise(message: str, reason_code: str, **context: Any) -> None:
         REASON_COMPONENT_COVERAGE_LOW,
         REASON_CHILD_MANIFEST_MISMATCH,
         REASON_LEG_MISSING,
+        REASON_PARENT_LEG_MAPPING_MISSING,
+        REASON_PARENT_LEG_SEED_METADATA_MISSING,
+        REASON_PARENT_LEG_MODEL_ASSET_MISSING,
+        REASON_PARENT_LEG_MODEL_ASSET_AMBIGUOUS,
+        REASON_PARENT_LEG_MODEL_ID_MISSING,
+        REASON_PARENT_LEG_FACTOR_REFS_MISSING,
+        REASON_PARENT_LEG_FACTOR_ASSET_MISSING,
+        REASON_PARENT_LEG_FACTOR_ASSET_AMBIGUOUS,
+        REASON_PARENT_ALPHA158_SCHEMA_MISSING,
+        REASON_PARENT_ALPHA158_SCHEMA_MISMATCH,
+        REASON_PARENT_LEG_RUNTIME_ASSETS_INCOMPLETE,
+        REASON_PARENT_LEG_INFERENCE_EMPTY,
     }:
         raise DataUnavailableError(message, context=error_context)
     if reason_code == REASON_RUNTIME_NOT_ENABLED:

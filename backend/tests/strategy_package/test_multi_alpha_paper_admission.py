@@ -124,6 +124,17 @@ def test_local_sim_dry_run_writes_admission_and_is_deterministic_for_topk_varian
     assert top50.artifact_shas["component_score_artifact_sha256"].keys() == {A1_LEG, FUND_LEG}
     assert top50.artifact_shas["weight_artifact_sha256"]
     assert top50.artifact_shas["combined_score_artifact_sha256"]
+    assert top50.evidence_json["parent_asset_runtime"]["runtime_source"] == "parent_package_asset"
+    assert top50.evidence_json["parent_asset_runtime"]["runtime_package_id"] == parent.package_id
+    assert top50.evidence_json["parent_asset_runtime"]["model_params_origin"] == "package_asset"
+    assert {
+        leg_id: item["runtime_source"]
+        for leg_id, item in top50.evidence_json["parent_asset_runtime"]["component_artifacts"].items()
+    } == {A1_LEG: "parent_package_asset", FUND_LEG: "parent_package_asset"}
+    assert {
+        leg_id: item["model_params_origin"]
+        for leg_id, item in top50.evidence_json["parent_asset_runtime"]["component_artifacts"].items()
+    } == {A1_LEG: "package_asset", FUND_LEG: "package_asset"}
     assert len(artifact_repo.list(package_id=parent.package_id, manifest_sha256=parent.manifest_sha256)) >= 2
 
     local_summary = StrategyPackageAssetEligibilityService(admission_reader=admission_repo).summarize(
@@ -311,15 +322,12 @@ def test_local_sim_portfolio_create_succeeds_without_admission_and_minqmt_stays_
         (
             lambda parent: parent.manifest.source_evidence["multi_alpha"]["legs"][0].__setitem__("seed_run_ids", []),
             _runtime_config_with_history(),
-            "multi_alpha_seed_prediction_missing",
+            "multi_alpha_parent_leg_seed_metadata_missing",
         ),
         (
-            lambda parent: parent.manifest.source_evidence["multi_alpha"]["legs"][0].__setitem__(
-                "child_manifest_sha256",
-                "0" * 64,
-            ),
+            lambda parent: _remove_first_leg_model_asset(parent),
             _runtime_config_with_history(),
-            "multi_alpha_child_manifest_mismatch",
+            "multi_alpha_parent_leg_model_asset_missing",
         ),
         (
             lambda _parent: None,
@@ -338,6 +346,13 @@ def test_dry_run_failures_are_loud_and_do_not_write_admission(mutator, runtime_c
 
     assert _reason(excinfo.value) == expected_reason
     assert admission_repo.records == {}
+
+
+def _remove_first_leg_model_asset(parent) -> None:  # noqa: ANN001
+    manifest = parent.manifest
+    first_model_id = manifest.alpha_components[0].model_id
+    models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    parent.manifest = manifest.model_copy(update={"model_asset": [model for model in models if model.model_id != first_model_id]})
 
 
 def test_dry_run_rejects_single_alpha_and_minqmt_without_admission_write() -> None:

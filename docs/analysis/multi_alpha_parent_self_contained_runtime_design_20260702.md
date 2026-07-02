@@ -335,6 +335,13 @@ Promotion：
 
 ## Design Acceptance Index
 
+## 2026-07-02 Tier2 Implementation Notes
+
+- per-leg model key 方案选择 `(a) unique model_id per leg`：本批实现沿用 `component.model_id -> parent model_asset[]` authority，并在 promotion 早期检测多腿 `model_id` 冲突；当前生产父包 `pkg_ma_0c796d57d216ebbd1daf0412` 不冲突，可无迁移运行。选择理由是最小化 manifest 契约变更、保持 legacy 父包兼容，并优先 fail-closed 而不是静默错绑；`(b) leg_id` 作为 model authority 可作为后续演进以支持同架构不同权重多腿。
+- 新增约束：多 Alpha 父包每腿 `model_id` 必须唯一；冲突统一报 `multi_alpha_promotion_parent_model_id_collision`，context 必须包含 `first_leg_id`、`second_leg_id`、`model_id`、两侧 `sha256/asset_ref` 与 `model_id_uniqueness_policy=unique_per_leg`。
+- 必办 silent merge 修正：`_merge_model_assets()` 不再用 `setdefault`；同 `model_id` 不同 `sha256` fail-closed 为 `multi_alpha_promotion_parent_model_id_collision`。`_merge_factor_assets()` 对同 `factor_id` 或同 `factor_name` 不同 `sha256` fail-closed 为 `multi_alpha_promotion_parent_factor_ref_collision`。
+- runtime legacy 兼容边界：现存 `child_package:` lineage ref 仅写入 `legacy_child_ref_ignored=true` metadata；生产 provider 不读取 child package repository，不回退 QE source/prediction workspace。测试 oracle 如需 child-based 对照，只能位于 `debug_tools/`，且不得被生产 import。
+
 | 设计项 | 标题 |
 |---|---|
 | F-001 | Runtime 每腿只从父包 `model_id -> model_asset`、`factor_artifact_refs -> factor_set`、`runtime_assets.alpha158` 解析，不读 child package |
@@ -433,15 +440,15 @@ rtk python debug_tools/strategy_package/multi_alpha_parent_self_contained/compar
 |---|---|---|---|---|
 | F-001 | `backend/services/strategy_package/multi_alpha_live.py`; `backend/services/strategy_package/live_inference.py` | parent leg slice unit tests; child repository access sentinel | ready | - |
 | F-002 | `live_inference.py` cache namespace; `prepare_workspace` namespace support | two-leg same parent package cache isolation test | ready | - |
-| F-003 | `multi_alpha_live.py` seed frame replay metadata | parity unit test and real WSL oracle compare | ready | - |
+| F-003 | `multi_alpha_live.py` seed frame replay metadata | parity unit test passes; real WSL oracle fail-closed on legacy DB schema gap | blocked | legacy parent `pkg_ma_0c79` lacks parent `runtime_assets` / `factor_schema` ledger; no user-approved refreeze/backfill in this PR |
 | F-004 | `multi_alpha_paper_dry_run.py`; selection artifact service | dry-run evidence asserts parent package asset origin | ready | - |
 | F-005 | `multi_alpha_promotion.py` request handling | promotion tests assert no child creation and explicit child ids rejected | ready | - |
 | F-006 | `multi_alpha_promotion.py` manifest builder | manifest snapshot test asserts parent lineage and no runtime child refs | ready | - |
 | F-007 | `package_asset_freeze.py`; parent freeze path | asset ledger tests for per-leg model/factor/model_code/Alpha158 | ready | - |
 | F-008 | `frozen_runtime_self_check.py` | strict per-leg feature count tests and combined signal smoke | ready | - |
-| F-009 | `multi_alpha_live.py` legacy compatibility branch | existing `pkg_ma_0c...` oracle test ignores `child_package:` ref | ready | - |
+| F-009 | `multi_alpha_live.py` legacy compatibility branch | legacy `child_package:` ref is ignored, but existing `pkg_ma_0c...` cannot run without parent schema asset | blocked | legacy parent `pkg_ma_0c79` lacks parent `runtime_assets` / `factor_schema` ledger; runtime correctly returns `multi_alpha_parent_alpha158_schema_missing` |
 | F-010 | PR body / follow-up cleanup checklist | read-only reference query plan; no DML in this PR | ready | - |
-| F-011 | `debug_tools/strategy_package/...compare_parent_vs_legacy_child.py`; pytest marker or manual Tier2 run | WSL parity evidence attached to PR | ready | - |
+| F-011 | `debug_tools/strategy_package/...compare_parent_vs_legacy_child.py`; manual Tier2 run | WSL parity oracle attached; real package fail-closed before score compare | blocked | parent-self-contained parity requires approved refreeze/manifest migration/backfill for existing `pkg_ma_0c79`; not executed in this PR |
 | F-012 | single-alpha targeted tests | existing single-alpha StrategyPackage tests unchanged | ready | - |
 
 ## Rollout / Rollback
@@ -478,3 +485,11 @@ Rollback：
 - `production_backend_dependency_gate=noop`：本设计不新增 Python 依赖。
 - `production_runtime_gate=pending_user_activation`：实现合入后是否重启 backend 由用户单独授权。
 - 本阶段未启动服务、未写生产 DB、未执行 WSL parity、未退役子包。
+
+## 2026-07-02 Implementation Read-Only DB Finding
+
+实现阶段按生产只读复核 `pkg_ma_0c796d57d216ebbd1daf0412` 时发现一个必须显式列出的 legacy 字段缺口：该父包 `manifest.runtime_assets` 为 `null`，`strategy_pkg.package_asset` 中也没有 `factor_schema` ledger row；但 LSTM 腿 `pkg_mac_6e48c4963846f7bf4f16a5f9` 带有 enabled Alpha158 schema，FUND 腿 `pkg_mac_a889a92ef523d91a1c103dc1` 为 Alpha158 disabled。因此现存父包不是设计假设中的完整 schema 超集，生产 parent-self-contained runtime 必须按 `multi_alpha_parent_alpha158_schema_missing` fail-closed，不能从 child package 或 QE workspace 回填。
+
+代码实现补充了混合腿契约：新 promotion 在 `source_evidence.multi_alpha.legs[].runtime_assets` 写入每腿 runtime asset 开关，同时父包顶层 `runtime_assets` 只记录所有 enabled 腿共享且已冻结到父包 ledger 的 Alpha158 schema；运行时按每腿 mapping 决定是否启用 Alpha158，并要求 enabled 腿的 schema 必须由父包顶层 `runtime_assets` 和 `factor_schema` ledger 覆盖。该补充支持后续新建父包自包含运行，但不对既有缺 schema 父包做静默兼容或 DML 迁移。
+
+因此，`pkg_ma_0c796d57d216ebbd1daf0412` 的真实 WSL parity 在本 PR 范围内不能伪造通过；若 Tier2 要求该既有父包直接跑通，需要另案执行受控 refreeze/manifest migration/backfill，使父包 manifest 和 package_asset ledger 补齐 schema 后再复跑 parity。本实现 PR 不执行该 DML。

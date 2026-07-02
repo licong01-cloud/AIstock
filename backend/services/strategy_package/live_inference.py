@@ -45,7 +45,7 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 
-from .models import FactorAsset, ModelAsset, ModelCodeAsset, StrategyPackageManifest
+from .models import FactorAsset, ModelAsset, ModelCodeAsset, RuntimeAssetManifest, StrategyPackageManifest
 from .package_asset_freeze import manifest_has_frozen_runtime_assets, pickled_model_code_references_from_params_bytes
 from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
 from .runtime_schema import (
@@ -515,7 +515,11 @@ def _manifest_runtime_experiment_id(manifest: StrategyPackageManifest) -> str:
     return manifest.package_id
 
 
-def _manifest_runtime_custom_params(manifest: StrategyPackageManifest) -> dict[str, Any]:
+def _manifest_runtime_custom_params(
+    manifest: StrategyPackageManifest,
+    *,
+    runtime_assets_override: RuntimeAssetManifest | None = None,
+) -> dict[str, Any]:
     source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
     backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
     custom = source_evidence.get("custom_params")
@@ -526,7 +530,7 @@ def _manifest_runtime_custom_params(manifest: StrategyPackageManifest) -> dict[s
         else:
             custom = {}
     runtime_custom = dict(custom)
-    runtime_assets = manifest.runtime_assets
+    runtime_assets = runtime_assets_override if runtime_assets_override is not None else manifest.runtime_assets
     if runtime_assets is None:
         runtime_custom["disable_alpha158"] = True
         runtime_custom["runtime_contract_source"] = "strategy_package_package_assets_legacy"
@@ -758,11 +762,36 @@ class QEExperimentRuntimeAssetResolver:
             },
             )
 
+    def load_source_for_strategy_package_leg(
+        self,
+        *,
+        manifest: StrategyPackageManifest,
+        package_id: str,
+        leg_id: str,
+        model_asset: ModelAsset,
+        factor_set: list[FactorAsset],
+        runtime_assets: RuntimeAssetManifest | None,
+    ) -> QEExperimentRuntimeSource:
+        """Resolve one MULTI_ALPHA leg strictly from parent package-owned assets."""
+
+        return self._source_from_package_assets(
+            manifest,
+            package_id=package_id,
+            model_asset_override=model_asset,
+            factor_set_override=factor_set,
+            runtime_assets_override=runtime_assets,
+            cache_namespace=f"leg_{_safe_cache_component(leg_id)}",
+        )
+
     def _source_from_package_assets(
         self,
         manifest: StrategyPackageManifest,
         *,
         package_id: str | None,
+        model_asset_override: ModelAsset | None = None,
+        factor_set_override: list[FactorAsset] | None = None,
+        runtime_assets_override: RuntimeAssetManifest | None = None,
+        cache_namespace: str | None = None,
     ) -> QEExperimentRuntimeSource:
         package_key = str(package_id or manifest.package_id or "").strip()
         manifest_sha = str(manifest.manifest_sha256 or "").strip().lower()
@@ -776,13 +805,16 @@ class QEExperimentRuntimeAssetResolver:
                 },
             )
 
-        model_asset = _single_model_asset_for_runtime(manifest)
+        model_asset = model_asset_override or _single_model_asset_for_runtime(manifest)
+        namespace = _safe_cache_component(cache_namespace or "")
         source_dir = (
             self.cache_root
             / "_package_asset_sources"
             / _safe_cache_component(package_key)
             / _safe_cache_component(manifest_sha[:16])
         )
+        if namespace:
+            source_dir = source_dir / namespace
         self._reset_cache_dir(source_dir)
         factors_dir = source_dir / "factors"
         model_dir = source_dir / "mlruns" / "package_asset" / "artifacts"
@@ -790,7 +822,8 @@ class QEExperimentRuntimeAssetResolver:
         model_dir.mkdir(parents=True, exist_ok=True)
 
         factor_names: list[str] = []
-        for factor in manifest.factor_set:
+        factors = list(factor_set_override) if factor_set_override is not None else list(manifest.factor_set)
+        for factor in factors:
             factor_name = _runtime_factor_name(factor, package_id=package_key)
             factor_names.append(factor_name)
             payload = self._read_package_asset_bytes(
@@ -830,11 +863,12 @@ class QEExperimentRuntimeAssetResolver:
             manifest,
             source_dir=source_dir,
             package_id=package_key,
+            runtime_assets_override=runtime_assets_override,
         )
 
         source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
         backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
-        custom_params = _manifest_runtime_custom_params(manifest)
+        custom_params = _manifest_runtime_custom_params(manifest, runtime_assets_override=runtime_assets_override)
         data_split = _manifest_runtime_data_split(source_evidence, backtest_context)
         experiment_id = _manifest_runtime_experiment_id(manifest)
         return QEExperimentRuntimeSource(
@@ -859,8 +893,9 @@ class QEExperimentRuntimeAssetResolver:
         *,
         source_dir: Path,
         package_id: str,
+        runtime_assets_override: RuntimeAssetManifest | None = None,
     ) -> None:
-        runtime_assets = manifest.runtime_assets
+        runtime_assets = runtime_assets_override if runtime_assets_override is not None else manifest.runtime_assets
         if runtime_assets is None or not runtime_assets.alpha158.enabled:
             (source_dir / "conf.yaml").write_text("task: {}\n", encoding="utf-8")
             return
@@ -1496,6 +1531,7 @@ class QEExperimentRuntimeAssetResolver:
         source: QEExperimentRuntimeSource,
         runtime_config: dict[str, Any] | None = None,
         path_converter: Callable[[str], str] | None = None,
+        cache_namespace: str | None = None,
     ) -> PreparedInferenceWorkspace:
         config = runtime_config or {}
         artifact_config = config.get("selection_artifact_config") or config.get("selection_artifact") or {}
@@ -1515,6 +1551,9 @@ class QEExperimentRuntimeAssetResolver:
         model_source_path, model_candidate_count = self._resolve_model_params_path(source, artifact_config)
 
         cache_key = manifest_sha256[:16] if manifest_sha256 else "unfrozen_manifest"
+        namespace = _safe_cache_component(cache_namespace or "")
+        if namespace:
+            cache_key = f"{cache_key}__{namespace}"
         workspace_path = self.cache_root / package_id / cache_key
         self._reset_cache_dir(workspace_path)
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
