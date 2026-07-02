@@ -1,0 +1,100 @@
+{
+  "actual": "Research Assistant token ledger records provider usage, but chat and audit pages show llm_usage_summary_unavailable / cost unavailable for DeepSeek v4 pro. Root evidence: assistant_llm_usage_events has usage_status=recorded but cost_status=unavailable, cost_reason_code includes litellm_cost_per_token_failed / model isn't mapped yet for deepseek/deepseek-v4-pro. Short-term target: correctly compute and show cost for current DeepSeek usage without silent fallback. Mid-term target: preserve pricing snapshots while allowing future LiteLLM price-map updates to be picked up automatically for new events. No DDL, no production DB connection, no service restart in this fix.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260702_BUG-571-ra-llm-usage-cost-unavailable-for-deepseek-v4-pro-pricing.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-571",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T03:28:57.455458Z",
+  "description": "Research Assistant token ledger records provider usage, but chat and audit pages show llm_usage_summary_unavailable / cost unavailable for DeepSeek v4 pro. Root evidence: assistant_llm_usage_events has usage_status=recorded but cost_status=unavailable, cost_reason_code includes litellm_cost_per_token_failed / model isn't mapped yet for deepseek/deepseek-v4-pro. Short-term target: correctly compute and show cost for current DeepSeek usage without silent fallback. Mid-term target: preserve pricing snapshots while allowing future LiteLLM price-map updates to be picked up automatically for new events. No DDL, no production DB connection, no service restart in this fix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-38a05889c1bd",
+      "timestamp": "2026-07-02T03:28:57.455453Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-02T03:28:57.455458Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1804,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1804",
+  "last_seen_at": "2026-07-02T03:28:57.455458Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA LLM usage cost unavailable for DeepSeek v4 pro pricing",
+  "trigger_condition": {
+    "fingerprint": "38a05889c1bdd4d8b71d45dc",
+    "source_event_id": "FE-20260702-38a05889c1bd"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/deepseek-v4-pro",
+    "ui_routes": [
+      "/deepseek-v4-pro"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
