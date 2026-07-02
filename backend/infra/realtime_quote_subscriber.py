@@ -1,57 +1,61 @@
-"""实时行情订阅服务（使用 xtquant）
+"""Realtime quote subscription helpers for xtquant."""
 
-提供从 miniQMT 获取实时行情的功能。
-"""
 from __future__ import annotations
 
 import logging
 import threading
+from datetime import UTC, datetime
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 try:
-    import xtquant.xtdata as xtdata
+    import xtquant.xtdata as xtdata  # type: ignore[import-not-found]
+
     XTDATA_AVAILABLE = True
 except ImportError:
+    xtdata = None  # type: ignore[assignment]
     XTDATA_AVAILABLE = False
-    logger.warning("xtquant.xtdata 不可用，实时行情订阅功能将不可用")
+    logger.warning("xtquant.xtdata is not available; realtime quote subscription is disabled")
+
+
+def _load_xtdata():
+    """Load xtdata lazily after callers have configured xtquant paths."""
+
+    global xtdata, XTDATA_AVAILABLE
+    if XTDATA_AVAILABLE and xtdata is not None:
+        return xtdata
+    try:
+        import xtquant.xtdata as xtdata_mod  # type: ignore[import-not-found]
+    except ImportError:
+        XTDATA_AVAILABLE = False
+        return None
+    xtdata = xtdata_mod
+    XTDATA_AVAILABLE = True
+    return xtdata_mod
 
 
 class RealtimeQuoteSubscriber:
-    """实时行情订阅服务"""
+    """Process-local whole-quote subscription manager."""
 
     def __init__(self):
         self.subscriptions: Dict[int, List[str]] = {}  # seq -> stocks
         self.callbacks: Dict[str, List[Callable]] = {}  # stock -> callbacks
+        self.managed_subscriptions: Dict[str, Dict] = {}
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
 
     def subscribe(self, stocks: List[str], callback: Callable) -> Optional[int]:
-        """订阅股票实时行情
+        """Subscribe to realtime quotes and return the xtdata sequence id."""
 
-        Args:
-            stocks: 股票代码列表，如 ["600519.SH", "000001.SZ"]
-            callback: 回调函数，格式: callback(stock_code: str, quote: dict)
-
-        Returns:
-            订阅号（成功返回 > 0，失败返回 None）
-        """
-        if not XTDATA_AVAILABLE:
-            logger.error("xtquant.xtdata 不可用，无法订阅实时行情")
+        xtdata_mod = _load_xtdata()
+        if xtdata_mod is None:
+            logger.error("xtquant.xtdata is not available; cannot subscribe realtime quotes")
             return None
 
         try:
-            # 注册回调
-            with self._lock:
-                for stock in stocks:
-                    if stock not in self.callbacks:
-                        self.callbacks[stock] = []
-                    self.callbacks[stock].append(callback)
-
-            # 订阅全推行情
-            seq = xtdata.subscribe_whole_quote(
+            seq = xtdata_mod.subscribe_whole_quote(
                 code_list=stocks,
                 callback=self._on_quote,
             )
@@ -59,18 +63,86 @@ class RealtimeQuoteSubscriber:
             if seq > 0:
                 with self._lock:
                     self.subscriptions[seq] = stocks
-                logger.info(f"成功订阅实时行情: {stocks}, 订阅号: {seq}")
+                    for stock in stocks:
+                        if stock not in self.callbacks:
+                            self.callbacks[stock] = []
+                        self.callbacks[stock].append(callback)
+                logger.info("subscribed realtime quotes: stocks=%s seq=%s", stocks, seq)
                 return seq
-            else:
-                logger.error(f"订阅实时行情失败: {stocks}")
-                return None
-
-        except Exception as e:
-            logger.error(f"订阅实时行情异常: {e}", exc_info=True)
+            logger.error("realtime quote subscription failed: stocks=%s seq=%s", stocks, seq)
             return None
 
+        except Exception as e:  # noqa: BLE001
+            logger.error("realtime quote subscription raised: %s", e, exc_info=True)
+            return None
+
+    def ensure_subscription(
+        self,
+        *,
+        key: str,
+        stocks: List[str],
+        callback: Callable,
+        force: bool = False,
+    ) -> Dict:
+        """Ensure one managed whole-quote subscription is active.
+
+        This path is used by MiniQMT pre-trade quote reads and is intentionally
+        loud: subscribe failures are surfaced instead of silently using stale
+        xtdata cache rows.
+        """
+
+        normalized = list(dict.fromkeys(str(stock or "").strip() for stock in stocks if str(stock or "").strip()))
+        if not normalized:
+            raise RuntimeError("MINIQMT_QUOTE_SUBSCRIPTION_SYMBOLS_EMPTY: no stocks requested")
+        xtdata_mod = _load_xtdata()
+        if xtdata_mod is None:
+            raise RuntimeError("MINIQMT_QUOTE_SUBSCRIPTION_UNAVAILABLE: xtquant.xtdata is not available")
+        self.start()
+        requested = set(normalized)
+        target_stocks = list(normalized)
+        with self._lock:
+            existing = self.managed_subscriptions.get(key)
+            existing_stocks = [str(stock) for stock in (existing or {}).get("stocks") or []]
+            if existing_stocks:
+                target_stocks = list(dict.fromkeys([*existing_stocks, *normalized]))
+            if (
+                not force
+                and existing
+                and int(existing.get("seq") or 0) in self.subscriptions
+                and requested.issubset(set(existing_stocks))
+            ):
+                return {
+                    **existing,
+                    "status": "active",
+                    "forced": False,
+                    "requested_stocks": normalized,
+                    "subscription_reused": True,
+                }
+            old_seq = int(existing.get("seq") or 0) if existing else None
+        if old_seq:
+            self.unsubscribe(old_seq)
+        seq = self.subscribe(target_stocks, callback)
+        if not isinstance(seq, int) or seq <= 0:
+            raise RuntimeError(
+                "MINIQMT_QUOTE_SUBSCRIPTION_FAILED: xtdata.subscribe_whole_quote did not return a positive seq"
+            )
+        payload = {
+            "key": key,
+            "seq": seq,
+            "stocks": target_stocks,
+            "status": "active",
+            "forced": bool(force),
+            "requested_stocks": normalized,
+            "subscription_reused": False,
+            "subscribed_at": datetime.now(UTC).isoformat(),
+        }
+        with self._lock:
+            self.managed_subscriptions[key] = dict(payload)
+        return payload
+
     def _on_quote(self, datas: Dict):
-        """行情回调"""
+        """Dispatch quote callbacks."""
+
         try:
             for stock_code, quote in datas.items():
                 with self._lock:
@@ -79,102 +151,92 @@ class RealtimeQuoteSubscriber:
                 for callback in callbacks:
                     try:
                         callback(stock_code, quote)
-                    except Exception as e:
-                        logger.error(
-                            f"行情回调执行失败 {stock_code}: {e}", exc_info=True
-                        )
-        except Exception as e:
-            logger.error(f"处理行情回调异常: {e}", exc_info=True)
+                    except Exception as e:  # noqa: BLE001
+                        logger.error("quote callback failed for %s: %s", stock_code, e, exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error("quote callback dispatch raised: %s", e, exc_info=True)
 
     def unsubscribe(self, seq: int) -> bool:
-        """取消订阅
+        """Unsubscribe one xtdata quote sequence."""
 
-        Args:
-            seq: 订阅号
-
-        Returns:
-            是否成功
-        """
-        if not XTDATA_AVAILABLE:
+        xtdata_mod = _load_xtdata()
+        if xtdata_mod is None:
             return False
 
         try:
             with self._lock:
                 if seq in self.subscriptions:
                     stocks = self.subscriptions[seq]
-                    xtdata.unsubscribe_quote(seq)
+                    xtdata_mod.unsubscribe_quote(seq)
                     del self.subscriptions[seq]
+                    for key, payload in list(self.managed_subscriptions.items()):
+                        if int(payload.get("seq") or 0) == seq:
+                            del self.managed_subscriptions[key]
 
-                    # 清理回调
                     for stock in stocks:
                         if stock in self.callbacks:
                             del self.callbacks[stock]
 
-                    logger.info(f"已取消订阅: {stocks}, 订阅号: {seq}")
+                    logger.info("unsubscribed realtime quotes: stocks=%s seq=%s", stocks, seq)
                     return True
-                else:
-                    logger.warning(f"订阅号不存在: {seq}")
-                    return False
+                logger.warning("quote subscription seq not found: seq=%s", seq)
+                return False
 
-        except Exception as e:
-            logger.error(f"取消订阅异常: {e}", exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error("unsubscribe realtime quote raised: %s", e, exc_info=True)
             return False
 
     def start(self):
-        """启动订阅服务（在后台线程运行）"""
+        """Start xtdata event loop in a daemon thread."""
+
         if self.running:
             return
 
-        if not XTDATA_AVAILABLE:
-            logger.error("xtquant.xtdata 不可用，无法启动订阅服务")
+        if _load_xtdata() is None:
+            logger.error("xtquant.xtdata is not available; cannot start realtime quote subscriber")
             return
 
         self.running = True
         self.thread = threading.Thread(target=self._run, name="realtime-quote-subscriber", daemon=True)
         self.thread.start()
-        logger.info("实时行情订阅服务已启动")
+        logger.info("realtime quote subscriber started")
 
     def stop(self):
-        """停止订阅服务"""
+        """Stop subscription service and unsubscribe all known sequences."""
+
         if not self.running:
             return
 
         self.running = False
 
-        # 取消所有订阅
         with self._lock:
             for seq in list(self.subscriptions.keys()):
                 self.unsubscribe(seq)
 
-        logger.info("实时行情订阅服务已停止")
+        logger.info("realtime quote subscriber stopped")
 
     def _run(self):
-        """运行订阅循环"""
+        """Run xtdata callback event loop."""
+
         try:
-            xtdata.run()  # 阻塞运行，持续接收回调
-        except Exception as e:
-            logger.error(f"实时行情订阅服务异常: {e}", exc_info=True)
+            xtdata_mod = _load_xtdata()
+            if xtdata_mod is None:
+                raise RuntimeError("xtquant.xtdata is not available")
+            xtdata_mod.run()
+        except Exception as e:  # noqa: BLE001
+            logger.error("realtime quote subscriber loop raised: %s", e, exc_info=True)
         finally:
             self.running = False
 
     def get_latest_quote(self, stock_code: str) -> Optional[Dict]:
-        """获取最新行情（从缓存）
+        """Fetch latest cached quote via xtdata.get_market_data."""
 
-        Args:
-            stock_code: 股票代码
-
-        Returns:
-            行情数据字典，字段对齐策略使用：
-            - lastPrice -> close (最新价)
-            - volume -> volume (成交量)
-            - open, high, low, amount 等
-        """
-        if not XTDATA_AVAILABLE:
+        xtdata_mod = _load_xtdata()
+        if xtdata_mod is None:
             return None
 
         try:
-            # 获取最新tick数据
-            data = xtdata.get_market_data(
+            data = xtdata_mod.get_market_data(
                 field_list=["time", "lastPrice", "open", "high", "low", "volume", "amount"],
                 stock_list=[stock_code],
                 period="tick",
@@ -189,8 +251,8 @@ class RealtimeQuoteSubscriber:
                 if not df_price.empty:
                     quote = {
                         "time": int(df_time.iloc[0, 0]) if df_time is not None and not df_time.empty else None,
-                        "lastPrice": float(df_price.iloc[0, 0]),  # xtquant字段：最新价
-                        "close": float(df_price.iloc[0, 0]),      # 对齐策略字段：收盘价
+                        "lastPrice": float(df_price.iloc[0, 0]),
+                        "close": float(df_price.iloc[0, 0]),
                         "volume": float(df_volume.iloc[0, 0]) if df_volume is not None and not df_volume.empty else None,
                         "open": float(data.get("open").iloc[0, 0]) if "open" in data and not data["open"].empty else None,
                         "high": float(data.get("high").iloc[0, 0]) if "high" in data and not data["high"].empty else None,
@@ -199,20 +261,19 @@ class RealtimeQuoteSubscriber:
                     }
                     return quote
 
-        except Exception as e:
-            logger.error(f"获取最新行情失败 {stock_code}: {e}", exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.error("get latest quote failed for %s: %s", stock_code, e, exc_info=True)
 
         return None
 
 
-# 全局订阅服务实例
 _subscriber_instance: Optional[RealtimeQuoteSubscriber] = None
 
 
 def get_realtime_quote_subscriber() -> RealtimeQuoteSubscriber:
-    """获取全局实时行情订阅服务实例"""
+    """Return the process-wide realtime quote subscriber."""
+
     global _subscriber_instance
     if _subscriber_instance is None:
         _subscriber_instance = RealtimeQuoteSubscriber()
     return _subscriber_instance
-

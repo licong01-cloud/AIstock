@@ -5,7 +5,13 @@
     "backend/data_service/xtquant_adapter.py",
     "backend/services/paper_trading_v2/market_data.py",
     "tests/aistock_validation/bugs/20260702_BUG-575-miniqmt-sim-pre-trade-quote-cache-goes-stale-without-active-subscription.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/infra/qmt_client.py",
+    "backend/infra/realtime_quote_subscriber.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "docs/handoff/BUG-575-miniqmt-quote-feed-subscription-self-heal.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-575",
@@ -45,8 +51,13 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
+    "targeted_pytest_minqmtsim_market_data_lifecycle",
+    "ruff_changed_python_files",
+    "git_diff_check",
+    "guardrail_changed_files",
     "l0",
-    "paper_v2_l3"
+    "validation_module_registry_l0",
+    "paper_v2_backend"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

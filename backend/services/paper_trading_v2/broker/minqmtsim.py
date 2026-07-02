@@ -20,6 +20,7 @@ from uuid import uuid4
 from backend.infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
 from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
+    TDX_REALTIME_QUOTE_MAX_AGE,
     assert_broker_market_source_match,
 )
 from backend.services.trading_core.errors import (
@@ -576,20 +577,43 @@ class MiniQMTSimBackend(BrokerBackend):
         return positions
 
     def query_quote(self, symbol: str) -> dict[str, object] | None:
-        """Return L1 quote from the underlying MiniQMT client when available."""
+        """Return L1 quote from MiniQMT with active subscription/self-heal evidence."""
 
         self._ensure_alive()
         getter = getattr(self._qmt_client, "get_full_tick", None)
         if not callable(getter):
             return None
+        now = datetime.now()
         try:
-            data = getter([symbol])
+            # TDX_REALTIME_QUOTE_MAX_AGE is the shared pre-trade fail-closed threshold;
+            # keep the value unchanged while ensuring MiniQMT cache freshness before the guard.
+            data = getter(
+                [symbol],
+                ensure_subscription=True,
+                ensure_fresh=True,
+                max_age_seconds=TDX_REALTIME_QUOTE_MAX_AGE.total_seconds(),
+                trade_date=date.today(),
+                as_of_time=now,
+            )
         except QMTNotAvailableError as exc:
-            raise BrokerConnectivityError("MiniQMT quote query failed", context={"symbol": symbol, "reason": str(exc)}) from exc
+            raise BrokerConnectivityError(
+                "MiniQMT quote query failed",
+                context={
+                    "reason_code": _reason_code_from_error_text(str(exc), default="MINIQMT_REALTIME_QUOTE_FETCH_FAILED"),
+                    "symbol": symbol,
+                    "reason": str(exc),
+                    "quote_feed_health": _safe_quote_feed_health(self._qmt_client),
+                },
+            ) from exc
         except Exception as exc:
             raise BrokerConnectivityError(
                 "MiniQMT quote query failed",
-                context={"symbol": symbol, "reason": f"{type(exc).__name__}: {exc}"},
+                context={
+                    "reason_code": "MINIQMT_REALTIME_QUOTE_FETCH_FAILED",
+                    "symbol": symbol,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "quote_feed_health": _safe_quote_feed_health(self._qmt_client),
+                },
             ) from exc
         if not data:
             return None
@@ -602,7 +626,9 @@ class MiniQMTSimBackend(BrokerBackend):
                     break
         if not isinstance(row, dict):
             return None
-        return normalize_miniqmt_quote_row(symbol, row)
+        normalized = normalize_miniqmt_quote_row(symbol, row)
+        normalized["quote_feed_health"] = _safe_quote_feed_health(self._qmt_client)
+        return normalized
 
     def query_position_marks(self) -> tuple[dict[str, PositionLot], dict[str, float]]:
         """Return MiniQMT-authoritative positions plus mark prices.
@@ -1309,6 +1335,24 @@ def _decimal_from_optional(value: Any) -> Decimal | None:
     parsed = _decimal_from_any(value)
     return parsed if parsed > 0 else None
 
+
+
+def _reason_code_from_error_text(value: str, *, default: str) -> str:
+    prefix = str(value or "").split(":", 1)[0].strip()
+    if prefix.startswith("MINIQMT_") or prefix.startswith("REALTIME_QUOTE_"):
+        return prefix
+    return default
+
+
+def _safe_quote_feed_health(qmt_client: Any) -> dict[str, Any] | None:
+    getter = getattr(qmt_client, "get_realtime_quote_health", None)
+    if not callable(getter):
+        return None
+    try:
+        payload = getter()
+    except Exception:  # noqa: BLE001 - health evidence must not mask quote result.
+        return {"status": "health_unavailable", "reason_code": "MINIQMT_QUOTE_HEALTH_UNAVAILABLE"}
+    return dict(payload) if isinstance(payload, dict) else None
 
 def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
     for key in ("current_price", "last_price", "market_price"):

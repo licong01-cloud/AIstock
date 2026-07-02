@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+import types
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -11,6 +13,7 @@ from backend.infra.qmt_client import (
     QMTNotAvailableError,
     QMTStatus,
     XtQuantQMTClient,
+    _quote_staleness_evidence,
     build_qmt_order_diagnostic,
 )
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner, miniqmt_broker_kwargs_for_portfolio
@@ -35,7 +38,7 @@ from backend.services.paper_trading_v2.broker import (
     OrderHandleStatus,
     SubscriptionHandle,
 )
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, quote_tradability_evidence
 from backend.services.selection_center.hmm_runtime import SectorHMMRuntime
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -53,6 +56,7 @@ from backend.services.trading_core.errors import (
     BrokerMarketSourceMismatchError,
     BrokerRejectedError,
     BrokerSubmitError,
+    DataUnavailableError,
 )
 from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
@@ -277,7 +281,7 @@ class FakeQMTClient:
     def get_positions(self):
         return list(self.positions)
 
-    def get_full_tick(self, symbols):
+    def get_full_tick(self, symbols, **_kwargs):
         return {
             symbol: {
                 "bidPrice": [10.0],
@@ -289,6 +293,9 @@ class FakeQMTClient:
             }
             for symbol in symbols
         }
+
+    def get_realtime_quote_health(self):
+        return {"schema_version": "miniqmt_quote_feed_health_v1", "status": "fake"}
 
     def cancel_order(self, order_id: str):
         self.cancel_calls.append(str(order_id))
@@ -899,6 +906,238 @@ def test_query_account_and_positions_map_miniqmt_authority_snapshots() -> None:
     assert positions["000001.SZ"].portfolio_id == "paper_mq_1"
     assert marked_positions["000001.SZ"].quantity == 300
     assert prices["000001.SZ"] == 10.8
+
+
+class _FakeXtDataForQuoteHeal:
+    def __init__(self) -> None:
+        self.subscribe_calls: list[dict[str, Any]] = []
+        self.full_tick_calls = 0
+        self.unsubscribe_calls: list[int] = []
+        self.run_calls = 0
+        self.seq = 700
+        self.rows = [
+            {
+                "000001.SZ": {
+                    "bidPrice": [10.0],
+                    "askPrice": [10.0],
+                    "bidVol": [1_000_000],
+                    "askVol": [1_000_000],
+                    "lastPrice": 10.0,
+                    "lastClose": 9.9,
+                    "open": 9.95,
+                    "high": 10.1,
+                    "low": 9.8,
+                    "time": "20240102093000",
+                }
+            },
+            {
+                "000001.SZ": {
+                    "bidPrice": [10.0],
+                    "askPrice": [10.0],
+                    "bidVol": [1_000_000],
+                    "askVol": [1_000_000],
+                    "lastPrice": 10.0,
+                    "lastClose": 9.9,
+                    "open": 9.95,
+                    "high": 10.1,
+                    "low": 9.8,
+                    "time": "20240102093530",
+                }
+            },
+        ]
+
+    def subscribe_whole_quote(self, code_list, callback):  # noqa: ANN001
+        self.seq += 1
+        self.subscribe_calls.append({"code_list": list(code_list), "callback": callback, "seq": self.seq})
+        return self.seq
+
+    def unsubscribe_quote(self, seq: int) -> None:
+        self.unsubscribe_calls.append(seq)
+
+    def run(self) -> None:
+        self.run_calls += 1
+
+    def get_full_tick(self, symbols):
+        self.full_tick_calls += 1
+        index = min(self.full_tick_calls - 1, len(self.rows) - 1)
+        row = self.rows[index]
+        return {symbol: row[symbol] for symbol in symbols if symbol in row}
+
+
+def _install_fake_xtdata(monkeypatch: pytest.MonkeyPatch, fake_xtdata: _FakeXtDataForQuoteHeal) -> None:
+    import backend.infra.realtime_quote_subscriber as subscriber_mod
+
+    xtquant_mod = types.ModuleType("xtquant")
+    xtdata_mod = types.ModuleType("xtquant.xtdata")
+    xtdata_mod.subscribe_whole_quote = fake_xtdata.subscribe_whole_quote
+    xtdata_mod.unsubscribe_quote = fake_xtdata.unsubscribe_quote
+    xtdata_mod.get_full_tick = fake_xtdata.get_full_tick
+    xtdata_mod.run = fake_xtdata.run
+    xtquant_mod.xtdata = xtdata_mod
+    monkeypatch.setitem(sys.modules, "xtquant", xtquant_mod)
+    monkeypatch.setitem(sys.modules, "xtquant.xtdata", xtdata_mod)
+    monkeypatch.setattr(subscriber_mod, "xtdata", xtdata_mod, raising=False)
+    monkeypatch.setattr(subscriber_mod, "XTDATA_AVAILABLE", True, raising=False)
+    monkeypatch.setattr(subscriber_mod, "_subscriber_instance", None, raising=False)
+
+
+def test_xtquant_get_full_tick_subscribes_and_self_heals_stale_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._connected = True
+    client._trader = SlowOrderTrader()
+    client._account = object()
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+    client._probe_connection_locked = lambda: True  # type: ignore[method-assign]
+
+    payload = client.get_full_tick(
+        ["000001.SZ"],
+        max_age_seconds=300,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime(2024, 1, 2, 9, 35, 30),
+    )
+
+    assert payload["000001.SZ"]["time"] == "20240102093530"
+    assert fake_xtdata.full_tick_calls == 2
+    assert [call["code_list"] for call in fake_xtdata.subscribe_calls] == [["000001.SZ"], ["000001.SZ"]]
+    health = client.get_realtime_quote_health()
+    assert health["reason_code"] == "MINIQMT_QUOTE_SELF_HEAL_SUCCEEDED"
+    assert health["before"]["stale_symbols"][0]["symbol"] == "000001.SZ"
+
+
+def test_xtquant_get_full_tick_still_returns_stale_payload_after_loud_self_heal(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    fake_xtdata.rows[1]["000001.SZ"]["time"] = "20240102093010"
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._connected = True
+    client._trader = SlowOrderTrader()
+    client._account = object()
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+    client._probe_connection_locked = lambda: True  # type: ignore[method-assign]
+
+    payload = client.get_full_tick(
+        ["000001.SZ"],
+        max_age_seconds=300,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime(2024, 1, 2, 9, 35, 30),
+    )
+
+    assert payload["000001.SZ"]["time"] == "20240102093010"
+    health = client.get_realtime_quote_health()
+    assert health["reason_code"] == "MINIQMT_QUOTE_STILL_STALE_AFTER_SELF_HEAL"
+    assert health["after"]["stale_symbols"][0]["symbol"] == "000001.SZ"
+
+
+@pytest.mark.parametrize(
+    ("raw_timestamp", "expected_stale"),
+    [
+        ("9594403", False),
+        ("10158777", False),
+        ("14999733", False),
+        ("20240102", True),
+    ],
+)
+def test_xtquant_quote_staleness_uses_miniqmt_compact_intraday_timestamp(
+    raw_timestamp: str,
+    expected_stale: bool,
+) -> None:
+    evidence = _quote_staleness_evidence(
+        {"000001.SZ": {"time": raw_timestamp}},
+        ["000001.SZ"],
+        max_age_seconds=300,
+        as_of_time=datetime(2024, 1, 2, 10, 0, 0),
+        trade_date=TRADE_DATE,
+    )
+
+    assert evidence["is_stale"] is expected_stale
+    if raw_timestamp == "20240102":
+        assert evidence["missing_timestamp_symbols"] == ["000001.SZ"]
+    else:
+        assert evidence["fresh_symbols"] == ["000001.SZ"]
+
+
+def test_xtquant_get_full_tick_disconnect_reconnects_before_subscription(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    fake_xtdata.rows = [fake_xtdata.rows[1]]
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._connected = False
+    client._trader = None
+    client._account = None
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+    client._probe_connection_locked = lambda: False  # type: ignore[method-assign]
+    reconnects: list[bool] = []
+
+    def _connect():
+        reconnects.append(True)
+        client._connected = True
+        client._trader = SlowOrderTrader()
+        client._account = object()
+        client._probe_connection_locked = lambda: True  # type: ignore[method-assign]
+        return True, "connected"
+
+    client.connect = _connect  # type: ignore[method-assign]
+
+    payload = client.get_full_tick(
+        ["000001.SZ"],
+        max_age_seconds=300,
+        trade_date=TRADE_DATE,
+        as_of_time=datetime(2024, 1, 2, 9, 35, 30),
+    )
+
+    assert reconnects == [True]
+    assert payload["000001.SZ"]["time"] == "20240102093530"
+    assert fake_xtdata.subscribe_calls
+
+
+def test_minqmtsim_query_quote_exposes_feed_health_and_guard_still_blocks_stale() -> None:
+    class StaleQuoteClient(FakeQMTClient):
+        def get_full_tick(self, symbols, **kwargs):
+            assert kwargs["ensure_subscription"] is True
+            assert kwargs["ensure_fresh"] is True
+            return {
+                symbol: {
+                    "bidPrice": [10.0],
+                    "askPrice": [10.0],
+                    "bidVol": [1_000_000],
+                    "askVol": [1_000_000],
+                    "lastPrice": 10.0,
+                    "lastClose": 9.9,
+                    "open": 10.0,
+                    "high": 10.0,
+                    "low": 10.0,
+                    "time": "20240102093000",
+                }
+                for symbol in symbols
+            }
+
+        def get_realtime_quote_health(self):
+            return {
+                "schema_version": "miniqmt_quote_feed_health_v1",
+                "status": "self_heal_still_stale",
+                "reason_code": "MINIQMT_QUOTE_STILL_STALE_AFTER_SELF_HEAL",
+            }
+
+    backend = _backend(client=StaleQuoteClient())
+
+    quote = backend.query_quote("000001.SZ")
+
+    assert quote is not None
+    assert quote["quote_feed_health"]["reason_code"] == "MINIQMT_QUOTE_STILL_STALE_AFTER_SELF_HEAL"
+    with pytest.raises(DataUnavailableError) as exc_info:
+        quote_tradability_evidence(
+            symbol="000001.SZ",
+            quote=quote,
+            source="MINIQMT_REALTIME.broker_quote",
+            trade_date=TRADE_DATE,
+            as_of_time=datetime(2024, 1, 2, 9, 35, 30),
+            st_status_provider=None,
+        )
+    assert exc_info.value.context["reason_code"] == "REALTIME_QUOTE_STALE"
+    assert exc_info.value.context["max_quote_age_seconds"] == 300.0
+    assert exc_info.value.context["quote_feed_health"]["reason_code"] == "MINIQMT_QUOTE_STILL_STALE_AFTER_SELF_HEAL"
 
 
 def _portfolio_backend_factory(client: FakeQMTClient):
