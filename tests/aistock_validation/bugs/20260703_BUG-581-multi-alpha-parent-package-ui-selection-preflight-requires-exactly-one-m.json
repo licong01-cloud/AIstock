@@ -1,0 +1,107 @@
+{
+  "actual": "UI selection preflight for multi-alpha parent StrategyPackage calls the single-model package asset path and fails with 'single-alpha runtime package asset path requires exactly one model asset' before the multi-alpha live inference provider can run. Preflight must branch on alpha_mode=MULTI_ALPHA, validate each leg from parent package assets only, keep single-alpha preflight unchanged, and fail closed with leg/model/asset reason codes.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260703_BUG-581-multi-alpha-parent-package-ui-selection-preflight-requires-exactly-one-m.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/tests/strategy_package/test_multi_alpha_live_preflight.py",
+    "backend/tests/selection_center/test_live_inference_preflight_wiring.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-581",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T16:14:07.959426Z",
+  "description": "UI selection preflight for multi-alpha parent StrategyPackage calls the single-model package asset path and fails with 'single-alpha runtime package asset path requires exactly one model asset' before the multi-alpha live inference provider can run. Preflight must branch on alpha_mode=MULTI_ALPHA, validate each leg from parent package assets only, keep single-alpha preflight unchanged, and fail closed with leg/model/asset reason codes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260703-e21eccad78f4",
+      "timestamp": "2026-07-02T16:14:07.959422Z"
+    },
+    {
+      "timestamp": "2026-07-03T00:20:00+08:00",
+      "actor": "codex",
+      "action": "expand_allowed_write_scope",
+      "note": "Scope expanded after graph-first refs showed initial BUG intake only covered registry files; fix requires multi-alpha preflight code and targeted tests."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-02T16:14:07.959426Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1838,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1838",
+  "last_seen_at": "2026-07-02T16:14:07.959426Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Multi-alpha parent package UI selection preflight requires exactly one model asset",
+  "trigger_condition": {
+    "fingerprint": "e21eccad78f46c175bd3e783",
+    "source_event_id": "FE-20260703-e21eccad78f4"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:strategy_package",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/model/asset",
+    "ui_routes": [
+      "/model/asset"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}
