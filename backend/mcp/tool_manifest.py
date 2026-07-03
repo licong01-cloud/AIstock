@@ -334,7 +334,6 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                       'selection_center_advisory_preview',
                       'selection_center_advisory_quality_report',
                       'selection_center_run_confirmed',
-                      'selection_center_aggregate_runs_confirmed',
                       'selection_center_delete_run_confirmed',
                       'selection_center_bulk_delete_runs_confirmed',
                       'selection_center_add_to_watchlist_confirmed'),

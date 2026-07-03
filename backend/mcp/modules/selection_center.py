@@ -5,7 +5,6 @@ from __future__ import annotations
 from ._gateway_specs import ToolSpec, register_spec_tools
 
 RUN_SELECTION_CONFIRM = "RUN_SELECTION_CENTER_SELECTION"
-AGGREGATE_SELECTION_RUNS_CONFIRM = "AGGREGATE_SELECTION_CENTER_RUNS"
 DELETE_SELECTION_RUN_CONFIRM = "DELETE_SELECTION_CENTER_RUN"
 ADD_SELECTION_TO_WATCHLIST_CONFIRM = "ADD_SELECTION_RUN_TO_WATCHLIST"
 
@@ -22,7 +21,6 @@ SPECS = (
     ToolSpec("selection_center_advisory_preview", "POST", "/advisory/multi-package-review/preview"),
     ToolSpec("selection_center_advisory_quality_report", "POST", "/advisory/quality-report"),
     ToolSpec("selection_center_run_confirmed", "POST", "/runs", confirm_token=RUN_SELECTION_CONFIRM),
-    ToolSpec("selection_center_aggregate_runs_confirmed", "POST", "/aggregate-runs", confirm_token=AGGREGATE_SELECTION_RUNS_CONFIRM),
     ToolSpec("selection_center_delete_run_confirmed", "DELETE", "/runs/{run_id}", path_params=("run_id",), confirm_token=DELETE_SELECTION_RUN_CONFIRM),
     ToolSpec("selection_center_bulk_delete_runs_confirmed", "POST", "/runs/bulk-delete", confirm_token=DELETE_SELECTION_RUN_CONFIRM, body_updates={"confirm_delete": True}),
     ToolSpec("selection_center_add_to_watchlist_confirmed", "POST", "/runs/{run_id}/add-to-watchlist", path_params=("run_id",), confirm_token=ADD_SELECTION_TO_WATCHLIST_CONFIRM),
