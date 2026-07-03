@@ -4,6 +4,7 @@
     ".github/workflows/nightly.yml",
     "scripts/aistock_issue_workflow.py",
     "scripts/ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "tests/aistock_validation/bugs/20260703_BUG-589-nightly-auto-filed-issues-stop-before-bug-id-promotion.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260703-3759af8aa826",
       "timestamp": "2026-07-03T10:04:48.588940Z"
+    },
+    {
+      "timestamp": "2026-07-03T10:35:07.275582Z",
+      "actor": "codex",
+      "action": "scope_expand_for_workflow_contract_test",
+      "note": "Added focused workflow contract test to pin nightly BUG promotion behavior and artifact visibility."
     }
   ],
   "evidence_uris": [
