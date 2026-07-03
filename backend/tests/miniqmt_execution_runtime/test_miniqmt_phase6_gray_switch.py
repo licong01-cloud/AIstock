@@ -159,10 +159,45 @@ def _seed_required_shadow_coverage(
     ]
 
 
+def test_phase6_direct_sim_event_loop_default_allows_switch_without_shadow_evidence() -> None:
+    repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    controller = MiniQMTGraySwitchController(repository=repo)
+
+    decision = controller.switch_to_event_loop(
+        runtime_id="mqrt_phase6_direct_no_shadow",
+        portfolio_id=PORTFOLIO_ID,
+        strategy_slot_id=STRATEGY_SLOT_ID,
+        mode=MiniQMTExecutionRuntimeMode.SIM,
+        trade_date=TRADE_DATE,
+        reason="direct_sim_event_loop_without_ab_shadow_gate",
+    )
+
+    assert decision.status == MiniQMTGrayDecisionStatus.APPLIED
+    assert decision.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
+    assert decision.shadow_event_id is None
+    gate_metadata = decision.metadata["shadow_evidence_gate"]
+    assert gate_metadata["canary_strictness"] == "direct_sim_event_loop"
+    assert gate_metadata["canary_strictness_source"] == "default_sim_direct_event_loop"
+    assert gate_metadata["shadow_evidence_required"] is False
+    assert gate_metadata["shadow_observation_mode"] == "optional_non_blocking"
+    assert gate_metadata["scenario_coverage_required"] is False
+    assert gate_metadata["required_scenarios"] == []
+    assert gate_metadata["accepted_reports"] == []
+    assert controller.resolve_runtime_kind(
+        runtime_id="mqrt_phase6_direct_no_shadow",
+        portfolio_id=PORTFOLIO_ID,
+        strategy_slot_id=STRATEGY_SLOT_ID,
+    ) == MiniQMTExecutionRuntimeKind.EVENT_LOOP
+
+
 def test_phase6_canary_rejects_insufficient_shadow_trading_days_loudly() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
     _seed_required_shadow_coverage(repo)
-    controller = MiniQMTGraySwitchController(repository=repo, shadow_min_trading_days=2)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        shadow_min_trading_days=2,
+        canary_strictness=MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE,
+    )
 
     with pytest.raises(RuntimeError, match="MINIQMT_GRAY_SHADOW_TRADING_DAYS_INSUFFICIENT") as exc_info:
         controller.switch_to_event_loop(
@@ -196,10 +231,13 @@ def test_phase6_canary_rejects_missing_shadow_scenario_coverage_loudly() -> None
     assert "partial_55_stream" in str(exc_info.value)
 
 
-def test_phase6_canary_default_single_day_smoke_accepts_one_no_fatal_shadow_day() -> None:
+def test_phase6_canary_explicit_single_day_smoke_accepts_one_no_fatal_shadow_day() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
     report = _seed_no_fatal_shadow_evidence(repo, scenario=MiniQMTShadowScenario.FULL_FILL)
-    controller = MiniQMTGraySwitchController(repository=repo)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        canary_strictness=MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE,
+    )
 
     decision = controller.switch_to_event_loop(
         runtime_id=RUNTIME_ID,
@@ -215,7 +253,9 @@ def test_phase6_canary_default_single_day_smoke_accepts_one_no_fatal_shadow_day(
     assert decision.shadow_event_id == report.durable_event_id
     gate_metadata = decision.metadata["shadow_evidence_gate"]
     assert gate_metadata["canary_strictness"] == "single_day_smoke"
-    assert gate_metadata["canary_strictness_source"] == "default_sim_single_day_smoke"
+    assert gate_metadata["canary_strictness_source"] == "constructor"
+    assert gate_metadata["shadow_evidence_required"] is True
+    assert gate_metadata["shadow_observation_mode"] == "blocking_gate"
     assert gate_metadata["scenario_coverage_required"] is False
     assert gate_metadata["required_scenarios"] == []
     assert gate_metadata["missing_scenarios"] == []
@@ -225,7 +265,10 @@ def test_phase6_canary_default_single_day_smoke_accepts_one_no_fatal_shadow_day(
 def test_phase6_canary_switch_requires_durable_shadow_report_then_rolls_back() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
     reports = _seed_required_shadow_coverage(repo)
-    controller = MiniQMTGraySwitchController(repository=repo)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        canary_strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+    )
 
     decision = controller.switch_to_event_loop(
         runtime_id=RUNTIME_ID,
@@ -288,7 +331,10 @@ def test_phase6_canary_accepts_mixed_real_and_synthetic_durable_shadow_evidence(
         MiniQMTShadowScenario.RESTART_RECOVERY: "synthetic",
     }
     reports = _seed_required_shadow_coverage(repo, source_by_scenario=source_by_scenario)
-    controller = MiniQMTGraySwitchController(repository=repo)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        canary_strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
+    )
 
     decision = controller.switch_to_event_loop(
         runtime_id=RUNTIME_ID,
@@ -309,7 +355,10 @@ def test_phase6_canary_accepts_mixed_real_and_synthetic_durable_shadow_evidence(
 
 def test_phase6_canary_rejects_missing_fatal_or_wrong_scope_shadow_evidence_loudly() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
-    controller = MiniQMTGraySwitchController(repository=repo)
+    controller = MiniQMTGraySwitchController(
+        repository=repo,
+        canary_strictness=MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE,
+    )
 
     with pytest.raises(RuntimeError, match="MINIQMT_GRAY_SHADOW_EVIDENCE_MISSING"):
         controller.switch_to_event_loop(
