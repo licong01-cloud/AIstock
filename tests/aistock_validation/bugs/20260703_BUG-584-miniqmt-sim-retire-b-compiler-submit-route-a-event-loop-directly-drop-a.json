@@ -16,12 +16,15 @@
   "bug_id": "BUG-584",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "SIM switch_to_event_loop applies without requiring durable A==B shadow evidence by default.",
+    "Shadow reconciliation remains optional/non-blocking observation and does not gate SIM event_loop activation.",
+    "A submit path still routes through QmtClientMiniQMTEventLoopGateway and qmt_strategy_ledger, not compiler/mock/TDX.",
+    "LIVE/LIVE_PENDING_APPROVAL still reject with MINIQMT_GRAY_LIVE_FORBIDDEN before submit.",
+    "One-click rollback to compiler remains available to stop A submit.",
+    "Run targeted MiniQMT/simulation_runtime pytest plus ruff, l0, validation_module_registry_l0, paper_v2_backend, git diff --check, and section10 grep guard."
   ],
   "created_at": "2026-07-03T01:47:12.850962Z",
-  "description": "MiniQMT SIM defaults to B compiler and gray switch requires shadow evidence before event_loop activation, so SIM cannot directly run real A despite B being retired as a yardstick.",
+  "description": "MiniQMT SIM should retire the A==B shadow hard gate for switching a slot to A event_loop. B compiler is retained only as an explicit rollback/off-switch path; SIM event_loop activation must be auditable, LIVE must remain hard-locked, and A submit must keep qmt_strategy_ledger/event_loop gateway authority.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -48,14 +51,21 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Inspect backend/services/miniqmt_execution_runtime/gray.py require_shadow_evidence and simulation runtime MiniQMT submit resolver; SIM switch_to_event_loop is blocked by shadow evidence gate.",
   "required_verification": [
-    "l0"
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "ruff",
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_backend",
+    "section10_grep_guard"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "miniqmt_execution_runtime"
+    "miniqmt_execution_runtime",
+    "simulation_runtime"
   ],
   "title": "MiniQMT SIM: retire B compiler submit, route A event_loop directly, drop A==B shadow gate (SIM only)",
   "trigger_condition": {
