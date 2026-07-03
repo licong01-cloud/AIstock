@@ -27,18 +27,18 @@
       "timestamp": "2026-07-03T10:52:24.710779Z"
     },
     {
-      "timestamp": "2026-07-03T10:54:20.720149Z",
-      "actor": "codex",
       "action": "scope_expand_for_llm_fail_closed_fix",
-      "note": "Expanded scope to nightly workflow, LLM adapter, adaptive scheduler, and focused contract tests for required-LLM fail-closed behavior."
+      "actor": "codex",
+      "note": "Expanded scope to nightly workflow, LLM adapter, adaptive scheduler, and focused contract tests for required-LLM fail-closed behavior.",
+      "timestamp": "2026-07-03T10:54:20.720149Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-03T10:52:24.710783Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "334b269bc3fe7ffd613e4214989cc3a3b967c73d",
+  "fixed_at": "2026-07-03T11:10:09.874692Z",
   "github_issue_number": 1866,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1866",
   "last_seen_at": "2026-07-03T10:52:24.710783Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1867",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -66,6 +67,9 @@
     "fingerprint": "a2db79102e5cb8d047ad9471",
     "source_event_id": "FE-20260703-a2db79102e5c"
   },
+  "validation_evidence": [
+    "PR #1867 CI all checks passed before merge"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
