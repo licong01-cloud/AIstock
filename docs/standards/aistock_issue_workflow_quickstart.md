@@ -95,15 +95,17 @@ Warnings about a dirty canonical root are not permission to write there. They me
 
 Stdout defaults to compact success output. A passing workflow command should show only the gate, issue id, branch/worktree or PR pointers, validation/CI counts, production gates, and the next action. Do not paste full JSON payloads, full `statusCheckRollup`, `recent_events`, skipped validation maps, or nox internals into chat when the command passed. Use `--output-format full-json` for local debugging, or `--output tmp/issue_workflow/<BUG-ID>/<name>.json` to persist full details as an ignored artifact. Failure output may include the smallest diagnostic signature needed to reproduce or unblock. Registry intake commands must stage only committable BUG registry files, not ignored `tmp/issue_workflow` artifacts.
 
+Machine JSON artifacts are debug/resume inputs, not default agent context. During ordinary Codex/Claude BUG fixes, read `task-card.md` first, then `context-pack.md` only when needed. Do not open `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, dependency cache JSON, or full `statusCheckRollup` unless a workflow command failed, state recovery is required, or the BUG explicitly targets that artifact producer.
+
 ## Optimized Tool Use Contract
 
 For Codex, Claude Code, Cursor, and other agents, context discovery should be cheap by default:
 
-- Read the workflow output, Context Pack, and `fix-ready.json` before searching code.
+- Read compact workflow output and `task-card.md` first; read the Context Pack only when task-card context is insufficient.
 - Use `allowed_write_scope` and `changed_files` as the initial search boundary.
 - Prefer `rg <pattern> <scoped-file-or-dir>` over broad repository scans; broaden only when the scoped search fails or the Context Pack is stale.
 - Do not load archived standards, old design notes, full logs, module restart plans, or feature/module/architecture design documents unless the current BUG explicitly cites them, the user asks for that context, or `fast-path` classifies the work as `T3`.
-- Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence.
+- Treat CodeGraph / Understand Anything references as acceleration hints; they do not replace selected nox / pytest / Validation Center evidence. CodeGraph suggested tests are candidates, not required validation, and PR/chat output must show only a short top list plus an artifact ref for the full candidate list.
 
 Close-sync-only PRs that change only BUG JSON/status evidence are metadata aftercare. AIstock CI uses `scripts/ci_change_classifier.py` to keep the static gate and PR Quality evidence while skipping unrelated backend matrix jobs when every changed BUG JSON is already `fixed`, `closed`, or `verified`. Any allocator change, open BUG registry intake, non-JSON registry file, or non-registry code/doc change keeps the full backend matrix.
 
