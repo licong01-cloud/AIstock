@@ -1,0 +1,126 @@
+{
+  "actual": "Nightly LLM scheduling/advice steps use --invoke-llm with deepseek_api, but several paths still allow fallback_on_llm_error by default. If DeepSeek/GitHub Models invocation fails, artifacts can show deterministic workflow_gate=ready while llm_invoked=false/degraded. This makes the pipeline look healthy even when the intended LLM participation did not happen. Expected: in nightly paths that explicitly require DeepSeek/LLM participation, provider invocation failures must be loud (non-zero) or at least workflow_gate blocked; deterministic fallback remains allowed only for explicit smoke/dry-run paths.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260703_BUG-590-nightly-deepseek-required-llm-steps-can-fall-back-to-deterministic-ready.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-590",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-03T10:52:24.710783Z",
+  "description": "Nightly LLM scheduling/advice steps use --invoke-llm with deepseek_api, but several paths still allow fallback_on_llm_error by default. If DeepSeek/GitHub Models invocation fails, artifacts can show deterministic workflow_gate=ready while llm_invoked=false/degraded. This makes the pipeline look healthy even when the intended LLM participation did not happen. Expected: in nightly paths that explicitly require DeepSeek/LLM participation, provider invocation failures must be loud (non-zero) or at least workflow_gate blocked; deterministic fallback remains allowed only for explicit smoke/dry-run paths.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260703-a2db79102e5c",
+      "timestamp": "2026-07-03T10:52:24.710779Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-03T10:52:24.710783Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1866,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1866",
+  "last_seen_at": "2026-07-03T10:52:24.710783Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly DeepSeek-required LLM steps can fall back to deterministic ready without loud failure",
+  "trigger_condition": {
+    "fingerprint": "a2db79102e5cb8d047ad9471",
+    "source_event_id": "FE-20260703-a2db79102e5c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation_llm_pipeline"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation_llm_pipeline"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
