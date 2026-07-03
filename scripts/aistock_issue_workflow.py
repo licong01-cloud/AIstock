@@ -184,6 +184,110 @@ def _size_and_token_estimate(path: Path) -> dict[str, Any]:
     }
 
 
+LOCAL_PREMERGE_PLAN_KEYS = {"l0", "validation_module_registry_l0", "guardrail_changed_files"}
+BROAD_VALIDATION_PLAN_SUFFIXES = ("_backend", "_ui", "_l2", "_l3")
+BROAD_VALIDATION_PLAN_KEYS = {
+    "data_quality_deep",
+    "paper_v2_l3",
+    "dr_validate",
+}
+LOCAL_VALIDATION_TOKENS = (
+    "ruff",
+    "compile",
+    "py_compile",
+    "diff --check",
+    "git diff --check",
+    "grep_guard",
+    "section",
+    "scope",
+    "lint",
+)
+
+
+def _known_plan_keys() -> set[str]:
+    return set(flow._plans_by_key())
+
+
+def _is_broad_validation_plan(value: str) -> bool:
+    plan = value.strip()
+    if not plan or plan in LOCAL_PREMERGE_PLAN_KEYS:
+        return False
+    if plan in BROAD_VALIDATION_PLAN_KEYS:
+        return True
+    if plan.startswith("ra_phase"):
+        return True
+    return plan.endswith(BROAD_VALIDATION_PLAN_SUFFIXES)
+
+
+def _is_local_validation_item(value: str) -> bool:
+    item = value.strip()
+    if not item:
+        return False
+    normalized = item.replace("\\", "/")
+    lower = normalized.lower()
+    if item in LOCAL_PREMERGE_PLAN_KEYS:
+        return True
+    if lower.endswith((".py", ".ts", ".tsx", ".js")) and (
+        normalized.startswith("backend/tests/")
+        or normalized.startswith("frontend/tests/")
+        or normalized.startswith("tests/")
+    ):
+        return True
+    return any(token in lower for token in LOCAL_VALIDATION_TOKENS)
+
+
+def _split_validation_budget_items(items: Iterable[Any]) -> dict[str, list[str]]:
+    known_plans = _known_plan_keys()
+    local: list[str] = []
+    deferred: list[str] = []
+    for raw in items:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        if _is_broad_validation_plan(item):
+            deferred.append(item)
+        elif item in known_plans and item not in LOCAL_PREMERGE_PLAN_KEYS and not _is_local_validation_item(item):
+            deferred.append(item)
+        else:
+            local.append(item)
+    return {
+        "local": flow._unique_strings(local),
+        "deferred": flow._unique_strings(deferred),
+    }
+
+
+def _apply_validation_budget(
+    *,
+    record: dict[str, Any],
+    validation: dict[str, Any],
+    record_required: list[str] | None = None,
+) -> dict[str, Any]:
+    """Keep pre-merge BUG validation narrow and move broad plans to nightly/VC."""
+
+    selected_required = _split_validation_budget_items(validation.get("required_plans") or [])
+    selected_recommended = flow._unique_strings(validation.get("recommended_plans") or [])
+    record_split = _split_validation_budget_items(record_required or record.get("required_verification") or [])
+    local_required = flow._unique_strings([*record_split["local"], *selected_required["local"]]) or ["l0"]
+    deferred = flow._unique_strings([*record_split["deferred"], *selected_required["deferred"]])
+    budgeted = dict(validation)
+    budgeted["required_plans"] = local_required
+    budgeted["recommended_plans"] = flow._unique_strings([*selected_recommended, *deferred])
+    budgeted["deferred_nightly_plans"] = deferred
+    budgeted["validation_budget_gate"] = {
+        "schema_version": "aistock_validation_budget_gate_v1",
+        "premerge_required": local_required,
+        "deferred_nightly_plans": deferred,
+        "policy": "broad module/UI/API/business-flow plans are nightly/VC by default; run pre-merge only on explicit request or production-gate need",
+    }
+    return budgeted
+
+
+def _deferred_modules_from_plans(module: str, plans: list[str]) -> list[str]:
+    modules = [module] if module else []
+    modules.extend(str(item).replace("_backend", "").replace("_ui", "").replace("_l2", "").replace("_l3", "") for item in plans)
+    return [item for item in flow._unique_strings(modules) if item]
+
+
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
@@ -273,6 +377,58 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
             "json": "diagnostic_only_on_failure_or_AISTOCK_WORKFLOW_ARTIFACTS=1",
             "required_runtime_state": ["state.json", "events.jsonl", "task-card.md", "context-pack.md", "pr-body.md"],
         },
+    }
+
+
+def _task_card_exists_payload(bug_id: str, root: Path) -> dict[str, Any]:
+    json_path = _task_card_json_path(bug_id, root)
+    md_path = _task_card_md_path(bug_id, root)
+    return {
+        "json": _size_and_token_estimate(json_path),
+        "md": _size_and_token_estimate(md_path),
+        "available": json_path.exists() and md_path.exists(),
+        "expected_json": _repo_rel(json_path, root),
+        "expected_md": _repo_rel(md_path, root),
+    }
+
+
+def _fallback_context_metrics(bug_id: str, root: Path) -> dict[str, Any]:
+    workflow_dir = root / WORKFLOW_ROOT / bug_id
+    metrics = {
+        "context_pack_md": _size_and_token_estimate(workflow_dir / "context-pack.md"),
+        "context_pack_json": _size_and_token_estimate(workflow_dir / "context-pack.json"),
+        "fix_ready_json": _size_and_token_estimate(workflow_dir / "fix-ready.json"),
+        "task_card_md": _size_and_token_estimate(_task_card_md_path(bug_id, root)),
+        "task_card_json": _size_and_token_estimate(_task_card_json_path(bug_id, root)),
+    }
+    return {key: value for key, value in metrics.items() if value.get("exists")}
+
+
+def _validation_receipt_summary(evidence: list[str], deferred_plans: list[str] | None = None) -> dict[str, Any]:
+    local_items: list[str] = []
+    broad_items: list[str] = []
+    for item in evidence:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        lower = text.lower()
+        plan_hits = [plan for plan in _known_plan_keys() if plan.lower() in lower]
+        if any(_is_broad_validation_plan(plan) for plan in plan_hits) or any(
+            token in lower for token in ("_l2", "_l3", "paper_v2_backend", "backend tests (")
+        ):
+            broad_items.append(text)
+        else:
+            local_items.append(text)
+    return {
+        "schema_version": "aistock_validation_receipt_summary_v1",
+        "evidence_count": len([item for item in evidence if str(item or "").strip()]),
+        "local_gate_evidence_count": len(local_items),
+        "broad_premerge_evidence_count": len(broad_items),
+        "broad_premerge_detected": bool(broad_items),
+        "deferred_nightly_plans": flow._unique_strings(deferred_plans or []),
+        "recommendation": "keep broad validation in nightly/VC unless explicitly required"
+        if broad_items
+        else "pre-merge evidence appears local/targeted",
     }
 
 
@@ -2738,6 +2894,10 @@ def _workflow_role_for_state(root: Path, state: dict[str, Any], git: dict[str, A
     worktree_name = Path(str(state.get("worktree") or root)).name
     if branch.startswith("bug/registry-") or worktree_name.startswith("registry-"):
         return "registry_intake"
+    if branch.startswith("chore/") and "close-sync" in branch:
+        return "close_sync"
+    if "close-sync" in worktree_name:
+        return "close_sync"
     return "fix"
 
 
@@ -2760,7 +2920,12 @@ def _workflow_state_sort_key(root: Path, state: dict[str, Any]) -> tuple[int, st
         "complete": 150,
     }
     role = _workflow_role_for_state(root, state)
-    role_bonus = -100 if role.startswith("registry") else 100
+    if role.startswith("registry"):
+        role_bonus = -100
+    elif role == "close_sync":
+        role_bonus = 0
+    else:
+        role_bonus = 100
     pr_bonus = 25 if state.get("pr_url") else 0
     worktree_bonus = 10 if state.get("worktree") else 0
     score = role_bonus + pr_bonus + worktree_bonus + state_rank.get(str(state.get("state") or ""), 0)
@@ -3408,9 +3573,8 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
     else:
         budget = "light"
         target_pct = "25-35%"
-    deferred_modules = flow._unique_strings(
-        [module, *[str(item).replace("_backend", "").replace("_ui", "") for item in required if item not in {"l0", "validation_module_registry_l0"}]]
-    )
+    split = _split_validation_budget_items(required)
+    deferred_modules = _deferred_modules_from_plans(module, split["deferred"])
     return {
         "schema_version": "aistock_verification_budget_v1",
         "budget": budget,
@@ -3421,6 +3585,7 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             "git diff --check",
             "production gates",
         ],
+        "premerge_required_plans": split["local"] or ["l0"],
         "delegated_validation": {
             "skill": "aistock-validation-delegation",
             "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
@@ -3429,6 +3594,7 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
         "deferred_nightly_verification": {
             "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
             "modules": [item for item in deferred_modules if item],
+            "plans": split["deferred"],
             "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs",
         },
     }
@@ -4272,6 +4438,7 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- target_cost_percent_of_legacy: `{budget.get('target_cost_percent_of_legacy') or 'not_recorded'}`",
         f"- deferred_nightly_required: `{str(bool(deferred.get('required'))).lower()}`",
         f"- deferred_nightly_modules: `{', '.join(deferred.get('modules') or []) or 'none'}`",
+        f"- deferred_nightly_plans: `{', '.join(deferred.get('plans') or []) or 'none'}`",
         f"- delegated_validation_skill: `{delegated.get('skill') or 'none'}`",
         f"- delegated_receipt_default: `{delegated.get('receipt_default') or 'none'}`",
         "",
@@ -4604,6 +4771,8 @@ def build_fast_path_plan(
         module = str(record.get("module") or module or "").strip() or None
 
     validation = flow.select_validation(changed, module=module)
+    if record:
+        validation = _apply_validation_budget(record=record, validation=validation)
     ownership = validation.get("ownership") or flow.match_changed_files(changed)
     tier, reasons = _infer_fast_path_tier(
         record=record,
@@ -5184,6 +5353,16 @@ def build_start_plan(
     output_dir = target_root / WORKFLOW_ROOT / canonical_bug_id
     fix_ready = flow.build_fix_ready(record, changed_files)
     context_pack = flow.build_context_pack(record, changed_files)
+    budgeted_validation = _apply_validation_budget(
+        record=record,
+        validation=fix_ready.get("validation_selection") if isinstance(fix_ready.get("validation_selection"), dict) else {},
+    )
+    fix_ready["required_verification"] = budgeted_validation["required_plans"]
+    fix_ready["recommended_verification"] = budgeted_validation["recommended_plans"]
+    fix_ready["validation_selection"] = budgeted_validation
+    context_pack["required_verification"] = budgeted_validation["required_plans"]
+    context_pack["recommended_verification"] = budgeted_validation["recommended_plans"]
+    context_pack["deferred_nightly_plans"] = budgeted_validation.get("deferred_nightly_plans") or []
     code_intelligence_summary = _build_code_intelligence_summary(
         item_id=canonical_bug_id,
         record=record,
@@ -5217,9 +5396,19 @@ def build_start_plan(
     context_md_path = output_dir / "context-pack.md"
     task_card_json_path = _task_card_json_path(canonical_bug_id, target_root)
     task_card_md_path = _task_card_md_path(canonical_bug_id, target_root)
+    task_record = dict(record)
+    task_record["required_verification"] = budgeted_validation["required_plans"] + budgeted_validation.get("deferred_nightly_plans", [])
+    task_record["verification_budget"] = _verification_budget_for_record(
+        task_record,
+        record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None,
+    )
+    task_record["workflow_efficiency_recommendations"] = {
+        **(record.get("workflow_efficiency_recommendations") if isinstance(record.get("workflow_efficiency_recommendations"), dict) else {}),
+        "verification_budget": task_record["verification_budget"],
+    }
     task_card = build_task_card(
         bug_id=canonical_bug_id,
-        record=record,
+        record=task_record,
         root=target_root,
         branch=actual_branch,
         planned_branch=planned_branch,
@@ -5272,9 +5461,14 @@ def build_start_plan(
             fast_path=fast_path,
             active_decision=active_decision,
             context_metrics=context_metrics,
+            required_verification=fix_ready.get("required_verification") or [],
+            recommended_verification=fix_ready.get("recommended_verification") or [],
+            deferred_nightly_plans=budgeted_validation.get("deferred_nightly_plans") or [],
+            verification_budget=task_record.get("verification_budget"),
+            task_card_availability=_task_card_exists_payload(canonical_bug_id, target_root),
             next_actions=[
                 "switch_to_worktree_if_created",
-                "read_context_pack_md",
+                "read_task_card_md_then_context_pack_only_if_needed",
                 "fix_only_within_allowed_write_scope_or_stop_for_scope_expansion",
                 "run_finish_plan_before_reporting_done",
             ],
@@ -5309,16 +5503,17 @@ def build_start_plan(
         "allowed_write_scope": fix_ready.get("allowed_write_scope") or [],
         "required_verification": fix_ready.get("required_verification") or [],
         "recommended_verification": fix_ready.get("recommended_verification") or [],
+        "deferred_nightly_plans": budgeted_validation.get("deferred_nightly_plans") or [],
         "production_gates": fix_ready.get("validation_selection", {}).get("production_gates", {}),
         "code_intelligence": context_pack.get("code_intelligence"),
         "fast_path": fast_path,
         "active_decision": active_decision,
         "context_metrics": context_metrics,
-        "workflow_efficiency_recommendations": record.get("workflow_efficiency_recommendations") or _workflow_efficiency_recommendations(record, record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None),
+        "workflow_efficiency_recommendations": task_record.get("workflow_efficiency_recommendations") or _workflow_efficiency_recommendations(record, record.get("ui_intake_hints") if isinstance(record.get("ui_intake_hints"), dict) else None),
         "ui_intake_hints": record.get("ui_intake_hints"),
         "next_agent_steps": [
             "switch_to_worktree_if_created",
-            "read_context_pack_md",
+            "read_task_card_md_then_context_pack_only_if_needed",
             "fix_only_within_allowed_write_scope_or_stop_for_scope_expansion",
             "use_compact_success_output_and_full_json_only_on_failure",
             "run_finish_plan_before_reporting_done",
@@ -5340,7 +5535,10 @@ def build_finish_plan(
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     changed = changed_files if changed_files is not None else flow.changed_files_from_git(base, head)
-    validation = flow.select_validation(changed, module=record.get("module"))
+    validation = _apply_validation_budget(
+        record=record,
+        validation=flow.select_validation(changed, module=record.get("module")),
+    )
     pr_quality = flow.build_pr_quality(base=base, head=head, issue_record=record, changed_files=changed)
     code_intelligence_summary = _build_code_intelligence_summary(
         item_id=canonical_bug_id,
@@ -5426,6 +5624,7 @@ def build_finish_plan(
         ),
         "required_verification": validation.get("required_plans") or [],
         "recommended_verification": validation.get("recommended_plans") or [],
+        "deferred_nightly_plans": validation.get("deferred_nightly_plans") or [],
         "production_gates": validation.get("production_gates") or {},
         "scope_check": pr_quality.get("scope_check"),
         "code_intelligence": {
@@ -5441,6 +5640,10 @@ def build_finish_plan(
         "codegraph_suggested_tests": codegraph_tests,
         "h7_code_intelligence": h7_code_intelligence,
         "validation_evidence": evidence,
+        "validation_receipt_summary": _validation_receipt_summary(
+            evidence,
+            validation.get("deferred_nightly_plans") or [],
+        ),
         "closure_ready": closure_ready,
         "workflow_gate": "ready_for_pr" if closure_ready else "validation_evidence_missing",
         "pr_body_path": _repo_rel(pr_body_path),
@@ -5482,6 +5685,9 @@ def render_pr_body(
         "",
         "## Required validation",
         *[f"- `{plan}`" for plan in validation.get("required_plans") or ["l0"]],
+        "",
+        "## Deferred nightly / VC validation",
+        *[f"- `{plan}`" for plan in validation.get("deferred_nightly_plans") or ["none"]],
         "",
         "## Code intelligence",
         *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
@@ -6494,6 +6700,9 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
     stop_conditions = ["commit task files before PR automation"] if dirty_stop else []
     if planned_only:
         stop_conditions.append("planned worktree has not been created; rerun plan with --create-worktree")
+    task_card_availability = state.get("task_card_availability") or _task_card_exists_payload(canonical_bug_id, root)
+    if not task_card_availability.get("available") and state.get("state") not in TERMINAL_WORKFLOW_STATES:
+        stop_conditions.append("task-card.md/json missing; rerun plan to regenerate compact resume context")
     resume_state = {
         **state,
         "allowed_write_scope": state.get("allowed_write_scope") or state.get("scope") or [],
@@ -6511,6 +6720,7 @@ def build_resume_plan(*, bug_id: str, worktree: str | None = None, events_limit:
         "planned_branch": state.get("planned_branch"),
         "task_card_json": state.get("task_card_json") or _repo_rel(_task_card_json_path(canonical_bug_id, root), root),
         "task_card_md": state.get("task_card_md") or _repo_rel(_task_card_md_path(canonical_bug_id, root), root),
+        "task_card_availability": task_card_availability,
         "state_path": _repo_rel(_state_path(canonical_bug_id, root), root),
         "events_path": _repo_rel(events_path, root),
         "context_resume_digest": _workflow_context_resume_digest(resume_state, root=root),
@@ -6576,6 +6786,8 @@ def build_postmortem_plan(
     duplicate_active_count = max(0, len(active) - 1)
     stale_pr_check = _stale_pr_check_for_bug(canonical_bug_id)
     context_metrics = state.get("context_metrics") or {}
+    if not context_metrics:
+        context_metrics = _fallback_context_metrics(canonical_bug_id, root)
     artifact_metrics = {}
     finish_plan = root / WORKFLOW_ROOT / canonical_bug_id / "finish-plan.json"
     pr_body = root / WORKFLOW_ROOT / canonical_bug_id / "pr-body.md"
@@ -6606,6 +6818,11 @@ def build_postmortem_plan(
         "h6_summary": h6_summary,
         "context_metrics": context_metrics,
         "artifact_metrics": artifact_metrics,
+        "task_card_availability": state.get("task_card_availability") or _task_card_exists_payload(canonical_bug_id, root),
+        "validation_receipt_summary": _validation_receipt_summary(
+            flow._as_list(state.get("validation_evidence")),
+            flow._as_list(state.get("deferred_nightly_plans")),
+        ),
         "h7_code_intelligence": h7_code_intelligence,
         "code_intelligence_efficiency": code_intelligence_efficiency,
         "active_workflows": active,
@@ -6667,6 +6884,8 @@ def build_postmortem_plan(
                 f"- PR/CI seconds: `{h6_summary.get('pr_ci_seconds') or 'not_recorded'}`",
                 f"- Merge aftercare seconds: `{h6_summary.get('merge_aftercare_seconds') or 'not_recorded'}`",
                 f"- Code repair seconds: `{h6_summary.get('code_repair_seconds') or 'not_recorded'}`",
+                f"- Task card available: `{str(bool((payload.get('task_card_availability') or {}).get('available'))).lower()}`",
+                f"- Broad pre-merge validation detected: `{str(bool((payload.get('validation_receipt_summary') or {}).get('broad_premerge_detected'))).lower()}`",
                 "",
                 "## H7 Code Intelligence",
                 "",
@@ -10905,6 +11124,10 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
                     "artifact_policy": "compact_success_no_artifact",
                     "timing_summary": pre_cleanup_postmortem.get("timing_summary"),
                     "h6_summary": pre_cleanup_postmortem.get("h6_summary"),
+                    "context_metrics": pre_cleanup_postmortem.get("context_metrics"),
+                    "artifact_metrics": pre_cleanup_postmortem.get("artifact_metrics"),
+                    "task_card_availability": pre_cleanup_postmortem.get("task_card_availability"),
+                    "validation_receipt_summary": pre_cleanup_postmortem.get("validation_receipt_summary"),
                 }
         except WorkflowError as exc:
             payload.setdefault("warnings", []).append(f"pre-cleanup postmortem skipped: {exc}")

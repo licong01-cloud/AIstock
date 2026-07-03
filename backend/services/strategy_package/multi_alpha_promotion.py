@@ -41,8 +41,9 @@ from .validators import StrategyPackageValidator
 
 
 MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION = "MULTI_ALPHA_PACKAGE_PROMOTE"
-MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
 MULTI_ALPHA_PROMOTION_PROVIDER_VERSION = "multi_alpha_package_promotion_v1"
+MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA = "multi_alpha_signal_admission_v1"
+MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA = "multi_alpha_parent_combined_signal_smoke_v1"
 SUPPORTED_P0_WEIGHTING_SCHEME = "ic_weighted"
 
 
@@ -264,8 +265,13 @@ class MultiAlphaPackagePromotionService:
         frozen = freeze_manifest(manifest)
         self.validator.validate_manifest(frozen)
         frozen_assets = self.asset_freezer.freeze_manifest_assets(frozen)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        parent = self.package_repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        self_check_result = self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        parent_manifest = _with_signal_admission_evidence(
+            frozen_assets.manifest,
+            self_check_result,
+            provider_version=MULTI_ALPHA_PROMOTION_PROVIDER_VERSION,
+        )
+        parent = self.package_repository.save_manifest_with_assets(parent_manifest, frozen_assets.assets)
         parent = self.package_repository.update_artifact_refs(
             parent.package_id,
             prediction_ref_uri=prediction_ref["uri"],
@@ -608,7 +614,7 @@ class MultiAlphaPackagePromotionService:
                     }
                     for leg in leg_evidence
                 ],
-                "paper_admission": _paper_admission(),
+                "paper_runtime_diagnostics": _paper_admission(),
             },
         }
         backtest_context = {
@@ -681,8 +687,15 @@ class MultiAlphaPackagePromotionService:
                 AssetCheck(
                     check_name="multi_alpha_package_promotion_p0",
                     passed=True,
-                    message="MULTI_ALPHA manifest frozen from validated combine-backtest evidence; Paper runtime remains blocked until dry-run.",
-                    context={"paper_admission_blocker": MULTI_ALPHA_PAPER_ADMISSION_BLOCKER},
+                    message=(
+                        "MULTI_ALPHA manifest frozen from validated combine-backtest evidence; "
+                        "signal admission is governed by frozen self-check and deterministic selection evidence. "
+                        "Paper runtime dry-run is optional diagnostic evidence."
+                    ),
+                    context={
+                        "signal_admission_required": True,
+                        "dry_run_required_for_signal_admission": False,
+                    },
                 )
             ],
             package_status=PackageStatus.ASSET_VALIDATED,
@@ -1150,7 +1163,113 @@ def _canonical_json(value: Any) -> str:
 
 
 def _paper_admission() -> dict[str, Any]:
-    return {"eligible": False, "blocking": [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]}
+    return {
+        "eligible": True,
+        "blocking": [],
+        "diagnostic_only": True,
+        "required_for_signal_admission": False,
+        "dry_run_endpoint": "paper-runtime-dry-run",
+    }
+
+
+def _with_signal_admission_evidence(
+    manifest: StrategyPackageManifest,
+    self_check_result: Any,
+    *,
+    provider_version: str,
+) -> StrategyPackageManifest:
+    if manifest.alpha_mode != AlphaMode.MULTI_ALPHA:
+        return manifest
+    signal_evidence = _signal_admission_evidence(
+        manifest,
+        self_check_result,
+        provider_version=provider_version,
+    )
+    source_evidence = _jsonable(manifest.source_evidence or {})
+    multi_alpha = dict(source_evidence.get("multi_alpha") or {})
+    multi_alpha.pop("paper_admission", None)
+    multi_alpha["signal_admission"] = signal_evidence
+    source_evidence["multi_alpha"] = multi_alpha
+    return freeze_manifest(
+        manifest.model_copy(
+            update={
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+
+
+def _signal_admission_evidence(
+    manifest: StrategyPackageManifest,
+    self_check_result: Any,
+    *,
+    provider_version: str,
+) -> dict[str, Any]:
+    context = self_check_result.to_context() if hasattr(self_check_result, "to_context") else {}
+    combined_signal_smoke = context.get("combined_signal_smoke") or getattr(self_check_result, "combined_signal_smoke", None)
+    origin = context.get("origin") or getattr(self_check_result, "origin", None)
+    if origin != "package_asset":
+        raise StrategyPackageValidationError(
+            "MULTI_ALPHA parent self-check evidence must originate from package assets",
+            context={
+                "reason_code": "multi_alpha_signal_self_check_failed",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "self_check_origin": origin,
+            },
+        )
+    if not isinstance(combined_signal_smoke, Mapping):
+        raise StrategyPackageValidationError(
+            "MULTI_ALPHA parent self-check did not return combined signal smoke evidence",
+            context={
+                "reason_code": "multi_alpha_signal_selection_artifact_unavailable",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+            },
+        )
+    leg_count = _positive_int(combined_signal_smoke.get("leg_count"))
+    if combined_signal_smoke.get("schema_version") != MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA or leg_count is None:
+        raise StrategyPackageValidationError(
+            "MULTI_ALPHA parent self-check combined signal smoke is empty or invalid",
+            context={
+                "reason_code": "multi_alpha_signal_selection_artifact_empty",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "combined_signal_smoke": _jsonable(combined_signal_smoke),
+            },
+        )
+    if combined_signal_smoke.get("deterministic_replay") is not True:
+        raise StrategyPackageValidationError(
+            "MULTI_ALPHA parent self-check combined signal smoke is not deterministic",
+            context={
+                "reason_code": "multi_alpha_signal_selection_artifact_nondeterministic",
+                "package_id": manifest.package_id,
+                "manifest_sha256": manifest.manifest_sha256,
+                "combined_signal_smoke": _jsonable(combined_signal_smoke),
+            },
+        )
+    evidence = {
+        "schema_version": MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA,
+        "self_check_passed": True,
+        "self_check_origin": "package_asset",
+        "self_check_manifest_sha256": manifest.manifest_sha256,
+        "combined_signal_smoke": _jsonable(combined_signal_smoke),
+        "deterministic": True,
+        "leg_count": leg_count,
+        "provider_version": provider_version,
+        "paper_runtime_dry_run_required": False,
+        "persisted_for_hot_path": True,
+    }
+    return _jsonable(evidence)
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _build_strategy_snapshot(*, topk: int, secondary_topk: list[int], backtest_config: Mapping[str, Any]) -> dict[str, Any]:

@@ -285,13 +285,13 @@ class MiniQMTExecutionBridge:
         )
 
     def submit_event_loop_plan(self, **kwargs: Any) -> MiniQMTRuntimeManagedBatchSubmitResult:
-        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
         mode = str(kwargs.get("mode") or "SIM").strip().upper()
         if mode != "SIM":
             raise LiveApprovalRequiredError(
                 "MiniQMT event_loop route is SIM-only; LIVE requires separate live admission",
                 context={"mode": mode, "reason_code": "MINIQMT_GRAY_LIVE_FORBIDDEN"},
             )
+        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
         if bool(getattr(self._managed_order_service, "preview_only", False)):
             raise LiveApprovalRequiredError(
                 "MiniQMT event_loop route requires submit-enabled SIM broker authority, not preview-only dry-run",

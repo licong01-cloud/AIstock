@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -546,6 +546,47 @@ def test_start_writes_fix_ready_and_context_pack(
     assert json.loads(fix_ready.read_text(encoding="utf-8"))["workflow_gate"] == "allowed"
 
 
+
+
+def test_start_validation_budget_defers_broad_required_plans(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(
+        isolated_workflow_root / "bug.json",
+        _bug(
+            module="miniqmt_execution_runtime",
+            allowed_write_scope=["backend/services/miniqmt_execution_runtime/gray.py"],
+            required_verification=[
+                "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+                "paper_v2_backend",
+                "simulation_core_l2",
+                "miniqmt_sim_stub_l3",
+            ],
+        ),
+    )
+    monkeypatch.setattr(workflow, "_build_code_intelligence_summary", lambda **kwargs: _fake_code_intelligence_summary())
+
+    payload = workflow.build_start_plan(
+        bug_id=None,
+        issue_json=str(issue),
+        changed_files=[],
+        create_worktree=False,
+        dry_run=False,
+        task_slug=None,
+        allow_missing_linkage=False,
+        allow_closed=False,
+    )
+
+    assert payload["required_verification"] == [
+        "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+        "l0",
+    ]
+    assert payload["deferred_nightly_plans"] == ["paper_v2_backend", "simulation_core_l2", "miniqmt_sim_stub_l3"]
+    task_card_text = (isolated_workflow_root / payload["task_card_md"]).read_text(encoding="utf-8")
+    assert "deferred_nightly_plans: `paper_v2_backend, simulation_core_l2, miniqmt_sim_stub_l3`" in task_card_text
+    state = json.loads((isolated_workflow_root / payload["state_path"]).read_text(encoding="utf-8"))
+    assert state["task_card_availability"]["available"] is True
 def test_start_code_intelligence_uses_allowed_scope_when_no_changed_files(
     isolated_workflow_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3096,11 +3137,55 @@ def test_postmortem_defaults_to_compact_success_without_artifacts(
     assert payload["artifact_policy"] == "compact_success_no_artifact"
     assert payload["h6_summary"]["token_usage_status"] == "unknown"
     assert payload["h6_summary"]["total_estimated_tokens"] is None
+    assert payload["task_card_availability"]["available"] is False
+    assert payload["validation_receipt_summary"]["broad_premerge_detected"] is False
     assert payload["code_intelligence_efficiency"]["broad_scan_avoided"] is False
     assert "postmortem_json_path" not in payload
     assert "postmortem_md_path" not in payload
     assert not (workflow_root / "postmortem.json").exists()
     assert not (workflow_root / "postmortem.md").exists()
+
+
+
+def test_postmortem_prefers_fix_workflow_over_close_sync_state(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fix = isolated_workflow_root / "fix-worktree"
+    close_sync = isolated_workflow_root / "BUG-199-close-sync"
+    _write_json(
+        fix / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "pr_opened",
+            "workflow_role": "fix",
+            "worktree": str(fix),
+            "branch": "bug/BUG-199-fix",
+            "pr_url": "https://github.example/pull/199",
+            "context_metrics": {"task_card_md": {"exists": True, "estimated_tokens": 11}},
+        },
+    )
+    _write_json(
+        close_sync / "tmp" / "issue_workflow" / "BUG-199" / "state.json",
+        {
+            "schema_version": "aistock_issue_workflow_state_v1",
+            "bug_id": "BUG-199",
+            "state": "complete",
+            "worktree": str(close_sync),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/200",
+        },
+    )
+    monkeypatch.setattr(workflow, "_state_roots_for_bug", lambda bug_id: [fix, close_sync])
+    monkeypatch.setattr(workflow, "_active_workflows_for_bug", lambda bug_id: [])
+    monkeypatch.setattr(workflow, "_stale_pr_check_for_bug", lambda bug_id: {"status": "checked", "open_prs": [], "merged_prs": []})
+
+    payload = workflow.build_postmortem_plan(bug_id="BUG-199")
+
+    assert payload["workflow_root"] == str(fix)
+    assert payload["state"]["branch"] == "bug/BUG-199-fix"
+    assert payload["h6_summary"]["context_estimated_tokens"] == 11
 
 
 def test_postmortem_prefers_fix_workflow_over_registry_intake(

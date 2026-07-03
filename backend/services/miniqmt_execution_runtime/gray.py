@@ -51,6 +51,7 @@ MINIQMT_GRAY_SHADOW_REQUIRED_SCENARIOS = frozenset(
 
 
 class MiniQMTGrayCanaryStrictness(str, Enum):
+    DIRECT_SIM_EVENT_LOOP = "direct_sim_event_loop"
     SINGLE_DAY_SMOKE = "single_day_smoke"
     FULL_SCENARIO_SET = "full_scenario_set"
 
@@ -144,7 +145,7 @@ class MiniQMTGraySwitchController:
         reason: str = "phase6_canary_switch",
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTGrayDecision:
-        """Apply a canary switch only after durable no-fatal shadow evidence."""
+        """Apply a SIM event_loop switch with auditable safety gates."""
 
         return self._decide(
             decision_type=MiniQMTGrayDecisionType.SWITCH,
@@ -230,12 +231,14 @@ class MiniQMTGraySwitchController:
             strictness = _CanaryStrictnessResolution(
                 strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
                 source="live_forbidden",
+                shadow_evidence_required=True,
                 scenario_coverage_required=True,
             )
         else:
             strictness = _CanaryStrictnessResolution(
                 strictness=MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
                 source="not_required_for_decision",
+                shadow_evidence_required=False,
                 scenario_coverage_required=False,
             )
         required_scenarios = (
@@ -273,7 +276,7 @@ class MiniQMTGraySwitchController:
             evidence=evidence,
             active_child_order_ids=active_child_order_ids,
             active_algo_instance_ids=active_algo_instance_ids,
-            require_shadow_evidence=require_shadow_evidence,
+            require_shadow_evidence=require_shadow_evidence and strictness.shadow_evidence_required,
             require_no_in_flight=require_no_in_flight,
         )
         if rejection is not None:
@@ -424,6 +427,7 @@ class _ShadowEvidence:
 class _CanaryStrictnessResolution:
     strictness: MiniQMTGrayCanaryStrictness
     source: str
+    shadow_evidence_required: bool
     scenario_coverage_required: bool
 
 
@@ -435,8 +439,8 @@ def _resolve_canary_strictness(
         source = "constructor"
     else:
         env_raw = str(os.getenv(MINIQMT_GRAY_CANARY_STRICTNESS_ENV) or "").strip().lower()
-        raw_text = env_raw or MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value
-        source = "env" if env_raw else "default_sim_single_day_smoke"
+        raw_text = env_raw or MiniQMTGrayCanaryStrictness.DIRECT_SIM_EVENT_LOOP.value
+        source = "env" if env_raw else "default_sim_direct_event_loop"
     try:
         strictness = MiniQMTGrayCanaryStrictness(raw_text)
     except ValueError as exc:
@@ -444,11 +448,12 @@ def _resolve_canary_strictness(
             "MiniQMT gray canary strictness is unsupported; "
             f"reason_code=MINIQMT_GRAY_CANARY_STRICTNESS_UNSUPPORTED, "
             f"{MINIQMT_GRAY_CANARY_STRICTNESS_ENV}={raw_text!r}, "
-            "expected one of: single_day_smoke,full_scenario_set"
+            "expected one of: direct_sim_event_loop,single_day_smoke,full_scenario_set"
         ) from exc
     return _CanaryStrictnessResolution(
         strictness=strictness,
         source=source,
+        shadow_evidence_required=strictness != MiniQMTGrayCanaryStrictness.DIRECT_SIM_EVENT_LOOP,
         scenario_coverage_required=strictness == MiniQMTGrayCanaryStrictness.FULL_SCENARIO_SET,
     )
 
@@ -766,9 +771,15 @@ def _shadow_evidence_metadata(
             "canary_strictness": strictness.strictness.value,
             "canary_strictness_env_var": MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
             "canary_strictness_source": strictness.source,
+            "shadow_evidence_required": strictness.shadow_evidence_required,
+            "shadow_observation_mode": (
+                "blocking_gate" if strictness.shadow_evidence_required else "optional_non_blocking"
+            ),
             "scenario_coverage_required": strictness.scenario_coverage_required,
             "strictness_reason": (
-                "SIM single_day_smoke requires one no-fatal durable shadow day and skips full scenario coverage"
+                "SIM direct event_loop retires the A==B shadow hard gate; shadow reports remain optional observation"
+                if strictness.strictness == MiniQMTGrayCanaryStrictness.DIRECT_SIM_EVENT_LOOP
+                else "SIM single_day_smoke requires one no-fatal durable shadow day and skips full scenario coverage"
                 if strictness.strictness == MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE
                 else "full_scenario_set requires durable coverage for every required canary scenario"
             ),
