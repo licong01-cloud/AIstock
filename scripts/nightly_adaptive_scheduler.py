@@ -407,7 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     _write_json(output, public_scheduler_report(report))
     _write_text(markdown_output, render_markdown(report))
     _print_compact(report, as_json=args.json, output=output)
-    return 2 if args.fail_on_blocked and report.get("workflow_gate") == "blocked" else 0
+    if report.get("workflow_gate") == "blocked" and (args.fail_on_blocked or args.fail_on_llm_error):
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

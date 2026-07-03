@@ -598,6 +598,33 @@ def test_test_plan_public_artifact_keeps_safe_fallback_reason(monkeypatch, tmp_p
     assert "provider_chain" in artifact["llm_invocation_evidence"]
 
 
+def test_test_plan_advice_fail_on_llm_error_is_loud(monkeypatch, tmp_path, capsys):
+    def fake_invoke(*args, **kwargs):
+        raise adapter.ProviderAdapterError("github_models inference request failed status=429 token=ghp_secret")
+
+    monkeypatch.setattr(adapter, "invoke_provider_json", fake_invoke)
+
+    exit_code = adapter.main(
+        [
+            "--json",
+            "test-plan-advice",
+            "--provider",
+            "github_models",
+            "--plan-key",
+            "l0",
+            "--invoke-llm",
+            "--fail-on-llm-error",
+            "--output",
+            str(tmp_path / "test-plan-advice.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 2
+    assert "status=429" in captured.err
+    assert "ghp_secret" not in captured.err
+
+
 def test_test_plan_advice_includes_compact_code_intelligence_refs(tmp_path):
     code_refs = tmp_path / "code-intelligence-summary.json"
     code_refs.write_text(
