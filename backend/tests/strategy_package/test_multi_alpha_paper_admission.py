@@ -16,8 +16,15 @@ from backend.services.selection_center.repository import InMemorySelectionCenter
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.strategy_package.asset_eligibility import (
-    MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED,
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
+    MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE,
+    MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
+    MULTI_ALPHA_SIGNAL_ADMISSION_PASSED,
+    MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING,
+    MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY,
+    MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC,
+    MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE,
+    MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER,
     StrategyPackageAssetEligibilityService,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
@@ -33,8 +40,9 @@ from backend.services.strategy_package.multi_alpha_paper_dry_run import (
     MultiAlphaPaperDryRunValidator,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.paper_trading_v2.test_day_runner import (
     make_paper_enabled_manifest,
     save_manifest_with_default_execution_policy,
@@ -101,6 +109,56 @@ def _run_dry_run(
     )
 
 
+class RaiseAdmissionReader:
+    def get_eligible(self, **_kwargs):  # noqa: ANN003, ANN201
+        raise AssertionError("legacy paper dry-run admission must not be consulted")
+
+
+class RaiseSelectionArtifactReader:
+    def list(self, **_kwargs):  # noqa: ANN003, ANN201
+        raise AssertionError("selection artifact repository should not be read when signal evidence is persisted")
+
+
+class EmptySelectionArtifactReader:
+    def list(self, **_kwargs):  # noqa: ANN003, ANN201
+        return []
+
+
+def _asset_service(**kwargs) -> StrategyPackageAssetEligibilityService:  # noqa: ANN003
+    kwargs.setdefault("admission_reader", RaiseAdmissionReader())
+    return StrategyPackageAssetEligibilityService(**kwargs)
+
+
+def _signal_admission(parent) -> dict[str, Any]:  # noqa: ANN001
+    return deepcopy(parent.current_manifest().source_evidence["multi_alpha"]["signal_admission"])
+
+
+def _save_parent_with_signal_evidence(parent, evidence: dict[str, Any]):  # noqa: ANN001
+    source_evidence = deepcopy(parent.current_manifest().source_evidence)
+    source_evidence["multi_alpha"]["signal_admission"] = evidence
+    return _copy_parent_with_source_evidence(parent, source_evidence, "signal_evidence_failure")
+
+
+def _copy_parent_with_source_evidence(parent, source_evidence: dict[str, Any], suffix: str):  # noqa: ANN001
+    manifest = parent.current_manifest()
+    return freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{manifest.package_id}_{suffix}",
+                "package_name": f"{manifest.package_name}_{suffix}",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+
+
+def _parent_without_signal_admission(parent, suffix: str):  # noqa: ANN001
+    source_evidence = deepcopy(parent.current_manifest().source_evidence)
+    source_evidence["multi_alpha"].pop("signal_admission", None)
+    return _copy_parent_with_source_evidence(parent, source_evidence, suffix)
+
+
 def test_local_sim_dry_run_writes_admission_and_is_deterministic_for_topk_variants() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
     validator, admission_repo, artifact_repo = _admission_validator(package_repo=package_repo)
@@ -137,24 +195,24 @@ def test_local_sim_dry_run_writes_admission_and_is_deterministic_for_topk_varian
     } == {A1_LEG: "package_asset", FUND_LEG: "package_asset"}
     assert len(artifact_repo.list(package_id=parent.package_id, manifest_sha256=parent.manifest_sha256)) >= 2
 
-    local_summary = StrategyPackageAssetEligibilityService(admission_reader=admission_repo).summarize(
+    local_summary = _asset_service().summarize(
         package_repo.get(parent.package_id),
         broker_backend="local_sim",
     )
-    minqmt_summary = StrategyPackageAssetEligibilityService(admission_reader=admission_repo).summarize(
+    minqmt_summary = _asset_service().summarize(
         package_repo.get(parent.package_id),
         broker_backend="minqmt_sim",
     )
 
     assert local_summary.eligible is True
     assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER not in local_summary.blockers
-    assert minqmt_summary.eligible is False
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in minqmt_summary.blockers
+    assert minqmt_summary.eligible is True
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER not in minqmt_summary.blockers
 
     selectable = SelectionCenterService(
         package_repository=package_repo,
         repository=InMemorySelectionCenterRepository(),
-        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility_service=_asset_service(),
         package_health_service=SelectionPackageHealthService(artifact_repository=artifact_repo),
     ).list_selectable_packages()
     assert parent.package_id in {item["package_id"] for item in selectable}
@@ -166,7 +224,7 @@ def test_multi_alpha_parent_enable_lifecycle_uses_shared_status_machine_after_dr
     _run_dry_run(validator, parent.package_id, runtime_variant="top_k=50")
     service = StrategyPackageService(
         repository=package_repo,
-        asset_eligibility=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility=_asset_service(),
     )
 
     approved = service.transition_status(
@@ -202,7 +260,7 @@ def test_multi_alpha_parent_enable_paper_without_dry_run_is_allowed_for_localsim
     admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
     service = StrategyPackageService(
         repository=package_repo,
-        asset_eligibility=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility=_asset_service(),
     )
     service.transition_status(
         package_id=parent.package_id,
@@ -215,10 +273,11 @@ def test_multi_alpha_parent_enable_paper_without_dry_run_is_allowed_for_localsim
 
     assert paper_enabled.package_status == PackageStatus.PAPER_ENABLED
     assert summary.eligible is True
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in summary.warnings
-    check = next(item for item in summary.checks if item.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
-    assert check.status == "WARN"
-    assert check.context["reason_code"] == MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
+    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER not in summary.blockers
+    assert MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING not in summary.warnings
+    check = next(item for item in summary.checks if item.name == MULTI_ALPHA_SIGNAL_ADMISSION_PASSED)
+    assert check.status == "PASS"
+    assert check.context["evidence_source"] == "persisted_manifest_signal_admission"
     assert admission_repo.records == {}
     assert [event.reason for event in service.list_status_events(parent.package_id)] == [
         "package_created",
@@ -235,18 +294,18 @@ def test_selection_full_path_lists_multi_alpha_without_localsim_dry_run_admissio
     selectable = SelectionCenterService(
         package_repository=package_repo,
         repository=InMemorySelectionCenterRepository(),
-        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility_service=_asset_service(),
         package_health_service=SelectionPackageHealthService(artifact_repository=artifact_repo),
     ).list_selectable_packages(view="full")
 
     row = next(item for item in selectable if item["package_id"] == parent.package_id)
     assert row["asset_eligibility"]["eligible"] is True
     assert row["asset_eligibility"]["blockers"] == []
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in row["asset_eligibility"]["warnings"]
+    assert row["asset_eligibility"].get("warnings") in (None, [])
     assert admission_repo.records == {}
 
 
-def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_closed() -> None:
+def test_local_sim_and_minqmt_manual_portfolio_create_succeed_after_optional_dry_run() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
     validator, admission_repo, _artifact_repo = _admission_validator(package_repo=package_repo)
     _run_dry_run(validator, parent.package_id, runtime_variant="top_k=50")
@@ -254,7 +313,7 @@ def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_cl
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
-        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility_service=_asset_service(),
     )
 
     portfolio = service.create_portfolio(
@@ -270,25 +329,26 @@ def test_local_sim_portfolio_create_succeeds_after_admission_and_minqmt_stays_cl
     assert portfolio.broker_backend == "local_sim"
     assert portfolio.data_source == MinuteDataSource.DB_HISTORICAL
 
-    with pytest.raises(Exception) as excinfo:
-        service.create_portfolio(
-            package_id=parent.package_id,
-            portfolio_name="multi alpha minqmt",
-            initial_cash=1_000_000,
-            start_date=date(2024, 7, 3),
-            data_source=MinuteDataSource.MINIQMT_REALTIME,
-            broker_backend="minqmt_sim",
-        )
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in getattr(excinfo.value, "context", {}).get("blockers", [])
+    minqmt_portfolio = service.create_portfolio(
+        package_id=parent.package_id,
+        portfolio_name="multi alpha minqmt manual",
+        initial_cash=1_000_000,
+        start_date=date(2024, 7, 3),
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    assert minqmt_portfolio.package_id == parent.package_id
+    assert minqmt_portfolio.broker_backend == "minqmt_sim"
+    assert minqmt_portfolio.data_source == MinuteDataSource.MINIQMT_REALTIME
 
 
-def test_local_sim_portfolio_create_succeeds_without_admission_and_minqmt_stays_closed() -> None:
+def test_local_sim_and_minqmt_manual_portfolio_create_succeed_without_dry_run_admission() -> None:
     package_repo, parent = _make_parent(live_weight_policy=True)
     admission_repo = InMemoryMultiAlphaPaperAdmissionRepository()
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=InMemoryPaperTradingV2Repository(),
-        asset_eligibility_service=StrategyPackageAssetEligibilityService(admission_reader=admission_repo),
+        asset_eligibility_service=_asset_service(),
     )
 
     portfolio = service.create_portfolio(
@@ -304,16 +364,43 @@ def test_local_sim_portfolio_create_succeeds_without_admission_and_minqmt_stays_
     assert portfolio.broker_backend == "local_sim"
     assert admission_repo.records == {}
 
-    with pytest.raises(Exception) as excinfo:
-        service.create_portfolio(
+    minqmt_portfolio = service.create_portfolio(
+        package_id=parent.package_id,
+        portfolio_name="multi alpha minqmt no admission",
+        initial_cash=1_000_000,
+        start_date=date(2024, 7, 3),
+        data_source=MinuteDataSource.MINIQMT_REALTIME,
+        broker_backend="minqmt_sim",
+    )
+    assert minqmt_portfolio.package_id == parent.package_id
+    assert minqmt_portfolio.broker_backend == "minqmt_sim"
+    assert minqmt_portfolio.data_source == MinuteDataSource.MINIQMT_REALTIME
+
+
+def test_minqmt_auto_run_missing_account_still_blocked_after_signal_eligibility() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    service = PaperTradingV2PortfolioService(
+        package_repository=package_repo,
+        repository=InMemoryPaperTradingV2Repository(),
+        asset_eligibility_service=_asset_service(),
+    )
+
+    summary = service.asset_eligibility_service.require_eligible(
+        package_repo.get(parent.package_id),
+        broker_backend="minqmt_sim",
+    )
+    assert summary.eligible is True
+
+    with pytest.raises(RuntimeConfigInvalidError) as excinfo:
+        service.create_minqmt_auto_run_portfolio(
             package_id=parent.package_id,
-            portfolio_name="multi alpha minqmt no admission",
+            portfolio_name="multi alpha minqmt missing account",
             initial_cash=1_000_000,
             start_date=date(2024, 7, 3),
-            data_source=MinuteDataSource.MINIQMT_REALTIME,
-            broker_backend="minqmt_sim",
+            broker_account_id="",
+            create_session=False,
         )
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in getattr(excinfo.value, "context", {}).get("blockers", [])
+    assert excinfo.value.context["broker_backend"] == "minqmt_sim"
 
 
 @pytest.mark.parametrize(
@@ -386,9 +473,7 @@ def test_single_alpha_paper_create_still_passes_without_admission_reader() -> No
     portfolio = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
-        asset_eligibility_service=StrategyPackageAssetEligibilityService(
-            admission_reader=InMemoryMultiAlphaPaperAdmissionRepository()
-        ),
+        asset_eligibility_service=_asset_service(),
     ).create_portfolio(
         package_id=manifest.package_id,
         portfolio_name="single alpha local sim",
@@ -423,15 +508,269 @@ def test_unknown_multi_alpha_paper_admission_blocker_still_blocks_localsim() -> 
         )
     )
 
-    summary = StrategyPackageAssetEligibilityService(
-        admission_reader=InMemoryMultiAlphaPaperAdmissionRepository()
-    ).summarize(updated, broker_backend="local_sim")
+    local_summary = _asset_service().summarize(updated, broker_backend="local_sim")
+    minqmt_summary = _asset_service().summarize(updated, broker_backend="minqmt_sim")
+
+    assert local_summary.eligible is False
+    assert minqmt_summary.eligible is False
+    assert MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER in local_summary.blockers
+    assert MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER in minqmt_summary.blockers
+    check = next(item for item in local_summary.checks if item.name == MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER)
+    assert check.status == "FAIL"
+    assert check.context["reason_code"] == MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER
+    assert check.context["unknown_blocker"] == "unsupported_multi_alpha_policy"
+
+
+def test_signal_eligibility_hot_path_reads_persisted_evidence_without_artifact_or_order_engines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+
+    def explode(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("eligibility must not instantiate order dry-run engines or full self-check")
+
+    monkeypatch.setattr("backend.services.strategy_package.runtime.TargetPositionEngine", explode)
+    monkeypatch.setattr("backend.services.strategy_package.runtime.RebalanceEngine", explode)
+    monkeypatch.setattr("backend.services.strategy_package.runtime.StrategyPackageRuntime.build_signal_snapshot", explode)
+    monkeypatch.setattr("backend.services.strategy_package.multi_alpha_paper_dry_run.MultiAlphaPaperDryRunValidator", explode)
+    monkeypatch.setattr("backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.prepare_workspace", explode)
+    monkeypatch.setattr(
+        "backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.load_source_for_strategy_package",
+        explode,
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.live_inference.QEExperimentRuntimeAssetResolver.load_source_for_strategy_package_leg",
+        explode,
+    )
+    monkeypatch.setattr("backend.services.strategy_package.live_inference.WslStrategyPackageInferenceProvider.run", explode)
+    monkeypatch.setattr("backend.services.strategy_package.live_inference.win_to_wsl_path", explode)
+    monkeypatch.setattr("backend.services.strategy_package.multi_alpha_live.win_to_wsl_path", explode)
+    monkeypatch.setattr("backend.services.strategy_package.selection_artifact.win_to_wsl_path", explode)
+    monkeypatch.setattr(
+        "backend.services.strategy_package.multi_alpha_live.MultiAlphaLivePredictionProvider.generate_artifacts",
+        explode,
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.selection_artifact.StrategyPackageSelectionArtifactService.generate_from_live_inference_dates",
+        explode,
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.package_asset_freeze.PackageAssetFreezeService.freeze_manifest_assets",
+        explode,
+    )
+    monkeypatch.setattr(
+        "backend.services.strategy_package.frozen_runtime_self_check.FrozenRuntimeSelfCheckService.assert_manifest_self_contained",
+        explode,
+    )
+    summary = _asset_service(selection_artifact_reader=RaiseSelectionArtifactReader()).summarize(
+        package_repo.get(parent.package_id),
+        broker_backend="minqmt_sim",
+    )
+
+    assert summary.eligible is True
+    assert MULTI_ALPHA_SIGNAL_ADMISSION_PASSED not in summary.blockers
+    pass_check = next(check for check in summary.checks if check.name == MULTI_ALPHA_SIGNAL_ADMISSION_PASSED)
+    assert pass_check.context["evidence_source"] == "persisted_manifest_signal_admission"
+    assert pass_check.context["hot_path_full_self_check_replayed"] is False
+
+
+@pytest.mark.parametrize(
+    ("mutator", "expected_reason"),
+    [
+        (lambda evidence: evidence.__setitem__("self_check_passed", False), "multi_alpha_signal_self_check_failed"),
+        (
+            lambda evidence: (
+                evidence.__setitem__("leg_count", 0),
+                evidence["combined_signal_smoke"].__setitem__("leg_count", 0),
+            ),
+            MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY,
+        ),
+        (
+            lambda evidence: evidence.__setitem__("deterministic", False),
+            MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC,
+        ),
+        (
+            lambda evidence: evidence.__setitem__("persisted_for_hot_path", False),
+            MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
+        ),
+        (
+            lambda evidence: evidence.__setitem__("paper_runtime_dry_run_required", True),
+            MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
+        ),
+        (
+            lambda evidence: evidence.__setitem__("self_check_manifest_sha256", None),
+            MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED,
+        ),
+    ],
+)
+def test_persisted_signal_evidence_failures_are_fail_closed(mutator, expected_reason) -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    evidence = _signal_admission(parent)
+    mutator(evidence)
+    updated = package_repo.save_manifest(_save_parent_with_signal_evidence(parent, evidence))
+
+    summary = _asset_service(selection_artifact_reader=RaiseSelectionArtifactReader()).summarize(
+        updated,
+        broker_backend="minqmt_sim",
+    )
 
     assert summary.eligible is False
-    assert "unsupported_multi_alpha_policy" in summary.blockers
-    check = next(item for item in summary.checks if item.name == "unsupported_multi_alpha_policy")
+    assert expected_reason in summary.blockers
+    check = next(item for item in summary.checks if item.name == expected_reason)
     assert check.status == "FAIL"
-    assert check.context["reason_code"] == "unsupported_multi_alpha_policy"
+    assert check.context["reason_code"] == expected_reason
+
+
+def test_selection_artifact_evidence_is_used_when_manifest_signal_evidence_is_missing() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    legacy_parent = package_repo.save_manifest(_parent_without_signal_admission(parent, "artifact_evidence"))
+    _artifact_service_instance, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
+    artifact_repo.save(
+        SelectionScoreArtifact(
+            package_id=legacy_parent.package_id,
+            manifest_sha256=legacy_parent.manifest_sha256,
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            runtime_config_hash="unit_signal_evidence",
+            scores_json=[{"symbol": "000001.SZ", "rank": 1, "score": 1.0, "target_weight": 0.04}],
+            score_count=1,
+            universe_count=1,
+            top_score_symbol="000001.SZ",
+            metadata={"target_weight_policy": "equal_weight", "topk": 1},
+        )
+    )
+
+    summary = _asset_service(selection_artifact_reader=artifact_repo).summarize(
+        legacy_parent,
+        broker_backend="minqmt_sim",
+    )
+
+    assert summary.eligible is True
+    assert summary.blockers == []
+    assert MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE in {check.name for check in summary.checks if check.status == "PASS"}
+    assert MULTI_ALPHA_SIGNAL_ADMISSION_PASSED in {check.name for check in summary.checks if check.status == "PASS"}
+
+
+def test_invalid_selection_artifact_evidence_fails_closed_before_structural_fallback() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    legacy_parent = package_repo.save_manifest(_parent_without_signal_admission(parent, "artifact_invalid"))
+    _artifact_service_instance, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
+    artifact_repo.save(
+        SelectionScoreArtifact(
+            package_id=legacy_parent.package_id,
+            manifest_sha256=legacy_parent.manifest_sha256,
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            runtime_config_hash="unit_invalid_signal_evidence",
+            scores_json=[{"symbol": "000001.SZ", "rank": 1, "score": 1.0, "target_weight": 0.04}],
+            score_count=1,
+            universe_count=1,
+            top_score_symbol="000001.SZ",
+            metadata={"topk": 1},
+        )
+    )
+
+    summary = _asset_service(selection_artifact_reader=artifact_repo).summarize(
+        legacy_parent,
+        broker_backend="local_sim",
+    )
+
+    assert summary.eligible is False
+    assert MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE in summary.blockers
+    check = next(item for item in summary.checks if item.name == MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE)
+    assert check.context["reason_code"] == MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE
+    assert "target_weight_policy" in check.context["missing_metadata_fields"]
+
+
+def test_selection_artifact_evidence_requires_sha256_digest() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    legacy_parent = package_repo.save_manifest(_parent_without_signal_admission(parent, "artifact_bad_digest"))
+    _artifact_service_instance, artifact_repo, _resolver, _provider = _artifact_service(package_repo)
+    stored = artifact_repo.save(
+        SelectionScoreArtifact(
+            package_id=legacy_parent.package_id,
+            manifest_sha256=legacy_parent.manifest_sha256,
+            trade_date=TRADE_DATE,
+            data_source=MinuteDataSource.DB_HISTORICAL.value,
+            runtime_config_hash="unit_invalid_digest_signal_evidence",
+            scores_json=[{"symbol": "000001.SZ", "rank": 1, "score": 1.0, "target_weight": 0.04}],
+            score_count=1,
+            universe_count=1,
+            top_score_symbol="000001.SZ",
+            metadata={"target_weight_policy": "equal_weight", "topk": 1},
+        )
+    )
+    artifact_repo.artifacts[
+        (
+            stored.package_id,
+            stored.manifest_sha256,
+            stored.trade_date,
+            stored.data_source,
+            stored.runtime_config_hash,
+        )
+    ] = stored.model_copy(update={"artifact_sha256": "z" * 64})
+
+    summary = _asset_service(selection_artifact_reader=artifact_repo).summarize(
+        legacy_parent,
+        broker_backend="minqmt_sim",
+    )
+
+    assert summary.eligible is False
+    assert MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC in summary.blockers
+    check = next(item for item in summary.checks if item.name == MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC)
+    assert check.context["reason_code"] == MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC
+
+
+def test_missing_persisted_evidence_uses_bounded_structural_smoke_for_legacy_parent() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    legacy_parent = package_repo.save_manifest(_parent_without_signal_admission(parent, "legacy_smoke"))
+
+    summary = _asset_service(selection_artifact_reader=EmptySelectionArtifactReader()).summarize(
+        legacy_parent,
+        broker_backend="minqmt_sim",
+    )
+
+    assert summary.eligible is True
+    assert MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING in summary.warnings
+    warning = next(check for check in summary.checks if check.name == MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING)
+    assert warning.context["cost_class"] == "cheap_structural_no_workspace_no_model_probe_no_wsl"
+    assert warning.context["hot_path_full_self_check_replayed"] is False
+
+
+def test_legacy_structural_smoke_requires_leg_ids_match_components_and_weights() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    source_evidence = deepcopy(parent.current_manifest().source_evidence)
+    source_evidence["multi_alpha"].pop("signal_admission", None)
+    source_evidence["multi_alpha"]["legs"][0]["leg_id"] = "unexpected_leg"
+    invalid_parent = package_repo.save_manifest(
+        _copy_parent_with_source_evidence(parent, source_evidence, "legacy_smoke_leg_mismatch")
+    )
+
+    summary = _asset_service(selection_artifact_reader=EmptySelectionArtifactReader()).summarize(
+        invalid_parent,
+        broker_backend="minqmt_sim",
+    )
+
+    assert summary.eligible is False
+    assert MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE in summary.blockers
+
+
+def test_missing_signal_evidence_and_invalid_structure_fail_closed() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    source_evidence = deepcopy(parent.current_manifest().source_evidence)
+    source_evidence["authority"] = "source_evidence_not_runtime_authority"
+    source_evidence["multi_alpha"].pop("signal_admission", None)
+    invalid_parent = package_repo.save_manifest(
+        _copy_parent_with_source_evidence(parent, source_evidence, "missing_signal_evidence")
+    )
+
+    summary = _asset_service(selection_artifact_reader=EmptySelectionArtifactReader()).summarize(
+        invalid_parent,
+        broker_backend="local_sim",
+    )
+
+    assert summary.eligible is False
+    assert MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED in summary.blockers
 
 
 def test_router_paper_runtime_dry_run_success_and_loud_error(monkeypatch: pytest.MonkeyPatch) -> None:

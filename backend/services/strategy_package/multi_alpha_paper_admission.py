@@ -1,4 +1,4 @@
-"""Admission ledger for MULTI_ALPHA Paper v2 runtime validation."""
+"""Legacy diagnostic ledger for MULTI_ALPHA Paper v2 dry-run validation."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ class MultiAlphaPaperAdmissionRecord(BaseModel):
 
 
 class MultiAlphaPaperAdmissionRepository:
-    """PostgreSQL repository for manifest-external MULTI_ALPHA paper admissions."""
+    """Legacy repository for optional dry-run evidence, not signal eligibility."""
 
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or get_conn

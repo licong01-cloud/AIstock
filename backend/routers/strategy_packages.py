@@ -786,6 +786,8 @@ def run_multi_alpha_paper_runtime_dry_run(
             "broker_backend": req.broker_backend,
             "runtime_variant": req.runtime_variant,
             "trade_date": req.trade_date.isoformat(),
+            "diagnostic_only": True,
+            "required_for_signal_admission": False,
             "admission": result.admission.to_dict(),
             "dry_run": result.to_dict(),
         }

@@ -1085,6 +1085,38 @@ def test_validate_manifest_integrity_clean_when_all_match():
     assert report["drifted"] == []
 
 
+def test_validate_manifest_integrity_clean_for_15_packages_with_multi_alpha_signal_evidence() -> None:
+    """New signal_admission evidence must not create manifest hash drift across package lists."""
+    repo = InMemoryStrategyPackageRepository()
+    for i in range(14):
+        manifest = freeze_manifest(
+            make_manifest().model_copy(update={"package_id": f"pkg-hash-{i}", "package_name": f"pkg-hash-{i}"})
+        )
+        repo.save_manifest(manifest)
+
+    _parent_repo, parent = _make_parent(live_weight_policy=True)
+    parent_manifest = parent.current_manifest()
+    assert "signal_admission" in parent_manifest.source_evidence["multi_alpha"]
+    repo.save_manifest(
+        freeze_manifest(
+            parent_manifest.model_copy(
+                update={
+                    "package_id": "pkg-ma-signal-hash-stable",
+                    "package_name": "pkg-ma-signal-hash-stable",
+                    "manifest_sha256": None,
+                }
+            )
+        )
+    )
+
+    report = repo.validate_manifest_integrity()
+
+    assert report["total_scanned"] == 15
+    assert report["clean_count"] == 15
+    assert report["drifted_count"] == 0
+    assert report["drifted"] == []
+
+
 def test_repair_manifest_hash_fixes_a_class_drift():
     """repair_manifest_hash updates only A-class schema-evolution hash drift."""
     repo = InMemoryStrategyPackageRepository()
@@ -1149,7 +1181,7 @@ def test_strategy_package_summary_listing_omits_heavy_manifest_and_runtime_contr
     assert "runtime_config_contract" not in rows[0]
 
 
-def test_strategy_package_summary_listing_treats_localsim_multi_alpha_dry_run_blocker_as_warning() -> None:
+def test_strategy_package_summary_listing_treats_new_multi_alpha_signal_evidence_as_eligible() -> None:
     repo, parent = _make_parent(live_weight_policy=True)
 
     rows = StrategyPackageService(repository=repo).list_package_summaries(limit=10)
@@ -1157,7 +1189,7 @@ def test_strategy_package_summary_listing_treats_localsim_multi_alpha_dry_run_bl
 
     assert row["asset_eligibility"]["eligible"] is True
     assert row["asset_eligibility"]["blockers"] == []
-    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
+    assert row["asset_eligibility"].get("warnings") in (None, [])
 
 
 def test_strategy_package_summary_listing_keeps_unknown_multi_alpha_blocker_hard_blocked() -> None:
@@ -1184,8 +1216,60 @@ def test_strategy_package_summary_listing_keeps_unknown_multi_alpha_blocker_hard
     row = next(item for item in rows if item["package_id"] == updated.package_id)
 
     assert row["asset_eligibility"]["eligible"] is False
-    assert row["asset_eligibility"]["blockers"] == ["unsupported_multi_alpha_policy"]
-    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_unknown_manifest_blocker"]
+    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_legacy_paper_dry_run_blocker_superseded"]
+
+
+def test_strategy_package_summary_listing_rejects_incomplete_signal_evidence_marker() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    signal_admission = dict(source_evidence["multi_alpha"]["signal_admission"])
+    signal_admission["persisted_for_hot_path"] = False
+    source_evidence["multi_alpha"]["signal_admission"] = signal_admission
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_bad_signal_summary",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_admission_not_validated"]
+
+
+def test_strategy_package_summary_listing_rejects_legacy_structural_leg_mismatch() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    source_evidence["multi_alpha"].pop("signal_admission", None)
+    source_evidence["multi_alpha"]["legs"] = [dict(item) for item in source_evidence["multi_alpha"]["legs"]]
+    source_evidence["multi_alpha"]["legs"][0]["leg_id"] = "unexpected_leg"
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_bad_legacy_summary",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_selection_artifact_unavailable"]
 
 
 def test_strategy_package_summary_listing_does_not_hash_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:

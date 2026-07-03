@@ -165,7 +165,7 @@ function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "sour
       <div className="pv2-readable-table">
         <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{textValue(value.package_name || manifest.package_name || value.created_package_id)}</div></div>
         <div className="pv2-readable-row"><div className="pv2-readable-key">资产合格</div><div className="pv2-readable-value">{Object.keys(readiness).length ? (readiness.eligible === false || readiness.status === "BLOCKED" ? "不合格，查看诊断信息" : "已通过或可进入下一步") : textValue(value.package_status || "以策略包列表为准")}</div></div>
-        {Object.keys(paperAdmission).length ? <div className="pv2-readable-row"><div className="pv2-readable-key">Paper 准入</div><div className="pv2-readable-value">{paperAdmission.eligible === true ? "eligible=true" : `eligible=false，${textValue(Array.isArray(paperAdmission.blocking) ? paperAdmission.blocking.join(", ") : paperAdmission.blocking)}`}</div></div> : null}
+        {Object.keys(paperAdmission).length ? <div className="pv2-readable-row"><div className="pv2-readable-key">Paper 诊断</div><div className="pv2-readable-value">{paperAdmission.required_for_signal_admission === false ? "dry-run 仅诊断，不作为信号准入硬门" : paperAdmission.eligible === true ? "eligible=true" : `eligible=false，${textValue(Array.isArray(paperAdmission.blocking) ? paperAdmission.blocking.join(", ") : paperAdmission.blocking)}`}</div></div> : null}
         {componentCount ? <div className="pv2-readable-row"><div className="pv2-readable-key">Component 单包</div><div className="pv2-readable-value">{componentCount} 个自动建/复用{materializedLegs.length ? `：${materializedLegs.slice(0, 4).join("、")}` : ""}</div></div> : null}
         <div className="pv2-readable-row"><div className="pv2-readable-key">manifest</div><div className="pv2-readable-value pv2-mono">{textValue(value.manifest_sha256 || manifest.manifest_sha256)}</div></div>
         <div className="pv2-readable-row"><div className="pv2-readable-key">来源</div><div className="pv2-readable-value">{textValue(value.source_type || manifest.source_type || (objectValue(manifest.source).source_type))}</div></div>
@@ -410,7 +410,7 @@ export default function PaperV2PackagesPage() {
           paper_admission: created.paper_admission || {},
           components_created_or_reused: created.components?.length ?? 0,
           auto_component_materialization: created.auto_component_materialization || [],
-          next_step: "多Alpha 包已建成 ASSET_VALIDATED。LocalSim 缺 dry-run admission 不再阻断准入，可直接进入 selectable-packages 与 create_portfolio；dry-run 仍可在本页作为可选留证。MiniQMT/真实 paper 仍保持严格准入。",
+          next_step: "多Alpha 包已建成 ASSET_VALIDATED。LocalSim 与 MiniQMT SIM 同用信号层判据，可进入 selectable-packages 与 create_portfolio；dry-run 仍可在本页作为可选留证。MiniQMT 执行层仍保留 account/group/slot/execution policy/data_source 门。",
         });
         await load();
       } catch (exc) {
@@ -482,7 +482,7 @@ export default function PaperV2PackagesPage() {
   const selectedTopK = selected?.portfolio_topk === 50 ? 50 : selected?.portfolio_topk === 25 ? 25 : dryRunTopKFromVariant(multiAlphaDryRunVariant);
   const selectedAssetWarnings = Array.isArray(assetEligibility.warnings) ? assetEligibility.warnings.map(String) : [];
   const selectedAssetBlockers = Array.isArray(assetEligibility.blockers) ? assetEligibility.blockers.map(String) : [];
-  const hasLocalSimDryRunWarning = selectedAssetWarnings.includes("multi_alpha_runtime_not_validated_until_dry_run");
+  const hasLegacyDryRunSupersededWarning = selectedAssetWarnings.includes("multi_alpha_legacy_paper_dry_run_blocker_superseded");
   const dryRunSummary = dryRunArtifactSummary(multiAlphaDryRunResult);
   const dryRunResult = objectValue(dryRunSummary.dryRun);
   const dryRunAdmission = objectValue(dryRunSummary.admission);
@@ -560,7 +560,7 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="ic_weighted 指标" value={selectedScheme ? "可创建" : "缺失"} hint={combineSchemeMetricText(selectedScheme)} tone={selectedScheme ? "success" : "warning"} />
             </div>
             <NoticePanel title="多Alpha 创建后的下一步" tone="warning">
-              创建只冻结 multi_alpha 父包并自动建/复用 component 单包。LocalSim 缺 dry-run admission 现在是 WARN/PASS：可进入 selectable-packages、荐股下拉和 LocalSim create_portfolio；dry-run 仍可选做留证。MiniQMT/真实 paper 仍保持 fail-closed，必须有专门准入。
+              创建只冻结 multi_alpha 父包并自动建/复用 component 单包。LocalSim 与 MiniQMT SIM 同用信号层判据：可进入 selectable-packages、荐股下拉和 create_portfolio；dry-run 仍可选做留证。MiniQMT 执行层 account/group/slot、validated execution policy 与 data_source 仍 fail-closed。
             </NoticePanel>
           </>
         ) : (
@@ -620,16 +620,16 @@ export default function PaperV2PackagesPage() {
             </NoticePanel>
             {selectedIsMultiAlpha ? (
               <div className="pv2-card" style={{ marginTop: 14 }}>
-                <div className="pv2-eyebrow">MultiAlpha LocalSim 准入</div>
-                <NoticePanel title={hasLocalSimDryRunWarning ? "LocalSim 缺 dry-run admission 是 WARN/PASS" : "LocalSim 准入状态"} tone={selectedAssetBlockers.length ? "warning" : "success"}>
-                  LocalSim 不再要求阻断式 dry-run admission；运行时仍由 frozen self-check、preflight 和 LocalSim 真实运行 fail-fast 校验。MiniQMT/真实 paper 未放宽，缺 admission 仍 hard FAIL。当前 blockers：{selectedAssetBlockers.join(", ") || "无"}；warnings：{selectedAssetWarnings.join(", ") || "无"}。
+                <div className="pv2-eyebrow">MultiAlpha 信号准入</div>
+                <NoticePanel title={hasLegacyDryRunSupersededWarning ? "旧 dry-run blocker 已被信号证据 supersede" : "信号层准入状态"} tone={selectedAssetBlockers.length ? "warning" : "success"}>
+                  LocalSim 与 MiniQMT SIM 使用同一信号层判据：持久化 self-check 证据 + 非空确定性 selection。订单差额、执行策略、MiniQMT account/group/slot 属于执行层，建组合或 auto-run 时仍 fail-closed。当前 blockers：{selectedAssetBlockers.join(", ") || "无"}；warnings：{selectedAssetWarnings.join(", ") || "无"}。
                 </NoticePanel>
                 <div className="pv2-form-grid" style={{ marginTop: 12 }}>
                   <div className="pv2-field">
                     <label>Broker</label>
                     <select className="pv2-select" value={multiAlphaDryRunBroker} onChange={(event) => setMultiAlphaDryRunBroker(event.target.value as "local_sim" | "minqmt_sim")}>
                       <option value="local_sim">local_sim（可选留证）</option>
-                      <option value="minqmt_sim">minqmt_sim（仍严格门控）</option>
+                      <option value="minqmt_sim">minqmt_sim（dry-run 诊断会拒绝）</option>
                     </select>
                   </div>
                   <div className="pv2-field">
@@ -649,12 +649,12 @@ export default function PaperV2PackagesPage() {
                   </div>
                 </div>
                 <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-                  <button className="pv2-button" onClick={runMultiAlphaDryRun} disabled={busy} type="button">执行 paper-runtime-dry-run</button>
+                    <button className="pv2-button" onClick={runMultiAlphaDryRun} disabled={busy} type="button">执行 paper-runtime-dry-run（可选诊断）</button>
                   <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${dryRunTopKFromVariant(multiAlphaDryRunVariant)}`}>进入 LocalSim 建组合</Link>
                 </div>
                 {multiAlphaDryRunBroker !== "local_sim" ? (
-                  <NoticePanel title="MiniQMT 仍 fail-closed" tone="warning">
-                    当前 dry-run 后端只支持 local_sim；选择 minqmt_sim 会真实调用接口并展示后端 reason_code/context，不会伪造 admission 或静默成功。
+                  <NoticePanel title="MiniQMT 执行层门保留" tone="warning">
+                    当前 dry-run 端点仍只支持 local_sim 诊断；minqmt_sim 是否可建组合由执行层 account/group/slot、validated execution policy 与数据源兼容门决定，不会伪造 admission。
                   </NoticePanel>
                 ) : null}
                 {multiAlphaDryRunResult ? (

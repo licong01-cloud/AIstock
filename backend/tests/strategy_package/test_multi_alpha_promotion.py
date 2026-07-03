@@ -13,7 +13,14 @@ from backend.db import init_trading_core_v2_schema
 from backend.routers import strategy_packages as router_module
 from backend.services.multi_alpha.combine_backtest import InMemoryCombineBacktestRepository
 from backend.services.qe_archive.multi_alpha_provenance import SeedProvenance
-from backend.services.strategy_package.asset_eligibility import MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
+from backend.services.strategy_package.asset_eligibility import (
+    MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED,
+    MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE,
+    MULTI_ALPHA_SIGNAL_ADMISSION_PASSED,
+    MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA,
+    MULTI_ALPHA_SIGNAL_SELF_CHECK_PASSED,
+)
+from backend.services.strategy_package.frozen_runtime_self_check import FrozenRuntimeSelfCheckResult
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     Alpha158SchemaAsset,
@@ -25,7 +32,6 @@ from backend.services.strategy_package.models import (
 )
 from backend.services.strategy_package.multi_alpha_promotion import (
     MULTI_ALPHA_PACKAGE_PROMOTE_CONFIRMATION,
-    MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
     MultiAlphaPackagePromotionService,
 )
 from backend.services.strategy_package import multi_alpha_promotion as promotion_module
@@ -94,7 +100,36 @@ class FakeQESourceResolver:
 
 class NoopFrozenRuntimeSelfCheck:
     def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
-        return None
+        leg_count = len(getattr(manifest, "alpha_components", []) or [])
+        return FrozenRuntimeSelfCheckResult(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            origin="package_asset",
+            model_kind="multi_alpha_parent",
+            model_expected_features=leg_count,
+            dynamic_factor_count=leg_count,
+            alpha158_alias_count=0,
+            factor_order_count=leg_count,
+            feature_count_delta=0,
+            model_params_path="aistock-package-asset://unit/self-check",
+            model_probe_backend="unit_noop",
+            leg_results={
+                component.alpha_id: {
+                    "origin": "package_asset",
+                    "model_expected_features": 1,
+                    "feature_count_delta": 0,
+                }
+                for component in getattr(manifest, "alpha_components", [])
+            },
+            combined_signal_smoke={
+                "schema_version": "multi_alpha_parent_combined_signal_smoke_v1",
+                "trade_date": "2024-05-05",
+                "instrument": "__self_check__",
+                "leg_count": leg_count,
+                "combined_score": 1.0,
+                "deterministic_replay": True,
+            },
+        )
 
 
 class FakeAssetFreezer:
@@ -457,7 +492,9 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
     assert first.package.alpha_mode == AlphaMode.MULTI_ALPHA
     assert first.package.package_status == PackageStatus.ASSET_VALIDATED
     assert first.package.package_status != PackageStatus.PAPER_ENABLED
-    assert first.paper_admission == {"eligible": False, "blocking": [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]}
+    assert first.paper_admission["blocking"] == []
+    assert first.paper_admission["diagnostic_only"] is True
+    assert first.paper_admission["required_for_signal_admission"] is False
     assert first.package.prediction_ref_uri == f"aistock-prediction-store://multi-alpha/{RUN_ID}/combined_prediction.pkl"
     assert first.package.prediction_ref_sha256 == PRED_SHA
     manifest = first.package.manifest
@@ -466,7 +503,18 @@ def test_promote_target_two_leg_run_freezes_deterministic_multi_alpha_package() 
     assert manifest.source.source_id == RUN_ID
     assert manifest.source.run_id == RUN_ID
     assert manifest.source_evidence["multi_alpha"]["combine_backtest_run_id"] == RUN_ID
-    assert manifest.source_evidence["multi_alpha"]["paper_admission"]["blocking"] == [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
+    assert "paper_admission" not in manifest.source_evidence["multi_alpha"]
+    assert manifest.source_evidence["multi_alpha"]["paper_runtime_diagnostics"]["blocking"] == []
+    signal_admission = manifest.source_evidence["multi_alpha"]["signal_admission"]
+    assert signal_admission["schema_version"] == MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA
+    assert signal_admission["self_check_passed"] is True
+    assert signal_admission["self_check_origin"] == "package_asset"
+    assert signal_admission["deterministic"] is True
+    assert signal_admission["leg_count"] == 2
+    assert signal_admission["paper_runtime_dry_run_required"] is False
+    assert signal_admission["persisted_for_hot_path"] is True
+    assert signal_admission["combined_signal_smoke"]["schema_version"] == "multi_alpha_parent_combined_signal_smoke_v1"
+    assert signal_admission["combined_signal_smoke"]["deterministic_replay"] is True
     assert manifest.source_evidence["authority"] == "parent_package_asset_runtime_authority"
     assert all("child_package_id" not in leg for leg in manifest.source_evidence["multi_alpha"]["legs"])
     assert all(
@@ -859,29 +907,37 @@ def test_promote_rejects_live_rolling_weight_policy_in_p0() -> None:
     assert excinfo.value.context["weight_policy_mode"] == "live_rolling_ic_weighted"
 
 
-def test_asset_eligibility_warns_multi_alpha_localsim_without_dry_run_and_blocks_minqmt() -> None:
+def test_asset_eligibility_uses_persisted_signal_evidence_for_local_and_minqmt_without_dry_run() -> None:
     combine_repo, package_repo, child_a1, child_fund = _seed_repos()
     service = _service(combine_repo, package_repo)
     result = _promote(service, child_a1, child_fund)
 
     eligibility = service.component_service.repository.get(result.package.package_id)
-    eligibility_service = router_module.StrategyPackageAssetEligibilityService()
+    class RaiseAdmissionReader:
+        def get_eligible(self, **_kwargs):  # noqa: ANN003, ANN201
+            raise AssertionError("legacy paper dry-run admission must not be read")
+
+    eligibility_service = router_module.StrategyPackageAssetEligibilityService(admission_reader=RaiseAdmissionReader())
     local_summary = eligibility_service.summarize(eligibility, broker_backend="local_sim")
     minqmt_summary = eligibility_service.summarize(eligibility, broker_backend="minqmt_sim")
 
     assert local_summary.eligible is True
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER not in local_summary.blockers
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in local_summary.warnings
-    local_check = next(check for check in local_summary.checks if check.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
-    assert local_check.status == "WARN"
-    assert local_check.context["reason_code"] == MULTI_ALPHA_LOCALSIM_DRY_RUN_NOT_REQUIRED
-    assert local_check.context["original_blocker"] == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER
+    assert "multi_alpha_runtime_not_validated_until_dry_run" not in local_summary.blockers
+    assert MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED not in local_summary.warnings
+    assert {check.name for check in local_summary.checks if check.status == "PASS"} >= {
+        MULTI_ALPHA_SIGNAL_SELF_CHECK_PASSED,
+        MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE,
+        MULTI_ALPHA_SIGNAL_ADMISSION_PASSED,
+    }
+    assert all(check.context.get("hot_path_full_self_check_replayed") is not True for check in local_summary.checks)
 
-    assert minqmt_summary.eligible is False
-    assert MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in minqmt_summary.blockers
-    minqmt_check = next(check for check in minqmt_summary.checks if check.name == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
-    assert minqmt_check.status == "FAIL"
-    assert minqmt_check.context["reason_code"] == MULTI_ALPHA_PAPER_ADMISSION_BLOCKER
+    assert minqmt_summary.eligible is True
+    assert "multi_alpha_runtime_not_validated_until_dry_run" not in minqmt_summary.blockers
+    assert {check.name for check in minqmt_summary.checks if check.status == "PASS"} >= {
+        MULTI_ALPHA_SIGNAL_SELF_CHECK_PASSED,
+        MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE,
+        MULTI_ALPHA_SIGNAL_ADMISSION_PASSED,
+    }
 
 
 def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -908,7 +964,9 @@ def test_router_endpoint_promotes_and_maps_loud_errors(monkeypatch: pytest.Monke
     payload = response.json()
     assert payload["ok"] is True
     assert payload["alpha_mode"] == AlphaMode.MULTI_ALPHA.value
-    assert payload["paper_admission"]["blocking"] == [MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
+    assert payload["paper_admission"]["blocking"] == []
+    assert payload["paper_admission"]["diagnostic_only"] is True
+    assert payload["paper_admission"]["required_for_signal_admission"] is False
 
     bad_request = deepcopy(_request(child_a1, child_fund))
     bad_request["combine_backtest_run_id"] = "missing_run"
