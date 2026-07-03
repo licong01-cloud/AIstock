@@ -1,4 +1,4 @@
-"""LocalSim dry-run admission for MULTI_ALPHA StrategyPackages."""
+"""Optional LocalSim dry-run diagnostics for MULTI_ALPHA StrategyPackages."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ class MultiAlphaPaperDryRunResult(BaseModel):
 
 
 class MultiAlphaPaperDryRunValidator:
-    """Validate MULTI_ALPHA LocalSim signal readiness without placing orders."""
+    """Produce optional LocalSim order-preview evidence without gating signal eligibility."""
 
     def __init__(
         self,
@@ -109,7 +109,7 @@ class MultiAlphaPaperDryRunValidator:
             )
         if broker_backend != "local_sim":
             raise StrategyPackageValidationError(
-                "MULTI_ALPHA paper dry-run currently admits LocalSim only",
+                "MULTI_ALPHA paper-runtime-dry-run diagnostics currently support LocalSim only",
                 context={
                     "reason_code": REASON_MULTI_ALPHA_DRY_RUN_UNSUPPORTED_BROKER,
                     "package_id": package_id,
@@ -129,7 +129,7 @@ class MultiAlphaPaperDryRunValidator:
             )
         if not str(validated_by or "").strip():
             raise RuntimeConfigInvalidError(
-                "validated_by is required for MULTI_ALPHA dry-run admission",
+                "validated_by is required for MULTI_ALPHA dry-run diagnostic evidence",
                 context={
                     "reason_code": REASON_MULTI_ALPHA_DRY_RUN_INVALID_CONFIG,
                     "package_id": package_id,
@@ -234,7 +234,8 @@ class MultiAlphaPaperDryRunValidator:
             runtime_variant=runtime_variant,
         )
         artifact_shas = {
-            "schema_version": "multi_alpha_paper_admission_artifacts_v1",
+            "schema_version": "multi_alpha_paper_runtime_diagnostics_artifacts_v1",
+            "legacy_table_role": "diagnostic_only_not_signal_admission",
             "selection_artifact_sha256": artifact.artifact_sha256,
             "deterministic_replay_artifact_sha256": replay.artifact_sha256,
             "combined_score_artifact_sha256": combined_sha,
@@ -265,7 +266,9 @@ class MultiAlphaPaperDryRunValidator:
             },
         }
         evidence_json = {
-            "schema_version": "multi_alpha_paper_admission_evidence_v1",
+            "schema_version": "multi_alpha_paper_runtime_diagnostics_evidence_v1",
+            "required_for_signal_admission": False,
+            "legacy_table_role": "diagnostic_only_not_signal_admission",
             "package_id": package_id,
             "manifest_sha256": manifest.manifest_sha256,
             "broker_backend": broker_backend,

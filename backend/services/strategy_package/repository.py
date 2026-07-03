@@ -61,6 +61,16 @@ ConnFactory = Callable[[], Iterator[Any]]
 
 SAFE_MANIFEST_REPAIR_CLASSIFICATION = "A_schema_evolution_stale_hash"
 MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
+MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA = "multi_alpha_signal_admission_v1"
+MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA = "multi_alpha_parent_combined_signal_smoke_v1"
+MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED = "multi_alpha_legacy_paper_dry_run_blocker_superseded"
+MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED = "multi_alpha_signal_admission_not_validated"
+MULTI_ALPHA_SIGNAL_SELF_CHECK_FAILED = "multi_alpha_signal_self_check_failed"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY = "multi_alpha_signal_selection_artifact_empty"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC = "multi_alpha_signal_selection_artifact_nondeterministic"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE = "multi_alpha_signal_selection_artifact_unavailable"
+MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER = "multi_alpha_signal_unknown_manifest_blocker"
+MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING = "multi_alpha_signal_evidence_missing"
 
 
 def _manifest_drift_repair_plan(
@@ -107,9 +117,15 @@ def _summary_asset_eligibility_from_manifest(
         paper_admission = multi_alpha.get("paper_admission") if isinstance(multi_alpha, dict) else None
         blocking = paper_admission.get("blocking") if isinstance(paper_admission, dict) else []
         blocking_reasons = [str(item) for item in (blocking or []) if str(item)]
-        if MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in blocking_reasons:
-            warnings.append(MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
-        blockers.extend(reason for reason in blocking_reasons if reason != MULTI_ALPHA_PAPER_ADMISSION_BLOCKER)
+        unknown_blockers = [reason for reason in blocking_reasons if reason != MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
+        if unknown_blockers:
+            blockers.append(MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER)
+        signal_blocker, signal_warnings = _summary_multi_alpha_signal_gate(manifest, evidence, multi_alpha)
+        if signal_blocker:
+            blockers.append(signal_blocker)
+        warnings.extend(signal_warnings)
+        if MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in blocking_reasons and not signal_blocker:
+            warnings.append(MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED)
     payload: dict[str, Any] = {
         "eligible": not blockers,
         "summary_only": True,
@@ -118,6 +134,74 @@ def _summary_asset_eligibility_from_manifest(
     if warnings:
         payload["warnings"] = warnings
     return payload
+
+
+def _summary_multi_alpha_signal_gate(
+    manifest: StrategyPackageManifest,
+    source_evidence: dict[str, Any],
+    multi_alpha: Any,
+) -> tuple[str | None, list[str]]:
+    if not isinstance(multi_alpha, dict):
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED, []
+    signal_admission = multi_alpha.get("signal_admission")
+    if isinstance(signal_admission, dict):
+        blocker = _summary_signal_admission_blocker(signal_admission)
+        return blocker, []
+    legs = multi_alpha.get("legs")
+    leg_ids = [
+        str(leg.get("leg_id") or "").strip()
+        for leg in legs
+        if isinstance(legs, list) and isinstance(leg, dict) and str(leg.get("leg_id") or "").strip()
+    ] if isinstance(legs, list) else []
+    component_ids = [str(component.alpha_id) for component in manifest.alpha_components if str(component.alpha_id or "").strip()]
+    weights = manifest.alpha_combination_policy.weights or {}
+    if source_evidence.get("authority") != "parent_package_asset_runtime_authority":
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED, []
+    if not isinstance(legs, list) or not legs or not component_ids:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE, []
+    component_id_set = set(component_ids)
+    if set(leg_ids) != component_id_set or {str(key) for key in weights} != component_id_set:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE, []
+    return None, [MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING]
+
+
+def _summary_signal_admission_blocker(evidence: dict[str, Any]) -> str | None:
+    if evidence.get("schema_version") != MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA:
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED
+    if (
+        not _summary_is_sha256(evidence.get("self_check_manifest_sha256"))
+        or evidence.get("persisted_for_hot_path") is not True
+        or evidence.get("paper_runtime_dry_run_required") is not False
+    ):
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED
+    if evidence.get("self_check_passed") is not True or evidence.get("self_check_origin") != "package_asset":
+        return MULTI_ALPHA_SIGNAL_SELF_CHECK_FAILED
+    smoke = evidence.get("combined_signal_smoke")
+    if not isinstance(smoke, dict):
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE
+    if smoke.get("schema_version") != MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY
+    if _positive_summary_int(evidence.get("leg_count")) is None and _positive_summary_int(smoke.get("leg_count")) is None:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY
+    deterministic = evidence.get("deterministic")
+    if deterministic is None:
+        deterministic = smoke.get("deterministic_replay")
+    if deterministic is not True:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC
+    return None
+
+
+def _positive_summary_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _summary_is_sha256(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
 
 
 def _manifest_json_for_record_classification(record: "StrategyPackageRecord") -> dict[str, Any]:
@@ -900,14 +984,55 @@ class StrategyPackageRepository:
                                created_at, updated_at,
                                manifest_json #> '{{backtest_summary}}' AS backtest_summary,
                                jsonb_array_length(COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)) AS alpha_count,
+                               ARRAY(
+                                   SELECT component ->> 'alpha_id'
+                                   FROM jsonb_array_elements(COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)) AS component
+                                   WHERE COALESCE(component ->> 'alpha_id', '') <> ''
+                                   ORDER BY component ->> 'alpha_id'
+                               ) AS alpha_ids,
                                COALESCE(
                                    NULLIF(manifest_json #>> '{{backtest_context,daily_strategy,topk}}', ''),
                                    NULLIF(manifest_json #>> '{{portfolio_policy,topk}}', '')
                                ) AS portfolio_topk,
-                               COALESCE(
-                                   manifest_json #> '{{source_evidence,multi_alpha,paper_admission,blocking}}',
-                                   '[]'::jsonb
-                               ) AS paper_admission_blocking
+                                COALESCE(
+                                    manifest_json #> '{{source_evidence,multi_alpha,paper_admission,blocking}}',
+                                    '[]'::jsonb
+                                ) AS paper_admission_blocking,
+                                manifest_json #> '{{source_evidence}}' AS source_evidence,
+                                manifest_json #> '{{source_evidence,multi_alpha}}' AS multi_alpha_evidence,
+                                manifest_json #> '{{source_evidence,multi_alpha,signal_admission}}' AS signal_admission,
+                                CASE
+                                    WHEN jsonb_typeof(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb)) = 'array'
+                                    THEN jsonb_array_length(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb))
+                                    ELSE 0
+                                END AS multi_alpha_leg_count,
+                                ARRAY(
+                                    SELECT leg ->> 'leg_id'
+                                    FROM jsonb_array_elements(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb)) AS leg
+                                    WHERE COALESCE(leg ->> 'leg_id', '') <> ''
+                                    ORDER BY leg ->> 'leg_id'
+                                ) AS multi_alpha_leg_ids,
+                                ARRAY(
+                                    SELECT weight_key
+                                    FROM jsonb_object_keys(
+                                        CASE
+                                            WHEN jsonb_typeof(COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)) = 'object'
+                                            THEN COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)
+                                            ELSE '{{}}'::jsonb
+                                        END
+                                    ) AS weight_key
+                                    ORDER BY weight_key
+                                ) AS multi_alpha_weight_ids,
+                                (
+                                    SELECT COUNT(*)::int
+                                    FROM jsonb_object_keys(
+                                        CASE
+                                            WHEN jsonb_typeof(COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)) = 'object'
+                                            THEN COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)
+                                            ELSE '{{}}'::jsonb
+                                        END
+                                    ) AS weight_key
+                                ) AS multi_alpha_weight_count
                         FROM strategy_pkg.package
                         {where}
                     )
@@ -916,44 +1041,107 @@ class StrategyPackageRepository:
                                package_status <> 'RETIRED'
                                AND (
                                    alpha_mode <> 'multi_alpha'
-                                   OR NOT EXISTS (
-                                       SELECT 1
-                                       FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
-                                       WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
-                                   )
-                               )
-                           ) AS summary_asset_eligible,
-                           CASE
-                               WHEN package_status = 'RETIRED' THEN ARRAY['package_retired']::text[]
-                               WHEN alpha_mode <> 'multi_alpha' THEN ARRAY[]::text[]
-                               ELSE COALESCE(
-                                   (
-                                       SELECT ARRAY_AGG(blocker.reason)::text[]
+                                    OR (
+                                        NOT EXISTS (
+                                            SELECT 1
+                                            FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                            WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                        )
+                                        AND (
+                                            (
+                                                signal_admission IS NOT NULL
+                                                AND signal_admission #>> '{{schema_version}}' = 'multi_alpha_signal_admission_v1'
+                                                AND COALESCE(signal_admission #>> '{{self_check_manifest_sha256}}', '') ~ '^[0-9a-f]{{64}}$'
+                                                AND signal_admission #>> '{{persisted_for_hot_path}}' = 'true'
+                                                AND signal_admission #>> '{{paper_runtime_dry_run_required}}' = 'false'
+                                                AND signal_admission #>> '{{self_check_passed}}' = 'true'
+                                                AND signal_admission #>> '{{self_check_origin}}' = 'package_asset'
+                                                AND signal_admission #>> '{{combined_signal_smoke,schema_version}}' = 'multi_alpha_parent_combined_signal_smoke_v1'
+                                                AND CASE
+                                                    WHEN COALESCE(signal_admission #>> '{{leg_count}}', '') ~ '^[0-9]+$'
+                                                    THEN (signal_admission #>> '{{leg_count}}')::int
+                                                    ELSE 0
+                                                END > 0
+                                                AND COALESCE(signal_admission #>> '{{deterministic}}', signal_admission #>> '{{combined_signal_smoke,deterministic_replay}}') = 'true'
+                                            )
+                                            OR (
+                                                source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                                AND cardinality(alpha_ids) > 0
+                                                AND alpha_ids = multi_alpha_leg_ids
+                                                AND alpha_ids = multi_alpha_weight_ids
+                                            )
+                                        )
+                                    )
+                                )
+                            ) AS summary_asset_eligible,
+                            CASE
+                                WHEN package_status = 'RETIRED' THEN ARRAY['package_retired']::text[]
+                                WHEN alpha_mode <> 'multi_alpha' THEN ARRAY[]::text[]
+                                WHEN EXISTS (
+                                    SELECT 1
+                                    FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                    WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                ) THEN ARRAY['multi_alpha_signal_unknown_manifest_blocker']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{schema_version}}', '') <> 'multi_alpha_signal_admission_v1'
+                                    THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND (
+                                         COALESCE(signal_admission #>> '{{self_check_manifest_sha256}}', '') !~ '^[0-9a-f]{{64}}$'
+                                         OR COALESCE(signal_admission #>> '{{persisted_for_hot_path}}', '') <> 'true'
+                                         OR COALESCE(signal_admission #>> '{{paper_runtime_dry_run_required}}', '') <> 'false'
+                                     )
+                                    THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND (
+                                         COALESCE(signal_admission #>> '{{self_check_passed}}', '') <> 'true'
+                                         OR COALESCE(signal_admission #>> '{{self_check_origin}}', '') <> 'package_asset'
+                                     )
+                                    THEN ARRAY['multi_alpha_signal_self_check_failed']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{combined_signal_smoke,schema_version}}', '') <> 'multi_alpha_parent_combined_signal_smoke_v1'
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_empty']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND CASE
+                                         WHEN COALESCE(signal_admission #>> '{{leg_count}}', '') ~ '^[0-9]+$'
+                                         THEN (signal_admission #>> '{{leg_count}}')::int
+                                         ELSE 0
+                                     END <= 0
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_empty']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{deterministic}}', signal_admission #>> '{{combined_signal_smoke,deterministic_replay}}', '') <> 'true'
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_nondeterministic']::text[]
+                                WHEN signal_admission IS NULL
+                                     AND source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                     AND cardinality(alpha_ids) > 0
+                                     AND alpha_ids = multi_alpha_leg_ids
+                                     AND alpha_ids = multi_alpha_weight_ids
+                                    THEN ARRAY[]::text[]
+                                WHEN signal_admission IS NULL THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                ELSE COALESCE(
+                                    (
+                                        SELECT ARRAY_AGG(blocker.reason)::text[]
                                        FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
                                        WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
                                    ),
                                    ARRAY[]::text[]
                                )
-                           END AS summary_asset_blockers,
-                           CASE
-                               WHEN package_status <> 'RETIRED'
-                                    AND alpha_mode = 'multi_alpha'
-                                    AND paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
-                                    AND NOT EXISTS (
-                                        SELECT 1
-                                        FROM strategy_pkg.multi_alpha_paper_admission admission
-                                        WHERE admission.package_id = package_summary.package_id
-                                          AND admission.manifest_sha256 = package_summary.manifest_sha256
-                                          AND admission.broker_backend = 'local_sim'
-                                          AND admission.runtime_variant = CASE
-                                              WHEN package_summary.portfolio_topk IS NULL THEN 'top_k=unknown'
-                                              ELSE 'top_k=' || package_summary.portfolio_topk
-                                          END
-                                          AND admission.eligible = TRUE
-                                    )
-                                   THEN ARRAY['multi_alpha_runtime_not_validated_until_dry_run']::text[]
-                               ELSE ARRAY[]::text[]
-                           END AS summary_asset_warnings
+                            END AS summary_asset_blockers,
+                            CASE
+                                WHEN package_status <> 'RETIRED'
+                                     AND alpha_mode = 'multi_alpha'
+                                     AND paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
+                                    THEN ARRAY['multi_alpha_legacy_paper_dry_run_blocker_superseded']::text[]
+                                WHEN package_status <> 'RETIRED'
+                                     AND alpha_mode = 'multi_alpha'
+                                     AND signal_admission IS NULL
+                                     AND source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                     AND cardinality(alpha_ids) > 0
+                                     AND alpha_ids = multi_alpha_leg_ids
+                                     AND alpha_ids = multi_alpha_weight_ids
+                                    THEN ARRAY['multi_alpha_signal_evidence_missing']::text[]
+                                ELSE ARRAY[]::text[]
+                            END AS summary_asset_warnings
                     FROM package_summary
                     ORDER BY created_at DESC
                     LIMIT %s
