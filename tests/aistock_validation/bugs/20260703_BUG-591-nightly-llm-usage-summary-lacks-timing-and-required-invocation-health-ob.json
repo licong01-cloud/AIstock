@@ -28,8 +28,8 @@
   "expected": "Nightly llm-usage-summary exposes observability-only timing when available plus required DeepSeek LLM expected/invoked/missing health, without adding token limits or broad pre-merge validation.",
   "first_seen_at": "2026-07-03T11:24:14.441133Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e42b789453fae6b8157b5998972cea07d745454b",
+  "fixed_at": "2026-07-03T12:13:28.951683Z",
   "github_issue_number": 1869,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1869",
   "last_seen_at": "2026-07-03T11:24:14.441133Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1871",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -59,6 +60,9 @@
     "fingerprint": "63469b74cbaa7638a69c8404",
     "source_event_id": "FE-20260703-63469b74cbaa"
   },
+  "validation_evidence": [
+    "PR #1871 GitHub CI all checks passed before squash merge"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
