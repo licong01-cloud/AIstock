@@ -37,8 +37,8 @@
   "expected": "MiniQMT SIM can switch to and submit via real A event_loop without requiring shadow evidence; shadow remains optional non-blocking observation. LIVE remains MINIQMT_GRAY_LIVE_FORBIDDEN/full-gated, A submit uses qmt_strategy_ledger/event_loop gateway, and all fail-closed safeguards remain intact.",
   "first_seen_at": "2026-07-03T01:47:12.850962Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a74d73fba4dd93e5b72ef1ffcb7ccec559277c44",
+  "fixed_at": "2026-07-03T03:21:00.751542Z",
   "github_issue_number": 1851,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1851",
   "last_seen_at": "2026-07-03T01:47:12.850962Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1852",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime",
     "simulation_runtime"
@@ -72,6 +73,9 @@
     "fingerprint": "2c4f2c7e273984336bbcbaba",
     "source_event_id": "FE-20260703-2c4f2c7e2739"
   },
+  "validation_evidence": [
+    "PR #1852 merged at a74d73fba4dd93e5b72ef1ffcb7ccec559277c44; CI real checks green CLEAN; local gates recorded in PR body"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
