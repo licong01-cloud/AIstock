@@ -1,0 +1,133 @@
+{
+  "actual": "Issue #1757 was auto-filed for Nightly run 28619263339, but its body still says BUG ID pending until promoted by promote-ci-issue.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/ci_failure_issue_summary.py",
+    "tests/aistock_validation/bugs/20260703_BUG-589-nightly-auto-filed-issues-stop-before-bug-id-promotion.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-589",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-03T10:04:48.588944Z",
+  "description": "Issue #1757 was auto-filed for Nightly run 28619263339, but its body still says BUG ID pending until promoted by promote-ci-issue.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260703-3759af8aa826",
+      "timestamp": "2026-07-03T10:04:48.588940Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issue #1757: BUG ID pending until promoted"
+  ],
+  "expected": "When Nightly classifies a real_regression_candidate/actionable failure, the pipeline should automatically create an auditable BUG registry draft/BUG ID using a dedicated registry worktree path, or record a loud promotion blocking reason in the issue/artifact.",
+  "first_seen_at": "2026-07-03T10:04:48.588944Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1863,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1863",
+  "last_seen_at": "2026-07-03T10:04:48.588944Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh issue view 1757 --json body",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly auto-filed issues stop before BUG ID promotion",
+  "trigger_condition": {
+    "fingerprint": "3759af8aa826ab24f01c9552",
+    "source_event_id": "FE-20260703-3759af8aa826"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation_llm_pipeline"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation_llm_pipeline"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  }
+}
