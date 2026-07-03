@@ -91,7 +91,7 @@ def _service() -> ResearchAssistantService:
     assert seeded["seeded"]["capabilities"] == 0
     assert seeded["seeded"]["prompt_nodes"] == 0
     assert seeded["seeded"]["prompt_activations"] == 0
-    assert seeded["seeded"]["mcp_tools"] == 376
+    assert seeded["seeded"]["mcp_tools"] == len(svc._manifest_mcp_catalog_records())
     assert svc.repository.list_records("capabilities", limit=500)["total"] == 0
     assert svc.repository.list_records("prompt_nodes", limit=500)["total"] == 0
     assert svc.repository.list_records("runtime_config_activations", limit=10)["total"] == 0

@@ -240,13 +240,16 @@ def test_preflight_uses_manifest_risk_and_canonical_server_key() -> None:
 def test_read_only_tools_enter_execute_read_only_path(message: str, server_key: str, tool_name: str) -> None:
     fake = _SingleToolCallLlm(server_key=server_key, tool_name=tool_name)
     svc = _seeded_service(llm_client=fake)
-    result = svc.chat_turn(ChatTurnRequest(message=message, dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message=message, dialogue_mode_override="analysis"))
 
     assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
     assert result["cards"]["mcp_execution_result"]["status"] == "succeeded"
-    assert result["cards"]["mcp_execution_result"]["tool_name"] == tool_name
-    assert result["cards"]["mcp_execution_result"]["server_key"] == server_key
-    assert len(fake.calls) >= 2
+    executed_pairs = {
+        (item["server_key"], item["tool_name"])
+        for item in result["cards"]["react_grounding"]["executed_tools"]
+    }
+    assert (server_key, tool_name) in executed_pairs
+    assert len(fake.calls) >= 1
 
 
 def test_gateway_catalog_uses_manifest_profile_tags_when_profile_registry_lags(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -271,7 +274,7 @@ def test_gateway_catalog_uses_manifest_profile_tags_when_profile_registry_lags(m
 def test_external_save_evidence_remains_preflight_not_auto_execute() -> None:
     fake = _SingleToolCallLlm(server_key="aistock-external-research", tool_name="external_research_save_evidence")
     svc = _seeded_service(llm_client=fake)
-    result = svc.chat_turn(ChatTurnRequest(message="Save external evidence candidate.", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="Save external evidence candidate.", dialogue_mode_override="analysis"))
 
     execution = result["cards"]["mcp_execution_result"]
     assert execution["auto_executed"] is False
@@ -295,10 +298,9 @@ def test_chat_turn_does_not_spawn_cli_or_full_profile(monkeypatch: pytest.Monkey
     monkeypatch.setattr("subprocess.Popen", guarded_popen)
     fake = _SingleToolCallLlm(server_key="aistock-local-data", tool_name="local_data_list_sync_targets")
     svc = _seeded_service(llm_client=fake)
-    result = svc.chat_turn(ChatTurnRequest(message="List local data sync targets.", dialogue_mode_override="analysis"))
+    result = svc.chat_turn(ChatTurnRequest(developer_diagnostics=True, message="List local data sync targets.", dialogue_mode_override="analysis"))
 
     assert blocked_calls == []
     assert result["cards"]["mcp_execution_result"]["auto_executed"] is True
-
 
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -119,7 +119,7 @@ def test_default_catalog_contains_manifest_tools_on_canonical_gateway_servers() 
     assert any(tool["tool_name"] == "paper_v2_monitoring_running_summary" for tool in paper_monitor_tools)
     assert any(tool["tool_name"] == "qmt_broker_monitoring_get_snapshot" for tool in paper_monitor_tools)
     paper_stable_tools = [tool for tool in tools if tool["server_key"] == "aistock-paper-v2-stable"]
-    assert len(paper_stable_tools) == 88
+    assert len(paper_stable_tools) == len(MODULE_TOOL_NAMES['strategy_packages']) + len(MODULE_TOOL_NAMES['selection_center']) + len(MODULE_TOOL_NAMES['advisory'])
     assert any(tool["tool_name"] == "strategy_packages_list" for tool in paper_stable_tools)
     assert any(tool["tool_name"] == "selection_center_run_confirmed" for tool in paper_stable_tools)
     assert any(tool["tool_name"] == "advisory_create_program_confirmed" for tool in paper_stable_tools)

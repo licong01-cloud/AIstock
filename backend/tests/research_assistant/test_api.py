@@ -11,6 +11,15 @@ from backend.services.research_assistant.repository import InMemoryResearchAssis
 from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
 
 
+class DiagnosticDefaultResearchAssistantService(ResearchAssistantService):
+    def chat_turn(self, request):  # type: ignore[override]
+        if isinstance(request, dict):
+            request = {**request, "developer_diagnostics": request.get("developer_diagnostics", True)}
+        else:
+            request = request.model_copy(update={"developer_diagnostics": True})
+        return super().chat_turn(request)
+
+
 class FakeLlmClient:
     def complete(self, **_kwargs: object) -> LlmCallResult:
         return LlmCallResult(
@@ -24,7 +33,7 @@ class FakeLlmClient:
 
 def _client(*, seed: bool = True) -> TestClient:
     repository = InMemoryResearchAssistantRepository()
-    service = ResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
+    service = DiagnosticDefaultResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
     if seed:
         service.seed_catalogs()
     app = FastAPI()
