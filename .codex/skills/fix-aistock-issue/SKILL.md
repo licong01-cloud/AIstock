@@ -15,6 +15,7 @@ Use this skill only for AIstock BUG/GitHub Issue work. Do not use it for ordinar
 - Do not read other scenario skills, quickstarts, full standards, module designs, or historical docs unless the user, BUG evidence, or task card explicitly requires it.
 - After compaction/restart, run `resume` and read only the compact digest plus `task-card.md` unless a digest changed.
 - Use graph-first refs before `rg`; avoid reprinting the same source range; pause if exploration exceeds the soft budget.
+- Treat machine JSON as debug/resume-only: do not open `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, or dependency cache JSON during ordinary fixes unless a command failed or state recovery requires it.
 
 ## Start
 
@@ -22,7 +23,7 @@ Use this skill only for AIstock BUG/GitHub Issue work. Do not use it for ordinar
 2. Existing BUG: `python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`.
 3. New BUG: `python scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`.
 4. If a state exists, follow the returned `next_command`; do not create duplicate worktrees.
-5. Switch to the returned worktree and read `task_card_md`, `context_pack_md` only when needed, `fix_ready_path`, and `state_path`.
+5. Switch to the returned worktree and read `task_card_md` first; read `context_pack_md` only when needed. Treat `fix_ready_path`, `state_path`, and `events_path` as debug/resume-only machine JSON.
 
 ## Fix Boundary
 

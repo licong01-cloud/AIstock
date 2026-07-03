@@ -4,7 +4,7 @@ Use this Claude Code command only for AIstock BUG/GitHub Issue work. Use docs, f
 
 ## Context Budget
 
-Read project rules once, then this command plus the issue task card/context pack. Do not read other scenario commands, full standards, quickstarts, module designs, or historical docs unless the user, BUG evidence, or task card explicitly requires it. After compaction/restart, run `resume` and read only the compact digest plus `task-card.md` unless a digest changed.
+Read project rules once, then this command plus the issue task card/context pack. Do not read other scenario commands, full standards, quickstarts, module designs, or historical docs unless the user, BUG evidence, or task card explicitly requires it. After compaction/restart, run `resume` and read only the compact digest plus `task-card.md` unless a digest changed. Treat machine JSON as debug/resume-only: do not open `state.json`, `events.jsonl`, `finish-plan.json`, `fix-ready.json`, runtime-state JSON, or dependency cache JSON during ordinary fixes unless a command failed or state recovery requires it.
 
 ## Start
 
@@ -15,7 +15,7 @@ python F:\Dev\AIstock\scripts/aistock_issue_workflow.py doctor
 - Existing BUG: `python F:\Dev\AIstock\scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode plan --create-worktree`.
 - New BUG: `python F:\Dev\AIstock\scripts/aistock_issue_workflow.py submit-bug --title "<title>" --module <module> --severity P1 --description "<description>" --create-github --create-fix-worktree --apply`.
 - If the command returns `workflow_gate=resume`, follow `next_command`; do not create another worktree.
-- Read `task_card_md`, Code Intelligence refs, and `context_pack_md` only when needed.
+- Read `task_card_md` first, Code Intelligence refs as needed, and `context_pack_md` only when needed. Treat `fix_ready_path`, `state_path`, and `events_path` as debug/resume-only machine JSON.
 
 ## Fix Boundary
 

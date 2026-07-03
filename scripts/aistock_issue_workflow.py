@@ -51,6 +51,7 @@ ARTIFACT_PATH_PATTERNS = (
 BUG_ID_RE = re.compile(r"\bBUG-(\d{3,})\b", re.IGNORECASE)
 OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr", "console"}
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
+PR_BODY_CODEGRAPH_TEST_LIMIT = 10
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
 SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
@@ -4355,6 +4356,11 @@ def build_task_card(
             "state_json": _repo_rel(state_path, root),
             "events_jsonl": _repo_rel(events_path, root),
         },
+        "machine_json_policy": {
+            "default_context": ["task-card.md", "compact stdout", "context-pack.md only when needed"],
+            "debug_only": ["state.json", "events.jsonl", "finish-plan.json", "fix-ready.json"],
+            "rule": "Do not read machine JSON artifacts during ordinary fixes unless a command failed or state recovery is required.",
+        },
         "problem": {
             "title": record.get("title"),
             "statement": context_pack.get("problem_statement"),
@@ -4453,6 +4459,7 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "",
         "## Artifacts",
         *[f"- {key}: `{value}`" for key, value in artifacts.items() if value],
+        "- machine JSON policy: debug/resume only; do not read `state.json`, `events.jsonl`, `finish-plan.json`, or `fix-ready.json` during ordinary fixes.",
         "",
         "## Code Intelligence",
         f"- status: `{code_intel.get('status') or 'unknown'}`",
@@ -5561,12 +5568,13 @@ def build_finish_plan(
         _write_json(finish_plan_path, {
             "bug_id": canonical_bug_id,
             "changed_files": changed,
-            "selected_validation": validation,
-            "pr_quality": pr_quality,
+            "selected_validation": _compact_validation_for_finish(validation),
+            "pr_quality": _compact_pr_quality_for_finish(pr_quality),
             "validation_evidence": evidence,
             "closure_ready": closure_ready,
-            "code_intelligence": code_intelligence_summary,
+            "code_intelligence": _compact_code_intelligence_for_finish(code_intelligence_summary, codegraph_tests),
             "h7_code_intelligence": h7_code_intelligence,
+            "artifact_policy": "compact_finish_plan_no_full_selected_validation_pr_quality_or_code_intelligence_payload",
         })
     elif finish_plan_path.exists():
         with contextlib.suppress(OSError):
@@ -5661,6 +5669,83 @@ def build_finish_plan(
     return payload
 
 
+def _codegraph_test_lines(tests: Iterable[Any], *, limit: int = PR_BODY_CODEGRAPH_TEST_LIMIT) -> list[str]:
+    normalized = [str(item).strip() for item in tests or [] if str(item).strip()]
+    if not normalized:
+        return ["- CodeGraph suggested tests: `none`"]
+    visible = normalized[:limit]
+    lines = [f"- CodeGraph suggested test: `{path}`" for path in visible]
+    omitted = len(normalized) - len(visible)
+    if omitted > 0:
+        lines.append(
+            f"- CodeGraph suggested tests omitted: `{omitted}` more; see `affected-tests.json` / task card artifacts."
+        )
+    return lines
+
+
+def _list_preview(items: Iterable[Any], *, limit: int = PR_BODY_CODEGRAPH_TEST_LIMIT) -> dict[str, Any]:
+    normalized = [str(item).strip() for item in items or [] if str(item).strip()]
+    visible = normalized[:limit]
+    return {
+        "count": len(normalized),
+        "preview": visible,
+        "omitted_count": max(0, len(normalized) - len(visible)),
+    }
+
+
+def _compact_code_intelligence_for_finish(
+    code_intelligence_summary: dict[str, Any],
+    tests: list[Any],
+) -> dict[str, Any]:
+    return {
+        "status": code_intelligence_summary.get("status"),
+        "context_ref": code_intelligence_summary.get("context_ref"),
+        "manifest_ref": code_intelligence_summary.get("manifest_ref"),
+        "affected_tests_ref": code_intelligence_summary.get("affected_tests_ref"),
+        "fallback_used": code_intelligence_summary.get("fallback_used"),
+        "fallback_reason": code_intelligence_summary.get("fallback_reason"),
+        "affected_tests_count": code_intelligence_summary.get("affected_tests_count"),
+        "affected_quality": code_intelligence_summary.get("affected_quality"),
+        "understand_anything_summary_ref": code_intelligence_summary.get("understand_anything_summary_ref"),
+        "suggested_tests_count": len(tests),
+        "suggested_tests_preview": [str(item) for item in tests[:PR_BODY_CODEGRAPH_TEST_LIMIT]],
+        "full_payload_inlined": False,
+    }
+
+
+def _compact_validation_for_finish(validation: dict[str, Any]) -> dict[str, Any]:
+    codegraph_tests = validation.get("codegraph_suggested_tests") or []
+    ownership = validation.get("ownership") if isinstance(validation.get("ownership"), dict) else {}
+    return {
+        "schema_version": validation.get("schema_version"),
+        "required_plans": validation.get("required_plans") or [],
+        "recommended_plans": validation.get("recommended_plans") or [],
+        "deferred_nightly_plans": validation.get("deferred_nightly_plans") or [],
+        "production_gates": validation.get("production_gates") or {},
+        "primary_modules": validation.get("primary_modules") or [],
+        "impacted_modules": validation.get("impacted_modules") or [],
+        "ownership": {
+            "matched_rule_count": len(ownership.get("matched_rules") or []),
+            "unmatched_file_count": len(ownership.get("unmatched_files") or []),
+            "risk_levels": ownership.get("risk_levels") or [],
+            "suggested_scope": _list_preview(ownership.get("suggested_scope") or []),
+        },
+        "codegraph_suggested_tests": _list_preview(codegraph_tests),
+        "full_payload_inlined": False,
+        "token_policy": "skip maps, ownership rule bodies, and full CodeGraph test lists stay in source artifacts only.",
+    }
+
+
+def _compact_pr_quality_for_finish(pr_quality: dict[str, Any]) -> dict[str, Any]:
+    scope = pr_quality.get("scope_check") if isinstance(pr_quality.get("scope_check"), dict) else {}
+    return {
+        "scope_check": _pick(scope, "status", "violations", "status_source"),
+        "selected_validation_inlined": False,
+        "llm_summary_inlined": False,
+        "full_payload_inlined": False,
+    }
+
+
 def render_pr_body(
     bug_id: str,
     record: dict[str, Any],
@@ -5690,7 +5775,7 @@ def render_pr_body(
         *[f"- `{plan}`" for plan in validation.get("deferred_nightly_plans") or ["none"]],
         "",
         "## Code intelligence",
-        *[f"- CodeGraph suggested test: `{path}`" for path in validation.get("codegraph_suggested_tests") or ["none"]],
+        *_codegraph_test_lines(validation.get("codegraph_suggested_tests") or []),
         f"- H7 readiness: `{code_intel.get('workflow_gate') or 'unknown'}`",
         f"- fallback_used: `{str(bool(code_intel.get('fallback_used'))).lower()}`",
         f"- readiness_next_command: `{code_intel.get('readiness_next_command') or 'not_required'}`",
@@ -6115,7 +6200,7 @@ def render_batch_pr_body(
         f"- context_ref: `{code_intelligence_summary.get('context_ref') or 'not_generated'}`",
         f"- affected_tests_ref: `{code_intelligence_summary.get('affected_tests_ref') or 'not_generated'}`",
         f"- fallback_used: `{str(bool(code_intelligence_summary.get('fallback_used'))).lower()}`",
-        *[f"- CodeGraph suggested test: `{path}`" for path in codegraph_tests or ["none"]],
+        *_codegraph_test_lines(codegraph_tests),
         "",
         "## Evidence",
         *[f"- {item}" for item in evidence or ["missing - run required validation before requesting merge"]],
