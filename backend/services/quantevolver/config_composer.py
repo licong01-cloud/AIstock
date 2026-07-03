@@ -2907,15 +2907,35 @@ class ConfigComposer:
                         hp["weight_decay"] = float(hp["weight_decay"])
 
                     pt_model_uri = hp.get("pt_model_uri")
+                    # GeneralPTNN.__init__ (and the LTR adapter) accept only trainer-level
+                    # params; every other hyperparameter is an architecture param for the
+                    # underlying nn.Module and MUST be routed through pt_model_kwargs.
+                    # Previously only the GRU/LSTM arch keys were routed, so Transformer
+                    # arch params (d_model/nhead/dim_feedforward) leaked into GeneralPTNN
+                    # top-level kwargs and raised TypeError. Route by trainer allowlist so
+                    # any built-in nn.Module's arch params pass through. Refs BUG-592.
+                    _general_ptnn_trainer_keys = {
+                        "n_epochs", "lr", "metric", "batch_size", "early_stop", "loss",
+                        "weight_decay", "optimizer", "n_jobs", "GPU", "seed", "use_amp",
+                        "gradient_accumulation_steps", "pin_memory", "prefetch_factor",
+                        "persistent_workers",
+                    } | _GENERAL_PTNN_LTR_HP_KEYS
                     pt_model_kwargs = {}
+                    # Keep legacy arch-key ordering first so existing GRU/LSTM/ALSTM
+                    # conf.yaml stays byte-stable (no regression).
                     for arch_key in ("d_feat", "hidden_size", "num_layers", "dropout"):
                         if arch_key in hp:
                             pt_model_kwargs[arch_key] = hp[arch_key]
 
                     for key, value in hp.items():
-                        if key in {"pt_model_uri", "d_feat", "hidden_size", "num_layers", "dropout"}:
+                        if key == "pt_model_uri" or key in pt_model_kwargs:
                             continue
-                        model_kwargs[key] = value
+                        if key in _general_ptnn_trainer_keys:
+                            model_kwargs[key] = value
+                        else:
+                            # Architecture param for the nn.Module (e.g. Transformer
+                            # d_model/nhead) -> pt_model_kwargs, not GeneralPTNN top-level.
+                            pt_model_kwargs[key] = value
 
                     if pt_model_uri:
                         model_kwargs["pt_model_uri"] = pt_model_uri

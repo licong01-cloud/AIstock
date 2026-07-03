@@ -1444,6 +1444,52 @@ def _custom_timeseries_lstm_model_info(training_hp=None):
     }
 
 
+def _builtin_transformer_model_info():
+    # Built-in qlib Transformer referenced via pt_model_uri (no custom code_text).
+    # Reaches the GeneralPTNN "no source code" branch in _compose_conf_yaml.
+    return {
+        "model_id": "__seed_Transformer_small_v1__",
+        "model_name": "Transformer",
+        "model_type": "PTNN",
+        "model_hyperparameters": {
+            "pt_model_uri": "qlib.contrib.model.pytorch_transformer_ts.Transformer",
+            "d_feat": 20,
+            "d_model": 64,
+            "nhead": 4,
+            "num_layers": 2,
+            "dropout": 0.1,
+        },
+        "model_training_hyperparameters": {
+            "n_epochs": 100,
+            "lr": 0.0002,
+            "batch_size": 2048,
+            "early_stop": 15,
+            "weight_decay": 0.0001,
+            "GPU": 0,
+        },
+    }
+
+
+def test_general_ptnn_builtin_transformer_arch_params_route_into_pt_model_kwargs():
+    # Regression for BUG-592: a built-in qlib Transformer seed carries arch params
+    # d_model/nhead that GeneralPTNN.__init__ does NOT accept. They must be routed
+    # through pt_model_kwargs to the nn.Module, never leaked as GeneralPTNN
+    # top-level kwargs (which previously raised TypeError -> qrun return code 1).
+    yaml_text = _base_yaml(model_info=_builtin_transformer_model_info())
+
+    assert "class: GeneralPTNN" in yaml_text
+    assert (
+        "pt_model_uri: qlib.contrib.model.pytorch_transformer_ts.Transformer"
+        in yaml_text
+    )
+    # Arch params routed into pt_model_kwargs (dict-literal form, quoted keys).
+    assert '"d_model": 64' in yaml_text
+    assert '"nhead": 4' in yaml_text
+    # And NOT emitted as GeneralPTNN top-level kwargs (12-space indented yaml key).
+    assert "\n            d_model:" not in yaml_text
+    assert "\n            nhead:" not in yaml_text
+
+
 def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     yaml_text = _base_yaml(model_info=_custom_timeseries_lstm_model_info())
 

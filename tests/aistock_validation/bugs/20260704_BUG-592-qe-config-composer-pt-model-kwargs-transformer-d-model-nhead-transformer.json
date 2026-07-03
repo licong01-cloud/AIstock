@@ -2,15 +2,18 @@
   "actual": "config_composer.py:2909-2917 路由模型超参进 pt_model_kwargs 时 arch-key 硬编码仅(d_feat,hidden_size,num_layers,dropout); 其余键含 Transformer 的 d_model/nhead 漏进 GeneralPTNN 顶层 kwargs -> GeneralPTNN.__init__ 无此形参 TypeError -> qrun 退码1 -> GPU loop failed. 证据: 失败 workspace conf.yaml (qe_workspace/qe_20260703_194846_b5e3/Loop1/conf.yaml L5276-5296) d_model:64/nhead:4 落顶层, pt_model_kwargs 仅 d_feat/num_layers/dropout. 库内可运行 Transformer 为自定义 model.py 路径不经此白名单; pt_model_uri+内置 Transformer 路径首次触发. 修复: pt_model_kwargs 路由改为仅 GeneralPTNN 已知 trainer 形参 + pt_model_uri 留顶层, 其余架构参数一律进 pt_model_kwargs.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260704_BUG-592-qe-config-composer-pt-model-kwargs-transformer-d-model-nhead-transformer.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-592",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "config_composer routes a qlib built-in Transformer seed (pt_model_uri=pytorch_transformer_ts.Transformer with d_model/nhead) so d_model/nhead land inside pt_model_kwargs, not GeneralPTNN top-level kwargs.",
+    "GRU/LSTM/ALSTM seed conf.yaml generation stays byte-equivalent (no regression to the existing arch keys d_feat/hidden_size/num_layers/dropout).",
+    "Unit test in backend/tests/unified_engine/test_qe_config_truth.py asserts Transformer arch params (d_model/nhead) route into pt_model_kwargs and out of GeneralPTNN top-level.",
+    "Run required verification (l0). Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-03T16:44:41.233390Z",
   "description": "config_composer.py:2909-2917 路由模型超参进 pt_model_kwargs 时 arch-key 硬编码仅(d_feat,hidden_size,num_layers,dropout); 其余键含 Transformer 的 d_model/nhead 漏进 GeneralPTNN 顶层 kwargs -> GeneralPTNN.__init__ 无此形参 TypeError -> qrun 退码1 -> GPU loop failed. 证据: 失败 workspace conf.yaml (qe_workspace/qe_20260703_194846_b5e3/Loop1/conf.yaml L5276-5296) d_model:64/nhead:4 落顶层, pt_model_kwargs 仅 d_feat/num_layers/dropout. 库内可运行 Transformer 为自定义 model.py 路径不经此白名单; pt_model_uri+内置 Transformer 路径首次触发. 修复: pt_model_kwargs 路由改为仅 GeneralPTNN 已知 trainer 形参 + pt_model_uri 留顶层, 其余架构参数一律进 pt_model_kwargs.",
@@ -33,12 +36,15 @@
   "last_seen_at": "2026-07-03T16:44:41.233390Z",
   "module": "quantevolver",
   "non_goals": [
-    "Do not restart production runtime services without explicit approval."
+    "Do not restart production runtime services without explicit approval.",
+    "Do not modify GeneralPTNN itself or qlib.",
+    "Do not diagnose the separate LSTM Loop2 1.5h failure here (tracked separately).",
+    "Do not touch the running CPU task qe_20260703_200736_0f79."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Register a Transformer seed (pt_model_uri=qlib.contrib.model.pytorch_transformer_ts.Transformer, model_hyperparameters incl d_model/nhead); run a QE custom-evo GPU loop; qrun exits code 1. Evidence conf.yaml: qe_workspace/qe_20260703_194846_b5e3/Loop1/conf.yaml L5276-5296 (d_model/nhead at GeneralPTNN top-level).",
   "required_verification": [
     "l0"
   ],
