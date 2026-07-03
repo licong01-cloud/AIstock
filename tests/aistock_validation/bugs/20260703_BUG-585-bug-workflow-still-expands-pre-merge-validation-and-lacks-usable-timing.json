@@ -2,7 +2,11 @@
   "actual": "BUG-584 had correct GitHub/close-sync mechanics but still included paper_v2_backend/simulation_core_l2/miniqmt_sim_stub_l3 style deep validation in PR evidence, postmortem token/local validation timing stayed unknown, and task-card.md was missing from the final workflow directory.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260703_BUG-585-bug-workflow-still-expands-pre-merge-validation-and-lacks-usable-timing.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-585",
@@ -20,6 +24,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260703-0aa9cd6da362",
       "timestamp": "2026-07-03T04:32:28.975612Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope expanded to workflow script/tests and client instructions to repair validation-budget/task-card/postmortem behavior.",
+      "timestamp": "2026-07-03T04:45:00Z"
     }
   ],
   "evidence_uris": [],

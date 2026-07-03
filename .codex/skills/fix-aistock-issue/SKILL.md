@@ -36,7 +36,7 @@ Use this skill only for AIstock BUG/GitHub Issue work. Do not use it for ordinar
 - Default PR gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, scope check, and production gates.
 - High-risk PR gate adds only safety-critical invariant/fail-closed/route/DDL/side-effect checks.
 - Use `aistock-validation-delegation` for broad UI/API/business-flow, cross-module, or LLM design-drift validation; report deferred modules so nightly can run one deduplicated deep pass for the day.
-- Full module matrices before merge require DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
+- Broad module matrices before merge require DDL, production writes, or an explicit user request. Order/cash/position/fail-closed bugs keep only the direct invariant or route safety test locally; run full module matrices through delegated VC/nightly.
 
 ## Finish / PR / Aftercare
 
@@ -44,7 +44,7 @@ Use this skill only for AIstock BUG/GitHub Issue work. Do not use it for ordinar
 2. Attach local-gate evidence with `run --mode pr --validation-evidence "<command> -> passed" --push --create-pr` when PR-ready.
 3. For workflow/client changes, run `workflow-smoke --changed-file <path> --module validation`.
 4. For merge aftercare, prefer `merge-finalizer` or route to `aistock-merge-aftercare`.
-5. Run `postmortem` compact output for timing/context summary; persist JSON only for diagnostics or `AISTOCK_WORKFLOW_ARTIFACTS=1`.
+5. Run `postmortem` compact output for timing/context summary; persist JSON only for diagnostics or `AISTOCK_WORKFLOW_ARTIFACTS=1`. Do not add full module suites to PR evidence just because they are recommended/deferred.
 
 ## Report
 
