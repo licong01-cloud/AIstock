@@ -1,6 +1,6 @@
 {
-  "last_allocated": 585,
+  "last_allocated": 587,
   "schema_version": "aistock_bug_id_allocator_v1",
-  "updated_at": "2026-07-03T04:32:37.706116Z",
+  "updated_at": "2026-07-03T07:50:28.489670Z",
   "updated_by": "aistock_issue_workflow.py"
 }
