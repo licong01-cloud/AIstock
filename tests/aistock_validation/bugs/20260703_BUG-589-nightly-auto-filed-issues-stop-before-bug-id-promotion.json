@@ -26,10 +26,10 @@
       "timestamp": "2026-07-03T10:04:48.588940Z"
     },
     {
-      "timestamp": "2026-07-03T10:35:07.275582Z",
-      "actor": "codex",
       "action": "scope_expand_for_workflow_contract_test",
-      "note": "Added focused workflow contract test to pin nightly BUG promotion behavior and artifact visibility."
+      "actor": "codex",
+      "note": "Added focused workflow contract test to pin nightly BUG promotion behavior and artifact visibility.",
+      "timestamp": "2026-07-03T10:35:07.275582Z"
     }
   ],
   "evidence_uris": [
@@ -38,8 +38,8 @@
   "expected": "When Nightly classifies a real_regression_candidate/actionable failure, the pipeline should automatically create an auditable BUG registry draft/BUG ID using a dedicated registry worktree path, or record a loud promotion blocking reason in the issue/artifact.",
   "first_seen_at": "2026-07-03T10:04:48.588944Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9d82989d7a60e3f86eecd6574944e43ec9ba3355",
+  "fixed_at": "2026-07-03T10:45:42.465109Z",
   "github_issue_number": 1863,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1863",
   "last_seen_at": "2026-07-03T10:04:48.588944Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1864",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -67,6 +68,9 @@
     "fingerprint": "3759af8aa826ab24f01c9552",
     "source_event_id": "FE-20260703-3759af8aa826"
   },
+  "validation_evidence": [
+    "PR #1864 CI all checks passed before merge"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
