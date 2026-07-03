@@ -29,8 +29,8 @@
   "expected": "Each Nightly L3 module/session should run independently or continue-on-error, aggregate per-module results, and fail the workflow only after all scheduled modules have produced pass/fail/skipped receipts.",
   "first_seen_at": "2026-07-03T09:30:34.523892Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "38e2a6f6c6d62e8fd38d8686bf699aa2c06ef801",
+  "fixed_at": "2026-07-03T09:56:04.036427Z",
   "github_issue_number": 1860,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1860",
   "last_seen_at": "2026-07-03T09:30:34.523892Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1861",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -58,6 +59,10 @@
     "fingerprint": "32e0990def047d05fc96d7b8",
     "source_event_id": "FE-20260703-32e0990def04"
   },
+  "validation_evidence": [
+    "PR #1861 CI rollup -> passed (14 success, 0 failed, 3 non-blocking skipped)",
+    "production_ddl_gate=noop; dependency gates=noop"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
