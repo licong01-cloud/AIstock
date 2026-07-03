@@ -37,7 +37,7 @@ python scripts/aistock_issue_workflow.py finish --bug-id BUG-XXX --plan-only
 python scripts/aistock_issue_workflow.py run --bug-id BUG-XXX --mode pr --validation-evidence "<command> -> passed" --push --create-pr
 ```
 
-For workflow/client changes, run `python scripts/aistock_issue_workflow.py workflow-smoke --changed-file <path> --module validation`. For merge aftercare, prefer `merge-finalizer` or route to `.claude/commands/aistock-merge-aftercare.md`. Use compact `postmortem` output; persist JSON only for diagnostics or `AISTOCK_WORKFLOW_ARTIFACTS=1`.
+For workflow/client changes, run `python scripts/aistock_issue_workflow.py workflow-smoke --changed-file <path> --module validation`. For merge aftercare, prefer `merge-finalizer` or route to `.claude/commands/aistock-merge-aftercare.md`. Use compact `postmortem` output; persist JSON only for diagnostics or `AISTOCK_WORKFLOW_ARTIFACTS=1`. Do not add full module suites to PR evidence just because they are recommended/deferred.
 
 ## Report
 
