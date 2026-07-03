@@ -36,8 +36,8 @@
   "expected": "BUG workflow emits a consistent compact task card, keeps required_verification aligned with the local gate, records deferred nightly modules separately, and postmortem reports command/artifact/time proxy metrics without requiring full module matrices per BUG.",
   "first_seen_at": "2026-07-03T04:32:28.975617Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6379a95f81882bc68d173b23172517d84a975507",
+  "fixed_at": "2026-07-03T05:50:19.577105Z",
   "github_issue_number": 1854,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1854",
   "last_seen_at": "2026-07-03T04:32:28.975617Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1856",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -64,6 +65,10 @@
     "fingerprint": "0aa9cd6da362cd6026ac5449",
     "source_event_id": "FE-20260703-0aa9cd6da362"
   },
+  "validation_evidence": [
+    "PR #1856 CI rollup -> passed (14 success, 0 failed, 3 non-blocking skipped)",
+    "production_ddl_gate=noop; dependency gates=noop"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
