@@ -250,6 +250,8 @@ jobs:
           }
 
       - name: nox -s paper_v2_l3
+        id: paper_v2_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s paper_v2_l3
         env:
@@ -258,16 +260,41 @@ jobs:
           PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-02'
 
       - name: nox -s qe_archive_l3
+        id: qe_archive_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s qe_archive_l3
         env:
           QE_ARCHIVE_L3_SKIP_UI: '1'
 
       - name: nox -s qe_read_l3
+        id: qe_read_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s qe_read_l3
         env:
           QE_READ_L3_SKIP_UI: '1'
+
+      - name: Summarize Nightly L3 session results
+        if: always()
+        env:
+          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
+          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
+          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
+        run: |
+          $outDir = "tmp/validation/nightly_l3"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $rows = @(
+            [pscustomobject]@{ session = "paper_v2_l3"; result = $env:PAPER_V2_L3_RESULT },
+            [pscustomobject]@{ session = "qe_archive_l3"; result = $env:QE_ARCHIVE_L3_RESULT },
+            [pscustomobject]@{ session = "qe_read_l3"; result = $env:QE_READ_L3_RESULT }
+          )
+          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
+          "# Nightly L3 session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          foreach ($row in $rows) {
+            "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          }
+          Get-Content -LiteralPath "$outDir/session-results.md"
 
       - name: Print validation history manifest
         if: always()
@@ -277,6 +304,32 @@ jobs:
             $count = ($files | Measure-Object).Count
             Write-Host "gate=validation_history_captured root=tests/aistock_validation/history file_count=$count manifest=omitted_on_success"
           }
+
+      - name: Upload Nightly L3 session results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fail Nightly L3 after all sessions complete
+        if: always()
+        env:
+          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
+          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
+          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
+        run: |
+          $failed = @()
+          if ($env:PAPER_V2_L3_RESULT -eq "failure") { $failed += "paper_v2_l3" }
+          if ($env:QE_ARCHIVE_L3_RESULT -eq "failure") { $failed += "qe_archive_l3" }
+          if ($env:QE_READ_L3_RESULT -eq "failure") { $failed += "qe_read_l3" }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::Nightly L3 sessions failed after complete run: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "Nightly L3 sessions completed without failure."
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
@@ -747,6 +800,14 @@ jobs:
           path: tmp/validation/code-intelligence/${{ github.run_id }}
         continue-on-error: true
 
+      - name: Download Nightly L3 session results
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+        continue-on-error: true
+
       - name: Compose nightly summary
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
         # include the dr-validate result line. full-summary.needs already
@@ -786,6 +847,15 @@ jobs:
 
           Run: ${RUN_URL}
           EOF
+          NIGHTLY_L3_RESULTS_MD="tmp/validation/nightly_l3/session-results.md"
+          if [ -f "${NIGHTLY_L3_RESULTS_MD}" ]; then
+            cat <<EOF >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+          ## Nightly L3 Session Matrix
+
+          EOF
+            cat "${NIGHTLY_L3_RESULTS_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          fi
           LLM_VALUE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-value-summary.md"
           if [ -f "${LLM_VALUE_MD}" ]; then
             cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
