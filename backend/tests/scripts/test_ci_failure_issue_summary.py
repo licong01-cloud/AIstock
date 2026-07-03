@@ -1093,6 +1093,31 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "if (!fs.existsSync(issuePayloadPath))" in script
     assert "No actionable Nightly issue created." in script
     assert "const payload = JSON.parse(fs.readFileSync(issuePayloadPath, 'utf8'));" in script
+    assert "github-issue-number.txt" in script
+
+
+def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["full-summary"]["steps"]
+    step = next(step for step in steps if step.get("name") == "Promote Nightly failure issue to BUG draft")
+    run = step["run"]
+
+    assert "github-issue-number.txt" in run
+    assert "promote-ci-issue" in run
+    assert "--summary-json tmp/validation/nightly_failure_issue/summary.json" in run
+    assert "--create-registry-worktree" in run
+    assert "--apply" in run
+    assert "--output tmp/validation/nightly_failure_issue/bug-promotion-full.json" in run
+    assert '"gh", "issue", "edit"' in run
+    assert "--body-file" in run
+    assert "bug-promotion-status.txt" in run
+    assert "workflow_gate=promotion_failed" in run
+    upload_step = next(step for step in steps if step.get("name") == "Upload Nightly BUG promotion context")
+    assert "nightly-bug-promotion-${{ github.run_id }}" == upload_step["with"]["name"]
+    assert "bug-promotion-status.txt" in upload_step["with"]["path"]
+    assert "bug-registry-pr-body.md" in upload_step["with"]["path"]
 
 
 def test_nightly_workflow_closes_stale_failure_issues_after_recovery() -> None:

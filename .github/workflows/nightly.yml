@@ -786,9 +786,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       issues: write
       actions: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -1007,7 +1008,121 @@ jobs:
                 body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
               });
             }
+            fs.writeFileSync(
+              'tmp/validation/nightly_failure_issue/github-issue-number.txt',
+              `${issueNumber}\n`,
+              'utf8',
+            );
             core.info(`Nightly failure issue: #${issueNumber}`);
+
+      - name: Promote Nightly failure issue to BUG draft
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AISTOCK_CANONICAL_ROOT: ${{ github.workspace }}
+          AISTOCK_WORKTREE_ROOT: ${{ runner.temp }}/aistock_nightly_bug_worktrees
+        run: |
+          mkdir -p "${AISTOCK_WORKTREE_ROOT}"
+          ISSUE_NUMBER_FILE="tmp/validation/nightly_failure_issue/github-issue-number.txt"
+          PROMOTION_STATUS="tmp/validation/nightly_failure_issue/bug-promotion-status.txt"
+          if [ ! -f "${ISSUE_NUMBER_FILE}" ]; then
+            echo "workflow_gate=skipped reason=nightly_issue_number_missing" | tee "${PROMOTION_STATUS}"
+            exit 0
+          fi
+          ISSUE_NUMBER="$(tr -d '[:space:]' < "${ISSUE_NUMBER_FILE}")"
+          if [ -z "${ISSUE_NUMBER}" ]; then
+            echo "workflow_gate=skipped reason=nightly_issue_number_empty" | tee "${PROMOTION_STATUS}"
+            exit 0
+          fi
+          export ISSUE_NUMBER
+          if python scripts/aistock_issue_workflow.py promote-ci-issue \
+            --issue "${ISSUE_NUMBER}" \
+            --summary-json tmp/validation/nightly_failure_issue/summary.json \
+            --create-registry-worktree \
+            --apply \
+            --output tmp/validation/nightly_failure_issue/bug-promotion-full.json \
+            --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
+            BUG_ID="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_id') or p.get('bug_id') or '')")"
+            if [ -n "${BUG_ID}" ]; then
+              BRANCH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_worktree_plan', {}).get('branch') or '')")"
+              REGISTRY_ROOT="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_root') or '')")"
+              BUG_PATH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_json_path') or '')")"
+              if [ -n "${REGISTRY_ROOT}" ] && [ -n "${BRANCH}" ]; then
+                git -C "${REGISTRY_ROOT}" push origin "${BRANCH}"
+                PR_BODY="tmp/validation/nightly_failure_issue/bug-registry-pr-body.md"
+                cat > "${PR_BODY}" <<EOF
+          Nightly failure intake generated BUG draft ${BUG_ID}.
+
+          - Source issue: #${ISSUE_NUMBER}
+          - BUG JSON: \`${BUG_PATH}\`
+          - Source run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - production_ddl_gate: \`noop\`
+          - production_frontend_dependency_gate: \`noop\`
+          - production_backend_dependency_gate: \`noop\`
+
+          This PR only persists the BUG registry draft; business-module fixes still require the standard issue workflow.
+          EOF
+                gh pr create \
+                  --repo "${{ github.repository }}" \
+                  --base main \
+                  --head "${BRANCH}" \
+                  --title "chore(nightly): register ${BUG_ID} from failure intake" \
+                  --body-file "${PR_BODY}"
+              fi
+              python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          issue = os.environ["ISSUE_NUMBER"]
+          payload = json.loads(Path("tmp/validation/nightly_failure_issue/bug-promotion-full.json").read_text(encoding="utf-8"))
+          bug_id = payload.get("submit_bug", {}).get("bug_id") or payload.get("bug_id")
+          bug_path = payload.get("submit_bug", {}).get("bug_json_path") or payload.get("bug_json_path")
+          branch = payload.get("submit_bug", {}).get("registry_worktree_plan", {}).get("branch")
+          body_json = subprocess.check_output(
+              ["gh", "issue", "view", issue, "--json", "body"],
+              text=True,
+              encoding="utf-8",
+          )
+          body = json.loads(body_json).get("body") or ""
+          replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry PR branch `{branch}`; business fix still requires standard workflow)."
+          body = body.replace(
+              "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
+              replacement,
+          )
+          if "## Nightly BUG Draft" not in body:
+              body += (
+                  "\n\n## Nightly BUG Draft\n\n"
+                  f"- BUG ID: `{bug_id}`\n"
+                  f"- BUG JSON draft: `{bug_path}`\n"
+                  f"- Registry branch: `{branch}`\n"
+                  "- Promotion source: `tmp/validation/nightly_failure_issue/bug-promotion-full.json`\n"
+              )
+          body_path = Path("tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md")
+          body_path.write_text(body, encoding="utf-8")
+          subprocess.check_call(["gh", "issue", "edit", issue, "--body-file", str(body_path)])
+          PY
+            fi
+            echo "workflow_gate=promoted issue=${ISSUE_NUMBER}" | tee "${PROMOTION_STATUS}"
+          else
+            echo "workflow_gate=promotion_failed issue=${ISSUE_NUMBER}" | tee "${PROMOTION_STATUS}"
+            exit 1
+          fi
+
+      - name: Upload Nightly BUG promotion context
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-bug-promotion-${{ github.run_id }}
+          path: |
+            tmp/validation/nightly_failure_issue/bug-promotion*.json
+            tmp/validation/nightly_failure_issue/bug-promotion-status.txt
+            tmp/validation/nightly_failure_issue/bug-registry-pr-body.md
+            tmp/validation/nightly_failure_issue/github-issue-number.txt
+            tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Close stale Nightly failure issues after recovery
         if: success()
