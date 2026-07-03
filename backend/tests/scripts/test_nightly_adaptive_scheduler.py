@@ -243,6 +243,34 @@ def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_eviden
     assert payload["llm_gate"] == "ready"
 
 
+def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
+    def fake_build(*args, **kwargs):
+        raise scheduler.llm_provider_adapter.ProviderAdapterError("deepseek_api inference failed status=429")
+
+    monkeypatch.setattr(scheduler.llm_provider_adapter, "build_nightly_scheduler_advice", fake_build)
+
+    output = tmp_path / "scheduler.json"
+    exit_code = scheduler.main(
+        [
+            "--provider",
+            "deepseek_api",
+            "--codegraph-freshness",
+            "fresh",
+            "--invoke-llm",
+            "--fail-on-llm-error",
+            "--output",
+            str(output),
+        ]
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 2
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["llm_gate"] == "degraded"
+    assert payload["llm_invoked"] is False
+    assert "429" in payload["error"]
+
+
 def test_nightly_adaptive_scheduler_includes_code_intelligence_refs_in_public_artifact(
     tmp_path: Path,
 ) -> None:
@@ -315,10 +343,12 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "selected-plans.json" in workflow
     assert "Build Nightly LLM design drift audit" in workflow
     assert "scripts/nightly_design_drift_audit.py --json" in workflow
-    assert "--invoke-llm `\n            --run-id" in workflow
+    assert "--invoke-llm `\n            --fail-on-llm-error `\n            --run-id" in workflow
+    assert "--fail-on-llm-error" in workflow
     assert "design-drift-audit.json" in workflow
     assert "design-drift-audit.md" in workflow
     assert "LLM design drift audit failed; retrying deterministic fallback." not in workflow
+    assert "retrying deterministic fallback" not in workflow
     assert "Build Nightly LLM silent degradation audit" in workflow
     assert "scripts/nightly_silent_degradation_audit.py --json" in workflow
     assert "silent-degradation-audit.json" in workflow

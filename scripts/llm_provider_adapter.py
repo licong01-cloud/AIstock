@@ -3196,7 +3196,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.func(args))
     except (ProviderAdapterError, DeepSeekConfigError) as exc:
-        message = redact_secret_text(str(exc))
+        message = _redact_llm_error(exc)
         if args.json:
             print(json.dumps({"gate": "failed", "error": message}, ensure_ascii=False), file=sys.stderr)
         else:

@@ -462,21 +462,15 @@ jobs:
           conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
             --module validation.runner `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/llm-test-plan-advice.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM test-plan advisor failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
-              --provider deterministic `
-              --changed-file scripts/llm_provider_adapter.py `
-              --changed-file scripts/ci_failure_issue_summary.py `
-              --module validation.runner `
-              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
-              --output "$outDir/llm-test-plan-advice.json"
+            Write-Error "LLM test-plan advisor failed while DeepSeek participation is required. See llm-test-plan-advice.json or job logs."
+            exit 1
           }
 
       - name: Build LLM nightly scheduler advice smoke
@@ -489,6 +483,7 @@ jobs:
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
             --codegraph-freshness fresh `
@@ -496,16 +491,8 @@ jobs:
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM nightly scheduler advisor failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
-              --provider deterministic `
-              --changed-file scripts/llm_provider_adapter.py `
-              --recent-failure-module validation.runner `
-              --codegraph-freshness fresh `
-              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
-              --resource-budget-seconds 900 `
-              --output "$outDir/llm-nightly-scheduler-advice.json"
+            Write-Error "LLM nightly scheduler advisor failed while DeepSeek participation is required. See llm-nightly-scheduler-advice.json or job logs."
+            exit 1
           }
 
       - name: Build LLM nightly discovery hypotheses
@@ -515,6 +502,7 @@ jobs:
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --input-pack "$outDir/discovery-input-pack.json" `
             --codegraph-freshness fresh `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
@@ -531,25 +519,8 @@ jobs:
             --output "$outDir/llm-hypotheses.json" `
             --selected-plans-output "$outDir/selected-plans.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM nightly discovery hypothesis failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
-              --provider deterministic `
-              --input-pack "$outDir/discovery-input-pack.json" `
-              --codegraph-freshness fresh `
-              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
-              --allowed-plan-key l0 `
-              --allowed-plan-key validation_module_registry_l0 `
-              --allowed-plan-key validation_catalog_integrity `
-              --allowed-plan-key validation_center_backend `
-              --allowed-plan-key validation_workflow_automation `
-              --allowed-plan-key validation_discovery_issue_intake_readonly `
-              --allowed-plan-key workflow_discovery_root_clean_guard `
-              --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
-              --allowed-plan-key validation_center_discovery_run_record_integrity `
-              --allowed-plan-key validation_semantic_drift_discovery_readonly `
-              --output "$outDir/llm-hypotheses.json" `
-              --selected-plans-output "$outDir/selected-plans.json"
+            Write-Error "LLM nightly discovery hypothesis failed while DeepSeek participation is required. See llm-hypotheses.json or job logs."
+            exit 1
           }
 
       - name: Run selected readonly discovery plans
@@ -636,6 +607,7 @@ jobs:
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
@@ -643,16 +615,8 @@ jobs:
             --output "$outDir/llm-nightly-adaptive-scheduler.json" `
             --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM adaptive scheduler failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
-              --provider deterministic `
-              --changed-files-file $changedFile `
-              --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
-              --code-intelligence-json "$outDir/code-intelligence-summary.json" `
-              --resource-budget-seconds 900 `
-              --output "$outDir/llm-nightly-adaptive-scheduler.json" `
-              --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+            Write-Error "LLM adaptive scheduler failed while DeepSeek participation is required. See llm-nightly-adaptive-scheduler.json or job logs."
+            exit 1
           }
           if (Test-Path -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md") {
             Get-Content -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -685,6 +649,7 @@ jobs:
           conda run -n AIstock python scripts/nightly_design_drift_audit.py --json `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --run-id "${{ github.run_id }}" `
             --llm-budget-tier expanded_80k_40k `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `
@@ -701,6 +666,7 @@ jobs:
           conda run -n AIstock python scripts/nightly_silent_degradation_audit.py --json `
             --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --run-id "${{ github.run_id }}" `
             --llm-budget-tier expanded_80k_40k `
             --code-intelligence-json "$outDir/code-intelligence-summary.json" `

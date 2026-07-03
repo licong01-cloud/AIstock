@@ -1,6 +1,11 @@
 {
   "actual": "Nightly LLM scheduling/advice steps use --invoke-llm with deepseek_api, but several paths still allow fallback_on_llm_error by default. If DeepSeek/GitHub Models invocation fails, artifacts can show deterministic workflow_gate=ready while llm_invoked=false/degraded. This makes the pipeline look healthy even when the intended LLM participation did not happen. Expected: in nightly paths that explicitly require DeepSeek/LLM participation, provider invocation failures must be loud (non-zero) or at least workflow_gate blocked; deterministic fallback remains allowed only for explicit smoke/dry-run paths.",
   "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/llm_provider_adapter.py",
+    "scripts/nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "tests/aistock_validation/bugs/20260703_BUG-590-nightly-deepseek-required-llm-steps-can-fall-back-to-deterministic-ready.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260703-a2db79102e5c",
       "timestamp": "2026-07-03T10:52:24.710779Z"
+    },
+    {
+      "timestamp": "2026-07-03T10:54:20.720149Z",
+      "actor": "codex",
+      "action": "scope_expand_for_llm_fail_closed_fix",
+      "note": "Expanded scope to nightly workflow, LLM adapter, adaptive scheduler, and focused contract tests for required-LLM fail-closed behavior."
     }
   ],
   "evidence_uris": [],
@@ -40,7 +51,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "guardrail_changed_files"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
