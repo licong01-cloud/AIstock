@@ -91,9 +91,9 @@
       "backend/tests/research_assistant/**"
     ],
     "ui_issue": true,
-    "ui_route": "/cards",
+    "ui_route": "/research-assistant/chat",
     "ui_routes": [
-      "/cards"
+      "/research-assistant/chat"
     ],
     "visual_acceptance_required": true
   },

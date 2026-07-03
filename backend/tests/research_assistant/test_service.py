@@ -4552,6 +4552,57 @@ def _chat_approval_proposal(
     return svc, result, proposal
 
 
+def _mark_chat_approval_production_sensitive(
+    svc: ResearchAssistantService,
+    proposal: dict[str, object],
+) -> dict[str, object]:
+    approval_id = str(proposal["approval_id"])
+    action_proposal_id = str(proposal["action_proposal_id"])
+    updated_proposal = svc.repository.update_record(
+        "action_proposals",
+        action_proposal_id,
+        {"risk_level": "production_sensitive", "side_effect_level": "production_sensitive"},
+    )
+    approval = svc.repository.get_record("approvals", approval_id)
+    context = dict(approval.get("approval_context_json") or {})
+    context.update(
+        {
+            "risk_level": "production_sensitive",
+            "side_effect_level": "production_sensitive",
+            "required_approval_level": "L2",
+        }
+    )
+    svc.repository.update_record(
+        "approvals",
+        approval_id,
+        {"risk_level": "production_sensitive", "approval_context_json": context},
+    )
+    return updated_proposal
+
+
+def _assert_l2_inline_option_blocked(
+    svc: ResearchAssistantService,
+    blocked: dict[str, object],
+    *,
+    approval_id: str,
+    action_proposal_id: str,
+    decision_id: str,
+) -> None:
+    approval = svc.repository.get_record("approvals", approval_id)
+    action = svc.repository.get_record("action_proposals", action_proposal_id)
+    cards = blocked["cards"]
+    decision_request = blocked["decision_request"]
+    assert approval["status"] == "pending"
+    assert action["status"] == "approval_required"
+    assert cards["approval_confirmation"]["status"] == "blocked"
+    assert cards["approval_confirmation"]["reason_code"] == "approval_confirmation_l2_requires_inline_option"
+    assert cards["mcp_execution_result"]["executed"] is False
+    assert decision_request["kind"] == "approve_action"
+    assert decision_request["decision_id"] == decision_id
+    assert decision_request["approve_requires_option"] is True
+    assert cards["approval_confirmation"]["message"] == "该操作为生产敏感级，请在下方选择『确认执行』选项（方向键选中后回车或点击），不接受纯文字确认。"
+
+
 def test_bug_583_multiturn_referent_followup_uses_agent_history_not_hard_clarification() -> None:
     fake = ReferentResolutionLlmClient()
     svc = _raw_service(fake)
@@ -4759,16 +4810,122 @@ def test_chat_turn_natural_language_affirmation_rejects_multiple_pending_approva
     assert rejected["cards"]["mcp_execution_result"]["executed"] is False
 
 
-def test_chat_turn_l2_natural_language_approval_uses_inline_gate_not_token() -> None:
-    svc, result, proposal = _chat_approval_proposal([_qe_template_materialize_call()])
+@pytest.mark.parametrize("approval_message", ["同意执行", "ok", "好"])
+def test_chat_turn_l2_freetext_affirmation_requires_inline_option_not_execute(approval_message: str) -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    proposal = _mark_chat_approval_production_sensitive(svc, proposal)
+    approval_id = str(proposal["approval_id"])
+    decision_id = f"dec_approve_action_{approval_id}"
+
+    blocked = svc.chat_turn(ChatTurnRequest(message=approval_message, conversation_id=str(result["conversation"]["conversation_id"]), developer_diagnostics=True))
+
+    approval = svc.repository.get_record("approvals", approval_id)
+    assert approval["required_confirmation_text"] == "CONFIRM_QE_DRAFT"
+    _assert_l2_inline_option_blocked(
+        svc,
+        blocked,
+        approval_id=approval_id,
+        action_proposal_id=str(proposal["action_proposal_id"]),
+        decision_id=decision_id,
+    )
+    assert "CONFIRM_QE_DRAFT" not in blocked["assistant_message"]["content_text"]
+
+
+def test_chat_turn_l2_decision_text_affirmation_requires_inline_option_not_execute() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    proposal = _mark_chat_approval_production_sensitive(svc, proposal)
+    approval_id = str(proposal["approval_id"])
+    decision_id = f"dec_approve_action_{approval_id}"
+
+    blocked = svc.chat_turn(
+        ChatTurnRequest(
+            message="同意执行",
+            conversation_id=str(result["conversation"]["conversation_id"]),
+            decision_id=decision_id,
+            developer_diagnostics=True,
+        )
+    )
+
+    _assert_l2_inline_option_blocked(
+        svc,
+        blocked,
+        approval_id=approval_id,
+        action_proposal_id=str(proposal["action_proposal_id"]),
+        decision_id=decision_id,
+    )
+
+
+def test_chat_turn_l2_legacy_confirmation_text_requires_inline_option_not_execute() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    proposal = _mark_chat_approval_production_sensitive(svc, proposal)
+    approval_id = str(proposal["approval_id"])
+    decision_id = f"dec_approve_action_{approval_id}"
+    approval = svc.repository.get_record("approvals", approval_id)
+
+    blocked = svc.chat_turn(
+        ChatTurnRequest(
+            message="CONFIRM_QE_DRAFT",
+            conversation_id=str(result["conversation"]["conversation_id"]),
+            confirm_approval_id=approval_id,
+            confirmation_text=str(approval["required_confirmation_text"]),
+            developer_diagnostics=True,
+        )
+    )
+
+    _assert_l2_inline_option_blocked(
+        svc,
+        blocked,
+        approval_id=approval_id,
+        action_proposal_id=str(proposal["action_proposal_id"]),
+        decision_id=decision_id,
+    )
+
+
+def test_chat_turn_l2_option_select_approval_executes() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    proposal = _mark_chat_approval_production_sensitive(svc, proposal)
+    approval_id = str(proposal["approval_id"])
+    decision_id = f"dec_approve_action_{approval_id}"
+
+    confirmed = svc.chat_turn(
+        ChatTurnRequest(
+            message="确认执行",
+            conversation_id=str(result["conversation"]["conversation_id"]),
+            decision_id=decision_id,
+            decision_option_id="approve",
+            developer_diagnostics=True,
+        )
+    )
+
+    approval = svc.repository.get_record("approvals", approval_id)
+    assert approval["status"] == "approved"
+    assert approval["approval_context_json"]["chat_inline_decision"]["decision_id"] == decision_id
+    assert approval["approval_context_json"]["chat_inline_decision"]["decision_option_id"] == "approve"
+    assert approval["approval_context_json"]["chat_inline_decision"]["confirmation_source"] == "decision_request_option"
+    events = svc.list_records("task_events", filters={"task_id": approval["task_id"]}, limit=20)["items"]
+    assert any(
+        event["event_type"] == "approved"
+        and event["payload_json"]["chat_inline_decision"]["decision_id"] == decision_id
+        and event["payload_json"]["chat_inline_decision"]["decision_option_id"] == "approve"
+        for event in events
+    )
+    assert confirmed["cards"]["approval_confirmation"]["status"] == "executed"
+    assert confirmed["cards"]["mcp_execution_result"]["executed"] is True
+    assert confirmed["cards"]["mcp_execution_result"]["triggered_by_approval"] is True
+
+
+def test_chat_turn_l2_freetext_rejection_still_rejects_without_execution() -> None:
+    svc, result, proposal = _chat_approval_proposal()
+    proposal = _mark_chat_approval_production_sensitive(svc, proposal)
     approval_id = str(proposal["approval_id"])
 
-    confirmed = svc.chat_turn(ChatTurnRequest(message="同意执行", conversation_id=str(result["conversation"]["conversation_id"]), developer_diagnostics=True))
+    rejected = svc.chat_turn(ChatTurnRequest(message="取消，不执行", conversation_id=str(result["conversation"]["conversation_id"]), developer_diagnostics=True))
 
-    assert svc.repository.get_record("approvals", approval_id)["status"] == "approved"
-    assert proposal["required_confirmation_text"] == "CONFIRM_QE_MATERIALIZE"
-    assert confirmed["cards"]["approval_confirmation"]["confirmation_source"] == "user_natural_language_affirmation"
-    assert confirmed["cards"]["mcp_execution_result"]["triggered_by_approval"] is True
+    approval = svc.repository.get_record("approvals", approval_id)
+    assert approval["status"] == "rejected"
+    assert approval["approval_text"] == "取消，不执行"
+    assert rejected["cards"]["approval_confirmation"]["status"] == "rejected"
+    assert rejected["cards"]["mcp_execution_result"]["executed"] is False
 
 
 def test_chat_turn_agent_tool_output_cannot_self_approve_without_user_decision() -> None:

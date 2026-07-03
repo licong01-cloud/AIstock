@@ -732,6 +732,7 @@ export type AssistantDecisionRequest = JsonObject & {
   prompt_text: string;
   options: AssistantDecisionOption[];
   allow_free_text: boolean;
+  approve_requires_option?: boolean;
   pending_action?: (JsonObject & {
     server_key?: string;
     tool_name?: string;

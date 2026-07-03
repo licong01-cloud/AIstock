@@ -1047,7 +1047,11 @@ function InlineDecisionBar({
           ))}
         </div>
       ) : null}
-      {decision.allow_free_text ? <p>也可以直接在输入框用自然语言回复。</p> : null}
+      {decision.approve_requires_option ? (
+        <p>生产敏感审批必须选择内联选项；拒绝仍可直接输入自然语言。</p>
+      ) : decision.allow_free_text ? (
+        <p>也可以直接在输入框用自然语言回复。</p>
+      ) : null}
     </div>
   );
 }

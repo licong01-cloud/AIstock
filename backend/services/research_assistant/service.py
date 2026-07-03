@@ -3354,7 +3354,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         return None
 
     @staticmethod
-    def _approval_requires_explicit_token(approval: dict[str, Any], proposal: dict[str, Any] | None) -> bool:
+    def _approval_requires_inline_option_select(approval: dict[str, Any], proposal: dict[str, Any] | None) -> bool:
         context = ResearchAssistantService._approval_context(approval)
         if str(context.get("required_approval_level") or "").upper() == "L2":
             return True
@@ -3396,6 +3396,10 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
     @staticmethod
     def _decision_option_is_approval(option_id: str | None) -> bool:
         return str(option_id or "").strip().lower() in {"approve", "execute", "yes", "confirm", "option_approve"}
+
+    @staticmethod
+    def _decision_option_is_inline_approval_select(option_id: str | None) -> bool:
+        return str(option_id or "").strip().lower() == "approve"
 
     @staticmethod
     def _decision_option_is_rejection(option_id: str | None) -> bool:
@@ -3492,6 +3496,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 {"id": "reject", "label": "取消", "description": "拒绝本次 pending_action；不会执行。"},
             ],
             "allow_free_text": True,
+            "approve_requires_option": self._approval_requires_inline_option_select(approval, proposal),
             "pending_action": self._pending_action_from_proposal(proposal, approval),
         }
 
@@ -3552,6 +3557,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
         approval_id: str | None = None,
         action_proposal_id: str | None = None,
         expected_confirmation_text: str | None = None,
+        operator_action: str | None = None,
     ) -> dict[str, Any]:
         del expected_confirmation_text
         return {
@@ -3561,7 +3567,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "approval_id": approval_id,
             "action_proposal_id": action_proposal_id,
             "message": message,
-            "operator_action": "请在同一对话中自然语言确认或取消；如存在多个待审批动作，请带上 decision_id 或 approval_id。",
+            "operator_action": operator_action or "请在同一对话中自然语言确认或取消；如存在多个待审批动作，请带上 decision_id 或 approval_id。",
         }
 
     def _required_confirmation_text_for_chat_approval(
@@ -3769,6 +3775,40 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             )
         return approval, proposal, None
 
+    def _block_chat_approval_requires_inline_option(
+        self,
+        data: ChatTurnRequest,
+        conversation_id: str,
+        task: dict[str, Any],
+        user_message: dict[str, Any],
+        dialogue_intent: DialogueIntent,
+        mode_decision: ModeDecision,
+        *,
+        approval: dict[str, Any],
+        proposal: dict[str, Any],
+    ) -> dict[str, Any]:
+        approval_id = str(approval.get("approval_id") or "")
+        action_proposal_id = str(proposal.get("action_proposal_id") or "")
+        guidance = "该操作为生产敏感级，请在下方选择『确认执行』选项（方向键选中后回车或点击），不接受纯文字确认。"
+        error = self._approval_confirmation_error(
+            reason_code="approval_confirmation_l2_requires_inline_option",
+            message=guidance,
+            approval_id=approval_id,
+            action_proposal_id=action_proposal_id,
+            operator_action=guidance,
+        )
+        return self._chat_approval_response(
+            data,
+            conversation_id,
+            task,
+            user_message,
+            dialogue_intent,
+            mode_decision,
+            approval=approval,
+            proposal=proposal,
+            error=error,
+        )
+
     def _maybe_handle_chat_approval_confirmation(
         self,
         *,
@@ -3834,6 +3874,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                     confirmation_text=self._chat_approval_confirmation_text(approval, "reject", data.confirmation_text or data.message),
                     confirmation_source="decision_request_rejection" if data.decision_id or data.decision_option_id else "user_natural_language_rejection",
                 )
+            if self._approval_requires_inline_option_select(approval, proposal) and not self._decision_option_is_inline_approval_select(data.decision_option_id):
+                return self._block_chat_approval_requires_inline_option(
+                    data,
+                    conversation_id,
+                    task,
+                    user_message,
+                    dialogue_intent,
+                    mode_decision,
+                    approval=approval,
+                    proposal=proposal,
+                )
             return self._consume_and_execute_chat_approval(
                 data,
                 conversation_id,
@@ -3878,6 +3929,17 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
                 proposal=proposal,
                 confirmation_text=self._chat_approval_confirmation_text(approval, "reject", data.message),
                 confirmation_source="user_natural_language_rejection",
+            )
+        if self._approval_requires_inline_option_select(approval, proposal):
+            return self._block_chat_approval_requires_inline_option(
+                data,
+                conversation_id,
+                task,
+                user_message,
+                dialogue_intent,
+                mode_decision,
+                approval=approval,
+                proposal=proposal,
             )
         return self._consume_and_execute_chat_approval(
             data,
@@ -4027,6 +4089,8 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             },
         }
         if error:
+            if approval is not None and proposal is not None and error.get("reason_code") == "approval_confirmation_l2_requires_inline_option":
+                cards["decision_request"] = self._decision_request_for_approval(approval, proposal)
             assistant_text = (
                 "审批确认未执行："
                 f"reason_code={error['reason_code']}; "
@@ -4165,7 +4229,7 @@ class ResearchAssistantService(ResearchAssistantExecutionMixin):
             "mode_decision": mode_decision_json,
             "context_health": {"show_badge": False},
             "cards": self._public_chat_cards(cards, developer_diagnostics=data.developer_diagnostics),
-            "decision_request": None,
+            "decision_request": cards.get("decision_request") if isinstance(cards.get("decision_request"), dict) else None,
         }
 
     def seed_catalogs(self) -> dict[str, Any]:
