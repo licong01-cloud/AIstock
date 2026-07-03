@@ -1354,12 +1354,32 @@ LLM_USAGE_ARTIFACTS = (
     ("guarded_rollout", "llm-guarded-rollout-gate.json"),
 )
 
+REQUIRED_LLM_USAGE_STEPS = frozenset(
+    {
+        "test_plan_advice",
+        "scheduler_advice",
+        "discovery_hypotheses",
+        "adaptive_scheduler",
+        "design_drift_audit",
+        "silent_degradation_audit",
+    }
+)
+
 
 def _optional_int(value: Any) -> int | None:
     try:
         if value is None or value == "":
             return None
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -1384,6 +1404,30 @@ def _usage_from_evidence(evidence: dict[str, Any]) -> tuple[dict[str, int | None
     return {"prompt_units": None, "completion_units": None, "total_units": None}, False
 
 
+def _usage_duration(payload: dict[str, Any], evidence: dict[str, Any]) -> tuple[float | None, str | None]:
+    candidates = (
+        ("llm_invocation_evidence.duration_seconds", evidence.get("duration_seconds")),
+        ("llm_invocation_evidence.elapsed_seconds", evidence.get("elapsed_seconds")),
+        ("duration_seconds", payload.get("duration_seconds")),
+        ("elapsed_seconds", payload.get("elapsed_seconds")),
+        ("timing.duration_seconds", _mapping(payload.get("timing")).get("duration_seconds")),
+        ("timing.elapsed_seconds", _mapping(payload.get("timing")).get("elapsed_seconds")),
+        (
+            "timing_summary.known_duration_seconds",
+            _mapping(payload.get("timing_summary")).get("known_duration_seconds"),
+        ),
+        (
+            "timing_summary.inferred_elapsed_seconds",
+            _mapping(payload.get("timing_summary")).get("inferred_elapsed_seconds"),
+        ),
+    )
+    for source, value in candidates:
+        duration = _optional_float(value)
+        if duration is not None and duration >= 0:
+            return round(duration, 3), source
+    return None, None
+
+
 def _usage_missing_reason(*, payload: dict[str, Any], evidence: dict[str, Any], invoked: bool) -> str | None:
     if not evidence:
         return "llm_invocation_evidence_missing"
@@ -1402,6 +1446,7 @@ def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any
     reason = str(evidence.get("reason") or "")
     attempted = invoked or bool(evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint")) or reason.endswith("_failed_fallback")
     units, usage_available = _usage_from_evidence(evidence)
+    duration_seconds, timing_source = _usage_duration(payload, evidence)
     total_units = units.get("total_units")
     if total_units is None and units.get("prompt_units") is not None and units.get("completion_units") is not None:
         total_units = int(units["prompt_units"] or 0) + int(units["completion_units"] or 0)
@@ -1413,6 +1458,7 @@ def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any
     return {
         "step": step,
         "artifact": _repo_rel(artifact_path, root),
+        "required_llm": step in REQUIRED_LLM_USAGE_STEPS,
         "schema_version": payload.get("schema_version"),
         "provider": evidence.get("provider") or payload.get("effective_provider") or payload.get("provider"),
         "model": evidence.get("model") or payload.get("effective_model") or payload.get("model"),
@@ -1428,12 +1474,26 @@ def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any
         "prompt_units": units.get("prompt_units"),
         "completion_units": units.get("completion_units"),
         "total_units": units.get("total_units"),
+        "duration_seconds": duration_seconds,
+        "timing_source": timing_source,
         "advice_consumed": bool(consumption.get("advice_consumed") or payload.get("advice_consumed")),
         "selected_plan_count": len(selected_plan_keys),
     }
 
 
 def _aggregate_usage_records(records: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    seen_required_steps = {str(item.get("step")) for item in records if item.get("required_llm")}
+    required_missing_steps = sorted(
+        REQUIRED_LLM_USAGE_STEPS
+        - {str(item.get("step")) for item in records if item.get("required_llm") and item.get("invoked")}
+    )
+    required_artifact_missing_steps = sorted(REQUIRED_LLM_USAGE_STEPS - seen_required_steps)
+    required_usage_missing_steps = sorted(
+        str(item.get("step"))
+        for item in records
+        if item.get("required_llm") and item.get("attempted") and not item.get("usage_available")
+    )
+    duration_records = [item for item in records if _optional_float(item.get("duration_seconds")) is not None]
     totals = {
         "record_count": len(records),
         "invoked_count": sum(1 for item in records if item.get("invoked")),
@@ -1443,6 +1503,30 @@ def _aggregate_usage_records(records: list[dict[str, Any]]) -> tuple[dict[str, A
         "prompt_units": sum(_optional_int(item.get("prompt_units")) or 0 for item in records),
         "completion_units": sum(_optional_int(item.get("completion_units")) or 0 for item in records),
         "total_units": sum(_optional_int(item.get("total_units")) or 0 for item in records),
+        "duration_available_count": len(duration_records),
+        "total_duration_seconds": round(sum(_optional_float(item.get("duration_seconds")) or 0.0 for item in records), 3),
+        "required_invocation_expected_count": len(REQUIRED_LLM_USAGE_STEPS),
+        "required_invocation_record_count": sum(1 for item in records if item.get("required_llm")),
+        "required_invocation_invoked_count": sum(
+            1 for item in records if item.get("required_llm") and item.get("invoked")
+        ),
+        "required_invocation_missing_count": len(required_missing_steps),
+        "required_invocation_missing_steps": required_missing_steps,
+        "required_artifact_missing_count": len(required_artifact_missing_steps),
+        "required_artifact_missing_steps": required_artifact_missing_steps,
+        "required_usage_missing_count": len(required_usage_missing_steps),
+        "required_usage_missing_steps": required_usage_missing_steps,
+        "slowest_steps": [
+            {
+                "step": str(item.get("step") or "unknown"),
+                "duration_seconds": _optional_float(item.get("duration_seconds")) or 0.0,
+            }
+            for item in sorted(
+                duration_records,
+                key=lambda value: _optional_float(value.get("duration_seconds")) or 0.0,
+                reverse=True,
+            )[:3]
+        ],
         "limit_enforced": False,
     }
     grouped: dict[str, dict[str, Any]] = {}
@@ -1562,10 +1646,13 @@ def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
         f"- total_units: `{totals.get('total_units', 0)}`",
         f"- prompt_units: `{totals.get('prompt_units', 0)}`",
         f"- completion_units: `{totals.get('completion_units', 0)}`",
+        f"- duration_available_steps: `{totals.get('duration_available_count', 0)}`",
+        f"- total_duration_seconds: `{totals.get('total_duration_seconds', 0)}`",
+        f"- required_llm_health: `expected={totals.get('required_invocation_expected_count', 0)}, invoked={totals.get('required_invocation_invoked_count', 0)}, missing={totals.get('required_invocation_missing_count', 0)}, artifact_missing={totals.get('required_artifact_missing_count', 0)}, usage_missing={totals.get('required_usage_missing_count', 0)}`",
         f"- value_context: `advice_consumed={bool(value.get('advice_consumed'))}, advice_changed_plan={bool(value.get('advice_changed_plan'))}, high_value_candidates={value.get('high_value_candidate_count', 0)}, issue_payloads={value.get('issue_payload_ready_count', 0)}`",
         "",
-        "| step | provider | model | attempted | invoked | usage | total_units | missing_reason |",
-        "|---|---|---|---|---|---|---:|---|",
+        "| step | required | provider | model | attempted | invoked | usage | total_units | duration_s | missing_reason |",
+        "|---|---|---|---|---|---|---|---:|---:|---|",
     ]
     for item in payload.get("records") or []:
         if not isinstance(item, dict):
@@ -1575,17 +1662,34 @@ def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
             + " | ".join(
                 [
                     str(item.get("step") or "unknown"),
+                    str(bool(item.get("required_llm"))),
                     str(item.get("provider") or "unknown"),
                     str(item.get("model") or "unknown"),
                     str(bool(item.get("attempted"))),
                     str(bool(item.get("invoked"))),
                     str(bool(item.get("usage_available"))),
                     str(item.get("total_units") if item.get("total_units") is not None else "-"),
+                    str(item.get("duration_seconds") if item.get("duration_seconds") is not None else "-"),
                     str(item.get("usage_missing_reason") or "-"),
                 ]
             )
             + " |"
         )
+    missing_required = totals.get("required_invocation_missing_steps") or []
+    missing_artifacts = totals.get("required_artifact_missing_steps") or []
+    slowest_steps = totals.get("slowest_steps") or []
+    if missing_required:
+        lines.append("")
+        lines.append("missing_required_llm_steps: `" + ", ".join(str(item) for item in missing_required) + "`")
+    if missing_artifacts:
+        lines.append("missing_required_artifacts: `" + ", ".join(str(item) for item in missing_artifacts) + "`")
+    if slowest_steps:
+        rendered = ", ".join(
+            f"{item.get('step')}={item.get('duration_seconds')}s"
+            for item in slowest_steps
+            if isinstance(item, dict)
+        )
+        lines.append("slowest_llm_artifacts: `" + rendered + "`")
     lines.extend(
         [
             "",
@@ -3366,6 +3470,9 @@ def cmd_llm_usage_summary(args: argparse.Namespace) -> int:
             "usage_available": totals.get("usage_available_count"),
             "usage_missing": totals.get("usage_missing_count"),
             "total_units": totals.get("total_units"),
+            "duration_s": totals.get("total_duration_seconds"),
+            "required_invoked": totals.get("required_invocation_invoked_count"),
+            "required_missing": totals.get("required_invocation_missing_count"),
             "limit_enforced": str(bool(payload.get("limit_enforced"))).lower(),
             "advice_consumed": str(bool(value.get("advice_consumed"))).lower(),
             "high_value": value.get("high_value_candidate_count"),

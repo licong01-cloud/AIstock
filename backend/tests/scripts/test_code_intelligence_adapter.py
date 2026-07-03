@@ -1564,6 +1564,7 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
                     "invoked": True,
                     "provider": "deepseek_api",
                     "model": "deepseek-v4-pro",
+                    "duration_seconds": 1.25,
                     "usage_summary": {"prompt_units": 100, "completion_units": 40, "total_units": 140},
                 },
                 "advice_consumption": {"advice_consumed": True},
@@ -1578,6 +1579,7 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
                 "provider": "deepseek_api",
                 "model": "deepseek-v4-pro",
                 "llm_invoked": True,
+                "elapsed_seconds": 2.5,
                 "llm_invocation_evidence": {
                     "invoked": True,
                     "provider": "deepseek_api",
@@ -1602,6 +1604,7 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
                     "model": "deepseek-v4-pro",
                     "reason": "silent_degradation_audit_live_provider_json",
                 },
+                "timing_summary": {"known_duration_seconds": 3.75},
             }
         ),
         encoding="utf-8",
@@ -1613,6 +1616,7 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
                 "provider": "deepseek_api",
                 "model": "deepseek-v4-pro",
                 "llm_gate": "degraded",
+                "duration_seconds": 4.0,
                 "llm_invocation_evidence": {
                     "invoked": False,
                     "provider": "deepseek_api",
@@ -1656,21 +1660,44 @@ def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path
     assert payload["totals"]["prompt_units"] == 120
     assert payload["totals"]["completion_units"] == 48
     assert payload["totals"]["total_units"] == 168
+    assert payload["totals"]["duration_available_count"] == 4
+    assert payload["totals"]["total_duration_seconds"] == 11.5
+    assert payload["totals"]["required_invocation_expected_count"] == 6
+    assert payload["totals"]["required_invocation_invoked_count"] == 3
+    assert payload["totals"]["required_invocation_missing_count"] == 3
+    assert payload["totals"]["required_invocation_missing_steps"] == [
+        "adaptive_scheduler",
+        "design_drift_audit",
+        "scheduler_advice",
+    ]
+    assert payload["totals"]["required_artifact_missing_steps"] == ["adaptive_scheduler", "scheduler_advice"]
+    assert payload["totals"]["required_usage_missing_steps"] == [
+        "design_drift_audit",
+        "silent_degradation_audit",
+    ]
     assert payload["value_context"]["advice_consumed"] is True
     assert payload["value_context"]["advice_changed_plan"] is True
     assert payload["value_context"]["selected_plan_count"] == 1
     assert payload["value_context"]["high_value_candidate_count"] == 2
     assert payload["value_context"]["issue_payload_ready_count"] == 1
     missing = [item for item in payload["records"] if item["step"] == "silent_degradation_audit"][0]
+    assert missing["required_llm"] is True
+    assert missing["duration_seconds"] == 3.75
+    assert missing["timing_source"] == "timing_summary.known_duration_seconds"
     assert missing["usage_available"] is False
     assert missing["usage_missing_reason"] == "provider_usage_missing"
     failed = [item for item in payload["records"] if item["step"] == "design_drift_audit"][0]
     assert failed["attempted"] is True
+    assert failed["duration_seconds"] == 4.0
     assert failed["usage_missing_reason"] == "provider_error_or_fallback_without_usage"
     assert "LLM Token Usage Summary" in markdown
     assert "attempted_steps: `4`" in markdown
     assert "limit_enforced: `False`" in markdown
     assert "total_units: `168`" in markdown
+    assert "total_duration_seconds: `11.5`" in markdown
+    assert "required_llm_health: `expected=6, invoked=3, missing=3" in markdown
+    assert "missing_required_llm_steps: `adaptive_scheduler, design_drift_audit, scheduler_advice`" in markdown
+    assert "slowest_llm_artifacts: `design_drift_audit=4.0s" in markdown
     assert "silent_degradation_audit" in markdown
 
 
@@ -1687,6 +1714,7 @@ def test_llm_usage_summary_command_defaults_to_compact_stdout(tmp_path: Path, ca
                     "invoked": True,
                     "provider": "deepseek_api",
                     "model": "deepseek-v4-pro",
+                    "duration_seconds": 0.75,
                     "usage_summary": {"prompt_units": 3, "completion_units": 2, "total_units": 5},
                 },
             }
@@ -1714,6 +1742,8 @@ def test_llm_usage_summary_command_defaults_to_compact_stdout(tmp_path: Path, ca
     assert result == 0
     assert stdout.startswith("WARN llm-usage-summary ")
     assert "total_units=5" in stdout
+    assert "duration_s=0.75" in stdout
+    assert "required_missing=5" in stdout
     assert "limit_enforced=false" in stdout
     assert "records" not in stdout
     assert json.loads(output.read_text(encoding="utf-8"))["totals"]["total_units"] == 5

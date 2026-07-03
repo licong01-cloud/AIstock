@@ -2,7 +2,9 @@
   "actual": "Existing nightly llm-usage-summary reports token totals and missing usage reasons, but it does not expose clear per-artifact timing/duration or required-LLM invocation health. After DeepSeek usage spikes or provider failures, maintainers cannot quickly tell which required LLM steps actually invoked the provider, which steps are missing usage metadata, or which artifacts consumed the most wall time. Expected: observability-only enhancement that reports timing when available, required LLM expected/invoked/missing counts, and a compact markdown table without adding token limits or broad validation.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260703_BUG-591-nightly-llm-usage-summary-lacks-timing-and-required-invocation-health-ob.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-591",
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Nightly llm-usage-summary exposes observability-only timing when available plus required DeepSeek LLM expected/invoked/missing health, without adding token limits or broad pre-merge validation.",
   "first_seen_at": "2026-07-03T11:24:14.441133Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -40,7 +42,10 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "targeted_code_intelligence_adapter",
+    "ruff_changed_files",
+    "git_diff_check"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
