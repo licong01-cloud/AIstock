@@ -31,8 +31,8 @@
   "expected": "Codex/Claude default path should read task-card/context summaries only, treat machine JSON as debug-only, cap CodeGraph suggested tests in PR bodies, persist only compact CI check summaries, and document heavy artifact exclusions so ordinary BUG handling avoids unnecessary token and test expansion without reducing validation quality.",
   "first_seen_at": "2026-07-02T08:37:10.392020Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6af800536621297264d6c4a7a72fa80cd92d7ff0",
+  "fixed_at": "2026-07-03T13:26:35.055160Z",
   "github_issue_number": 1817,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1817",
   "last_seen_at": "2026-07-02T08:37:10.392020Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1873",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "24be4b4cd0e043c4b1af27e3",
     "source_event_id": "FE-20260702-24be4b4cd0e0"
   },
+  "validation_evidence": [
+    "PR #1873 GitHub CI all checks passed before squash merge"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
