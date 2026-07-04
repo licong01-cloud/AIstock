@@ -1490,6 +1490,41 @@ def test_general_ptnn_builtin_transformer_arch_params_route_into_pt_model_kwargs
     assert "\n            nhead:" not in yaml_text
 
 
+def test_builtin_models_registry_has_transformer_tsdataseth():
+    # Regression for BUG-593: the built-in qlib Transformer
+    # (pytorch_transformer_ts) is a time-series model and MUST resolve to
+    # TSDatasetH, exactly like its sibling ALSTM/GRU2 built-ins. It was missing
+    # from _BUILTIN_MODELS, so a model_name="Transformer" seed matched no
+    # built-in, _get_model_info never set default_dataset_type, and the PTNN
+    # branch fell back to flat DatasetH -> built-in Transformer got [N, F]
+    # instead of windowed [N, T, F] -> Epoch0 RuntimeError (shape mismatch).
+    entry = ConfigComposer._BUILTIN_MODELS.get("__builtin_Transformer__")
+    assert entry is not None
+    assert entry["model_name"] == "Transformer"
+    assert entry["model_type"] == "PTNN"
+    assert entry["default_dataset_type"] == "TSDatasetH"
+    assert (
+        entry["default_hyperparameters"]["pt_model_uri"]
+        == "qlib.contrib.model.pytorch_transformer_ts.Transformer"
+    )
+
+
+def test_builtin_transformer_seed_composes_tsdataseth_and_templated_dfeat():
+    # BUG-593 behavior: once _get_model_info resolves default_dataset_type from
+    # the built-in catalog, the Transformer seed composes onto TSDatasetH
+    # (windowed [N, T, F]) and its d_feat is templated to the real feature count
+    # rather than the hardcoded seed value, so the nn.Module input dim matches.
+    model_info = _builtin_transformer_model_info()
+    model_info["default_dataset_type"] = "TSDatasetH"
+    yaml_text = _base_yaml(model_info=model_info)
+
+    assert "class: GeneralPTNN" in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+    # d_feat inside pt_model_kwargs is templated, not the hardcoded seed value 20.
+    assert "{{ num_features }}" in yaml_text
+    assert '"d_feat": 20' not in yaml_text
+
+
 def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     yaml_text = _base_yaml(model_info=_custom_timeseries_lstm_model_info())
 
