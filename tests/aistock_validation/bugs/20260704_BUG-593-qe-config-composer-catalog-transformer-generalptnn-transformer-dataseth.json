@@ -1,6 +1,8 @@
 {
   "actual": "根因(已取证): config_composer._get_model_info(4470) 匹配 _BUILTIN_MODELS(4411) 时按 model_name 补 default_dataset_type; catalog 内已有 ALSTM/GRU2 两个 pytorch_*_ts 内置时序模型(default_dataset_type=TSDatasetH), 但漏了 Transformer(pytorch_transformer_ts)。故 model_name='Transformer' 的 seed 匹配不到 builtin → default_dataset_type=None → config_composer:2875 model_dataset_cls 回落 DatasetH(扁平[N,F]) → 内置 Transformer_ts 需窗口化[N,T,F] → Epoch0 RuntimeError: size of tensor a(2048) must match b(64) at dim2。铁证: 成功 LSTM(__seed_LSTM_10D_hs64_d02__)与失败 Transformer 生成的 conf.yaml 唯一差异=dataset class TSDatasetH vs DatasetH; 且 _get_model_info 的 SELECT 只取9列, 不含 seed 已声明的 model_config.dataset_type/dataset_config。修复=在 _BUILTIN_MODELS 补 __builtin_Transformer__(model_name=Transformer,model_type=PTNN,default_dataset_type=TSDatasetH,default_hyperparameters含pt_model_uri=qlib.contrib.model.pytorch_transformer_ts.Transformer/d_feat/d_model/nhead/num_layers/dropout, default_training_hyperparameters)。TSDatasetH下 d_feat 由 composer:3644 自动模板成 num_features。与 BUG-592(pt_model_kwargs路由)相互独立。non_goals: 不改 GeneralPTNN 本体/不改 ALSTM/GRU2/不动 DatasetH 分支/不改 _get_model_info 的SELECT列集。验证: 单测(Transformer seed → 生成 conf.yaml 的 dataset class=TSDatasetH 且 d_feat 模板化); 8011/8012 不涉及, 用生产已跑的 QE canary 验证非训练崩溃。禁碰生产8001。",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260704_BUG-593-qe-config-composer-catalog-transformer-generalptnn-transformer-dataseth.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -8,8 +10,10 @@
   "bug_id": "BUG-593",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
+    "在 _BUILTIN_MODELS 补 __builtin_Transformer__(model_name=Transformer, model_type=PTNN, default_dataset_type=TSDatasetH, default_hyperparameters 含 pt_model_uri=qlib.contrib.model.pytorch_transformer_ts.Transformer + d_feat/d_model/nhead/num_layers/dropout, default_training_hyperparameters)。",
+    "新增单测: model_name=Transformer 的内置 seed 经 compose 后, 生成 conf.yaml 的 dataset class=TSDatasetH 且 d_feat 被模板成 num_features(非硬编码值), d_model/nhead 在 pt_model_kwargs。",
+    "不回归 ALSTM/GRU2/LGB/Linear 现有路径; 不改 DatasetH 分支; 不改 _get_model_info 的 SELECT 列集。",
+    "Run required verification plans (l0 + validation_module_registry_l0).",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-04T04:34:31.133423Z",
@@ -23,7 +27,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "model_name=Transformer 的内置 GeneralPTNN seed 经 config_composer 生成的 conf.yaml 使用 dataset class=TSDatasetH(窗口化[N,T,F]) 且 d_feat 模板成 num_features, 使内置 pytorch_transformer_ts.Transformer 可正常训练(不在 Epoch0 因 [N,F] 扁平输入维度崩溃)。",
   "first_seen_at": "2026-07-04T04:34:31.133423Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,7 +42,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "cd F:/Dev/AIstock_worktrees/BUG-593-... && python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -q",
   "required_verification": [
     "l0"
   ],

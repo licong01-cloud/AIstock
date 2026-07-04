@@ -4460,6 +4460,20 @@ class ConfigComposer:
                 "weight_decay": 1e-4,
             },
         },
+        "__builtin_Transformer__": {
+            "model_name": "Transformer", "model_type": "PTNN",
+            "default_dataset_type": "TSDatasetH",
+            "default_hyperparameters": {
+                "pt_model_uri": "qlib.contrib.model.pytorch_transformer_ts.Transformer",
+                "d_feat": 20, "d_model": 64, "nhead": 4, "num_layers": 2,
+                "dropout": 0.1,
+            },
+            "default_training_hyperparameters": {
+                "n_epochs": 100, "lr": 2e-4,
+                "early_stop": 15, "batch_size": 2048,
+                "weight_decay": 1e-4,
+            },
+        },
         "__builtin_Ridge__": {
             "model_name": "Ridge", "model_type": "LINEAR",
             "default_dataset_type": "DatasetH",
