@@ -58,13 +58,15 @@ MASTER（arXiv 2312.15235）摘要明确批评「先从单只股票序列学时�
 
 | 模型 | arXiv | 结构 | 邻接需求 | 选型定位 |
 |---|---|---|---|---|
-| **GATs** | 图注意力（qlib 内置） | 截面图注意力 | 行业邻接 | **Phase1 MVP**：最轻量、qlib 有实现、直接吃行业邻接 |
-| **HIST** | 2110.13716 | 股票-概念**动态**图（预定义+隐藏概念） | 概念/行业成分 | Phase1（行业变体）→ Phase3（概念） |
+| **HIST** | 2110.13716 | 股票-概念**动态**图（预定义+隐藏概念） | 概念/行业成分 | **Phase1 首选（行业变体）→ Phase3（概念）** |
+| **GATs** | 图注意力（qlib 内置） | 截面图注意力 | 行业邻接（或学习） | 更轻备选探针 |
 | **MASTER** | 2312.15235 | 截面 Transformer（市场引导，跨股票+跨时间） | 隐式（可无显式图） | Phase2：对照「正确的 Transformer」 |
 | RSR（关系排序） | 1809.09441 | 关系图 + ranking loss | 行业/知识图 | 备选：ranking loss 对齐 topk 目标 |
 | STHAN-SR（超图） | 2107.14033 | **超图**三重注意力 | 多归属概念超图 | Phase3：多归属概念的正解 |
 
-**推荐路径**：Phase1 先上 **GATs（行业邻接）** 作为最小可行验证（实现现成、依赖最少），HIST-industry 变体并列；若行业图见增量，Phase2 引 **MASTER** 对照，Phase3 采 THS 概念数据上 **HIST/STHAN-SR 概念超图**。
+**推荐路径（已决策 2026-07-05）**：Phase1 采用 **HIST-industry**（吃现成 `sw_index_member` 行业成分作预定义概念图 + 隐藏概念模块学潜在联动；动态相关性设计正对 A 股题材轮动；O(N×C) 比全连接 GATs 在 ~4000 股规模更省；一份实现同时铺好 Phase1 行业与 Phase3 概念，衔接无返工）。GATs 作为更轻的备选探针保留。Phase2 引 **MASTER** 对照「正确的 Transformer」，Phase3 采 THS 概念数据上 **HIST/STHAN-SR 概念超图**。
+
+> GATs vs HIST-industry 取舍：GATs 更轻/更快跑通但学出的关系在 A 股噪声下不稳、全连接 O(N²) 重、不利用已知行业结构；HIST-industry 更贴合「概念/行业共享信息 + 动态轮动」诉求、直接用免费行业成分、可发现隐藏分组、是概念超图的同框架前身，代价是复杂度更高。综合选 HIST-industry。
 
 ---
 
@@ -88,10 +90,24 @@ MASTER（arXiv 2312.15235）摘要明确批评「先从单只股票序列学时�
 - 落地：随 loop workspace 分发的只读 artifact（与因子缓存同机制），可复算、可校验。
 - 反泄漏校验：邻接构建只能用 `t` 之前可见的成分状态；单测覆盖「out_date 边界当日不计入」。
 
-### 4.4 特征集（关键：不能只喂 10 因子）
-- 文献中的图/注意力模型多用 **Alpha360 级丰富输入**（约 360 维）。我们现在 10 个因子对重注意力/图模型**过薄，会「饿着」**（这也是时间维 Transformer 无效的部分原因）。
-- Phase1 特征口径：**Alpha158/360 基础特征 + 现有 10 个趋势因子**（disable_alpha158 需改为启用基础特征；这是与趋势腿 A 的关键区别，需在实验配置显式标注并单独评估）。
+### 4.4 特征集（关键：不能只喂 10 因子，但要避开拥挤因子）
+
+图/注意力模型需要比 10 因子更丰富的输入，否则「饿着」学不到东西（这也是时间维 Transformer 无效的部分原因）。但「丰富」不等于「堆公开手工因子」——须区分**原始底料**与**拥挤 alpha**：
+
+| 层级 | 内容 | 定位 | 拥挤风险 |
+|---|---|---|---|
+| 原始底料 | **Alpha360 原始量价**（`Ref($close,i)/$close`、`Ref($open,i)/$close`…`Ref($volume,i)/$volume`，6 字段 × 60 天滞后归一化 = 360 维；源自 qlib `Alpha360DL.get_feature_config`） | 给时序编码器的输入表示，**非可交易 alpha** | 无（原始价量人人相同，边来自模型+关系+私有因子） |
+| 差异化 alpha（主力） | **私有趋势/筹码/资金流/基本面因子**（Price_Deviation_Historical_High、elg_flow_high_price_interaction、cp_winner_rate_momentum、m_sw2_net_vol_momentum、FundamentalEpsIndustryMomentum…） | 真正差异化信号来源 | 低（较 Alpha158 手工因子不拥挤） |
+| 补充（非主力） | **Alpha158 择优子集** | 仅补充，不当主信号 | 高（公布多年、机构广用，尤其短周期动量/反转） |
+| 核心赌注 | **关系结构（板块关联/轮动）** | 任何公开因子都不含的维度 | 不可被公开因子套利 |
+
+**决策（2026-07-05）**：
+- **Alpha360 作原始底料，但不塞进因子库**：其本质是 `Ref($field, lag)/$close` 的滞后原始量价（数据装载 spec），不是命名截面因子；把 360 个近重复滞后列注册为因子库因子是错误抽象且冗重。采用 **QE 自定义模型内的数据 handler，按 qlib `Alpha360DL` 规范从 qlib bin 的原始量价即时生成**（qlib bin 已含 `$close/$open/$high/$low/$volume/$vwap`，无需新增因子库列）。
+- **私有趋势因子 + Alpha158 择优子集**走因子库常规流程（develop-factor / factor_library_register），作为差异化 alpha 与补充。
+- **拥挤性判断**：本策略是 **h20（月级）趋势 + 基本面 + 筹码**，属容量受限、更难套利、更不拥挤地带；且实证 rank_ic 0.098（h20 > h5 0.064）证明残余信号存在。故不依赖 Alpha158 手工因子作主力，用原始底料 + 私有因子 + 关系结构。
 - 保持股票池、label horizon（h20）、回测口径与基线一致，确保可比。
+
+> Alpha360 底料的 QE 落地计划（源码移植 vs 因子库注册 vs 即时 handler）见 §11。
 
 ---
 
@@ -116,8 +132,9 @@ MASTER（arXiv 2312.15235）摘要明确批评「先从单只股票序列学时�
 - 交付：邻接 artifact + 基线数字表 + 评估脚本。**门：邻接 PIT 反泄漏单测通过。**
 
 ### Phase 1 — 行业图 MVP（免采集数据，正式走 feature workflow）
-- P1.1 按 `aistock-feature-workflow` 建隔离 worktree，新增 **GATs（行业邻接）自定义模型**（code_text，方案 A 截面重组封装在 model.py），注册到 `aistock_model_catalog`。HIST-industry 变体并列备选。
-- P1.2 QE 自定义实验：GATs-industry，h20，单种子（先验证能训练、能过 Epoch0、能上传），同池同窗。
+- P1.1 按 `aistock-feature-workflow` 建隔离 worktree，新增 **HIST-industry 自定义模型**（code_text，方案 A 截面重组封装在 model.py；预定义概念图 = `sw_index_member` PIT 行业成分；隐藏概念模块学潜在联动），注册到 `aistock_model_catalog`。GATs 作更轻备选。
+- P1.1b 特征底料：自定义 handler 按 qlib `Alpha360DL` 规范即时生成原始量价（§4.4/§11），叠加私有趋势因子；Alpha158 择优子集可选补充。
+- P1.2 QE 自定义实验：HIST-industry，h20，单种子（先验证能训练、能过 Epoch0、能上传），同池同窗。
 - P1.3 判定门：rank_ic / 年化是否达到 §5 门（≥ 基线 + 噪声）。**过 → Phase2；不过 → 记录 no-go，Track B 暂止，回到 Track A 因子精修。**
 - 交付：可跑的图模型 + 首轮对照结论。**产线门：backend/ddl/frontend = noop（仅新增模型与实验）。**
 
@@ -174,8 +191,22 @@ MASTER（arXiv 2312.15235）摘要明确批评「先从单只股票序列学时�
 
 ---
 
-## 10. 决策请求
+## 10. 决策记录（2026-07-05 已定）
 
-1. 确认 Phase1 首选 **GATs（行业邻接）** 作为 MVP（vs 直接上 HIST-industry）。
-2. 确认 Phase1 特征口径切到 **Alpha158/360 + 10 趋势因子**（区别于趋势腿 A 的 disable_alpha158）。
-3. 确认接入采用**方案 A（自定义模型内截面重组）**，不改 QE 数据装载主干。
+1. ✅ Phase1 模型 = **HIST-industry**（吃现成行业成分 + 动态相关性贴合轮动 + 概念超图前身）；GATs 作更轻备选。
+2. ✅ 特征口径 = **Alpha360 原始量价底料（即时 handler，不入因子库）+ 私有趋势因子（主力）+ Alpha158 择优子集（补充非主力）+ 关系结构（核心赌注）**；不依赖 Alpha158 手工因子作主力。
+3. ✅ 接入采用**方案 A（自定义模型内截面重组）**，不改 QE 数据装载主干。
+
+## 11. Alpha360 底料的 QE 落地计划（源码移植方案对比）
+
+背景：qlib `Alpha360DL.get_feature_config()` 是确定性表达式列表——`Ref($close,i)/$close`、`Ref($open,i)/$close`、`Ref($high,i)/$close`、`Ref($low,i)/$close`、`Ref($volume,i)/$volume`（i=59..0），即**最近 60 天原始量价按当日归一化**，6 字段 × 60 = 360 维。本质是**原始底料，不是命名截面 alpha**。
+
+三种落地方式对比：
+
+| 方案 | 做法 | 优 | 劣 | 采纳 |
+|---|---|---|---|---|
+| **A 即时 handler（推荐）** | 自定义模型工作区内按 `Alpha360DL` 规范从 qlib bin 即时生成 360 维底料 | 与 qlib HIST/GATs 原生一致；零因子库改动；无冗余列；可复算 | 每次训练重算（成本低，表达式简单） | ✅ 主 |
+| B 因子库注册 360 列 | 把 360 个 `Ref` 表达式按 QE 因子库流程注册为命名因子 | 与因子库治理统一、可被其他实验复用 | 360 近重复滞后列冗重、语义错位（非 alpha）、覆盖率/指标计算无意义 | ✗ |
+| C 折中：注册「基础特征包」 | 仅登记 6 个原始字段 + 一个文档化的滞后窗口 spec（不落 360 列） | 治理可见 + 轻量 | 仍需 handler 展开；额外抽象层 | 可选（若治理强制） |
+
+**结论**：Alpha360 底料用**方案 A（即时 handler，源码规范移植自 qlib `Alpha360DL`）**，不塞因子库；真正的差异化 alpha（私有趋势/筹码/资金流/基本面因子 + Alpha158 择优子集）才走因子库常规注册流程。qlib bin 已含 `$close/$open/$high/$low/$volume/$vwap`，无需新增数据。
