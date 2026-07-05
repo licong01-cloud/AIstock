@@ -78,6 +78,13 @@ interface PricesResponse {
   >;
 }
 
+interface TdxSyncResult {
+  name: string;
+  display_name: string;
+  count: number;
+  codes: string[];
+}
+
 function formatPct(v: number | null | undefined) {
   if (v === null || v === undefined || Number.isNaN(v)) return "-";
   return `${v.toFixed(2)}%`;
@@ -361,6 +368,10 @@ function WatchlistPage() {
 
   const [pricesRefreshed, setPricesRefreshed] = useState(false);
   const [refreshingPrices, setRefreshingPrices] = useState(false);
+  const [tdxAvailable, setTdxAvailable] = useState(false);
+  const [tdxChecked, setTdxChecked] = useState(false);
+  const [tdxSyncing, setTdxSyncing] = useState(false);
+  const [tdxSyncResult, setTdxSyncResult] = useState<TdxSyncResult | null>(null);
 
   const [searchActive, setSearchActive] = useState(false);
   const [searchFilters, setSearchFilters] = useState<SearchFilters>({
@@ -864,6 +875,11 @@ function WatchlistPage() {
   useEffect(() => {
     loadCategories();
     loadAllItems();
+    fetch(`${API_BASE}/tdx-blocks/available`)
+      .then((res) => (res.ok ? res.json() : { available: false }))
+      .then((data) => setTdxAvailable(Boolean(data.available)))
+      .catch(() => setTdxAvailable(false))
+      .finally(() => setTdxChecked(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -939,6 +955,31 @@ function WatchlistPage() {
     } else {
       setSortBy(field);
       setSortDir("desc");
+    }
+  }
+
+  async function syncCurrentCategoryToTdx() {
+    if (currentCatId == null || !currentCatName || tdxSyncing) return;
+    const confirmed = window.confirm(
+      `将用 AIstock 分类「${currentCatName}」覆盖通达信板块 AIstock_${currentCatId}。确认同步？`,
+    );
+    if (!confirmed) return;
+    setTdxSyncing(true);
+    setTdxSyncResult(null);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/tdx-blocks/sync-from-category-id`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_id: currentCatId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `通达信同步失败: ${res.status}`);
+      setTdxSyncResult(data as TdxSyncResult);
+    } catch (e: any) {
+      setError(e?.message || "通达信同步失败");
+    } finally {
+      setTdxSyncing(false);
     }
   }
 
@@ -1429,6 +1470,32 @@ function WatchlistPage() {
           {refreshingPrices ? "刷新中..." : "刷新价格"}
         </button>
 
+        <button
+          type="button"
+          data-testid="watchlist-tdx-sync"
+          onClick={syncCurrentCategoryToTdx}
+          disabled={!tdxChecked || !tdxAvailable || currentCatId == null || tdxSyncing}
+          title={
+            currentCatId == null
+              ? "请选择一个自选分类后同步"
+              : !tdxAvailable
+                ? "通达信 TdxQuant 未连接"
+                : `同步当前分类到通达信板块 AIstock_${currentCatId}`
+          }
+          style={{
+            padding: "4px 10px",
+            borderRadius: 8,
+            border: "1px solid #cbd5e1",
+            background:
+              tdxChecked && tdxAvailable && currentCatId != null
+                ? "#dbeafe"
+                : "#e5e7eb",
+            fontSize: 12,
+          }}
+        >
+          {tdxSyncing ? "同步中..." : "同步通达信"}
+        </button>
+
         <span style={{ color: "#fff" }}>
           {currentCatName ? `当前分类：${currentCatName}` : "全部分类"}
           {total ? ` · 共 ${total} 条` : ""}
@@ -1438,6 +1505,11 @@ function WatchlistPage() {
       </section>
 
       {error && <p style={{ color: "#b00020", fontSize: 13 }}>错误：{error}</p>}
+      {tdxSyncResult && (
+        <p data-testid="watchlist-tdx-sync-result" style={{ color: "#166534", fontSize: 13 }}>
+          已同步到通达信板块「{tdxSyncResult.display_name}」({tdxSyncResult.name})，共 {tdxSyncResult.count} 只股票。
+        </p>
+      )}
 
       {/* 分类管理 */}
       <CollapsibleCard title="🗂 分类管理" cardId="category">

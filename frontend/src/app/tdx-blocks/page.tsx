@@ -202,16 +202,16 @@ export default function TdxBlocksPage() {
             请在 <code className="bg-yellow-100 px-1 rounded">.env</code>{" "}
             中配置{" "}
             <code className="bg-yellow-100 px-1 rounded">
-              TDX_BLOCK_DIR
+              TDX_CLIENT_PATH
             </code>{" "}
-            指向通达信安装目录下的{" "}
+            指向通达信客户端安装目录，并确认客户端已运行、已登录且 TdxQuant 可连接。
+            例如：{" "}
             <code className="bg-yellow-100 px-1 rounded">
-              T0002/blocknew/
+              C:\new_tdx64
             </code>{" "}
-            目录，然后重启后端服务。
           </p>
           <pre className="bg-yellow-100 p-2 rounded mt-2 text-sm">
-            TDX_BLOCK_DIR=C:\zd_gjzq\T0002\blocknew
+            TDX_CLIENT_PATH=C:\new_tdx64
           </pre>
         </div>
       </div>

@@ -30,6 +30,9 @@ test("watchlist uses adjusted joined return metadata and expands table height by
       body: JSON.stringify({ total: items.length, items }),
     });
   });
+  await page.route("**/api/v1/tdx-blocks/available", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ available: false }) });
+  });
 
   await page.goto("/watchlist");
   await expect(page.getByTestId("watchlist-items-table")).toBeVisible();
@@ -46,7 +49,53 @@ test("watchlist uses adjusted joined return metadata and expands table height by
 
   await expect(page.getByTestId("watchlist-cell-entry-price-000001.SZ").locator("span")).toHaveAttribute(
     "title",
-    /前复权加入价: 5\.000；复权因子: 0\.250000/,
+    /Adjusted entry price: 5\.000; factor: 0\.250000/,
   );
   await expect(page.getByText("100.00%")).toBeVisible();
+});
+
+test("watchlist syncs the selected category to TDX by category id", async ({ page }) => {
+  const syncCalls: unknown[] = [];
+  await page.route("**/api/v1/watchlist/categories", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(categories) });
+  });
+  await page.route("**/api/v1/watchlist/items?**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ total: items.length, items }),
+    });
+  });
+  await page.route("**/api/v1/tdx-blocks/available", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ available: true }) });
+  });
+  await page.route("**/api/v1/tdx-blocks/sync-from-category-id", async (route) => {
+    syncCalls.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        name: "AIstock_1",
+        display_name: "默认",
+        count: 2,
+        codes: ["000001.SZ", "000002.SZ"],
+      }),
+    });
+  });
+  page.on("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("AIstock_1");
+    await dialog.accept();
+  });
+
+  await page.goto("/watchlist");
+  await expect(page.getByTestId("watchlist-items-table")).toBeVisible();
+  await expect(page.getByTestId("watchlist-tdx-sync")).toBeDisabled();
+
+  await page.getByTestId("watchlist-category-filter").selectOption("1");
+  await expect(page.getByTestId("watchlist-tdx-sync")).toBeEnabled();
+  await page.getByTestId("watchlist-tdx-sync").click();
+
+  await expect.poll(() => syncCalls.length).toBe(1);
+  expect(syncCalls[0]).toEqual({ category_id: 1 });
+  await expect(page.getByTestId("watchlist-tdx-sync-result")).toContainText("AIstock_1");
 });

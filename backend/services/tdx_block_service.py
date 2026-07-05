@@ -157,17 +157,52 @@ def delete_block(name: str) -> dict:
 
 # ─── 从自选分类同步 ────────────────────────────────────────────────────────────
 
-def sync_from_category(category_name: str) -> Dict[str, Any]:
-    """将自选分类中的股票同步到通达信板块。
-
-    1. DB 查询分类下的所有股票代码
-    2. 构造 block_code: AIstock_<category_id>
-    3. clear_sector 清空旧数据
-    4. send_user_block 写入新数据
-    5. 返回 { name, display_name, count, codes }
-    """
+def _sync_from_category_rows(rows: list[dict[str, Any]], *, label: str) -> Dict[str, Any]:
     tq = _ensure_tq()
 
+    if not rows:
+        raise ValueError(f"自选分类不存在或无股票: {label}")
+
+    category_id = rows[0]["category_id"]
+    display_name = rows[0]["display_name"]
+    codes = [r["code"] for r in rows]  # DB 中已是 "600519.SH" 格式
+
+    # 验证代码格式 (API 要求 CODE.SUFFIX)
+    valid_codes = [c for c in codes if "." in c and len(c.split(".")) == 2]
+    if not valid_codes:
+        raise ValueError(f"分类 {label} 中无有效股票代码")
+
+    block_code = f"AIstock_{category_id}"
+
+    # 尝试创建板块（已存在则忽略错误）
+    try:
+        tq.create_sector(block_code=block_code, block_name=display_name)
+    except Exception:
+        pass  # 板块已存在，忽略
+
+    # 清空后写入，保持通达信板块与 AIstock 当前分类一致。
+    try:
+        tq.clear_sector(block_code=block_code)
+    except Exception:
+        pass  # 板块可能为空
+
+    tq.send_user_block(block_code=block_code, stocks=valid_codes)
+
+    logger.info(
+        "sync_from_category: 分类=%r -> 板块=%s, %d 只股票",
+        label, block_code, len(valid_codes),
+    )
+
+    return {
+        "name": block_code,
+        "display_name": display_name,
+        "count": len(valid_codes),
+        "codes": valid_codes,
+    }
+
+
+def sync_from_category(category_name: str) -> Dict[str, Any]:
+    """将自选分类中的股票同步到通达信板块。"""
     with get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
@@ -183,42 +218,27 @@ def sync_from_category(category_name: str) -> Dict[str, Any]:
             )
             rows = cur.fetchall()
 
-    if not rows:
-        raise ValueError(f"自选分类不存在或无股票: {category_name!r}")
+    return _sync_from_category_rows(rows, label=repr(category_name))
 
-    category_id = rows[0]["category_id"]
-    display_name = rows[0]["display_name"]
-    codes = [r["code"] for r in rows]  # DB 中已是 "600519.SH" 格式
 
-    # 验证代码格式 (API 要求 CODE.SUFFIX)
-    valid_codes = [c for c in codes if "." in c and len(c.split(".")) == 2]
-    if not valid_codes:
-        raise ValueError(f"分类 {category_name!r} 中无有效股票代码")
+def sync_from_category_id(category_id: int) -> Dict[str, Any]:
+    """按自选分类 id 同步到通达信板块，供 /watchlist 分类选择器直接调用。"""
+    if int(category_id) <= 0:
+        raise ValueError("自选分类 id 必须为正整数")
 
-    block_code = f"AIstock_{category_id}"
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT c.id AS category_id, c.name AS display_name, i.code
+                FROM app.watchlist_items i
+                JOIN app.watchlist_item_categories w ON w.item_id = i.id
+                JOIN app.watchlist_categories c ON c.id = w.category_id
+                WHERE c.id = %s
+                ORDER BY i.code
+                """,
+                (int(category_id),),
+            )
+            rows = cur.fetchall()
 
-    # 尝试创建板块（已存在则忽略错误）
-    try:
-        tq.create_sector(block_code=block_code, block_name=display_name)
-    except Exception:
-        pass  # 板块已存在，忽略
-
-    # 清空后写入
-    try:
-        tq.clear_sector(block_code=block_code)
-    except Exception:
-        pass  # 板块可能为空
-
-    tq.send_user_block(block_code=block_code, stocks=valid_codes)
-
-    logger.info(
-        "sync_from_category: 分类=%r → 板块=%s, %d 只股票",
-        category_name, block_code, len(valid_codes),
-    )
-
-    return {
-        "name": block_code,
-        "display_name": display_name,
-        "count": len(valid_codes),
-        "codes": valid_codes,
-    }
+    return _sync_from_category_rows(rows, label=f"id={int(category_id)}")
