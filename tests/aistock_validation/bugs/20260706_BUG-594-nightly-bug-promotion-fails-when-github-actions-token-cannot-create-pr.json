@@ -1,6 +1,8 @@
 {
   "actual": "Nightly summary detects recurring L3 failure and creates/updates GitHub Issue #1757, but Promote Nightly failure issue to BUG draft tries to create a PR from GitHub Actions using the default token and fails with createPullRequest permission denied. Expected: nightly may upload BUG draft/artifacts or persist allowed evidence, but it must not fail the summary job only because Actions cannot create PR; promotion should degrade loudly to a non-blocking manual/registry handoff when PR creation is not permitted.",
   "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "tests/aistock_validation/bugs/20260706_BUG-594-nightly-bug-promotion-fails-when-github-actions-token-cannot-create-pr.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Nightly failure issue promotion must still generate and upload a BUG draft, push the registry branch when available, and update the source issue with a loud manual handoff if GitHub Actions cannot create the registry PR. The summary job must not fail only because createPullRequest is denied.",
   "first_seen_at": "2026-07-05T17:20:07.381764Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -40,7 +42,9 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "targeted_ci_failure_issue_summary",
+    "ruff_changed_files",
+    "git_diff_check"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

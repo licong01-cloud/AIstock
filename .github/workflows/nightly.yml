@@ -1001,6 +1001,9 @@ jobs:
             exit 0
           fi
           export ISSUE_NUMBER
+          PROMOTION_GATE="promoted"
+          REGISTRY_PR_STATUS="not_attempted"
+          export REGISTRY_PR_STATUS
           if python scripts/aistock_issue_workflow.py promote-ci-issue \
             --issue "${ISSUE_NUMBER}" \
             --summary-json tmp/validation/nightly_failure_issue/summary.json \
@@ -1014,7 +1017,6 @@ jobs:
               REGISTRY_ROOT="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_root') or '')")"
               BUG_PATH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_json_path') or '')")"
               if [ -n "${REGISTRY_ROOT}" ] && [ -n "${BRANCH}" ]; then
-                git -C "${REGISTRY_ROOT}" push origin "${BRANCH}"
                 PR_BODY="tmp/validation/nightly_failure_issue/bug-registry-pr-body.md"
                 cat > "${PR_BODY}" <<EOF
           Nightly failure intake generated BUG draft ${BUG_ID}.
@@ -1028,12 +1030,30 @@ jobs:
 
           This PR only persists the BUG registry draft; business-module fixes still require the standard issue workflow.
           EOF
-                gh pr create \
-                  --repo "${{ github.repository }}" \
-                  --base main \
-                  --head "${BRANCH}" \
-                  --title "chore(nightly): register ${BUG_ID} from failure intake" \
-                  --body-file "${PR_BODY}"
+                if git -C "${REGISTRY_ROOT}" push origin "${BRANCH}"; then
+                  REGISTRY_PR_STATUS="branch_pushed"
+                else
+                  PUSH_EXIT="$?"
+                  PROMOTION_GATE="manual_registry_pr_required"
+                  REGISTRY_PR_STATUS="manual_required_push_failed"
+                  echo "::warning::Nightly BUG draft was generated, but GitHub Actions could not push the registry branch; manual registry handoff is required. issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} exit_code=${PUSH_EXIT}"
+                  echo "workflow_gate=manual_registry_pr_required issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} reason=branch_push_failed exit_code=${PUSH_EXIT}" | tee -a "${PROMOTION_STATUS}"
+                fi
+                if [ "${REGISTRY_PR_STATUS}" = "branch_pushed" ] && gh pr create \
+                    --repo "${{ github.repository }}" \
+                    --base main \
+                    --head "${BRANCH}" \
+                    --title "chore(nightly): register ${BUG_ID} from failure intake" \
+                    --body-file "${PR_BODY}"; then
+                  REGISTRY_PR_STATUS="created"
+                else
+                  PR_EXIT="$?"
+                  PROMOTION_GATE="manual_registry_pr_required"
+                  REGISTRY_PR_STATUS="manual_required"
+                  echo "::warning::Nightly BUG draft branch was pushed, but GitHub Actions could not create the registry PR; manual registry PR is required. issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} exit_code=${PR_EXIT}"
+                  echo "workflow_gate=manual_registry_pr_required issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} reason=pr_create_failed exit_code=${PR_EXIT}" | tee -a "${PROMOTION_STATUS}"
+                fi
+                export REGISTRY_PR_STATUS
               fi
               python - <<'PY'
           import json
@@ -1046,13 +1066,14 @@ jobs:
           bug_id = payload.get("submit_bug", {}).get("bug_id") or payload.get("bug_id")
           bug_path = payload.get("submit_bug", {}).get("bug_json_path") or payload.get("bug_json_path")
           branch = payload.get("submit_bug", {}).get("registry_worktree_plan", {}).get("branch")
+          registry_pr_status = os.environ.get("REGISTRY_PR_STATUS") or "not_attempted"
           body_json = subprocess.check_output(
               ["gh", "issue", "view", issue, "--json", "body"],
               text=True,
               encoding="utf-8",
           )
           body = json.loads(body_json).get("body") or ""
-          replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry PR branch `{branch}`; business fix still requires standard workflow)."
+          replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry branch `{branch}`; registry_pr_status=`{registry_pr_status}`; business fix still requires standard workflow)."
           body = body.replace(
               "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
               replacement,
@@ -1063,6 +1084,7 @@ jobs:
                   f"- BUG ID: `{bug_id}`\n"
                   f"- BUG JSON draft: `{bug_path}`\n"
                   f"- Registry branch: `{branch}`\n"
+                  f"- Registry PR status: `{registry_pr_status}`\n"
                   "- Promotion source: `tmp/validation/nightly_failure_issue/bug-promotion-full.json`\n"
               )
           body_path = Path("tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md")
@@ -1070,7 +1092,7 @@ jobs:
           subprocess.check_call(["gh", "issue", "edit", issue, "--body-file", str(body_path)])
           PY
             fi
-            echo "workflow_gate=promoted issue=${ISSUE_NUMBER}" | tee "${PROMOTION_STATUS}"
+            echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER}" | tee -a "${PROMOTION_STATUS}"
           else
             echo "workflow_gate=promotion_failed issue=${ISSUE_NUMBER}" | tee "${PROMOTION_STATUS}"
             exit 1

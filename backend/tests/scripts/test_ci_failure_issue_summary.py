@@ -1113,6 +1113,11 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     assert '"gh", "issue", "edit"' in run
     assert "--body-file" in run
     assert "bug-promotion-status.txt" in run
+    assert "gh pr create" in run
+    assert "REGISTRY_PR_STATUS" in run
+    assert "workflow_gate=manual_registry_pr_required" in run
+    assert "GitHub Actions could not create the registry PR" in run
+    assert "Registry PR status" in run
     assert "workflow_gate=promotion_failed" in run
     upload_step = next(step for step in steps if step.get("name") == "Upload Nightly BUG promotion context")
     assert "nightly-bug-promotion-${{ github.run_id }}" == upload_step["with"]["name"]
