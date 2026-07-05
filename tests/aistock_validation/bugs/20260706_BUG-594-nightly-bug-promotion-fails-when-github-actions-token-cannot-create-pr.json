@@ -28,8 +28,8 @@
   "expected": "Nightly failure issue promotion must still generate and upload a BUG draft, push the registry branch when available, and update the source issue with a loud manual handoff if GitHub Actions cannot create the registry PR. The summary job must not fail only because createPullRequest is denied.",
   "first_seen_at": "2026-07-05T17:20:07.381764Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0bb82ac7c017e82e085042bc7ec9aa2e000850ae",
+  "fixed_at": "2026-07-05T17:51:24.228029Z",
   "github_issue_number": 1881,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1881",
   "last_seen_at": "2026-07-05T17:20:07.381764Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1883",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "c1745a98505c4546e0c98f0e",
     "source_event_id": "FE-20260706-c1745a98505c"
   },
+  "validation_evidence": [
+    "PR #1883 CI all checks passed before squash merge; local targeted pytest/ruff/diff-check/workflow-smoke passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
