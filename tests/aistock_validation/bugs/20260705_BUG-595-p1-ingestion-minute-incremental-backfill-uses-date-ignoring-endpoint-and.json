@@ -2,6 +2,7 @@
   "actual": "/api/kline-history?code=688591&start_date=20260529&end_date=20260529&limit=300 返回 300 根但日期全是 2026-07-02/07-03，导致目标日 2026-05-29 无数据可写，增量历史回补 inserted=0。定时分钟摄取缺少按日覆盖校验，部分 code 漏摄仍可标记 success。",
   "allowed_write_scope": [
     "scripts/ingest_incremental.py",
+    "backend/tests/ingestion/test_ingest_incremental_minute.py",
     "tests/aistock_validation/bugs/20260705_BUG-595-p1-ingestion-minute-incremental-backfill-uses-date-ignoring-endpoint-and.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -21,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260705-e70f05f34878",
       "timestamp": "2026-07-05T17:26:32.071413Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add focused minute incremental ingestion test required by BUG-595 acceptance.",
+      "timestamp": "2026-07-05T18:10:00Z"
     }
   ],
   "evidence_uris": [],
@@ -41,7 +48,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET /api/kline-history?code=688591&start_date=20260529&end_date=20260529&limit=300 returns latest 07-02/07-03 rows instead of 2026-05-29; incremental backfill for 688591@2026-05-29 inserts 0",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -77,7 +85,8 @@
       "production gates"
     ],
     "premerge_required_plans": [
-      "l0"
+      "l0",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "35-60%"

@@ -19,7 +19,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras as pgx
-from psycopg2 import errors as pg_errors
 import requests
 from requests import exceptions as req_exc
 try:
@@ -42,6 +41,7 @@ DB_CFG = dict(
 # - kline_daily_raw: 未复权日线（与 ingest_full_daily_raw 对齐）
 # - kline_minute_raw: 1 分钟线
 SUPPORTED_DATASETS = {"kline_daily_raw", "kline_minute_raw"}
+EXPECTED_MINUTE_BARS_PER_TRADING_DAY = 240
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
 
 
@@ -236,27 +236,38 @@ def fetch_minute(code: str, trade_date: dt.date) -> List[Dict[str, Any]]:
 
 
 def fetch_minute_range(code: str, start: dt.date, end: dt.date) -> List[Dict[str, Any]]:
-    """Fetch 1-minute K-bars for a symbol within [start, end] via /api/kline-history.
+    """Fetch true 1-minute OHLC bars for a symbol within [start, end].
 
-    为避免触及 limit=800 的上限，调用方应保证 (end-start) 的跨度不超过数日；
-    本函数仅负责单次 /api/kline-history 调用并返回原始列表。
+    Uses /api/kline-all/tdx and filters locally because the legacy history endpoint ignores dates.
     """
     if start > end:
         return []
-    params = {
-        "code": code,
-        "type": "minute1",
-        "start_date": start.strftime("%Y%m%d"),
-        "end_date": end.strftime("%Y%m%d"),
-        "limit": 800,
-    }
-    data = http_get("/api/kline-history", params=params)
+    params = {"code": code, "type": "minute1"}
+    data = http_get("/api/kline-all/tdx", params=params)
     payload = data.get("data") if isinstance(data, dict) else None
     if isinstance(payload, dict):
         items = payload.get("List") or payload.get("list") or []
     else:
         items = payload or []
-    return list(items) if isinstance(items, list) else []
+    if not isinstance(items, list):
+        return []
+
+    selected: List[Tuple[str, str, Dict[str, Any]]] = []
+    start_key = start.isoformat()
+    end_key = end.isoformat()
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
+        trade_date = _to_date(trade_time)
+        if trade_date is None:
+            continue
+        if trade_date < start_key or trade_date > end_key:
+            continue
+        selected.append((trade_date, str(trade_time or ""), dict(row)))
+
+    selected.sort(key=lambda item: (item[0], item[1]))
+    return [row for _, _, row in selected]
 
 
 def upsert_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
@@ -556,6 +567,248 @@ def log_error(
             "INSERT INTO market.ingestion_errors (run_id, dataset, ts_code, message, detail) VALUES (%s, %s, %s, %s, %s)",
             (run_id, dataset, ts_code, message, json.dumps(detail, ensure_ascii=False) if detail else None),
         )
+
+
+def _stats_add(stats: Dict[str, Any], key: str, value: int) -> None:
+    current = stats.get(key, 0)
+    stats[key] = int(current) + int(value) if isinstance(current, (int, float)) else int(value)
+
+
+def is_trading_day(conn, trade_date: dt.date) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_trading
+              FROM market.trading_calendar
+             WHERE cal_date=%s
+            """,
+            (trade_date,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return True
+    return bool(row[0])
+
+
+def get_expected_minute_codes(conn, trade_date: dt.date, ts_codes: List[str]) -> List[str]:
+    if not ts_codes:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT d.ts_code
+              FROM market.kline_daily_raw d
+             WHERE d.trade_date=%s
+               AND d.ts_code = ANY(%s)
+               AND NOT EXISTS (
+                    SELECT 1
+                      FROM market.suspend_d s
+                     WHERE s.trade_date=d.trade_date
+                       AND s.ts_code=d.ts_code
+                       AND COALESCE(s.suspend_type, 'S') = 'S'
+               )
+             ORDER BY d.ts_code
+            """,
+            (trade_date, list(ts_codes)),
+        )
+        rows = cur.fetchall()
+    return [str(row[0]) for row in rows if row and row[0]]
+
+
+def get_minute_day_counts(conn, trade_date: dt.date, ts_codes: List[str]) -> Dict[str, int]:
+    if not ts_codes:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ts_code, COUNT(*)::int
+              FROM market.kline_minute_raw
+             WHERE freq='1m'
+               AND trade_time::date=%s
+               AND ts_code = ANY(%s)
+             GROUP BY ts_code
+            """,
+            (trade_date, list(ts_codes)),
+        )
+        rows = cur.fetchall()
+    return {str(row[0]): int(row[1]) for row in rows if row and row[0] is not None}
+
+
+def find_minute_day_gaps(
+    conn,
+    trade_date: dt.date,
+    expected_codes: List[str],
+    expected_bars: int = EXPECTED_MINUTE_BARS_PER_TRADING_DAY,
+) -> List[Dict[str, Any]]:
+    counts = get_minute_day_counts(conn, trade_date, expected_codes)
+    gaps: List[Dict[str, Any]] = []
+    for ts_code in expected_codes:
+        actual = int(counts.get(ts_code, 0))
+        if actual < expected_bars:
+            gaps.append({"ts_code": ts_code, "actual_bars": actual, "expected_bars": expected_bars})
+    return gaps
+
+
+def filter_minute_bars_for_date(values: List[Dict[str, Any]], trade_date: dt.date) -> List[Dict[str, Any]]:
+    target = trade_date.isoformat()
+    selected: List[Dict[str, Any]] = []
+    for row in values:
+        if not isinstance(row, dict):
+            continue
+        trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
+        if _to_date(trade_time) == target:
+            selected.append(row)
+    return selected
+
+
+def retry_minute_day_gaps(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    trade_date: dt.date,
+    gaps: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+) -> int:
+    repaired = 0
+    for gap in gaps:
+        ts_code = str(gap["ts_code"])
+        code = ts_code.split(".")[0]
+        try:
+            values = fetch_minute_range(code, trade_date, trade_date)
+            day_bars = filter_minute_bars_for_date(values, trade_date)
+            if not day_bars:
+                log_error(
+                    conn,
+                    run_id,
+                    dataset,
+                    ts_code,
+                    "minute completeness retry returned no bars",
+                    detail={"date": trade_date.isoformat(), **gap},
+                )
+                continue
+            inserted, last_ts = upsert_minute(conn, ts_code, trade_date, day_bars)
+            _stats_add(stats, "inserted_rows", inserted)
+            if inserted > 0:
+                last_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
+                upsert_state(conn, dataset, ts_code, trade_date, last_dt, None)
+                upsert_checkpoint(
+                    conn,
+                    run_id,
+                    dataset,
+                    ts_code,
+                    trade_date,
+                    last_ts,
+                    {"repair": "minute_completeness", "actual_bars_before": gap.get("actual_bars")},
+                )
+                repaired += 1
+                try:
+                    update_job_summary(conn, job_id, {"inserted_rows": int(inserted)})
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} {trade_date} job_summary_update failed: {summary_exc}",
+                    )
+            log_ingestion(
+                conn,
+                job_id,
+                "info",
+                f"run {run_id} {dataset} {ts_code} {trade_date} completeness_retry inserted={inserted}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                conn.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001
+                log_ingestion(
+                    conn,
+                    job_id,
+                    "warning",
+                    f"run {run_id} {dataset} {ts_code} {trade_date} rollback failed after retry error: {rollback_exc}",
+                )
+            err = str(exc)
+            log_error(
+                conn,
+                run_id,
+                dataset,
+                ts_code,
+                f"minute completeness retry failed: {err}",
+                detail={"date": trade_date.isoformat(), **gap},
+            )
+            log_ingestion(
+                conn,
+                job_id,
+                "error",
+                f"run {run_id} {dataset} {ts_code} {trade_date} completeness_retry failed: {err}",
+            )
+    return repaired
+
+
+def validate_minute_day_and_repair(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    ts_codes: List[str],
+    trade_date: dt.date,
+    stats: Dict[str, Any],
+    expected_bars: int = EXPECTED_MINUTE_BARS_PER_TRADING_DAY,
+) -> List[Dict[str, Any]]:
+    if not is_trading_day(conn, trade_date):
+        return []
+
+    expected_codes = get_expected_minute_codes(conn, trade_date, ts_codes)
+    if not expected_codes:
+        detail = {"date": trade_date.isoformat(), "reason": "empty_daily_universe"}
+        log_error(conn, run_id, dataset, None, "minute completeness universe is empty", detail=detail)
+        return [{"ts_code": None, "actual_bars": 0, "expected_bars": expected_bars, **detail}]
+
+    gaps = find_minute_day_gaps(conn, trade_date, expected_codes, expected_bars)
+    if not gaps:
+        log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {trade_date} completeness ok codes={len(expected_codes)}")
+        return []
+
+    _stats_add(stats, "completeness_initial_gap_codes", len(gaps))
+    retry_minute_day_gaps(conn, run_id, job_id, dataset, trade_date, gaps, stats)
+    remaining = find_minute_day_gaps(conn, trade_date, expected_codes, expected_bars)
+    if remaining:
+        _stats_add(stats, "completeness_failed_codes", len(remaining))
+        for gap in remaining:
+            log_error(
+                conn,
+                run_id,
+                dataset,
+                gap.get("ts_code"),
+                "minute completeness check failed after retry",
+                detail={"date": trade_date.isoformat(), **gap},
+            )
+        log_ingestion(
+            conn,
+            job_id,
+            "error",
+            f"run {run_id} {dataset} {trade_date} completeness failed gaps={json.dumps(remaining, ensure_ascii=False)}",
+        )
+    else:
+        _stats_add(stats, "completeness_repaired_codes", len(gaps))
+        log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {trade_date} completeness repaired codes={len(gaps)}")
+    return remaining
+
+
+def validate_minute_range_and_repair(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    ts_codes: List[str],
+    start_date: dt.date,
+    end_date: dt.date,
+    stats: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    remaining: List[Dict[str, Any]] = []
+    for trade_date in date_range(start_date, end_date):
+        remaining.extend(validate_minute_day_and_repair(conn, run_id, job_id, dataset, ts_codes, trade_date, stats))
+    return remaining
 
 
 def ingest_daily_raw(
@@ -882,7 +1135,26 @@ def ingest_minute(
             pbar.close()
         except Exception:
             pass
-    status = "success" if stats["failed_codes"] == 0 else "failed"
+    validation_start = start_override or target_date
+    remaining_gaps = validate_minute_range_and_repair(
+        conn,
+        run_id,
+        job_id,
+        dataset,
+        codes,
+        validation_start,
+        target_date,
+        stats,
+    )
+    if remaining_gaps:
+        failed_gap_codes = {str(gap.get("ts_code") or "<universe>") for gap in remaining_gaps}
+        _stats_add(stats, "failed_codes", len(failed_gap_codes))
+        try:
+            update_job_summary(conn, job_id, {"failed_codes": len(failed_gap_codes)})
+        except Exception as summary_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} {dataset} final job_summary_update failed: {summary_exc}")
+
+    status = "success" if stats["failed_codes"] == 0 and not remaining_gaps else "failed"
     finish_run(conn, run_id, status, stats)
     finish_job(conn, job_id, status, {"run_id": str(run_id), "stats": stats})
     log_ingestion(conn, job_id, "info", f"run {run_id} finished status={status} stats={json.dumps(stats, ensure_ascii=False)}")
