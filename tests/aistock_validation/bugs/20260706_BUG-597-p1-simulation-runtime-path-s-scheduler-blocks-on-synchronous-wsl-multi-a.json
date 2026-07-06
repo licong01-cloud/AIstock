@@ -2,7 +2,9 @@
   "actual": "Path S SimulationLifecycleScheduler currently executes multi-alpha selection synchronously inside the scheduler tick. Multi-alpha bindings can trigger WSL/conda/python live inference through backend/services/strategy_package/live_inference.py. A slow, hung, or concurrent WSL inference blocks the scheduler thread: last_run stops advancing for 20+ minutes, all Path S bindings are blocked, and controlled stop/start cannot recover because stop_event is checked only between ticks and thread.join(timeout=5.0) leaves the old thread alive.\n\nExpected fix:\n- Scheduler tick must not synchronously block on WSL inference. Prefer authoritative SUCCEEDED selection artifact short-circuit, following the day_runner artifact cache precedent; if runtime generation is unavoidable, dispatch inference off the scheduler thread with a bounded timeout.\n- Add idempotency/mutex protection per (package_id, manifest_sha256, trade_date, runtime_config_hash) to avoid duplicate concurrent inference.\n- Add tick/binding watchdog observability: timeout/failure is loud and names binding, stage, and timeout, while the scheduler continues with other bindings.\n- Preserve fail-closed behavior, evidence chain, and event_loop/guard semantics. Do not add silent fallback, except:pass, or default-value masking.\n\nAcceptance:\n- Simulated slow/hung inference does not freeze the scheduler tick.\n- Other bindings continue to be processed.\n- Timeout is loudly recorded/reported.\n- Relevant tests plus nox l0 pass before PR.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260706_BUG-597-p1-simulation-runtime-path-s-scheduler-blocks-on-synchronous-wsl-multi-a.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-597",
@@ -40,14 +42,16 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "simulation_runtime"
+    "simulation_runtime",
+    "strategy_package"
   ],
   "title": "[P1][Simulation Runtime] Path S scheduler blocks on synchronous WSL multi-alpha inference",
   "trigger_condition": {
@@ -122,5 +126,5 @@
       "target_cost_percent_of_legacy": "35-60%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
