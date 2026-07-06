@@ -31,8 +31,8 @@
   "expected": "Self-hosted Paper v2 UI validation resolves StrategyPackage package asset blobs from a canonical package asset store or fails early with a loud preflight error before live inference.",
   "first_seen_at": "2026-07-06T02:29:33.241719Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "48e8129362cd94e911cbb1b2345a3f7fd648922f",
+  "fixed_at": "2026-07-06T07:05:38.137787Z",
   "github_issue_number": 1889,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1889",
   "last_seen_at": "2026-07-06T02:29:33.241719Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1891",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -61,6 +62,12 @@
     "fingerprint": "e601ba3ce4978b66a1fa3c7b",
     "source_event_id": "FE-20260706-e601ba3ce497"
   },
+  "validation_evidence": [
+    "GitHub PR #1891 CI after main-sync -> all checks completed: 17 success, 3 skipped, 0 failed",
+    "rtk python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py -q -p no:cacheprovider -> 3 passed",
+    "rtk python -m py_compile scripts/ci/prepare_self_hosted_workspace.py backend/tests/scripts/test_prepare_self_hosted_workspace.py -> passed",
+    "rtk git diff --check --cached after conflict resolution -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
