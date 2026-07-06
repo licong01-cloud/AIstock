@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-06T02:29:07.978948Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "46f7ed7fc93d457ac7f54e73f09024a02e36a73b",
+  "fixed_at": "2026-07-06T03:24:03.919500Z",
   "github_issue_number": 1888,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1888",
   "last_seen_at": "2026-07-06T02:29:07.978948Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1890",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime",
     "strategy_package"
@@ -58,6 +59,9 @@
     "fingerprint": "fddeb7568498c7b868e19da9",
     "source_event_id": "FE-20260706-fddeb7568498"
   },
+  "validation_evidence": [
+    "Tier2 PASS; CI clean after minor; local gates: py_compile, ruff, pytest backend/tests/simulation_runtime (195 passed), nox l0, validation_module_registry_l0, git diff --check all passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
