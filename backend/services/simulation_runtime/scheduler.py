@@ -12,7 +12,9 @@ import logging
 import math
 import os
 import threading
+import time as monotonic_time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
@@ -54,9 +56,18 @@ from backend.services.miniqmt_execution_runtime.gray import (
 )
 from backend.services.miniqmt_execution_runtime.repository import default_miniqmt_execution_runtime_repository
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
-from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
+from backend.services.strategy_package.multi_alpha_live import multi_alpha_selection_artifact_runtime_hash
+from backend.services.strategy_package.runtime import _candidate_selection_artifact_runtime_hashes
+from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
 from backend.services.trading_calendar_status import TradingCalendarStatusService
-from backend.services.trading_core.errors import BrokerRejectedError, DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    BrokerRejectedError,
+    DataUnavailableError,
+    RuntimeConfigInvalidError,
+)
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
 from .bridges import MiniQMTExecutionBridge
@@ -100,6 +111,8 @@ DEFAULT_SCHEDULER_APPROVAL_STATES = (
 )
 MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
 MINIQMT_SHADOW_ENABLED_ENV = "MINIQMT_SHADOW_ENABLED"
+SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV = "SIMULATION_RUNTIME_SELECTION_INFERENCE_TIMEOUT_SEC"
+SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV = "SIMULATION_RUNTIME_SELECTION_INFERENCE_MAX_WORKERS"
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -2056,6 +2069,16 @@ class SimulationSchedulerRunOnceResult:
         return len(self.stale_run_results)
 
 
+@dataclass
+class _SelectionInferenceInFlight:
+    key: tuple[Any, ...]
+    future: Future
+    started_monotonic: float
+    started_at: str
+    context: dict[str, Any]
+    timed_out: bool = False
+
+
 class SimulationLifecycleScheduler:
     """Run one unattended lifecycle tick for eligible simulation bindings."""
 
@@ -2068,12 +2091,34 @@ class SimulationLifecycleScheduler:
         context_provider: SimulationRunContextProvider | None = None,
         performance_service: StrategyPerformanceProjectionService | None = None,
         trading_calendar_service: Any | None = None,
+        selection_inference_timeout_seconds: float | None = None,
+        selection_inference_max_workers: int | None = None,
     ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
         self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(repository=self.repository)
         self.context_provider = context_provider or FailFastSimulationRunContextProvider()
         self.performance_service = performance_service or StrategyPerformanceProjectionService()
+        self._selection_inference_timeout_seconds = (
+            float(selection_inference_timeout_seconds)
+            if selection_inference_timeout_seconds is not None
+            else self._selection_inference_timeout_seconds_from_env()
+        )
+        if self._selection_inference_timeout_seconds <= 0:
+            raise ValueError("selection_inference_timeout_seconds must be positive")
+        max_workers = (
+            int(selection_inference_max_workers)
+            if selection_inference_max_workers is not None
+            else self._selection_inference_max_workers_from_env()
+        )
+        if max_workers <= 0:
+            raise ValueError("selection_inference_max_workers must be positive")
+        self._selection_inference_executor = ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="simulation-selection-inference",
+        )
+        self._selection_inference_lock = threading.RLock()
+        self._selection_inference_inflight: dict[tuple[Any, ...], _SelectionInferenceInFlight] = {}
         if trading_calendar_service is not None:
             self.trading_calendar_service = trading_calendar_service
         elif isinstance(self.repository, InMemorySimulationRuntimeRepository):
@@ -2118,7 +2163,51 @@ class SimulationLifecycleScheduler:
                 "sim_default": MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value,
                 "live_forbidden": True,
             },
+            "selection_inference": self._selection_inference_status(),
         }
+
+    def shutdown_selection_inference(self, *, wait: bool = True) -> None:
+        self._selection_inference_executor.shutdown(wait=wait, cancel_futures=not wait)
+
+    def _selection_inference_status(self) -> dict[str, Any]:
+        now = monotonic_time.monotonic()
+        with self._selection_inference_lock:
+            in_flight = []
+            for entry in self._selection_inference_inflight.values():
+                in_flight.append(
+                    {
+                        **entry.context,
+                        "started_at": entry.started_at,
+                        "elapsed_seconds": round(max(0.0, now - entry.started_monotonic), 3),
+                        "timeout_seconds": self._selection_inference_timeout_seconds,
+                        "timed_out": entry.timed_out,
+                        "done": entry.future.done(),
+                    }
+                )
+        return {
+            "mode": "artifact_hit_sync_else_background",
+            "timeout_env_var": SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV,
+            "max_workers_env_var": SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV,
+            "timeout_seconds": self._selection_inference_timeout_seconds,
+            "in_flight_count": len(in_flight),
+            "in_flight": in_flight,
+        }
+
+    @staticmethod
+    def _selection_inference_timeout_seconds_from_env() -> float:
+        raw = (os.getenv(SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV) or "300").strip()
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV} must be a number") from exc
+
+    @staticmethod
+    def _selection_inference_max_workers_from_env() -> int:
+        raw = (os.getenv(SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV) or "2").strip()
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise ValueError(f"{SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV} must be an integer") from exc
 
     def run_once(
         self,
@@ -2652,7 +2741,16 @@ class SimulationLifecycleScheduler:
     def _pre_run_failure_stage(exc: Exception, context: dict[str, Any]) -> str:
         for key in ("failure_stage", "phase", "stage"):
             value = str(context.get(key) or "").strip().lower()
-            if value in {"context", "selection", "preflight", "validate", "validation", "build_plan", "planning"}:
+            if value in {
+                "context",
+                "selection",
+                "selection_inference",
+                "preflight",
+                "validate",
+                "validation",
+                "build_plan",
+                "planning",
+            }:
                 return "validate" if value == "validation" else value
             if value in {"submit_preflight", "pre_submit"}:
                 return "pre_submit"
@@ -5406,6 +5504,7 @@ class SimulationLifecycleScheduler:
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
         shared_selection_keys: set[tuple[Any, ...]] | None,
     ) -> StrategyPackageSelectionResult:
+        runtime_config = StrategyPackageSelectionService.release_selection_runtime_config(runtime_release)
         cache_key = self._selection_cache_key(
             binding=binding,
             trade_date=trade_date,
@@ -5419,15 +5518,24 @@ class SimulationLifecycleScheduler:
                 raise cached
             return cached
         try:
-            selection = self.selection_service.run_selection(
-                package_ids=[binding.package_id],
-                mode=SelectionMode.SINGLE_PACKAGE,
-                trade_date=trade_date,
-                data_source=data_source,
-                runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(runtime_release),
-                runtime_release=runtime_release,
-                created_by=created_by,
-            )
+            if self._selection_artifact_auto_generation_enabled(runtime_config):
+                selection = self._run_auto_generated_selection_nonblocking(
+                    binding=binding,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config=runtime_config,
+                    created_by=created_by,
+                )
+            else:
+                selection = self._run_selection_sync(
+                    binding=binding,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config=runtime_config,
+                    created_by=created_by,
+                )
         except Exception as exc:
             if selection_cache is not None:
                 selection_cache[cache_key] = exc
@@ -5435,6 +5543,265 @@ class SimulationLifecycleScheduler:
         if selection_cache is not None:
             selection_cache[cache_key] = selection
         return selection
+
+    def _run_selection_sync(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+        created_by: str,
+    ) -> StrategyPackageSelectionResult:
+        return self.selection_service.run_selection(
+            package_ids=[binding.package_id],
+            mode=SelectionMode.SINGLE_PACKAGE,
+            trade_date=trade_date,
+            data_source=data_source,
+            runtime_config=runtime_config,
+            runtime_release=runtime_release,
+            created_by=created_by,
+        )
+
+    def _run_auto_generated_selection_nonblocking(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+        created_by: str,
+    ) -> StrategyPackageSelectionResult:
+        if self._authoritative_selection_artifact_exists(
+            binding=binding,
+            runtime_release=runtime_release,
+            trade_date=trade_date,
+            data_source=data_source,
+            runtime_config=runtime_config,
+        ):
+            return self._run_selection_sync(
+                binding=binding,
+                runtime_release=runtime_release,
+                trade_date=trade_date,
+                data_source=data_source,
+                runtime_config=runtime_config,
+                created_by=created_by,
+            )
+
+        key = self._selection_inference_key(
+            binding=binding,
+            trade_date=trade_date,
+            data_source=data_source,
+            runtime_config=runtime_config,
+        )
+        now = monotonic_time.monotonic()
+        with self._selection_inference_lock:
+            entry = self._selection_inference_inflight.get(key)
+            if entry is None:
+                context = self._selection_inference_context(
+                    binding=binding,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config=runtime_config,
+                )
+                future = self._selection_inference_executor.submit(
+                    self._run_selection_sync,
+                    binding=binding,
+                    runtime_release=runtime_release,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config=deepcopy(runtime_config),
+                    created_by=created_by,
+                )
+                entry = _SelectionInferenceInFlight(
+                    key=key,
+                    future=future,
+                    started_monotonic=now,
+                    started_at=datetime.now(UTC).isoformat(),
+                    context=context,
+                )
+                self._selection_inference_inflight[key] = entry
+                logger.warning(
+                    "Simulation scheduler dispatched auto-generated selection inference off tick thread: %s",
+                    context,
+                )
+            if entry.future.done():
+                self._selection_inference_inflight.pop(key, None)
+                future = entry.future
+            else:
+                elapsed = now - entry.started_monotonic
+                if elapsed >= self._selection_inference_timeout_seconds:
+                    entry.timed_out = True
+                    raise self._selection_inference_timeout_error(entry, elapsed_seconds=elapsed)
+                raise self._selection_inference_pending_error(entry, elapsed_seconds=elapsed)
+        return future.result()
+
+    @staticmethod
+    def _selection_artifact_auto_generation_enabled(runtime_config: dict[str, Any]) -> bool:
+        artifact_config = StrategyPackageSelectionService.selection_artifact_config(runtime_config)
+        return bool(artifact_config.get("auto_generate"))
+
+    def _authoritative_selection_artifact_exists(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+    ) -> bool:
+        artifact_config = StrategyPackageSelectionService.selection_artifact_config(runtime_config)
+        if bool(artifact_config.get("force_regenerate")):
+            return False
+        artifact_repository = self._selection_artifact_repository()
+        if artifact_repository is None:
+            return False
+        runtime_hashes = self._selection_artifact_runtime_hashes(
+            binding=binding,
+            runtime_release=runtime_release,
+            runtime_config=runtime_config,
+        )
+        for runtime_hash in runtime_hashes:
+            try:
+                artifact = artifact_repository.get(
+                    package_id=binding.package_id,
+                    manifest_sha256=binding.manifest_sha256 or runtime_release.manifest_sha256 or "",
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config_hash=runtime_hash,
+                )
+            except DataUnavailableError:
+                continue
+            metadata = artifact.metadata or {}
+            if (
+                artifact.status.value == "SUCCEEDED"
+                and artifact.scores_json
+                and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
+            ):
+                return True
+        return False
+
+    def _selection_artifact_runtime_hashes(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        runtime_config: dict[str, Any],
+    ) -> list[str]:
+        hashes = list(_candidate_selection_artifact_runtime_hashes(runtime_config))
+        manifest = self._selection_package_manifest(binding=binding, runtime_release=runtime_release)
+        if manifest is not None and manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            multi_hash = multi_alpha_selection_artifact_runtime_hash(manifest, runtime_config)
+            hashes = [multi_hash, *[item for item in hashes if item != multi_hash]]
+        return hashes
+
+    def _selection_package_manifest(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+    ) -> StrategyPackageManifest | None:
+        package_repository = getattr(self.selection_service, "package_repository", None)
+        getter = getattr(package_repository, "get", None)
+        if not callable(getter):
+            return None
+        record = getter(binding.package_id)
+        manifest = record.current_manifest()
+        if not manifest.manifest_sha256:
+            return manifest.model_copy(update={"manifest_sha256": binding.manifest_sha256 or runtime_release.manifest_sha256})
+        return manifest
+
+    def _selection_artifact_repository(self) -> Any | None:
+        candidates = [
+            getattr(self.selection_service, "runtime", None),
+            getattr(getattr(self.selection_service, "signal_service", None), "runtime", None),
+            getattr(self.selection_service, "selection_artifact_service", None),
+            getattr(getattr(self.selection_service, "signal_service", None), "selection_artifact_service", None),
+        ]
+        for candidate in candidates:
+            artifact_repository = getattr(candidate, "artifact_repository", None)
+            if artifact_repository is not None and callable(getattr(artifact_repository, "get", None)):
+                return artifact_repository
+        return None
+
+    def _selection_inference_key(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+    ) -> tuple[Any, ...]:
+        return (
+            binding.package_id,
+            binding.manifest_sha256,
+            trade_date.isoformat(),
+            data_source,
+            selection_artifact_runtime_hash(runtime_config),
+        )
+
+    def _selection_inference_context(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        runtime_release: StrategyRuntimeRelease,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "stage": "SELECTION_INFERENCE",
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "package_id": binding.package_id,
+            "manifest_sha256": binding.manifest_sha256 or runtime_release.manifest_sha256,
+            "release_id": runtime_release.release_id,
+            "release_hash": runtime_release.release_hash,
+            "trade_date": trade_date.isoformat(),
+            "data_source": data_source,
+            "runtime_config_hash": selection_artifact_runtime_hash(runtime_config),
+        }
+
+    def _selection_inference_pending_error(
+        self,
+        entry: _SelectionInferenceInFlight,
+        *,
+        elapsed_seconds: float,
+    ) -> DataUnavailableError:
+        return DataUnavailableError(
+            "simulation scheduler selection inference is running asynchronously; tick will continue",
+            context={
+                **entry.context,
+                "reason_code": "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS",
+                "failure_stage": "SELECTION_INFERENCE",
+                "started_at": entry.started_at,
+                "elapsed_seconds": round(max(0.0, elapsed_seconds), 3),
+                "timeout_seconds": self._selection_inference_timeout_seconds,
+            },
+        )
+
+    def _selection_inference_timeout_error(
+        self,
+        entry: _SelectionInferenceInFlight,
+        *,
+        elapsed_seconds: float,
+    ) -> ArtifactGenerationFailedError:
+        return ArtifactGenerationFailedError(
+            "simulation scheduler selection inference timed out; tick remains non-blocking",
+            context={
+                **entry.context,
+                "reason_code": "SIMULATION_SELECTION_INFERENCE_TIMEOUT",
+                "failure_stage": "SELECTION_INFERENCE",
+                "started_at": entry.started_at,
+                "elapsed_seconds": round(max(0.0, elapsed_seconds), 3),
+                "timeout_seconds": self._selection_inference_timeout_seconds,
+                "thread_isolated": True,
+            },
+        )
 
     def _selection_cache_key(
         self,

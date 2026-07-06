@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time as time_module
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -178,6 +180,7 @@ def _create_scheduler_release(
     *,
     package_id: str,
     manifest_sha256: str,
+    release_metadata: dict | None = None,
 ):
     return StrategyRuntimeReleaseService(repository=repo).create_release(
         package_id=package_id,
@@ -190,6 +193,7 @@ def _create_scheduler_release(
         execution_policy_sha256=f"exec_policy_{package_id}_hash",
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256=f"tail_policy_{package_id}_hash",
+        release_metadata=release_metadata,
         created_by="unit-test",
         created_reason="scheduler multi-release test",
     )
@@ -1844,6 +1848,132 @@ def test_scheduler_isolates_live_inference_preflight_failure_and_continues_later
     detail = SimulationRuntimeOpsService(repository=repo).get_run_detail(failed_run.run_id)
     assert detail["run"]["errors"][0]["code"] == "PRE_RUN_FAILED"
     assert detail["run"]["errors"][0]["context"]["reason_code"] == "strategy_package_model_code_missing"
+
+
+def test_scheduler_auto_generated_selection_timeout_does_not_freeze_other_bindings() -> None:
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    auto_generate_config = {
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "include_reference_price": True,
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    slow_release = _create_scheduler_release(
+        repo,
+        package_id="pkg_slow_autogen",
+        manifest_sha256="manifest_slow_autogen",
+        release_metadata={"selection_runtime_config": auto_generate_config},
+    )
+    fast_release = _create_scheduler_release(repo, package_id="pkg_fast_after_slow", manifest_sha256="manifest_fast")
+    slow_binding = service.create_binding(
+        strategy_id="strategy_slow_autogen",
+        release=slow_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="slow autogen binding",
+    )
+    fast_binding = service.create_binding(
+        strategy_id="strategy_fast_after_slow",
+        release=fast_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=100_000,
+        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        created_by="unit-test",
+        created_reason="fast binding still processed",
+    )
+
+    class BlockingAutoGenerateSelectionService:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.calls: list[str] = []
+
+        def run_selection(self, **kwargs):
+            package_id = kwargs["package_ids"][0]
+            self.calls.append(package_id)
+            if package_id == slow_release.package_id:
+                self.started.set()
+                self.release.wait(timeout=5.0)
+            runtime_release = kwargs.get("runtime_release") or {
+                slow_release.package_id: slow_release,
+                fast_release.package_id: fast_release,
+            }[package_id]
+            candidates = _candidate_rows()
+            evidence = _evidence(runtime_release, candidates=candidates, target_trade_date=kwargs.get("trade_date") or TRADE_DATE)
+            return StrategyPackageSelectionResult(
+                runtime_config={
+                    "runtime_profile": {
+                        "selection": {"daily_strategy_id": DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID}
+                    }
+                },
+                package_results={runtime_release.package_id: candidates},
+                aggregate_results=candidates,
+                excluded_results={runtime_release.package_id: []},
+                manifest_sha256_by_package={runtime_release.package_id: runtime_release.manifest_sha256},
+                evidence_by_package={runtime_release.package_id: evidence},
+            )
+
+    selection = BlockingAutoGenerateSelectionService()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                slow_binding.binding_id: _position_context(portfolio_id="portfolio_slow"),
+                fast_binding.binding_id: _position_context(portfolio_id="portfolio_fast"),
+            }
+        ),
+        selection_inference_timeout_seconds=0.01,
+        selection_inference_max_workers=1,
+    )
+
+    try:
+        started = time_module.perf_counter()
+        first = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+        )
+        elapsed = time_module.perf_counter() - started
+        assert selection.started.wait(timeout=1.0)
+
+        by_binding_id = {item.binding_id: item for item in first.results}
+        assert elapsed < 0.5
+        assert first.total_bindings == 2
+        assert first.failed_count == 1
+        assert first.planned_count == 1
+        assert by_binding_id[slow_binding.binding_id].error["context"]["reason_code"] == "SIMULATION_SELECTION_INFERENCE_IN_PROGRESS"
+        assert by_binding_id[fast_binding.binding_id].status == "PLANNED"
+
+        time_module.sleep(0.03)
+        second = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+        )
+        second_by_binding_id = {item.binding_id: item for item in second.results}
+        inflight_status = scheduler.status()["selection_inference"]
+
+        assert second.total_bindings == 2
+        assert second.failed_count == 1
+        assert second_by_binding_id[slow_binding.binding_id].error["context"]["reason_code"] == "SIMULATION_SELECTION_INFERENCE_TIMEOUT"
+        assert second_by_binding_id[slow_binding.binding_id].error["context"]["failure_stage"] == "selection_inference"
+        assert second_by_binding_id[fast_binding.binding_id].status == "REUSED_EXISTING_PLAN"
+        assert selection.calls.count(slow_release.package_id) == 1
+        assert inflight_status["in_flight_count"] == 1
+        assert inflight_status["in_flight"][0]["timed_out"] is True
+    finally:
+        selection.release.set()
+        scheduler.shutdown_selection_inference(wait=True)
 
 
 def test_scheduler_raise_on_error_reraises_live_inference_preflight_failure() -> None:
