@@ -2,7 +2,14 @@
   "actual": "submit_persisted_execution_plan(event_loop) 完成后 broker_called=false、submitted_intents=0、failed_intents=0、/qmt/orders 空，run_payload 无 submit 失败，形成静默 RECONCILING。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260706_BUG-599-bug-599-unattended-miniqmt-event-loop-submit-silently-skips-sim-broker-o.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/gateway.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-599",
@@ -20,6 +27,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260706-6b1050048ae6",
       "timestamp": "2026-07-06T07:04:09.690525Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Scope expanded after user-provided production SIM evidence showed the registry-only BUG intake cannot fix the unattended SimulationLifecycleScheduler event_loop MiniQMT submit path; include lifecycle/bridge/scheduler, MiniQMT event_loop runtime client/gateway, and focused regression tests only.",
+      "timestamp": "2026-07-06T15:30:00+08:00"
     }
   ],
   "evidence_uris": [
@@ -42,14 +55,17 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0",
+    "simulation_runtime_miniqmt_event_loop_targeted"
   ],
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "simulation_runtime"
+    "simulation_runtime",
+    "miniqmt_execution_runtime"
   ],
   "title": "BUG-599 unattended MiniQMT event_loop submit silently skips SIM broker order",
   "trigger_condition": {
@@ -124,5 +140,5 @@
       "target_cost_percent_of_legacy": "35-60%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
