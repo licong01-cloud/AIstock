@@ -30,22 +30,22 @@
     {
       "action": "expand_allowed_write_scope",
       "actor": "codex",
-      "timestamp": "2026-06-25T11:52:47.545425Z",
-      "note": "BUG-527 changes the read-only tool surface contract, so characterization and catalog gate tests must be updated with the service behavior."
+      "note": "BUG-527 changes the read-only tool surface contract, so characterization and catalog gate tests must be updated with the service behavior.",
+      "timestamp": "2026-06-25T11:52:47.545425Z"
     },
     {
       "action": "implementation",
       "actor": "codex",
-      "timestamp": "2026-06-25T15:43:30.585573Z",
-      "note": "Implemented full read-only manifest MCP tool domain for RA agentic analysis/planning/preflight/execution while keeping capability-backed side-effect tools under preflight/approval and excluding manifest-only write tools. Added manifest read-only direct execution path with mcp_tool_events/trace_events/task_events audit; preserved save_evidence as preflight-only in dialogue/none mode via capability-backed side-effect catalog gate only (not exposed as function tool, not executed). Validation: targeted pytest 16 passed; research_assistant_backend nox 350 passed; research_assistant_mcp_contract nox 38 passed; l0 nox passed; validation_module_registry_l0 nox 8 passed; ruff passed; git diff --check passed. ra_phase7_full_accept failed on unrelated local dev Postgres 127.0.0.1:5433 connection refused in test_agent_teams_ddl_contract/test_qe_autonomy_ddl_contract; no production DB connected and no services/DDL run."
+      "note": "Implemented full read-only manifest MCP tool domain for RA agentic analysis/planning/preflight/execution while keeping capability-backed side-effect tools under preflight/approval and excluding manifest-only write tools. Added manifest read-only direct execution path with mcp_tool_events/trace_events/task_events audit; preserved save_evidence as preflight-only in dialogue/none mode via capability-backed side-effect catalog gate only (not exposed as function tool, not executed). Validation: targeted pytest 16 passed; research_assistant_backend nox 350 passed; research_assistant_mcp_contract nox 38 passed; l0 nox passed; validation_module_registry_l0 nox 8 passed; ruff passed; git diff --check passed. ra_phase7_full_accept failed on unrelated local dev Postgres 127.0.0.1:5433 connection refused in test_agent_teams_ddl_contract/test_qe_autonomy_ddl_contract; no production DB connected and no services/DDL run.",
+      "timestamp": "2026-06-25T15:43:30.585573Z"
     }
   ],
   "evidence_uris": [],
   "expected": "In read-only dialogue/analysis modes, the LLM visible/callable tool set equals all manifest tools with side_effect_level=read_only; non-read-only tools still require capability backing and approval gates; route candidates are suggestions, not restrictions.",
   "first_seen_at": "2026-06-25T08:53:33.044556Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:30:00.874282Z",
   "github_issue_number": 1640,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1640",
   "last_seen_at": "2026-06-25T08:53:33.044556Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -67,7 +68,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -76,6 +77,9 @@
     "fingerprint": "7e68b477d671934a266415ea",
     "source_event_id": "FE-20260625-7e68b477d671"
   },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

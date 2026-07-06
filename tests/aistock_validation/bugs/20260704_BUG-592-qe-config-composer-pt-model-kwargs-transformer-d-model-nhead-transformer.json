@@ -29,8 +29,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-03T16:44:41.233390Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:30:14.955627Z",
   "github_issue_number": 1875,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1875",
   "last_seen_at": "2026-07-03T16:44:41.233390Z",
@@ -41,6 +41,7 @@
     "Do not diagnose the separate LSTM Loop2 1.5h failure here (tracked separately).",
     "Do not touch the running CPU task qe_20260703_200736_0f79."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "cf040e63028f4baebb78c181",
     "source_event_id": "FE-20260704-cf040e63028f"
   },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
