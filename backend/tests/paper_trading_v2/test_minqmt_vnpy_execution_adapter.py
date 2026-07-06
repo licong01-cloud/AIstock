@@ -16,9 +16,20 @@ from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
 from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError, MiniQMTUnsupportedExecutionAlgoError
+from backend.services.miniqmt_execution_runtime import (
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionRuntimeClient,
+)
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import TRADE_DATE, _SnapshotOnlyRepository
+
+
+@pytest.fixture(autouse=True)
+def _force_compiler_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME", "compiler")
 
 
 class VnpyRecordingMiniQMTBroker:
@@ -150,6 +161,36 @@ class VnpyRecordingMiniQMTBroker:
         return None
 
 
+class EventLoopCallbackMiniQMTClient:
+    def __init__(self) -> None:
+        self.place_order_calls: list[dict[str, Any]] = []
+
+    def query_quote(self, symbol: str) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "source": "MINIQMT_REALTIME.broker_quote",
+            "price": 10.0,
+            "ask_price_1": 10.0,
+            "ask_volume_1": 1000,
+            "bid_price_1": 9.99,
+            "bid_volume_1": 1000,
+            "time": "20240102093105",
+        }
+
+    def get_orders(self, cancelable_only: bool = False) -> list[dict[str, Any]]:  # noqa: ARG002
+        return []
+
+    def get_trades(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_positions(self) -> list[dict[str, Any]]:
+        return []
+
+    def place_order(self, **kwargs: Any):
+        self.place_order_calls.append(dict(kwargs))
+        return 880000000 + len(self.place_order_calls), "accepted"
+
+
 def _portfolio_and_run(policy_json: dict[str, Any]):
     manifest = make_paper_enabled_manifest()
     policy = {
@@ -201,6 +242,70 @@ def _intent(
         limit_price=limit_price,
         target_trade_date=date(2024, 1, 2),
     )
+
+
+def test_event_loop_route_a_submits_parent_intent_through_callback_gateway() -> None:
+    runtime_repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    ledger_repo = InMemoryQmtStrategyLedgerRepository()
+    ledger_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strategy_event_loop",
+            strategy_name="strategy_event_loop",
+            display_name="Event loop strategy",
+            account_id="acct_event_loop",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_client = EventLoopCallbackMiniQMTClient()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=runtime_repo,
+        strategy_ledger_repository=ledger_repo,
+        runtime_kind="event_loop",
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[
+            _intent(quantity=100).model_copy(
+                update={
+                    "intent_id": "intent_event_loop_buy",
+                    "metadata": {
+                        "strategy_id": "strategy_event_loop",
+                        "strategy_name": "strategy_event_loop",
+                    },
+                }
+            )
+        ],
+        policy_context={
+            "policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}},
+            "validated_execution_policy_id": "policy_event_loop",
+            "policy_sha256": "sha_event_loop",
+        },
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_route_a",
+        runtime_id="mqrt_event_loop_route_a",
+        strategy_slot_id="strategy_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+        source="paper_v2_event_loop_route_a_unit",
+    )
+
+    assert result.success is True
+    assert qmt_client.place_order_calls
+    runtime = runtime_repo.get_runtime("mqrt_event_loop_route_a")
+    assert runtime is not None
+    assert runtime.metadata["runtime_kind"] == "event_loop"
+    assert runtime.metadata["gateway_class"] == "QmtClientMiniQMTEventLoopGateway"
+    algo = runtime_repo.list_algo_instances("mqrt_event_loop_route_a", active_only=False)[0]
+    assert algo.metadata["event_loop_submit"] is True
+    assert algo.metadata["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    child = runtime_repo.list_child_orders("mqrt_event_loop_route_a", active_only=False)[0]
+    assert child.status.value == "SUBMITTED"
 
 
 def test_minqmt_rejects_v25_policy_before_broker_submit() -> None:

@@ -20,6 +20,12 @@ COMMON_ENV = {
     "PYTHONIOENCODING": "utf-8",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
+VALIDATION_ENV_FILE_DENYLIST = {
+    "MINIQMT_EXECUTION_RUNTIME",
+}
+VALIDATION_RUNTIME_DEFAULTS = {
+    "MINIQMT_EXECUTION_RUNTIME": "compiler",
+}
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
@@ -58,6 +64,8 @@ def _load_validation_env_file() -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
+        if key in VALIDATION_ENV_FILE_DENYLIST:
+            continue
         if key and not os.environ.get(key):
             os.environ[key] = value.strip().strip('"').strip("'")
 
@@ -66,6 +74,7 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     _load_validation_env_file()
     env = os.environ.copy()
     env.update(COMMON_ENV)
+    env.update(VALIDATION_RUNTIME_DEFAULTS)
     if extra:
         env.update(extra)
     return env
