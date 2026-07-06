@@ -46,8 +46,8 @@
   "expected": "vn.py-style MiniQMT algo instances must terminalize once their orders are terminal and no core active orders remain; terminal algos must not receive later tick/timer dispatch; repeated shadow reject replays of the same base runtime/scenario must be isolated/idempotent; _append_count_diff remains strict.",
   "first_seen_at": "2026-06-29T11:45:01.678239Z",
   "fix_branch": "bug/BUG-556-miniqmt-shadow-reject-replay-keeps-vn-py-algo-ac-20260629",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:30:04.830974Z",
   "github_issue_number": 1746,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1746",
   "last_seen_at": "2026-06-29T11:45:01.678239Z",
@@ -55,6 +55,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -69,7 +70,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -78,6 +79,9 @@
     "fingerprint": "4ca0bc63af0958ad8ad7f1fe",
     "source_event_id": "FE-20260629-4ca0bc63af09"
   },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

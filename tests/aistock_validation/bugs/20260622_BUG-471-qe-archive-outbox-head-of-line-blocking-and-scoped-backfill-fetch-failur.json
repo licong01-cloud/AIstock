@@ -31,11 +31,6 @@
     {
       "action": "scope_expanded",
       "actor": "codex",
-      "timestamp": "2026-06-22T05:33:48Z",
-      "old_scope": [
-        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
-        "tests/aistock_validation/bugs/.bug_id_allocator.json"
-      ],
       "new_scope": [
         "backend/services/qe_archive/backfill_service.py",
         "backend/services/qe_archive/event_capture.py",
@@ -47,15 +42,20 @@
         "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
         "tests/aistock_validation/bugs/.bug_id_allocator.json"
       ],
-      "note": "Targeted read-only evidence narrowed BUG-471 fix to qe_archive scoped-selection fallback, outbox archive-routing claim/health observability, and QE Archive frontend API error reporting; no RA/QE training scope."
+      "note": "Targeted read-only evidence narrowed BUG-471 fix to qe_archive scoped-selection fallback, outbox archive-routing claim/health observability, and QE Archive frontend API error reporting; no RA/QE training scope.",
+      "old_scope": [
+        "tests/aistock_validation/bugs/20260622_BUG-471-qe-archive-outbox-head-of-line-blocking-and-scoped-backfill-fetch-failur.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-22T05:33:48Z"
     }
   ],
   "evidence_uris": [],
   "expected": "QE loop archive events are not starved by paper_v2 telemetry; backfill candidates are strictly scoped to selected experiment/task ids; UI archive action uses bounded/async or paginated endpoint behavior and reports explicit reason_code/error details instead of generic Failed to fetch.",
   "first_seen_at": "2026-06-22T05:09:22.221867Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:29:50.313446Z",
   "github_issue_number": 1454,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1454",
   "last_seen_at": "2026-06-22T05:09:22.221867Z",
@@ -63,6 +63,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -73,7 +74,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -108,6 +109,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,

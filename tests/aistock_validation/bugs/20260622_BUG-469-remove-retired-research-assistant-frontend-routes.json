@@ -28,24 +28,24 @@
       "timestamp": "2026-06-22T04:57:26.883840Z"
     },
     {
-      "timestamp": "2026-06-22T05:10:00Z",
-      "actor": "codex",
       "action": "scope_expanded",
-      "note": "Scoped frontend grep found retired route references in chat rail and retired issue-candidates API client methods; expanded scope to remove dangling frontend references without touching backend."
+      "actor": "codex",
+      "note": "Scoped frontend grep found retired route references in chat rail and retired issue-candidates API client methods; expanded scope to remove dangling frontend references without touching backend.",
+      "timestamp": "2026-06-22T05:10:00Z"
     },
     {
-      "timestamp": "2026-06-22T05:18:01Z",
-      "actor": "codex",
       "action": "implementation",
-      "note": "Removed RA admin/streams/issue-candidates frontend routes, removed nav/admin chat link and retired RA issue-candidate/discovery frontend API client surface. Validation: route grep clean; directories absent; git diff --check passed; PR scope check passed; frontend npm run lint passed; frontend npm run build passed."
+      "actor": "codex",
+      "note": "Removed RA admin/streams/issue-candidates frontend routes, removed nav/admin chat link and retired RA issue-candidate/discovery frontend API client surface. Validation: route grep clean; directories absent; git diff --check passed; PR scope check passed; frontend npm run lint passed; frontend npm run build passed.",
+      "timestamp": "2026-06-22T05:18:01Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Research Assistant navigation exposes only active pages; /research-assistant/admin, /research-assistant/streams, and /research-assistant/issue-candidates frontend routes and links are removed.",
   "first_seen_at": "2026-06-22T04:57:26.883842Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:29:46.420833Z",
   "github_issue_number": 1452,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1452",
   "last_seen_at": "2026-06-22T04:57:26.883842Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,7 +67,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "research_assistant"
   ],
@@ -106,6 +107,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
