@@ -480,6 +480,14 @@ class SimulationLifecycleOrchestrator:
                     price_by_symbol=price_by_symbol,
                 )
             except Exception as exc:
+                if runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP:
+                    self._annotate_event_loop_submit_failure(
+                        exc=exc,
+                        stage=submit_stage,
+                        run=run,
+                        plan=plan,
+                        binding=binding,
+                    )
                 self.mark_submit_failure(run=run, stage=submit_stage, exc=exc)
                 raise
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
@@ -597,20 +605,52 @@ class SimulationLifecycleOrchestrator:
         )
         raise exc
 
+    @staticmethod
+    def _annotate_event_loop_submit_failure(
+        *,
+        exc: BaseException,
+        stage: str,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+    ) -> None:
+        context = getattr(exc, "context", None)
+        if not isinstance(context, dict):
+            return
+        context.setdefault("stage", stage)
+        context.setdefault("run_id", run.run_id)
+        context.setdefault("plan_id", plan.plan_id)
+        context.setdefault("binding_id", binding.binding_id)
+        context.setdefault("strategy_id", binding.strategy_id)
+        context.setdefault("broker_backend", binding.broker_backend.value)
+        context.setdefault("broker_called", False)
+        context.setdefault("submitted_intents", 0)
+        context.setdefault("failed_intents", len(plan.intents))
+
     def mark_submit_failure(self, *, run: SimulationDailyRun, stage: str, exc: BaseException) -> SimulationDailyRun:
         context = getattr(exc, "context", None)
+        payload_patch: dict[str, Any] = {
+            "last_stage": "FAILED_RETRYABLE",
+            "submit_failure": {
+                "stage": (
+                    str(context.get("stage"))
+                    if isinstance(context, dict) and context.get("stage")
+                    else stage
+                ),
+                "outer_stage": stage,
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "context": context if isinstance(context, dict) else None,
+            },
+        }
+        if isinstance(context, dict):
+            for key in ("broker_called", "submitted_intents", "failed_intents"):
+                if key in context:
+                    payload_patch[key] = context[key]
         return self.repository.update_simulation_daily_run(
             run.run_id,
             status=SimulationDailyRunStatus.FAILED_RETRYABLE,
-            payload_patch={
-                "last_stage": "FAILED_RETRYABLE",
-                "submit_failure": {
-                    "stage": stage,
-                    "type": type(exc).__name__,
-                    "message": str(exc),
-                    "context": context if isinstance(context, dict) else None,
-                },
-            },
+            payload_patch=payload_patch,
         )
 
     def _create_or_load_run(

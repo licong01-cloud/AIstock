@@ -2346,9 +2346,23 @@ class SimulationLifecycleScheduler:
         created_by: str,
         exc: Exception,
     ) -> SimulationSchedulerBindingResult:
-        if not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError)) and self._has_broker_side_effect_evidence(
-            binding=binding,
+        existing_after_failure = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
             trade_date=trade_date,
+        )
+        submit_failure_recorded = (
+            existing_after_failure is not None
+            and bool(existing_after_failure.execution_plan_id)
+            and isinstance(existing_after_failure.run_payload_json.get("submit_failure"), dict)
+        )
+        if (
+            not submit_failure_recorded
+            and not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
+            and self._has_broker_side_effect_evidence(
+                binding=binding,
+                trade_date=trade_date,
+            )
         ):
             logger.exception(
                 "Simulation lifecycle scheduler will not mark side-effect-bearing binding failure as pre-run failure",
@@ -2498,6 +2512,8 @@ class SimulationLifecycleScheduler:
                 SimulationDailyRunStatus.FAILED_TERMINAL,
                 SimulationDailyRunStatus.CANCELLED,
             }
+            if existing.execution_plan_id and isinstance(existing.run_payload_json.get("submit_failure"), dict):
+                return existing
             if (
                 not isinstance(exc, (DataUnavailableError, RuntimeConfigInvalidError))
                 and existing.status not in terminal_statuses

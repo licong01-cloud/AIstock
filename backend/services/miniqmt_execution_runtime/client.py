@@ -591,13 +591,24 @@ class MiniQMTExecutionRuntimeClient:
         for child in new_children:
             child_by_parent.setdefault(child.parent_intent_id, []).append(child)
         results: list[ManagedOrderSubmitResult] = []
+        missing_child_intents: list[OrderIntent] = []
         for intent in parent_intents:
             children = child_by_parent.get(intent.intent_id) or []
             if not children:
-                results.append(_event_loop_no_child_result(intent=intent, source=source))
+                missing_child_intents.append(intent)
                 continue
             for child in children:
                 results.append(_event_loop_child_submit_result(child=child, source=source))
+        if missing_child_intents:
+            _raise_event_loop_no_child_order(
+                missing_child_intents=missing_child_intents,
+                parent_intents=parent_intents,
+                new_children=new_children,
+                runtime_evidence=runtime_evidence,
+                runtime_id=runtime.config.runtime_id,
+                strategy_slot_id=strategy_slot_id,
+                source=source,
+            )
         succeeded = sum(1 for item in results if item.success)
         failed = len(results) - succeeded
         batch_status = "SUCCEEDED" if failed == 0 and succeeded > 0 else ("PARTIAL" if succeeded else "FAILED")
@@ -1616,6 +1627,46 @@ def _event_loop_no_child_result(*, intent: OrderIntent, source: str) -> ManagedO
         broker_message="event_loop route produced no child order",
         preflight=preflight,
         broker_called=False,
+    )
+
+
+def _raise_event_loop_no_child_order(
+    *,
+    missing_child_intents: list[OrderIntent],
+    parent_intents: list[OrderIntent],
+    new_children: tuple[MiniQMTChildOrder, ...],
+    runtime_evidence: MiniQMTRuntimeEvidence,
+    runtime_id: str,
+    strategy_slot_id: str,
+    source: str,
+) -> None:
+    submitted_children = [
+        child
+        for child in new_children
+        if child.status != MiniQMTChildOrderStatus.REJECTED and bool(child.broker_order_id)
+    ]
+    first_missing = missing_child_intents[0]
+    raise BrokerSubmitError(
+        "MiniQMT event_loop route produced no child order for parent intent",
+        context={
+            "reason_code": "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER",
+            "stage": "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER",
+            "runtime_id": runtime_id,
+            "runtime_evidence": runtime_evidence.to_dict(),
+            "strategy_slot_id": strategy_slot_id,
+            "source": source,
+            "intent_id": first_missing.intent_id,
+            "symbol": first_missing.symbol,
+            "side": first_missing.side.value,
+            "quantity": int(first_missing.quantity),
+            "missing_parent_intent_ids": [intent.intent_id for intent in missing_child_intents],
+            "parent_intent_count": len(parent_intents),
+            "broker_called": bool(new_children),
+            "submitted_intents": len(submitted_children),
+            "failed_intents": len(missing_child_intents),
+            "child_order_count": len(new_children),
+            "submitted_child_order_ids": [child.child_order_id for child in submitted_children],
+        },
     )
 
 

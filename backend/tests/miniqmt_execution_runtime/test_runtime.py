@@ -488,11 +488,14 @@ class _EventLoopFakeQmtClient:
         return True, f"cancelled {order_id}"
 
 
-def _event_loop_policy() -> dict[str, object]:
+def _event_loop_policy(
+    algo_code: str = "SNIPER_MINIQMT",
+    algo_config: dict[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "policy_json": {
-            "algo_code": "SNIPER_MINIQMT",
-            "algo_config": {},
+            "algo_code": algo_code,
+            "algo_config": dict(algo_config or {}),
         },
         "validated_execution_policy_id": "policy_event_loop",
         "policy_sha256": "policy_sha_event_loop",
@@ -536,6 +539,42 @@ def _event_loop_client_fixture() -> tuple[
         },
     )
     return repo, qmt_repo, _EventLoopFakeQmtClient(), intent
+
+
+def test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        client.submit_event_loop_vnpy_parent_intents(
+            parent_intents=[intent],
+            policy_context=_event_loop_policy(
+                "TWAP_LITE_MINIQMT",
+                {"time": 60, "interval": 60},
+            ),
+            account_group_id="acct_event_loop",
+            trade_date=TRADE_DATE,
+            runtime_config_hash="runtime_hash_event_loop_no_child",
+            runtime_id="mqrt_event_loop_no_child",
+            strategy_slot_id="slot_event_loop",
+            qmt_client=qmt_client,
+            strategy_name="strategy_event_loop",
+            order_remark_prefix="evtloop",
+            account_id="acct_event_loop",
+        )
+
+    context = exc_info.value.context
+    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER"
+    assert context["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
+    assert context["broker_called"] is False
+    assert context["submitted_intents"] == 0
+    assert context["failed_intents"] == 1
+    assert context["missing_parent_intent_ids"] == [intent.intent_id]
+    assert qmt_client.place_order_calls == []
 
 
 def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient() -> None:

@@ -85,6 +85,7 @@ from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightResult,
 )
 from backend.services.trading_core.errors import (
+    BrokerUnavailableError,
     BrokerRejectedError,
     DataUnavailableError,
     LiveApprovalRequiredError,
@@ -122,13 +123,18 @@ def _deterministic_scheduler_now(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scheduler_module, "scheduler_now", fixed_now)
 
 
-def _release_and_bindings(*, qmt_only: bool = False, release_metadata: dict | None = None):
+def _release_and_bindings(
+    *,
+    qmt_only: bool = False,
+    release_metadata: dict | None = None,
+    execution_policy_json: dict[str, Any] | None = None,
+):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
     if qmt_only:
         execution_policy_version_id = "vnpy_asset:SNIPER_MINIQMT"
         execution_policy_sha256 = "exec_policy_hash_sniper_miniqmt"
-        execution_policy_json = {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}
+        execution_policy_json = execution_policy_json or {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}
     else:
         execution_policy_version_id = "exec_policy_v25_1_small_cap"
         execution_policy_sha256 = "exec_policy_hash_v25_1_small_cap"
@@ -602,6 +608,10 @@ class FakeManagedOrderBroker:
         return True, f"cancelled {order_id}"
 
 
+class MissingPlaceOrderQmtClient(FakeManagedOrderBroker):
+    place_order = None
+
+
 class FakeQmtSnapshotClient:
     def __init__(
         self,
@@ -640,8 +650,15 @@ class FailingQmtSnapshotClient(FakeQmtSnapshotClient):
         return super().get_orders(cancelable_only=cancelable_only)
 
 
-def _miniqmt_shadow_test_scheduler(*, candidates: list[SelectionCandidate] | None = None):
-    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+def _miniqmt_shadow_test_scheduler(
+    *,
+    candidates: list[SelectionCandidate] | None = None,
+    execution_policy_json: dict[str, Any] | None = None,
+):
+    release, _, qmt_binding, repo = _release_and_bindings(
+        qmt_only=True,
+        execution_policy_json=execution_policy_json,
+    )
     qmt_repo = InMemoryQmtStrategyLedgerRepository()
     qmt_repo.create_virtual_account(
         VirtualAccount(
@@ -1202,6 +1219,66 @@ def test_miniqmt_event_loop_bridge_rejects_live_before_building_submit_payload()
 
     assert exc_info.value.context["reason_code"] == "MINIQMT_GRAY_LIVE_FORBIDDEN"
     assert broker.place_order_payloads == []
+
+
+def test_miniqmt_event_loop_bridge_requires_real_qmt_callback_gateway() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    bridge = simulation_bridges.MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(
+            repository=qmt_repo,
+            broker=MissingPlaceOrderQmtClient(),
+        )  # type: ignore[arg-type]
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                qmt_binding.binding_id: SimulationRunContext(
+                    portfolio_id="portfolio_qmt",
+                    current_positions=_position_context(portfolio_id="portfolio_qmt").current_positions,
+                    current_prices={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+                    managed_order_service=QmtManagedOrderService(repository=qmt_repo, broker=FakeManagedOrderBroker()),  # type: ignore[arg-type]
+                    qmt_ledger_repository=qmt_repo,
+                )
+            }
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+
+    with pytest.raises(BrokerUnavailableError) as exc_info:
+        bridge.submit_event_loop_plan(
+            plan=planned.results[0].execution_plan,
+            binding=qmt_binding,
+            mode="SIM",
+            price_by_symbol={"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0},
+        )
+
+    context = exc_info.value.context
+    assert context["reason_code"] == "MINIQMT_EVENT_LOOP_REAL_CALLBACKS_MISSING"
+    assert context["stage"] == "MINIQMT_EVENT_LOOP_CALLBACK_GATEWAY_UNAVAILABLE"
+    assert context["missing_methods"] == ["place_order"]
+    assert context["broker_called"] is False
+    assert context["submitted_intents"] == 0
+    assert context["failed_intents"] == len(planned.results[0].execution_plan.intents)
 
 
 def test_miniqmt_shadow_bridge_requires_explicit_scenario_without_delay_fallback() -> None:
@@ -6907,6 +6984,208 @@ def test_production_context_provider_miniqmt_submit_defaults_to_preview_only_and
     assert restarted.results[0].run.run_payload_json["qmt_batch_id"] == payload["qmt_batch_id"]
     assert restarted.results[0].run.run_payload_json["broker_called"] is False
     assert len(qmt_repo.list_order_intents_by_batch(payload["qmt_batch_id"])) == len(preview_intents)
+    assert broker.place_order_payloads == []
+
+
+def test_production_context_provider_miniqmt_event_loop_submit_places_broker_orders_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+    qmt_repo = InMemoryQmtStrategyLedgerRepository()
+    qmt_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id=qmt_binding.strategy_id,
+            strategy_name=qmt_binding.strategy_name or qmt_binding.strategy_id,
+            display_name="Scheduler QMT Strategy",
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_repo.create_position_lot(
+        PositionLotRecord(
+            lot_id="lot_prod_event_loop_000003",
+            strategy_id=qmt_binding.strategy_id,
+            symbol="000003.SZ",
+            open_trade_id="trade_prod_event_loop_000003",
+            open_date=date(2026, 5, 20),
+            quantity=77,
+            available_quantity=77,
+            remaining_quantity=77,
+            avg_cost=Decimal("8.00"),
+            cost_amount=Decimal("616.00"),
+            account_id=qmt_binding.broker_account_id or "QMT_SIM_ACCOUNT",
+        )
+    )
+    broker = FakeManagedOrderBroker(
+        positions=[{"stock_code": "000003.SZ", "quantity": 77, "can_sell": 77}],
+        quotes={
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.0,
+                "ask_price_1": 20.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.0,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 8.0,
+                "bid_volume_1": 5000,
+            },
+        },
+    )
+    manifest = _score_weighted_manifest(release)
+    provider = ProductionSimulationRunContextProvider(
+        price_loader=lambda symbols, trade_date: {symbol: {"000001.SZ": 10.0, "000003.SZ": 8.0, "688001.SH": 20.0}[symbol] for symbol in symbols},
+        qmt_ledger_repository=qmt_repo,
+        qmt_client_factory=lambda: broker,
+        qmt_calendar_provider_factory=lambda: StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+        package_manifest_loader=lambda package_id: manifest,
+        enable_miniqmt_submit=True,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=provider,
+    )
+    runtime_store = tmp_path / "miniqmt-production-event-loop.json"
+    monkeypatch.delenv("MINIQMT_EXECUTION_RUNTIME", raising=False)
+    monkeypatch.delenv("MINIQMT_SHADOW_ENABLED", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(runtime_store))
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    plan = planned.results[0].execution_plan
+    runtime_id = simulation_bridges.MiniQMTExecutionBridge._runtime_id(plan=plan, binding=qmt_binding)
+    MiniQMTGraySwitchController(repository=JsonFileMiniQMTExecutionRuntimeRepository(runtime_store)).switch_to_event_loop(
+        runtime_id=runtime_id,
+        portfolio_id=qmt_binding.strategy_id,
+        strategy_slot_id=qmt_binding.strategy_slot_id,
+        mode="SIM",
+        trade_date=TRADE_DATE,
+        account_group_id="ag_minqmt_QMT_SIM_ACCOUNT_sim",
+        reason="unit_production_event_loop_submit_enabled",
+    )
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(submitted.results[0].run.run_id)
+    assert latest_run.run_payload_json["miniqmt_runtime_kind"] == "event_loop"
+    assert latest_run.run_payload_json["broker_called"] is True
+    assert latest_run.run_payload_json["submitted_intents"] == len(plan.intents)
+    assert latest_run.run_payload_json["failed_intents"] == 0
+    assert len(broker.place_order_payloads) == len(plan.intents)
+    assert latest_run.run_payload_json["qmt_batch_result"]["runtime_evidence"]["source"] == "simulation_runtime_event_loop_submit"
+
+
+def test_scheduler_event_loop_no_child_submit_failure_is_loud_not_reconciling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_shadow_test_scheduler(
+        execution_policy_json={
+            "algo_code": "TWAP_LITE_MINIQMT",
+            "algo_config": {"time": 60, "interval": 60},
+        }
+    )
+    broker.quotes.update(
+        {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.0,
+                "ask_price_1": 20.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.0,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 8.0,
+                "bid_volume_1": 5000,
+            },
+        }
+    )
+    runtime_store = tmp_path / "miniqmt-event-loop-no-child.json"
+    monkeypatch.delenv("MINIQMT_EXECUTION_RUNTIME", raising=False)
+    monkeypatch.delenv("MINIQMT_SHADOW_ENABLED", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(runtime_store))
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    plan = planned.results[0].execution_plan
+    run = planned.results[0].run
+    runtime_id = simulation_bridges.MiniQMTExecutionBridge._runtime_id(plan=plan, binding=qmt_binding)
+    MiniQMTGraySwitchController(repository=JsonFileMiniQMTExecutionRuntimeRepository(runtime_store)).switch_to_event_loop(
+        runtime_id=runtime_id,
+        portfolio_id="portfolio_qmt",
+        strategy_slot_id=qmt_binding.strategy_slot_id,
+        mode="SIM",
+        trade_date=TRADE_DATE,
+        account_group_id="ag_minqmt_QMT_SIM_ACCOUNT_sim",
+        reason="unit_event_loop_no_child_fail_loud",
+    )
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(run.run_id)
+    assert submitted.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert latest_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest_run.run_payload_json["last_stage"] == "FAILED_RETRYABLE"
+    assert latest_run.run_payload_json["broker_called"] is False
+    assert latest_run.run_payload_json["submitted_intents"] == 0
+    assert latest_run.run_payload_json["failed_intents"] == len(plan.intents)
+    assert "pre_run_failure" not in latest_run.run_payload_json
+    failure = latest_run.run_payload_json["submit_failure"]
+    assert failure["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
+    assert failure["outer_stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
+    assert failure["context"]["reason_code"] == "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER"
+    assert failure["context"]["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
     assert broker.place_order_payloads == []
 
 
