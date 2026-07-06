@@ -82,6 +82,52 @@ def _git_stdout(args: list[str], *, cwd: Path, timeout: int = 120) -> str:
     return proc.stdout.strip()
 
 
+def _first_readable_blob(store_root: Path) -> Path | None:
+    blobs_root = store_root / "blobs"
+    for bucket in sorted(blobs_root.iterdir(), key=lambda item: item.name):
+        if not bucket.is_dir():
+            continue
+        for candidate in sorted(bucket.iterdir(), key=lambda item: item.name):
+            if candidate.is_file():
+                with candidate.open("rb") as fh:
+                    fh.read(1)
+                return candidate
+    return None
+
+
+def _validate_package_asset_store_root(path: Path) -> dict[str, Any]:
+    root = path.resolve()
+    blobs_root = root / "blobs"
+    if not root.is_dir():
+        _fail(f"package asset store root is missing: {root}", code="package_asset_store_missing")
+    if not blobs_root.is_dir():
+        _fail(
+            f"package asset store blobs directory is missing: {blobs_root}",
+            code="package_asset_store_blobs_missing",
+        )
+    try:
+        smoke_blob = _first_readable_blob(root)
+    except OSError as exc:
+        _fail(f"package asset store is not readable: {root}: {exc}", code="package_asset_store_unreadable")
+    if smoke_blob is None:
+        _fail(f"package asset store contains no readable blobs: {blobs_root}", code="package_asset_store_empty")
+    return {
+        "root": str(root),
+        "blobs_root": str(blobs_root),
+        "smoke_blob": str(smoke_blob),
+        "smoke_blob_size": smoke_blob.stat().st_size,
+    }
+
+
+def _append_github_env(env_file: Path | None, *, key: str, value: str) -> bool:
+    if env_file is None:
+        return False
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    with env_file.open("a", encoding="utf-8", newline="\n") as out:
+        out.write(f"{key}={value}\n")
+    return True
+
+
 def _clear_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     for child in path.iterdir():
@@ -154,6 +200,18 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
     if status:
         _fail(f"prepared workspace is not clean: {status}", code="dirty_workspace")
 
+    package_asset_store: dict[str, Any] | None = None
+    if args.package_asset_store_root:
+        package_asset_store = _validate_package_asset_store_root(_resolve(args.package_asset_store_root))
+        github_env_file = args.github_env_file or os.environ.get("GITHUB_ENV")
+        exported = _append_github_env(
+            _resolve(github_env_file) if github_env_file else None,
+            key="AISTOCK_PACKAGE_ASSET_STORE_ROOT",
+            value=package_asset_store["root"],
+        )
+        package_asset_store["github_env_exported"] = exported
+        package_asset_store["env_name"] = "AISTOCK_PACKAGE_ASSET_STORE_ROOT"
+
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _utc_now(),
@@ -167,6 +225,8 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
         "remote_url": remote_url,
         "root_worktree_written": False,
     }
+    if package_asset_store is not None:
+        payload["package_asset_store"] = package_asset_store
 
     if args.summary_json:
         requested_summary_path = Path(args.summary_json)
@@ -185,6 +245,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-commit", required=True, help="GitHub Actions commit SHA to checkout.")
     parser.add_argument("--repo", default="licong01-cloud/AIstock", help="Expected GitHub repository full name.")
     parser.add_argument("--summary-json", help="Relative path under destination for a compact evidence JSON.")
+    parser.add_argument(
+        "--package-asset-store-root",
+        help=(
+            "Canonical StrategyPackage package asset CAS root to validate and export "
+            "as AISTOCK_PACKAGE_ASSET_STORE_ROOT for later validation steps."
+        ),
+    )
+    parser.add_argument(
+        "--github-env-file",
+        help="GitHub Actions env file to append exports to; defaults to $GITHUB_ENV when present.",
+    )
     parser.add_argument("--allow-any-dest", action="store_true", help="Allow destinations outside RUNNER_WORKSPACE for local tests.")
     return parser
 
