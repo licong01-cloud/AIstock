@@ -5319,6 +5319,50 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert background.status()["last_result"]["summary"]["total_bindings"] == 2
 
 
+def test_background_scheduler_stop_shuts_down_selection_inference_executor() -> None:
+    release_selection_config = {
+        "selection_artifact_config": {
+            "auto_generate": True,
+            "include_reference_price": True,
+        },
+        "runtime_profile": {
+            "selection": {"top_k": 2},
+            "tradability": {"exclude_suspended": False},
+        },
+    }
+    release, local_binding, _, repo = _release_and_bindings(
+        release_metadata={"selection_runtime_config": release_selection_config}
+    )
+    assert local_binding is not None
+    selection = FakeSelectionService(release, candidates=_candidate_rows())
+    lifecycle = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_stopped_executor")}
+        ),
+    )
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([TRADE_DATE]),
+    )
+
+    stopped = background.shutdown(wait=True)
+
+    assert stopped["selection_inference"]["shutdown"] is True
+    with pytest.raises(RuntimeConfigInvalidError) as exc_info:
+        lifecycle.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            submit=False,
+            raise_on_error=True,
+        )
+    assert exc_info.value.context["reason_code"] == "SIMULATION_SELECTION_INFERENCE_EXECUTOR_SHUTDOWN"
+    assert exc_info.value.context["failure_stage"] == "SELECTION_INFERENCE"
+    assert selection.calls == []
+
+
 def test_background_scheduler_result_surfaces_miniqmt_capacity_residual_alert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -2119,6 +2119,7 @@ class SimulationLifecycleScheduler:
         )
         self._selection_inference_lock = threading.RLock()
         self._selection_inference_inflight: dict[tuple[Any, ...], _SelectionInferenceInFlight] = {}
+        self._selection_inference_shutdown = False
         if trading_calendar_service is not None:
             self.trading_calendar_service = trading_calendar_service
         elif isinstance(self.repository, InMemorySimulationRuntimeRepository):
@@ -2168,10 +2169,13 @@ class SimulationLifecycleScheduler:
 
     def shutdown_selection_inference(self, *, wait: bool = True) -> None:
         self._selection_inference_executor.shutdown(wait=wait, cancel_futures=not wait)
+        with self._selection_inference_lock:
+            self._selection_inference_shutdown = True
 
     def _selection_inference_status(self) -> dict[str, Any]:
         now = monotonic_time.monotonic()
         with self._selection_inference_lock:
+            shutdown = self._selection_inference_shutdown
             in_flight = []
             for entry in self._selection_inference_inflight.values():
                 in_flight.append(
@@ -2189,6 +2193,7 @@ class SimulationLifecycleScheduler:
             "timeout_env_var": SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV,
             "max_workers_env_var": SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV,
             "timeout_seconds": self._selection_inference_timeout_seconds,
+            "shutdown": shutdown,
             "in_flight_count": len(in_flight),
             "in_flight": in_flight,
         }
@@ -5598,6 +5603,21 @@ class SimulationLifecycleScheduler:
         )
         now = monotonic_time.monotonic()
         with self._selection_inference_lock:
+            if self._selection_inference_shutdown:
+                raise RuntimeConfigInvalidError(
+                    "simulation scheduler selection inference executor is shut down",
+                    context={
+                        **self._selection_inference_context(
+                            binding=binding,
+                            runtime_release=runtime_release,
+                            trade_date=trade_date,
+                            data_source=data_source,
+                            runtime_config=runtime_config,
+                        ),
+                        "reason_code": "SIMULATION_SELECTION_INFERENCE_EXECUTOR_SHUTDOWN",
+                        "failure_stage": "SELECTION_INFERENCE",
+                    },
+                )
             entry = self._selection_inference_inflight.get(key)
             if entry is None:
                 context = self._selection_inference_context(
@@ -7479,6 +7499,16 @@ class SimulationLifecycleBackgroundScheduler:
             thread = self._thread
         if wait and thread and thread.is_alive():
             thread.join(timeout=5.0)
+        thread_alive = bool(thread and thread.is_alive())
+        shutdown_selection = getattr(self.lifecycle_scheduler, "shutdown_selection_inference", None)
+        if callable(shutdown_selection):
+            graceful = bool(wait and not thread_alive)
+            shutdown_selection(wait=graceful)
+            logger.info(
+                "Simulation runtime scheduler selection inference executor stopped wait=%s thread_alive=%s",
+                graceful,
+                thread_alive,
+            )
         logger.info("Simulation runtime scheduler stopped")
         return self.status()
 
