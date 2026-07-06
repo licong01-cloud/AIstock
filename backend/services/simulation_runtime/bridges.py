@@ -54,6 +54,14 @@ from .models import (
 MINIQMT_UNSUPPORTED_V25_ALGOS = frozenset({"V25_TWO_STAGE", "V25_1_SMALL_CAP"})
 MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_RATIO = Decimal("0.02")
 MINIQMT_CASH_SHRINK_MAX_OVERSHOOT_AMOUNT = Decimal("10000")
+MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS = (
+    "place_order",
+    "cancel_order",
+    "get_full_tick",
+    "get_orders",
+    "get_trades",
+    "get_positions",
+)
 
 
 @dataclass(frozen=True)
@@ -313,6 +321,13 @@ class MiniQMTExecutionBridge:
                     "runtime_id": vnpy_kwargs["runtime_id"],
                 },
             )
+        self._assert_event_loop_broker_gateway_ready(
+            broker=broker,
+            plan=kwargs["plan"],
+            binding=kwargs["binding"],
+            runtime_id=str(vnpy_kwargs["runtime_id"]),
+            parent_intent_count=len(vnpy_kwargs["parent_intents"]),
+        )
         strategy_ledger_repository = getattr(self._managed_order_service, "_repository", None)
         if strategy_ledger_repository is None:
             raise BrokerUnavailableError(
@@ -353,6 +368,40 @@ class MiniQMTExecutionBridge:
                 mode=mode,
             ),
             source="simulation_runtime_event_loop_submit",
+        )
+
+    @staticmethod
+    def _assert_event_loop_broker_gateway_ready(
+        *,
+        broker: Any,
+        plan: ExecutionPlan,
+        binding: SimulationReleaseBinding,
+        runtime_id: str,
+        parent_intent_count: int,
+    ) -> None:
+        missing_methods = [
+            method_name
+            for method_name in MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS
+            if not callable(getattr(broker, method_name, None))
+        ]
+        if not missing_methods:
+            return
+        raise BrokerUnavailableError(
+            "MiniQMT event_loop route requires real qmt_client callback gateway methods",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_REAL_CALLBACKS_MISSING",
+                "stage": "MINIQMT_EVENT_LOOP_CALLBACK_GATEWAY_UNAVAILABLE",
+                "plan_id": plan.plan_id,
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "runtime_id": runtime_id,
+                "broker_type": type(broker).__name__,
+                "missing_methods": missing_methods,
+                "required_methods": list(MINIQMT_EVENT_LOOP_REQUIRED_BROKER_METHODS),
+                "broker_called": False,
+                "submitted_intents": 0,
+                "failed_intents": int(parent_intent_count),
+            },
         )
 
     def run_shadow_reconciliation(self, **kwargs: Any) -> MiniQMTShadowReconciliationReport:
