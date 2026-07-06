@@ -1,0 +1,128 @@
+{
+  "actual": "submit_persisted_execution_plan(event_loop) 完成后 broker_called=false、submitted_intents=0、failed_intents=0、/qmt/orders 空，run_payload 无 submit 失败，形成静默 RECONCILING。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260706_BUG-599-bug-599-unattended-miniqmt-event-loop-submit-silently-skips-sim-broker-o.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-599",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-06T07:04:09.690530Z",
+  "description": "submit_persisted_execution_plan(event_loop) 完成后 broker_called=false、submitted_intents=0、failed_intents=0、/qmt/orders 空，run_payload 无 submit 失败，形成静默 RECONCILING。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260706-6b1050048ae6",
+      "timestamp": "2026-07-06T07:04:09.690525Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-07-06 production SIM simbind_5256f5e9 ma_8ec5e389_sim_20260703 MINIQMT_SIM unattended event_loop submit"
+  ],
+  "expected": "无人值守 event_loop MiniQMT SIM 提交必须调用真实 MiniQMT place_order/qmt_client 回调并落券商单；broker_called=true；缺回调或前置不满足时以 reason_code + stage loud 失败。",
+  "first_seen_at": "2026-07-06T07:04:09.690530Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1893,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1893",
+  "last_seen_at": "2026-07-06T07:04:09.690530Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "BUG-599 unattended MiniQMT event_loop submit silently skips SIM broker order",
+  "trigger_condition": {
+    "fingerprint": "6b1050048ae6e397d7df547d",
+    "source_event_id": "FE-20260706-6b1050048ae6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
