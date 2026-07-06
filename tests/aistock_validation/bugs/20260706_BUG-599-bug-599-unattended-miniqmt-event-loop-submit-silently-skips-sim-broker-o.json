@@ -41,8 +41,8 @@
   "expected": "无人值守 event_loop MiniQMT SIM 提交必须调用真实 MiniQMT place_order/qmt_client 回调并落券商单；broker_called=true；缺回调或前置不满足时以 reason_code + stage loud 失败。",
   "first_seen_at": "2026-07-06T07:04:09.690530Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e34496c71364d9eff67de3e082ed28cc12bb3f33",
+  "fixed_at": "2026-07-06T17:40:17.574791Z",
   "github_issue_number": 1893,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1893",
   "last_seen_at": "2026-07-06T07:04:09.690530Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1895",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -62,7 +63,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime",
     "miniqmt_execution_runtime"
@@ -72,6 +73,9 @@
     "fingerprint": "6b1050048ae6e397d7df547d",
     "source_event_id": "FE-20260706-6b1050048ae6"
   },
+  "validation_evidence": [
+    "PR #1895 checks green; targeted pytest 12 passed; compileall passed; ruff passed; nox -s l0 passed; nox -s validation_module_registry_l0 passed; git diff --check passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
