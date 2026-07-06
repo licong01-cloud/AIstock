@@ -232,6 +232,8 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
+            --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       # Activates the local AIstock conda env. The runner must have conda on PATH
@@ -351,6 +353,8 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
+            --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: nox -s paper_v2_live
