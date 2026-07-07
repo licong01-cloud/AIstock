@@ -178,6 +178,48 @@ def test_compact_loop_row_projects_factors_and_scalar_metrics_only() -> None:
     assert "stock_trades" not in compact["metrics_summary"]
 
 
+def test_compact_loop_row_projects_compact_enhanced_metrics_for_comparison() -> None:
+    row = {
+        "loop_id": "task_1_Loop2",
+        "task_id": "task_1",
+        "loop_index": 2,
+        "status": "completed",
+        "config_json": {"factor_list": ["alpha_a"], "model_id": "LGB"},
+        "metrics_json": {
+            "enhanced_metrics": {
+                "absolute_returns": {
+                    "cagr": 0.42,
+                    "sharpe": 1.73,
+                    "max_drawdown": -0.11,
+                    "final_cash": 12500.0,
+                    "final_stock_value": 87500.0,
+                    "final_total_value": 100000.0,
+                },
+                "position_summary": {
+                    "position_count_avg": 17.5,
+                    "position_count_max": 30,
+                },
+                "return_curves": {"dates": ["2026-01-01"], "portfolio": [1.0]},
+                "stock_trades": {"AAA": [{"date": "2026-01-01", "side": "buy"}]},
+            },
+        },
+    }
+
+    compact = compact_loop_row(row)
+    enhanced = compact["metrics_summary"]["enhanced_metrics"]
+
+    assert compact["cagr"] == 0.42
+    assert compact["max_drawdown"] == -0.11
+    assert enhanced["absolute_returns"]["sharpe"] == 1.73
+    assert enhanced["absolute_returns"]["final_cash"] == 12500.0
+    assert enhanced["absolute_returns"]["final_stock_value"] == 87500.0
+    assert enhanced["position_summary"]["position_count_avg"] == 17.5
+    assert enhanced["position_summary"]["position_count_max"] == 30
+    assert "stock_trades" not in enhanced
+    assert "return_curves" not in enhanced
+    assert "metrics_json" not in compact
+
+
 def test_compact_loop_row_accepts_sql_projected_summary_fields() -> None:
     row = {
         "loop_id": "task_1_Loop3",

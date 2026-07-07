@@ -195,7 +195,11 @@ function getEnhancedMetrics(loop: LoopLike, overrideEnhanced?: AnyRecord | null)
 
   const metrics = asRecord(loop.metrics_json);
   const enhanced = asRecord(metrics?.enhanced_metrics);
-  return enhanced || {};
+  if (hasKeys(enhanced)) return enhanced!;
+
+  const summary = asRecord(loop.metrics_summary);
+  const summaryEnhanced = asRecord(summary?.enhanced_metrics);
+  return summaryEnhanced || {};
 }
 
 function mergeRecords(...records: Array<AnyRecord | undefined>): AnyRecord {

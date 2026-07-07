@@ -2,7 +2,15 @@
   "actual": "QE automatic evolution results page /quantevolver/evolution shows Incomplete metrics for non-selected loops after a multi-loop experiment completes. Only the selected/last loop has full comparison metrics because the frontend loads summary task data initially and lazy-loads full loop metrics on click; backend summary/comparison payloads do not expose compact enhanced metrics needed by the comparison table. Fix backend compact payloads and frontend hydration so completed loops display complete metrics without per-loop manual selection.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260707_BUG-603-qe-evolution-loop-comparison-shows-incomplete-metrics-until-selected.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/routers/quantevolver_evolution.py",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+    "frontend/src/app/quantevolver/evolution/components/loopDiagnostics.ts",
+    "backend/tests/quantevolver/test_payload_summary.py",
+    "backend/tests/unified_engine/test_qe_evolution_read_paths.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-603",
@@ -179,5 +187,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
