@@ -59,7 +59,7 @@ from backend.services.trading_core.errors import (
     DataUnavailableError,
 )
 from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError
-from backend.services.trading_core.models import OrderIntent, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
+from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import (
     FakeCalendar,
     FakeSuspendLookup,
@@ -756,7 +756,7 @@ def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:
         strategy_slot_id=repository.bindings[0].strategy_slot_id,
     )
 
-    with pytest.raises(BrokerRejectedError):
+    with pytest.raises(BrokerSubmitError) as exc_info:
         PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
             portfolio=portfolio,
             run=run,
@@ -767,22 +767,10 @@ def test_day_runner_minqmt_submit_error_persists_rejection_diagnostic() -> None:
             execution_policy_context=_vnpy_execution_policy_context(),
         )
 
-    final_order = repository.orders[0]
-    assert final_order.status.value == "REJECTED"
-    assert final_order.metadata["broker_status"] == "submit_error"
-    assert final_order.metadata["broker_status_msg"] == "MiniQMT rejected the order"
-    assert final_order.metadata["broker_error"]["context"]["message"] == "fake rejected"
-    assert final_order.metadata["broker_handle_id"]
-    assert final_order.metadata["miniqmt_order_id"] == "-1"
-    diagnostic = final_order.metadata["broker_diagnostic"]
-    assert diagnostic["authority_source"] == "MINIQMT_SUBMIT_ERROR"
-    assert diagnostic["broker_status_msg"] == "MiniQMT rejected the order"
-    assert diagnostic["broker_handle_id"] == final_order.metadata["broker_handle_id"]
-    assert diagnostic["miniqmt_order_id"] == "-1"
-    assert diagnostic["broker_audit"]["after_reconcile"]["native"]["broker_submit_message"] == "fake rejected"
-    assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 123456.78
-    assert repository.order_events[0].metadata["broker_error"]["context"]["message"] == "fake rejected"
-    assert repository.events[-1]["event_type"] == "MINIQMT_ORDER_SUBMIT_FAILED"
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker._qmt_client.place_calls == []
+    assert repository.orders == []
+    assert repository.fills == []
 
 
 def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
@@ -816,7 +804,7 @@ def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
         strategy_slot_id=repository.bindings[0].strategy_slot_id,
     )
 
-    with pytest.raises(BrokerConnectivityError):
+    with pytest.raises(BrokerSubmitError) as exc_info:
         PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
             portfolio=portfolio,
             run=run,
@@ -827,18 +815,10 @@ def test_day_runner_minqmt_timeout_persists_connectivity_diagnostic() -> None:
             execution_policy_context=_vnpy_execution_policy_context(),
         )
 
-    final_order = repository.orders[0]
-    diagnostic = final_order.metadata["broker_diagnostic"]
-    assert final_order.status.value == "REJECTED"
-    assert final_order.metadata["broker_error"]["error_code"] == "BROKER_CONNECTIVITY_ERROR"
-    assert final_order.metadata["broker_error"]["context"]["submit_diagnostic"]["classification"] == "adapter_timeout"
-    assert diagnostic["submit_diagnostic"]["classification"] == "adapter_timeout"
-    assert diagnostic["broker_error"]["context"]["native_reconcile"]["schema_version"] == "miniqmt_submit_error_native_probe_v1"
-    assert diagnostic["broker_error"]["context"]["native_reconcile"]["orders_query_ok"] is True
-    assert diagnostic["broker_error"]["context"]["native_reconcile"]["trades_query_ok"] is True
-    assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 123456.78
-    assert diagnostic["broker_audit"]["after_reconcile"]["account"]["cash"] == 123456.78
-    assert repository.events[-1]["event_type"] == "MINIQMT_ORDER_SUBMIT_FAILED"
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker._qmt_client.place_calls == []
+    assert repository.orders == []
+    assert repository.fills == []
 
 
 def test_cancel_calls_miniqmt_cancel_order() -> None:
@@ -1142,6 +1122,13 @@ def test_minqmtsim_query_quote_exposes_feed_health_and_guard_still_blocks_stale(
 
 def _portfolio_backend_factory(client: FakeQMTClient):
     return lambda **kwargs: MiniQMTSimBackend(qmt_client=client, **kwargs)
+
+
+def _assert_legacy_minqmt_runtime_route_rejected(exc: BrokerSubmitError) -> None:
+    assert exc.context["reason_code"] == "MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS"
+    assert exc.context["stage"] == "MINIQMT_COMPILER_LIFECYCLE_REJECTED"
+    assert exc.context["source"] == "paper_v2_vnpy_miniqmt"
+    assert exc.context["operation"] == "execute_paper_vnpy_intent"
 
 
 class _RecordingMiniQMTBroker:
@@ -1640,19 +1627,20 @@ def test_day_runner_minqmt_submits_sell_intents_before_buy_intents() -> None:
     broker = _RecordingMiniQMTBroker()
     repository = _SnapshotOnlyRepository(portfolio)
 
-    PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[buy, sell],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[buy, sell],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    assert [intent.side for intent in broker.submitted] == [OrderSide.SELL, OrderSide.BUY]
-    assert all(order.filled_quantity == 0 for order in repository.orders)
-    assert all(order.status.value == "SUBMITTED" for order in repository.orders)
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
 
 
 def test_day_runner_minqmt_persists_rejected_order_diagnostic_and_audit() -> None:
@@ -1678,37 +1666,20 @@ def test_day_runner_minqmt_persists_rejected_order_diagnostic_and_audit() -> Non
     repository = _SnapshotOnlyRepository(portfolio)
     broker = _RejectedMiniQMTBroker()
 
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    final_order = result.orders[0]
-    assert final_order.status.value == "REJECTED"
-    assert final_order.metadata["broker_raw_status"] == 57
-    assert final_order.metadata["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
-    assert final_order.metadata["broker_rejection_reason"] == "[COUNTER][260200] insufficient buying power"
-    diagnostic = final_order.metadata["broker_diagnostic"]
-    assert diagnostic["broker_status"] == "rejected"
-    assert diagnostic["broker_status_raw"]["order_status"] == 57
-    assert diagnostic["broker_error_code"] == "260200"
-    assert diagnostic["broker_rejection_classification"] == "counter_260200"
-    assert diagnostic["diagnostic_completeness"] == "best_available"
-    assert diagnostic["status_msg_best_available"] == "[COUNTER][260200] insufficient buying power"
-    assert diagnostic["broker_audit"]["before_submit"]["account"]["cash"] == 100000.0
-    assert diagnostic["broker_audit"]["after_reconcile"]["account"]["cash"] == 100000.0
-    assert repository.order_events[-1].metadata["broker_rejection_reason"] == "[COUNTER][260200] insufficient buying power"
-    assert repository.execution_states[0].algo_state["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
-    assert repository.events[-1]["event_type"] == "RUN_SUCCEEDED"
-    submit_event = next(event for event in repository.events if event["event_type"] == "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED")
-    child_diagnostic = submit_event["context"]["diagnostic"]["child_orders"][0]["status"]
-    assert child_diagnostic["raw_status"] == 57
-    assert final_order.metadata["broker_diagnostic"]["broker_audit"]["schema_version"] == "miniqmt_broker_audit_v1"
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
 
 
 def test_day_runner_minqmt_persists_native_trade_fills_and_order_events() -> None:
@@ -1753,27 +1724,21 @@ def test_day_runner_minqmt_persists_native_trade_fills_and_order_events() -> Non
         prices={"000001.SZ": 11.0},
     )
 
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    assert len(result.fills) == 1
-    assert result.fills[0].fill_id.startswith("fill_minqmt_trade_")
-    assert result.fills[0].order_id == result.orders[0].order_id
-    assert result.orders[0].status.value == "FILLED"
-    assert result.orders[0].filled_quantity == 200
-    assert repository.fills[0]["fill_market_context"]["data_source"] == "MINIQMT_REALTIME"
-    assert repository.order_events[0].event_type.value == "FILLED"
-    assert repository.execution_states[0].session_id == "psess_unit"
-    assert repository.execution_states[0].status == "FILLED"
-    assert repository.snapshots[0]["metadata"]["fill_count"] == 1
-    assert repository.snapshots[0]["metadata"]["miniqmt_no_local_fills"] is False
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
+    assert repository.fills == []
 
 
 def test_reconcile_minqmt_native_run_updates_existing_order_metadata_with_rejection_diagnostic() -> None:
@@ -1798,61 +1763,20 @@ def test_reconcile_minqmt_native_run_updates_existing_order_metadata_with_reject
     )
     repository = _SnapshotOnlyRepository(portfolio)
     broker = _RecordingMiniQMTBroker()
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
-    original = repository.orders[0]
-    assert original.status.value == "SUBMITTED"
-    handle_id = original.metadata["broker_handle_id"]
-    broker._statuses[handle_id] = OrderHandleStatus(
-        handle_id=handle_id,
-        state="rejected",
-        filled_quantity=0,
-        avg_fill_price=None,
-        last_event_at=datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-        rejection_reason="[COUNTER][260200] insufficient buying power",
-        raw_status=57,
-        status_msg="[COUNTER][260200] insufficient buying power",
-        raw={"order_status": 57, "status_msg": "[COUNTER][260200] insufficient buying power"},
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    reconciled = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=result.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
-
-    final_order = reconciled.orders[0]
-    assert final_order.status.value == "REJECTED"
-    assert final_order.metadata["broker_raw_status"] == 57
-    assert final_order.metadata["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
-    assert final_order.metadata["broker_diagnostic"]["broker_status_raw"]["order_status"] == 57
-    assert final_order.metadata["broker_error_code"] == "260200"
-    assert final_order.metadata["broker_rejection_classification"] == "counter_260200"
-    assert final_order.metadata["diagnostic_completeness"] == "best_available"
-    assert final_order.metadata["broker_audit"]["before_submit"]["phase"] == "before_native_reconcile"
-    assert final_order.metadata["broker_audit"]["after_reconcile"]["phase"] == "after_native_reconcile"
-    native_reject_event = next(
-        event for event in repository.order_events if event.event_id.startswith("evt_minqmt_native_")
-    )
-    assert native_reject_event.event_type.value == "REJECTED"
-    assert native_reject_event.reason == "[COUNTER][260200] insufficient buying power"
-    assert native_reject_event.metadata["terminal_reconcile_event"] is True
-    assert native_reject_event.metadata["broker_status_raw"]["order_status"] == 57
-    assert native_reject_event.metadata["broker_error_code"] == "260200"
-    assert native_reject_event.metadata["broker_rejection_classification"] == "counter_260200"
-    run_event = next(
-        event for event in repository.events if event["event_type"] == "MINIQMT_NATIVE_ORDER_REJECTED_RECONCILED"
-    )
-    assert run_event["context"]["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
-    assert repository.execution_states[-1].algo_state["broker_status_msg"] == "[COUNTER][260200] insufficient buying power"
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
 
 
 def test_reconcile_minqmt_native_run_repairs_prefixed_rejected_order_with_stale_pending_metadata() -> None:
@@ -1877,70 +1801,20 @@ def test_reconcile_minqmt_native_run_repairs_prefixed_rejected_order_with_stale_
     )
     repository = _SnapshotOnlyRepository(portfolio)
     broker = _RecordingMiniQMTBroker()
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
-    original = repository.orders[0]
-    handle_id = original.metadata["broker_handle_id"]
-    stale_rejected = original.model_copy(
-        update={
-            "status": OrderStatus.REJECTED,
-            "metadata": {
-                **original.metadata,
-                "broker_status": "pending",
-                "broker_raw_status": "submitted",
-                "broker_status_msg": None,
-                "broker_rejection_reason": None,
-                "broker_diagnostic": None,
-            },
-        }
-    )
-    repository.save_order(result.run.run_id, stale_rejected)
-    broker._statuses[handle_id] = OrderHandleStatus(
-        handle_id=handle_id,
-        state="rejected",
-        filled_quantity=0,
-        avg_fill_price=None,
-        last_event_at=datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-        rejection_reason="[COUNTER][260200]",
-        raw_status=57,
-        status_msg="[COUNTER][260200]",
-        raw={"order_status": 57, "status_msg": "[COUNTER][260200]", "order_id": original.metadata["miniqmt_order_id"]},
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    reconciled = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=result.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
-    repeated = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=reconciled.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
-
-    final_order = reconciled.orders[0]
-    assert final_order.status.value == "REJECTED"
-    assert final_order.metadata["broker_status"] == "rejected"
-    assert final_order.metadata["broker_raw_status"] == 57
-    assert final_order.metadata["broker_status_msg"] == "[COUNTER][260200]"
-    assert final_order.metadata["broker_error_code"] == "260200"
-    assert final_order.metadata["broker_rejection_classification"] == "counter_260200"
-    assert final_order.metadata["diagnostic_completeness"] == "broker_status_msg_code_only"
-    assert final_order.metadata["diagnostic_gap"] is True
-    native_events = [event for event in repository.order_events if event.event_id.startswith("evt_minqmt_native_")]
-    assert len(native_events) == 1
-    assert native_events[0].metadata["previous_paper_status"] == "REJECTED"
-    assert native_events[0].metadata["broker_status_raw"]["order_status"] == 57
-    assert repeated.fills == []
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
 
 
 def test_reconcile_minqmt_native_run_marks_truncated_or_mojibake_status_msg_gap() -> None:
@@ -1965,43 +1839,21 @@ def test_reconcile_minqmt_native_run_marks_truncated_or_mojibake_status_msg_gap(
     )
     repository = _SnapshotOnlyRepository(portfolio)
     broker = _RecordingMiniQMTBroker()
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
-    handle_id = repository.orders[0].metadata["broker_handle_id"]
-    broker._statuses[handle_id] = OrderHandleStatus(
-        handle_id=handle_id,
-        state="rejected",
-        filled_quantity=0,
-        avg_fill_price=None,
-        last_event_at=datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-        rejection_reason="[COUNTER][260200][\u00e5\u008f\u00af",
-        raw_status=57,
-        status_msg="[COUNTER][260200][\u00e5\u008f\u00af",
-        raw={"order_status": 57, "status_msg": "[COUNTER][260200][\u00e5\u008f\u00af"},
-    )
 
-    reconciled = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=result.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    diagnostic = reconciled.orders[0].metadata["broker_diagnostic"]
-    assert diagnostic["broker_error_code"] == "260200"
-    assert diagnostic["broker_rejection_classification"] == "counter_260200"
-    assert diagnostic["diagnostic_completeness"] == "broker_status_msg_truncated_or_encoding_uncertain"
-    assert diagnostic["diagnostic_gap"] is True
-    assert diagnostic["status_msg_maybe_truncated"] is True
-    assert diagnostic["status_msg_encoding_warning"] is True
-    assert reconciled.orders[0].metadata["diagnostic_gap"] is True
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
 
 
 def test_day_runner_minqmt_reconciles_native_fills_after_initial_pending_submit() -> None:
@@ -2045,65 +1897,22 @@ def test_day_runner_minqmt_reconciles_native_fills_after_initial_pending_submit(
         },
         prices={"000001.SZ": 11.0},
     )
-    result = PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=_vnpy_execution_policy_context(),
-    )
-    assert result.fills == []
-    assert repository.orders[0].filled_quantity == 0
-    handle_id = repository.orders[0].metadata["broker_handle_id"]
-    native_id = repository.orders[0].metadata["miniqmt_order_id"]
-    broker._statuses[handle_id] = OrderHandleStatus(
-        handle_id=handle_id,
-        state="filled",
-        filled_quantity=200,
-        avg_fill_price=Decimal("10.88"),
-        last_event_at=datetime(2024, 1, 2, 14, 30, tzinfo=UTC),
-        rejection_reason=None,
-    )
-    broker._trades[handle_id] = [
-        {
-            "traded_id": "delayed_trade_1",
-            "stock_code": "000001.SZ",
-            "stock_name": "Unit Test Stock",
-            "order_type": 23,
-            "traded_time": "143000",
-            "traded_price": 10.88,
-            "traded_volume": 200,
-            "traded_amount": 2176.0,
-            "order_id": native_id,
-            "order_sysid": "sys_delayed",
-            "commission": 5.0,
-            "strategy_name": "slot_alpha",
-            "order_remark": repository.orders[0].metadata["order_remark"],
-        }
-    ]
 
-    reconciled = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=result.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
-    repeated = PaperTradingDayRunner(repository=repository).reconcile_minqmt_native_run(
-        portfolio=portfolio,
-        run=reconciled.run,
-        trade_date=TRADE_DATE,
-        broker=broker,  # type: ignore[arg-type]
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repository)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(portfolio_id=portfolio.portfolio_id, package_id=manifest.package_id)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
 
-    assert len(repository.fills) == 1
-    assert repository.fills[0]["fill"].quantity == 200
-    assert repository.orders[-1].status.value == "FILLED"
-    assert repository.orders[-1].filled_quantity == 200
-    assert repository.snapshots[-1]["metadata"]["fill_count"] == 1
-    assert repository.snapshots[-1]["metadata"]["miniqmt_no_local_fills"] is False
-    assert repeated.fills == []
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert broker.submitted == []
+    assert repository.orders == []
+    assert repository.fills == []
 
 
 def _miniqmt_portfolio_fixture(*, custom_params: dict | None = None):
@@ -2261,7 +2070,7 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
         source_backtest_status="COMPLETED",
         paper_enabled=True,
     )
-    activation = PaperTradingV2PortfolioService(
+    PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
     ).activate_execution_policy(
@@ -2288,7 +2097,7 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
         config_json=runtime_config,
         created_by="unit_test",
     )
-    runtime_activation = profile_service.activate_runtime_config(
+    profile_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=TRADE_DATE,
         profile_version_id=version.profile_version_id,
@@ -2312,27 +2121,19 @@ def test_minqmt_day_runner_uses_platform_hmm_snapshot_and_versioned_execution_po
     )
     client = FakeQMTClient()
 
-    result = PaperTradingDayRunner(
-        repository=paper_repo,
-        calendar_provider=FakeCalendar(),
-        runtime=runtime,
-        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
-        refresh_audit=NoopRefreshAudit(),
-        risk_policy_service=RecordingRiskPolicyService(),
-        minqmt_broker_factory=_portfolio_backend_factory(client),
-    ).run_day(
-        portfolio_id=portfolio.portfolio_id,
-        trade_date=TRADE_DATE,
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(
+            repository=paper_repo,
+            calendar_provider=FakeCalendar(),
+            runtime=runtime,
+            tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+            refresh_audit=NoopRefreshAudit(),
+            risk_policy_service=RecordingRiskPolicyService(),
+            minqmt_broker_factory=_portfolio_backend_factory(client),
+        ).run_day(
+            portfolio_id=portfolio.portfolio_id,
+            trade_date=TRADE_DATE,
+        )
 
-    context = result.run.runtime_config["validated_execution_policy"]
-    assert result.run.status == RunStatus.SUCCEEDED
-    assert result.run.runtime_config["runtime_profile_activation"]["activation_id"] == runtime_activation.activation_id
-    assert context["activation_id"] == activation.activation_id
-    assert context["activation_source"] == "trade_date_activation"
-    assert context["algo_code"] == "SNIPER_MINIQMT"
-    assert result.run.runtime_config["runtime_profile"]["hmm"]["model_snapshot_id"] == "platform_hmm_snapshot_new"
-    assert result.run.runtime_config["qe_backtest_runtime_contract"]["runtime_features"]["hmm"]["package_bound"] is False
-    assert client.place_calls, "MiniQMT should receive broker-authoritative order submit"
-    assert result.orders[0].metadata["broker_backend"] == "minqmt_sim"
-    assert result.fills == []
+    _assert_legacy_minqmt_runtime_route_rejected(exc_info.value)
+    assert client.place_calls == []

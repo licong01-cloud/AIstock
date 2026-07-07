@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import queue
 import threading
 import time as monotonic_time
 from collections.abc import Callable
@@ -48,13 +49,7 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.sync_service import QmtStrategyLedgerSyncService
 from backend.services.miniqmt_execution_runtime import (
     MiniQMTExecutionRuntimeKind,
-    MiniQMTGraySwitchController,
 )
-from backend.services.miniqmt_execution_runtime.gray import (
-    MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
-    MiniQMTGrayCanaryStrictness,
-)
-from backend.services.miniqmt_execution_runtime.repository import default_miniqmt_execution_runtime_repository
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
@@ -70,7 +65,6 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
-from .bridges import MiniQMTExecutionBridge
 from .lifecycle import (
     DEFAULT_SCHEDULER_WINDOWS,
     SCHEDULER_TZ,
@@ -110,9 +104,14 @@ DEFAULT_SCHEDULER_APPROVAL_STATES = (
     SimulationBindingApprovalState.LIVE_APPROVED,
 )
 MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
-MINIQMT_SHADOW_ENABLED_ENV = "MINIQMT_SHADOW_ENABLED"
 SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV = "SIMULATION_RUNTIME_SELECTION_INFERENCE_TIMEOUT_SEC"
 SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV = "SIMULATION_RUNTIME_SELECTION_INFERENCE_MAX_WORKERS"
+SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV = "SIMULATION_RUNTIME_BINDING_WATCHDOG_TIMEOUT_SEC"
+SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV = "SIMULATION_RUNTIME_MINIQMT_SUBMIT_TIMEOUT_SEC"
+SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV = "SIMULATION_RUNTIME_MINIQMT_RECONCILE_TIMEOUT_SEC"
+DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS = 600.0
+DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS = 120.0
+DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS = 120.0
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -2149,20 +2148,28 @@ class SimulationLifecycleScheduler:
                 "execution": "submit_and_reconcile",
                 "post_close_reconcile": "post_close_terminalization",
             },
-            "miniqmt_shadow": {
-                "env_var": MINIQMT_SHADOW_ENABLED_ENV,
-                "enabled": _env_flag(MINIQMT_SHADOW_ENABLED_ENV, default=False),
-                "default": False,
-                "mode": "dry_run_no_broker_mutation",
-            },
-            "miniqmt_gray": {
-                "canary_strictness_env_var": MINIQMT_GRAY_CANARY_STRICTNESS_ENV,
-                "canary_strictness": (
-                    os.getenv(MINIQMT_GRAY_CANARY_STRICTNESS_ENV)
-                    or MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value
-                ),
-                "sim_default": MiniQMTGrayCanaryStrictness.SINGLE_DAY_SMOKE.value,
+            "miniqmt_sim_runtime": {
+                "sim_runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+                "runtime_selector_effect": "event_loop_only_no_runtime_switch",
+                "compiler_route_retired": True,
                 "live_forbidden": True,
+            },
+            "binding_watchdog": {
+                "timeout_env_var": SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
+                "timeout_seconds": self._timeout_seconds_from_env(
+                    SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
+                    DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS,
+                ),
+                "miniqmt_submit_timeout_env_var": SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV,
+                "miniqmt_submit_timeout_seconds": self._timeout_seconds_from_env(
+                    SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV,
+                    DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS,
+                ),
+                "miniqmt_reconcile_timeout_env_var": SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV,
+                "miniqmt_reconcile_timeout_seconds": self._timeout_seconds_from_env(
+                    SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV,
+                    DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS,
+                ),
             },
             "selection_inference": self._selection_inference_status(),
         }
@@ -2213,6 +2220,81 @@ class SimulationLifecycleScheduler:
             return int(raw)
         except ValueError as exc:
             raise ValueError(f"{SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV} must be an integer") from exc
+
+    @staticmethod
+    def _timeout_seconds_from_env(env_var: str, default_seconds: float) -> float:
+        raw = str(os.getenv(env_var) or "").strip()
+        if not raw:
+            return float(default_seconds)
+        try:
+            value = float(raw)
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "simulation runtime timeout configuration must be numeric",
+                context={
+                    "reason_code": "SIMULATION_STAGE_TIMEOUT_CONFIG_INVALID",
+                    "stage": "TIMEOUT_CONFIGURATION",
+                    "env_var": env_var,
+                    "raw_value": raw,
+                },
+            ) from exc
+        if value <= 0:
+            raise RuntimeConfigInvalidError(
+                "simulation runtime timeout configuration must be positive",
+                context={
+                    "reason_code": "SIMULATION_STAGE_TIMEOUT_CONFIG_INVALID",
+                    "stage": "TIMEOUT_CONFIGURATION",
+                    "env_var": env_var,
+                    "raw_value": raw,
+                    "parsed_value": value,
+                },
+            )
+        return value
+
+    def _run_callable_with_timeout(
+        self,
+        *,
+        stage: str,
+        reason_code: str,
+        timeout_env_var: str,
+        default_timeout_seconds: float,
+        context: dict[str, Any],
+        func: Callable[[], Any],
+    ) -> Any:
+        timeout_seconds = self._timeout_seconds_from_env(timeout_env_var, default_timeout_seconds)
+        result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def target() -> None:
+            try:
+                result_queue.put(("result", func()))
+            except BaseException as exc:  # noqa: BLE001 - propagate worker failures through the scheduler path.
+                result_queue.put(("exception", exc))
+
+        thread = threading.Thread(
+            target=target,
+            name=f"simulation-stage-{stage.lower().replace('_', '-')}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            outcome, value = result_queue.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            timeout_context = {
+                **context,
+                "reason_code": reason_code,
+                "stage": stage,
+                "failure_stage": stage,
+                "timeout_env_var": timeout_env_var,
+                "timeout_seconds": timeout_seconds,
+                "thread_alive": thread.is_alive(),
+            }
+            raise RuntimeConfigInvalidError(
+                f"simulation runtime stage timed out; reason_code={reason_code}, stage={stage}",
+                context=timeout_context,
+            ) from exc
+        if outcome == "exception":
+            raise value
+        return value
 
     def run_once(
         self,
@@ -2302,7 +2384,7 @@ class SimulationLifecycleScheduler:
                 continue
             try:
                 results.append(
-                    self._run_binding(
+                    self._run_binding_with_watchdog(
                         binding=binding,
                         trade_date=trade_date,
                         data_source=data_source,
@@ -2335,6 +2417,47 @@ class SimulationLifecycleScheduler:
             stale_run_results=tuple([*stale_run_results, *eod_terminalized_results]),
             as_of_time=as_of_time,
             schedule_windows=self._compute_schedule_windows(trade_date=trade_date, as_of_time=as_of_time),
+        )
+
+    def _run_binding_with_watchdog(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        data_source: str,
+        submit: bool,
+        mode: str,
+        created_by: str,
+        selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] | None,
+        shared_selection_keys: set[tuple[Any, ...]] | None,
+        as_of_time: datetime | None,
+    ) -> SimulationSchedulerBindingResult:
+        return self._run_callable_with_timeout(
+            stage="BINDING_TICK",
+            reason_code="SIMULATION_BINDING_STAGE_TIMEOUT",
+            timeout_env_var=SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
+            default_timeout_seconds=DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS,
+            context={
+                "binding_id": binding.binding_id,
+                "strategy_id": binding.strategy_id,
+                "broker_backend": binding.broker_backend.value,
+                "package_id": binding.package_id,
+                "trade_date": trade_date.isoformat(),
+                "data_source": data_source,
+                "submit": bool(submit),
+                "mode": str(mode or "SIM").strip().upper(),
+            },
+            func=lambda: self._run_binding(
+                binding=binding,
+                trade_date=trade_date,
+                data_source=data_source,
+                submit=submit,
+                mode=mode,
+                created_by=created_by,
+                selection_cache=selection_cache,
+                shared_selection_keys=shared_selection_keys,
+                as_of_time=as_of_time,
+            ),
         )
 
     def _record_pre_run_binding_failure_result(
@@ -2440,6 +2563,10 @@ class SimulationLifecycleScheduler:
     def _run_has_broker_side_effect_evidence(run: SimulationDailyRun) -> bool:
         payload = run.run_payload_json
         if bool(payload.get("broker_called")):
+            return True
+        if payload.get("miniqmt_side_effect_state") == "UNKNOWN_TIMEOUT":
+            return True
+        if isinstance(payload.get("miniqmt_submit_timeout"), dict):
             return True
         for key in ("submitted_intents", "failed_intents"):
             try:
@@ -2771,6 +2898,9 @@ class SimulationLifecycleScheduler:
                 "validation",
                 "build_plan",
                 "planning",
+                "binding_tick",
+                "miniqmt_event_loop_submit",
+                "miniqmt_reconcile_after_submit",
             }:
                 return "validate" if value == "validation" else value
             if value in {"submit_preflight", "pre_submit"}:
@@ -3486,7 +3616,7 @@ class SimulationLifecycleScheduler:
                 binding=binding,
                 trade_date=run.trade_date,
             )
-            reconciliation = self._reconcile_after_submit(binding=binding, run=run, context=context)
+            reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=run, context=context)
         except Exception as exc:
             if isinstance(exc, DataUnavailableError) and getattr(exc, "context", {}).get(
                 "reason_code"
@@ -3999,29 +4129,24 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        build_result = replace(
-            build_result,
-            run=self._run_miniqmt_shadow_reconciliation_before_submit(
+        try:
+            execution = self._submit_execution_plan_with_timeout(
+                build_result=build_result,
                 binding=binding,
                 run=build_result.run,
                 plan=build_result.execution_plan,
                 context=context,
                 mode=mode,
-            ),
-        )
-        try:
-            execution = self.orchestrator.submit_execution_plan(
-                build_result=build_result,
-                local_broker=context.local_broker,
-                managed_order_service=context.managed_order_service,
-                mode=mode,
-                price_by_symbol=context.price_by_symbol or context.current_prices,
-                miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
-                    binding=binding,
-                    plan=build_result.execution_plan,
-                    context=context,
-                ),
                 as_of_time=as_of_time,
+                submit_callable=lambda: self.orchestrator.submit_execution_plan(
+                    build_result=build_result,
+                    local_broker=context.local_broker,
+                    managed_order_service=context.managed_order_service,
+                    mode=mode,
+                    price_by_symbol=context.price_by_symbol or context.current_prices,
+                    miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+                    as_of_time=as_of_time,
+                ),
             )
         except BrokerRejectedError as exc:
             terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -4064,7 +4189,7 @@ class SimulationLifecycleScheduler:
                 ),
             )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
-        reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
+        reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=execution.run, context=context)
         self._persist_strategy_performance(
             binding=binding,
             run=execution.run,
@@ -4089,7 +4214,7 @@ class SimulationLifecycleScheduler:
                 trade_date=trade_date,
                 default_data_source=data_source,
             ),
-            )
+        )
 
     def _rebuild_miniqmt_plan_after_side_effect_free_failure(
         self,
@@ -4180,28 +4305,23 @@ class SimulationLifecycleScheduler:
             )
 
         sync_result = self._sync_before_submit(binding=binding, run=build_result.run, context=context)
-        build_result = replace(
-            build_result,
-            run=self._run_miniqmt_shadow_reconciliation_before_submit(
-                binding=binding,
-                run=build_result.run,
-                plan=build_result.execution_plan,
-                context=context,
-                mode=mode,
-            ),
-        )
-        execution = self.orchestrator.submit_execution_plan(
+        execution = self._submit_execution_plan_with_timeout(
             build_result=build_result,
-            local_broker=context.local_broker,
-            managed_order_service=context.managed_order_service,
+            binding=binding,
+            run=build_result.run,
+            plan=build_result.execution_plan,
+            context=context,
             mode=mode,
-            price_by_symbol=context.price_by_symbol or context.current_prices,
-            miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
-                binding=binding,
-                plan=build_result.execution_plan,
-                context=context,
-            ),
             as_of_time=as_of_time,
+            submit_callable=lambda: self.orchestrator.submit_execution_plan(
+                build_result=build_result,
+                local_broker=context.local_broker,
+                managed_order_service=context.managed_order_service,
+                mode=mode,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
+                miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+                as_of_time=as_of_time,
+            ),
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -4228,7 +4348,7 @@ class SimulationLifecycleScheduler:
                 ),
             )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
-        reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
+        reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=execution.run, context=context)
         self._persist_strategy_performance(
             binding=binding,
             run=execution.run,
@@ -4387,18 +4507,23 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        execution = self.orchestrator.submit_execution_plan(
+        execution = self._submit_execution_plan_with_timeout(
             build_result=build_result,
-            local_broker=context.local_broker,
-            managed_order_service=context.managed_order_service,
+            binding=binding,
+            run=build_result.run,
+            plan=build_result.execution_plan,
+            context=context,
             mode=mode,
-            price_by_symbol=context.price_by_symbol or context.current_prices,
-            miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
-                binding=binding,
-                plan=build_result.execution_plan,
-                context=context,
-            ),
             as_of_time=as_of_time,
+            submit_callable=lambda: self.orchestrator.submit_execution_plan(
+                build_result=build_result,
+                local_broker=context.local_broker,
+                managed_order_service=context.managed_order_service,
+                mode=mode,
+                price_by_symbol=context.price_by_symbol or context.current_prices,
+                miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+                as_of_time=as_of_time,
+            ),
         )
         local_persistence = self._persist_local_sim_execution_result(
             binding=binding,
@@ -4407,7 +4532,7 @@ class SimulationLifecycleScheduler:
             context=context,
         )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
-        reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
+        reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=execution.run, context=context)
         self._persist_strategy_performance(
             binding=binding,
             run=execution.run,
@@ -4527,7 +4652,7 @@ class SimulationLifecycleScheduler:
                 trade_date=trade_date,
             )
             sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
-            reconciliation = self._reconcile_after_submit(binding=binding, run=run, context=context)
+            reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=run, context=context)
             self._persist_strategy_performance(binding=binding, run=run, context=context)
             latest_run = self.repository.get_simulation_daily_run(run.run_id)
             status = self._result_status_after_post_submit(
@@ -4608,28 +4733,26 @@ class SimulationLifecycleScheduler:
                         default_data_source=data_source,
                         ),
                     )
-            run = self._run_miniqmt_shadow_reconciliation_before_submit(
-                binding=binding,
-                run=run,
-                plan=plan,
-                context=context,
-                mode=mode,
-            )
             try:
-                execution = self.orchestrator.submit_persisted_execution_plan(
-                    run=run,
+                execution = self._submit_execution_plan_with_timeout(
+                    build_result=None,
                     binding=binding,
-                    execution_plan=plan,
-                    local_broker=context.local_broker,
-                    managed_order_service=context.managed_order_service,
+                    run=run,
+                    plan=plan,
+                    context=context,
                     mode=mode,
-                    price_by_symbol=context.price_by_symbol or context.current_prices,
-                    miniqmt_runtime_kind=self._resolve_miniqmt_runtime_kind_for_submit(
-                        binding=binding,
-                        plan=plan,
-                        context=context,
-                    ),
                     as_of_time=as_of_time,
+                    submit_callable=lambda: self.orchestrator.submit_persisted_execution_plan(
+                        run=run,
+                        binding=binding,
+                        execution_plan=plan,
+                        local_broker=context.local_broker,
+                        managed_order_service=context.managed_order_service,
+                        mode=mode,
+                        price_by_symbol=context.price_by_symbol or context.current_prices,
+                        miniqmt_runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+                        as_of_time=as_of_time,
+                    ),
                 )
             except BrokerRejectedError as exc:
                 terminalized = self._terminalize_deterministic_localsim_submit_failure(
@@ -4672,7 +4795,7 @@ class SimulationLifecycleScheduler:
                     ),
                 )
             tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
-            reconciliation = self._reconcile_after_submit(binding=binding, run=execution.run, context=context)
+            reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=execution.run, context=context)
             self._persist_strategy_performance(
                 binding=binding,
                 run=execution.run,
@@ -5302,199 +5425,6 @@ class SimulationLifecycleScheduler:
         if "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause_code or "LOCAL_SIM_BOARD_LOT_VIOLATION" in cause:
             return "LOCAL_SIM_BOARD_LOT_VIOLATION"
         return "LOCAL_SIM_DETERMINISTIC_SUBMIT_REJECTED"
-
-    def _run_miniqmt_shadow_reconciliation_before_submit(
-        self,
-        *,
-        binding: SimulationReleaseBinding,
-        run: SimulationDailyRun,
-        plan: ExecutionPlan,
-        context: SimulationRunContext,
-        mode: str,
-    ) -> SimulationDailyRun:
-        if not self._should_run_miniqmt_shadow(binding=binding, mode=mode, plan=plan):
-            return run
-        try:
-            if context.managed_order_service is None:
-                raise RuntimeConfigInvalidError(
-                    "MiniQMT shadow reconciliation requires the same managed_order_service as B submit",
-                    context={
-                        "reason_code": "MINIQMT_SHADOW_MANAGED_ORDER_SERVICE_MISSING",
-                        "run_id": run.run_id,
-                        "binding_id": binding.binding_id,
-                        "strategy_id": binding.strategy_id,
-                        "trade_date": plan.target_trade_date.isoformat(),
-                    },
-                )
-            reports = MiniQMTExecutionBridge(
-                managed_order_service=context.managed_order_service
-            ).run_shadow_reconciliations(
-                run=run,
-                plan=plan,
-                binding=binding,
-                mode=mode,
-                price_by_symbol=context.price_by_symbol or context.current_prices,
-                scenarios=MiniQMTExecutionBridge.required_canary_shadow_scenarios(),
-            )
-            scenario_summaries = [
-                {
-                    "report_id": report.report_id,
-                    "runtime_id": report.runtime_id,
-                    "durable_event_id": report.durable_event_id,
-                    "scenario": report.scenario.value,
-                    "difference_count": len(report.differences),
-                    "fatal_difference_count": len(report.fatal_differences),
-                    "metadata": report.metadata,
-                }
-                for report in reports
-            ]
-            report = reports[-1]
-            return self.repository.update_simulation_daily_run(
-                run.run_id,
-                payload_patch={
-                    "miniqmt_shadow_reconciliation": {
-                        "schema_version": "miniqmt_shadow_reconciliation_v1",
-                        "status": "SUCCEEDED",
-                        "reason_code": "MINIQMT_SHADOW_RECONCILIATION_REPORTED",
-                        "env_var": MINIQMT_SHADOW_ENABLED_ENV,
-                        "report_count": len(reports),
-                        "reports": scenario_summaries,
-                        "covered_scenarios": [item["scenario"] for item in scenario_summaries],
-                        "durable_event_ids": [item["durable_event_id"] for item in scenario_summaries],
-                        "report_id": report.report_id,
-                        "runtime_id": report.runtime_id,
-                        "durable_event_id": report.durable_event_id,
-                        "scenario": report.scenario.value,
-                        "difference_count": len(report.differences),
-                        "fatal_difference_count": len(report.fatal_differences),
-                        "broker_called": False,
-                        "broker_mutated": False,
-                        "b_submit_unaffected": True,
-                        "metadata": report.metadata,
-                    }
-                },
-            )
-        except Exception as exc:  # noqa: BLE001 - shadow is observation-only; persist loud failure and continue B submit.
-            reason_code = self._reason_code_from_exception(exc, default="MINIQMT_SHADOW_RECONCILIATION_FAILED")
-            raw_context = getattr(exc, "context", None)
-            failure = {
-                "schema_version": "miniqmt_shadow_reconciliation_v1",
-                "status": "FAILED_OBSERVATION_ONLY",
-                "reason_code": reason_code,
-                "env_var": MINIQMT_SHADOW_ENABLED_ENV,
-                "stage": "MINIQMT_SHADOW_RECONCILIATION_FAILED",
-                "run_id": run.run_id,
-                "binding_id": binding.binding_id,
-                "strategy_id": binding.strategy_id,
-                "trade_date": plan.target_trade_date.isoformat(),
-                "execution_plan_id": plan.plan_id,
-                "account_group_id": str(
-                    plan.account_group_id
-                    or binding.account_group_id
-                    or binding.broker_account_id
-                    or binding.strategy_id
-                ),
-                "error_type": type(exc).__name__,
-                "message": str(exc),
-                "context": _json_safe_preview(raw_context) if isinstance(raw_context, dict) else None,
-                "broker_called": False,
-                "broker_mutated": False,
-                "b_submit_unaffected": True,
-                "next_action": (
-                    "fix MiniQMT shadow runner input/runtime evidence; B submit remains broker-authoritative "
-                    "and continues because shadow is observation-only"
-                ),
-            }
-            alert = {
-                "schema_version": "simulation_runtime_alert_v1",
-                "severity": "warning",
-                "reason_code": reason_code,
-                "message": "MiniQMT shadow reconciliation failed before B submit; B submit continued",
-                "run_id": run.run_id,
-                "binding_id": binding.binding_id,
-                "strategy_id": binding.strategy_id,
-                "trade_date": plan.target_trade_date.isoformat(),
-                "broker_backend": binding.broker_backend.value,
-            }
-            updated = self.repository.update_simulation_daily_run(
-                run.run_id,
-                payload_patch={
-                    "miniqmt_shadow_reconciliation": failure,
-                    "simulation_alerts": self._append_simulation_alert(run, alert),
-                },
-            )
-            logger.warning("MiniQMT shadow reconciliation failed but B submit continues: %s", failure)
-            return updated
-
-    def _resolve_miniqmt_runtime_kind_for_submit(
-        self,
-        *,
-        binding: SimulationReleaseBinding,
-        plan: ExecutionPlan,
-        context: SimulationRunContext,
-    ) -> MiniQMTExecutionRuntimeKind:
-        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
-            return MiniQMTExecutionRuntimeKind.COMPILER
-        runtime_id = MiniQMTExecutionBridge._runtime_id(plan=plan, binding=binding)
-        portfolio_id = str(plan.portfolio_id or context.portfolio_id or binding.strategy_id).strip()
-        strategy_slot_id = str(plan.strategy_slot_id or binding.strategy_slot_id or binding.strategy_id).strip()
-        try:
-            return MiniQMTGraySwitchController(
-                repository=default_miniqmt_execution_runtime_repository()
-            ).resolve_runtime_kind(
-                portfolio_id=portfolio_id,
-                strategy_slot_id=strategy_slot_id,
-                runtime_id=runtime_id,
-                environ=os.environ,
-            )
-        except Exception as exc:  # noqa: BLE001 - route selection must be loud before broker submit.
-            raise RuntimeConfigInvalidError(
-                "failed to resolve MiniQMT gray runtime kind before submit",
-                context={
-                    "reason_code": "MINIQMT_GRAY_RUNTIME_KIND_RESOLUTION_FAILED",
-                    "runtime_id": runtime_id,
-                    "portfolio_id": portfolio_id,
-                    "strategy_slot_id": strategy_slot_id,
-                    "binding_id": binding.binding_id,
-                    "strategy_id": binding.strategy_id,
-                    "broker_backend": binding.broker_backend.value,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                },
-            ) from exc
-
-    @staticmethod
-    def _should_run_miniqmt_shadow(
-        *,
-        binding: SimulationReleaseBinding,
-        mode: str,
-        plan: ExecutionPlan,
-    ) -> bool:
-        return (
-            _env_flag(MINIQMT_SHADOW_ENABLED_ENV, default=False)
-            and binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
-            and str(mode or "SIM").strip().upper() == "SIM"
-            and bool(plan.intents)
-        )
-
-    @staticmethod
-    def _append_simulation_alert(run: SimulationDailyRun, alert: dict[str, Any]) -> list[dict[str, Any]]:
-        existing = run.run_payload_json.get("simulation_alerts")
-        alerts = [dict(item) for item in existing if isinstance(item, dict)] if isinstance(existing, list) else []
-        alerts.append(alert)
-        return alerts
-
-    @staticmethod
-    def _reason_code_from_exception(exc: BaseException, *, default: str) -> str:
-        context = getattr(exc, "context", None)
-        if isinstance(context, dict) and context.get("reason_code"):
-            return str(context["reason_code"])
-        marker = "reason_code="
-        message = str(exc)
-        if marker in message:
-            suffix = message.split(marker, 1)[1]
-            return suffix.split(",", 1)[0].split(";", 1)[0].split()[0].strip() or default
-        return default
 
     @staticmethod
     def _mini_qmt_batch_failed_without_broker_side_effect(payload: dict[str, Any]) -> bool:
@@ -6497,6 +6427,10 @@ class SimulationLifecycleScheduler:
     def _mini_qmt_batch_has_broker_side_effect_evidence(payload: dict[str, Any]) -> bool:
         if bool(payload.get("broker_called")):
             return True
+        if payload.get("miniqmt_side_effect_state") == "UNKNOWN_TIMEOUT":
+            return True
+        if isinstance(payload.get("miniqmt_submit_timeout"), dict):
+            return True
         for container_key in ("reconcile_after_submit", "sync_after_submit", "sync_before_submit"):
             container = payload.get(container_key)
             if not isinstance(container, dict):
@@ -6780,6 +6714,163 @@ class SimulationLifecycleScheduler:
             },
         )
         return payload, summary
+
+    def _submit_execution_plan_with_timeout(
+        self,
+        *,
+        build_result: SimulationPlanBuildResult | None,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+        mode: str,
+        as_of_time: datetime | None,
+        submit_callable: Callable[[], SimulationExecutionResult],
+    ) -> SimulationExecutionResult:
+        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return submit_callable()
+        try:
+            return self._run_callable_with_timeout(
+                stage="MINIQMT_EVENT_LOOP_SUBMIT",
+                reason_code="MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT",
+                timeout_env_var=SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV,
+                default_timeout_seconds=DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS,
+                context={
+                    "run_id": run.run_id,
+                    "plan_id": plan.plan_id,
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "trade_date": plan.target_trade_date.isoformat(),
+                    "mode": str(mode or "SIM").strip().upper(),
+                    "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
+                    "execution_plan_intent_count": len(plan.intents),
+                    "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+                    "build_result_present": build_result is not None,
+                },
+                func=submit_callable,
+            )
+        except RuntimeConfigInvalidError as exc:
+            if self._exception_context(exc).get("reason_code") == "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT":
+                self._mark_miniqmt_submit_timeout(binding=binding, run=run, plan=plan, exc=exc)
+            raise
+
+    def _reconcile_after_submit_with_timeout(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        context: SimulationRunContext,
+    ) -> dict[str, Any] | None:
+        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return self._reconcile_after_submit(binding=binding, run=run, context=context)
+        try:
+            return self._run_callable_with_timeout(
+                stage="MINIQMT_RECONCILE_AFTER_SUBMIT",
+                reason_code="MINIQMT_RECONCILE_AFTER_SUBMIT_TIMEOUT",
+                timeout_env_var=SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV,
+                default_timeout_seconds=DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS,
+                context={
+                    "run_id": run.run_id,
+                    "plan_id": run.execution_plan_id,
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "trade_date": run.trade_date.isoformat(),
+                    "broker_called": bool(run.run_payload_json.get("broker_called")),
+                    "submitted_intents": run.run_payload_json.get("submitted_intents"),
+                    "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+                },
+                func=lambda: self._reconcile_after_submit(binding=binding, run=run, context=context),
+            )
+        except RuntimeConfigInvalidError as exc:
+            if self._exception_context(exc).get("reason_code") == "MINIQMT_RECONCILE_AFTER_SUBMIT_TIMEOUT":
+                self._mark_miniqmt_reconcile_timeout(binding=binding, run=run, exc=exc)
+            raise
+
+    def _mark_miniqmt_submit_timeout(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        exc: RuntimeConfigInvalidError,
+    ) -> SimulationDailyRun:
+        context = self._exception_context(exc)
+        diagnostic = {
+            "schema_version": "miniqmt_submit_timeout_v1",
+            "stage": "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT",
+            "reason_code": "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT",
+            "reason": "miniqmt_event_loop_submit_exceeded_binding_stage_timeout",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": plan.target_trade_date.isoformat(),
+            "execution_plan_intent_count": len(plan.intents),
+            "side_effect_state": "UNKNOWN_TIMEOUT",
+            "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "context": context,
+            "next_action": (
+                "treat broker side effects as ambiguous, do not silently retry the same plan, and inspect broker "
+                "orders/qmt ledger before any operator retry"
+            ),
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "failed_intents": len(plan.intents),
+                "miniqmt_side_effect_state": "UNKNOWN_TIMEOUT",
+                "miniqmt_submit_timeout": diagnostic,
+                "submit_failure": {
+                    "stage": "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT",
+                    "outer_stage": "MINIQMT_EVENT_LOOP_SUBMIT",
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": diagnostic,
+                },
+            },
+        )
+
+    def _mark_miniqmt_reconcile_timeout(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        exc: RuntimeConfigInvalidError,
+    ) -> SimulationDailyRun:
+        context = self._exception_context(exc)
+        diagnostic = {
+            "schema_version": "miniqmt_reconcile_timeout_v1",
+            "stage": "MINIQMT_RECONCILE_AFTER_SUBMIT_TIMEOUT",
+            "reason_code": "MINIQMT_RECONCILE_AFTER_SUBMIT_TIMEOUT",
+            "reason": "miniqmt_reconcile_after_submit_exceeded_binding_stage_timeout",
+            "run_id": run.run_id,
+            "plan_id": run.execution_plan_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": run.trade_date.isoformat(),
+            "broker_called": bool(run.run_payload_json.get("broker_called")),
+            "submitted_intents": run.run_payload_json.get("submitted_intents"),
+            "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+            "context": context,
+            "next_action": "retry reconciliation on a later tick; do not block the scheduler thread",
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "reconcile_after_submit": diagnostic,
+                "miniqmt_reconcile_timeout": diagnostic,
+            },
+        )
 
     def _reconcile_after_submit(
         self,

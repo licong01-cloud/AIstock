@@ -26,9 +26,12 @@ from backend.services.miniqmt_execution_runtime.contracts import (
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 
 
-def test_miniqmt_execution_runtime_flag_defaults_to_compiler_and_rejects_unknown_values() -> None:
-    assert get_miniqmt_execution_runtime_kind({}) == MiniQMTExecutionRuntimeKind.COMPILER
+def test_miniqmt_execution_runtime_flag_is_event_loop_only_and_rejects_unknown_values() -> None:
+    assert get_miniqmt_execution_runtime_kind({}) == MiniQMTExecutionRuntimeKind.EVENT_LOOP
     assert get_miniqmt_execution_runtime_kind({MINIQMT_EXECUTION_RUNTIME_ENV: "event_loop"}) == (
+        MiniQMTExecutionRuntimeKind.EVENT_LOOP
+    )
+    assert get_miniqmt_execution_runtime_kind({MINIQMT_EXECUTION_RUNTIME_ENV: "compiler"}) == (
         MiniQMTExecutionRuntimeKind.EVENT_LOOP
     )
 

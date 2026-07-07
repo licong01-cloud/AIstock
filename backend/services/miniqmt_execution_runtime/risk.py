@@ -1,4 +1,4 @@
-"""Phase 4 realtime risk hooks for the durable MiniQMT event loop."""
+"""Realtime risk hooks for the durable MiniQMT event loop."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ class MiniQMTRiskEngine(Protocol):
 
 
 class NoopMiniQMTRiskEngine:
-    """Default inert hook: explicit Phase 4 risk engines opt in per runtime."""
+    """Default inert hook; explicit risk engines opt in per runtime."""
 
     def evaluate_event(
         self,
@@ -185,7 +185,7 @@ class MiniQMTRiskRuleSet:
 
 
 class ConfigurableMiniQMTRiskEngine:
-    """Realtime risk engine for Phase 4 event-loop validation.
+    """Realtime risk engine for event-loop validation.
 
     It keeps a small in-process view of latest account/tick facts, while order,
     trade, cash, and position authority remains in qmt_strategy_ledger.

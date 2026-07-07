@@ -1,9 +1,8 @@
-"""A/B seam contracts for MiniQMT execution runtime implementations.
+"""MiniQMT event-loop runtime contracts.
 
-Phase 0 freezes the shared interfaces used by the legacy compiler path and the
-future durable event-loop path. The protocols are intentionally narrow: A may
-add adapters around them, but must not create a second algorithm core, gateway,
-or OMS authority.
+These protocols freeze the durable event-loop runtime seams.  MiniQMT SIM no
+longer has a compiler comparison route, so production callers must use one
+algorithm core, one gateway, and qmt_strategy OMS authority.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ from .gateway import MiniQMTGateway, MiniQMTGatewayEventSource
 
 @runtime_checkable
 class MiniQMTVnpyAlgoCoreContract(Protocol):
-    """Broker-neutral vn.py-style core contract shared by A and B."""
+    """Broker-neutral vn.py-style core contract used by the A event-loop runtime."""
 
     def start(self) -> list[VnpyAction]:
         ...

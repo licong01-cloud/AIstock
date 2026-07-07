@@ -2,24 +2,17 @@
 
 from __future__ import annotations
 
-import os
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from backend.infra.qmt_client import get_qmt_client_singleton
 from backend.services.miniqmt_execution_runtime import (
-    JsonFileMiniQMTExecutionRuntimeRepository,
     MiniQMTExecutionRuntimeClient,
     MiniQMTOperatorCommandStatus,
     QmtClientMiniQMTEventLoopGateway,
-    QmtClientMiniQMTGateway,
-)
-from backend.services.miniqmt_execution_runtime.config import (
-    MiniQMTExecutionRuntimeKind,
-    get_miniqmt_execution_runtime_kind,
+    default_miniqmt_execution_runtime_repository,
 )
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
@@ -44,24 +37,15 @@ def get_simulation_runtime_ops_service() -> SimulationRuntimeOpsService:
 
 
 def get_miniqmt_runtime_client() -> MiniQMTExecutionRuntimeClient:
-    store_path = Path(
-        os.getenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH")
-        or "tmp/miniqmt_execution_runtime/runtime-state.json"
-    )
-    return MiniQMTExecutionRuntimeClient(repository=JsonFileMiniQMTExecutionRuntimeRepository(store_path))
+    return MiniQMTExecutionRuntimeClient(repository=default_miniqmt_execution_runtime_repository())
 
 
-def get_miniqmt_runtime_repository() -> JsonFileMiniQMTExecutionRuntimeRepository:
+def get_miniqmt_runtime_repository() -> Any:
     return get_miniqmt_runtime_client().repository
 
 
-def get_miniqmt_gateway() -> QmtClientMiniQMTGateway:
-    gateway_cls = (
-        QmtClientMiniQMTEventLoopGateway
-        if get_miniqmt_execution_runtime_kind(os.environ) == MiniQMTExecutionRuntimeKind.EVENT_LOOP
-        else QmtClientMiniQMTGateway
-    )
-    return gateway_cls(
+def get_miniqmt_gateway() -> QmtClientMiniQMTEventLoopGateway:
+    return QmtClientMiniQMTEventLoopGateway(
         qmt_client=get_qmt_client_singleton(),
         order_remark_prefix="simrt-opcmd",
     )
@@ -227,37 +211,6 @@ def get_live_admission_evidence(
         _raise_http(exc)
 
 
-@router.get("/miniqmt/shadow-evidence")
-def list_miniqmt_shadow_evidence(
-    trade_date: date | None = None,
-    portfolio_id: str | None = None,
-    strategy_slot_id: str | None = None,
-    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
-    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
-) -> dict[str, Any]:
-    try:
-        if trade_date is None:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "error_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED",
-                    "message": "trade_date is required",
-                    "context": {"reason_code": "MINIQMT_RUNTIME_QUERY_PARAMETER_REQUIRED", "field": "trade_date"},
-                },
-            )
-        payload = service.list_miniqmt_shadow_evidence(
-            runtime_repository=runtime_repository,
-            trade_date=trade_date,
-            portfolio_id=_required_query_text(portfolio_id, "portfolio_id"),
-            strategy_slot_id=_required_query_text(strategy_slot_id, "strategy_slot_id"),
-        )
-        return {"ok": True, **payload}
-    except HTTPException:
-        raise
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
 @router.get("/miniqmt/runtime-events")
 def list_miniqmt_runtime_events(
     runtime_id: str | None = None,
@@ -268,26 +221,6 @@ def list_miniqmt_runtime_events(
         payload = service.list_miniqmt_runtime_events(
             runtime_repository=runtime_repository,
             runtime_id=_required_query_text(runtime_id, "runtime_id"),
-        )
-        return {"ok": True, **payload}
-    except HTTPException:
-        raise
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
-@router.get("/miniqmt/gray-state")
-def get_miniqmt_gray_state(
-    portfolio_id: str | None = None,
-    strategy_slot_id: str | None = None,
-    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
-    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
-) -> dict[str, Any]:
-    try:
-        payload = service.get_miniqmt_gray_state(
-            runtime_repository=runtime_repository,
-            portfolio_id=_required_query_text(portfolio_id, "portfolio_id"),
-            strategy_slot_id=_required_query_text(strategy_slot_id, "strategy_slot_id"),
         )
         return {"ok": True, **payload}
     except HTTPException:

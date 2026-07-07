@@ -7,10 +7,8 @@ from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
-from backend.services.miniqmt_execution_runtime.config import MiniQMTExecutionRuntimeKind, get_miniqmt_execution_runtime_kind
-from backend.services.miniqmt_execution_runtime.models import MiniQMTExecutionEventType
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
-from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import DataUnavailableError
 
 from .models import ExecutionPlan, SimulationBrokerBackend, SimulationDailyRun, SimulationDailyRunStatus
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
@@ -89,7 +87,6 @@ class SimulationRuntimeOpsService:
             "context_provider_mode": status.get("context_provider_mode"),
             "data_source": status.get("data_source"),
             "data_source_policy": status.get("data_source_policy") or {},
-            "miniqmt_shadow": status.get("miniqmt_shadow") or {},
             "account_slot_persistence": {
                 "enabled": True,
                 "release_binding_columns": ["account_group_id", "strategy_slot_id"],
@@ -162,47 +159,6 @@ class SimulationRuntimeOpsService:
         plan = self.repository.get_execution_plan(plan_id)
         return {"execution_plan": self._plan_summary(plan, include_intents=True)}
 
-    def list_miniqmt_shadow_evidence(
-        self,
-        *,
-        runtime_repository: MiniQMTExecutionRuntimeRepository,
-        trade_date: date,
-        portfolio_id: str,
-        strategy_slot_id: str,
-    ) -> dict[str, Any]:
-        evidence: list[dict[str, Any]] = []
-        for runtime in runtime_repository.list_runtimes():
-            for event in runtime_repository.list_events(runtime.runtime_id):
-                if event.event_type != MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED:
-                    continue
-                row = self._shadow_report_event_projection(event)
-                metadata = row["scope"]
-                if (
-                    metadata.get("trade_date") == trade_date.isoformat()
-                    and metadata.get("portfolio_id") == portfolio_id
-                    and metadata.get("strategy_slot_id") == strategy_slot_id
-                ):
-                    evidence.append(row)
-        evidence.extend(
-            self._failed_shadow_observation_rows(
-                trade_date=trade_date,
-                portfolio_id=portfolio_id,
-                strategy_slot_id=strategy_slot_id,
-            )
-        )
-        evidence.sort(key=lambda item: str(item.get("event_time") or ""), reverse=True)
-        fatal_count = sum(1 for item in evidence if item.get("has_fatal_difference"))
-        return {
-            "schema_version": "miniqmt_shadow_evidence_readonly_v1",
-            "trade_date": trade_date.isoformat(),
-            "portfolio_id": portfolio_id,
-            "strategy_slot_id": strategy_slot_id,
-            "count": len(evidence),
-            "fatal_count": fatal_count,
-            "evidence": evidence,
-            "read_only": True,
-        }
-
     def list_miniqmt_runtime_events(
         self,
         *,
@@ -232,57 +188,6 @@ class SimulationRuntimeOpsService:
             "runtime": runtime.model_dump(mode="json"),
             "count": len(events),
             "events": events,
-            "read_only": True,
-        }
-
-    def get_miniqmt_gray_state(
-        self,
-        *,
-        runtime_repository: MiniQMTExecutionRuntimeRepository,
-        portfolio_id: str,
-        strategy_slot_id: str,
-    ) -> dict[str, Any]:
-        scope_key = f"{portfolio_id}::{strategy_slot_id}"
-        selected_runtime = None
-        selected_override: str | None = None
-        for runtime in runtime_repository.list_runtimes():
-            overrides = self._gray_runtime_overrides(runtime.metadata)
-            last_shadow = self._last_shadow_reconciliation(runtime.metadata)
-            shadow_scope = self._shadow_scope(last_shadow)
-            if scope_key in overrides:
-                selected_runtime = runtime
-                selected_override = str(overrides[scope_key])
-                break
-            if (
-                shadow_scope.get("portfolio_id") == portfolio_id
-                and shadow_scope.get("strategy_slot_id") == strategy_slot_id
-                and selected_runtime is None
-            ):
-                selected_runtime = runtime
-
-        try:
-            global_kind = get_miniqmt_execution_runtime_kind(os.environ).value
-        except ValueError as exc:
-            raise RuntimeConfigInvalidError(
-                "MiniQMT execution runtime selector is invalid",
-                context={"reason_code": "MINIQMT_EXECUTION_RUNTIME_UNSUPPORTED", "error": str(exc)},
-            ) from exc
-        runtime_payload = selected_runtime.model_dump(mode="json") if selected_runtime is not None else None
-        last_shadow_summary = (
-            self._shadow_report_summary(self._last_shadow_reconciliation(selected_runtime.metadata))
-            if selected_runtime is not None
-            else None
-        )
-        return {
-            "schema_version": "miniqmt_gray_state_readonly_v1",
-            "portfolio_id": portfolio_id,
-            "strategy_slot_id": strategy_slot_id,
-            "scope_key": scope_key,
-            "global_runtime_kind": global_kind,
-            "override_runtime_kind": selected_override,
-            "effective_runtime_kind": selected_override or global_kind or MiniQMTExecutionRuntimeKind.COMPILER.value,
-            "runtime": runtime_payload,
-            "last_shadow_reconciliation": last_shadow_summary,
             "read_only": True,
         }
 
@@ -840,135 +745,6 @@ class SimulationRuntimeOpsService:
                 }
             )
         return errors
-
-    @staticmethod
-    def _shadow_report_event_projection(event: Any) -> dict[str, Any]:
-        payload = dict(event.payload) if isinstance(event.payload, dict) else {}
-        differences = payload.get("differences") if isinstance(payload.get("differences"), list) else []
-        fatal_count = sum(
-            1
-            for item in differences
-            if isinstance(item, dict) and str(item.get("severity") or "").upper() == "FATAL"
-        )
-        metadata = SimulationRuntimeOpsService._shadow_scope(payload)
-        return {
-            "source": "runtime_event",
-            "status": MiniQMTExecutionEventType.SHADOW_RECONCILIATION_REPORTED.value,
-            "reason_code": "MINIQMT_SHADOW_RECONCILIATION_REPORTED",
-            "event_id": event.event_id,
-            "runtime_id": event.runtime_id,
-            "event_time": event.event_time.isoformat(),
-            "sequence": event.sequence,
-            "report_id": payload.get("report_id"),
-            "scenario": payload.get("scenario"),
-            "scope": metadata,
-            "differences": differences,
-            "difference_count": len(differences),
-            "fatal_difference_count": fatal_count,
-            "has_fatal_difference": fatal_count > 0,
-            "severity": "FATAL" if fatal_count else ("WARNING" if differences else "INFO"),
-            "payload": payload,
-        }
-
-    def _failed_shadow_observation_rows(
-        self,
-        *,
-        trade_date: date,
-        portfolio_id: str,
-        strategy_slot_id: str,
-    ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        for run in self.repository.list_simulation_daily_runs(
-            trade_date=trade_date,
-            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
-            limit=500,
-        ):
-            failure = run.run_payload_json.get("miniqmt_shadow_reconciliation")
-            if not isinstance(failure, dict) or str(failure.get("status") or "").upper() != "FAILED_OBSERVATION_ONLY":
-                continue
-            scope = self._shadow_scope(failure, run=run)
-            if scope.get("portfolio_id") is None and run.execution_plan_id:
-                plan = self.repository.get_execution_plan(run.execution_plan_id)
-                scope["portfolio_id"] = plan.portfolio_id
-                scope["strategy_slot_id"] = scope.get("strategy_slot_id") or plan.strategy_slot_id
-            if (
-                scope.get("trade_date") == trade_date.isoformat()
-                and scope.get("portfolio_id") == portfolio_id
-                and scope.get("strategy_slot_id") == strategy_slot_id
-            ):
-                rows.append(
-                    {
-                        "source": "simulation_run_payload",
-                        "status": "FAILED_OBSERVATION_ONLY",
-                        "reason_code": failure.get("reason_code") or "MINIQMT_SHADOW_RECONCILIATION_FAILED",
-                        "event_id": None,
-                        "runtime_id": failure.get("runtime_id"),
-                        "event_time": run.updated_at.isoformat(),
-                        "sequence": None,
-                        "report_id": failure.get("report_id"),
-                        "scenario": failure.get("scenario"),
-                        "scope": scope,
-                        "differences": [],
-                        "difference_count": int(failure.get("difference_count") or 0),
-                        "fatal_difference_count": int(failure.get("fatal_difference_count") or 0),
-                        "has_fatal_difference": bool(int(failure.get("fatal_difference_count") or 0)),
-                        "severity": "WARNING",
-                        "payload": failure,
-                    }
-                )
-        return rows
-
-    @staticmethod
-    def _shadow_scope(payload: dict[str, Any] | None, *, run: SimulationDailyRun | None = None) -> dict[str, Any]:
-        raw_metadata = (payload or {}).get("metadata") if isinstance(payload, dict) else None
-        metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
-        source = {**(payload or {}), **metadata}
-        return {
-            "portfolio_id": str(source.get("portfolio_id") or "").strip() or None,
-            "strategy_slot_id": str(source.get("strategy_slot_id") or getattr(run, "strategy_slot_id", None) or "").strip()
-            or None,
-            "binding_id": str(source.get("binding_id") or getattr(run, "binding_id", "") or "").strip() or None,
-            "run_id": str(source.get("run_id") or getattr(run, "run_id", "") or "").strip() or None,
-            "trade_date": str(source.get("trade_date") or (run.trade_date.isoformat() if run else "")).strip() or None,
-            "execution_plan_id": str(source.get("execution_plan_id") or getattr(run, "execution_plan_id", "") or "").strip()
-            or None,
-            "account_group_id": str(source.get("account_group_id") or getattr(run, "account_group_id", "") or "").strip()
-            or None,
-        }
-
-    @staticmethod
-    def _shadow_report_summary(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-        if not isinstance(payload, dict):
-            return None
-        differences = payload.get("differences") if isinstance(payload.get("differences"), list) else []
-        fatal_count = sum(
-            1
-            for item in differences
-            if isinstance(item, dict) and str(item.get("severity") or "").upper() == "FATAL"
-        )
-        return {
-            "report_id": payload.get("report_id"),
-            "runtime_id": payload.get("runtime_id"),
-            "durable_event_id": payload.get("durable_event_id"),
-            "scenario": payload.get("scenario"),
-            "scope": SimulationRuntimeOpsService._shadow_scope(payload),
-            "difference_count": len(differences),
-            "fatal_difference_count": fatal_count,
-            "has_fatal_difference": fatal_count > 0,
-            "severity": "FATAL" if fatal_count else ("WARNING" if differences else "INFO"),
-        }
-
-    @staticmethod
-    def _last_shadow_reconciliation(metadata: dict[str, Any]) -> dict[str, Any] | None:
-        raw = metadata.get("last_shadow_reconciliation") if isinstance(metadata, dict) else None
-        return dict(raw) if isinstance(raw, dict) else None
-
-    @staticmethod
-    def _gray_runtime_overrides(metadata: dict[str, Any]) -> dict[str, str]:
-        raw = metadata.get("gray_runtime_overrides") if isinstance(metadata, dict) else None
-        if not isinstance(raw, dict):
-            return {}
-        return {str(key): str(value) for key, value in raw.items()}
 
     def start_scheduler(self, *, interval_seconds: int | None = None, default_submit: bool | None = None) -> dict[str, Any]:
         if not isinstance(self.scheduler, SimulationLifecycleBackgroundScheduler):

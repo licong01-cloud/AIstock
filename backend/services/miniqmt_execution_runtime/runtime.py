@@ -54,7 +54,7 @@ from .risk import MiniQMTRiskDecision, MiniQMTRiskDecisionAction, MiniQMTRiskEng
 
 
 class MiniQMTExecutionEventLoop:
-    """Persist-first event loop for fake-broker Phase 2 validation."""
+    """Persist-first event loop for MiniQMT gateway callbacks."""
 
     def __init__(self, *, repository: MiniQMTExecutionRuntimeRepository) -> None:
         self._repository = repository
@@ -78,12 +78,10 @@ class MiniQMTExecutionEventLoop:
 
 
 class MiniQMTExecutionRuntime:
-    """Single execution owner for future MiniQMT product paths.
+    """Single execution owner for MiniQMT SIM event-loop paths.
 
-    Phase 2 provides durable runtime/event/gateway/OMS behavior with a fake
-    broker. Phase 3 attaches vn.py-derived algo cores while keeping gateway
-    submission/cancel ownership inside this runtime. Phase 4 will route Paper
-    v2/simulation_runtime clients.
+    The runtime keeps gateway submission/cancel ownership, durable event
+    ordering, runtime-owned vn.py algo state, and OMS projection in one owner.
     """
 
     def __init__(
@@ -269,9 +267,8 @@ class MiniQMTExecutionRuntime:
     ) -> MiniQMTExecutionAlgoInstance:
         """Create a runtime-owned vn.py-style algo instance.
 
-        Phase 3 keeps the algo core broker-neutral: the core emits actions,
-        while this runtime owns gateway submission, event persistence, and OMS
-        mapping.
+        The algo core stays broker-neutral: it emits actions, while this runtime
+        owns gateway submission, event persistence, and OMS mapping.
         """
 
         normalized_algo_code = str(algo_code or "").strip().upper()
@@ -420,10 +417,10 @@ class MiniQMTExecutionRuntime:
         broker_order_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTChildOrder:
-        """Attach an externally-submitted child order to the runtime ledger.
+        """Attach an externally submitted child order to the runtime ledger.
 
-        Phase 4 product clients may still use legacy broker/managed-order
-        gateways while the canonical owner records algo/child-order evidence.
+        The runtime remains the canonical owner for algo/child-order evidence
+        even when a caller supplies a broker-side order identifier.
         """
 
         runtime = self._require_runtime()

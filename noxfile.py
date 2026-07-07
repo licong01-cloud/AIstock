@@ -24,7 +24,7 @@ VALIDATION_ENV_FILE_DENYLIST = {
     "MINIQMT_EXECUTION_RUNTIME",
 }
 VALIDATION_RUNTIME_DEFAULTS = {
-    "MINIQMT_EXECUTION_RUNTIME": "compiler",
+    "MINIQMT_EXECUTION_RUNTIME": "event_loop",
 }
 
 nox.options.reuse_existing_virtualenvs = True

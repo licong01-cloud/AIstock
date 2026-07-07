@@ -20,7 +20,6 @@ from backend.services.qmt_strategy_ledger.models import (
     CashLedgerEntry,
     STATUS_CANCELLED,
     STATUS_FILLED,
-    STATUS_OPEN_LIKE,
     STATUS_PART_SUCC,
     STATUS_REJECTED,
     IntentPreflightStatus,
@@ -510,7 +509,7 @@ def _qmt_order_id_for_ledger(order: MiniQMTChildOrder) -> str | None:
     return None
 
 
-def _order_status(status: MiniQMTChildOrderStatus) -> int:
+def _order_status(status: MiniQMTChildOrderStatus) -> int | None:
     if status == MiniQMTChildOrderStatus.PARTIALLY_FILLED:
         return STATUS_PART_SUCC
     if status == MiniQMTChildOrderStatus.FILLED:
@@ -519,7 +518,10 @@ def _order_status(status: MiniQMTChildOrderStatus) -> int:
         return STATUS_CANCELLED
     if status == MiniQMTChildOrderStatus.REJECTED:
         return STATUS_REJECTED
-    return STATUS_OPEN_LIKE
+    # A runtime submit ack proves the broker accepted an order id, but it is
+    # not a broker order-status snapshot. The qmt_strategy sync service will
+    # replace this with the actual open/terminal MiniQMT status on reconcile.
+    return None
 
 
 def _child_status_from_order_ledger(order: OrderLedgerRecord) -> MiniQMTChildOrderStatus:

@@ -1,4 +1,4 @@
-"""MiniQMT gateway protocol and fake gateway used by Phase 2 validation."""
+"""MiniQMT gateway protocols and controlled test gateway."""
 
 from __future__ import annotations
 
