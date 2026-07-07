@@ -16,9 +16,16 @@ def test_evolution_router_no_longer_reads_worker_workspace_paths() -> None:
 
 def test_summary_read_path_selects_cached_json_for_compact_projection() -> None:
     source = Path(qe_evolution_service.__file__).read_text(encoding="utf-8")
+    detail_start = source.index("async def get_task_detail")
+    comparison_start = source.index("def get_loop_comparison")
+    payload_start = source.index("def get_loop_payload")
+    detail_source = source[detail_start:comparison_start]
+    comparison_source = source[comparison_start:payload_start]
 
-    assert "config_json, metrics_json" in source
-    assert "result[\"loops\"] = [compact_loop_row(loop_data)" in source
+    assert "config_json, metrics_json" in detail_source
+    assert "config_json, metrics_json" in comparison_source
+    assert "result[\"loops\"] = [compact_loop_row(loop_data)" in detail_source
+    assert "loops = [compact_loop_row(dict(row))" in comparison_source
 
 
 def test_position_enrichment_missing_metrics_is_read_only() -> None:

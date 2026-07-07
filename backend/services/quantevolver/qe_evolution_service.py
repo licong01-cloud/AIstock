@@ -2819,6 +2819,7 @@ class AutoEvolutionScheduler:
                 else:
                     cur.execute("""
                         SELECT loop_id, task_id, loop_index, action_type,
+                               config_json, metrics_json,
                                COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
                                config_json->>'model_id' AS model_id,
                                config_json->>'strategy_id' AS strategy_id,
@@ -2995,6 +2996,7 @@ class AutoEvolutionScheduler:
                     return None
                 cur.execute("""
                     SELECT loop_id, task_id, loop_index, action_type,
+                           config_json, metrics_json,
                            COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
                            config_json->>'model_id' AS model_id,
                            config_json->>'strategy_id' AS strategy_id,

@@ -228,8 +228,11 @@ function isHmmTask(task: Task): boolean {
 function normalizeSummaryLoop(loop: Loop): Loop {
   const configSummary = (loop as any).config_summary || {};
   const metricsSummary = (loop as any).metrics_summary || {};
-  const metricsJson = loop.metrics_json || {
+  const rawMetricsJson = loop.metrics_json || {};
+  const metricsJson = {
     ...metricsSummary,
+    ...rawMetricsJson,
+    enhanced_metrics: (rawMetricsJson as any).enhanced_metrics ?? (metricsSummary as any).enhanced_metrics,
     IC: metricsSummary.ic ?? (loop as any).ic,
     ICIR: metricsSummary.icir ?? (loop as any).icir,
     Rank_IC: metricsSummary.rank_ic ?? (loop as any).rank_ic,
