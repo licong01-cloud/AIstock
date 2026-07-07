@@ -6,6 +6,8 @@ Use this command when a Claude Code task needs broad AIstock validation without 
 
 - Keep only the minimal local gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Send broad module matrices, UI journeys, API/business-flow E2E, LLM design-drift, and cross-module regression to Validation Center, GitHub CI, or Nightly.
+- When a local test fails, rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.
+- When local validation/exploration exceeds about 30 minutes or the task-card command budget, stop adding local suites and create a compact validation handoff.
 - DeepSeek may select plans and diagnose failures; deterministic allowlisted runners execute tests.
 - If DeepSeek/API planning fails, report `planner_status=failed`; do not silently mark deterministic fallback as success.
 

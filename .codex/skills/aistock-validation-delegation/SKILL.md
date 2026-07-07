@@ -11,6 +11,8 @@ Use this skill when local Codex validation would become broad, repetitive, or lo
 
 - Codex keeps the minimal pre-merge gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
 - Deep validation runs in Validation Center, GitHub CI, or Nightly; Codex does not manually run broad module matrices, UI journeys, or cross-module business-flow suites for every BUG.
+- When a local test fails, Codex should rerun only the failed nodeid or `pytest --lf` before escalating to a broader suite.
+- When local validation/exploration exceeds about 30 minutes or the task-card command budget, Codex should stop adding local suites and create a compact validation handoff.
 - DeepSeek may choose test plans and diagnose failures, but deterministic allowlisted runners execute commands.
 - DeepSeek/API failure is a loud `planner_status=failed`; do not silently downgrade to deterministic success.
 

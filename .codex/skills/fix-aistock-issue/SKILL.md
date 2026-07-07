@@ -36,6 +36,9 @@ Use this skill only for AIstock BUG/GitHub Issue work. Do not use it for ordinar
 
 - Default PR gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, scope check, and production gates.
 - High-risk PR gate adds only safety-critical invariant/fail-closed/route/DDL/side-effect checks.
+- After a test failure, rerun the failed nodeid first (`pytest path::test -q`) or use `pytest --lf -q` / `pytest --ff -x -q`; do not rerun a broad suite just to reach the same failure.
+- Run the related final small matrix at most once after behavior stabilizes. If it already passed, do not repeat it for test renames, comments, docs, formatting, or other non-behavioral edits.
+- If local exploration or validation exceeds about 30 minutes, command count exceeds the task-card soft limit, or the task needs broad module/cross-module/UI/API/business-flow coverage, stop expanding local runs and delegate validation.
 - Use `aistock-validation-delegation` for broad UI/API/business-flow, cross-module, or LLM design-drift validation; report deferred modules so nightly can run one deduplicated deep pass for the day.
 - Broad module matrices before merge require DDL, production writes, or an explicit user request. Order/cash/position/fail-closed bugs keep only the direct invariant or route safety test locally; run full module matrices through delegated VC/nightly.
 
