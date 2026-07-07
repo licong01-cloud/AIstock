@@ -373,6 +373,17 @@ def _workflow_context_resume_digest(state: dict[str, Any], *, root: Path | None 
             "soft_limit": 40,
             "action": "pause_and_summarize_before_more_search_or_repeated_file_reads",
         },
+        "validation_loop_budget": {
+            "failure_resume_first": ["pytest <path>::<test_name> -q", "pytest --lf -q", "pytest --ff -x -q"],
+            "max_final_related_matrix_runs": 1,
+            "delegate_when": [
+                "local validation or exploration exceeds 30 minutes",
+                "exploration commands exceed the soft limit",
+                "broad module/cross-module/UI/API/business-flow coverage is needed",
+                "a suite already passed and only non-behavioral edits followed",
+            ],
+            "rule": "do not rerun broad suites after each edit; rerun failed nodeids first and delegate deep validation",
+        },
         "success_artifact_policy": {
             "stdout": "compact_by_default",
             "json": "diagnostic_only_on_failure_or_AISTOCK_WORKFLOW_ARTIFACTS=1",
@@ -3631,10 +3642,10 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
     ).lower()
     if has_production_gate or any(marker in text for marker in ("ddl", "migration", "production db")):
         budget = "deep"
-        target_pct = "60-70%"
+        target_pct = "45-60%"
     elif severity in {"P0", "P1"} or module in high_risk_modules or any(marker in text for marker in runtime_markers):
         budget = "standard"
-        target_pct = "35-60%"
+        target_pct = "30-45%"
     elif ui_hints:
         budget = "light_ui"
         target_pct = "30-40%"
@@ -3658,6 +3669,17 @@ def _verification_budget_for_record(record: dict[str, Any], ui_hints: dict[str, 
             "skill": "aistock-validation-delegation",
             "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
             "receipt_default": "compact",
+        },
+        "local_loop_policy": {
+            "failure_resume_first": ["pytest <path>::<test_name> -q", "pytest --lf -q", "pytest --ff -x -q"],
+            "max_final_related_matrix_runs": 1,
+            "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first",
+            "delegate_when": [
+                "local validation or exploration exceeds 30 minutes",
+                "exploration commands exceed the task-card soft limit",
+                "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+                "the relevant small matrix already passed and only non-behavioral edits followed",
+            ],
         },
         "deferred_nightly_verification": {
             "required": budget in {"light_ui", "standard", "deep"} or bool(deferred_modules),
@@ -4453,6 +4475,7 @@ def build_task_card(
             "missing GitHub linkage",
             "scope expansion required outside allowed_write_scope",
             "required validation cannot run",
+            "local validation/exploration exceeds budget and should switch to validation delegation",
             "production runtime or DB action requested without explicit approval",
         ],
         "next_client_steps": [
@@ -4462,6 +4485,8 @@ def build_task_card(
             "after context compaction, use Context Resume Digest hashes instead of re-reading standards/quickstart/RTK",
             "read Code Intelligence refs before rg; record a scoped miss reason before broad scans",
             "stop and summarize before more search if exploration commands exceed the soft budget",
+            "after a test failure, rerun the failed nodeid or pytest --lf before any broader suite",
+            "run the final related small matrix at most once; delegate broad/deep validation to VC/CI/nightly",
             "edit only files under allowed_write_scope or stop for scope expansion",
             "run finish --plan-only before reporting the issue fixed",
         ],
@@ -4482,6 +4507,10 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
     budget = task_card.get("verification_budget") if isinstance(task_card.get("verification_budget"), dict) else {}
     deferred = budget.get("deferred_nightly_verification") if isinstance(budget.get("deferred_nightly_verification"), dict) else {}
     delegated = budget.get("delegated_validation") if isinstance(budget.get("delegated_validation"), dict) else {}
+    local_loop = budget.get("local_loop_policy") if isinstance(budget.get("local_loop_policy"), dict) else {}
+    resume_validation = (
+        resume_digest.get("validation_loop_budget") if isinstance(resume_digest.get("validation_loop_budget"), dict) else {}
+    )
     lines = [
         f"# AIstock Agent Task Card {task_card.get('bug_id')}",
         "",
@@ -4515,9 +4544,16 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- delegated_validation_skill: `{delegated.get('skill') or 'none'}`",
         f"- delegated_receipt_default: `{delegated.get('receipt_default') or 'none'}`",
         "",
+        "## Local Validation Loop Policy",
+        f"- failure_resume_first: `{', '.join(local_loop.get('failure_resume_first') or []) or 'pytest --lf -q'}`",
+        f"- max_final_related_matrix_runs: `{local_loop.get('max_final_related_matrix_runs') or 1}`",
+        f"- no_repeat_rule: `{local_loop.get('no_repeat_rule') or 'rerun failed nodeids before broader suites'}`",
+        f"- delegate_when: `{', '.join(local_loop.get('delegate_when') or []) or 'broad validation needed'}`",
+        "",
         "## Context Resume Digest",
         f"- rule_digest_count: `{len(resume_digest.get('rule_digests') or [])}`",
         f"- exploration_soft_limit: `{((resume_digest.get('exploration_command_budget') or {}).get('soft_limit')) or 40}`",
+        f"- validation_resume_first: `{', '.join(resume_validation.get('failure_resume_first') or []) or 'pytest --lf -q'}`",
         f"- json_artifact_policy: `{((resume_digest.get('success_artifact_policy') or {}).get('json')) or 'diagnostic_only'}`",
         *[
             f"- rule: `{item.get('path')}` sha256_12=`{item.get('sha256_12') or 'missing'}`"

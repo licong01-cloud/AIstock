@@ -28,6 +28,9 @@ python F:\Dev\AIstock\scripts/aistock_issue_workflow.py doctor
 
 - Default PR gate: changed-file lint/compile, direct fix-point targeted test or API/contract smoke, `git diff --check`, scope check, and production gates.
 - High-risk PR gate adds only safety-critical invariant/fail-closed/route/DDL/side-effect checks.
+- After a test failure, rerun the failed nodeid first (`pytest path::test -q`) or use `pytest --lf -q` / `pytest --ff -x -q`; do not rerun a broad suite just to reach the same failure.
+- Run the related final small matrix at most once after behavior stabilizes. If it already passed, do not repeat it for test renames, comments, docs, formatting, or other non-behavioral edits.
+- If local exploration or validation exceeds about 30 minutes, command count exceeds the task-card soft limit, or the task needs broad module/cross-module/UI/API/business-flow coverage, stop expanding local runs and delegate validation.
 - Use `.claude/commands/aistock-validation-delegation.md` for broad UI/API/business-flow, cross-module, or LLM design-drift validation; report deferred modules so nightly can run one deduplicated deep pass for the day.
 
 ## Finish / PR / Aftercare

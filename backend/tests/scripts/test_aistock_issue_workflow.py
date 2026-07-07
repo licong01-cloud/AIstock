@@ -541,8 +541,15 @@ def test_start_writes_fix_ready_and_context_pack(
         "fix-ready.json",
     ]
     assert task_card["verification_budget"]["delegated_validation"]["skill"] == "aistock-validation-delegation"
+    local_loop = task_card["verification_budget"]["local_loop_policy"]
+    assert "pytest --lf -q" in local_loop["failure_resume_first"]
+    assert local_loop["max_final_related_matrix_runs"] == 1
+    assert "do not rerun broad" in local_loop["no_repeat_rule"]
     task_card_text = task_card_md.read_text(encoding="utf-8")
     assert "delegated_validation_skill: `aistock-validation-delegation`" in task_card_text
+    assert "## Local Validation Loop Policy" in task_card_text
+    assert "pytest --lf -q" in task_card_text
+    assert "max_final_related_matrix_runs: `1`" in task_card_text
     assert "machine JSON policy: debug/resume only" in task_card_text
     assert "suggested_tests" not in json.dumps(task_card, ensure_ascii=False)
     assert "skip_reasons" not in json.dumps(task_card, ensure_ascii=False)
@@ -2992,6 +2999,9 @@ def test_run_plan_writes_state_and_resume_reads_it(isolated_workflow_root: Path)
     assert digest["schema_version"] == "aistock_workflow_context_resume_digest_v1"
     assert "standards README" in digest["reuse_policy"][1]
     assert digest["exploration_command_budget"]["soft_limit"] == 40
+    assert "pytest --lf -q" in digest["validation_loop_budget"]["failure_resume_first"]
+    assert digest["validation_loop_budget"]["max_final_related_matrix_runs"] == 1
+    assert "do not rerun broad suites" in digest["validation_loop_budget"]["rule"]
     assert resume["worktree"] is None
     assert "run --bug-id BUG-199 --mode plan --create-worktree" in resume["next_command"]
 
