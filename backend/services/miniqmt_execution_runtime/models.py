@@ -1,8 +1,7 @@
 """Durable MiniQMT execution runtime domain models.
 
-Phase 2 intentionally keeps these models broker-interface oriented and does not
-connect to a production MiniQMT process. The runtime owns event ordering,
-gateway calls, OMS projection, and restart recovery.
+The runtime owns event ordering, gateway calls, OMS projection, and restart
+recovery for MiniQMT SIM event-loop submissions.
 """
 
 from __future__ import annotations
@@ -64,11 +63,6 @@ class MiniQMTExecutionEventType(str, Enum):
     TRADE_EVENT = "TRADE_EVENT"
     ACCOUNT_EVENT = "ACCOUNT_EVENT"
     RISK_KILL_SWITCH_TRIGGERED = "RISK_KILL_SWITCH_TRIGGERED"
-    SHADOW_RECONCILIATION_REPORTED = "SHADOW_RECONCILIATION_REPORTED"
-    GRAY_SWITCH_APPLIED = "GRAY_SWITCH_APPLIED"
-    GRAY_SWITCH_REJECTED = "GRAY_SWITCH_REJECTED"
-    GRAY_ROLLBACK_APPLIED = "GRAY_ROLLBACK_APPLIED"
-    GRAY_ROLLBACK_REJECTED = "GRAY_ROLLBACK_REJECTED"
     RECONCILE_STARTED = "RECONCILE_STARTED"
     RECONCILE_COMPLETED = "RECONCILE_COMPLETED"
     OPERATOR_COMMAND_RECEIVED = "OPERATOR_COMMAND_RECEIVED"
@@ -161,7 +155,7 @@ class MiniQMTExecutionEvent(BaseModel):
     sequence: int = Field(ge=1)
     event_type: MiniQMTExecutionEventType
     event_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery", "shadow"]
+    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("event_id", "runtime_id", "source")
@@ -174,7 +168,7 @@ class MiniQMTExecutionEvent(BaseModel):
 
 
 class MiniQMTExecutionAlgoInstance(BaseModel):
-    """Runtime-owned algo instance; Phase 3 will attach vn.py-derived behavior."""
+    """Runtime-owned vn.py-style algo instance."""
 
     model_config = ConfigDict(extra="forbid")
 

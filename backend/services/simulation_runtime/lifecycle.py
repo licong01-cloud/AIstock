@@ -139,14 +139,25 @@ def _normalize_miniqmt_runtime_kind(
     raw: MiniQMTExecutionRuntimeKind | str | None,
 ) -> MiniQMTExecutionRuntimeKind:
     if raw is None:
-        return MiniQMTExecutionRuntimeKind.COMPILER
+        return MiniQMTExecutionRuntimeKind.EVENT_LOOP
     try:
-        return raw if isinstance(raw, MiniQMTExecutionRuntimeKind) else MiniQMTExecutionRuntimeKind(str(raw))
+        kind = raw if isinstance(raw, MiniQMTExecutionRuntimeKind) else MiniQMTExecutionRuntimeKind(str(raw))
     except ValueError as exc:
         raise LiveApprovalRequiredError(
             "unsupported MiniQMT simulation runtime kind",
             context={"reason_code": "MINIQMT_RUNTIME_KIND_UNSUPPORTED", "runtime_kind": str(raw)},
         ) from exc
+    if kind == MiniQMTExecutionRuntimeKind.COMPILER:
+        raise RuntimeConfigInvalidError(
+            "MiniQMT SIM compiler runtime route is retired; SIM submissions must use event_loop",
+            context={
+                "reason_code": "MINIQMT_SIM_COMPILER_ROUTE_RETIRED",
+                "stage": "MINIQMT_RUNTIME_KIND_REJECTED",
+                "runtime_kind": kind.value,
+                "allowed_runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+            },
+        )
+    return kind
 
 
 def _pre_trade_blocked_symbol_count(pre_trade_tradability: dict[str, dict[str, Any]] | None) -> int:
@@ -462,32 +473,22 @@ class SimulationLifecycleOrchestrator:
                 )
             bridge = MiniQMTExecutionBridge(managed_order_service=managed_order_service)
             runtime_kind = _normalize_miniqmt_runtime_kind(miniqmt_runtime_kind)
-            submitter = (
-                bridge.submit_event_loop_plan
-                if runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
-                else bridge.submit_plan
-            )
-            submit_stage = (
-                "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
-                if runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
-                else "MINIQMT_SUBMIT_FAILED"
-            )
+            submit_stage = "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
             try:
-                qmt_result = submitter(
+                qmt_result = bridge.submit_event_loop_plan(
                     plan=plan,
                     binding=binding,
                     mode=mode,
                     price_by_symbol=price_by_symbol,
                 )
             except Exception as exc:
-                if runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP:
-                    self._annotate_event_loop_submit_failure(
-                        exc=exc,
-                        stage=submit_stage,
-                        run=run,
-                        plan=plan,
-                        binding=binding,
-                    )
+                self._annotate_event_loop_submit_failure(
+                    exc=exc,
+                    stage=submit_stage,
+                    run=run,
+                    plan=plan,
+                    binding=binding,
+                )
                 self.mark_submit_failure(run=run, stage=submit_stage, exc=exc)
                 raise
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
@@ -502,20 +503,19 @@ class SimulationLifecycleOrchestrator:
                 "qmt_batch_result": qmt_result.to_dict(),
                 "last_stage": next_status.value,
             }
-            if runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP:
-                payload_patch.update(
-                    {
-                        "miniqmt_runtime_kind": runtime_kind.value,
-                        "miniqmt_runtime_route": {
-                            "route": "A_EVENT_LOOP",
-                            "runtime_kind": runtime_kind.value,
-                            "gateway_class": "QmtClientMiniQMTEventLoopGateway",
-                            "oms_authority": "qmt_strategy_ledger",
-                            "quote_source": "MINIQMT_REALTIME.broker_quote",
-                            "reason_code": "MINIQMT_EVENT_LOOP_ROUTE_SELECTED",
-                        },
-                    }
-                )
+            payload_patch.update(
+                {
+                    "miniqmt_runtime_kind": runtime_kind.value,
+                    "miniqmt_runtime_route": {
+                        "route": "A_EVENT_LOOP",
+                        "runtime_kind": runtime_kind.value,
+                        "gateway_class": "QmtClientMiniQMTEventLoopGateway",
+                        "oms_authority": "qmt_strategy_ledger",
+                        "quote_source": "MINIQMT_REALTIME.broker_quote",
+                        "reason_code": "MINIQMT_EVENT_LOOP_ROUTE_SELECTED",
+                    },
+                }
+            )
             updated = self.repository.update_simulation_daily_run(
                 run.run_id,
                 status=next_status,

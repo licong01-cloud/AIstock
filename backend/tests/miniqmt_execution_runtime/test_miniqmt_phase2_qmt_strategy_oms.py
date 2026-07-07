@@ -16,7 +16,6 @@ from backend.services.miniqmt_execution_runtime import (
 from backend.services.miniqmt_execution_runtime.config import MiniQMTExecutionRuntimeKind
 from backend.services.qmt_strategy_ledger.models import (
     STATUS_FILLED,
-    STATUS_OPEN_LIKE,
     STATUS_PART_SUCC,
     VirtualAccount,
     VirtualAccountStatus,
@@ -97,7 +96,7 @@ def test_event_loop_oms_writes_child_order_and_trade_facts_to_qmt_strategy_ledge
     order_facts = ledger_repo.list_order_ledger(account_id=ACCOUNT_ID, trade_date=TRADE_DATE)
     assert len(order_facts) == 1
     assert order_facts[0].qmt_order_id == child.broker_order_id
-    assert order_facts[0].order_status == STATUS_OPEN_LIKE
+    assert order_facts[0].order_status is None
     assert order_facts[0].raw_json["qmt_strategy_ledger_authority"] is True
 
     runtime.record_order_event(
@@ -135,7 +134,7 @@ def test_event_loop_oms_writes_child_order_and_trade_facts_to_qmt_strategy_ledge
     assert runtime.repository.list_child_orders(runtime.config.runtime_id, active_only=True) == []
 
 
-def test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_is_inert() -> None:
+def test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_runtime_is_retired() -> None:
     ledger_repo = InMemoryQmtStrategyLedgerRepository()
     runtime_repo = InMemoryMiniQMTExecutionRuntimeRepository()
     event_loop_runtime, _event_loop_client = _event_loop_runtime(
@@ -148,21 +147,15 @@ def test_event_loop_client_uses_qmt_strategy_oms_authority_and_compiler_default_
     assert ledger_repo.list_order_ledger(account_id=ACCOUNT_ID, trade_date=TRADE_DATE)
 
     compiler_ledger = InMemoryQmtStrategyLedgerRepository()
-    compiler_client = MiniQMTExecutionRuntimeClient(
-        repository=InMemoryMiniQMTExecutionRuntimeRepository(),
-        strategy_ledger_repository=compiler_ledger,
-        runtime_kind=MiniQMTExecutionRuntimeKind.COMPILER,
-    )
-    compiler_runtime = compiler_client._runtime(
-        account_group_id=ACCOUNT_ID,
-        trade_date=TRADE_DATE,
-        runtime_config_hash="phase2_compiler_inert",
-        runtime_id="mqrt_phase2_compiler_inert",
-        gateway=FakeMiniQMTGateway(),
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=compiler_ledger,
+            runtime_kind=MiniQMTExecutionRuntimeKind.COMPILER,
+        )
 
-    assert compiler_runtime.oms.uses_qmt_strategy_authority is False
-    _create_child(compiler_runtime)
+    assert exc_info.value.context["reason_code"] == "MINIQMT_SIM_COMPILER_ROUTE_RETIRED"
+    assert exc_info.value.context["stage"] == "MINIQMT_RUNTIME_KIND_REJECTED"
     assert compiler_ledger.list_order_ledger(account_id=ACCOUNT_ID, trade_date=TRADE_DATE) == []
 
 

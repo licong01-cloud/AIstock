@@ -24,6 +24,10 @@ from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingC
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
+from backend.services.miniqmt_execution_runtime import (
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionRuntimeClient,
+)
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
@@ -673,9 +677,44 @@ class FailingLocalSimBroker:
 class FakeManagedOrderBroker:
     def __init__(self) -> None:
         self.calls = []
+        self.quotes = {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.0,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 8.0,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.0,
+                "ask_price_1": 20.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 5000,
+            },
+        }
 
     def get_positions(self):
         return [{"stock_code": "000003.SZ", "can_sell": 1000}]
+
+    def get_orders(self, cancelable_only: bool = False):  # noqa: ARG002
+        return []
+
+    def get_trades(self):
+        return []
+
+    def get_full_tick(self, symbols):
+        return {symbol: dict(self.quotes[symbol]) for symbol in symbols if symbol in self.quotes}
 
     def place_order(self, **kwargs):
         self.calls.append(kwargs)
@@ -786,23 +825,26 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
             repository=qmt_repo,
             broker=broker,  # type: ignore[arg-type]
             calendar_provider=calendar,
-        )
+        ),
+        runtime_client=MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=qmt_repo,
+        ),
     )
 
-    prices = {"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")}
-    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol=prices)
-    submitted = bridge.submit_plan(plan=plan, binding=binding, price_by_symbol=prices)
+    submitted = bridge.submit_event_loop_plan(plan=plan, binding=binding)
+    stored_intents = qmt_repo.list_order_intents_by_batch(submitted.batch_id or "")
 
-    assert all(item.allowed for item in preview.preflights)
     assert submitted.success is True
     assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
-    assert preview.requests[0].metadata["source"] == "runtime_owned_vnpy_algo"
-    assert preview.requests[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
-    assert preview.requests[0].metadata["runtime_child_order_id"]
-    assert preview.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
+    assert all(result.preflight.allowed for result in submitted.results)
+    assert stored_intents
+    assert stored_intents[0].metadata["event_loop_submit"] is True
+    assert stored_intents[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert stored_intents[0].metadata["runtime_child_order_id"]
     assert submitted.runtime_evidence is not None
     assert submitted.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
-    assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
+    assert all(call["order_remark"].startswith(binding.order_remark_prefix or "") for call in broker.calls)
 
 
 def test_miniqmt_vnpy_bridge_marks_buy_requests_cash_shrink_eligible() -> None:
@@ -850,16 +892,21 @@ def test_miniqmt_vnpy_bridge_marks_buy_requests_cash_shrink_eligible() -> None:
             repository=qmt_repo,
             broker=FakeManagedOrderBroker(),  # type: ignore[arg-type]
             calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), date(2026, 5, 21)]),
-        )
+        ),
+        runtime_client=MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=qmt_repo,
+        ),
     )
 
-    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol={"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")})
+    submitted = bridge.submit_event_loop_plan(plan=plan, binding=binding)
+    stored_intents = qmt_repo.list_order_intents_by_batch(submitted.batch_id or "")
 
-    buy_requests = [request for request in preview.requests if request.side == "BUY"]
+    buy_requests = [intent for intent in stored_intents if intent.side == "BUY"]
     assert buy_requests
-    assert all(request.metadata["miniqmt_cash_preflight_shrink_enabled"] is True for request in buy_requests)
-    assert {request.metadata["miniqmt_cash_shrink_max_overshoot_ratio"] for request in buy_requests} == {"0.02"}
-    assert {request.metadata["miniqmt_cash_shrink_max_overshoot"] for request in buy_requests} == {"10000"}
+    assert all(intent.metadata["miniqmt_cash_preflight_shrink_enabled"] is True for intent in buy_requests)
+    assert {intent.metadata["miniqmt_cash_shrink_max_overshoot_ratio"] for intent in buy_requests} == {"0.02"}
+    assert {intent.metadata["miniqmt_cash_shrink_max_overshoot"] for intent in buy_requests} == {"10000"}
 
 
 def test_lifecycle_orchestrator_builds_dual_backend_plans_from_same_evidence_and_is_idempotent() -> None:

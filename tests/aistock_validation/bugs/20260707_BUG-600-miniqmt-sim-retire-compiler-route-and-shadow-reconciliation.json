@@ -1,0 +1,181 @@
+{
+  "actual": "Unattended MiniQMT SIM submit still ran shadow A/B before submit and left compiler(B)/gray/env routing available. 2026-07-07 py-spy showed scheduler stuck in json.dumps via JsonFileMiniQMTExecutionRuntimeRepository._save while runtime-state.json had grown to 63.7MB / 114 runtimes / 24036 events / 3477 algo / 3478 child orders; submit/reconcile could also block the single scheduler thread.",
+  "allowed_write_scope": [
+    "backend/routers/simulation_runtime.py",
+    "backend/services/miniqmt_execution_runtime/__init__.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/config.py",
+    "backend/services/miniqmt_execution_runtime/contracts.py",
+    "backend/services/miniqmt_execution_runtime/gateway.py",
+    "backend/services/miniqmt_execution_runtime/gray.py",
+    "backend/services/miniqmt_execution_runtime/models.py",
+    "backend/services/miniqmt_execution_runtime/oms.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/miniqmt_execution_runtime/risk.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/migrations/miniqmt_execution_runtime_repository_20260707.sql",
+    "backend/migrations/miniqmt_execution_runtime_repository_20260707.rollback.sql",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase0_seam_contracts.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase2_qmt_strategy_oms.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase5_shadow_reconciliation.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_router_summary.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20260707_BUG-600-miniqmt-sim-retire-compiler-route-and-shadow-reconciliation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-600",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-07T01:32:25.845367Z",
+  "description": "MiniQMT SIM must be A(event_loop)-only. Shadow A/B comparison and B compiler/gray routing are retired because B never successfully ran and A==B is not valid evidence.\n\nP0 escalation 2026-07-07 09:25: scheduler thread froze in the MiniQMT submit/shadow/reconcile phase, so synchronous shadow must be deleted and submit/reconcile/binding stages must have loud timeouts/watchdog isolation.\n\nP0 escalation 2026-07-07 py-spy: stack was json._iterencode_dict -> json.dumps -> repository.py _save -> upsert_algo_instance -> record_algo_instance -> _persist_vnpy_core_state -> record_trade_event -> _run_binding. Root cause was production default JsonFileMiniQMTExecutionRuntimeRepository, a Phase 2.1 temporary JSON store, performing O(full repository) serialization per runtime/event/algo/child write. Production must use a real Postgres MiniQMTExecutionRuntimeRepository with controlled forward/rollback DDL, incremental row writes, retention prune/archive, and no startup auto-migration. Existing tmp/miniqmt_execution_runtime/runtime-state.json is disposable; do not bulk import it into DB.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260707-9b868280a90c",
+      "timestamp": "2026-07-07T01:32:25.845363Z"
+    },
+    {
+      "action": "escalate_to_p0_and_expand_scope",
+      "actor": "codex",
+      "note": "User supplied 2026-07-07 intraday evidence of scheduler freeze and 63MB runtime-state write amplification; expanded scope to repository watchdog/prune/reset.",
+      "timestamp": "2026-07-07T01:45:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope_for_p0_runtime_store",
+      "actor": "codex",
+      "note": "User supplied py-spy root cause and production JSON write amplification evidence; scope expanded to MiniQMT runtime repository, client/gateway, controlled DDL migrations, watchdog tests, and affected Paper v2/MiniQMT regression tests.",
+      "timestamp": "2026-07-07T09:40:00+08:00"
+    },
+    {
+      "action": "record_production_gates",
+      "actor": "codex",
+      "note": "Postgres runtime repository requires controlled production DDL after merge; no startup auto-migration, no production DB write, and no service restart are performed by this PR.",
+      "timestamp": "2026-07-07T09:45:00+08:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "MiniQMT SIM uses event_loop(A) only with the real qmt callback gateway; no shadow A/B payload/state, no gray switch, and no hidden compiler(B) fallback. Any forced B route or missing callback/precondition loudly rejects with reason_code + stage. Submit/reconcile and each binding tick are timeout-isolated so one hung binding cannot freeze the scheduler. Production runtime state persists to Postgres with incremental per-row writes, bounded prune/archive for events/algo_instances/child_orders, and JsonFile is test/offline only with no production fallback or runtime-state.json growth.",
+  "first_seen_at": "2026-07-07T01:32:25.845367Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1898,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1898",
+  "last_seen_at": "2026-07-07T01:32:25.845367Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval.",
+    "Do not write production DB or apply production DDL in the fix PR.",
+    "Do not bulk import tmp/miniqmt_execution_runtime/runtime-state.json into Postgres; after DDL is applied and DB repository is verified, archive/delete the tmp JSON/JSONL store safely."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime",
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT SIM retire compiler route, shadow reconciliation, scheduler freeze, and JSON runtime store",
+  "trigger_condition": {
+    "fingerprint": "9b868280a90c36a541c2ac53",
+    "source_event_id": "FE-20260707-9b868280a90c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  }
+}

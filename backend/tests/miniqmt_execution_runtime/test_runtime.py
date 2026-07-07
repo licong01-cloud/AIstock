@@ -26,7 +26,6 @@ from backend.services.qmt_strategy_ledger.models import (
     VirtualAccountStatus,
 )
 from backend.services.qmt_strategy_ledger.order_service import (
-    ManagedOrderRequest,
     ManagedOrderSubmitResult,
     OrderPreflightResult,
 )
@@ -298,7 +297,7 @@ def test_vnpy_create_loudly_rejects_unknown_symbol_instead_of_defaulting_to_hund
     assert repo.list_child_orders(runtime.config.runtime_id, active_only=False) == []
 
 
-def test_vnpy_create_respects_explicit_board_lot_override_for_compiler_path_compatibility() -> None:
+def test_vnpy_create_respects_explicit_board_lot_override_for_event_loop_path() -> None:
     _runtime_obj, repo, _gateway = _submit_vnpy_child_order(
         symbol="688001.SH",
         side=OrderSide.BUY,
@@ -314,48 +313,15 @@ def test_vnpy_create_respects_explicit_board_lot_override_for_compiler_path_comp
     assert algo.metadata["volume_increment"] == 100
 
 
-def test_compiler_adapter_keeps_star_market_child_quantity_with_explicit_board_lot() -> None:
+def test_compiler_adapter_rejects_retired_b_route_loudly() -> None:
     repo = InMemoryMiniQMTExecutionRuntimeRepository()
-    client = MiniQMTExecutionRuntimeClient(repository=repo, runtime_kind="compiler")
-    intent = OrderIntent(
-        intent_id="intent_compiler_star_board_lot",
-        package_id="pkg_board_lot",
-        portfolio_id="portfolio_board_lot",
-        symbol="688001.SH",
-        side=OrderSide.BUY,
-        quantity=1215,
-        order_type=OrderType.LIMIT,
-        limit_price=10.0,
-        target_trade_date=TRADE_DATE,
-    )
 
-    build = client.build_managed_vnpy_order_requests(
-        parent_intents=[intent],
-        policy_context={"policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}}},
-        account_group_id="ag_board_lot",
-        trade_date=TRADE_DATE,
-        runtime_config_hash="runtime_hash_board_lot",
-        runtime_id="mqrt_compiler_star_board_lot",
-        strategy_slot_id="slot_board_lot",
-        managed_request_factory=lambda child, index: ManagedOrderRequest(
-            account_id="ag_board_lot",
-            strategy_name=child.strategy_slot_id,
-            symbol=child.symbol,
-            side=child.side.value,
-            order_type=BUY_ORDER_TYPE,
-            quantity=child.quantity,
-            price_type=child.price_type,
-            price=Decimal(str(child.price)),
-            order_remark=f"remark_compiler_star_{index}",
-            trade_date=TRADE_DATE,
-            mode="SIM",
-        ),
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        MiniQMTExecutionRuntimeClient(repository=repo, runtime_kind="compiler")
 
-    child = repo.list_child_orders(build.runtime_evidence.runtime_id, active_only=False)[0]
-    assert child.quantity == 1215
-    assert build.requests[0].quantity == 1215
-
+    assert exc_info.value.context["reason_code"] == "MINIQMT_SIM_COMPILER_ROUTE_RETIRED"
+    assert exc_info.value.context["stage"] == "MINIQMT_RUNTIME_KIND_REJECTED"
+    assert repo.list_child_orders("mqrt_compiler_star_board_lot", active_only=False) == []
 
 def test_event_loop_submit_rejects_non_broker_quote_source_loudly() -> None:
     repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
