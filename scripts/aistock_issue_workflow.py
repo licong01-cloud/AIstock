@@ -988,6 +988,18 @@ def _compact_payload(payload: dict[str, Any]) -> dict[str, Any]:
             compact["worktree_hygiene"]["noncanonical_main_worktree_count"] = len(
                 payload["worktree_hygiene"].get("noncanonical_main_worktrees") or []
             )
+        if "cleanup_janitor" in payload:
+            compact["cleanup_janitor"] = _pick(
+                payload["cleanup_janitor"],
+                "workflow_gate",
+                "safe_merged_local_branch_count",
+                "stale_backup_or_temp_branch_count",
+                "checked_out_merged_branch_count",
+                "safe_merged_local_branch_samples",
+                "stale_backup_or_temp_branch_samples",
+                "checked_out_merged_branch_samples",
+                "next_command",
+            )
     elif schema.endswith("_start_v1"):
         compact.update(_compact_start(payload) or {})
     elif schema.endswith("_finish_v1") or schema.endswith("_finish_batch_v1"):
@@ -2780,6 +2792,61 @@ def _worktree_hygiene_report(canonical_root: Path | None = None) -> dict[str, An
         "warnings": warnings,
         "noncanonical_main_worktrees": items,
         "canonical_branch": canonical_git.get("branch"),
+    }
+
+
+def _cleanup_janitor_report(canonical_root: Path | None = None, *, sample_limit: int = 5) -> dict[str, Any]:
+    """Return a compact, read-only branch/worktree cleanup debt summary.
+
+    The janitor intentionally reports counts and tiny samples only; deep cleanup
+    decisions still use cleanup-after-merge/read-only triage to avoid noisy
+    doctor output and token-heavy branch dumps.
+    """
+    root = canonical_root or _canonical_root()
+    local_branches = set(
+        item.strip()
+        for item in _git(["for-each-ref", "--format=%(refname:short)", "refs/heads"], cwd=root, check=False).splitlines()
+        if item.strip() and item.strip() != "main"
+    )
+    merged_refs = set(
+        item.strip()
+        for item in _git(["branch", "--format=%(refname:short)", "--merged", "origin/main"], cwd=root, check=False).splitlines()
+        if item.strip() and item.strip() != "main"
+    )
+    checked_out: set[str] = set()
+    for item in _parse_worktree_list():
+        branch_ref = item.get("branch") or ""
+        branch = branch_ref.removeprefix("refs/heads/")
+        if branch:
+            checked_out.add(branch)
+    stale_backup_or_temp = sorted(
+        branch
+        for branch in local_branches
+        if branch not in checked_out
+        and (
+            branch.startswith("backup/")
+            or branch.startswith("temp/")
+            or branch.startswith("tmp/")
+            or "temp-check" in branch
+        )
+    )
+    safe_merged_local = sorted(branch for branch in merged_refs if branch in local_branches and branch not in checked_out)
+    checked_out_merged = sorted(branch for branch in merged_refs if branch in checked_out)
+    return {
+        "schema_version": "aistock_cleanup_janitor_v1",
+        "workflow_gate": "warning" if (safe_merged_local or stale_backup_or_temp or checked_out_merged) else "ready",
+        "sample_limit": sample_limit,
+        "safe_merged_local_branch_count": len(safe_merged_local),
+        "safe_merged_local_branch_samples": safe_merged_local[:sample_limit],
+        "stale_backup_or_temp_branch_count": len(stale_backup_or_temp),
+        "stale_backup_or_temp_branch_samples": stale_backup_or_temp[:sample_limit],
+        "checked_out_merged_branch_count": len(checked_out_merged),
+        "checked_out_merged_branch_samples": checked_out_merged[:sample_limit],
+        "next_command": (
+            "python scripts/aistock_issue_workflow.py cleanup-after-merge --branch <branch> --pr-url <merged-pr-url> "
+            "--worktree <task-worktree> --sync-root --apply"
+        ),
+        "policy": "compact_counts_only; do not print full branch/worktree lists in doctor output",
     }
 
 
@@ -6586,6 +6653,11 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         blocking.append(f"worktree hygiene: {item}")
     for item in worktree_hygiene.get("warnings") or []:
         warnings.append(f"worktree hygiene: {item}")
+    cleanup_janitor = _cleanup_janitor_report(canonical_root)
+    if cleanup_janitor.get("workflow_gate") == "warning":
+        warnings.append(
+            "cleanup janitor found branch/worktree cleanup debt; run read-only triage or cleanup-after-merge for listed samples"
+        )
 
     github: dict[str, Any] = {
         "env_repository": os.environ.get("GITHUB_REPOSITORY"),
@@ -6648,6 +6720,7 @@ def build_doctor_report(*, skip_external: bool = False) -> dict[str, Any]:
         "canonical_root": str(canonical_root),
         "canonical_git": canonical_git,
         "worktree_hygiene": worktree_hygiene,
+        "cleanup_janitor": cleanup_janitor,
         "github": github,
         "bug_id_allocation": bug_id_allocation,
         "mcp": mcp,
@@ -10038,7 +10111,7 @@ def build_merge_finalizer_plan(
                 bug_id=canonical_bug_id,
                 worktree=source_worktree,
                 pr_url=source_pr_url,
-                apply=merge_close_sync_pr,
+                apply=apply,
                 sync_root=sync_root,
             )
             if cleanup_root_sync_deferred:
@@ -10081,6 +10154,7 @@ def build_merge_finalizer_plan(
         final_blocking.extend(close_sync_cleanup_plan.get("blocking") or [])
 
     cleanup_complete = bool(cleanup_plan and cleanup_plan.get("workflow_gate") == "cleanup_done")
+    close_sync_persisted = close_sync_pr_merge.get("workflow_gate") in {"merged", "already_merged"}
     close_sync_cleanup_complete = (
         close_sync_cleanup_plan is None or close_sync_cleanup_plan.get("workflow_gate") == "cleanup_done"
     )
@@ -10088,7 +10162,7 @@ def build_merge_finalizer_plan(
     payload.update(
         {
             "workflow_gate": "blocked" if final_blocking else (
-                "complete" if cleanup_complete and close_sync_cleanup_complete else "close_sync_persisted"
+                "complete" if cleanup_complete and close_sync_persisted and close_sync_cleanup_complete else "close_sync_persisted"
             ),
             "blocking": final_blocking,
             "source_pr_check": source_pr_check,

@@ -2,7 +2,11 @@
   "actual": "Dozens of merged/squash-merged branches, close-sync worktrees, backup branches, and dirty worktrees remained after historical flows; cleanup required manual audits and consumed time/tokens.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260707_BUG-601-merge-aftercare-cleanup-does-not-reliably-prune-squash-merged-branches-a.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    ".codex/skills/aistock-merge-aftercare/SKILL.md",
+    ".claude/commands/aistock-merge-aftercare.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-601",
