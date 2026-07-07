@@ -34,8 +34,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-07T17:34:59.475729Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "366436df222c213123bf73a46c840e357d7d44e9",
+  "fixed_at": "2026-07-07T17:55:40.024558Z",
   "github_issue_number": 1905,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1905",
   "last_seen_at": "2026-07-07T17:34:59.475729Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1906",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -88,6 +89,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "PR #1906 CI statusCheckRollup => all required checks success",
+    "source PR merged at 2026-07-07T17:53:38Z merge commit 366436df222c213123bf73a46c840e357d7d44e9"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
