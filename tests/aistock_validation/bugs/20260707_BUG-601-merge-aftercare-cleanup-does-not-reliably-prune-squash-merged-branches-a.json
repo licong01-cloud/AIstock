@@ -32,8 +32,8 @@
   "expected": "Merge/close-sync aftercare should classify and clean merged or squash-merged source branches/worktrees when safe, keep open PR/dirty worktrees, classify backup/temp TTL candidates, and expose compact cleanup guidance for Codex and Claude without large token overhead.",
   "first_seen_at": "2026-07-07T03:54:01.332818Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2bc7c7e4e3376dfd12985efb5b200f9c31bc91bb",
+  "fixed_at": "2026-07-07T04:29:34.557744Z",
   "github_issue_number": 1899,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1899",
   "last_seen_at": "2026-07-07T03:54:01.332818Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1900",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -61,6 +62,10 @@
     "fingerprint": "7e7d7917c5e19a885bd28965",
     "source_event_id": "FE-20260707-7e7d7917c5e1"
   },
+  "validation_evidence": [
+    "PR #1900 CI rollup all required checks passed",
+    "targeted pytest/ruff/diff-check/workflow-smoke passed before PR"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
