@@ -1,0 +1,131 @@
+{
+  "actual": "A high-risk BUG repair repeatedly ran large related suites and manual exploration for over 7 hours instead of resuming from failed tests or delegating broad validation.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".claude/commands/fix-aistock-issue.md",
+    "tests/aistock_validation/bugs/20260707_BUG-602-bug-600-revealed-issue-fix-workflow-lacks-enforceable-test-budget-and-fa.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-602",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-07T09:36:57.082788Z",
+  "description": "A high-risk BUG repair repeatedly ran large related suites and manual exploration for over 7 hours instead of resuming from failed tests or delegating broad validation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260707-d34fa681cba8",
+      "timestamp": "2026-07-07T09:36:57.082783Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Issue-fix workflow and client entrypoints enforce a compact local validation budget: run only changed-file compile/lint, direct fix-point tests, safety invariants, diff/scope checks; after failures rerun failed nodeids or pytest --lf first; run at most one final relevant small matrix; delegate broad module/UI/API/business-flow/regression validation to VC/CI/nightly with compact receipts. Restarted Codex/Claude windows should read the same updated skill/command and follow the budget automatically.",
+  "first_seen_at": "2026-07-07T09:36:57.082788Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1902,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1902",
+  "last_seen_at": "2026-07-07T09:36:57.082788Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "BUG-600 revealed issue fix workflow lacks enforceable test budget and failure-resume defaults",
+  "trigger_condition": {
+    "fingerprint": "d34fa681cba8da7522ee1b64",
+    "source_event_id": "FE-20260707-d34fa681cba8"
+  },
+  "verification_budget": {
+    "budget": "light",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation_llm_pipeline"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation_llm_pipeline"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}
