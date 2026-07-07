@@ -1414,7 +1414,52 @@ def test_doctor_reports_ready_when_client_entries_exist(
     compact = workflow._compact_payload(payload)
     assert compact["validation_center_runtime_safety"]["safe_app_module"] == "backend.validation_app:app"
     assert compact["worktree_hygiene"]["workflow_gate"] == "ready"
+    assert compact["cleanup_janitor"]["workflow_gate"] == "ready"
     assert "run --bug-id BUG-XXX" in payload["next_command"]
+
+
+def test_doctor_cleanup_janitor_reports_compact_cleanup_debt(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(workflow, "_canonical_root", lambda: isolated_workflow_root)
+    monkeypatch.setattr(
+        workflow,
+        "_git",
+        lambda args, cwd=None, check=True: {
+            ("for-each-ref", "--format=%(refname:short)", "refs/heads"): "\n".join(
+                [
+                    "main",
+                    "bug/merged-clean",
+                    "backup/pre-rebase-20260501",
+                    "feature/checked-merged",
+                ]
+            ),
+            ("branch", "--format=%(refname:short)", "--merged", "origin/main"): "\n".join(
+                ["main", "bug/merged-clean", "feature/checked-merged"]
+            ),
+        }.get(tuple(args), ""),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_parse_worktree_list",
+        lambda: [
+            {"worktree": str(isolated_workflow_root), "branch": "refs/heads/main"},
+            {"worktree": str(isolated_workflow_root / "wt"), "branch": "refs/heads/feature/checked-merged"},
+        ],
+    )
+
+    payload = workflow._cleanup_janitor_report(isolated_workflow_root, sample_limit=1)
+    compact = workflow._compact_payload({"schema_version": "aistock_issue_workflow_doctor_v1", "cleanup_janitor": payload})
+
+    assert payload["workflow_gate"] == "warning"
+    assert payload["safe_merged_local_branch_count"] == 1
+    assert payload["stale_backup_or_temp_branch_count"] == 1
+    assert payload["checked_out_merged_branch_count"] == 1
+    assert payload["safe_merged_local_branch_samples"] == ["bug/merged-clean"]
+    assert compact["cleanup_janitor"]["safe_merged_local_branch_count"] == 1
+    assert compact["cleanup_janitor"]["stale_backup_or_temp_branch_samples"] == ["backup/pre-rebase-20260501"]
+    assert "backup/pre-rebase-20260501" in json.dumps(compact["cleanup_janitor"], ensure_ascii=False)
 
 
 def test_doctor_blocks_noncanonical_main_worktree_with_stale_index(
@@ -4138,6 +4183,87 @@ def test_merge_finalizer_can_merge_close_sync_pr_and_cleanup(
             "apply": True,
             "sync_root": False,
         },
+    ]
+
+
+def test_merge_finalizer_apply_cleans_source_before_close_sync_pr_merge(
+    isolated_workflow_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issue = _write_json(isolated_workflow_root / "bug.json", _bug(status="in_progress"))
+    close_sync_root = isolated_workflow_root / "registry"
+    cleanup_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        workflow,
+        "_verify_pr_merged",
+        lambda pr_url: {
+            "checked": True,
+            "merged": True,
+            "pr": {"url": pr_url, "mergeCommit": {"oid": "merge123"}, "headRefOid": "head123"},
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "build_close_sync_plan",
+        lambda **kwargs: {
+            "workflow_gate": "close_synced",
+            "registry_root": str(close_sync_root),
+            "registry_worktree_plan": {"branch": "chore/BUG-199-close-sync"},
+            "merge_commit": "merge123",
+            "updated_bug_json": "tests/aistock_validation/bugs/bug199.json",
+        },
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_commit_and_pr_close_sync",
+        lambda **kwargs: {
+            "workflow_gate": "pr_opened",
+            "root": str(close_sync_root),
+            "branch": "chore/BUG-199-close-sync",
+            "pr_url": "https://github.example/pull/299",
+        },
+    )
+
+    def fake_cleanup(**kwargs: Any) -> dict[str, Any]:
+        cleanup_calls.append(kwargs)
+        return {
+            "workflow_gate": "cleanup_done" if kwargs.get("apply") else "ready_for_cleanup",
+            "branch": kwargs["branch"],
+            "worktree": kwargs.get("worktree"),
+            "sync_root": kwargs.get("sync_root"),
+        }
+
+    monkeypatch.setattr(workflow, "build_cleanup_after_merge_plan", fake_cleanup)
+    monkeypatch.setattr(workflow, "build_postmortem_plan", lambda **kwargs: {"schema_version": "postmortem"})
+
+    payload = workflow.build_merge_finalizer_plan(
+        bug_id="BUG-199",
+        issue_json=str(issue),
+        source_pr_url="https://github.example/pull/199",
+        source_branch="bug/BUG-199-workflow",
+        source_worktree=str(isolated_workflow_root / "task"),
+        validation_evidence=["python -m nox -s l0 -> passed"],
+        production_gates={"production_ddl_gate": "noop"},
+        sync_root=True,
+        merge_close_sync_pr=False,
+        cleanup=True,
+        apply=True,
+    )
+
+    assert payload["workflow_gate"] == "close_sync_persisted"
+    assert payload["close_sync_pr_merge"]["workflow_gate"] == "ready_for_merge"
+    assert payload["cleanup"]["workflow_gate"] == "cleanup_done"
+    assert payload["close_sync_cleanup"] is None
+    assert cleanup_calls == [
+        {
+            "branch": "bug/BUG-199-workflow",
+            "bug_id": "BUG-199",
+            "worktree": str(isolated_workflow_root / "task"),
+            "pr_url": "https://github.example/pull/199",
+            "apply": True,
+            "sync_root": True,
+        }
     ]
 
 
