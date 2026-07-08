@@ -493,14 +493,17 @@ class SimulationLifecycleOrchestrator:
                 raise
             next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
             broker_called = any(result.broker_called for result in qmt_result.results)
+            qmt_batch_payload = qmt_result.to_dict()
+            pending_intents = int(qmt_batch_payload.get("pending") or 0)
             payload_patch = {
                 "broker_called": broker_called,
                 "submitted_intents": qmt_result.succeeded,
                 "failed_intents": qmt_result.failed,
+                "pending_intents": pending_intents,
                 "qmt_batch_id": qmt_result.batch_id,
                 "qmt_batch_status": qmt_result.batch_status,
                 "qmt_retry_of_batch_id": qmt_result.retry_of_batch_id,
-                "qmt_batch_result": qmt_result.to_dict(),
+                "qmt_batch_result": qmt_batch_payload,
                 "last_stage": next_status.value,
             }
             payload_patch.update(
