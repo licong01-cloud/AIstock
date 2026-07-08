@@ -1,0 +1,158 @@
+{
+  "actual": "2026-07-08 intraday production SIM evidence after BUG-600: multi-alpha binding slot ma_8ec5e389_sim_20260703 submitted through A(event_loop) reports broker_called=true but submitted=1/failed=24. Postgres runtime store writes rows correctly: qmt_strategy.execution_algo_instance has 25 rows, execution_runtime_event has 80 rows, execution_child_order has 1 row. All 25 algo_instance rows are status=ACTIVE, vnpy_algo_state.snapshot status=running, traded=0, left=full quantity. The 25 SNIPER algorithms are alive/running; only one triggered a child order at dispatch time, while the other 24 are pending waiting for tick market data. BUG-599 currently classifies the 24 as MINIQMT_EVENT_LOOP_NO_CHILD_ORDER failed even though they are valid pending/running algorithms.\n\nRoot cause: A(event_loop) dispatches 25 vn.py-style SNIPER algorithms correctly, but the unattended production path lacks a sustained tick driving loop. runtime._dispatch_tick_to_vnpy_algos exists, but no production tick source continuously calls it for the runtime symbols. As a result, running SNIPER algorithms do not receive subsequent ticks and never trigger child orders. This is a closure gap versus vn.py continuous event engine + market tick feed.\n\nRequired fix A: add a non-blocking sustained tick driver for event_loop runtime during trading sessions. It must subscribe/poll realtime tick quotes for all symbols in the runtime through MINIQMT_REALTIME broker quote / xtquant market data and keep calling runtime._dispatch_tick_to_vnpy_algos so running SNIPER algorithms can trigger child orders until filled or market close. It must be driven by unattended scheduler tick cadence or a dedicated protected tick loop, must remain non-blocking, must stay under BUG-600 watchdog/timeout protection, and must not reintroduce scheduler freezes. Child orders must continue to be written incrementally row-by-row to Postgres and reconciled to order_ledger/broker. broker_called/submitted_intents should reflect cumulative child-order submissions.\n\nRequired fix B: fix BUG-599 pending-vs-failed classification. MINIQMT_EVENT_LOOP_NO_CHILD_ORDER should mean algorithm dispatch truly failed or was rejected. ACTIVE/running algorithms with no child order yet are pending, valid, and non-failed. Runs with dispatched running algorithms waiting for child orders should be RUNNING/INTRADAY_RUNNING or equivalent in-progress state, never FAILED_RETRYABLE. Reconcile should progress as child orders arrive.\n\nRequired fix C: add runtime observability for triggered/filled/pending counts across the 25 algorithms. At market close, loudly record reasons for algorithms that never triggered; no silent fallback.\n\nRed lines: do not reintroduce freezing; tick driver must be non-blocking and watchdog protected. Do not break BUG-600 row-by-row Postgres writes, A submission, first-order path, or shadow/B removal. Align with vn.py continuous loop model; no full dump persistence, placeholder, simplified/minimal implementation, except-pass, or silent downgrade. Errors must be loud with reason_code and stage.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260708_BUG-604-miniqmt-event-loop-runtime-lacks-sustained-tick-driver-and-misclassifies.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-604",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-08T01:47:22.332317Z",
+  "description": "2026-07-08 intraday production SIM evidence after BUG-600: multi-alpha binding slot ma_8ec5e389_sim_20260703 submitted through A(event_loop) reports broker_called=true but submitted=1/failed=24. Postgres runtime store writes rows correctly: qmt_strategy.execution_algo_instance has 25 rows, execution_runtime_event has 80 rows, execution_child_order has 1 row. All 25 algo_instance rows are status=ACTIVE, vnpy_algo_state.snapshot status=running, traded=0, left=full quantity. The 25 SNIPER algorithms are alive/running; only one triggered a child order at dispatch time, while the other 24 are pending waiting for tick market data. BUG-599 currently classifies the 24 as MINIQMT_EVENT_LOOP_NO_CHILD_ORDER failed even though they are valid pending/running algorithms.\n\nRoot cause: A(event_loop) dispatches 25 vn.py-style SNIPER algorithms correctly, but the unattended production path lacks a sustained tick driving loop. runtime._dispatch_tick_to_vnpy_algos exists, but no production tick source continuously calls it for the runtime symbols. As a result, running SNIPER algorithms do not receive subsequent ticks and never trigger child orders. This is a closure gap versus vn.py continuous event engine + market tick feed.\n\nRequired fix A: add a non-blocking sustained tick driver for event_loop runtime during trading sessions. It must subscribe/poll realtime tick quotes for all symbols in the runtime through MINIQMT_REALTIME broker quote / xtquant market data and keep calling runtime._dispatch_tick_to_vnpy_algos so running SNIPER algorithms can trigger child orders until filled or market close. It must be driven by unattended scheduler tick cadence or a dedicated protected tick loop, must remain non-blocking, must stay under BUG-600 watchdog/timeout protection, and must not reintroduce scheduler freezes. Child orders must continue to be written incrementally row-by-row to Postgres and reconciled to order_ledger/broker. broker_called/submitted_intents should reflect cumulative child-order submissions.\n\nRequired fix B: fix BUG-599 pending-vs-failed classification. MINIQMT_EVENT_LOOP_NO_CHILD_ORDER should mean algorithm dispatch truly failed or was rejected. ACTIVE/running algorithms with no child order yet are pending, valid, and non-failed. Runs with dispatched running algorithms waiting for child orders should be RUNNING/INTRADAY_RUNNING or equivalent in-progress state, never FAILED_RETRYABLE. Reconcile should progress as child orders arrive.\n\nRequired fix C: add runtime observability for triggered/filled/pending counts across the 25 algorithms. At market close, loudly record reasons for algorithms that never triggered; no silent fallback.\n\nRed lines: do not reintroduce freezing; tick driver must be non-blocking and watchdog protected. Do not break BUG-600 row-by-row Postgres writes, A submission, first-order path, or shadow/B removal. Align with vn.py continuous loop model; no full dump persistence, placeholder, simplified/minimal implementation, except-pass, or silent downgrade. Errors must be loud with reason_code and stage.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260708-b8769440a6c1",
+      "timestamp": "2026-07-08T01:47:22.332312Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-07-08 intraday production SIM evidence: 25 ACTIVE/running SNIPER algo_instance rows, 1 execution_child_order, BUG-599 reports 24 MINIQMT_EVENT_LOOP_NO_CHILD_ORDER failed"
+  ],
+  "expected": "Intraday A(event_loop) run for a 25-leg multi-alpha binding keeps SNIPER algorithms alive and continuously tick-driven. Child orders trigger incrementally as realtime ticks arrive; submitted_intents approaches 25 or each non-triggered algorithm has a loud explicit reason at close. /qmt/orders and qmt_strategy.execution_child_order show multiple child orders; broker_called=true. Scheduler does not freeze, last_run continues advancing, Postgres incremental writes continue, and pending algorithms are not classified FAILED_RETRYABLE. Local targeted tests plus nox l0 and validation_module_registry_l0 are green or broad validation is delegated per workflow.",
+  "first_seen_at": "2026-07-08T01:47:22.332317Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1908,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1908",
+  "last_seen_at": "2026-07-08T01:47:22.332317Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Intraday production SIM A(event_loop) run for multi-alpha binding slot ma_8ec5e389_sim_20260703 after BUG-600",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT event_loop runtime lacks sustained tick driver and misclassifies pending SNIPER algos",
+  "trigger_condition": {
+    "fingerprint": "b8769440a6c1f0f213457b75",
+    "source_event_id": "FE-20260708-b8769440a6c1"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "miniqmt_execution_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "miniqmt_execution_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
