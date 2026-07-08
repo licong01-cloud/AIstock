@@ -2,7 +2,9 @@
   "actual": "record.generate() enters qlib.workflow.record_temp.py check(), MLflow FileStore reads a metric file while it is empty/not flushed, raises ValueError 'Metric Rank IC is malformed. No data found.', and QE marks the loop failed even though computation already succeeded.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260708_BUG-605-qe-qrun-mlflow-metric-read-race-fails-completed-loop.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/qrun_limit_minute.py",
+    "backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-605",
@@ -20,6 +22,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260708-636e89204c75",
       "timestamp": "2026-07-08T04:46:46.525568Z"
+    },
+    {
+      "timestamp": "2026-07-08T04:58:09.615781+00:00",
+      "actor": "codex",
+      "action": "scope_expansion",
+      "note": "Expanded allowed_write_scope after repository template paths resolved to scripts/qrun_limit_minute.py plus focused regression test."
     }
   ],
   "evidence_uris": [
@@ -42,7 +50,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -154,5 +163,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
