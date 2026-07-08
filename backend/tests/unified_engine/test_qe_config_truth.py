@@ -1521,6 +1521,103 @@ def _efficient_gats_model_info():
     return model_info
 
 
+_MODEL_CATALOG_COLUMNS = [
+    "model_id",
+    "model_name",
+    "model_type",
+    "model_hyperparameters",
+    "model_training_hyperparameters",
+    "model_config",
+    "ic",
+    "annualized_return",
+    "is_sota",
+    "code_text",
+]
+
+
+class _FakeModelCatalogCursor:
+    description = [(col,) for col in _MODEL_CATALOG_COLUMNS]
+
+    def __init__(self, row):
+        self._row = row
+        self._params = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params):
+        assert "model_config" in sql
+        self._params = params
+
+    def fetchone(self):
+        if not self._params or self._params[0] != self._row["model_id"]:
+            return None
+        return tuple(self._row.get(col) for col in _MODEL_CATALOG_COLUMNS)
+
+
+class _FakeModelCatalogConn:
+    def __init__(self, row):
+        self._row = row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return _FakeModelCatalogCursor(self._row)
+
+
+def _catalog_row_from_model_info(model_info):
+    return {
+        "model_id": model_info["model_id"],
+        "model_name": model_info["model_name"],
+        "model_type": model_info["model_type"],
+        "model_hyperparameters": model_info.get("model_hyperparameters"),
+        "model_training_hyperparameters": model_info.get("model_training_hyperparameters"),
+        "model_config": model_info.get("model_config"),
+        "ic": None,
+        "annualized_return": None,
+        "is_sota": False,
+        "code_text": None,
+    }
+
+
+def _compose_in_memory_with_catalog_model(monkeypatch, catalog_row, *, model_id):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    composer = ConfigComposer()
+    monkeypatch.setattr(composer_module, "get_conn", lambda: _FakeModelCatalogConn(catalog_row))
+    monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+
+    return composer.compose_experiment_in_memory(
+        factor_names=["Alpha001"],
+        model_id=model_id,
+        strategy_id="score_weighted_topk_v2",
+        data_split=DATA_SPLIT,
+        custom_params={},
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+
 class _MiniGatsSegment:
     def __init__(self, index, values):
         self._index = index
@@ -1604,6 +1701,60 @@ def test_efficient_gats_seed_respects_model_config_module_path():
     assert "class: TSDatasetH" in yaml_text
     assert "step_len: 20" in yaml_text
     assert "d_feat: {{ num_features }}" in yaml_text
+
+
+def test_catalog_get_model_info_preserves_efficient_gats_model_config(monkeypatch):
+    model_info = _efficient_gats_model_info()
+    catalog_row = _catalog_row_from_model_info(model_info)
+
+    result = _compose_in_memory_with_catalog_model(
+        monkeypatch,
+        catalog_row,
+        model_id="__seed_EfficientGATs_default_v1__",
+    )
+
+    conf_yaml = result["experiment_files"]["conf.yaml"]
+    assert "class: EfficientGATs" in conf_yaml
+    assert "module_path: aistock_models.efficient_gats" in conf_yaml
+    assert "class: GATs" not in conf_yaml
+    assert "module_path: qlib.contrib.model.pytorch_gats_ts" not in conf_yaml
+
+
+@pytest.mark.parametrize(
+    "model_config",
+    [
+        {"class": "GATs", "module_path": "qlib.contrib.model.pytorch_gats_ts", "dataset_type": "TSDatasetH"},
+        None,
+    ],
+)
+def test_catalog_get_model_info_keeps_original_gats_default(monkeypatch, model_config):
+    model_info = _gats_model_info()
+    model_info["model_config"] = model_config
+    catalog_row = _catalog_row_from_model_info(model_info)
+
+    result = _compose_in_memory_with_catalog_model(
+        monkeypatch,
+        catalog_row,
+        model_id="__seed_GATs_default_v1__",
+    )
+
+    conf_yaml = result["experiment_files"]["conf.yaml"]
+    assert "class: GATs" in conf_yaml
+    assert "module_path: qlib.contrib.model.pytorch_gats_ts" in conf_yaml
+    assert "class: EfficientGATs" not in conf_yaml
+    assert "module_path: aistock_models.efficient_gats" not in conf_yaml
+
+
+def test_catalog_get_model_info_invalid_model_config_fails_loud(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    model_info = _efficient_gats_model_info()
+    catalog_row = _catalog_row_from_model_info(model_info)
+    catalog_row["model_config"] = "{invalid-json"
+    monkeypatch.setattr(composer_module, "get_conn", lambda: _FakeModelCatalogConn(catalog_row))
+
+    with pytest.raises(ValueError, match="reason_code=model_config_invalid"):
+        ConfigComposer()._get_model_info("__seed_EfficientGATs_default_v1__")
 
 
 def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwargs():

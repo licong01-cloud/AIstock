@@ -1,6 +1,8 @@
 {
   "actual": "EfficientGATs seed with model_config.class=EfficientGATs routes through real QE dispatch to qlib.contrib.model.pytorch_gats_ts.GATs because _get_model_info does not SELECT or return model_config. The GATs branch then defaults to original qlib GATs and full-pool dispatch OOMs. Fix _get_model_info to include and parse model_config, keep builtin model_info shape consistent, and add an integration test through the real _get_model_info path for EfficientGATs plus original GATs regression.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260708_BUG-607-qe-efficientgats-seed-loses-model-config-in-composer-lookup.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
