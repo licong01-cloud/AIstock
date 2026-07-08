@@ -340,6 +340,32 @@ class TestConfigComposerCommandGeneration:
         assert "python prepare_factors.py" in command
         assert "python qrun_limit_minute.py conf.yaml" in command
 
+    def test_generate_auto_wsl_command_injects_cuda_expandable_segments_for_gpu_node(self):
+        composer = ConfigComposer()
+        command = composer._generate_wsl_command(
+            "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+            mode="auto",
+            backtest_freq="1min",
+            node_id="wsl2-5080",
+        )
+
+        assert "export MALLOC_ARENA_MAX=4" in command
+        assert "export PYTHONUNBUFFERED=1" in command
+        assert "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" in command
+
+    def test_generate_auto_wsl_command_skips_cuda_expandable_segments_for_cpu_node(self):
+        composer = ConfigComposer()
+        command = composer._generate_wsl_command(
+            "/mnt/f/Dev/RD-Agent-main/qe_workspace/demo",
+            mode="auto",
+            backtest_freq="1min",
+            node_id="rdagent-node1",
+        )
+
+        assert "export MALLOC_ARENA_MAX=4" in command
+        assert "export PYTHONUNBUFFERED=1" in command
+        assert "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True" not in command
+
     def test_compose_prepare_factors_generates_valid_python(self, monkeypatch):
         monkeypatch.setattr(
             ConfigComposer,
