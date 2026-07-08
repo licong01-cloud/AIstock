@@ -61,6 +61,28 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"reason_code={reason_code}: {field_name} must be a JSON object or null, got invalid JSON"
+            ) from exc
+        if parsed is None:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(
+        f"reason_code={reason_code}: {field_name} must be a JSON object or null, "
+        f"got {type(value).__name__}"
+    )
+
+
 def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(params, dict):
         return False
@@ -2900,9 +2922,14 @@ class ConfigComposer:
                 # Qlib GATs is a full Model implementation with its own fit/predict
                 # and DailyBatchSampler. Route all constructor params directly to
                 # GATs kwargs; do not wrap it with GeneralPTNN or pt_model_kwargs.
-                model_config = model_info.get("model_config") or {}
-                if isinstance(model_config, str):
-                    model_config = json.loads(model_config)
+                model_config = (
+                    _coerce_optional_json_object(
+                        model_info.get("model_config"),
+                        field_name="model_config",
+                        reason_code="gats_model_config_invalid",
+                    )
+                    or {}
+                )
                 model_class = str(model_config.get("class") or "GATs")
                 model_module = str(model_config.get("module_path") or "qlib.contrib.model.pytorch_gats_ts")
                 if model_class not in _GATS_MODEL_CLASSES:
@@ -4594,6 +4621,7 @@ class ConfigComposer:
                 cur.execute("""
                     SELECT model_id, model_name, model_type,
                            model_hyperparameters, model_training_hyperparameters,
+                           model_config,
                            ic, annualized_return, is_sota,
                            code_text
                     FROM aistock_model_catalog
@@ -4619,8 +4647,15 @@ class ConfigComposer:
                 "annualized_return": None,
                 "is_sota": False,
                 "code_text": None,
+                "model_config": None,
                 "default_dataset_type": builtin.get("default_dataset_type"),
             }
+
+        catalog_row["model_config"] = _coerce_optional_json_object(
+            catalog_row.get("model_config"),
+            field_name="model_config",
+            reason_code="model_config_invalid",
+        )
 
         # 3. catalog 命中：补充 builtin default 作为 fallback（仅当对应字段为空）
         # 通过 model_name 匹配最接近的 builtin
