@@ -65,6 +65,7 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import AccountSnapshot, OrderSide, PositionLot, RunStatus
 
+from .bridges import MiniQMTExecutionBridge
 from .lifecycle import (
     DEFAULT_SCHEDULER_WINDOWS,
     SCHEDULER_TZ,
@@ -109,9 +110,11 @@ SIMULATION_SELECTION_INFERENCE_MAX_WORKERS_ENV = "SIMULATION_RUNTIME_SELECTION_I
 SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV = "SIMULATION_RUNTIME_BINDING_WATCHDOG_TIMEOUT_SEC"
 SIMULATION_MINIQMT_SUBMIT_TIMEOUT_ENV = "SIMULATION_RUNTIME_MINIQMT_SUBMIT_TIMEOUT_SEC"
 SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV = "SIMULATION_RUNTIME_MINIQMT_RECONCILE_TIMEOUT_SEC"
+SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV = "SIMULATION_RUNTIME_MINIQMT_TICK_DRIVER_TIMEOUT_SEC"
 DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS = 600.0
 DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS = 120.0
+DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS = 30.0
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -2170,6 +2173,11 @@ class SimulationLifecycleScheduler:
                     SIMULATION_MINIQMT_RECONCILE_TIMEOUT_ENV,
                     DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS,
                 ),
+                "miniqmt_tick_driver_timeout_env_var": SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV,
+                "miniqmt_tick_driver_timeout_seconds": self._timeout_seconds_from_env(
+                    SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV,
+                    DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS,
+                ),
             },
             "selection_inference": self._selection_inference_status(),
         }
@@ -3553,6 +3561,10 @@ class SimulationLifecycleScheduler:
             as_of_time=as_of_time,
         )
         terminal_status, reason = self._miniqmt_post_close_terminal_status(fresh_payload)
+        event_loop_pending_after_close = self._miniqmt_event_loop_pending_after_close(fresh_payload)
+        if terminal_status is None and event_loop_pending_after_close:
+            terminal_status = SimulationDailyRunStatus.FAILED_RETRYABLE
+            reason = "miniqmt_post_close_event_loop_pending_algos_untriggered"
         if terminal_status is None:
             return None
         summary = self._mini_qmt_batch_residual_summary(fresh_payload)
@@ -3578,6 +3590,8 @@ class SimulationLifecycleScheduler:
             "submit_result_gate": self._latest_miniqmt_payload_evidence(fresh_payload, "submit_result_gate"),
             "audit_state": self._miniqmt_post_close_audit_state(terminal_status, reason),
         }
+        if event_loop_pending_after_close:
+            evidence["event_loop_pending_after_close"] = event_loop_pending_after_close
         if capacity_residual_observability:
             evidence["miniqmt_capacity_residual_observability"] = capacity_residual_observability
         payload_patch = {
@@ -3703,6 +3717,23 @@ class SimulationLifecycleScheduler:
         if status == SimulationDailyRunStatus.FAILED_RETRYABLE:
             return "failed_retryable_after_close"
         return "failed_terminal_after_close"
+
+    @staticmethod
+    def _miniqmt_event_loop_pending_after_close(payload: dict[str, Any]) -> dict[str, Any] | None:
+        if not SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(payload):
+            return None
+        driver = payload.get("miniqmt_event_loop_tick_driver") if isinstance(payload.get("miniqmt_event_loop_tick_driver"), dict) else {}
+        pending_parent_ids = driver.get("pending_parent_intent_ids") if isinstance(driver.get("pending_parent_intent_ids"), list) else []
+        return {
+            "schema_version": "miniqmt_event_loop_pending_after_close_v1",
+            "reason_code": "MINIQMT_EVENT_LOOP_PENDING_ALGOS_MARKET_CLOSED",
+            "stage": "MINIQMT_POST_CLOSE_TERMINALIZATION",
+            "reason": "event_loop_algorithms_remained_running_without_child_order_until_market_close",
+            "pending_intents": payload.get("pending_intents"),
+            "pending_parent_intent_ids": list(pending_parent_ids),
+            "qmt_batch_id": payload.get("qmt_batch_id"),
+            "qmt_batch_status": payload.get("qmt_batch_status"),
+        }
 
     @staticmethod
     def _latest_miniqmt_payload_evidence(payload: dict[str, Any], key: str) -> dict[str, Any]:
@@ -4188,6 +4219,28 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
+        if (
+            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
+            and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
+        ):
+            self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="MINIQMT_EVENT_LOOP_PENDING",
+                run=latest_run,
+                execution_plan=execution.execution_plan,
+                execution_result=execution,
+                sync_result=sync_result,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
         tail_result = self._handle_tail_after_submit(binding=binding, run=execution.run, execution=execution, context=context)
         reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=execution.run, context=context)
         self._persist_strategy_performance(
@@ -4337,6 +4390,28 @@ class SimulationLifecycleScheduler:
                 strategy_id=binding.strategy_id,
                 broker_backend=binding.broker_backend,
                 status=execution.status,
+                run=latest_run,
+                execution_plan=execution.execution_plan,
+                execution_result=execution,
+                sync_result=sync_result,
+                data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
+        if (
+            binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
+            and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
+        ):
+            self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+            latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="MINIQMT_EVENT_LOOP_PENDING",
                 run=latest_run,
                 execution_plan=execution.execution_plan,
                 execution_result=execution,
@@ -4645,12 +4720,30 @@ class SimulationLifecycleScheduler:
                     default_data_source=data_source,
                 ),
             )
-        if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
+        context: SimulationRunContext | None = None
+        tick_driver_result = None
+        if self._should_drive_existing_miniqmt_event_loop(binding=binding, run=run, submit=submit):
             context = self.context_provider.load_context(
                 runtime_release=runtime_release,
                 binding=binding,
                 trade_date=trade_date,
             )
+            tick_driver_result = self._drive_miniqmt_event_loop_ticks_with_timeout(
+                binding=binding,
+                run=run,
+                plan=plan,
+                context=context,
+                mode=mode,
+                as_of_time=as_of_time,
+            )
+            run = self.repository.get_simulation_daily_run(run.run_id)
+        if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
+            if context is None:
+                context = self.context_provider.load_context(
+                    runtime_release=runtime_release,
+                    binding=binding,
+                    trade_date=trade_date,
+                )
             sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
             reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=run, context=context)
             self._persist_strategy_performance(binding=binding, run=run, context=context)
@@ -4672,6 +4765,22 @@ class SimulationLifecycleScheduler:
                 sync_result=sync_result,
                 reconciliation_result=reconciliation,
                 data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                    binding=binding,
+                    trade_date=trade_date,
+                    default_data_source=data_source,
+                ),
+            )
+        if tick_driver_result is not None:
+            latest_run = self.repository.get_simulation_daily_run(run.run_id)
+            return SimulationSchedulerBindingResult(
+                binding_id=binding.binding_id,
+                strategy_id=binding.strategy_id,
+                broker_backend=binding.broker_backend,
+                status="MINIQMT_EVENT_LOOP_TICK_DRIVEN",
+                run=latest_run,
+                execution_plan=plan,
+                data_source=(context.market_data_source if context is not None else None)
+                or self._effective_market_data_source_for_binding(
                     binding=binding,
                     trade_date=trade_date,
                     default_data_source=data_source,
@@ -4784,6 +4893,28 @@ class SimulationLifecycleScheduler:
                     strategy_id=binding.strategy_id,
                     broker_backend=binding.broker_backend,
                     status=execution.status,
+                    run=latest_run,
+                    execution_plan=execution.execution_plan,
+                    execution_result=execution,
+                    sync_result=sync_result,
+                    data_source=context.market_data_source or self._effective_market_data_source_for_binding(
+                        binding=binding,
+                        trade_date=trade_date,
+                        default_data_source=data_source,
+                    ),
+                )
+            if (
+                binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                and self._mini_qmt_event_loop_has_pending_algos(execution.run.run_payload_json)
+                and not self._mini_qmt_event_loop_has_submitted_children(execution.run.run_payload_json)
+            ):
+                self._persist_strategy_performance(binding=binding, run=execution.run, context=context)
+                latest_run = self.repository.get_simulation_daily_run(execution.run.run_id)
+                return SimulationSchedulerBindingResult(
+                    binding_id=binding.binding_id,
+                    strategy_id=binding.strategy_id,
+                    broker_backend=binding.broker_backend,
+                    status="MINIQMT_EVENT_LOOP_PENDING",
                     run=latest_run,
                     execution_plan=execution.execution_plan,
                     execution_result=execution,
@@ -6380,12 +6511,34 @@ class SimulationLifecycleScheduler:
                 SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
                 or SimulationLifecycleScheduler._mini_qmt_batch_has_terminal_capacity_residual(run.run_payload_json)
                 or SimulationLifecycleScheduler._mini_qmt_batch_has_open_order_evidence(run.run_payload_json)
+                or SimulationLifecycleScheduler._mini_qmt_event_loop_has_submitted_children(run.run_payload_json)
                 or (
                     run.status != SimulationDailyRunStatus.FAILED_RETRYABLE
                     and SimulationLifecycleScheduler._mini_qmt_batch_has_retryable_buy_residual(run.run_payload_json)
                 )
             )
         )
+
+    @staticmethod
+    def _mini_qmt_event_loop_has_submitted_children(payload: dict[str, Any]) -> bool:
+        for key in ("submitted_intents", "triggered_child_order_count"):
+            try:
+                if int(payload.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        for key in ("succeeded", "submitted_child_count", "triggered_child_order_count"):
+            try:
+                if int(batch.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        try:
+            return int(runtime_evidence.get("submitted_child_count") or 0) > 0
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _mini_qmt_batch_has_open_order_evidence(payload: dict[str, Any]) -> bool:
@@ -6466,6 +6619,206 @@ class SimulationLifecycleScheduler:
                 if isinstance(error, dict) and str(error.get("code") or "").upper() == "DUPLICATE_ORDER_REMARK":
                     return True
         return False
+
+    @staticmethod
+    def _should_drive_existing_miniqmt_event_loop(
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        submit: bool,
+    ) -> bool:
+        if not submit or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return False
+        if run.status not in {SimulationDailyRunStatus.SUBMITTING, SimulationDailyRunStatus.INTRADAY_RUNNING}:
+            return False
+        payload = run.run_payload_json
+        route = payload.get("miniqmt_runtime_route") if isinstance(payload.get("miniqmt_runtime_route"), dict) else {}
+        if str(route.get("route") or "").upper() not in {"", "A_EVENT_LOOP"}:
+            return False
+        return SimulationLifecycleScheduler._mini_qmt_event_loop_has_pending_algos(payload)
+
+    @staticmethod
+    def _mini_qmt_event_loop_has_pending_algos(payload: dict[str, Any]) -> bool:
+        for key in ("pending_intents", "event_loop_pending_count"):
+            try:
+                if int(payload.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        for key in ("pending", "pending_child_trigger_count"):
+            try:
+                if int(batch.get(key) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        try:
+            if int(runtime_evidence.get("pending_algo_count") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+        return str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper() == "SUBMITTING"
+
+    def _drive_miniqmt_event_loop_ticks_with_timeout(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+        mode: str,
+        as_of_time: datetime | None,
+    ) -> Any | None:
+        try:
+            result = self._run_callable_with_timeout(
+                stage="MINIQMT_EVENT_LOOP_TICK_DRIVER",
+                reason_code="MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT",
+                timeout_env_var=SIMULATION_MINIQMT_TICK_DRIVER_TIMEOUT_ENV,
+                default_timeout_seconds=DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS,
+                context={
+                    "run_id": run.run_id,
+                    "plan_id": plan.plan_id,
+                    "binding_id": binding.binding_id,
+                    "strategy_id": binding.strategy_id,
+                    "broker_backend": binding.broker_backend.value,
+                    "trade_date": run.trade_date.isoformat(),
+                    "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+                    "pending_intents": run.run_payload_json.get("pending_intents"),
+                    "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
+                },
+                func=lambda: self._drive_miniqmt_event_loop_ticks(
+                    binding=binding,
+                    run=run,
+                    plan=plan,
+                    context=context,
+                    mode=mode,
+                ),
+            )
+        except RuntimeConfigInvalidError as exc:
+            if self._exception_context(exc).get("reason_code") == "MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT":
+                self._mark_miniqmt_tick_driver_timeout(binding=binding, run=run, plan=plan, exc=exc)
+                return None
+            raise
+        self._persist_miniqmt_tick_driver_result(binding=binding, run=run, result=result)
+        return result
+
+    def _drive_miniqmt_event_loop_ticks(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        context: SimulationRunContext,
+        mode: str,
+    ) -> Any:
+        if context.managed_order_service is None:
+            raise DataUnavailableError(
+                "MiniQMT event_loop tick driver requires QmtManagedOrderService",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SERVICE_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_CONTEXT",
+                    "run_id": run.run_id,
+                    "plan_id": plan.plan_id,
+                    "binding_id": binding.binding_id,
+                },
+            )
+        bridge = MiniQMTExecutionBridge(managed_order_service=context.managed_order_service)
+        return bridge.drive_event_loop_ticks(
+            plan=plan,
+            binding=binding,
+            mode=mode,
+            price_by_symbol=context.price_by_symbol or context.current_prices,
+        )
+
+    def _persist_miniqmt_tick_driver_result(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        result: Any,
+    ) -> SimulationDailyRun:
+        payload = run.run_payload_json
+        result_payload = result.to_dict() if hasattr(result, "to_dict") else dict(result)
+        evidence = result_payload.get("runtime_evidence") if isinstance(result_payload.get("runtime_evidence"), dict) else {}
+        submitted_child_count = int(evidence.get("submitted_child_count") or result_payload.get("submitted_child_count") or 0)
+        rejected_child_count = int(evidence.get("rejected_child_count") or result_payload.get("rejected_child_count") or 0)
+        pending_algo_count = int(evidence.get("pending_algo_count") or result_payload.get("pending_algo_count") or 0)
+        qmt_batch_id = str(payload.get("qmt_batch_id") or "").strip()
+        batch_results = result_payload.get("batch_results") if isinstance(result_payload.get("batch_results"), dict) else {}
+        qmt_batch_result = dict(payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {})
+        qmt_batch_status = payload.get("qmt_batch_status")
+        if qmt_batch_id and isinstance(batch_results.get(qmt_batch_id), dict):
+            latest_batch = batch_results[qmt_batch_id]
+            result_json = latest_batch.get("result_json") if isinstance(latest_batch.get("result_json"), dict) else {}
+            metadata = latest_batch.get("metadata") if isinstance(latest_batch.get("metadata"), dict) else {}
+            qmt_batch_status = latest_batch.get("batch_status") or qmt_batch_status
+            qmt_batch_result.update(result_json)
+            qmt_batch_result.update(
+                {
+                    "success": rejected_child_count == 0 and (submitted_child_count > 0 or pending_algo_count > 0),
+                    "batch_id": qmt_batch_id,
+                    "batch_status": qmt_batch_status,
+                    "total": int(qmt_batch_result.get("total") or len(qmt_batch_result.get("results") or [])),
+                    "succeeded": submitted_child_count,
+                    "failed": rejected_child_count,
+                    "pending": pending_algo_count,
+                    "triggered_child_order_count": submitted_child_count,
+                    "pending_child_trigger_count": pending_algo_count,
+                    "runtime_evidence": evidence,
+                    "event_loop_batch_metadata": metadata,
+                }
+            )
+        payload_patch = {
+            "broker_called": bool(payload.get("broker_called")) or submitted_child_count > 0,
+            "submitted_intents": submitted_child_count,
+            "failed_intents": rejected_child_count,
+            "pending_intents": pending_algo_count,
+            "miniqmt_event_loop_tick_driver": result_payload,
+            "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
+        }
+        if qmt_batch_status:
+            payload_patch["qmt_batch_status"] = qmt_batch_status
+        if qmt_batch_result:
+            payload_patch["qmt_batch_result"] = qmt_batch_result
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+            payload_patch=payload_patch,
+            payload_unset=("submit_failure",),
+        )
+
+    def _mark_miniqmt_tick_driver_timeout(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        exc: RuntimeConfigInvalidError,
+    ) -> SimulationDailyRun:
+        context = self._exception_context(exc)
+        diagnostic = {
+            "schema_version": "miniqmt_event_loop_tick_driver_timeout_v1",
+            "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT",
+            "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_TIMEOUT",
+            "reason": "miniqmt_event_loop_tick_driver_exceeded_stage_timeout",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": run.trade_date.isoformat(),
+            "qmt_batch_id": run.run_payload_json.get("qmt_batch_id"),
+            "timeout_context": context,
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.INTRADAY_RUNNING.value,
+                "miniqmt_event_loop_tick_driver_timeout": diagnostic,
+                "miniqmt_event_loop_tick_driver": diagnostic,
+            },
+        )
 
     @staticmethod
     def _mini_qmt_batch_has_terminal_capacity_residual(payload: dict[str, Any]) -> bool:

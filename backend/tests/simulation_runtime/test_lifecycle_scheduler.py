@@ -7040,7 +7040,7 @@ def test_production_context_provider_miniqmt_event_loop_submit_places_broker_ord
     assert latest_run.run_payload_json["qmt_batch_result"]["runtime_evidence"]["source"] == "simulation_runtime_event_loop_submit"
 
 
-def test_scheduler_event_loop_no_child_submit_failure_is_loud_not_reconciling(
+def test_scheduler_event_loop_no_child_dispatch_stays_pending_not_failed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
@@ -7099,19 +7099,145 @@ def test_scheduler_event_loop_no_child_submit_failure_is_loud_not_reconciling(
     )
 
     latest_run = repo.get_simulation_daily_run(run.run_id)
-    assert submitted.results[0].status == SimulationDailyRunStatus.FAILED_RETRYABLE.value
-    assert latest_run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
-    assert latest_run.run_payload_json["last_stage"] == "FAILED_RETRYABLE"
+    assert submitted.results[0].status == "MINIQMT_EVENT_LOOP_PENDING"
+    assert latest_run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert latest_run.run_payload_json["last_stage"] == "INTRADAY_RUNNING"
     assert latest_run.run_payload_json["broker_called"] is False
     assert latest_run.run_payload_json["submitted_intents"] == 0
-    assert latest_run.run_payload_json["failed_intents"] == len(plan.intents)
+    assert latest_run.run_payload_json["failed_intents"] == 0
+    assert latest_run.run_payload_json["pending_intents"] == len(plan.intents)
+    assert latest_run.run_payload_json["qmt_batch_status"] == OrderBatchStatus.SUBMITTING.value
+    assert latest_run.run_payload_json["qmt_batch_result"]["pending"] == len(plan.intents)
     assert "pre_run_failure" not in latest_run.run_payload_json
-    failure = latest_run.run_payload_json["submit_failure"]
-    assert failure["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
-    assert failure["outer_stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
-    assert failure["context"]["reason_code"] == "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER"
-    assert failure["context"]["stage"] == "MINIQMT_EVENT_LOOP_SUBMIT_NO_CHILD_ORDER"
+    assert "submit_failure" not in latest_run.run_payload_json
     assert broker.place_order_payloads == []
+
+
+def test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    scheduler, repo, broker, qmt_binding = _miniqmt_event_loop_test_scheduler()
+    broker.quotes.update(
+        {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.5,
+                "ask_price_1": 10.5,
+                "ask_volume_1": 5000,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.5,
+                "ask_price_1": 20.5,
+                "ask_volume_1": 5000,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 7.5,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 7.5,
+                "bid_volume_1": 5000,
+            },
+        }
+    )
+    runtime_store = tmp_path / "miniqmt-event-loop-tick-driver.json"
+    monkeypatch.delenv("MINIQMT_EXECUTION_RUNTIME", raising=False)
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME_STORE_PATH", str(runtime_store))
+
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    plan = planned.results[0].execution_plan
+    run = planned.results[0].run
+    limit_by_symbol = {"000001.SZ": 10.0, "688001.SH": 20.0, "000003.SZ": 8.0}
+    plan = plan.model_copy(
+        update={
+            "intents": [
+                intent.model_copy(
+                    update={
+                        "price_policy": {
+                            **dict(intent.price_policy),
+                            "order_type": OrderType.LIMIT.value,
+                            "limit_price": limit_by_symbol[intent.symbol],
+                            "reference_price": limit_by_symbol[intent.symbol],
+                        }
+                    }
+                )
+                for intent in plan.intents
+            ]
+        }
+    )
+    repo.execution_plans[plan.plan_id] = plan
+
+    submitted = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+    assert submitted.results[0].status == "MINIQMT_EVENT_LOOP_PENDING"
+    assert broker.place_order_payloads == []
+
+    broker.quotes.update(
+        {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 9.9,
+                "ask_price_1": 9.9,
+                "ask_volume_1": 5000,
+                "bid_price_1": 9.8,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 19.9,
+                "ask_price_1": 19.9,
+                "ask_volume_1": 5000,
+                "bid_price_1": 19.8,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.1,
+                "ask_price_1": 8.2,
+                "ask_volume_1": 5000,
+                "bid_price_1": 8.1,
+                "bid_volume_1": 5000,
+            },
+        }
+    )
+
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    latest_run = repo.get_simulation_daily_run(run.run_id)
+    assert len(broker.place_order_payloads) == len(plan.intents)
+    assert latest_run.status in {SimulationDailyRunStatus.INTRADAY_RUNNING, SimulationDailyRunStatus.SUCCEEDED}
+    assert latest_run.run_payload_json["broker_called"] is True
+    assert latest_run.run_payload_json["submitted_intents"] == len(plan.intents)
+    assert latest_run.run_payload_json["failed_intents"] == 0
+    assert latest_run.run_payload_json["pending_intents"] == 0
+    driver = latest_run.run_payload_json["miniqmt_event_loop_tick_driver"]
+    assert driver["triggered_child_order_count"] == len(plan.intents)
+    assert driver["pending_algo_count"] == 0
+    assert driver["errors"] == []
+    batch = latest_run.run_payload_json["qmt_batch_result"]
+    assert batch["succeeded"] == len(plan.intents)
+    assert batch["failed"] == 0
+    assert batch["pending"] == 0
 
 
 def test_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanup_and_retries() -> None:

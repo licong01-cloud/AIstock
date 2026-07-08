@@ -56,10 +56,12 @@ from backend.services.trading_core.models import OrderIntent, OrderSide, OrderTy
 from .config import MiniQMTExecutionRuntimeKind
 from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck, QmtClientMiniQMTEventLoopGateway
 from .models import (
+    MiniQMTAlgoInstanceStatus,
     MiniQMTChildOrder,
     MiniQMTChildOrderStatus,
     MiniQMTExecutionEvent,
     MiniQMTExecutionEventType,
+    MiniQMTExecutionAlgoInstance,
     MiniQMTExecutionRuntimeConfig,
     MiniQMTOperatorCommandResult,
 )
@@ -99,6 +101,9 @@ class MiniQMTRuntimeEvidence:
     submitted_child_count: int
     rejected_child_count: int
     source: str
+    active_algo_count: int = 0
+    completed_algo_count: int = 0
+    pending_algo_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +116,9 @@ class MiniQMTRuntimeEvidence:
             "child_order_ids": list(self.child_order_ids),
             "submitted_child_count": self.submitted_child_count,
             "rejected_child_count": self.rejected_child_count,
+            "active_algo_count": self.active_algo_count,
+            "completed_algo_count": self.completed_algo_count,
+            "pending_algo_count": self.pending_algo_count,
             "source": self.source,
         }
 
@@ -162,6 +170,7 @@ class MiniQMTRuntimeManagedBatchSubmitResult:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        pending = sum(1 for result in self.results if _is_event_loop_pending_result(result))
         payload = {
             "success": self.success,
             "batch_id": self.batch_id,
@@ -171,6 +180,9 @@ class MiniQMTRuntimeManagedBatchSubmitResult:
             "total": self.total,
             "succeeded": self.succeeded,
             "failed": self.failed,
+            "pending": pending,
+            "triggered_child_order_count": self.succeeded,
+            "pending_child_trigger_count": pending,
             "results": [result.to_dict() for result in self.results],
             "compensation_required": self.compensation_required,
             "compensation_hint": self.compensation_hint,
@@ -217,6 +229,51 @@ class MiniQMTEventLoopPreflightResult:
     results: tuple[ManagedOrderSubmitResult, ...]
     request_by_parent_intent_id: dict[str, ManagedOrderRequest]
     submit_parent_intent_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class MiniQMTRuntimeTickDriveResult:
+    runtime_id: str
+    source: str
+    symbols: tuple[str, ...]
+    quote_count: int
+    tick_event_count: int
+    child_order_count_before: int
+    child_order_count_after: int
+    triggered_child_order_count: int
+    submitted_child_count: int
+    rejected_child_count: int
+    active_algo_count: int
+    completed_algo_count: int
+    pending_algo_count: int
+    pending_parent_intent_ids: tuple[str, ...]
+    failed_quote_symbols: tuple[str, ...]
+    errors: tuple[dict[str, Any], ...]
+    batch_results: dict[str, dict[str, Any]]
+    runtime_evidence: MiniQMTRuntimeEvidence
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "miniqmt_event_loop_tick_driver_v1",
+            "runtime_id": self.runtime_id,
+            "source": self.source,
+            "symbols": list(self.symbols),
+            "quote_count": self.quote_count,
+            "tick_event_count": self.tick_event_count,
+            "child_order_count_before": self.child_order_count_before,
+            "child_order_count_after": self.child_order_count_after,
+            "triggered_child_order_count": self.triggered_child_order_count,
+            "submitted_child_count": self.submitted_child_count,
+            "rejected_child_count": self.rejected_child_count,
+            "active_algo_count": self.active_algo_count,
+            "completed_algo_count": self.completed_algo_count,
+            "pending_algo_count": self.pending_algo_count,
+            "pending_parent_intent_ids": list(self.pending_parent_intent_ids),
+            "failed_quote_symbols": list(self.failed_quote_symbols),
+            "errors": [dict(item) for item in self.errors],
+            "batch_results": self.batch_results,
+            "runtime_evidence": self.runtime_evidence.to_dict(),
+        }
 
 
 class MiniQMTExecutionRuntimeClient:
@@ -683,13 +740,29 @@ class MiniQMTExecutionRuntimeClient:
         child_by_parent: dict[str, list[MiniQMTChildOrder]] = {}
         for child in new_children:
             child_by_parent.setdefault(child.parent_intent_id, []).append(child)
-        missing_child_intents: list[OrderIntent] = []
+        algo_by_parent = {
+            instance.parent_intent_id: instance
+            for instance in self.repository.list_algo_instances(runtime.config.runtime_id, active_only=False)
+        }
+        dispatch_failed_intents: list[OrderIntent] = []
         for intent in parent_intents:
             if intent.intent_id not in submitted_parent_ids:
                 continue
             children = child_by_parent.get(intent.intent_id) or []
             if not children:
-                missing_child_intents.append(intent)
+                request = request_by_parent_intent_id.get(intent.intent_id)
+                result = results_by_parent_id.get(intent.intent_id)
+                algo_instance = algo_by_parent.get(intent.intent_id)
+                if request is not None and result is not None and _is_event_loop_pending_algo(algo_instance):
+                    results_by_parent_id[intent.intent_id] = _event_loop_pending_algo_result(
+                        intent=intent,
+                        request=request,
+                        preflight=result.preflight,
+                        algo_instance=algo_instance,
+                        source=source,
+                    )
+                    continue
+                dispatch_failed_intents.append(intent)
                 continue
             accepted_child = _accepted_event_loop_child(children)
             request = request_by_parent_intent_id.get(intent.intent_id)
@@ -702,9 +775,9 @@ class MiniQMTExecutionRuntimeClient:
                 repository=self.strategy_ledger_repository,
                 source=source,
             )
-        if missing_child_intents:
+        if dispatch_failed_intents:
             _raise_event_loop_no_child_order(
-                missing_child_intents=missing_child_intents,
+                missing_child_intents=dispatch_failed_intents,
                 parent_intents=parent_intents,
                 new_children=new_children,
                 runtime_evidence=runtime_evidence,
@@ -725,10 +798,11 @@ class MiniQMTExecutionRuntimeClient:
             source=source,
         )
         succeeded = sum(1 for item in results if item.success)
-        failed = len(results) - succeeded
+        pending = sum(1 for item in results if _is_event_loop_pending_result(item))
+        failed = len(results) - succeeded - pending
         batch_status = _event_loop_batch_status(preflight_result.requests, results)
         managed_result = ManagedBatchSubmitResult(
-            success=failed == 0 and succeeded > 0,
+            success=failed == 0 and (succeeded > 0 or pending > 0),
             total=len(results),
             succeeded=succeeded,
             failed=failed,
@@ -745,6 +819,301 @@ class MiniQMTExecutionRuntimeClient:
             managed_result,
             runtime_evidence=runtime_evidence,
         )
+
+    def drive_event_loop_ticks(
+        self,
+        *,
+        account_group_id: str,
+        trade_date: date,
+        runtime_config_hash: str,
+        runtime_id: str,
+        qmt_client: Any,
+        strategy_name: str,
+        order_remark_prefix: str,
+        account_id: str | None = None,
+        quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
+        managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None = None,
+        managed_order_service: QmtManagedOrderService | None = None,
+        source: str = "simulation_runtime_event_loop_tick_driver",
+    ) -> MiniQMTRuntimeTickDriveResult:
+        """Drive one non-blocking quote batch into active event-loop algos."""
+
+        if self.runtime_kind != MiniQMTExecutionRuntimeKind.EVENT_LOOP:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver requires runtime_kind=event_loop",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_RUNTIME_KIND_REQUIRED",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_GATE",
+                    "runtime_id": runtime_id,
+                    "runtime_kind": self.runtime_kind.value,
+                },
+            )
+        if self.strategy_ledger_repository is None:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver requires qmt_strategy ledger authority",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LEDGER_AUTHORITY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_GATE",
+                    "runtime_id": runtime_id,
+                },
+            )
+        runtime_record = self.repository.get_runtime(runtime_id)
+        if runtime_record is None:
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver found no durable runtime",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_RUNTIME_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_RUNTIME_LOAD",
+                    "runtime_id": runtime_id,
+                    "account_group_id": account_group_id,
+                    "trade_date": trade_date.isoformat(),
+                },
+            )
+        gateway = QmtClientMiniQMTEventLoopGateway(
+            qmt_client=qmt_client,
+            strategy_name=strategy_name,
+            order_remark_prefix=order_remark_prefix,
+        )
+        self._runtime(
+            account_group_id=account_group_id,
+            trade_date=trade_date,
+            runtime_config_hash=runtime_config_hash,
+            runtime_id=runtime_id,
+            gateway=gateway,
+            account_id=account_id,
+            metadata={
+                **dict(runtime_record.metadata or {}),
+                "source": source,
+                "runtime_kind": MiniQMTExecutionRuntimeKind.EVENT_LOOP.value,
+                "gateway_class": "QmtClientMiniQMTEventLoopGateway",
+                "oms_authority": "qmt_strategy_ledger",
+                "account_id": account_id,
+            },
+        )
+        before_children = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
+        before_child_ids = {child.child_order_id for child in before_children}
+        active_instances = tuple(
+            instance
+            for instance in self.repository.list_algo_instances(runtime_id, active_only=True)
+            if is_vnpy_style_algo(instance.algo_code) and _is_event_loop_pending_algo(instance)
+        )
+        instance_by_symbol: dict[str, MiniQMTExecutionAlgoInstance] = {}
+        for instance in active_instances:
+            instance_by_symbol.setdefault(instance.symbol, instance)
+        quote_count = 0
+        tick_event_count = 0
+        failed_quote_symbols: list[str] = []
+        errors: list[dict[str, Any]] = []
+        for symbol in sorted(instance_by_symbol):
+            instance = instance_by_symbol[symbol]
+            try:
+                tick_payload = _required_event_loop_tick_payload(
+                    intent=_event_loop_probe_intent_for_algo(instance, trade_date=trade_date),
+                    quote_provider=quote_provider,
+                    qmt_client=qmt_client,
+                    source=source,
+                )
+                gateway.on_tick(tick_payload)
+                quote_count += 1
+                tick_event_count += 1
+            except Exception as exc:  # noqa: BLE001
+                failed_quote_symbols.append(symbol)
+                errors.append(
+                    {
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_SYMBOL_FAILED",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_DISPATCH",
+                        "runtime_id": runtime_id,
+                        "symbol": symbol,
+                        "algo_instance_id": instance.algo_instance_id,
+                        "parent_intent_id": instance.parent_intent_id,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "error_context": getattr(exc, "context", None),
+                    }
+                )
+        after_children = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
+        new_children = tuple(child for child in after_children if child.child_order_id not in before_child_ids)
+        batch_results = self._sync_event_loop_triggered_children_to_batches(
+            runtime_id=runtime_id,
+            trade_date=trade_date,
+            new_children=new_children,
+            managed_request_factory=managed_request_factory,
+            managed_order_service=managed_order_service,
+            source=source,
+        )
+        evidence = self.evidence_for_runtime(runtime_id, source=source)
+        all_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        all_children = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
+        child_parent_ids = {child.parent_intent_id for child in all_children}
+        pending_parent_ids = tuple(
+            sorted(
+                instance.parent_intent_id
+                for instance in all_instances
+                if _is_event_loop_pending_algo(instance) and instance.parent_intent_id not in child_parent_ids
+            )
+        )
+        return MiniQMTRuntimeTickDriveResult(
+            runtime_id=runtime_id,
+            source=source,
+            symbols=tuple(sorted(instance_by_symbol)),
+            quote_count=quote_count,
+            tick_event_count=tick_event_count,
+            child_order_count_before=len(before_children),
+            child_order_count_after=len(after_children),
+            triggered_child_order_count=len(new_children),
+            submitted_child_count=evidence.submitted_child_count,
+            rejected_child_count=evidence.rejected_child_count,
+            active_algo_count=evidence.active_algo_count,
+            completed_algo_count=evidence.completed_algo_count,
+            pending_algo_count=evidence.pending_algo_count,
+            pending_parent_intent_ids=pending_parent_ids,
+            failed_quote_symbols=tuple(failed_quote_symbols),
+            errors=tuple(errors),
+            batch_results=batch_results,
+            runtime_evidence=evidence,
+        )
+
+    def _sync_event_loop_triggered_children_to_batches(
+        self,
+        *,
+        runtime_id: str,
+        trade_date: date,
+        new_children: tuple[MiniQMTChildOrder, ...],
+        managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
+        managed_order_service: QmtManagedOrderService | None,
+        source: str,
+    ) -> dict[str, dict[str, Any]]:
+        if not new_children:
+            return {}
+        results_by_batch_parent: dict[str, dict[str, ManagedOrderSubmitResult]] = {}
+        for index, child in enumerate(new_children, start=1):
+            request_index = _event_loop_child_request_index(child, fallback=index)
+            request = (
+                managed_request_factory(child, request_index)
+                if managed_request_factory is not None
+                else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
+            )
+            batch_id = str(
+                child.metadata.get("qmt_batch_id")
+                or request.metadata.get("qmt_batch_id")
+                or ""
+            ).strip()
+            if not batch_id:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop tick driver cannot sync child without qmt_batch_id",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_ID_MISSING",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                        "runtime_id": runtime_id,
+                        "child_order_id": child.child_order_id,
+                        "parent_intent_id": child.parent_intent_id,
+                        "symbol": child.symbol,
+                    },
+                )
+            preflight = self._event_loop_stored_batch_preflight(
+                batch_id=batch_id,
+                parent_intent_id=child.parent_intent_id,
+            )
+            if preflight is None:
+                preflight = self._event_loop_preview_order(
+                    request,
+                    managed_order_service=managed_order_service,
+                )
+            result = _event_loop_child_submit_result(
+                child=child,
+                request=request,
+                preflight=preflight,
+                repository=self.strategy_ledger_repository,
+                source=source,
+            )
+            results_by_batch_parent.setdefault(batch_id, {})[child.parent_intent_id] = result
+
+        updated: dict[str, dict[str, Any]] = {}
+        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
+        if not callable(get_batch):
+            raise BrokerSubmitError(
+                "MiniQMT event_loop tick driver requires get_order_batch for batch sync",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_REPOSITORY_MISSING",
+                    "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                    "runtime_id": runtime_id,
+                },
+            )
+        for batch_id, parent_results in results_by_batch_parent.items():
+            batch = get_batch(batch_id)
+            if batch is None:
+                raise BrokerSubmitError(
+                    "MiniQMT event_loop tick driver cannot find qmt_strategy batch",
+                    context={
+                        "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_MISSING",
+                        "stage": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BATCH_SYNC",
+                        "runtime_id": runtime_id,
+                        "qmt_batch_id": batch_id,
+                    },
+                )
+            requests = tuple(_event_loop_requests_from_batch(batch))
+            stored_results = tuple(
+                _result_from_dict(item)
+                for item in (batch.result_json or {}).get("results", ())
+                if isinstance(item, dict)
+            )
+            results_by_parent = {
+                parent_id: result
+                for request, result in zip(requests, stored_results, strict=False)
+                if (parent_id := _parent_id_from_request(request))
+            }
+            results_by_parent.update(parent_results)
+            ordered_results = tuple(
+                results_by_parent.get(_parent_id_from_request(request))
+                or ManagedOrderSubmitResult(
+                    False,
+                    _parent_id_from_request(request) or None,
+                    None,
+                    "event_loop algo dispatched and running; child order pending tick trigger",
+                    self._event_loop_preview_order(request, managed_order_service=managed_order_service),
+                    False,
+                )
+                for request in requests
+            )
+            evidence = self.evidence_for_runtime(runtime_id, source=source)
+            self._upsert_event_loop_batch_record(
+                batch_id=batch_id,
+                requests=requests,
+                results=ordered_results,
+                runtime_evidence=evidence,
+                source=source,
+            )
+            latest = get_batch(batch_id)
+            updated[batch_id] = {
+                "batch_id": batch_id,
+                "batch_status": latest.batch_status.value if latest is not None else None,
+                "result_json": dict(latest.result_json or {}) if latest is not None else {},
+                "metadata": dict(latest.metadata or {}) if latest is not None else {},
+            }
+        return updated
+
+    def _event_loop_stored_batch_preflight(
+        self,
+        *,
+        batch_id: str,
+        parent_intent_id: str,
+    ) -> OrderPreflightResult | None:
+        get_batch = getattr(self.strategy_ledger_repository, "get_order_batch", None)
+        if not callable(get_batch):
+            return None
+        batch = get_batch(batch_id)
+        if batch is None:
+            return None
+        requests = tuple(_event_loop_requests_from_batch(batch))
+        stored_results = tuple(
+            _result_from_dict(item)
+            for item in (batch.result_json or {}).get("results", ())
+            if isinstance(item, dict)
+        )
+        for request, result in zip(requests, stored_results, strict=False):
+            if _parent_id_from_request(request) == parent_intent_id:
+                return result.preflight
+        return None
 
     def _event_loop_preflight_parent_intents(
         self,
@@ -870,9 +1239,9 @@ class MiniQMTExecutionRuntimeClient:
                     False,
                     parent_id,
                     None,
-                    "event_loop preflight passed; broker submission pending",
+                    "event_loop preflight passed; algo dispatch pending tick trigger",
                     preflight,
-                    True,
+                    False,
                 )
             )
             if parent_id:
@@ -1133,9 +1502,9 @@ class MiniQMTExecutionRuntimeClient:
                         False,
                         parent_id,
                         None,
-                        "event_loop dependent buy retry preflight passed; broker submission pending",
+                        "event_loop dependent buy retry preflight passed; algo dispatch pending tick trigger",
                         preflight,
-                        True,
+                        False,
                     )
                     if parent_id:
                         submit_parent_ids.add(parent_id)
@@ -1418,18 +1787,20 @@ class MiniQMTExecutionRuntimeClient:
         if runtime_record is None:
             raise BrokerSubmitError("MiniQMT runtime evidence is missing", context={"runtime_id": runtime_id})
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
+        algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime_record.account_group_id,
             trade_date=runtime_record.trade_date,
             event_count=len(self.repository.list_events(runtime_id)),
-            algo_instance_ids=tuple(
-                item.algo_instance_id for item in self.repository.list_algo_instances(runtime_id, active_only=False)
-            ),
+            algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
+            completed_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED),
+            pending_algo_count=_pending_algo_count(algo_instances, child_orders),
             source=source,
         )
 
@@ -1467,18 +1838,20 @@ class MiniQMTExecutionRuntimeClient:
     def _evidence(self, runtime: MiniQMTExecutionRuntime, *, source: str) -> MiniQMTRuntimeEvidence:
         runtime_id = runtime.config.runtime_id
         child_orders = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
+        algo_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
         return MiniQMTRuntimeEvidence(
             runtime_id=runtime_id,
             runtime_owner=RUNTIME_OWNER,
             account_group_id=runtime.config.account_group_id,
             trade_date=runtime.config.trade_date,
             event_count=len(self.repository.list_events(runtime_id)),
-            algo_instance_ids=tuple(
-                item.algo_instance_id for item in self.repository.list_algo_instances(runtime_id, active_only=False)
-            ),
+            algo_instance_ids=tuple(item.algo_instance_id for item in algo_instances),
             child_order_ids=tuple(item.child_order_id for item in child_orders),
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
+            active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
+            completed_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED),
+            pending_algo_count=_pending_algo_count(algo_instances, child_orders),
             source=source,
         )
 
@@ -2392,6 +2765,102 @@ def _event_loop_result_from_existing_intent(intent: Any) -> ManagedOrderSubmitRe
     )
 
 
+def _event_loop_probe_intent_for_algo(
+    instance: MiniQMTExecutionAlgoInstance,
+    *,
+    trade_date: date,
+) -> OrderIntent:
+    metadata = dict(instance.metadata or {})
+    child_context = metadata.get("runtime_child_context") if isinstance(metadata.get("runtime_child_context"), dict) else {}
+    return OrderIntent(
+        intent_id=instance.parent_intent_id,
+        package_id=str(child_context.get("package_id") or metadata.get("package_id") or instance.strategy_slot_id),
+        portfolio_id=str(child_context.get("portfolio_id") or metadata.get("portfolio_id") or instance.strategy_slot_id),
+        symbol=instance.symbol,
+        side=instance.side,
+        quantity=max(int(instance.target_quantity), 1),
+        order_type=OrderType.MARKET,
+        target_trade_date=trade_date,
+        metadata={
+            **dict(child_context),
+            "source": "event_loop_tick_driver_probe_intent",
+            "runtime_algo_instance_id": instance.algo_instance_id,
+            "runtime_parent_intent_id": instance.parent_intent_id,
+        },
+    )
+
+
+def _event_loop_child_request_index(child: MiniQMTChildOrder, *, fallback: int) -> int:
+    for value in (
+        child.metadata.get("event_loop_request_index") if isinstance(child.metadata, dict) else None,
+        child.metadata.get("request_index") if isinstance(child.metadata, dict) else None,
+    ):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if index > 0:
+            return index
+    return fallback
+
+
+def _is_event_loop_pending_algo(instance: MiniQMTExecutionAlgoInstance | None) -> bool:
+    if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
+        return False
+    state = instance.metadata.get("vnpy_algo_state") if isinstance(instance.metadata, dict) else None
+    snapshot = state.get("snapshot") if isinstance(state, dict) else None
+    status = str(snapshot.get("status") if isinstance(snapshot, dict) else "").strip().lower()
+    return status in {"", "running", "active"}
+
+
+def _pending_algo_count(
+    algo_instances: tuple[MiniQMTExecutionAlgoInstance, ...],
+    child_orders: tuple[MiniQMTChildOrder, ...],
+) -> int:
+    child_parent_ids = {child.parent_intent_id for child in child_orders}
+    return sum(
+        1
+        for instance in algo_instances
+        if _is_event_loop_pending_algo(instance) and instance.parent_intent_id not in child_parent_ids
+    )
+
+
+def _is_event_loop_pending_result(result: ManagedOrderSubmitResult) -> bool:
+    if result.success or result.broker_called or result.qmt_order_id:
+        return False
+    if not result.preflight.allowed:
+        return False
+    message = str(result.broker_message or "").lower()
+    return "pending tick trigger" in message or "algo dispatched" in message
+
+
+def _event_loop_pending_algo_result(
+    *,
+    intent: OrderIntent,
+    request: ManagedOrderRequest,
+    preflight: OrderPreflightResult,
+    algo_instance: MiniQMTExecutionAlgoInstance,
+    source: str,
+) -> ManagedOrderSubmitResult:
+    return ManagedOrderSubmitResult(
+        success=False,
+        intent_id=request.metadata.get("runtime_parent_intent_id") or intent.intent_id,
+        qmt_order_id=None,
+        broker_message=(
+            "event_loop algo dispatched and running; child order pending tick trigger "
+            f"algo_instance_id={algo_instance.algo_instance_id}"
+        ),
+        preflight=replace(
+            preflight,
+            allowed=True,
+            errors=tuple(
+                error for error in preflight.errors if str(error.code).upper() != "MINIQMT_EVENT_LOOP_NO_CHILD_ORDER"
+            ),
+        ),
+        broker_called=False,
+    )
+
+
 def _accepted_event_loop_child(children: list[MiniQMTChildOrder]) -> MiniQMTChildOrder:
     for child in children:
         if child.status != MiniQMTChildOrderStatus.REJECTED and child.broker_order_id:
@@ -2404,7 +2873,10 @@ def _event_loop_batch_status(
     results: tuple[ManagedOrderSubmitResult, ...],
 ) -> OrderBatchStatus:
     succeeded = sum(1 for result in results if result.success)
-    failed = len(results) - succeeded
+    pending = sum(1 for result in results if _is_event_loop_pending_result(result))
+    failed = len(results) - succeeded - pending
+    if failed == 0 and pending > 0:
+        return OrderBatchStatus.SUBMITTING
     if failed == 0 and succeeded > 0:
         return OrderBatchStatus.SUCCEEDED
     if succeeded > 0:
@@ -2426,7 +2898,9 @@ def _event_loop_preflight_passed(
     residual_failed = sum(
         1
         for request, result in zip(requests, results, strict=False)
-        if not result.success and _is_non_compensating_batch_residual(request, result.preflight)
+        if not result.success
+        and not _is_event_loop_pending_result(result)
+        and _is_non_compensating_batch_residual(request, result.preflight)
     )
     return residual_failed == 0 and all(result.preflight.allowed for result in results if result.broker_called)
 
@@ -2440,12 +2914,15 @@ def _event_loop_compensation_required(
     if normalized != OrderBatchStatus.PARTIAL.value:
         return False
     failed = sum(1 for result in results if not result.success)
+    pending = sum(1 for result in results if _is_event_loop_pending_result(result))
     residual_failed = sum(
         1
         for request, result in zip(list(requests), results, strict=False)
-        if not result.success and _is_non_compensating_batch_residual(request, result.preflight)
+        if not result.success
+        and not _is_event_loop_pending_result(result)
+        and _is_non_compensating_batch_residual(request, result.preflight)
     )
-    return failed != residual_failed
+    return failed - pending != residual_failed
 
 
 def _event_loop_batch_metadata(
@@ -2466,6 +2943,7 @@ def _event_loop_batch_metadata(
         if not result.success and _is_capacity_residual_skipped(request, result.preflight)
     )
     status = _event_loop_batch_status(requests, results)
+    pending_count = sum(1 for result in results if _is_event_loop_pending_result(result))
     return {
         "source": source,
         "runtime_route": "A_EVENT_LOOP",
@@ -2476,6 +2954,9 @@ def _event_loop_batch_metadata(
         "dependent_buy_count": dependent_buy_count,
         "capacity_residual_skipped": capacity_residual_count > 0,
         "capacity_residual_count": capacity_residual_count,
+        "event_loop_pending": pending_count > 0,
+        "event_loop_pending_count": pending_count,
+        "triggered_child_order_count": sum(1 for result in results if result.success),
         "compensation_required": _event_loop_compensation_required(status, requests, results),
         "compensation_actions": [],
         "broker_called": any(result.broker_called for result in results),

@@ -1,6 +1,11 @@
 {
   "actual": "2026-07-08 intraday production SIM evidence after BUG-600: multi-alpha binding slot ma_8ec5e389_sim_20260703 submitted through A(event_loop) reports broker_called=true but submitted=1/failed=24. Postgres runtime store writes rows correctly: qmt_strategy.execution_algo_instance has 25 rows, execution_runtime_event has 80 rows, execution_child_order has 1 row. All 25 algo_instance rows are status=ACTIVE, vnpy_algo_state.snapshot status=running, traded=0, left=full quantity. The 25 SNIPER algorithms are alive/running; only one triggered a child order at dispatch time, while the other 24 are pending waiting for tick market data. BUG-599 currently classifies the 24 as MINIQMT_EVENT_LOOP_NO_CHILD_ORDER failed even though they are valid pending/running algorithms.\n\nRoot cause: A(event_loop) dispatches 25 vn.py-style SNIPER algorithms correctly, but the unattended production path lacks a sustained tick driving loop. runtime._dispatch_tick_to_vnpy_algos exists, but no production tick source continuously calls it for the runtime symbols. As a result, running SNIPER algorithms do not receive subsequent ticks and never trigger child orders. This is a closure gap versus vn.py continuous event engine + market tick feed.\n\nRequired fix A: add a non-blocking sustained tick driver for event_loop runtime during trading sessions. It must subscribe/poll realtime tick quotes for all symbols in the runtime through MINIQMT_REALTIME broker quote / xtquant market data and keep calling runtime._dispatch_tick_to_vnpy_algos so running SNIPER algorithms can trigger child orders until filled or market close. It must be driven by unattended scheduler tick cadence or a dedicated protected tick loop, must remain non-blocking, must stay under BUG-600 watchdog/timeout protection, and must not reintroduce scheduler freezes. Child orders must continue to be written incrementally row-by-row to Postgres and reconciled to order_ledger/broker. broker_called/submitted_intents should reflect cumulative child-order submissions.\n\nRequired fix B: fix BUG-599 pending-vs-failed classification. MINIQMT_EVENT_LOOP_NO_CHILD_ORDER should mean algorithm dispatch truly failed or was rejected. ACTIVE/running algorithms with no child order yet are pending, valid, and non-failed. Runs with dispatched running algorithms waiting for child orders should be RUNNING/INTRADAY_RUNNING or equivalent in-progress state, never FAILED_RETRYABLE. Reconcile should progress as child orders arrive.\n\nRequired fix C: add runtime observability for triggered/filled/pending counts across the 25 algorithms. At market close, loudly record reasons for algorithms that never triggered; no silent fallback.\n\nRed lines: do not reintroduce freezing; tick driver must be non-blocking and watchdog protected. Do not break BUG-600 row-by-row Postgres writes, A submission, first-order path, or shadow/B removal. Align with vn.py continuous loop model; no full dump persistence, placeholder, simplified/minimal implementation, except-pass, or silent downgrade. Errors must be loud with reason_code and stage.",
   "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260708_BUG-604-miniqmt-event-loop-runtime-lacks-sustained-tick-driver-and-misclassifies.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -42,7 +47,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "Intraday production SIM A(event_loop) run for multi-alpha binding slot ma_8ec5e389_sim_20260703 after BUG-600",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",

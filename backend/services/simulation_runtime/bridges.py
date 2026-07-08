@@ -373,6 +373,65 @@ class MiniQMTExecutionBridge:
             source="simulation_runtime_event_loop_submit",
         )
 
+    def drive_event_loop_ticks(self, **kwargs: Any) -> Any:
+        mode = str(kwargs.get("mode") or "SIM").strip().upper()
+        if mode != "SIM":
+            raise LiveApprovalRequiredError(
+                "MiniQMT event_loop tick driver is SIM-only; LIVE requires separate live admission",
+                context={"mode": mode, "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LIVE_FORBIDDEN"},
+            )
+        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
+        broker = getattr(self._managed_order_service, "_broker", None)
+        if broker is None:
+            raise BrokerUnavailableError(
+                "MiniQMT event_loop tick driver requires the broker behind QmtManagedOrderService",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_BROKER_MISSING",
+                    "plan_id": kwargs["plan"].plan_id,
+                    "binding_id": kwargs["binding"].binding_id,
+                    "runtime_id": vnpy_kwargs["runtime_id"],
+                },
+            )
+        self._assert_event_loop_broker_gateway_ready(
+            broker=broker,
+            plan=kwargs["plan"],
+            binding=kwargs["binding"],
+            runtime_id=str(vnpy_kwargs["runtime_id"]),
+            parent_intent_count=len(vnpy_kwargs["parent_intents"]),
+        )
+        strategy_ledger_repository = getattr(self._managed_order_service, "_repository", None)
+        if strategy_ledger_repository is None:
+            raise BrokerUnavailableError(
+                "MiniQMT event_loop tick driver requires qmt_strategy ledger repository authority",
+                context={
+                    "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LEDGER_REPOSITORY_MISSING",
+                    "plan_id": kwargs["plan"].plan_id,
+                    "binding_id": kwargs["binding"].binding_id,
+                    "runtime_id": vnpy_kwargs["runtime_id"],
+                },
+            )
+        plan = kwargs["plan"]
+        binding = kwargs["binding"]
+        event_loop_client = MiniQMTExecutionRuntimeClient(
+            repository=self._runtime_client.repository,
+            strategy_ledger_repository=strategy_ledger_repository,
+            runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+        )
+        return event_loop_client.drive_event_loop_ticks(
+            account_group_id=str(vnpy_kwargs["account_group_id"]),
+            trade_date=plan.target_trade_date,
+            runtime_config_hash=str(vnpy_kwargs["runtime_config_hash"]),
+            runtime_id=str(vnpy_kwargs["runtime_id"]),
+            qmt_client=broker,
+            strategy_name=str(kwargs.get("strategy_name") or binding.strategy_name or binding.strategy_id),
+            order_remark_prefix=str(kwargs.get("order_remark_prefix") or binding.order_remark_prefix or "aistock"),
+            account_id=str(binding.broker_account_id or ""),
+            quote_provider=None,
+            managed_request_factory=vnpy_kwargs["managed_request_factory"],
+            managed_order_service=self._managed_order_service,
+            source="simulation_runtime_event_loop_tick_driver",
+        )
+
     @staticmethod
     def _assert_event_loop_broker_gateway_ready(
         *,
@@ -517,10 +576,13 @@ class MiniQMTExecutionBridge:
                 "selection_evidence_hash": plan.selection_evidence_hash,
                 "strategy_id": binding.strategy_id,
                 "strategy_name": strategy_name,
+                "account_id": binding.broker_account_id,
+                "broker_account_id": binding.broker_account_id,
                 "package_id": parent_metadata.get("package_id") or plan.package_id,
                 "portfolio_id": plan.portfolio_id,
                 "order_type": "LIMIT",
                 "price_type": int(price_type),
+                "event_loop_request_index": index,
                 "target_trade_date": plan.target_trade_date.isoformat(),
                 "target_weight": target_weight_raw,
                 "order_remark": self._vnpy_order_remark(order_remark_prefix, plan=plan, child=parent, index=index),
