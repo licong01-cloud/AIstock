@@ -116,6 +116,28 @@ INSERT INTO aistock_model_catalog (
 ) ON CONFLICT (model_id) DO NOTHING;
 
 -- 验证
+-- R0 GATs Default (relational graph-attention TS model)
+INSERT INTO aistock_model_catalog (
+    model_id, catalog_version, generated_at_utc, catalog_source,
+    task_run_id, loop_id, workspace_id, workspace_path,
+    model_type, model_name, display_name, model_description,
+    model_config, dataset_config,
+    model_hyperparameters, model_training_hyperparameters, is_sota
+) VALUES (
+    '__seed_GATs_default_v1__',
+    '1.0', '2026-07-08T00:00:00Z', 'manual_seed_multi_alpha',
+    'manual_seed_malpha', 105, 'manual_seed_gats', 'N/A',
+    'GATS',
+    'GATs',
+    'GATs Default (Relational TS R0)',
+    'Qlib built-in graph-attention time-series model. R0 capability seed: direct GATs fit/predict with TSDatasetH and daily cross-section batches; no external stock2concept matrix.',
+    '{"class": "GATs", "module_path": "qlib.contrib.model.pytorch_gats_ts", "dataset_type": "TSDatasetH"}'::jsonb,
+    '{"class": "TSDatasetH", "module_path": "qlib.data.dataset"}'::jsonb,
+    '{"d_feat": 20, "hidden_size": 64, "num_layers": 2, "dropout": 0.1, "base_model": "GRU", "n_epochs": 80, "lr": 3e-4, "metric": "loss", "early_stop": 10, "batch_size": 4096, "GPU": 0, "n_jobs": 2, "seed": 20260708}'::jsonb,
+    '{"lr": 3e-4, "batch_size": 4096, "n_epochs": 80, "early_stop": 10, "dropout": 0.1}'::jsonb,
+    false
+) ON CONFLICT (model_id) DO NOTHING;
+
 SELECT model_id, model_name, model_type, display_name, is_sota
 FROM aistock_model_catalog
 WHERE catalog_source = 'manual_seed_multi_alpha'

@@ -1473,6 +1473,209 @@ def _builtin_transformer_model_info():
     }
 
 
+def _gats_model_info():
+    return {
+        "model_id": "__seed_GATs_default_v1__",
+        "model_name": "GATs",
+        "model_type": "GATS",
+        "model_config": {
+            "class": "GATs",
+            "module_path": "qlib.contrib.model.pytorch_gats_ts",
+            "dataset_type": "TSDatasetH",
+        },
+        "default_dataset_type": "TSDatasetH",
+        "model_hyperparameters": {
+            "d_feat": 20,
+            "hidden_size": 64,
+            "num_layers": 2,
+            "dropout": 0.1,
+            "base_model": "GRU",
+            "n_epochs": 80,
+            "lr": 0.0003,
+            "metric": "loss",
+            "early_stop": 10,
+            "batch_size": 4096,
+            "GPU": 0,
+            "n_jobs": 2,
+            "seed": 20260708,
+        },
+        "model_training_hyperparameters": {
+            "n_epochs": 80,
+            "lr": 0.0003,
+            "batch_size": 4096,
+            "early_stop": 10,
+        },
+    }
+
+
+def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
+    yaml_text = _base_yaml(model_info=_gats_model_info())
+
+    assert "class: GATs" in yaml_text
+    assert "module_path: qlib.contrib.model.pytorch_gats_ts" in yaml_text
+    assert "class: GeneralPTNN" not in yaml_text
+    assert "pt_model_kwargs" not in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+    assert "step_len: 20" in yaml_text
+    assert "d_feat: {{ num_features }}" in yaml_text
+    assert "dropout: 0.1" in yaml_text
+    assert "base_model: GRU" in yaml_text
+
+
+def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwargs():
+    yaml_text = _base_yaml(
+        model_info=_gats_model_info(),
+        custom_params={
+            "dropout": 0.25,
+            "base_model": "LSTM",
+            "hidden_size": 32,
+            "num_layers": 1,
+            "lr": "0.0005",
+            "batch_size": 128,
+        },
+    )
+    conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    model = conf["task"]["model"]
+    strategy_kwargs = conf["port_analysis_config"]["strategy"]["kwargs"]
+    assert model["class"] == "GATs"
+    assert model["module_path"] == "qlib.contrib.model.pytorch_gats_ts"
+    assert model["kwargs"]["dropout"] == 0.25
+    assert model["kwargs"]["base_model"] == "LSTM"
+    assert model["kwargs"]["hidden_size"] == 32
+    assert model["kwargs"]["num_layers"] == 1
+    assert model["kwargs"]["lr"] == 0.0005
+    assert model["kwargs"]["batch_size"] == 128
+    assert "pt_model_kwargs" not in model["kwargs"]
+    for key in ("dropout", "base_model", "hidden_size", "num_layers", "lr", "batch_size"):
+        assert key not in strategy_kwargs
+
+
+def test_gats_v25_minute_execution_config_remains_daily_signal_nested_executor():
+    yaml_text = _base_yaml(
+        model_info=_gats_model_info(),
+        custom_params={"execution_algo": "V25_TWO_STAGE"},
+        execution_algo="V25_TWO_STAGE",
+    )
+    conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert conf["task"]["model"]["class"] == "GATs"
+    assert conf["port_analysis_config"]["executor"]["class"] == "NestedExecutor"
+    assert conf["port_analysis_config"]["executor"]["kwargs"]["time_per_step"] == "day"
+    assert (
+        conf["port_analysis_config"]["executor"]["kwargs"]["inner_executor"]["kwargs"]["time_per_step"]
+        == "1min"
+    )
+    assert conf["port_analysis_config"]["strategy"]["kwargs"]["signal"] == "<PRED>"
+    assert conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["freq"] == "1min"
+
+
+def test_qlib_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):
+    gats_module = pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    np = pytest.importorskip("numpy")
+    torch = pytest.importorskip("torch")
+
+    class _MiniGatsSegment:
+        def __init__(self, index, values):
+            self._index = index
+            self._values = values
+            self.empty = len(index) == 0
+
+        def get_index(self):
+            return self._index
+
+        def config(self, **_kwargs):
+            return None
+
+        def __len__(self):
+            return len(self._index)
+
+        def __getitem__(self, index):
+            if isinstance(index, (list, tuple)) and len(index) == 1:
+                index = index[0]
+            if hasattr(index, "detach"):
+                index = index.detach().cpu().numpy()
+            return torch.as_tensor(self._values[index], dtype=torch.float32)
+
+    class _MiniGatsDataset:
+        def __init__(self, d_feat=2, step_len=3, stocks=6):
+            self.d_feat = d_feat
+            self.step_len = step_len
+            self.stocks = stocks
+            self._segments = {
+                "train": self._make_segment("2021-01-04", 4),
+                "valid": self._make_segment("2021-01-08", 3),
+                "test": self._make_segment("2021-01-13", 3),
+            }
+
+        def _make_segment(self, start, days):
+            dates = pd.bdate_range(start, periods=days)
+            rows = []
+            values = []
+            for day_idx, date in enumerate(dates):
+                for stock_idx in range(self.stocks):
+                    instrument = f"STK{stock_idx:03d}"
+                    stock_signal = (stock_idx - (self.stocks - 1) / 2.0) / self.stocks
+                    day_signal = day_idx / max(days - 1, 1)
+                    seq = np.zeros((self.step_len, self.d_feat + 1), dtype="float32")
+                    for step_idx in range(self.step_len):
+                        seq[step_idx, 0] = stock_signal + 0.05 * step_idx + 0.1 * day_signal
+                        seq[step_idx, 1] = np.sin(stock_idx + day_idx + step_idx)
+                        seq[step_idx, -1] = 0.7 * stock_signal + 0.2 * day_signal
+                    rows.append((date, instrument))
+                    values.append(seq)
+            index = pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"])
+            return _MiniGatsSegment(index, np.stack(values))
+
+        def prepare(self, segment, **_kwargs):
+            return self._segments[segment]
+
+    dataset = _MiniGatsDataset()
+    sampler = gats_module.DailyBatchSampler(dataset.prepare("train"))
+    first_batch = next(iter(sampler))
+    train_index = dataset.prepare("train").get_index()
+    assert len(first_batch) == dataset.stocks
+    assert train_index[first_batch].get_level_values("datetime").nunique() == 1
+
+    model = gats_module.GATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+    )
+    evals_result = {}
+    model.fit(dataset, evals_result=evals_result, save_path=str(tmp_path / "gats.pt"))
+    preds = model.predict(dataset)
+
+    assert not preds.empty
+    assert preds.index.equals(dataset.prepare("test").get_index())
+    assert preds.notna().any()
+    assert np.isfinite(preds.to_numpy()).any()
+    assert not np.allclose(preds.to_numpy(), preds.iloc[0])
+    assert evals_result["train"] and evals_result["valid"]
+
+    labels = pd.Series(
+        dataset.prepare("test")._values[:, -1, -1],
+        index=dataset.prepare("test").get_index(),
+        name="label",
+    )
+    rank_ic = (
+        pd.DataFrame({"pred": preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    finite_rank_ic = rank_ic[np.isfinite(rank_ic)]
+    assert not finite_rank_ic.empty
+
+
 def test_general_ptnn_builtin_transformer_arch_params_route_into_pt_model_kwargs():
     # Regression for BUG-592: a built-in qlib Transformer seed carries arch params
     # d_model/nhead that GeneralPTNN.__init__ does NOT accept. They must be routed
