@@ -37,6 +37,8 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
 _GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
+_CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+_CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -59,6 +61,11 @@ def _bool_param(value: Any) -> bool:
         if normalized in {"0", "false", "no", "off"}:
             return False
     return bool(value)
+
+
+def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
+    normalized = str(node_id or "").strip().lower()
+    return normalized not in _CPU_ONLY_QE_NODE_IDS
 
 
 def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
@@ -4820,6 +4827,8 @@ class ConfigComposer:
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
+        if _is_gpu_qe_node(node_id):
+            core_parts.append(_CUDA_EXPANDABLE_SEGMENTS_ENV)
         if train_only:
             core_parts.append("export TRAIN_ONLY=1")
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])

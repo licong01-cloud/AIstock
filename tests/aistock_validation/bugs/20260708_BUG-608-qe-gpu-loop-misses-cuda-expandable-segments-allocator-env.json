@@ -1,6 +1,8 @@
 {
   "actual": "EfficientGATs full-pool model memory is stable, but real QE GPU loops with variable daily GATs batches trigger PyTorch CUDA caching allocator fragmentation: allocated stays low while reserved grows to VRAM plus WDDM shared memory and OOMs. Inject PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True into QE GPU loop runtime commands so variable-size GPU NN loops use expandable segments. CPU loops must remain unaffected or the configured scope must be explicit. Add command-generation tests for GPU injection and CPU non-injection.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/unified_engine/test_multi_alpha_command_generation.py",
     "tests/aistock_validation/bugs/20260708_BUG-608-qe-gpu-loop-misses-cuda-expandable-segments-allocator-env.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
