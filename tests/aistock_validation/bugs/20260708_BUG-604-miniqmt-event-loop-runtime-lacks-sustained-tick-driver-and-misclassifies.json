@@ -33,8 +33,8 @@
   "expected": "Intraday A(event_loop) run for a 25-leg multi-alpha binding keeps SNIPER algorithms alive and continuously tick-driven. Child orders trigger incrementally as realtime ticks arrive; submitted_intents approaches 25 or each non-triggered algorithm has a loud explicit reason at close. /qmt/orders and qmt_strategy.execution_child_order show multiple child orders; broker_called=true. Scheduler does not freeze, last_run continues advancing, Postgres incremental writes continue, and pending algorithms are not classified FAILED_RETRYABLE. Local targeted tests plus nox l0 and validation_module_registry_l0 are green or broad validation is delegated per workflow.",
   "first_seen_at": "2026-07-08T01:47:22.332317Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a1d7b47563d14f82b14f88837d6f58bccff7d436",
+  "fixed_at": "2026-07-08T02:29:31.287592Z",
   "github_issue_number": 1908,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1908",
   "last_seen_at": "2026-07-08T01:47:22.332317Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1909",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "b8769440a6c1f0f213457b75",
     "source_event_id": "FE-20260708-b8769440a6c1"
   },
+  "validation_evidence": [
+    "Tier2 raw diff PASS + CI 17/17 + pytest event_loop 3 passed + nox l0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
