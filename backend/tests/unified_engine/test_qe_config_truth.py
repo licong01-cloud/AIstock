@@ -11,6 +11,7 @@ from pathlib import Path
 import yaml
 
 import pytest
+import numpy as np
 import pandas as pd
 from fastapi import HTTPException
 from unittest.mock import AsyncMock
@@ -1508,6 +1509,77 @@ def _gats_model_info():
     }
 
 
+def _efficient_gats_model_info():
+    model_info = _gats_model_info()
+    model_info["model_id"] = "__seed_EfficientGATs_default_v1__"
+    model_info["model_name"] = "EfficientGATs"
+    model_info["model_config"] = {
+        "class": "EfficientGATs",
+        "module_path": "aistock_models.efficient_gats",
+        "dataset_type": "TSDatasetH",
+    }
+    return model_info
+
+
+class _MiniGatsSegment:
+    def __init__(self, index, values):
+        self._index = index
+        self._values = values
+        self.empty = len(index) == 0
+
+    def get_index(self):
+        return self._index
+
+    def config(self, **_kwargs):
+        return None
+
+    def __len__(self):
+        return len(self._index)
+
+    def __getitem__(self, index):
+        import torch
+
+        if isinstance(index, (list, tuple)) and len(index) == 1:
+            index = index[0]
+        if hasattr(index, "detach"):
+            index = index.detach().cpu().numpy()
+        return torch.as_tensor(self._values[index], dtype=torch.float32)
+
+
+class _MiniGatsDataset:
+    def __init__(self, d_feat=2, step_len=3, stocks=6):
+        self.d_feat = d_feat
+        self.step_len = step_len
+        self.stocks = stocks
+        self._segments = {
+            "train": self._make_segment("2021-01-04", 4),
+            "valid": self._make_segment("2021-01-08", 3),
+            "test": self._make_segment("2021-01-13", 3),
+        }
+
+    def _make_segment(self, start, days):
+        dates = pd.bdate_range(start, periods=days)
+        rows = []
+        values = []
+        for day_idx, date in enumerate(dates):
+            for stock_idx in range(self.stocks):
+                instrument = f"STK{stock_idx:03d}"
+                stock_signal = (stock_idx - (self.stocks - 1) / 2.0) / self.stocks
+                day_signal = day_idx / max(days - 1, 1)
+                seq = np.zeros((self.step_len, self.d_feat + 1), dtype="float32")
+                for step_idx in range(self.step_len):
+                    seq[step_idx, 0] = stock_signal + 0.05 * step_idx + 0.1 * day_signal
+                    seq[step_idx, 1] = np.sin(stock_idx + day_idx + step_idx)
+                    seq[step_idx, -1] = 0.7 * stock_signal + 0.2 * day_signal
+                rows.append((date, instrument))
+                values.append(seq)
+        index = pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"])
+        return _MiniGatsSegment(index, np.stack(values))
+
+    def prepare(self, segment, **_kwargs):
+        return self._segments[segment]
+
+
 def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
     yaml_text = _base_yaml(model_info=_gats_model_info())
 
@@ -1520,6 +1592,18 @@ def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
     assert "d_feat: {{ num_features }}" in yaml_text
     assert "dropout: 0.1" in yaml_text
     assert "base_model: GRU" in yaml_text
+
+
+def test_efficient_gats_seed_respects_model_config_module_path():
+    yaml_text = _base_yaml(model_info=_efficient_gats_model_info())
+
+    assert "class: EfficientGATs" in yaml_text
+    assert "module_path: aistock_models.efficient_gats" in yaml_text
+    assert "class: GeneralPTNN" not in yaml_text
+    assert "pt_model_kwargs" not in yaml_text
+    assert "class: TSDatasetH" in yaml_text
+    assert "step_len: 20" in yaml_text
+    assert "d_feat: {{ num_features }}" in yaml_text
 
 
 def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwargs():
@@ -1572,63 +1656,7 @@ def test_gats_v25_minute_execution_config_remains_daily_signal_nested_executor()
 
 def test_qlib_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):
     gats_module = pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
-    np = pytest.importorskip("numpy")
-    torch = pytest.importorskip("torch")
-
-    class _MiniGatsSegment:
-        def __init__(self, index, values):
-            self._index = index
-            self._values = values
-            self.empty = len(index) == 0
-
-        def get_index(self):
-            return self._index
-
-        def config(self, **_kwargs):
-            return None
-
-        def __len__(self):
-            return len(self._index)
-
-        def __getitem__(self, index):
-            if isinstance(index, (list, tuple)) and len(index) == 1:
-                index = index[0]
-            if hasattr(index, "detach"):
-                index = index.detach().cpu().numpy()
-            return torch.as_tensor(self._values[index], dtype=torch.float32)
-
-    class _MiniGatsDataset:
-        def __init__(self, d_feat=2, step_len=3, stocks=6):
-            self.d_feat = d_feat
-            self.step_len = step_len
-            self.stocks = stocks
-            self._segments = {
-                "train": self._make_segment("2021-01-04", 4),
-                "valid": self._make_segment("2021-01-08", 3),
-                "test": self._make_segment("2021-01-13", 3),
-            }
-
-        def _make_segment(self, start, days):
-            dates = pd.bdate_range(start, periods=days)
-            rows = []
-            values = []
-            for day_idx, date in enumerate(dates):
-                for stock_idx in range(self.stocks):
-                    instrument = f"STK{stock_idx:03d}"
-                    stock_signal = (stock_idx - (self.stocks - 1) / 2.0) / self.stocks
-                    day_signal = day_idx / max(days - 1, 1)
-                    seq = np.zeros((self.step_len, self.d_feat + 1), dtype="float32")
-                    for step_idx in range(self.step_len):
-                        seq[step_idx, 0] = stock_signal + 0.05 * step_idx + 0.1 * day_signal
-                        seq[step_idx, 1] = np.sin(stock_idx + day_idx + step_idx)
-                        seq[step_idx, -1] = 0.7 * stock_signal + 0.2 * day_signal
-                    rows.append((date, instrument))
-                    values.append(seq)
-            index = pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"])
-            return _MiniGatsSegment(index, np.stack(values))
-
-        def prepare(self, segment, **_kwargs):
-            return self._segments[segment]
+    pytest.importorskip("torch")
 
     dataset = _MiniGatsDataset()
     sampler = gats_module.DailyBatchSampler(dataset.prepare("train"))
@@ -1674,6 +1702,161 @@ def test_qlib_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):
     )
     finite_rank_ic = rank_ic[np.isfinite(rank_ic)]
     assert not finite_rank_ic.empty
+
+
+def _import_efficient_gats_module():
+    models_root = PROJECT_ROOT / "aistock_models"
+    if str(models_root) not in sys.path:
+        sys.path.insert(0, str(models_root))
+    import aistock_models.efficient_gats as efficient_gats
+
+    return efficient_gats
+
+
+def test_efficient_gats_attention_is_numerically_identical_to_naive():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    for seed, sample_num, hidden_size in ((1, 3, 4), (7, 8, 16), (13, 17, 32)):
+        torch.manual_seed(seed)
+        hidden = torch.randn(sample_num, hidden_size, dtype=torch.float32)
+        attention_vector = torch.randn(hidden_size * 2, 1, dtype=torch.float32)
+
+        # Match qlib 0.9.7 GATModel.cal_attention exactly:
+        # e_x = x.expand(N, N, H); e_y = transpose(e_x, 0, 1);
+        # cat((e_x, e_y), dim=2).view(-1, 2H).
+        e_x = hidden.expand(sample_num, sample_num, hidden_size)
+        e_y = torch.transpose(e_x, 0, 1)
+        naive_input = torch.cat((e_x, e_y), dim=2).view(-1, hidden_size * 2)
+        naive_raw = attention_vector.t().mm(naive_input.t()).view(sample_num, sample_num)
+
+        efficient_raw = efficient_gats.additive_gats_attention_logits(
+            hidden,
+            hidden,
+            attention_vector,
+        )
+        assert torch.allclose(naive_raw, efficient_raw, atol=1e-5)
+
+        naive_leaky = torch.nn.functional.leaky_relu(naive_raw)
+        efficient_leaky = torch.nn.functional.leaky_relu(efficient_raw)
+        assert torch.allclose(naive_leaky, efficient_leaky, atol=1e-5)
+
+        naive_softmax = torch.softmax(naive_leaky, dim=1)
+        efficient_softmax = torch.softmax(efficient_leaky, dim=1)
+        assert torch.allclose(naive_softmax, efficient_softmax, atol=1e-5)
+
+        naive_model = efficient_gats.QlibGATModel(
+            d_feat=2,
+            hidden_size=hidden_size,
+            num_layers=1,
+            dropout=0.0,
+        )
+        efficient_model = efficient_gats.EfficientGATModel(
+            d_feat=2,
+            hidden_size=hidden_size,
+            num_layers=1,
+            dropout=0.0,
+        )
+        efficient_model.load_state_dict(naive_model.state_dict())
+        assert torch.allclose(
+            naive_model.cal_attention(hidden, hidden),
+            efficient_model.cal_attention(hidden, hidden),
+            atol=1e-5,
+        )
+
+
+def test_efficient_gats_full_pool_attention_smoke_no_n2_hidden_materialization(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    sample_num = 5000
+    hidden_size = 64
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats(device)
+        model = efficient_gats.EfficientGATModel(
+            d_feat=4,
+            hidden_size=hidden_size,
+            num_layers=1,
+            dropout=0.0,
+        ).to(device)
+        batch = torch.randn(sample_num, 2, 4, device=device)
+        pred = model(batch)
+        loss = pred.float().pow(2).mean()
+        loss.backward()
+        peak_bytes = torch.cuda.max_memory_allocated(device)
+        assert peak_bytes < 8 * 1024**3
+    else:
+        model = efficient_gats.EfficientGATModel(
+            d_feat=4,
+            hidden_size=hidden_size,
+            num_layers=1,
+            dropout=0.0,
+        )
+        hidden = torch.randn(sample_num, hidden_size, requires_grad=True)
+        original_cat = torch.cat
+
+        def _reject_n2_hidden_cat(tensors, *args, **kwargs):
+            result = original_cat(tensors, *args, **kwargs)
+            assert result.shape != (sample_num, sample_num, hidden_size * 2)
+            return result
+
+        with monkeypatch.context() as mp:
+            mp.setattr(torch, "cat", _reject_n2_hidden_cat)
+            att = model.cal_attention(hidden, hidden)
+            assert att.shape == (sample_num, sample_num)
+            loss = att[:16, :16].sum()
+            loss.backward()
+        assert hidden.grad is not None
+        assert torch.isfinite(hidden.grad).any()
+
+
+def test_efficient_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+    )
+    evals_result = {}
+    model.fit(dataset, evals_result=evals_result, save_path=str(tmp_path / "efficient_gats.pt"))
+    preds = model.predict(dataset)
+
+    assert not preds.empty
+    assert preds.index.equals(dataset.prepare("test").get_index())
+    assert preds.notna().any()
+    assert np.isfinite(preds.to_numpy()).any()
+    assert not np.allclose(preds.to_numpy(), preds.iloc[0])
+    assert evals_result["train"] and evals_result["valid"]
+
+    labels = pd.Series(
+        dataset.prepare("test")._values[:, -1, -1],
+        index=dataset.prepare("test").get_index(),
+        name="label",
+    )
+    rank_ic = (
+        pd.DataFrame({"pred": preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    assert not rank_ic[np.isfinite(rank_ic)].empty
 
 
 def test_general_ptnn_builtin_transformer_arch_params_route_into_pt_model_kwargs():
@@ -1850,6 +2033,48 @@ def test_general_ptnn_ltr_in_memory_payload_includes_adapter_files(monkeypatch):
     assert "aistock_models/__init__.py" in files
     assert "aistock_models/general_ptnn_ltr.py" in files
     assert "class AIStockGeneralPTNNLTR" in files["aistock_models/general_ptnn_ltr.py"]
+    assert "export PYTHONPATH=" in result["wsl_command"]
+
+
+def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
+    composer = ConfigComposer()
+    monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        composer,
+        "_get_model_info",
+        lambda *_args, **_kwargs: _efficient_gats_model_info(),
+    )
+    monkeypatch.setattr(composer, "_get_strategy_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        composer,
+        "_prepare_risk_policy_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(
+        composer,
+        "_prepare_suspend_filter_runtime",
+        lambda **_kwargs: (_kwargs["custom_params"], None),
+    )
+    monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
+
+    result = composer.compose_experiment_in_memory(
+        factor_names=["Alpha001"],
+        model_id="__seed_EfficientGATs_default_v1__",
+        strategy_id="score_weighted_topk_v2",
+        data_split=DATA_SPLIT,
+        custom_params={},
+        skip_db_save=True,
+        execution_algo="CLOSE_PRICE",
+        execution_algo_params={},
+    )
+
+    files = result["experiment_files"]
+    conf_yaml = files["conf.yaml"]
+    assert "class: EfficientGATs" in conf_yaml
+    assert "module_path: aistock_models.efficient_gats" in conf_yaml
+    assert "aistock_models/__init__.py" in files
+    assert "aistock_models/efficient_gats.py" in files
+    assert "class EfficientGATModel" in files["aistock_models/efficient_gats.py"]
     assert "export PYTHONPATH=" in result["wsl_command"]
 
 

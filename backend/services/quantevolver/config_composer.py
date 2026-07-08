@@ -36,7 +36,7 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
-_GATS_MODEL_CLASSES = {"GATs"}
+_GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -185,6 +185,14 @@ def _conf_uses_general_ptnn_ltr_adapter(conf_yaml: str) -> bool:
     return "module_path: aistock_models.general_ptnn_ltr" in conf_yaml
 
 
+def _conf_uses_efficient_gats_adapter(conf_yaml: str) -> bool:
+    return "module_path: aistock_models.efficient_gats" in conf_yaml
+
+
+def _conf_uses_workspace_aistock_model(conf_yaml: str) -> bool:
+    return _conf_uses_general_ptnn_ltr_adapter(conf_yaml) or _conf_uses_efficient_gats_adapter(conf_yaml)
+
+
 def _general_ptnn_ltr_adapter_sources() -> dict[str, Path]:
     package_dir = AISTOCK_PROJECT_ROOT / "aistock_models" / "aistock_models"
     sources = {
@@ -195,6 +203,27 @@ def _general_ptnn_ltr_adapter_sources() -> dict[str, Path]:
     if missing:
         raise RuntimeError(
             "reason_code=general_ptnn_ltr_adapter_missing: "
+            f"required adapter source files are missing: {missing}"
+        )
+    return sources
+
+
+def _workspace_aistock_model_sources(conf_yaml: str) -> dict[str, Path]:
+    package_dir = AISTOCK_PROJECT_ROOT / "aistock_models" / "aistock_models"
+    sources: dict[str, Path] = {}
+    if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
+        sources.update(_general_ptnn_ltr_adapter_sources())
+    if _conf_uses_efficient_gats_adapter(conf_yaml):
+        sources.update(
+            {
+                "aistock_models/__init__.py": package_dir / "__init__.py",
+                "aistock_models/efficient_gats.py": package_dir / "efficient_gats.py",
+            }
+        )
+    missing = [str(path) for path in sources.values() if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "reason_code=aistock_model_adapter_missing: "
             f"required adapter source files are missing: {missing}"
         )
     return sources
@@ -1603,8 +1632,8 @@ class ConfigComposer:
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
-        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
-            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
                 target = exp_dir / rel_path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 import shutil
@@ -1620,7 +1649,7 @@ class ConfigComposer:
         # 生成WSL命令（直接使用 qe_workspace WSL路径）
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         prediction_store_base_url = self._prediction_store_base_url()
-        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=needs_workspace_pythonpath,
@@ -1938,8 +1967,8 @@ class ConfigComposer:
         # 5) model.py（自定义模型）
         if model_info and model_info.get("code_text"):
             experiment_files["model.py"] = self._build_model_py_content(model_info)
-        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
-            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
                 experiment_files[rel_path] = source_path.read_text(encoding="utf-8")
 
         # 6) custom_strategy.py（自定义策略）
@@ -1957,7 +1986,7 @@ class ConfigComposer:
         _, auto_core_parts = self._build_auto_wsl_command_parts(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml),
+            use_custom_model=bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             train_only=train_only,
@@ -1969,7 +1998,7 @@ class ConfigComposer:
             task_id=task_id,
             loop_index=loop_index,
         )
-        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path,
             has_custom_factors=has_custom_factors,
@@ -2629,8 +2658,8 @@ class ConfigComposer:
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
-        if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
-            for rel_path, source_path in _general_ptnn_ltr_adapter_sources().items():
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
                 target = exp_dir / rel_path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target)
@@ -2645,7 +2674,7 @@ class ConfigComposer:
         # 生成WSL命令
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
         prediction_store_base_url = self._prediction_store_base_url()
-        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_general_ptnn_ltr_adapter(conf_yaml)
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
             use_custom_model=needs_workspace_pythonpath,
@@ -2871,8 +2900,16 @@ class ConfigComposer:
                 # Qlib GATs is a full Model implementation with its own fit/predict
                 # and DailyBatchSampler. Route all constructor params directly to
                 # GATs kwargs; do not wrap it with GeneralPTNN or pt_model_kwargs.
-                model_class = "GATs"
-                model_module = "qlib.contrib.model.pytorch_gats_ts"
+                model_config = model_info.get("model_config") or {}
+                if isinstance(model_config, str):
+                    model_config = json.loads(model_config)
+                model_class = str(model_config.get("class") or "GATs")
+                model_module = str(model_config.get("module_path") or "qlib.contrib.model.pytorch_gats_ts")
+                if model_class not in _GATS_MODEL_CLASSES:
+                    raise ValueError(
+                        "reason_code=gats_model_class_invalid: "
+                        f"model_config.class={model_class!r} is not a supported GATs class"
+                    )
                 model_dataset_cls = "TSDatasetH"
                 model_step_len = 20
                 model_kwargs = {
