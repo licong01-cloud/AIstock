@@ -2894,7 +2894,17 @@ class ConfigComposer:
                         training_hp["lr"] = float(training_hp["lr"])
                     if "weight_decay" in training_hp and isinstance(training_hp["weight_decay"], str):
                         training_hp["weight_decay"] = float(training_hp["weight_decay"])
-                    model_kwargs.update(training_hp)
+                    # Architecture params (d_feat/hidden_size/num_layers/dropout) belong in
+                    # pt_model_kwargs and are provided authoritatively via model_hyperparameters
+                    # below. Some seeds (e.g. __seed_GRU2_default_v1__, __seed_ALSTM_sector_v1__)
+                    # mistakenly stored dropout in model_training_hyperparameters; merging it into
+                    # GeneralPTNN top-level kwargs raised "GeneralPTNN.__init__() got an unexpected
+                    # keyword argument 'dropout'". Drop arch keys from this trainer-level merge so
+                    # they cannot leak to GeneralPTNN. Same class as BUG-592; refs BUG-606.
+                    _ptnn_arch_keys = {"d_feat", "hidden_size", "num_layers", "dropout"}
+                    model_kwargs.update(
+                        {k: v for k, v in training_hp.items() if k not in _ptnn_arch_keys}
+                    )
 
                 hp = model_info.get("model_hyperparameters")
                 if hp:
