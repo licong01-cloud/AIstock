@@ -3213,7 +3213,9 @@ class ConfigComposer:
             "d_feat", "hidden_size", "num_layers", "dropout", "n_epochs", "lr",
             "metric", "early_stop", "loss", "base_model", "model_path",
             "optimizer", "GPU", "n_jobs", "seed", "batch_size",
-            "weight_decay",
+            "weight_decay", "gpu_resident", "gpu_resident_shuffle_days",
+            "gpu_resident_vram_margin_bytes",
+            "gpu_resident_working_memory_multiplier",
         }
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",

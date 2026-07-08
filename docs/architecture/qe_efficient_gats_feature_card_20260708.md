@@ -85,3 +85,32 @@ R0 GATs PR #1919 让 QE 能直接运行 qlib 内置 `qlib.contrib.model.pytorch_
 - `production_frontend_dependency_gate`: noop; no frontend dependency changes.
 - `production_backend_dependency_gate`: noop; no backend dependency changes.
 - Runtime activation gate: code merge does not start QE runs or register production seeds.
+
+## GPU Resident Data Extension (2026-07-09)
+
+### Scope
+
+- Add opt-in `EfficientGATs(gpu_resident=True)` mode.
+- Keep qlib `fit(dataset, evals_result, save_path)` and `predict(dataset)` contracts.
+- Keep the existing streaming DataLoader path and the plain qlib `GATs` path unchanged.
+- Do not modify site-packages qlib.
+
+### Design Acceptance Index
+
+- F-009: GPU resident mode preloads train/valid/test feature+label tensors once, then forms daily batches by day index gather from the resident tensor.
+- F-010: For each trading day, resident daily batch feature+label values equal the original qlib `DailyBatchSampler` streaming batch element by element.
+- F-011: Resident `train_epoch` does not call `Tensor.to(device)` per daily batch; only the one-time preload path may move tensors.
+- F-012: Before activating resident mode, VRAM is estimated from resident data, model parameters, working attention memory and margin; insufficient VRAM loudly falls back to streaming with `reason_code`, requested bytes and available bytes.
+- F-013: Resident fit/predict remains non-degenerate: finite predictions, non-constant predictions and computable RankIC.
+- F-014: Composer can pass `gpu_resident` and resident safety knobs as GATs model kwargs, not strategy kwargs.
+
+### Design Acceptance Matrix
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-009 | `aistock_models/aistock_models/efficient_gats.py` `_preload_segment_to_cpu`, `_move_segment_to_gpu`, `_iter_resident_batches` | `test_efficient_gats_gpu_resident_daily_batch_data_equivalent_to_streaming` | verified | - |
+| F-010 | same resident batch helpers | `test_efficient_gats_gpu_resident_daily_batch_data_equivalent_to_streaming` uses `torch.allclose` against qlib DataLoader daily batches | verified | - |
+| F-011 | `EfficientGATs.train_epoch` resident branch | `test_efficient_gats_gpu_resident_train_epoch_has_no_per_batch_to` monkeypatches `Tensor.to` | verified | - |
+| F-012 | `_resident_estimate`, `_can_activate_gpu_resident`, `_loud_gpu_resident_fallback` | `test_efficient_gats_gpu_resident_vram_fallback_is_loud` | verified | - |
+| F-013 | resident `fit` and `predict` branches | `test_efficient_gats_gpu_resident_fit_predict_non_degenerate_rank_ic` | verified | - |
+| F-014 | `backend/services/quantevolver/config_composer.py` `_GATS_HP_KEYS` | `test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwargs` | verified | - |
