@@ -25,9 +25,11 @@
 import argparse
 import os
 import random
+import re
 import shutil
 import stat
 import sys
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +87,126 @@ PRED_BACKTEST_PICKLE_MAX_BYTES_ENV = "QE_PRED_BACKTEST_PICKLE_MAX_BYTES"
 PARAMS_PICKLE_MAX_BYTES_ENV = "QE_BACKTEST_PARAMS_PICKLE_MAX_BYTES"
 DEFAULT_PRED_BACKTEST_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_PARAMS_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS"
+MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC"
+DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS = 3
+DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC = 0.1
+_MLFLOW_EMPTY_METRIC_RE = re.compile(r"Metric '([^']+)' is malformed\. No data found\.")
+
+
+class QEMlflowMetricReadRaceError(RuntimeError):
+    """Raised after exhausting the specific MLflow empty metric read retry."""
+
+
+def _env_int(name: str, default_value: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return default_value
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw_value!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _env_float(name: str, default_value: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return default_value
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a float, got {raw_value!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _empty_mlflow_metric_name(exc: ValueError) -> str | None:
+    match = _MLFLOW_EMPTY_METRIC_RE.search(str(exc))
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _mlflow_metric_file_hint(recorder, metric_name: str) -> str:
+    if recorder is None:
+        return "<unknown-recorder>/metrics/" + metric_name
+    try:
+        local_dir = recorder.get_local_dir()
+    except (AttributeError, RuntimeError, ValueError, OSError):
+        local_dir = None
+    if local_dir:
+        return str(Path(local_dir) / "metrics" / metric_name)
+
+    info = getattr(recorder, "info", {}) or {}
+    exp_id = str(info.get("experiment_id") or getattr(recorder, "experiment_id", "") or "")
+    run_id = str(info.get("id") or info.get("recorder_id") or getattr(recorder, "id", "") or "")
+    tracking_uri = str(os.environ.get("MLFLOW_TRACKING_URI") or getattr(recorder, "uri", "") or "")
+    tracking_uri = tracking_uri.removeprefix("file:")
+    if tracking_uri and exp_id and run_id:
+        return str(Path(tracking_uri) / exp_id / run_id / "metrics" / metric_name)
+    if exp_id or run_id:
+        return f"<unknown-mlruns>/{exp_id}/{run_id}/metrics/{metric_name}"
+    return "<unknown-recorder>/metrics/" + metric_name
+
+
+def _retry_empty_mlflow_metric_read(operation, *, recorder=None, context: str):
+    attempts = _env_int(
+        MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV,
+        DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS,
+    )
+    sleep_seconds = _env_float(
+        MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV,
+        DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC,
+    )
+    for attempt in range(attempts + 1):
+        try:
+            return operation()
+        except ValueError as exc:
+            metric_name = _empty_mlflow_metric_name(exc)
+            if metric_name is None:
+                raise
+            metric_path = _mlflow_metric_file_hint(recorder, metric_name)
+            if attempt >= attempts:
+                raise QEMlflowMetricReadRaceError(
+                    f"{context} failed after {attempts} retries because MLflow metric "
+                    f"{metric_name!r} stayed empty/malformed; metric_path={metric_path}; original_error={exc}"
+                ) from exc
+            print(
+                f"[WARN] {context}: transient MLflow empty metric read for metric={metric_name!r} "
+                f"metric_path={metric_path}; retry {attempt + 1}/{attempts} after {sleep_seconds:.3f}s"
+            )
+            if sleep_seconds:
+                time.sleep(sleep_seconds)
+
+
+def _install_mlflow_metric_read_retry() -> bool:
+    from qlib.workflow import record_temp
+
+    record_temp_cls = getattr(record_temp, "RecordTemp", None)
+    if record_temp_cls is None:
+        raise RuntimeError("qlib.workflow.record_temp.RecordTemp is unavailable; cannot install QE metric retry")
+    if getattr(record_temp_cls.check, "_qe_mlflow_metric_retry", False):
+        return False
+
+    original_check = record_temp_cls.check
+
+    def _check_with_mlflow_metric_retry(self, *args, **kwargs):
+        recorder = getattr(self, "recorder", None)
+        return _retry_empty_mlflow_metric_read(
+            lambda: original_check(self, *args, **kwargs),
+            recorder=recorder,
+            context=f"{type(self).__name__}.check",
+        )
+
+    _check_with_mlflow_metric_retry._qe_mlflow_metric_retry = True
+    _check_with_mlflow_metric_retry._qe_original_check = original_check
+    record_temp_cls.check = _check_with_mlflow_metric_retry
+    print("[INFO] Installed QE MLflow empty metric read retry for Qlib record checks")
+    return True
 
 
 def _pickle_max_bytes(env_name: str, default_bytes: int) -> int:
@@ -1311,6 +1433,7 @@ def main():
     if args.backtest_only:
         _validate_backtest_recorder_isolation_manifest(isolation_manifest)
     qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
+    _install_mlflow_metric_read_retry()
 
     # 注入 benchmark Series（在 qlib init 之后，fallback 需要 D.features）
     benchmark_series = load_benchmark_series(config)
