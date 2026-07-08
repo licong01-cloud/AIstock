@@ -36,6 +36,7 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
+_GATS_MODEL_CLASSES = {"GATs"}
 _GENERAL_PTNN_LTR_HP_KEYS = {
     "ltr_loss_mode",
     "topk_train_k",
@@ -2866,6 +2867,45 @@ class ConfigComposer:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
+            elif "GATS" in model_type:
+                # Qlib GATs is a full Model implementation with its own fit/predict
+                # and DailyBatchSampler. Route all constructor params directly to
+                # GATs kwargs; do not wrap it with GeneralPTNN or pt_model_kwargs.
+                model_class = "GATs"
+                model_module = "qlib.contrib.model.pytorch_gats_ts"
+                model_dataset_cls = "TSDatasetH"
+                model_step_len = 20
+                model_kwargs = {
+                    "d_feat": 20,
+                    "hidden_size": 64,
+                    "num_layers": 2,
+                    "dropout": 0.0,
+                    "n_epochs": 200,
+                    "lr": 1e-3,
+                    "metric": "loss",
+                    "early_stop": 20,
+                    "loss": "mse",
+                    "base_model": "GRU",
+                    "optimizer": "adam",
+                    "GPU": 0,
+                    "n_jobs": 2,
+                }
+                training_hp = model_info.get("model_training_hyperparameters")
+                if training_hp:
+                    if isinstance(training_hp, str):
+                        training_hp = json.loads(training_hp)
+                    for key in ("lr", "weight_decay"):
+                        if key in training_hp and isinstance(training_hp[key], str):
+                            training_hp[key] = float(training_hp[key])
+                    model_kwargs.update(training_hp)
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    for key in ("lr", "weight_decay"):
+                        if key in hp and isinstance(hp[key], str):
+                            hp[key] = float(hp[key])
+                    model_kwargs.update(hp)
             elif "PTNN" in model_type or "NN" in model_type:
                 # 无源代码的 GeneralPTNN：必须在 model_hyperparameters 中提供 pt_model_uri
                 model_class = "GeneralPTNN"
@@ -3098,6 +3138,12 @@ class ConfigComposer:
         _LINEAR_HP_KEYS = {
             "estimator", "alpha",
         }
+        _GATS_HP_KEYS = {
+            "d_feat", "hidden_size", "num_layers", "dropout", "n_epochs", "lr",
+            "metric", "early_stop", "loss", "base_model", "model_path",
+            "optimizer", "GPU", "n_jobs", "seed", "batch_size",
+            "weight_decay",
+        }
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
@@ -3140,7 +3186,7 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
@@ -3157,6 +3203,8 @@ class ConfigComposer:
                 hp_keys = _TABPFN_HP_KEYS
             elif model_class in ("LinearModel",):
                 hp_keys = _LINEAR_HP_KEYS
+            elif model_class in _GATS_MODEL_CLASSES:
+                hp_keys = _GATS_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
             if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
                 hp_keys = hp_keys | _PTNN_HP_KEYS
@@ -3166,7 +3214,7 @@ class ConfigComposer:
                 if key in custom_params:
                     val = custom_params[key]
                     # 确保 GeneralPTNN 的 lr 和 weight_decay 是数值类型
-                    if model_class in _GENERAL_PTNN_MODEL_CLASSES and key in ("lr", "weight_decay") and isinstance(val, str):
+                    if model_class in (_GENERAL_PTNN_MODEL_CLASSES | _GATS_MODEL_CLASSES) and key in ("lr", "weight_decay") and isinstance(val, str):
                         val = float(val)
                     model_hp_overrides[key] = val
             if model_hp_overrides:
@@ -3657,7 +3705,9 @@ class ConfigComposer:
                 if k == "pt_model_kwargs":
                     continue
                 # pt_model_kwargs 使用Jinja2模板变量，与RDAgent一致
-                if k == "pt_model_uri":
+                if model_class in _GATS_MODEL_CLASSES and model_dataset_cls == "TSDatasetH" and k == "d_feat":
+                    lines.append(f"            {k}: {{{{ num_features }}}}")
+                elif k == "pt_model_uri":
                     lines.append(f"            {k}: {v}")
                 else:
                     lines.append(f"            {k}: {v}")
@@ -3683,7 +3733,7 @@ class ConfigComposer:
                     lines.append('            }')
 
         # 数据集配置
-        if model_class in _GENERAL_PTNN_MODEL_CLASSES:
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES:
             lines.append("    dataset:")
             lines.append(f'        class: {model_dataset_cls}')
             lines.append("        module_path: qlib.data.dataset")
@@ -3705,7 +3755,7 @@ class ConfigComposer:
         lines.append(f"                train: [{data_split['train_start']}, {data_split['train_end']}]")
         lines.append(f"                valid: [{data_split['valid_start']}, {data_split['valid_end']}]")
         lines.append(f"                test: [{data_split['test_start']}, {data_split['test_end']}]")
-        if model_class in _GENERAL_PTNN_MODEL_CLASSES and model_step_len:
+        if (model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES) and model_step_len:
             lines.append(f"            step_len: {model_step_len}")
 
         # record
