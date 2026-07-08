@@ -38,6 +38,7 @@ from backend.services.quantevolver.qe_evolution_service import (
     QE_LOOP_RETRY_MODE_AUTO,
     QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    QE_LOOP_RETRY_MODE_RESULTS_ONLY,
     normalize_qe_loop_retry_mode,
 )
 from backend.services.quantevolver.experiment_config_builders import (
@@ -995,6 +996,8 @@ def test_qe_loop_retry_mode_normalization():
     assert normalize_qe_loop_retry_mode("backtest") == QE_LOOP_RETRY_MODE_BACKTEST_ONLY
     assert normalize_qe_loop_retry_mode("full-train") == QE_LOOP_RETRY_MODE_FULL_TRAIN
     assert normalize_qe_loop_retry_mode("train") == QE_LOOP_RETRY_MODE_FULL_TRAIN
+    assert normalize_qe_loop_retry_mode("results-only") == QE_LOOP_RETRY_MODE_RESULTS_ONLY
+    assert normalize_qe_loop_retry_mode("register-only") == QE_LOOP_RETRY_MODE_RESULTS_ONLY
 
     with pytest.raises(ValueError, match="Invalid retry mode"):
         normalize_qe_loop_retry_mode("invalid")

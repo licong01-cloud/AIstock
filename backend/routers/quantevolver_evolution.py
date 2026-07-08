@@ -21,6 +21,7 @@ from ..services.quantevolver.qe_evolution_service import (
     QE_LOOP_RETRY_MODE_AUTO,
     QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    QE_LOOP_RETRY_MODE_RESULTS_ONLY,
     normalize_qe_loop_retry_mode,
 )
 from ..services.quantevolver.factor_value_loader import FactorValueLoader
@@ -803,7 +804,8 @@ class EvolutionLoopRetryRequest(BaseModel):
             "Retry mode: "
             f"{QE_LOOP_RETRY_MODE_AUTO} / "
             f"{QE_LOOP_RETRY_MODE_BACKTEST_ONLY} / "
-            f"{QE_LOOP_RETRY_MODE_FULL_TRAIN}"
+            f"{QE_LOOP_RETRY_MODE_FULL_TRAIN} / "
+            f"{QE_LOOP_RETRY_MODE_RESULTS_ONLY}"
         ),
     )
 

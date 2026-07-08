@@ -5,7 +5,7 @@ import asyncio
 import uuid
 import threading
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import aiofiles
@@ -26,6 +26,11 @@ from .node_execution import (
     preflight_qe_node,
     resolve_custom_loop_nodes,
     resolve_default_qe_node_id,
+)
+from .results_only_retry import (
+    ResultsOnlyRegistrationError,
+    collect_results_only_artifacts,
+    upload_results_only_prediction_store,
 )
 from ..strategy_package.workspace_policy import (
     remove_aistock_artifact_tree,
@@ -71,16 +76,23 @@ QE_LOG_TAIL_DEFAULT_LINES = 500
 QE_LOOP_RETRY_MODE_AUTO = "auto"
 QE_LOOP_RETRY_MODE_BACKTEST_ONLY = "backtest_only"
 QE_LOOP_RETRY_MODE_FULL_TRAIN = "full_train"
+QE_LOOP_RETRY_MODE_RESULTS_ONLY = "results_only"
 QE_LOOP_RETRY_MODES = {
     QE_LOOP_RETRY_MODE_AUTO,
     QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    QE_LOOP_RETRY_MODE_RESULTS_ONLY,
 }
 _QE_LOOP_RETRY_MODE_ALIASES = {
     "backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     "only_backtest": QE_LOOP_RETRY_MODE_BACKTEST_ONLY,
     "train": QE_LOOP_RETRY_MODE_FULL_TRAIN,
     "full": QE_LOOP_RETRY_MODE_FULL_TRAIN,
+    "results": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+    "result_only": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+    "register_only": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+    "registration_only": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+    "upload_only": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
 }
 
 CUSTOM_EVO_STARTED_LOOP_STATUSES = {
@@ -3278,6 +3290,249 @@ class AutoEvolutionScheduler:
         )
         return result
 
+    async def _retry_loop_results_only(
+        self,
+        *,
+        task_id: str,
+        loop_index: int,
+        task: Dict[str, Any],
+        client: Any,
+        effective_node_id: str,
+        config: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Recover a post-compute loop by re-registering existing artifacts only."""
+
+        evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
+        loop_id = f"Loop{loop_index}"
+        try:
+            artifacts = await collect_results_only_artifacts(
+                client=client,
+                task_id=task_id,
+                loop_id=loop_id,
+                node_id=effective_node_id,
+            )
+            manifest = upload_results_only_prediction_store(
+                artifacts=artifacts,
+                task_id=task_id,
+                loop_id=loop_id,
+                loop_index=loop_index,
+                node_id=effective_node_id,
+            )
+            experiment_id = self._register_results_only_loop(
+                task_id=task_id,
+                loop_index=loop_index,
+                evolution_loop_db_id=evolution_loop_db_id,
+                loop_id=loop_id,
+                task=task,
+                config=config,
+                metrics=artifacts.metrics,
+                artifacts_summary={
+                    "prediction": artifacts.prediction.stats(),
+                    "portfolio_report": artifacts.report_stats,
+                    "metrics_source": artifacts.metrics_source,
+                    "artifact_prefix": artifacts.artifact_prefix,
+                    "prediction_store_run_key": manifest.get("run_key"),
+                },
+            )
+            self._archive_completed_loop_best_effort(task_id, evolution_loop_db_id, loop_index)
+            self._record_research_backtest_best_effort(
+                task_id,
+                evolution_loop_db_id,
+                loop_index,
+                experiment_id=experiment_id,
+            )
+            final_task_status = None
+            if task.get("task_type") in ("custom_evo", "strategy_evo"):
+                final_task_status = self.recompute_custom_evo_task_status(task_id)
+            else:
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE qe_evolution_tasks SET current_loop = GREATEST(COALESCE(current_loop, 0), %s), updated_at = NOW() WHERE task_id = %s",
+                            (loop_index, task_id),
+                        )
+                    conn.commit()
+            logger.info(
+                "QE results_only retry registered existing artifacts: task=%s loop=%s node=%s experiment=%s metrics_source=%s",
+                task_id,
+                loop_id,
+                effective_node_id,
+                experiment_id,
+                artifacts.metrics_source,
+            )
+            return {
+                "loop_id": evolution_loop_db_id,
+                "mode": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+                "experiment_id": experiment_id,
+                "metrics_source": artifacts.metrics_source,
+                "prediction_store_run_key": manifest.get("run_key"),
+                "task_status": final_task_status,
+            }
+        except Exception as exc:
+            self._record_results_only_retry_failure(
+                evolution_loop_db_id=evolution_loop_db_id,
+                error=exc,
+            )
+            logger.error(
+                "QE results_only retry failed loudly: task=%s loop=%s node=%s error=%s",
+                task_id,
+                loop_id,
+                effective_node_id,
+                exc,
+                exc_info=True,
+            )
+            if task.get("task_type") == "custom_evo":
+                self.recompute_custom_evo_task_status(task_id)
+            raise
+
+    def _register_results_only_loop(
+        self,
+        *,
+        task_id: str,
+        loop_index: int,
+        evolution_loop_db_id: str,
+        loop_id: str,
+        task: Dict[str, Any],
+        config: Dict[str, Any],
+        metrics: Dict[str, Any],
+        artifacts_summary: Dict[str, Any],
+    ) -> str:
+        """Idempotently upsert QE experiment/loop rows after the artifact gate."""
+
+        experiment_id = f"{task_id}_L{loop_index}"
+        history_parent_experiment_id = task.get("base_experiment_id") or task_id
+        try:
+            experiment_custom_params = merge_qe_minute_runtime_contract(
+                config.get("model_params", {}),
+                config=config,
+                source="results_only_retry",
+                allow_default_execution_algo=False,
+            )
+            recovery_note = {
+                "results_only_retry": {
+                    "status": "completed",
+                    "mode": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+                    "registered_at": datetime.now(timezone.utc).isoformat(),
+                    "artifacts": artifacts_summary,
+                }
+            }
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_loops
+                        SET status = 'processing', updated_at = NOW()
+                        WHERE loop_id = %s
+                          AND status IN ('failed', 'cancelled', 'canceled')
+                        RETURNING loop_id
+                        """,
+                        (evolution_loop_db_id,),
+                    )
+                    if cur.fetchone() is None:
+                        raise ResultsOnlyRegistrationError(
+                            reason_code="loop_state_changed_before_registration",
+                            task_id=task_id,
+                            loop_id=loop_id,
+                            node_id=task.get("node_id"),
+                            details={"expected_status": "failed|cancelled", "loop_db_id": evolution_loop_db_id},
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO qe_experiments
+                        (experiment_id, experiment_name, qe_task_id, qe_loop_id,
+                         loop_index, parent_experiment_id,
+                         is_evolution_loop, factor_names, model_id, strategy_id,
+                         data_split, custom_params,
+                         result_metrics, status, is_sota)
+                        VALUES (%s, %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s, %s, %s, 'completed', FALSE)
+                        ON CONFLICT (experiment_id) DO UPDATE SET
+                            result_metrics = EXCLUDED.result_metrics,
+                            status = EXCLUDED.status,
+                            parent_experiment_id = EXCLUDED.parent_experiment_id,
+                            qe_task_id = EXCLUDED.qe_task_id,
+                            qe_loop_id = EXCLUDED.qe_loop_id,
+                            custom_params = EXCLUDED.custom_params,
+                            updated_at = NOW()
+                        """,
+                        (
+                            experiment_id,
+                            f"{task_id} results-only Loop{loop_index}",
+                            task_id,
+                            loop_id,
+                            loop_index,
+                            history_parent_experiment_id,
+                            json.dumps(config.get("factor_list") or config.get("factor_names") or []),
+                            config.get("model_id"),
+                            config.get("strategy_id"),
+                            json.dumps(config.get("data_split", {})),
+                            json.dumps(experiment_custom_params),
+                            json.dumps(metrics),
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_loops
+                        SET metrics_json = %s,
+                            agent_analysis = %s,
+                            status = 'completed',
+                            experiment_id = %s,
+                            updated_at = NOW()
+                        WHERE loop_id = %s
+                        """,
+                        (
+                            json.dumps(metrics),
+                            json.dumps(recovery_note, ensure_ascii=False),
+                            experiment_id,
+                            evolution_loop_db_id,
+                        ),
+                    )
+                conn.commit()
+        except ResultsOnlyRegistrationError:
+            raise
+        except Exception as exc:
+            raise ResultsOnlyRegistrationError(
+                reason_code="qe_warehouse_registration_failed",
+                task_id=task_id,
+                loop_id=loop_id,
+                node_id=task.get("node_id"),
+                details={"error": f"{type(exc).__name__}: {exc}", "experiment_id": experiment_id},
+            ) from exc
+        return experiment_id
+
+    def _record_results_only_retry_failure(
+        self,
+        *,
+        evolution_loop_db_id: str,
+        error: BaseException,
+    ) -> None:
+        error_detail = json.dumps(
+            {
+                "_error": str(error),
+                "reason_code": getattr(error, "reason_code", "results_only_retry_failed"),
+                "retry_mode": QE_LOOP_RETRY_MODE_RESULTS_ONLY,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE qe_evolution_loops
+                        SET status = 'failed', agent_analysis = %s, updated_at = NOW()
+                        WHERE loop_id = %s
+                        """,
+                        (error_detail, evolution_loop_db_id),
+                    )
+                conn.commit()
+        except Exception as db_err:
+            logger.critical(
+                "FATAL: failed to record results_only retry failure for %s: %s",
+                evolution_loop_db_id,
+                db_err,
+                exc_info=True,
+            )
+
     async def retry_loop(
         self,
         task_id: str,
@@ -3352,6 +3607,16 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         original_backtest_only = bool(isinstance(config, dict) and config.get("backtest_only"))
+
+        if requested_retry_mode == QE_LOOP_RETRY_MODE_RESULTS_ONLY:
+            return await self._retry_loop_results_only(
+                task_id=task_id,
+                loop_index=loop_index,
+                task=dict(task),
+                client=client,
+                effective_node_id=effective_node_id,
+                config=dict(config or {}),
+            )
 
         # 3. Resolve retry mode. UI/API callers may force full training or
         # backtest-only; auto preserves the old artifact-based behavior.
