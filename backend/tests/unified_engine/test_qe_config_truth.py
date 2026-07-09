@@ -2236,6 +2236,175 @@ def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation
     assert not preds.empty
 
 
+def _cpu_resident_move_for_test(torch):
+    def _move(segment):
+        return {
+            "segment_name": segment["segment_name"],
+            "tensor": segment["tensor"],
+            "daily_indices": [
+                torch.as_tensor(index, dtype=torch.long)
+                for index in segment["daily_indices"]
+            ],
+            "index": segment["index"],
+        }
+
+    return _move
+
+
+def test_efficient_gats_gpu_resident_predict_matches_streaming_when_not_shuffled(monkeypatch, tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    common_kwargs = dict(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+    )
+    streaming_model = efficient_gats.EfficientGATs(**common_kwargs, gpu_resident=False)
+    resident_model = efficient_gats.EfficientGATs(
+        **common_kwargs,
+        gpu_resident=True,
+        gpu_resident_shuffle_days=False,
+    )
+    monkeypatch.setattr(resident_model, "_can_activate_gpu_resident", lambda _segments: True)
+    monkeypatch.setattr(resident_model, "_move_segment_to_gpu", _cpu_resident_move_for_test(torch))
+
+    streaming_model.fit(
+        dataset,
+        evals_result={},
+        save_path=str(tmp_path / "efficient_gats_streaming.pt"),
+    )
+    resident_model.fit(
+        dataset,
+        evals_result={},
+        save_path=str(tmp_path / "efficient_gats_resident.pt"),
+    )
+    streaming_preds = streaming_model.predict(dataset)
+    resident_preds = resident_model.predict(dataset)
+
+    assert streaming_preds.index.equals(resident_preds.index)
+    assert np.allclose(streaming_preds.to_numpy(), resident_preds.to_numpy(), atol=1e-6)
+
+    labels = pd.Series(
+        dataset.prepare("test")._values[:, -1, -1],
+        index=dataset.prepare("test").get_index(),
+        name="label",
+    )
+    streaming_rank_ic = (
+        pd.DataFrame({"pred": streaming_preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    resident_rank_ic = (
+        pd.DataFrame({"pred": resident_preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    assert np.allclose(
+        streaming_rank_ic.dropna().to_numpy(),
+        resident_rank_ic.dropna().to_numpy(),
+        atol=1e-6,
+    )
+
+
+def test_efficient_gats_gpu_resident_test_epoch_item_sync_is_constant(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+    resident = _resident_segment_for_test(model, dataset.prepare("train"), torch)
+    calls = []
+    original_item = torch.Tensor.item
+
+    def _count_item(tensor, *args, **kwargs):
+        calls.append(tuple(tensor.shape))
+        return original_item(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "item", _count_item)
+    model.test_epoch(resident)
+
+    assert len(calls) <= 2
+
+
+def test_efficient_gats_gpu_resident_preload_float32_and_daily_paths_do_not_float(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+    resident_cpu = model._preload_segment_to_cpu(dataset.prepare("train"), segment_name="train")
+    assert resident_cpu["tensor"].dtype == torch.float32
+    resident = {
+        "segment_name": resident_cpu["segment_name"],
+        "tensor": resident_cpu["tensor"],
+        "daily_indices": [
+            torch.as_tensor(index, dtype=torch.long)
+            for index in resident_cpu["daily_indices"]
+        ],
+        "index": resident_cpu["index"],
+    }
+    calls = []
+    original_float = torch.Tensor.float
+
+    def _count_float(tensor, *args, **kwargs):
+        calls.append(tuple(tensor.shape))
+        return original_float(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "float", _count_float)
+    model.train_epoch(resident)
+    model.test_epoch(resident)
+
+    monkeypatch.setattr(model, "_can_activate_gpu_resident", lambda _segments: True)
+    monkeypatch.setattr(model, "_move_segment_to_gpu", _cpu_resident_move_for_test(torch))
+    model.fitted = True
+    preds = model.predict(dataset)
+
+    assert calls == []
+    assert not preds.empty
+
+
 def test_efficient_gats_gpu_resident_fit_predict_non_degenerate_rank_ic(monkeypatch, tmp_path):
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     torch = pytest.importorskip("torch")

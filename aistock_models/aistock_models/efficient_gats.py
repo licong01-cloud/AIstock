@@ -130,6 +130,8 @@ class EfficientGATs(QlibGATs):
                 "reason_code=efficient_gats_gpu_resident_shape_invalid: "
                 f"segment={segment_name} shape={tuple(tensor.shape)} expected=[rows, seq, feature_plus_label]"
             )
+        if tensor.dtype != torch.float32:
+            tensor = tensor.to(dtype=torch.float32)
         return tensor.contiguous()
 
     def _preload_segment_to_cpu(self, segment, *, segment_name):
@@ -240,7 +242,7 @@ class EfficientGATs(QlibGATs):
     def _move_segment_to_gpu(self, resident_segment):
         return {
             "segment_name": resident_segment["segment_name"],
-            "tensor": resident_segment["tensor"].to(self.device),
+            "tensor": resident_segment["tensor"].to(self.device, non_blocking=True),
             "daily_indices": [
                 torch.as_tensor(index, dtype=torch.long, device=self.device)
                 for index in resident_segment["daily_indices"]
@@ -260,7 +262,7 @@ class EfficientGATs(QlibGATs):
         daily_indices = resident_segment["daily_indices"]
         for day_idx in self._daily_order(len(daily_indices), shuffle=shuffle):
             index = daily_indices[int(day_idx)]
-            yield resident_segment["tensor"].index_select(0, index)
+            yield resident_segment["tensor"].index_select(0, index).contiguous()
 
     def _load_pretrained_base_model(self):
         if self.base_model == "LSTM":
@@ -297,10 +299,10 @@ class EfficientGATs(QlibGATs):
                 data_loader,
                 shuffle=self.gpu_resident_shuffle_days,
             ):
-                feature = data[:, :, 0:-1]
+                feature = data.narrow(2, 0, data.shape[2] - 1)
                 label = data[:, -1, -1]
 
-                pred = self.GAT_model(feature.float())
+                pred = self.GAT_model(feature)
                 loss = self.loss_fn(pred, label)
 
                 self.train_optimizer.zero_grad()
@@ -329,28 +331,34 @@ class EfficientGATs(QlibGATs):
         scores = []
         losses = []
 
-        if isinstance(data_loader, dict) and "daily_indices" in data_loader:
+        resident_loader = isinstance(data_loader, dict) and "daily_indices" in data_loader
+        if resident_loader:
             batch_iter = self._iter_resident_batches(data_loader, shuffle=False)
         else:
             batch_iter = data_loader
 
         for data in batch_iter:
-            data = data.squeeze()
-            feature = data[:, :, 0:-1]
-            label = data[:, -1, -1]
-            if feature.device != self.device:
-                feature = feature.to(self.device)
-            if label.device != self.device:
-                label = label.to(self.device)
+            if resident_loader:
+                feature = data.narrow(2, 0, data.shape[2] - 1)
+                label = data[:, -1, -1]
+            else:
+                data = data.squeeze()
+                feature = data[:, :, 0:-1]
+                label = data[:, -1, -1]
+                if feature.device != self.device:
+                    feature = feature.to(self.device)
+                if label.device != self.device:
+                    label = label.to(self.device)
+                feature = feature.float()
 
-            pred = self.GAT_model(feature.float())
+            pred = self.GAT_model(feature)
             loss = self.loss_fn(pred, label)
-            losses.append(loss.item())
+            losses.append(loss.detach())
 
             score = self.metric_fn(pred, label)
-            scores.append(score.item())
+            scores.append(score.detach())
 
-        return np.mean(losses), np.mean(scores)
+        return torch.stack(losses).mean().item(), torch.stack(scores).mean().item()
 
     def _fit_streaming(self, dataset, evals_result, save_path):
         return QlibGATs.fit(self, dataset, evals_result=evals_result, save_path=save_path)
@@ -475,9 +483,9 @@ class EfficientGATs(QlibGATs):
         self.GAT_model.eval()
         preds = []
         for data in self._iter_resident_batches(test_resident, shuffle=False):
-            feature = data[:, :, 0:-1]
+            feature = data.narrow(2, 0, data.shape[2] - 1)
             with torch.no_grad():
-                pred = self.GAT_model(feature.float()).detach().cpu().numpy()
+                pred = self.GAT_model(feature).detach().cpu().numpy()
             preds.append(pred)
 
         return pd.Series(np.concatenate(preds), index=dl_test.get_index())
