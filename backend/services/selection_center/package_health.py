@@ -150,7 +150,7 @@ class SelectionPackageHealthService:
     def _contract_check(manifest: Any) -> dict[str, Any]:
         try:
             contract = build_backtest_runtime_contract(manifest)
-            risk_contract = contract["runtime_features"]["risk_policy"]
+            contract["runtime_features"]["risk_policy"]
         except TradingCoreError as exc:
             return {
                 "name": "st_pit_contract_status",
