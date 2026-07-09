@@ -19,7 +19,8 @@ from pathlib import Path
 
 from jinja2 import Template, meta
 from ruamel.yaml import YAML
-from qlib.workflow.cli import sys_config, task_train
+from qlib.workflow.cli import sys_config
+from qlib.workflow.cli import task_train
 import qlib
 from qlib.config import C
 
@@ -74,6 +75,17 @@ def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment
         mode=mode,
         config=config,
     )
+
+
+def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
+    task_config = (config or {}).get("task") if isinstance(config, dict) else None
+    model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
+    model_kwargs = model_cfg.get("kwargs") or {}
+    if isinstance(model_kwargs, dict) and model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias":
+        from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
+
+        inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
+    return task_train(task_config, experiment_name=experiment_name)
 
 
 def render_yaml_template(yaml_path: str) -> str:
@@ -246,7 +258,7 @@ def main():
 
     # Run training + backtesting
     experiment_name = config.get("experiment_name", "workflow")
-    recorder = task_train(config.get("task"), experiment_name=experiment_name)
+    recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
     recorder_ref = _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, "full", experiment_name, config)

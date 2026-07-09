@@ -193,6 +193,7 @@ class EfficientGATs(QlibGATs):
         message = " ".join(f"{key}={value}" for key, value in payload.items())
         self.logger.warning("EfficientGATs adjacency: %s", message)
         print(message)
+        return payload
 
     def _provider_industry_values(self, segment, index, *, segment_name):
         provider = self.gats_industry_id_provider
@@ -309,6 +310,15 @@ class EfficientGATs(QlibGATs):
         values = self._segment_industry_values(segment, index, segment_name=segment_name)
         return self._normalise_industry_ids(values, index, segment_name=segment_name)
 
+    def _require_segment_industry_ids(self, segment, *, segment_name):
+        industry_ids = self._extract_segment_industry_ids(segment, segment_name=segment_name)
+        if self._industry_bias_enabled() and industry_ids is None:
+            raise ValueError(
+                "reason_code=efficient_gats_industry_ids_missing: "
+                f"segment={segment_name} rows={len(segment.get_index())}"
+            )
+        return industry_ids
+
     def _normalise_segment_tensor(self, data, *, segment_name):
         if isinstance(data, (list, tuple)) and len(data) == 1:
             data = data[0]
@@ -346,7 +356,7 @@ class EfficientGATs(QlibGATs):
             "tensor": tensor,
             "daily_indices": daily_indices,
             "index": segment.get_index(),
-            "industry_ids": self._extract_segment_industry_ids(segment, segment_name=segment_name),
+            "industry_ids": self._require_segment_industry_ids(segment, segment_name=segment_name),
         }
 
     def _model_parameter_bytes(self):
@@ -457,6 +467,13 @@ class EfficientGATs(QlibGATs):
             self._gpu_resident_rng.shuffle(order)
         return order
 
+    def _reset_fit_rng(self):
+        if self.seed is None:
+            return
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+        self._gpu_resident_rng = np.random.RandomState(self.seed)
+
     def _iter_resident_batches(self, resident_segment, *, shuffle, include_industry=False):
         daily_indices = resident_segment["daily_indices"]
         for day_idx in self._daily_order(len(daily_indices), shuffle=shuffle):
@@ -480,7 +497,7 @@ class EfficientGATs(QlibGATs):
             "segment": segment,
             "daily_indices": daily_indices,
             "index": segment.get_index(),
-            "industry_ids": self._extract_segment_industry_ids(segment, segment_name=segment_name),
+            "industry_ids": self._require_segment_industry_ids(segment, segment_name=segment_name),
         }
 
     def _iter_streaming_batches(self, streaming_segment, *, shuffle):
@@ -499,6 +516,7 @@ class EfficientGATs(QlibGATs):
             yield data, industry_ids
 
     def _load_pretrained_base_model(self):
+        self._reset_fit_rng()
         if self.base_model == "LSTM":
             pretrained_model = LSTMModel(
                 d_feat=self.d_feat,
@@ -630,6 +648,7 @@ class EfficientGATs(QlibGATs):
     def _fit_streaming(self, dataset, evals_result, save_path):
         if self._industry_bias_enabled():
             return self._fit_streaming_with_industry(dataset, evals_result, save_path)
+        self._reset_fit_rng()
         return QlibGATs.fit(self, dataset, evals_result=evals_result, save_path=save_path)
 
     def _fit_streaming_with_industry(self, dataset, evals_result, save_path):
