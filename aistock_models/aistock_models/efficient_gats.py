@@ -195,7 +195,14 @@ class EfficientGATs(QlibGATs):
 
     def _cuda_available_bytes(self):
         free_bytes, total_bytes = torch.cuda.mem_get_info(self.device)
-        return int(free_bytes), int(total_bytes)
+        reserved_bytes = int(torch.cuda.memory_reserved(self.device))
+        allocated_bytes = int(torch.cuda.memory_allocated(self.device))
+        reclaimable_bytes = max(0, reserved_bytes - allocated_bytes)
+        return int(free_bytes) + reclaimable_bytes, int(total_bytes)
+
+    def _release_cached_cuda_blocks(self):
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def _can_activate_gpu_resident(self, resident_segments):
         if not self.gpu_resident:
@@ -365,6 +372,8 @@ class EfficientGATs(QlibGATs):
         dl_train.config(fillna_type="ffill+bfill")
         dl_valid.config(fillna_type="ffill+bfill")
 
+        self._release_cached_cuda_blocks()
+
         train_cpu = self._preload_segment_to_cpu(dl_train, segment_name="train")
         valid_cpu = self._preload_segment_to_cpu(dl_valid, segment_name="valid")
         resident_cpu = [train_cpu, valid_cpu]
@@ -441,6 +450,8 @@ class EfficientGATs(QlibGATs):
             raise ValueError("model is not fitted yet!")
         if not self.gpu_resident:
             return QlibGATs.predict(self, dataset)
+
+        self._release_cached_cuda_blocks()
 
         dl_test = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
         dl_test.config(fillna_type="ffill+bfill")
