@@ -28,8 +28,8 @@
   "expected": "F1 feature workflow client guidance should enforce compact execution: graph/UA or exact-symbol exploration first, single final small matrix after stabilization, failure-nodeid-first reruns, indirect suites deferred to CI/nightly, and compact asynchronous CI rollup.",
   "first_seen_at": "2026-07-09T16:43:33.777166Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "60e67c3bf41a838e76e3409e028f14a4cbdb13f8",
+  "fixed_at": "2026-07-09T17:00:06.183706Z",
   "github_issue_number": 1936,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1936",
   "last_seen_at": "2026-07-09T16:43:33.777166Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1937",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -59,6 +60,9 @@
     "fingerprint": "e2ae122ca6347a1385847405",
     "source_event_id": "FE-20260710-e2ae122ca634"
   },
+  "validation_evidence": [
+    "python -m json.tool BUG-613 JSON -> PASS; workflow-smoke Codex/Claude feature entrypoints -> PASS; install-client plan -> ready_for_install; nox -s validation_module_registry_l0 -> PASS; nox -s l0 -> PASS; git diff --check -> PASS; GitHub PR #1937 checks -> SUCCESS 11, SKIPPED 3"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
