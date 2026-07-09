@@ -95,6 +95,42 @@ def _unique(values: list[str]) -> list[str]:
     return result
 
 
+def _normalize_failure_path(value: str) -> str:
+    text = value.strip().strip("`'\"")
+    text = text.replace("\\", "/")
+    text = re.sub(r"\s+›.*$", "", text).strip()
+    if text.startswith("tests/"):
+        text = f"frontend/{text}"
+    return text
+
+
+def _playwright_failed_tests(lines: list[str]) -> list[str]:
+    tests: list[str] = []
+    patterns = [
+        r"(?:[✘xX]\s*)?\d+\s+\[[^\]]+\]\s+›\s+(.+?\.spec\.[tj]sx?(?::\d+(?::\d+)?)?)\s+›",
+        r"\[[^\]]+\]\s+›\s+(.+?\.spec\.[tj]sx?(?::\d+(?::\d+)?)?)\s+›",
+    ]
+    for line in lines:
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                tests.append(_normalize_failure_path(match.group(1)))
+    return _unique(tests)
+
+
+def _error_code_from_lines(lines: list[str]) -> str | None:
+    joined = "\n".join(lines)
+    for pattern in [
+        r'"error_code"\s*:\s*"([^"]+)"',
+        r"'error_code'\s*:\s*'([^']+)'",
+        r"\berror_code=([A-Z][A-Z0-9_]{6,})\b",
+    ]:
+        match = re.search(pattern, joined)
+        if match:
+            return match.group(1).strip()
+    return None
+
+
 def _status_value(value: Any) -> str:
     return str(value or "unknown").strip().lower() or "unknown"
 
@@ -316,10 +352,18 @@ def _infer_module(
 
 
 def _module_files(module: str | None, failed_tests: list[str]) -> list[str]:
-    files = [test.split("::", 1)[0] for test in failed_tests if "::" in test]
+    files: list[str] = []
+    for test in failed_tests:
+        candidate = test.split("::", 1)[0]
+        candidate = _normalize_failure_path(candidate)
+        candidate = re.sub(r":\d+(?::\d+)?$", "", candidate)
+        if "/" in candidate or candidate.endswith((".py", ".ts", ".tsx", ".js")):
+            files.append(candidate)
     if module == "paper_v2":
         files.extend(
             [
+                "frontend/tests/paper-v2",
+                "frontend/src/app/paper-trading-v2",
                 "backend/services/paper_trading_v2",
                 "backend/tests/paper_trading_v2",
                 "backend/tests/selection_center",
@@ -490,7 +534,9 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         [
             r"nox > (python -m pytest .*)",
             r"nox > Command (python -m pytest .*?) failed",
-            r"##\[command\](.*python.*pytest.*)",
+            r"##\[command\]((?:python|pytest|npm|npx|node)\b.*)",
+            r"\b(npm run test:e2e\b.*)",
+            r"\b(npx playwright test\b.*)",
         ],
     )
     failed_step = _first_match(lines, [r"nox > Session ([A-Za-z0-9_.-]+) failed"])
@@ -498,7 +544,7 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         failed_command = _command_from_session(lines, failed_step)
         if failed_command:
             command = failed_command
-    failed_tests = _unique(re.findall(r"FAILED\s+([^\s]+::[^\s]+)", joined))
+    failed_tests = _unique([*re.findall(r"FAILED\s+([^\s]+::[^\s]+)", joined), *_playwright_failed_tests(lines)])
     pytest_summary = _first_match(
         lines,
         [
@@ -513,6 +559,8 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         if match:
             error_signature = match.group(1)
             break
+    if not error_signature:
+        error_signature = _error_code_from_lines(lines)
     if not error_signature and docker_exit_code:
         error_signature = f"Docker pull failed with exit code {docker_exit_code}"
     error_signature = error_signature or _first_match(
@@ -536,6 +584,14 @@ def parse_job_log(log_text: str, *, job_name: str = "", job_url: str | None = No
         " relation ",
         "ERROR:",
         "FATAL:",
+        "Error:",
+        "error_code",
+        "package_id",
+        "source_id",
+        "experiment_id",
+        "LIVE_INFERENCE_PREFLIGHT_FAILED",
+        "npm run test:e2e",
+        "playwright",
         "Command python -m pytest",
         "Session ",
     ]
@@ -581,22 +637,7 @@ def _primary_failed_job(summary: dict[str, Any]) -> dict[str, Any]:
     failed_jobs = summary.get("failed_jobs") or []
     if not failed_jobs:
         return {}
-
-    def score(job: dict[str, Any]) -> int:
-        value = 0
-        if job.get("failed_tests"):
-            value += 100
-        if job.get("failed_step"):
-            value += 80
-        if job.get("command"):
-            value += 60
-        if job.get("suspected_module"):
-            value += 40
-        if job.get("error_signature"):
-            value += 10
-        return value
-
-    return max(failed_jobs, key=score)
+    return max(failed_jobs, key=_job_actionable_score)
 
 
 def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -630,7 +671,12 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     failure_name = first_test or first_job.get("error_signature") or summary.get("manual_summary") or "diagnostic extraction incomplete"
     summary["issue_title"] = f"[{summary.get('severity') or 'P1'}][{nox_session}] {branch} CI failed: {failure_name}"[:240]
     if first_job.get("failed_tests"):
-        summary["reproduce_command"] = f"python -m pytest {first_job['failed_tests'][0]} -q -p no:cacheprovider"
+        command = str(first_job.get("command") or "")
+        first_failed_test = str(first_job["failed_tests"][0])
+        if "npm run" in command or "playwright" in command or first_failed_test.endswith((".ts", ".tsx", ".js")):
+            summary["reproduce_command"] = command or f"npm run test:e2e -- {first_failed_test}"
+        else:
+            summary["reproduce_command"] = f"python -m pytest {first_failed_test} -q -p no:cacheprovider"
     elif nox_session and nox_session != "ci":
         summary["reproduce_command"] = f"python -m nox -s {nox_session}"
     else:
@@ -643,6 +689,114 @@ def finalize_summary(summary: dict[str, Any]) -> dict[str, Any]:
     summary["failure_event"] = build_failure_event(summary)
     summary["agent_handoff"] = build_agent_handoff(summary)
     return summary
+
+
+def _job_actionable_score(job: dict[str, Any]) -> int:
+    value = 0
+    if job.get("failed_tests"):
+        value += 100
+    if job.get("failed_step"):
+        value += 80
+    if job.get("command"):
+        value += 60
+    if job.get("suspected_module"):
+        value += 40
+    if job.get("error_signature"):
+        value += 10
+    return value
+
+
+def _restore_nightly_identity(summary: dict[str, Any], nightly_summary: dict[str, Any]) -> dict[str, Any]:
+    for key in ("nightly_statuses", "nightly_fingerprint", "nightly_failed_stages"):
+        if key in nightly_summary:
+            summary[key] = nightly_summary[key]
+    summary["fingerprint_source"] = nightly_summary.get("nightly_fingerprint") or summary.get("fingerprint_source")
+    if nightly_summary.get("nightly_fingerprint"):
+        summary["fingerprint"] = "ci-" + hashlib.sha256(str(nightly_summary["nightly_fingerprint"]).encode("utf-8")).hexdigest()[:16]
+    return summary
+
+
+def _merge_nightly_actions_details(nightly_summary: dict[str, Any], actions_summary: dict[str, Any]) -> dict[str, Any]:
+    """Prefer compact failed-log details over status-only Nightly placeholders."""
+    concrete_jobs = [
+        job
+        for job in actions_summary.get("failed_jobs") or []
+        if job.get("failed_tests") or job.get("error_signature") or job.get("command")
+    ]
+    if not concrete_jobs:
+        extraction_errors = [str(item) for item in actions_summary.get("extraction_errors") or [] if item]
+        if extraction_errors:
+            merged = dict(nightly_summary)
+            merged["extraction_errors"] = _unique([*(nightly_summary.get("extraction_errors") or []), *extraction_errors])
+            merged["nightly_detail_enrichment"] = {
+                "source": "github_actions_failed_job_logs",
+                "workflow_gate": "warning",
+                "reason": "failed_job_log_details_unavailable",
+            }
+            merged = finalize_summary(merged)
+            merged = _restore_nightly_identity(merged, nightly_summary)
+            merged["llm_triage_advice"] = _build_nightly_llm_triage_advice(merged)
+            return merged
+        return nightly_summary
+    merged_jobs = sorted(concrete_jobs, key=_job_actionable_score, reverse=True)
+    extraction_errors = _unique(
+        [str(item) for item in [*(nightly_summary.get("extraction_errors") or []), *(actions_summary.get("extraction_errors") or [])] if item]
+    )
+    merged = dict(nightly_summary)
+    merged["failed_jobs"] = merged_jobs
+    merged["extraction_errors"] = extraction_errors
+    merged["nightly_detail_enrichment"] = {
+        "source": "github_actions_failed_job_logs",
+        "workflow_gate": "enriched",
+        "failed_job_count": len(merged_jobs),
+    }
+    enriched = finalize_summary(merged)
+    enriched = _restore_nightly_identity(enriched, nightly_summary)
+    enriched["last_green_locator"] = actions_summary.get("last_green_locator") or nightly_summary.get("last_green_locator")
+    enriched["failure_event"] = build_failure_event(enriched)
+    enriched["agent_handoff"] = build_agent_handoff(enriched)
+    enriched["llm_triage_advice"] = _build_nightly_llm_triage_advice(enriched)
+    return enriched
+
+
+def _maybe_enrich_nightly_status_from_actions(
+    nightly_summary: dict[str, Any],
+    *,
+    repo: str,
+    run_id: str | None,
+    run_url: str | None = None,
+    severity: str = "P1",
+    log_attempts: int = 1,
+    log_wait_seconds: float = 10.0,
+) -> dict[str, Any]:
+    effective_run_id = str(run_id or nightly_summary.get("run_id") or "").strip()
+    if not effective_run_id or effective_run_id.lower() in SYNTHETIC_RUN_IDS:
+        return nightly_summary
+    try:
+        actions_summary = summarize_actions_run(
+            repo=repo,
+            run_id=effective_run_id,
+            run_url=run_url or nightly_summary.get("run_url"),
+            severity=severity,
+            wait_for_completion=False,
+            log_attempts=log_attempts,
+            log_wait_seconds=log_wait_seconds,
+        )
+    except Exception as exc:
+        merged = dict(nightly_summary)
+        merged["extraction_errors"] = _unique(
+            [
+                *(nightly_summary.get("extraction_errors") or []),
+                f"failed to enrich Nightly status with failed job logs: {str(exc)[:240]}",
+            ]
+        )
+        merged["nightly_detail_enrichment"] = {
+            "source": "github_actions_failed_job_logs",
+            "workflow_gate": "warning",
+            "reason": "failed_job_log_enrichment_exception",
+        }
+        return _restore_nightly_identity(finalize_summary(merged), nightly_summary)
+    return _merge_nightly_actions_details(nightly_summary, actions_summary)
 
 
 def _github_issue_url(issue_number: int | str | None, repo: str = DEFAULT_REPO) -> str | None:
@@ -906,8 +1060,13 @@ def _llm_triage_lines(payload: dict[str, Any]) -> list[str]:
         f"- model: `{payload.get('model') or evidence.get('model') or 'unknown'}`",
         f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
         f"- invoked: `{evidence.get('invoked')}`",
+        f"- reason: `{evidence.get('reason') or 'unknown'}`",
         f"- input_policy: `{evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
     ]
+    if payload.get("triage_advice_mode"):
+        lines.append(f"- triage_advice_mode: `{payload.get('triage_advice_mode')}`")
+    if evidence.get("error"):
+        lines.append(f"- invocation_error: `{evidence.get('error')}`")
     refs = payload.get("code_intelligence_refs") if isinstance(payload.get("code_intelligence_refs"), dict) else {}
     if refs:
         lines.extend(
@@ -1226,8 +1385,13 @@ def _nightly_job_from_statuses(statuses: dict[str, str], *, run_url: str | None 
     }
 
 
-def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str = "github_models") -> dict[str, Any]:
-    """Attach schema-checked LLM triage advice without performing a network call."""
+def _build_nightly_llm_triage_advice(
+    summary: dict[str, Any],
+    *,
+    provider: str = "github_models",
+    invoke_llm: bool = False,
+) -> dict[str, Any]:
+    """Attach schema-checked triage advice and optionally live LLM test-plan advice."""
 
     try:
         root = Path(__file__).resolve().parents[1]
@@ -1246,6 +1410,7 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
             changed_files=list(summary.get("suspected_files") or []),
             module=(summary.get("suspected_modules") or [None])[0],
             code_intelligence_refs=code_intelligence_refs,
+            invoke_llm=invoke_llm,
         )
     except Exception as exc:
         return {
@@ -1265,8 +1430,12 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
             },
         }
     advice = dict(advice)
+    smoke_evidence = advice.get("llm_invocation_evidence") if isinstance(advice.get("llm_invocation_evidence"), dict) else {}
     advice["workflow_gate"] = "ready"
     advice["blocking_for_issue_creation"] = False
+    advice["triage_advice_mode"] = (
+        "schema_smoke_plus_live_test_plan_advice" if invoke_llm else "schema_smoke_no_network"
+    )
     advice["failure_event_ref"] = (summary.get("failure_event") or {}).get("event_id")
     advice["source_fingerprint"] = summary.get("fingerprint")
     advice["code_intelligence_input_policy"] = {
@@ -1275,6 +1444,10 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
         "full_logs_included": False,
     }
     advice["code_intelligence_refs"] = code_intelligence_refs
+    live_evidence = test_plan_advice["llm_invocation_evidence"]
+    if invoke_llm:
+        advice["schema_smoke_evidence"] = smoke_evidence
+        advice["llm_invocation_evidence"] = live_evidence
     advice["test_plan_advice_gate"] = {
         "schema_version": test_plan_advice["schema_version"],
         "workflow_gate": test_plan_advice["deterministic_gate"]["workflow_gate"],
@@ -1283,7 +1456,10 @@ def _build_nightly_llm_triage_advice(summary: dict[str, Any], *, provider: str =
         "validation_select_compatible": test_plan_advice["deterministic_gate"]["validation_select_compatible"],
         "workspace_path_allowed": test_plan_advice["deterministic_gate"]["workspace_path_allowed"],
         "shell_commands_allowed": test_plan_advice["deterministic_gate"]["shell_commands_allowed"],
-        "llm_invoked": test_plan_advice["llm_invocation_evidence"]["invoked"],
+        "llm_invoked": live_evidence["invoked"],
+        "llm_reason": live_evidence.get("reason"),
+        "llm_error": live_evidence.get("error"),
+        "provider_chain": live_evidence.get("provider_chain") or [],
         "plans": [
             {
                 "plan_key": item["plan_key"],
@@ -1525,9 +1701,14 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
                 f"- model: `{llm_advice.get('model') or llm_evidence.get('model') or 'unknown'}`",
                 f"- workflow_gate: `{llm_advice.get('workflow_gate') or 'unknown'}`",
                 f"- invoked: `{llm_evidence.get('invoked')}`",
+                f"- reason: `{llm_evidence.get('reason') or 'unknown'}`",
                 f"- input_policy: `{llm_evidence.get('input_policy') or 'compact_failure_event_plus_code_intelligence_refs_only'}`",
             ]
         )
+        if llm_advice.get("triage_advice_mode"):
+            lines.append(f"- triage_advice_mode: `{llm_advice.get('triage_advice_mode')}`")
+        if llm_evidence.get("error"):
+            lines.append(f"- invocation_error: `{llm_evidence.get('error')}`")
         code_intelligence_refs = llm_advice.get("code_intelligence_refs") if isinstance(llm_advice.get("code_intelligence_refs"), dict) else {}
         if code_intelligence_refs:
             lines.extend(
@@ -1925,6 +2106,16 @@ def main(argv: list[str] | None = None) -> int:
             branch=args.branch,
             commit=args.commit,
         )
+        if args.run_id:
+            summary = _maybe_enrich_nightly_status_from_actions(
+                summary,
+                repo=args.repo,
+                run_id=args.run_id,
+                run_url=args.run_url,
+                severity=args.severity,
+                log_attempts=args.log_attempts,
+                log_wait_seconds=args.log_wait_seconds,
+            )
     elif args.run_id:
         summary = summarize_actions_run(
             repo=args.repo,
@@ -1942,7 +2133,8 @@ def main(argv: list[str] | None = None) -> int:
 
     summary["code_intelligence_refs"] = _code_intelligence_refs_from_file(args.code_intelligence_json)
     if summary["code_intelligence_refs"]:
-        summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary)
+        invoke_llm_triage = args.llm_triage_mode in {"warning_only", "opt_in_auto_file"} or bool(args.llm_auto_file_opt_in)
+        summary["llm_triage_advice"] = _build_nightly_llm_triage_advice(summary, invoke_llm=invoke_llm_triage)
     if "llm_guarded_rollout_gate" not in summary or args.llm_triage_mode or args.llm_auto_file_opt_in:
         summary["llm_guarded_rollout_gate"] = _llm_guarded_rollout_gate(
             summary,
