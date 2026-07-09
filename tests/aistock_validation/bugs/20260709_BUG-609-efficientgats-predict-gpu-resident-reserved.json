@@ -1,6 +1,7 @@
 {
   "actual": "Predict sees available_bytes around 1.79GB versus required_bytes around 5.67GB and always falls back to streaming even though torch has a large reusable reserved pool from fit.",
   "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260709_BUG-609-efficientgats-predict-gpu-resident-reserved.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

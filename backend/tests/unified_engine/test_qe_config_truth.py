@@ -2124,13 +2124,116 @@ def test_efficient_gats_gpu_resident_vram_fallback_is_loud(monkeypatch, capsys):
 
     model.device = torch.device("cuda:0")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(model, "_cuda_available_bytes", lambda: (1, 2))
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (1, 2))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda _device: 0)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda _device: 0)
 
     assert model._can_activate_gpu_resident([resident_cpu]) is False
     captured = capsys.readouterr()
     assert "reason_code=efficient_gats_gpu_resident_vram_insufficient" in captured.out
     assert model.gpu_resident_last_fallback["available_bytes"] == 1
     assert model.gpu_resident_last_fallback["required_bytes"] > 1
+
+
+def test_efficient_gats_gpu_resident_predict_activation_counts_reclaimable_reserved(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+    resident_cpu = model._preload_segment_to_cpu(dataset.prepare("test"), segment_name="test")
+    required_bytes = model._resident_estimate([resident_cpu])["required_bytes"]
+
+    model.device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (1, required_bytes * 2))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda _device: required_bytes + 128)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda _device: 128)
+
+    assert model._can_activate_gpu_resident([resident_cpu]) is True
+    assert model.gpu_resident_last_fallback is None
+
+
+def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation_check(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+    )
+
+    def _cpu_resident_move(segment):
+        return {
+            "segment_name": segment["segment_name"],
+            "tensor": segment["tensor"],
+            "daily_indices": [
+                torch.as_tensor(index, dtype=torch.long)
+                for index in segment["daily_indices"]
+            ],
+            "index": segment["index"],
+        }
+
+    monkeypatch.setattr(model, "_move_segment_to_gpu", _cpu_resident_move)
+    model.fitted = True
+
+    calls = []
+    model.device = torch.device("cuda:0")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (10**12, 10**12))
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda _device: 0)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda _device: 0)
+
+    original_preload = model._preload_segment_to_cpu
+
+    def _assert_empty_cache_before_preload(segment, *, segment_name):
+        assert calls == ["empty_cache"]
+        return original_preload(segment, segment_name=segment_name)
+
+    original_can_activate = efficient_gats.EfficientGATs._can_activate_gpu_resident.__get__(
+        model,
+        type(model),
+    )
+
+    def _assert_empty_cache_already_called(segments):
+        assert calls == ["empty_cache"]
+        return original_can_activate(segments)
+
+    monkeypatch.setattr(model, "_preload_segment_to_cpu", _assert_empty_cache_before_preload)
+    monkeypatch.setattr(model, "_can_activate_gpu_resident", _assert_empty_cache_already_called)
+    preds = model.predict(dataset)
+
+    assert calls == ["empty_cache"]
+    assert not preds.empty
 
 
 def test_efficient_gats_gpu_resident_fit_predict_non_degenerate_rank_ic(monkeypatch, tmp_path):
