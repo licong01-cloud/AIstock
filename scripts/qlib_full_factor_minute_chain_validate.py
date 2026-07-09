@@ -450,7 +450,7 @@ def source_for_feature(col: str) -> str:
         return "bak_basic"
     if col.startswith("cp_"):
         return "cyq_perf"
-    if col.startswith("sw2_"):
+    if col == "l2_code_id" or col.startswith("sw2_"):
         return "sector_data"
     if col.startswith("md_"):
         return "margin_detail"

@@ -1137,7 +1137,7 @@ class QlibSectorDataExporter:
 
     输出文件 sector_data.h5，供 Qlib / RD-Agent 使用：
     - Index: MultiIndex (datetime, instrument)
-    - Columns: sw2_* 系列 22 列
+    - Columns: sw2_* 22 numeric columns plus l2_code_id
     """
 
     def __init__(

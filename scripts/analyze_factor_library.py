@@ -51,7 +51,7 @@ DATASET_FIELDS = {
         "sw2_mf_buy_lg_amt", "sw2_mf_sell_lg_amt",
         "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt",
         "sw2_mf_net_amt", "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
-        "sw2_mf_net_vol",
+        "sw2_mf_net_vol", "l2_code_id",
     ],
     "static_factors.parquet": ["static_factors"],
 }
