@@ -33,6 +33,15 @@ Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:03.
 Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-06-29T00:06:04.0000000Z ##[error]Process completed with exit code 1.
 """
 
+PAPER_V2_PLAYWRIGHT_LOG = r"""
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:14:00.0000000Z > npm run test:e2e -- tests/paper-v2
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:15:00.0000000Z x 18 [chromium] › tests\paper-v2\paper-v2-real-flow.spec.ts:573:7 › Paper v2 real flow › creates strategy package and starts live inference
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:15:01.0000000Z Error: selection run failed {"detail":{"error_code":"LIVE_INFERENCE_PREFLIGHT_FAILED","message":"StrategyPackage model params.pkl references local model code that is missing from the runtime workspace","package_id":"pkg_378eb9c91e104c64935404e257e932ee","source_id":"csp_6103320a9c7f47448908670321cc52ff","experiment_id":"qe_20260520_215627_abbc_L16"}}
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:15:02.0000000Z expect(response.ok()).toBeTruthy()
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:15:03.0000000Z 1 failed, 19 passed, 9 did not run
+Nightly L3 (paper_v2 + qe_archive + qe_read)\tUNKNOWN STEP\t2026-07-08T21:15:04.0000000Z ##[error]Process completed with exit code 1.
+"""
+
 
 def test_parse_job_log_extracts_pytest_failure_details() -> None:
     parsed = summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")
@@ -57,6 +66,20 @@ def test_parse_job_log_prefers_failed_session_over_mixed_job_name() -> None:
     assert parsed["suspected_module"] == "qe_archive"
     assert "scripts/qe_archive_data_quality_smoke.py" in parsed["suspected_files"]
     assert not any(path.startswith("backend/services/paper_trading_v2") for path in parsed["suspected_files"])
+
+
+def test_parse_job_log_extracts_paper_v2_playwright_failure_details() -> None:
+    parsed = summary.parse_job_log(
+        PAPER_V2_PLAYWRIGHT_LOG,
+        job_name="Nightly L3 (paper_v2 + qe_archive + qe_read)",
+    )
+
+    assert parsed["command"] == "npm run test:e2e -- tests/paper-v2"
+    assert parsed["failed_tests"] == ["frontend/tests/paper-v2/paper-v2-real-flow.spec.ts:573:7"]
+    assert parsed["error_signature"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
+    assert parsed["suspected_module"] == "paper_v2"
+    assert "frontend/tests/paper-v2/paper-v2-real-flow.spec.ts" in parsed["suspected_files"]
+    assert any("pkg_378eb9c91e104c64935404e257e932ee" in line for line in parsed["key_log_excerpt"])
 
 
 def test_finalize_summary_uses_actionable_failed_job_for_mixed_nightly_scope() -> None:
@@ -883,7 +906,198 @@ def test_nightly_status_summary_uses_shared_payload_and_markers() -> None:
     assert context_pack["failure_event"]["source"] == "github_actions"
     assert context_pack["failure_event"]["failure_kind"] == "real_github_actions"
     assert context_pack["llm_triage_advice"]["provider"] == "github_models"
-    assert context_pack["token_budget"]["full_logs_included"] is False
+    assert "reason: `schema_quality_smoke_no_network`" in issue_payload["body"]
+    assert "triage_advice_mode: `schema_smoke_no_network`" in issue_payload["body"]
+
+
+def test_nightly_status_cli_enriches_generic_stage_with_failed_action_log(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "status.json"
+    summary_path = tmp_path / "summary.json"
+    issue_payload_path = tmp_path / "github-issue-payload.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "statuses": {
+                    "runnerPreflight": "success",
+                    "drSnapshot": "success",
+                    "drValidate": "success",
+                    "nightlyL3": "failure",
+                    "paperV2Live": "skipped",
+                    "codeIntelligence": "success",
+                },
+                "run_id": "28973219723",
+                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_run(args: list[str], **_: object) -> dict[str, object]:
+        if "--job" in args:
+            return {"ok": True, "stdout": PAPER_V2_PLAYWRIGHT_LOG, "stderr": ""}
+        return {
+            "ok": True,
+            "stdout": json.dumps(
+                {
+                    "databaseId": 28973219723,
+                    "workflowName": "AIstock Nightly L3 + DR",
+                    "displayTitle": "Nightly",
+                    "event": "schedule",
+                    "headBranch": "main",
+                    "headSha": "1a0bf5e41cc6379658d001d111b3e4bd30560b79",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723",
+                    "jobs": [
+                        {
+                            "databaseId": 811,
+                            "name": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
+                            "conclusion": "failure",
+                            "url": "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723/job/811",
+                        }
+                    ],
+                }
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(summary, "_run", fake_run)
+    monkeypatch.setattr(
+        summary,
+        "locate_last_green_run",
+        lambda payload, repo: summary._last_green_payload(payload, status="not_requested"),
+    )
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--run-id",
+            "28973219723",
+            "--output",
+            str(summary_path),
+            "--github-issue-payload-output",
+            str(issue_payload_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    issue_payload = json.loads(issue_payload_path.read_text(encoding="utf-8"))
+    body = issue_payload["body"]
+
+    assert stdout_payload["failed_jobs_count"] == 1
+    assert payload["nightly_detail_enrichment"]["workflow_gate"] == "enriched"
+    assert payload["failed_jobs"][0]["error_signature"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
+    assert payload["failed_jobs"][0]["failed_tests"] == ["frontend/tests/paper-v2/paper-v2-real-flow.spec.ts:573:7"]
+    assert payload["reproduce_command"] == "npm run test:e2e -- tests/paper-v2"
+    assert "Nightly failed: nightly_l3=failure" not in body
+    assert "paper-v2-real-flow.spec.ts:573:7" in body
+    assert "LIVE_INFERENCE_PREFLIGHT_FAILED" in body
+    assert "pkg_378eb9c91e104c64935404e257e932ee" in body
+
+
+def test_nightly_cli_invokes_llm_triage_when_code_refs_and_warning_mode(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import llm_provider_adapter
+
+    status_path = tmp_path / "status.json"
+    code_refs_path = tmp_path / "code-intelligence-summary.json"
+    summary_path = tmp_path / "summary.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "statuses": {
+                    "runnerPreflight": "success",
+                    "drSnapshot": "success",
+                    "drValidate": "success",
+                    "nightlyL3": "failure",
+                    "paperV2Live": "skipped",
+                    "codeIntelligence": "success",
+                },
+                "run_id": "9001",
+            }
+        ),
+        encoding="utf-8",
+    )
+    code_refs_path.write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "context_ref": "tmp/issue_workflow/BUG-610/codegraph-context.md",
+                    "affected_tests_ref": "tmp/issue_workflow/BUG-610/affected-tests.json",
+                    "ua_summary_ref": "tmp/issue_workflow/BUG-610/ua-validation_llm_pipeline-summary.md",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_test_plan_advice(*args: object, **kwargs: object) -> dict[str, object]:
+        captured["invoke_llm"] = kwargs.get("invoke_llm")
+        return {
+            "schema_version": "aistock_deepseek_test_plan_advice_v1",
+            "deterministic_gate": {
+                "workflow_gate": "ready",
+                "validation_select_compatible": True,
+                "workspace_path_allowed": True,
+                "shell_commands_allowed": False,
+            },
+            "test_plan_advice": [
+                {
+                    "plan_key": "validation_module_registry_l0",
+                    "allowed": True,
+                    "nox_session": "validation_module_registry_l0",
+                    "rejection_reasons": [],
+                }
+            ],
+            "llm_invocation_evidence": {
+                "schema_version": "aistock_llm_invocation_evidence_v1",
+                "provider": "github_models",
+                "model": "deepseek/deepseek-r1",
+                "invoked": True,
+                "reason": "test_plan_advice_live_provider_json",
+                "input_policy": "plan_key_intent_catalog_plus_code_intelligence_refs_only",
+                "redaction_applied": True,
+                "provider_chain": [{"provider": "github_models", "status": "invoked"}],
+                "usage_summary": {"total_units": 42},
+            },
+        }
+
+    monkeypatch.setattr(llm_provider_adapter, "build_test_plan_advice", fake_test_plan_advice)
+
+    assert summary.main(
+        [
+            "--nightly-status-json",
+            str(status_path),
+            "--code-intelligence-json",
+            str(code_refs_path),
+            "--llm-triage-mode",
+            "warning_only",
+            "--output",
+            str(summary_path),
+            "--stdout-format",
+            "compact",
+        ]
+    ) == 0
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    payload = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    assert captured["invoke_llm"] is True
+    assert stdout_payload["llm_triage"]["invoked"] is True
+    assert payload["llm_triage_advice"]["triage_advice_mode"] == "schema_smoke_plus_live_test_plan_advice"
+    assert payload["llm_triage_advice"]["llm_invocation_evidence"]["reason"] == "test_plan_advice_live_provider_json"
 
 
 def test_nightly_smoke_payload_is_explicitly_synthetic() -> None:

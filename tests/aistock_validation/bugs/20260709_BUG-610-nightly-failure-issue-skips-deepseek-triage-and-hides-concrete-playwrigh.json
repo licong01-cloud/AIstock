@@ -24,12 +24,18 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260709-327e728036b4",
       "timestamp": "2026-07-09T02:17:24.828622Z"
+    },
+    {
+      "action": "fix_validation_scope_update",
+      "actor": "codex",
+      "note": "Added validation_module_registry_l0 to required verification per task-card and implemented compact nightly failure enrichment plus loud LLM triage evidence.",
+      "timestamp": "2026-07-09T00:00:00Z"
     }
   ],
   "evidence_uris": [],
   "expected": "When nightly L3 fails and LLM triage is ready, the summary/auto-issue path should either invoke the configured LLM triage or loudly record why it was not invoked. The generated issue/BUG draft must include a compact concrete failure summary extracted from logs or artifacts: failing session, command, test file:line/title, error_code/message, key ids such as package_id/source_id/experiment_id, and artifact refs. It must remain compact and avoid downloading full logs unless needed.",
   "first_seen_at": "2026-07-09T02:17:24.828626Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-610-nightly-failure-issue-skips-deepseek-triage-and-20260709",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 1928,
@@ -45,7 +51,8 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "guardrail_changed_files"
+    "guardrail_changed_files",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -97,7 +104,8 @@
     ],
     "premerge_required_plans": [
       "l0",
-      "guardrail_changed_files"
+      "guardrail_changed_files",
+      "validation_module_registry_l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "25-35%"
