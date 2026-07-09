@@ -10,9 +10,10 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit_minute.py"
+DAY_RUNNER_PATH = PROJECT_ROOT / "scripts" / "qrun_limit.py"
 
 
-def _load_runner(monkeypatch: pytest.MonkeyPatch):
+def _load_runner(monkeypatch: pytest.MonkeyPatch, runner_path: Path = RUNNER_PATH):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
     qlib_model_trainer = types.ModuleType("qlib.model.trainer")
@@ -29,6 +30,7 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch):
     qlib_workflow.__path__ = []
     qlib_workflow_cli = types.ModuleType("qlib.workflow.cli")
     qlib_workflow_cli.sys_config = lambda *args, **kwargs: None
+    qlib_workflow_cli.task_train = lambda *args, **kwargs: None
     qlib_record_temp = types.ModuleType("qlib.workflow.record_temp")
     qlib_workflow.record_temp = qlib_record_temp
     qlib_config = types.ModuleType("qlib.config")
@@ -49,7 +51,7 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch):
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
 
-    spec = importlib.util.spec_from_file_location("qrun_limit_minute_metric_retry_test", RUNNER_PATH)
+    spec = importlib.util.spec_from_file_location(f"{runner_path.stem}_metric_retry_test", runner_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
@@ -66,8 +68,9 @@ class _FakeRecorder:
 
 
 
-def test_qrun_industry_provider_injection_only_for_industry_bias(tmp_path, monkeypatch) -> None:
-    runner, _record_temp = _load_runner(monkeypatch)
+@pytest.mark.parametrize("runner_path", [RUNNER_PATH, DAY_RUNNER_PATH])
+def test_qrun_industry_provider_injection_only_for_industry_requested(tmp_path, monkeypatch, runner_path) -> None:
+    runner, _record_temp = _load_runner(monkeypatch, runner_path)
     calls = []
     provider_module = types.ModuleType("aistock_models.gats_industry_provider")
 
@@ -94,6 +97,15 @@ def test_qrun_industry_provider_injection_only_for_industry_bias(tmp_path, monke
         "exp-bias",
     ) is None
     assert calls == [{"config": config, "cwd": tmp_path}]
+
+    config_embedding = {
+        "task": {"model": {"kwargs": {"gats_adjacency_mode": "off", "gats_industry_embedding": "on"}}},
+    }
+    assert runner._task_train_with_gats_industry_provider(
+        config_embedding,
+        "exp-embedding",
+    ) is None
+    assert calls[-1] == {"config": config_embedding, "cwd": tmp_path}
 
 def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatch, capsys) -> None:
     runner, record_temp = _load_runner(monkeypatch)

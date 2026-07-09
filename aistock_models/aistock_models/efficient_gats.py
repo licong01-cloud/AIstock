@@ -35,7 +35,29 @@ _DEFAULT_WORKING_MEMORY_MULTIPLIER = 4
 _GATS_ADJACENCY_OFF = "off"
 _GATS_ADJACENCY_INDUSTRY_BIAS = "industry_bias"
 _GATS_ADJACENCY_MODES = {_GATS_ADJACENCY_OFF, _GATS_ADJACENCY_INDUSTRY_BIAS}
-_MISSING_INDUSTRY_ID = -1
+_GATS_INDUSTRY_EMBEDDING_OFF = "off"
+_GATS_INDUSTRY_EMBEDDING_ON = "on"
+_GATS_INDUSTRY_EMBEDDING_MODES = {_GATS_INDUSTRY_EMBEDDING_OFF, _GATS_INDUSTRY_EMBEDDING_ON}
+_GATS_L2_INDUSTRY_CLASSES = 131
+_MISSING_INDUSTRY_ID = _GATS_L2_INDUSTRY_CLASSES
+_GATS_INDUSTRY_EMBEDDING_CLASSES = _GATS_L2_INDUSTRY_CLASSES + 1
+
+
+def _normalise_on_off(value, *, name):
+    if isinstance(value, bool):
+        return _GATS_INDUSTRY_EMBEDDING_ON if value else _GATS_INDUSTRY_EMBEDDING_OFF
+    mode = str(value or _GATS_INDUSTRY_EMBEDDING_OFF).strip().lower()
+    if mode not in _GATS_INDUSTRY_EMBEDDING_MODES:
+        raise ValueError(
+            f"reason_code=efficient_gats_{name}_invalid: "
+            f"value={value!r} allowed={sorted(_GATS_INDUSTRY_EMBEDDING_MODES)}"
+        )
+    return mode
+
+
+def _normalise_industry_code(value):
+    text = str(value).strip()
+    return text or None
 
 
 def additive_gats_attention_logits(
@@ -72,6 +94,8 @@ class EfficientGATModel(QlibGATModel):
         *args,
         gats_adjacency_mode=_GATS_ADJACENCY_OFF,
         gats_industry_gamma_init=0.0,
+        gats_industry_embedding=_GATS_INDUSTRY_EMBEDDING_OFF,
+        gats_industry_embedding_dim=8,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -81,12 +105,32 @@ class EfficientGATModel(QlibGATModel):
                 f"mode={gats_adjacency_mode} allowed={sorted(_GATS_ADJACENCY_MODES)}"
             )
         self.gats_adjacency_mode = gats_adjacency_mode
+        self.gats_industry_embedding = _normalise_on_off(
+            gats_industry_embedding,
+            name="industry_embedding",
+        )
+        self.gats_industry_embedding_dim = int(gats_industry_embedding_dim)
+        if self.gats_industry_embedding_dim <= 0:
+            raise ValueError(
+                "reason_code=efficient_gats_industry_embedding_dim_invalid: "
+                f"value={gats_industry_embedding_dim} expected_positive_int"
+            )
         if self.gats_adjacency_mode == _GATS_ADJACENCY_INDUSTRY_BIAS:
             self.industry_bias_gamma = torch.nn.Parameter(
                 torch.tensor(float(gats_industry_gamma_init), dtype=torch.float32)
             )
         else:
             self.register_parameter("industry_bias_gamma", None)
+        if self.gats_industry_embedding == _GATS_INDUSTRY_EMBEDDING_ON:
+            self.industry_embedding = torch.nn.Embedding(
+                _GATS_INDUSTRY_EMBEDDING_CLASSES,
+                self.gats_industry_embedding_dim,
+            )
+            attention_input_size = self.hidden_size + self.gats_industry_embedding_dim
+            self.industry_embedding_projection = torch.nn.Linear(attention_input_size, self.hidden_size)
+        else:
+            self.industry_embedding = None
+            self.industry_embedding_projection = None
         self.last_attention_weight = None
 
     @staticmethod
@@ -94,9 +138,23 @@ class EfficientGATModel(QlibGATModel):
         if industry_ids is None:
             return None
         ids = industry_ids.to(device=device, dtype=torch.long).view(-1)
-        valid = ids >= 0
+        valid = (ids >= 0) & (ids < _GATS_L2_INDUSTRY_CLASSES)
         same = (ids.view(-1, 1) == ids.view(1, -1)) & valid.view(-1, 1) & valid.view(1, -1)
         return same.to(dtype=dtype)
+
+    def _with_industry_embedding(self, hidden, industry_ids):
+        if getattr(self, "gats_industry_embedding", _GATS_INDUSTRY_EMBEDDING_OFF) != _GATS_INDUSTRY_EMBEDDING_ON:
+            return hidden
+        if industry_ids is None:
+            raise ValueError(
+                "reason_code=efficient_gats_industry_embedding_ids_missing: "
+                f"rows={hidden.shape[0]}"
+            )
+        ids = industry_ids.to(device=hidden.device, dtype=torch.long).view(-1)
+        valid = (ids >= 0) & (ids < _GATS_L2_INDUSTRY_CLASSES)
+        ids = torch.where(valid, ids, torch.full_like(ids, _MISSING_INDUSTRY_ID))
+        embedded = self.industry_embedding(ids)
+        return self.industry_embedding_projection(torch.cat((hidden, embedded), dim=1))
 
     def cal_attention(self, x, y, industry_ids=None):
         left_hidden = self.transformation(x)
@@ -117,6 +175,7 @@ class EfficientGATModel(QlibGATModel):
     def forward(self, x, industry_ids=None):
         out, _ = self.rnn(x)
         hidden = out[:, -1, :]
+        hidden = self._with_industry_embedding(hidden, industry_ids)
         att_weight = self.cal_attention(hidden, hidden, industry_ids=industry_ids)
         hidden = att_weight.mm(hidden) + hidden
         hidden = self.fc(hidden)
@@ -130,6 +189,16 @@ class EfficientGATs(QlibGATs):
     def __init__(self, *args, **kwargs):
         self.gats_adjacency_mode = kwargs.pop("gats_adjacency_mode", _GATS_ADJACENCY_OFF)
         self.gats_industry_gamma_init = float(kwargs.pop("gats_industry_gamma_init", 0.0))
+        self.gats_industry_embedding = _normalise_on_off(
+            kwargs.pop("gats_industry_embedding", _GATS_INDUSTRY_EMBEDDING_OFF),
+            name="industry_embedding",
+        )
+        self.gats_industry_embedding_dim = int(kwargs.pop("gats_industry_embedding_dim", 8))
+        if self.gats_industry_embedding_dim <= 0:
+            raise ValueError(
+                "reason_code=efficient_gats_industry_embedding_dim_invalid: "
+                f"value={self.gats_industry_embedding_dim} expected_positive_int"
+            )
         self.gats_industry_id_provider = kwargs.pop("gats_industry_id_provider", None)
         if self.gats_adjacency_mode not in _GATS_ADJACENCY_MODES:
             raise ValueError(
@@ -148,6 +217,7 @@ class EfficientGATs(QlibGATs):
         self.gpu_resident_last_fallback = None
         self.gats_adjacency_last_event = None
         self.gats_adjacency_events = []
+        self._industry_code_to_id = {}
         self._gpu_resident_rng = None
 
         super().__init__(*args, **kwargs)
@@ -165,6 +235,8 @@ class EfficientGATs(QlibGATs):
             base_model=self.base_model,
             gats_adjacency_mode=self.gats_adjacency_mode,
             gats_industry_gamma_init=self.gats_industry_gamma_init,
+            gats_industry_embedding=self.gats_industry_embedding,
+            gats_industry_embedding_dim=self.gats_industry_embedding_dim,
         )
         self.GAT_model.to(self.device)
 
@@ -184,7 +256,13 @@ class EfficientGATs(QlibGATs):
         print(message)
 
     def _industry_bias_enabled(self):
-        return self.gats_adjacency_mode == _GATS_ADJACENCY_INDUSTRY_BIAS
+        return getattr(self, "gats_adjacency_mode", _GATS_ADJACENCY_OFF) == _GATS_ADJACENCY_INDUSTRY_BIAS
+
+    def _industry_side_channel_enabled(self):
+        return (
+            getattr(self, "gats_adjacency_mode", _GATS_ADJACENCY_OFF) == _GATS_ADJACENCY_INDUSTRY_BIAS
+            or getattr(self, "gats_industry_embedding", _GATS_INDUSTRY_EMBEDDING_OFF) == _GATS_INDUSTRY_EMBEDDING_ON
+        )
 
     def _loud_adjacency_event(self, reason_code, **details):
         payload = {"reason_code": reason_code, **details}
@@ -290,8 +368,25 @@ class EfficientGATs(QlibGATs):
         missing = series.isna() | series.astype(str).isin(["", "nan", "NaN", "None", "none", "<NA>"])
         codes = np.full(len(series), _MISSING_INDUSTRY_ID, dtype=np.int64)
         if (~missing).any():
-            factorized, _uniques = pd.factorize(series[~missing], sort=True)
-            codes[~missing.to_numpy()] = factorized.astype(np.int64)
+            if not hasattr(self, "_industry_code_to_id"):
+                self._industry_code_to_id = {}
+            mapped = []
+            for value in series[~missing]:
+                industry_code = _normalise_industry_code(value)
+                if industry_code is None:
+                    mapped.append(_MISSING_INDUSTRY_ID)
+                    continue
+                if industry_code not in self._industry_code_to_id:
+                    next_id = len(self._industry_code_to_id)
+                    if next_id >= _GATS_L2_INDUSTRY_CLASSES:
+                        raise ValueError(
+                            "reason_code=efficient_gats_l2_code_cardinality_exceeded: "
+                            f"segment={segment_name} max_classes={_GATS_L2_INDUSTRY_CLASSES} "
+                            f"new_code={industry_code!r}"
+                        )
+                    self._industry_code_to_id[industry_code] = next_id
+                mapped.append(self._industry_code_to_id[industry_code])
+            codes[~missing.to_numpy()] = np.asarray(mapped, dtype=np.int64)
 
         missing_count = int(missing.sum())
         if missing_count:
@@ -304,7 +399,7 @@ class EfficientGATs(QlibGATs):
         return torch.as_tensor(codes, dtype=torch.long)
 
     def _extract_segment_industry_ids(self, segment, *, segment_name):
-        if not self._industry_bias_enabled():
+        if not self._industry_side_channel_enabled():
             return None
         index = segment.get_index()
         values = self._segment_industry_values(segment, index, segment_name=segment_name)
@@ -312,7 +407,7 @@ class EfficientGATs(QlibGATs):
 
     def _require_segment_industry_ids(self, segment, *, segment_name):
         industry_ids = self._extract_segment_industry_ids(segment, segment_name=segment_name)
-        if self._industry_bias_enabled() and industry_ids is None:
+        if self._industry_side_channel_enabled() and industry_ids is None:
             raise ValueError(
                 "reason_code=efficient_gats_industry_ids_missing: "
                 f"segment={segment_name} rows={len(segment.get_index())}"
@@ -646,7 +741,7 @@ class EfficientGATs(QlibGATs):
         return torch.stack(losses).mean().item(), torch.stack(scores).mean().item()
 
     def _fit_streaming(self, dataset, evals_result, save_path):
-        if self._industry_bias_enabled():
+        if self._industry_side_channel_enabled():
             return self._fit_streaming_with_industry(dataset, evals_result, save_path)
         self._reset_fit_rng()
         return QlibGATs.fit(self, dataset, evals_result=evals_result, save_path=save_path)
@@ -833,7 +928,7 @@ class EfficientGATs(QlibGATs):
         return pd.Series(np.concatenate(preds), index=dl_test.get_index())
 
     def _predict_streaming(self, dataset):
-        if not self._industry_bias_enabled():
+        if not self._industry_side_channel_enabled():
             return QlibGATs.predict(self, dataset)
 
         dl_test = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
