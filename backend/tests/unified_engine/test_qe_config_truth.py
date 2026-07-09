@@ -1619,13 +1619,17 @@ def _compose_in_memory_with_catalog_model(monkeypatch, catalog_row, *, model_id)
 
 
 class _MiniGatsSegment:
-    def __init__(self, index, values):
+    def __init__(self, index, values, industry_ids=None):
         self._index = index
         self._values = values
+        self._industry_ids = industry_ids
         self.empty = len(index) == 0
 
     def get_index(self):
         return self._index
+
+    def get_industry_ids(self):
+        return self._industry_ids
 
     def config(self, **_kwargs):
         return None
@@ -1644,10 +1648,12 @@ class _MiniGatsSegment:
 
 
 class _MiniGatsDataset:
-    def __init__(self, d_feat=2, step_len=3, stocks=6):
+    def __init__(self, d_feat=2, step_len=3, stocks=6, include_industry=False, missing_industry_rows=None):
         self.d_feat = d_feat
         self.step_len = step_len
         self.stocks = stocks
+        self.include_industry = include_industry
+        self.missing_industry_rows = set(missing_industry_rows or [])
         self._segments = {
             "train": self._make_segment("2021-01-04", 4),
             "valid": self._make_segment("2021-01-08", 3),
@@ -1658,6 +1664,7 @@ class _MiniGatsDataset:
         dates = pd.bdate_range(start, periods=days)
         rows = []
         values = []
+        industry_ids = []
         for day_idx, date in enumerate(dates):
             for stock_idx in range(self.stocks):
                 instrument = f"STK{stock_idx:03d}"
@@ -1670,8 +1677,15 @@ class _MiniGatsDataset:
                     seq[step_idx, -1] = 0.7 * stock_signal + 0.2 * day_signal
                 rows.append((date, instrument))
                 values.append(seq)
+                if self.include_industry:
+                    row_offset = day_idx * self.stocks + stock_idx
+                    industry_ids.append(None if row_offset in self.missing_industry_rows else f"SW2_{stock_idx // 2}")
         index = pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"])
-        return _MiniGatsSegment(index, np.stack(values))
+        return _MiniGatsSegment(
+            index,
+            np.stack(values),
+            industry_ids=np.asarray(industry_ids, dtype=object) if self.include_industry else None,
+        )
 
     def prepare(self, segment, **_kwargs):
         return self._segments[segment]
@@ -1768,6 +1782,8 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
             "lr": "0.0005",
             "batch_size": 128,
             "gpu_resident": True,
+            "gats_adjacency_mode": "industry_bias",
+            "gats_industry_gamma_init": 0.0,
         },
     )
     conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
@@ -1783,8 +1799,20 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
     assert model["kwargs"]["lr"] == 0.0005
     assert model["kwargs"]["batch_size"] == 128
     assert model["kwargs"]["gpu_resident"] is True
+    assert model["kwargs"]["gats_adjacency_mode"] == "industry_bias"
+    assert model["kwargs"]["gats_industry_gamma_init"] == 0.0
     assert "pt_model_kwargs" not in model["kwargs"]
-    for key in ("dropout", "base_model", "hidden_size", "num_layers", "lr", "batch_size", "gpu_resident"):
+    for key in (
+        "dropout",
+        "base_model",
+        "hidden_size",
+        "num_layers",
+        "lr",
+        "batch_size",
+        "gpu_resident",
+        "gats_adjacency_mode",
+        "gats_industry_gamma_init",
+    ):
         assert key not in strategy_kwargs
 
 
@@ -1919,6 +1947,73 @@ def test_efficient_gats_attention_is_numerically_identical_to_naive():
         )
 
 
+def test_efficient_gats_industry_bias_increases_same_industry_attention_without_masking_cross_industry():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    torch.manual_seed(11)
+    model = efficient_gats.EfficientGATModel(
+        d_feat=2,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        gats_adjacency_mode="industry_bias",
+        gats_industry_gamma_init=0.0,
+    )
+    hidden = torch.randn(6, 4)
+    industry_ids = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.long)
+
+    with torch.no_grad():
+        att_off = model.cal_attention(hidden, hidden, industry_ids=None)
+        model.industry_bias_gamma.fill_(2.0)
+        att_bias = model.cal_attention(hidden, hidden, industry_ids=industry_ids)
+
+    same = efficient_gats.EfficientGATModel.industry_same_matrix(
+        industry_ids,
+        device=att_bias.device,
+        dtype=torch.bool,
+    )
+    same_mass_off = (att_off * same).sum(dim=1)
+    same_mass_bias = (att_bias * same).sum(dim=1)
+    cross_weight = att_bias.masked_select(~same)
+
+    assert torch.all(same_mass_bias > same_mass_off)
+    assert torch.all(cross_weight > 0)
+
+
+def test_efficient_gats_industry_bias_gamma_zero_matches_off_attention():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    torch.manual_seed(17)
+    off_model = efficient_gats.EfficientGATModel(
+        d_feat=2,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        gats_adjacency_mode="off",
+    )
+    bias_model = efficient_gats.EfficientGATModel(
+        d_feat=2,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        gats_adjacency_mode="industry_bias",
+        gats_industry_gamma_init=0.0,
+    )
+    bias_model.load_state_dict(off_model.state_dict(), strict=False)
+    hidden = torch.randn(6, 4)
+    industry_ids = torch.tensor([0, 0, 1, 1, 2, 2], dtype=torch.long)
+
+    assert torch.allclose(
+        off_model.cal_attention(hidden, hidden),
+        bias_model.cal_attention(hidden, hidden, industry_ids=industry_ids),
+        atol=1e-6,
+    )
+
+
 def test_efficient_gats_full_pool_attention_smoke_no_n2_hidden_materialization(monkeypatch):
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     torch = pytest.importorskip("torch")
@@ -2012,6 +2107,38 @@ def test_efficient_gats_minimal_fit_predict_non_degenerate_rank_ic(tmp_path):
     assert not rank_ic[np.isfinite(rank_ic)].empty
 
 
+def test_efficient_gats_adjacency_off_matches_default_fit_predict(tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True)
+    common_kwargs = dict(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+    )
+    default_model = efficient_gats.EfficientGATs(**common_kwargs)
+    off_model = efficient_gats.EfficientGATs(**common_kwargs, gats_adjacency_mode="off")
+
+    default_model.fit(dataset, evals_result={}, save_path=str(tmp_path / "default.pt"))
+    off_model.fit(dataset, evals_result={}, save_path=str(tmp_path / "off.pt"))
+    default_preds = default_model.predict(dataset)
+    off_preds = off_model.predict(dataset)
+
+    assert default_preds.index.equals(off_preds.index)
+    assert np.allclose(default_preds.to_numpy(), off_preds.to_numpy(), atol=1e-6)
+
+
 def _resident_segment_for_test(model, segment, torch):
     cpu_segment = model._preload_segment_to_cpu(segment, segment_name="train")
     return {
@@ -2022,6 +2149,7 @@ def _resident_segment_for_test(model, segment, torch):
             for index in cpu_segment["daily_indices"]
         ],
         "index": cpu_segment["index"],
+        "industry_ids": cpu_segment.get("industry_ids"),
     }
 
 
@@ -2062,6 +2190,86 @@ def test_efficient_gats_gpu_resident_daily_batch_data_equivalent_to_streaming():
     assert len(stream_batches) == len(resident_batches)
     for stream_batch, resident_batch in zip(stream_batches, resident_batches):
         assert torch.allclose(resident_batch.cpu(), stream_batch.cpu())
+
+
+def test_efficient_gats_industry_ids_resident_and_streaming_side_channel():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True)
+    segment = dataset.prepare("train")
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+        gats_adjacency_mode="industry_bias",
+    )
+    resident_cpu = model._preload_segment_to_cpu(segment, segment_name="train")
+    resident = {
+        "segment_name": resident_cpu["segment_name"],
+        "tensor": resident_cpu["tensor"],
+        "daily_indices": [torch.as_tensor(index, dtype=torch.long) for index in resident_cpu["daily_indices"]],
+        "index": resident_cpu["index"],
+        "industry_ids": resident_cpu["industry_ids"],
+    }
+    streaming = model._preload_streaming_segment_metadata(segment, segment_name="train")
+
+    resident_data, resident_ids = next(model._iter_resident_batches(resident, shuffle=False, include_industry=True))
+    streaming_data, streaming_ids = next(model._iter_streaming_batches(streaming, shuffle=False))
+
+    assert torch.allclose(resident_data.cpu(), streaming_data.cpu())
+    assert torch.equal(resident_ids.cpu(), streaming_ids.cpu())
+    assert resident_ids.shape == (dataset.stocks,)
+
+
+def test_efficient_gats_industry_missing_ids_are_loud_and_unbiased(capsys):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True, missing_industry_rows={1})
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_adjacency_mode="industry_bias",
+    )
+
+    resident_cpu = model._preload_segment_to_cpu(dataset.prepare("train"), segment_name="train")
+    captured = capsys.readouterr()
+    assert "reason_code=efficient_gats_industry_id_missing" in captured.out
+    assert model.gats_adjacency_last_event["reason_code"] == "efficient_gats_industry_id_missing"
+
+    ids = resident_cpu["industry_ids"][: dataset.stocks]
+    hidden = torch.randn(dataset.stocks, 4)
+    with torch.no_grad():
+        model.GAT_model.industry_bias_gamma.fill_(2.0)
+        att_off = model.GAT_model.cal_attention(hidden, hidden, industry_ids=None)
+        att_bias = model.GAT_model.cal_attention(hidden, hidden, industry_ids=ids)
+
+    assert ids[1].item() == -1
+    assert torch.allclose(att_bias[1], att_off[1], atol=1e-6)
+    assert torch.all(att_bias[:, 1] > 0)
 
 
 def test_efficient_gats_gpu_resident_train_epoch_has_no_per_batch_to(monkeypatch):
@@ -2200,6 +2408,7 @@ def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation
                 for index in segment["daily_indices"]
             ],
             "index": segment["index"],
+            "industry_ids": segment.get("industry_ids"),
         }
 
     monkeypatch.setattr(model, "_move_segment_to_gpu", _cpu_resident_move)
@@ -2246,6 +2455,7 @@ def _cpu_resident_move_for_test(torch):
                 for index in segment["daily_indices"]
             ],
             "index": segment["index"],
+            "industry_ids": segment.get("industry_ids"),
         }
 
     return _move
@@ -2436,6 +2646,7 @@ def test_efficient_gats_gpu_resident_fit_predict_non_degenerate_rank_ic(monkeypa
                 for index in segment["daily_indices"]
             ],
             "index": segment["index"],
+            "industry_ids": segment.get("industry_ids"),
         }
 
     monkeypatch.setattr(model, "_can_activate_gpu_resident", lambda _segments: True)
@@ -2446,6 +2657,52 @@ def test_efficient_gats_gpu_resident_fit_predict_non_degenerate_rank_ic(monkeypa
     preds = model.predict(dataset)
 
     assert model.gpu_resident_active is True
+    assert not preds.empty
+    assert preds.index.equals(dataset.prepare("test").get_index())
+    assert preds.notna().any()
+    assert np.isfinite(preds.to_numpy()).any()
+    assert not np.allclose(preds.to_numpy(), preds.iloc[0])
+    assert evals_result["train"] and evals_result["valid"]
+
+    labels = pd.Series(
+        dataset.prepare("test")._values[:, -1, -1],
+        index=dataset.prepare("test").get_index(),
+        name="label",
+    )
+    rank_ic = (
+        pd.DataFrame({"pred": preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    assert not rank_ic[np.isfinite(rank_ic)].empty
+
+
+def test_efficient_gats_industry_bias_fit_predict_non_degenerate_rank_ic(tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True)
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_adjacency_mode="industry_bias",
+    )
+
+    evals_result = {}
+    model.fit(dataset, evals_result=evals_result, save_path=str(tmp_path / "efficient_gats_industry_bias.pt"))
+    preds = model.predict(dataset)
+
     assert not preds.empty
     assert preds.index.equals(dataset.prepare("test").get_index())
     assert preds.notna().any()
