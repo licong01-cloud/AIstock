@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightError,
     LiveInferenceResult,
@@ -367,6 +368,30 @@ def test_prepare_workspace_rejects_package_asset_params_with_missing_pickled_mod
 
     assert excinfo.value.context["reason_code"] == "strategy_package_model_code_missing"
     assert excinfo.value.context["missing_modules"] == ["model"]
+
+
+def test_selection_health_marks_missing_package_model_code_not_runnable(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    manifest = _frozen_manifest(
+        store,
+        model_payload=_pickled_model_instance_payload(tmp_path),
+    )
+    package_repo = InMemoryStrategyPackageRepository()
+    record = package_repo.save_manifest(manifest)
+    resolver = QEExperimentRuntimeAssetResolver(
+        conn_factory=lambda: _ForbiddenConn(),
+        cache_root=tmp_path / "runtime_cache",
+        asset_store=store,
+    )
+
+    health = SelectionPackageHealthService(runtime_source_resolver=resolver).summarize(record)
+
+    assert health["status"] == "BLOCKED"
+    assert health["runnable"] is False
+    blocked = next(item for item in health["checks"] if item["name"] == "live_inference_preflight")
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["context"]["reason_code"] == "strategy_package_model_code_missing"
+    assert blocked["context"]["missing_relative_paths"] == ["model.py"]
 
 
 def test_package_asset_params_with_model_code_materialize_successfully(tmp_path: Path) -> None:

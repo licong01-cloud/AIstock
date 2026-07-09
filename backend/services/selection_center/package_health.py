@@ -11,6 +11,7 @@ from typing import Any
 
 from backend.services.strategy_package.backtest_contract import build_backtest_runtime_contract
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.package_asset_freeze import manifest_has_frozen_runtime_assets
 from backend.services.strategy_package.runtime import _candidate_selection_artifact_runtime_hashes
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError
 
@@ -19,6 +20,7 @@ from .runtime_profile import parse_selection_runtime_profile
 
 PASS = "PASS"
 WARN = "WARN"
+BLOCKED = "BLOCKED"
 UNKNOWN = "UNKNOWN"
 
 
@@ -71,8 +73,8 @@ class SelectionPackageHealthService:
                     },
                 }
             )
-        elif self._auto_generate(config):
-            checks.append(self._source_resolution_check(record))
+        elif self._auto_generate(config) or self._has_package_owned_runtime_assets(manifest):
+            checks.append(self._source_resolution_check(record, runtime_config=config))
         else:
             checks.append(
                 {
@@ -90,8 +92,11 @@ class SelectionPackageHealthService:
             extra_checks.append(self._st_pit_runtime_profile_check(manifest, config))
 
         all_checks = [*checks, *extra_checks]
+        runtime_blocked = any(item["status"] == BLOCKED for item in all_checks)
         if legacy_non_st_pit:
             status = "LEGACY_NON_ST_PIT"
+        elif runtime_blocked:
+            status = "BLOCKED"
         elif any(item["status"] == WARN for item in all_checks):
             status = "WARN"
         else:
@@ -99,7 +104,7 @@ class SelectionPackageHealthService:
 
         return {
             "status": status,
-            "runnable": True,
+            "runnable": not runtime_blocked,
             "diagnostic_only": True,
             "st_pit_contract_status": st_pit_contract_status,
             "legacy_non_st_pit": legacy_non_st_pit,
@@ -133,6 +138,13 @@ class SelectionPackageHealthService:
         if artifact_config is None:
             artifact_config = runtime_config.get("selection_artifact")
         return isinstance(artifact_config, dict) and bool(artifact_config.get("auto_generate"))
+
+    @staticmethod
+    def _has_package_owned_runtime_assets(manifest: Any) -> bool:
+        try:
+            return manifest_has_frozen_runtime_assets(manifest)
+        except Exception:
+            return False
 
     @staticmethod
     def _contract_check(manifest: Any) -> dict[str, Any]:
@@ -322,7 +334,7 @@ class SelectionPackageHealthService:
             },
         }
 
-    def _source_resolution_check(self, record: Any) -> dict[str, Any]:
+    def _source_resolution_check(self, record: Any, *, runtime_config: dict[str, Any] | None = None) -> dict[str, Any]:
         if self.runtime_source_resolver is None:
             return {
                 "name": "source_resolves",
@@ -331,6 +343,50 @@ class SelectionPackageHealthService:
                 "context": {"package_id": record.package_id},
             }
         try:
+            preflight = getattr(self.runtime_source_resolver, "preflight_for_strategy_package", None)
+            if callable(preflight):
+                result = preflight(
+                    source_type=record.source_type,
+                    source_id=record.source_id,
+                    loop_id=record.loop_id,
+                    run_id=record.run_id,
+                    runtime_config=runtime_config or {},
+                    manifest=record.current_manifest(),
+                    package_id=record.package_id,
+                )
+                if not result.passed:
+                    blocked = result.blocked_check
+                    context: dict[str, Any] = {
+                        "package_id": record.package_id,
+                        "source_type": record.source_type,
+                        "source_id": record.source_id,
+                        "loop_id": record.loop_id,
+                        "run_id": record.run_id,
+                        "preflight": result.to_dict(),
+                    }
+                    if blocked is not None:
+                        context["blocked_check"] = blocked.name
+                        context.update(blocked.context or {})
+                    return {
+                        "name": "live_inference_preflight",
+                        "status": BLOCKED,
+                        "severity": "runtime_blocker",
+                        "message": blocked.message if blocked is not None else "live inference preflight failed",
+                        "context": context,
+                    }
+                return {
+                    "name": "live_inference_preflight",
+                    "status": PASS,
+                    "message": "StrategyPackage live inference preflight passed",
+                    "context": {
+                        "package_id": record.package_id,
+                        "source_type": record.source_type,
+                        "source_id": record.source_id,
+                        "loop_id": record.loop_id,
+                        "preflight": result.to_dict(),
+                    },
+                }
+
             source_loader = getattr(self.runtime_source_resolver, "load_source_for_strategy_package", None)
             if callable(source_loader):
                 source_loader(

@@ -1,0 +1,176 @@
+{
+  "actual": "Failure summary: Error: selection run qe_20260520_215627_abbc 绛栫暐鍥炴祴16: {\"detail\":{\"error_code\":\"LIVE_INFERENCE_PREFLIGHT_FAILED\",\"message\":\"live inference cold-start preflight failed: StrategyPackage model params.pkl references local model code that is missing from the runtime workspace\",\"context\":{\"source_type\":\"candidate_strategy_package\",\"source_id\":\"csp_6103320a9c7f47448908670321cc52ff\",\"loop_id\":null,\"run_id\":null,\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"preflight\":{\"passed\":false,\"checks\":[{\"name\":\"qe_source\",\"status\":\"PASS\",\"message\":\"StrategyPackage frozen runtime assets resolved\",\"suggestion\":null,\"context\":{\"experiment_id\":\"qe_20260520_215627_abbc_L16\",\"qe_task_id\":\"qe_20260520_215627_abbc\",\"qe_loop_id\":\"Loop16\",\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"source_workspace_type\":\"strategy_package_asset_store\"}},{\"name\":\"qe_node\",\"status\":\"PASS\",\"message\":\"package-owned runtime assets do not require QE node access\",\"suggestion\":null,\"context\":{\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"manifest_sha256\":\"2aae3560563bd669e5f1951c40ae939744f82a67be5b7479f239b9f910270300\",\"asset_workspace_path\":\"rdagent_assets\\\\strategy_package_runtime\\\\_package_asset_sources\\\\pkg_378eb9c91e104c64935404e257e932ee\\\\2aae3560563bd669\\\\u",
+  "allowed_write_scope": [
+    "backend/services/selection_center/package_health.py",
+    "backend/services/paper_trading_v2",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/selection_center",
+    "backend/tests/strategy_package",
+    "tests/aistock_validation/bugs/20260709_BUG-611-paper-v2-ci-failure-requires-triage-error-selection-run-qe-20260520-2156.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-611",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-09T02:21:35.706022Z",
+  "description": "Failure summary: Error: selection run qe_20260520_215627_abbc 绛栫暐鍥炴祴16: {\"detail\":{\"error_code\":\"LIVE_INFERENCE_PREFLIGHT_FAILED\",\"message\":\"live inference cold-start preflight failed: StrategyPackage model params.pkl references local model code that is missing from the runtime workspace\",\"context\":{\"source_type\":\"candidate_strategy_package\",\"source_id\":\"csp_6103320a9c7f47448908670321cc52ff\",\"loop_id\":null,\"run_id\":null,\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"preflight\":{\"passed\":false,\"checks\":[{\"name\":\"qe_source\",\"status\":\"PASS\",\"message\":\"StrategyPackage frozen runtime assets resolved\",\"suggestion\":null,\"context\":{\"experiment_id\":\"qe_20260520_215627_abbc_L16\",\"qe_task_id\":\"qe_20260520_215627_abbc\",\"qe_loop_id\":\"Loop16\",\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"source_workspace_type\":\"strategy_package_asset_store\"}},{\"name\":\"qe_node\",\"status\":\"PASS\",\"message\":\"package-owned runtime assets do not require QE node access\",\"suggestion\":null,\"context\":{\"package_id\":\"pkg_378eb9c91e104c64935404e257e932ee\",\"manifest_sha256\":\"2aae3560563bd669e5f1951c40ae939744f82a67be5b7479f239b9f910270300\",\"asset_workspace_path\":\"rdagent_assets\\\\strategy_package_runtime\\\\_package_asset_sources\\\\pkg_378eb9c91e104c64935404e257e932ee\\\\2aae3560563bd669\\\\u",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260709-281c51537c5a",
+      "timestamp": "2026-07-09T02:21:35.706016Z"
+    },
+    {
+      "timestamp": "2026-07-09T02:37:27.294154+00:00",
+      "actor": "codex",
+      "action": "codex_fix_preflight_runnable_guard",
+      "note": "Codex triage: root cause is package-owned runtime asset incompleteness, not a pipeline/toolchain failure. pkg_378eb9c91e104c64935404e257e932ee params.pkl references model.LSTM_10D_hs64_d02 but materialized package runtime has no model.py; Selection Center health now runs package-owned live inference preflight and marks this blocker non-runnable so E2E does not select it as a runnable package."
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/28973219723",
+    "https://github.com/licong01-cloud/AIstock/issues/1757",
+    "tmp/issue_workflow/ci-issue-1757/failure-event.json",
+    "tmp/issue_workflow/ci-issue-1757/context-pack.md"
+  ],
+  "expected": "CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
+  "first_seen_at": "2026-07-09T02:21:35.706022Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1757,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1757",
+  "last_seen_at": "2026-07-09T02:37:27.294169+00:00",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s paper_v2_ui",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "paper_v2 CI failure requires triage: Error: selection run qe_20260520_215627_abbc 绛栫暐鍥炴祴16: {\"detail\":{\"error_code\":\"LIVE_INFERENCE_PREFLIGHT_FAILED\",\"message\":\"live inference cold",
+  "trigger_condition": {
+    "fingerprint": "281c51537c5adccc04153a98",
+    "source_event_id": "FE-20260709-281c51537c5a"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
