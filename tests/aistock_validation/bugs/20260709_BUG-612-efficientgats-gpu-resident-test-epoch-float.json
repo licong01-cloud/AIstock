@@ -1,6 +1,7 @@
 {
   "actual": "Resident test_epoch synchronizes per day via Tensor.item() and resident train/test/predict daily branches allocate/cast via feature.float(), reducing GPU pipeline continuity and throughput.",
   "allowed_write_scope": [
+    "aistock_models/aistock_models/efficient_gats.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260709_BUG-612-efficientgats-gpu-resident-test-epoch-float.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
