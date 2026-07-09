@@ -1894,6 +1894,15 @@ def _import_efficient_gats_module():
     return efficient_gats
 
 
+def _import_gats_industry_provider_module():
+    models_root = PROJECT_ROOT / "aistock_models"
+    if str(models_root) not in sys.path:
+        sys.path.insert(0, str(models_root))
+    import aistock_models.gats_industry_provider as provider_mod
+
+    return provider_mod
+
+
 def test_efficient_gats_attention_is_numerically_identical_to_naive():
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     torch = pytest.importorskip("torch")
@@ -2722,6 +2731,179 @@ def test_efficient_gats_industry_bias_fit_predict_non_degenerate_rank_ic(tmp_pat
     )
     assert not rank_ic[np.isfinite(rank_ic)].empty
 
+
+
+def _write_sector_data_h5(path, mapping, *, dates=None):
+    dates = list(dates or pd.bdate_range("2021-01-01", periods=20))
+    code_to_value = {code: float(pos + 1) for pos, code in enumerate(sorted(set(mapping.values())))}
+    rows = []
+    values = []
+    for date in pd.to_datetime(dates):
+        for instrument, code in mapping.items():
+            rows.append((date, instrument))
+            base = code_to_value[code]
+            values.append({"sw2_open": base, "sw2_close": base, "sw2_pct_change": 0.0})
+    df = pd.DataFrame(values, index=pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"]))
+    df.to_hdf(path, key="data")
+    return df
+
+
+def test_gats_industry_provider_pit_asof_and_coverage(tmp_path):
+    provider_mod = _import_gats_industry_provider_module()
+
+    source = tmp_path / "sector_data.h5"
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2021-01-04"), "STK000"),
+            (pd.Timestamp("2021-01-05"), "STK000"),
+            (pd.Timestamp("2021-01-05"), "STK001"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    df = pd.DataFrame(
+        {"sw2_code": ["L1_A", "L1_B"]},
+        index=pd.MultiIndex.from_tuples(
+            [
+                (pd.Timestamp("2021-01-04"), "STK000"),
+                (pd.Timestamp("2021-01-06"), "STK000"),
+            ],
+            names=["datetime", "instrument"],
+        ),
+    )
+    df.to_hdf(source, key="data")
+
+    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=0.50)
+    values = provider(index)
+
+    assert values.loc[(pd.Timestamp("2021-01-04"), "STK000")] == "L1_A"
+    assert values.loc[(pd.Timestamp("2021-01-05"), "STK000")] == "L1_A"
+    assert pd.isna(values.loc[(pd.Timestamp("2021-01-05"), "STK001")])
+    assert provider.last_coverage["covered_rows"] == 2
+
+
+def test_gats_industry_provider_normalises_qlib_and_ts_code_instruments(tmp_path):
+    provider_mod = _import_gats_industry_provider_module()
+
+    source = tmp_path / "sector_data.h5"
+    df = pd.DataFrame(
+        {"sw2_code": ["L1_BANK"]},
+        index=pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "000001.SZ")], names=["datetime", "instrument"]),
+    )
+    df.to_hdf(source, key="data")
+    target_index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "SZ000001")], names=["datetime", "instrument"])
+
+    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=1.0)
+    values = provider(target_index)
+
+    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "L1_BANK"
+    assert provider.last_coverage["coverage"] == 1.0
+
+
+def test_gats_industry_provider_source_missing_and_coverage_zero_are_loud(tmp_path):
+    provider_mod = _import_gats_industry_provider_module()
+
+    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_source_missing"):
+        provider_mod.inject_gats_industry_provider_if_needed(
+            {"task": {"model": {"kwargs": {"gats_adjacency_mode": "industry_bias"}}}},
+            cwd=tmp_path,
+            print_fn=lambda *_args, **_kwargs: None,
+        )
+
+    source = tmp_path / "sector_data.h5"
+    df = pd.DataFrame(
+        {"sw2_code": ["L1_A"]},
+        index=pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "STK000")], names=["datetime", "instrument"]),
+    )
+    df.to_hdf(source, key="data")
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "MISSING")], names=["datetime", "instrument"])
+
+    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=0.90)
+    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_coverage_below_threshold"):
+        provider(index)
+
+
+def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monkeypatch):
+    provider_mod = _import_gats_industry_provider_module()
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("sector source should not be resolved in off mode")
+
+    monkeypatch.setattr(provider_mod, "resolve_sector_source_path", _boom)
+    result = provider_mod.inject_gats_industry_provider_if_needed(
+        {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off"}}}},
+        cwd=tmp_path,
+        print_fn=lambda *_args, **_kwargs: None,
+    )
+
+    assert result is None
+
+
+def test_efficient_gats_industry_bias_runner_injection_fit_predict(tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    pytest.importorskip("torch")
+    provider_mod = _import_gats_industry_provider_module()
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=False)
+    source = tmp_path / "sector_data.h5"
+    _write_sector_data_h5(source, {f"STK{i:03d}": f"L1_{i // 2}" for i in range(dataset.stocks)})
+    config = {
+        "qe_runtime": {"gats_industry_source_path": str(source), "gats_industry_min_coverage": 0.90},
+        "task": {"model": {"kwargs": {"gats_adjacency_mode": "industry_bias"}}},
+    }
+    provider = provider_mod.inject_gats_industry_provider_if_needed(config, cwd=tmp_path, print_fn=lambda *_args, **_kwargs: None)
+
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_adjacency_mode="industry_bias",
+        gats_industry_id_provider=provider,
+    )
+
+    evals_result = {}
+    model.fit(dataset, evals_result=evals_result, save_path=str(tmp_path / "efficient_gats_industry_provider.pt"))
+    preds = model.predict(dataset)
+
+    assert not preds.empty
+    if model.gats_adjacency_last_event is not None:
+        assert model.gats_adjacency_last_event["reason_code"] != "efficient_gats_industry_ids_missing"
+    assert provider.coverage_history
+    assert min(item["coverage"] for item in provider.coverage_history) > 0.90
+
+
+def test_efficient_gats_industry_bias_missing_provider_fails_loud():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=False)
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gats_adjacency_mode="industry_bias",
+    )
+
+    with pytest.raises(ValueError, match="reason_code=efficient_gats_industry_ids_missing"):
+        model._preload_segment_to_cpu(dataset.prepare("train"), segment_name="train")
 
 def test_general_ptnn_builtin_transformer_arch_params_route_into_pt_model_kwargs():
     # Regression for BUG-592: a built-in qlib Transformer seed carries arch params

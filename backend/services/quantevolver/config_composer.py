@@ -247,6 +247,7 @@ def _workspace_aistock_model_sources(conf_yaml: str) -> dict[str, Path]:
             {
                 "aistock_models/__init__.py": package_dir / "__init__.py",
                 "aistock_models/efficient_gats.py": package_dir / "efficient_gats.py",
+                "aistock_models/gats_industry_provider.py": package_dir / "gats_industry_provider.py",
             }
         )
     missing = [str(path) for path in sources.values() if not path.exists()]
@@ -1446,6 +1447,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1686,6 +1689,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             prediction_store_base_url=prediction_store_base_url,
+            factor_data_dir=factor_data_dir,
         )
 
         # 保存实验记录到数据库
@@ -1769,6 +1773,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # ── 获取因子 / 模型 / 策略信息 ──
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -2020,6 +2026,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             node_id=node_id,
             prediction_store_base_url=prediction_store_base_url,
@@ -2037,6 +2044,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             node_id=node_id,
             prediction_store_base_url=prediction_store_base_url,
@@ -2536,6 +2544,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)
@@ -2711,6 +2721,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
             prediction_store_base_url=prediction_store_base_url,
+            factor_data_dir=factor_data_dir,
         )
 
         # 更新数据库中的WSL命令和状态
@@ -4753,6 +4764,7 @@ class ConfigComposer:
         backtest_freq: str = "1min",
         train_only: bool = False,
         factor_cache_dir: Optional[str] = None,
+        factor_data_dir: Optional[str] = None,
         seed_ensemble_enabled: bool = False,
         node_id: Optional[str] = None,
         prediction_store_base_url: Optional[str] = None,
@@ -4800,6 +4812,9 @@ class ConfigComposer:
             loop_index_text = str(int(loop_index))
             env_lines.append(f"export QE_LOOP_INDEX={loop_index_text}")
             env_lines.append(f"export QE_LOOP_ID=Loop{loop_index_text}")
+        effective_factor_data_dir = str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "").strip()
+        if effective_factor_data_dir:
+            env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
 
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
@@ -4854,6 +4869,7 @@ class ConfigComposer:
                               backtest_freq: str = "1min",
                               train_only: bool = False,
                               factor_cache_dir: Optional[str] = None,
+                              factor_data_dir: Optional[str] = None,
                               seed_ensemble_enabled: bool = False,
                               node_id: Optional[str] = None,
                               prediction_store_base_url: Optional[str] = None,
@@ -4876,6 +4892,7 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=seed_ensemble_enabled,
             node_id=node_id,
             prediction_store_base_url=prediction_store_base_url,

@@ -1197,8 +1197,19 @@ def _run_seed_analysis_records(config: dict, recorder, label_obj) -> None:
         record.generate()
 
 
+def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
+    task_config = (config or {}).get("task") if isinstance(config, dict) else None
+    model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
+    model_kwargs = model_cfg.get("kwargs") or {}
+    if isinstance(model_kwargs, dict) and model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias":
+        from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
+
+        inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
+    return task_train(task_config, experiment_name=experiment_name)
+
+
 def _run_full_backtest(config: dict, experiment_name: str, *, mode: str = "full", output_dir: Path | str | None = None):
-    recorder = task_train(config.get("task"), experiment_name=experiment_name)
+    recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
     recorder_ref = _write_qe_current_recorder(recorder, mode, experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, mode, experiment_name, config)
@@ -1633,8 +1644,9 @@ def _run_train_only(config: dict, experiment_name: str):
 
     task_config["record"] = filtered_records
 
-    # 执行训练（task_train 内部会执行 filtered_records 中的 SignalRecord + SigAnaRecord）
-    recorder = task_train(task_config, experiment_name=experiment_name)
+    config_for_train = copy.deepcopy(config)
+    config_for_train["task"] = task_config
+    recorder = _task_train_with_gats_industry_provider(config_for_train, experiment_name=experiment_name)
     recorder_ref = _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
     _maybe_upload_prediction_store(recorder, recorder_ref, "train_only", experiment_name, config)
@@ -1687,6 +1699,10 @@ def _run_backtest_only(config: dict, experiment_name: str):
             f"under {source_params_dir}; target mlruns is reserved for recorder writes."
         )
     print(f"[INFO] Loaded trained model from isolated source params.pkl {params_path}")
+    if getattr(model, "gats_adjacency_mode", None) == "industry_bias":
+        from aistock_models.gats_industry_provider import attach_gats_industry_provider_to_model
+
+        attach_gats_industry_provider_to_model(model, config, cwd=Path.cwd(), print_fn=print)
 
     # 重建 dataset（从配置重新初始化，不需要训练数据）
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)

@@ -18,6 +18,13 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch):
     qlib_model_trainer = types.ModuleType("qlib.model.trainer")
     qlib_model_trainer.task_train = lambda *args, **kwargs: None
     qlib_model_trainer.fill_placeholder = lambda cfg, values: cfg
+    qlib_data = types.ModuleType("qlib.data")
+    qlib_data_dataset = types.ModuleType("qlib.data.dataset")
+    qlib_data_dataset.Dataset = object
+    qlib_model_base = types.ModuleType("qlib.model.base")
+    qlib_model_base.Model = object
+    qlib_utils = types.ModuleType("qlib.utils")
+    qlib_utils.init_instance_by_config = lambda *args, **kwargs: None
     qlib_workflow = types.ModuleType("qlib.workflow")
     qlib_workflow.__path__ = []
     qlib_workflow_cli = types.ModuleType("qlib.workflow.cli")
@@ -31,6 +38,10 @@ def _load_runner(monkeypatch: pytest.MonkeyPatch):
         "qlib": qlib,
         "qlib.model": qlib_model,
         "qlib.model.trainer": qlib_model_trainer,
+        "qlib.data": qlib_data,
+        "qlib.data.dataset": qlib_data_dataset,
+        "qlib.model.base": qlib_model_base,
+        "qlib.utils": qlib_utils,
         "qlib.workflow": qlib_workflow,
         "qlib.workflow.cli": qlib_workflow_cli,
         "qlib.workflow.record_temp": qlib_record_temp,
@@ -53,6 +64,36 @@ class _FakeRecorder:
     def get_local_dir(self) -> str:
         return str(self._run_dir)
 
+
+
+def test_qrun_industry_provider_injection_only_for_industry_bias(tmp_path, monkeypatch) -> None:
+    runner, _record_temp = _load_runner(monkeypatch)
+    calls = []
+    provider_module = types.ModuleType("aistock_models.gats_industry_provider")
+
+    def _inject(config, *, cwd=None, print_fn=print):
+        calls.append({"config": config, "cwd": Path(cwd)})
+        return "provider"
+
+    provider_module.inject_gats_industry_provider_if_needed = _inject
+    monkeypatch.setitem(sys.modules, "aistock_models.gats_industry_provider", provider_module)
+    monkeypatch.chdir(tmp_path)
+
+    assert runner._task_train_with_gats_industry_provider(
+        {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off"}}}},
+        "exp-off",
+    ) is None
+    assert calls == []
+
+    config = {
+        "qe_runtime": {"gats_industry_source_path": str(tmp_path / "sector_data.h5")},
+        "task": {"model": {"kwargs": {"gats_adjacency_mode": "industry_bias"}}},
+    }
+    assert runner._task_train_with_gats_industry_provider(
+        config,
+        "exp-bias",
+    ) is None
+    assert calls == [{"config": config, "cwd": tmp_path}]
 
 def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatch, capsys) -> None:
     runner, record_temp = _load_runner(monkeypatch)
