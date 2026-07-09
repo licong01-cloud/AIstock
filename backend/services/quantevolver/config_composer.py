@@ -3216,6 +3216,7 @@ class ConfigComposer:
             "weight_decay", "gpu_resident", "gpu_resident_shuffle_days",
             "gpu_resident_vram_margin_bytes",
             "gpu_resident_working_memory_multiplier",
+            "gats_adjacency_mode", "gats_industry_gamma_init",
         }
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
