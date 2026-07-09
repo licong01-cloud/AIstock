@@ -12,6 +12,7 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 - Read project rules once, then this skill plus the approved Feature Card/design.
 - Use `Design Acceptance Index` ids after the first design read; do not repeatedly load the full design.
 - Do not read BUG workflow, docs workflow, quickstarts, archived standards, or unrelated module designs.
+- For F1 work, use graph/UA or exact-symbol search before broad `rg`; pause and summarize before expanding if exploration reaches about 25 commands or 30 minutes.
 
 ## Feature Workflow
 
@@ -26,6 +27,9 @@ Use this skill only after the task is confirmed as new feature delivery or archi
 - Codex keeps the minimal local gate: changed-file lint/compile, direct contract or fix-point tests, `git diff --check`, scope check, and production gates.
 - Delegate broad UI/API/business-flow, cross-module, LLM design-drift, and long-running validation through `aistock-validation-delegation` or nightly; consume compact receipts first.
 - Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
+- For F1, run the related final small matrix at most once after behavior stabilizes. After a failure, rerun the failed nodeid or `pytest --lf` before any broader suite.
+- Do not run indirect module suites just because adjacent files are imported; list them as deferred CI/nightly coverage unless the design item directly changes that behavior.
+- After PR creation, read one compact check rollup. Do not spend interactive time on long CI polling unless a required check fails.
 
 ## Business Oracles
 

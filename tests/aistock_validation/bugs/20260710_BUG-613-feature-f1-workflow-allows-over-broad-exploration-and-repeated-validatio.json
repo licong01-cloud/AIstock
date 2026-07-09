@@ -1,8 +1,10 @@
 {
-  "actual": "Feature Workflow F1 currently allows agents to spend excessive time and tokens on broad exploration, repeated validation, and CI polling. Recent QE GATS SW2 provider PR #1935 took about 1h40 despite moderate local tests. Expected: F1 feature execution should be budgeted and compact: CodeGraph/UA or exact-symbol exploration first, no repeated standards rereads, fail-nodeid-first test reruns, one final small matrix, compact PR evidence, asynchronous CI rollup, and broad validation delegated to VC/CI/nightly.",
+  "actual": "Feature Workflow F1 currently allows agents to spend excessive time and tokens on broad exploration, repeated validation, and CI polling. Recent QE GATS SW2 provider PR #1935 took about 1h40 despite moderate local tests. Expected: F1 feature execution should be budgeted and compact: CodeGraph/UA or exact-symbol exploration first, no repeated standards rereads, fail-nodeid-first test reruns, one final small matrix, compact PR evidence, asynchronous CI rollup, and broad validation delegated to VC/CI/nightly. Scope update: fix requires Codex and Claude feature workflow entrypoints so both clients receive the compact F1 rules.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260710_BUG-613-feature-f1-workflow-allows-over-broad-exploration-and-repeated-validatio.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".codex/skills/verify-aistock-feature/SKILL.md",
+    ".claude/commands/aistock-feature-workflow.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-613",
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "F1 feature workflow client guidance should enforce compact execution: graph/UA or exact-symbol exploration first, single final small matrix after stabilization, failure-nodeid-first reruns, indirect suites deferred to CI/nightly, and compact asynchronous CI rollup.",
   "first_seen_at": "2026-07-09T16:43:33.777166Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -41,7 +43,9 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
-    "validation_center_backend"
+    "validation_center_backend",
+    "workflow_smoke",
+    "client_entry_scope_check"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
