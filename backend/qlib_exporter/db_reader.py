@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """从本地数据库读取行情数据的工具.
 
 数据导出策略：
@@ -13,6 +11,8 @@ from __future__ import annotations
 - 分钟线数据（股票）
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional
@@ -21,14 +21,15 @@ import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.services.industry_code_map import (
+    UNKNOWN_L2_CODE_ID,
+    encode_l2_codes,
+    load_sw_l2_code_map,
+)
 
 from .config import (
-    ADJ_FACTOR_TABLE,
     DAILY_RAW_TABLE,
-    FACTOR_DATA_TABLE,
-    FIELD_MAPPING_DB_DAILY,
     FIELD_MAPPING_DB_MINUTE,
-    FIELD_MAPPING_FACTOR,
     INDEX_BASIC_TABLE,
     INDEX_DAILY_TABLE,
     INDEX_DAILY_TDX_TABLE,
@@ -1399,7 +1400,7 @@ class DBReader:
 
         返回 DataFrame:
         - Index: MultiIndex (datetime, instrument)
-        - Columns: sw2_* 系列 22 列, float32
+        - Columns: sw2_* 22 numeric float32 columns plus int l2_code_id
         """
         exchange_conds = []
         if exchanges:
@@ -1447,9 +1448,19 @@ class DBReader:
             SELECT
                 sd.trade_date,
                 sd.ts_code,
+                ind.l2_code,
                 {col_list}
             FROM market.sector_data sd
             INNER JOIN market.stock_basic s ON sd.ts_code = s.ts_code
+            LEFT JOIN LATERAL (
+                SELECT l2_code
+                FROM market.sw_index_member m
+                WHERE m.ts_code = sd.ts_code
+                  AND m.in_date <= sd.trade_date
+                  AND (m.out_date IS NULL OR m.out_date >= sd.trade_date)
+                ORDER BY m.in_date DESC NULLS LAST, m.out_date DESC NULLS LAST
+                LIMIT 1
+            ) ind ON TRUE
             WHERE sd.trade_date >= '{start.isoformat()}'
               AND sd.trade_date <= '{end.isoformat()}'
               AND {where_clause}{ts_code_filter}
@@ -1461,6 +1472,7 @@ class DBReader:
                 cur.execute(sql)
                 rows = cur.fetchall()
                 colnames = [desc[0] for desc in cur.description]
+            l2_code_map = load_sw_l2_code_map(conn)
         df = pd.DataFrame(rows, columns=colnames)
 
         if df.empty:
@@ -1473,8 +1485,36 @@ class DBReader:
 
         # 仅保留 sw2_* 列，统一为 float32
         result = df[sw2_cols].astype("float32")
+        result["l2_code_id"] = np.asarray(
+            encode_l2_codes(df["l2_code"].tolist(), l2_code_map),
+            dtype=np.int16,
+        )
         result = result.sort_index()
+        self._warn_low_l2_code_coverage(result)
         return result
+
+    def _warn_low_l2_code_coverage(self, df: pd.DataFrame) -> None:
+        if df.empty or "l2_code_id" not in df.columns:
+            return
+        coverage = df["l2_code_id"].ne(UNKNOWN_L2_CODE_ID).groupby(level="datetime").agg(["sum", "count"])
+        for dt_value, row in coverage.iterrows():
+            total = int(row["count"])
+            matched = int(row["sum"])
+            if total <= 0:
+                continue
+            ratio = matched / total
+            if ratio < 0.90:
+                missing = total - matched
+                label = dt_value.date().isoformat() if hasattr(dt_value, "date") else str(dt_value)
+                self.logger.warning(
+                    "sector_data_l2_code_id_coverage_below_threshold "
+                    "reason_code=sector_data_l2_code_id_low_coverage "
+                    "trade_date=%s coverage=%.4f missing_count=%d total_count=%d",
+                    label,
+                    ratio,
+                    missing,
+                    total,
+                )
 
     def get_moneyflow_ts_codes(
         self,

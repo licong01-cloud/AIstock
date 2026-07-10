@@ -1,18 +1,16 @@
-from __future__ import annotations
-
 """Qlib 数据导出协调器.
 
 封装从 DB 读取 → 生成宽表 → 写入 Snapshot 的完整流程。
 支持全量和增量导出。
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional, Sequence
-import psycopg2
 import pandas as pd
 
-from ..db.pg_pool import get_conn
 from .db_reader import DBReader
 from .meta_repo import MetaRepo
 from .snapshot_writer import SnapshotWriter
@@ -1137,7 +1135,7 @@ class QlibSectorDataExporter:
 
     输出文件 sector_data.h5，供 Qlib / RD-Agent 使用：
     - Index: MultiIndex (datetime, instrument)
-    - Columns: sw2_* 系列 22 列
+    - Columns: sw2_* 22 numeric columns plus l2_code_id
     """
 
     def __init__(

@@ -134,6 +134,7 @@ def _sector_data_source_to_export_map() -> Dict[str, str]:
         "sw2_mf_net_amt",
         "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
         "sw2_mf_net_vol",
+        "l2_code_id",
     ]
     return {c: c for c in cols}
 
@@ -316,6 +317,18 @@ def build_field_map_rows_for_snapshot(
         for col in sector_data_columns:
             src = exp2src.get(col)
             if not src:
+                continue
+            if col == "l2_code_id":
+                cn = "申万L2行业稳定整数编码，未知=-1，编码真源为 market.sw_index_classify L2 index_code 升序"
+                rows.append(
+                    FieldMapRow(
+                        name=col,
+                        meaning_cn=cn,
+                        source_table="sector_data",
+                        comment=cn,
+                        dtype_hint=sector_data_dtypes.get(col, "int16") if sector_data_dtypes else "int16",
+                    )
+                )
                 continue
             cn = comments.get(src, "")
             unit = ""

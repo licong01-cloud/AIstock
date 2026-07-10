@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import struct
 import sys
 import warnings
@@ -308,7 +307,7 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
         "moneyflow.h5": 18,
         "bak_basic.h5": 15,
         "cyq_perf.h5": 9,
-        "sector_data.h5": 22,
+        "sector_data.h5": 23,
         "margin_detail.h5": 8,
     }
     for name, expected_cols in aux_files.items():

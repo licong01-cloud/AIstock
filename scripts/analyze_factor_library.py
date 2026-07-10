@@ -51,7 +51,7 @@ DATASET_FIELDS = {
         "sw2_mf_buy_lg_amt", "sw2_mf_sell_lg_amt",
         "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt",
         "sw2_mf_net_amt", "sw2_mf_buy_elg_vol", "sw2_mf_sell_elg_vol",
-        "sw2_mf_net_vol",
+        "sw2_mf_net_vol", "l2_code_id",
     ],
     "static_factors.parquet": ["static_factors"],
 }
@@ -386,7 +386,7 @@ async def main():
     print(f"{'=' * 60}")
 
     # §1
-    print(f"\n§1 因子库总览")
+    print("\n§1 因子库总览")
     print(f"{'-' * 40}")
     print(f"  总因子数:          {total}")
     print(f"  可用(available):   {available}")
@@ -399,14 +399,14 @@ async def main():
     missing_metrics = available - has_full_metrics
     missing_class = available - classified_count
     if missing_metrics > 0 or missing_class > 0:
-        print(f"\n  !! 数据完整性:")
+        print("\n  !! 数据完整性:")
         if missing_metrics > 0:
             print(f"    - {missing_metrics} 个可用因子缺少完整指标(4窗口)")
         if missing_class > 0:
             print(f"    - {missing_class} 个可用因子缺少LLM分类")
 
     # §2
-    print(f"\n§2 分类分布")
+    print("\n§2 分类分布")
     print(f"{'-' * 40}")
     max_count = max(cat_dist.values()) if cat_dist else 1
     for code, name in CATEGORY_NAMES.items():
@@ -420,7 +420,7 @@ async def main():
         print(f"  ???   未分类  {unclassified}")
 
     # §3
-    print(f"\n§3 IC 分布统计")
+    print("\n§3 IC 分布统计")
     print(f"{'-' * 40}")
     for window in ["out_sample", "full", "recent_6m", "recent_3m"]:
         data = ic_by_window.get(window, [])
@@ -441,7 +441,7 @@ async def main():
         print(f"    |IC|>0.03: {gt003} ({gt003*100//n}%)")
 
     # §4
-    print(f"\n§4 数据集覆盖分析")
+    print("\n§4 数据集覆盖分析")
     print(f"{'-' * 40}")
     for ds_name, fields in DATASET_FIELDS.items():
         used = all_used_fields.get(ds_name, set())
@@ -456,14 +456,14 @@ async def main():
                 print(f"    未用: {', '.join(unused[:5])}, ... (+{len(unused)-5})")
 
     # §5
-    print(f"\n§5 Top/Bottom 因子 (out_sample IC)")
+    print("\n§5 Top/Bottom 因子 (out_sample IC)")
     print(f"{'-' * 40}")
     if os_sorted:
-        print(f"  Top 20 (|IC| 最大):")
+        print("  Top 20 (|IC| 最大):")
         for i, f in enumerate(os_sorted[:20], 1):
             cat = cat_map.get(f["factor_name"], "?")
             print(f"    {i:2d}. {f['factor_name']:40s} IC={f['ic_mean']:+.4f}  ICIR={f['icir']:.2f}  {cat}")
-        print(f"\n  Bottom 10 (|IC| 最小):")
+        print("\n  Bottom 10 (|IC| 最小):")
         for i, f in enumerate(reversed(os_sorted[-10:]), 1):
             cat = cat_map.get(f["factor_name"], "?")
             print(f"    {i:2d}. {f['factor_name']:40s} IC={f['ic_mean']:+.4f}  ICIR={f['icir']:.2f}  {cat}")
@@ -471,7 +471,7 @@ async def main():
         print("  无 out_sample 数据")
 
     # §6 相关性分析
-    print(f"\n§6 相关性分析")
+    print("\n§6 相关性分析")
     print(f"{'-' * 40}")
     if corr_total == 0:
         print("  ⚠ 相关性数据为空，请先执行相关性计算")
@@ -489,7 +489,7 @@ async def main():
         # 高相关因子对 Top 20
         high_pairs = corr_data.get("high_pairs", [])
         if high_pairs:
-            print(f"\n  高相关因子对 Top 20:")
+            print("\n  高相关因子对 Top 20:")
             for i, r in enumerate(high_pairs[:20], 1):
                 ic_a = float(r["ic_a"]) if r["ic_a"] else 0
                 ic_b = float(r["ic_b"]) if r["ic_b"] else 0
@@ -507,17 +507,17 @@ async def main():
         # 因子替换建议
         replacements = corr_data.get("replace_candidates", [])
         if replacements:
-            print(f"\n  因子替换建议 (|corr|>0.8 且 IC 提升>=30%):")
+            print("\n  因子替换建议 (|corr|>0.8 且 IC 提升>=30%):")
             for r in replacements[:10]:
                 print(f"    ✓ {r['keep']:40s} IC={r['ic_keep']:.4f}  ICIR={r['icir_keep']:.2f}")
                 print(f"      → 替换 {r['drop']:36s} IC={r['ic_drop']:.4f}  ICIR={r['icir_drop']:.2f}")
                 print(f"        corr={r['corr']:+.3f}  IC提升={r['ic_improve']:.0f}%")
 
     # §7 IC 衰变分析
-    print(f"\n§7 IC 衰变分析 (full → recent_3m)")
+    print("\n§7 IC 衰变分析 (full → recent_3m)")
     print(f"{'-' * 40}")
     if decay_data:
-        print(f"  衰变最严重 (Top 15):")
+        print("  衰变最严重 (Top 15):")
         seen = set()
         count = 0
         for d in decay_data:
@@ -536,7 +536,7 @@ async def main():
         print("  无衰变数据")
 
     if improve_data:
-        print(f"\n  近期增强 (Top 15):")
+        print("\n  近期增强 (Top 15):")
         seen = set()
         count = 0
         for d in improve_data:
@@ -553,7 +553,7 @@ async def main():
             print(f"    {name:45s} IC_full={ic_f:+.4f}  IC_3m={ic_3:+.4f}  增强={imp:+.0f}%")
 
     # §8 补充建议
-    print(f"\n§8 补充建议")
+    print("\n§8 补充建议")
     print(f"{'-' * 40}")
     suggestions = []
 
@@ -587,7 +587,7 @@ async def main():
         suggestions.append(
             f"[因子清理] {len(low_ic)} 个因子 out_sample |IC| < 0.01，"
             f"建议禁用: {', '.join(f['factor_name'] for f in low_ic[:5])}"
-            + (f" 等" if len(low_ic) > 5 else "")
+            + (" 等" if len(low_ic) > 5 else "")
         )
 
     if corr_total > 0:
@@ -608,7 +608,7 @@ async def main():
         print("  无特别建议")
 
     print(f"\n{'=' * 60}")
-    print(f"  报告完成")
+    print("  报告完成")
     print(f"{'=' * 60}")
 
 
