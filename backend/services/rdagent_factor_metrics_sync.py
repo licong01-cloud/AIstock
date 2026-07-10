@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..db.pg_pool import get_conn
@@ -338,7 +337,7 @@ def sync_factor_metrics_for_task(task_id: str) -> MetricsSyncResult:
                       AND catalog_source IN ('rdagent_loop_manual_sync', 'rdagent_task_sync')
                 """, (task_id,))
                 for row in cur.fetchall():
-                    fname, tag, csource = row[0], row[1], row[2]
+                    fname, tag = row[0], row[1]
 
                     # 跳过 Step 1 已通过 SOTA parquet 处理的因子
                     if _normalize_factor_name(fname) in sota_handled_norm:

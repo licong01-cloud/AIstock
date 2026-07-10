@@ -4,7 +4,6 @@
 直接调用 ManualFactorService 完成全流程。
 """
 import asyncio
-import json
 import os
 import sys
 import time
