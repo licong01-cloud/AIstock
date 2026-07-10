@@ -340,6 +340,18 @@ DDL: List[str] = [
         rank_ic_5d               DOUBLE PRECISION,
         rank_ic_10d              DOUBLE PRECISION,
         rank_ic_20d              DOUBLE PRECISION,
+        h20_return_horizon       TEXT,
+        h20_ic_mean              DOUBLE PRECISION,
+        h20_ic_std               DOUBLE PRECISION,
+        h20_rank_ic_mean         DOUBLE PRECISION,
+        h20_rank_ic_std          DOUBLE PRECISION,
+        h20_icir                 DOUBLE PRECISION,
+        h20_rank_icir            DOUBLE PRECISION,
+        h20_icir_hac             DOUBLE PRECISION,
+        h20_rank_icir_hac        DOUBLE PRECISION,
+        h20_ic_positive_ratio    DOUBLE PRECISION,
+        h20_n_obs                INTEGER,
+        h20_hac_lag              INTEGER,
         coverage                 DOUBLE PRECISION,
         coverage_numerator       BIGINT,
         coverage_denominator     BIGINT,
@@ -393,7 +405,7 @@ DDL: List[str] = [
     ON aistock_factor_metrics (factor_name, snapshot_date);
     """,
     # aistock_factor_metrics 表和字段中文注释
-    "COMMENT ON TABLE aistock_factor_metrics IS '单因子独立评估指标表，每个因子在不同评估窗口下的17项量化指标，支持历史多次计算记录';",
+    "COMMENT ON TABLE aistock_factor_metrics IS '单因子独立评估指标表，保存核心指标与可空扩展指标，支持多窗口和历史多次计算记录';",
     "COMMENT ON COLUMN aistock_factor_metrics.factor_name IS '因子名称，与 aistock_factor_catalog.factor_name 对应';",
     "COMMENT ON COLUMN aistock_factor_metrics.calculated_at IS '指标计算时间(UTC)，同一因子可多次计算以追踪衰退';",
     "COMMENT ON COLUMN aistock_factor_metrics.data_start IS '计算所用数据的起始日期';",
@@ -560,6 +572,18 @@ POST_MIGRATION_COMMENTS: List[str] = [
     "COMMENT ON COLUMN aistock_factor_metrics.top_max_drawdown IS '多头组最大回撤：多头组合累计收益的最大回撤幅度(负值)';",
     "COMMENT ON COLUMN aistock_factor_metrics.top_excess_sharpe IS '多头超额夏普比：多头超额收益序列的年化夏普比率';",
     "COMMENT ON COLUMN aistock_factor_metrics.benchmark_annual_return IS '基准年化收益：全市场等权组合的年化收益率';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_return_horizon IS 'h20 companion 指标的收益区间标识；T21T1 表示t+1收盘到t+21收盘';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_ic_mean IS 'h20 Pearson IC 日序列均值，与默认1d核心指标并存';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_ic_std IS 'h20 Pearson IC 日序列标准差';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_rank_ic_mean IS 'h20 Spearman Rank IC 日序列均值';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_rank_ic_std IS 'h20 Spearman Rank IC 日序列标准差';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_icir IS 'h20 IC 均值除以标准差，未做重叠收益的 HAC 调整';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_rank_icir IS 'h20 Rank IC 均值除以标准差，未做 HAC 调整';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_icir_hac IS 'h20 Pearson IC 基于 Newey-West 长期方差的 HAC ICIR';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_rank_icir_hac IS 'h20 Rank IC 基于 Newey-West 长期方差的 HAC ICIR';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_ic_positive_ratio IS 'h20 Pearson IC 大于0的观测占比';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_n_obs IS 'h20 Pearson IC 有效日序列观测数';",
+    "COMMENT ON COLUMN aistock_factor_metrics.h20_hac_lag IS 'h20 HAC 长期方差估计使用的最大滞后阶数，默认输出为19';",
 ]
 
 
@@ -628,6 +652,24 @@ def init_quant_schema() -> None:
             # aistock_factor_metrics / aistock_factor_calc_log: catalog_id 关联列
             add_column_if_not_exists("aistock_factor_metrics", "factor_catalog_id", "BIGINT")
             add_column_if_not_exists("aistock_factor_calc_log", "factor_catalog_id", "BIGINT")
+
+            # aistock_factor_metrics: h20 companion 指标（可空，兼容旧1d payload/记录）
+            h20_metric_columns = {
+                "h20_return_horizon": "TEXT",
+                "h20_ic_mean": "DOUBLE PRECISION",
+                "h20_ic_std": "DOUBLE PRECISION",
+                "h20_rank_ic_mean": "DOUBLE PRECISION",
+                "h20_rank_ic_std": "DOUBLE PRECISION",
+                "h20_icir": "DOUBLE PRECISION",
+                "h20_rank_icir": "DOUBLE PRECISION",
+                "h20_icir_hac": "DOUBLE PRECISION",
+                "h20_rank_icir_hac": "DOUBLE PRECISION",
+                "h20_ic_positive_ratio": "DOUBLE PRECISION",
+                "h20_n_obs": "INTEGER",
+                "h20_hac_lag": "INTEGER",
+            }
+            for column, col_type in h20_metric_columns.items():
+                add_column_if_not_exists("aistock_factor_metrics", column, col_type)
 
             # aistock_factor_metrics: 多空→纯多头列名迁移
             def rename_column_if_exists(table, old_col, new_col):

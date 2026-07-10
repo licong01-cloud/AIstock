@@ -133,6 +133,10 @@ def get_result(
         SELECT id, factor_name, eval_window, return_horizon, universe, ic_mean, rank_ic_mean,
                icir, rank_icir, ic_positive_ratio, top_excess_sharpe, top_excess_annual_return,
                top_max_drawdown, group_return_monotonicity, turnover, coverage, n_trading_days,
+               h20_return_horizon, h20_ic_mean, h20_ic_std,
+               h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+               h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+               h20_n_obs, h20_hac_lag,
                snapshot_date, calc_batch_id, calculated_at
         FROM aistock_factor_metrics
         WHERE {where}
@@ -160,7 +164,11 @@ def compare_versions(factor_name: str, limit: int | None = Query(20, ge=1)) -> d
     rows = _rows(
         """
         SELECT factor_name, eval_window, snapshot_date, calc_batch_id, ic_mean, rank_ic_mean,
-               icir, rank_icir, coverage, n_trading_days, calculated_at
+               icir, rank_icir, coverage, n_trading_days,
+               h20_return_horizon, h20_ic_mean, h20_ic_std,
+               h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+               h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+               h20_n_obs, h20_hac_lag, calculated_at
         FROM aistock_factor_metrics
         WHERE factor_name = %s AND calc_engine = %s
         ORDER BY snapshot_date DESC NULLS LAST, calculated_at DESC NULLS LAST

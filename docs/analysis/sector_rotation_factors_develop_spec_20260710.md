@@ -1,9 +1,9 @@
 # 板块轮动因子研发规格：候选池、去重与 h20 验收
 
-- 文档类型：因子研发规格 / 开发指引（`develop-factor`）
+- 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v2（证据整合修订版，2026-07-10）
+- 当前版本：v3（Gate-0 F2 执行版，2026-07-11）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -25,9 +25,9 @@
 | 原编号 | 原设计 | 统一状态 | 当前证据与处置 |
 |---|---|---|---|
 | F1 | `m_sector_rs_rank_20d` 板块相对强度排名 | `BASELINE` | 与既有行业动量/行业反转族同源。对收益做 percentile rank 是单调变换，本身不产生正交性。保留为研究基线，不作为首批新增因子；新增研发改为“板块排名速度”。 |
-| F2 | `m_sector_breadth_ma20` 板块内成员站上均线比例 | `BASELINE` | raw level 作为基线；因子库中未发现申万 L2 成员均线广度的直接同义因子，因此将结构不同的 breadth thrust（A2）作为 `NEW` 主候选。 |
+| F2 | `m_sector_breadth_ma20` 板块内成员站上均线比例 | `BASELINE` | raw level 作为基线；当前英文泛化 MCP 搜索不足以证明无同族资产，Stage 0 仍须用精确名、中文描述、公式和相关簇查重。A2 breadth thrust 作为待证伪的 `NEW` 主候选，而非已证明独有。 |
 | F3 | `m_sector_flow_rotation_10d` 板块资金流加速 | `NEGATIVE_CONTROL` | 与现有 `m_sw2_net_vol_momentum` 等高度相邻；既有 out-sample 1d 证据弱。快筛不过不入库。 |
-| F4 | `m_stock_sector_leadership_20d` 个股 20 日动量减板块动量 | `REUSE` | 已由 `m_stock_vs_industry_mom_20d` 精确覆盖，并与 `m_mom_residual_20d` 高相关。禁止换名重复入库；先审计并复用现有因子做 h20 重评估，再决定是否研发结构不同的 leadership persistence。 |
+| F4 | `m_stock_sector_leadership_20d` 个股 20 日动量减板块动量 | `REUSE` | 经济公式意图已由 `m_stock_vs_industry_mom_20d` 覆盖，并与 `m_mom_residual_20d` 进入同一高相关簇；但 catalog 资产存在 PIT 口径缺陷，只有完成 F-006 repair source 同步与重算后才能正式复用。禁止换名重复入库；B2 只允许结构不同的 leadership persistence。 |
 
 关键策略约束保持不变：
 
@@ -35,7 +35,7 @@
 - 因子内部可以使用行业相对值、残差、板块内排名等结构，但不能把“因子使用相对值”和“标签板块中性化”混为一谈。
 - 正交性和模型增量价值优先于单因子绝对 IC；不得为了扩充数量重复注册同公式、反向或单调变换因子。
 
-## 2. 目标与非目标
+## 2. Scope / 范围
 
 ### 2.1 目标
 
@@ -60,13 +60,17 @@
 | `CONDITIONAL` | 只有上游数据或前一批证据通过后才开发。 |
 | `PASS/MARGINAL/KILL/DUPLICATE` | 研发后的最终处置。 |
 
-### 2.2 非目标
+### 2.2 Non-goals / 非目标
 
 - 不以“开发数量”替代质量门禁。
 - 不重复创建现有行业动量、行业残差或其反向副本。
 - 不把 `l2_code_id` 当连续数值直接输入因子公式。
 - 不用最终 out-sample 结果选择符号、窗口或公式；这些选择必须在 train/validation 阶段冻结。
 - 不在本规格中授权 candidate 数据向 active/production 的自动 promotion。
+
+### 2.3 2026-07-11 Gate-0 本批执行边界
+
+用户于 2026-07-11 明确批准按本方案启动“前置批次”。本批交付范围是：研究门禁与 F2 设计、candidate bundle 闭环、通用 h20 快筛、RD-Agent/AIstock h20 companion 指标契约，以及 F4/R2 tracked repair source 的 PIT 修复。候选 A1–A6/B1/B2/N1 的实际开发、offline/realtime 双资产生成、成本容量/拥挤回测、QE 消融、生产 DDL/回填、candidate → active promotion 与运行时启用均明确后置；这些后置项不是本批允许以简化版替代的缺口，而是下一阶段必须按 F-007–F-010 重新验收的独立工作。
 
 ## 3. 证据口径与基线因子
 
@@ -83,7 +87,21 @@
 
 历史 1d 指标只用于定位重复、方向风险和 negative control，不得替代 h20 验收。QE archive 中“包含某因子的运行表现”也只能说明组合使用背景，不能当作该因子的因果贡献；最终贡献必须由受控消融证明。
 
-## 4. 统一设计原则
+2026-07-11 Gate-0 因子库 MCP 只读复核进一步确认：
+
+| factor | eval_window | snapshot_date | universe | return_horizon | IC / RankIC | calc_batch_id | calculated_at |
+|---|---|---|---|---|---|---|---|
+| `m_stock_vs_industry_mom_20d` | out_sample | 2026-04-30 | `shsz_st_pit_active_v1` | 1d | -0.03802977 / -0.03668953 | `cf25429d-928c-4938-88ee-96514e65d214` | 2026-06-20T05:00:57.811464+08:00 |
+| `m_mom_residual_20d` | out_sample | 2026-04-30 | `shsz_st_pit_active_v1` | 1d | -0.03886011 / -0.03851000 | `cf25429d-928c-4938-88ee-96514e65d214` | 2026-06-20T04:52:25.170443+08:00 |
+
+查询 receipt：2026-07-11 调用 `factor_library_get`、`factor_library_get_metric_summary` 与 `factor_corr_get_clusters(min_abs_corr=0.8)`；相关性快照在 catalog 中记录为 2026-06-20。上表只用于查重和发现旧口径问题，不是 h20 验收。
+
+- `m_stock_vs_industry_mom_20d`（manual，id=1247）仍为 `is_available=true` 但 `asset_status=pending`；其 catalog `realtime_code_text` 沿 instrument 对 `sw2_close` 做 20 日 `pct_change`，与第 4.1 节 PIT 契约冲突，因此 transformation `SUCCESS` 不能视为口径正确。
+- 该因子与 `m_mom_residual_20d` 的官方指标仍只有 `return_horizon=1d`。out-sample 1d IC/RankIC 分别约为 `-0.03803/-0.03669` 与 `-0.03886/-0.03851`，形态和方向高度接近；修复 PIT 口径并重算 h20 前，不得引用这些历史值为 PASS 证据。
+- `min_abs_corr=0.8` 的相关簇把 `m_stock_vs_industry_mom_20d`、`m_mom_residual_20d`、`m_ind_pb_rel_mom` 归入同一簇；`Industry_Momentum` 与 `SW2_MOM5` 也在同一高相关簇。该证据支持 F4 `REUSE`、B2 条件增量以及 A3 相对 R1 去重，不支持换名新增。
+- 英文泛化搜索 `sector breadth`/`industry momentum` 返回 0 条不能解释为“因子库不存在同族因子”；Stage 0 必须继续用精确名称、中文描述、公式线索和相关簇联合检索。
+
+## 4. Architecture / 架构与统一设计原则
 
 ### 4.1 先构造板块面板，再做时序运算
 
@@ -134,6 +152,41 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 - 不得在最终 out-sample 看到负 IC 后直接取负；若 train/validation 证明反向语义成立，应创建有清晰金融解释的版本，再进入 untouched test。
 - 同族窗口变体必须作为一个 family 报告，保留 family-level 淘汰记录，避免从大量参数中择优造成数据挖掘偏差。
 
+### 4.6 G0-01：试验台账、依赖检验与选择偏差
+
+机构和论文证据只提供研究先验，不直接证明 A 股 alpha。Harvey、Liu、Zhu 指出因子海量检验下传统 `t > 2` 不足；2026 年更新进一步强调测试依赖、原假设分布和样本选择，并建议 local FDR。Bailey 与 López de Prado 的 Deflated Sharpe Ratio（DSR）则校正多次尝试、非正态和选择偏差。对应 AIstock 规则为：
+
+- 每次公式、窗口、符号、阈值、种子、切分或数据快照组合都分配唯一 `trial_id`；validation 后的任何修改都算新试验。
+- 台账最小字段冻结为：`trial_id`、`parent_trial_id`、`created_at_utc`、`candidate_id`、`family_id`、`formula_hash`、`code_hash`、`data_snapshot_sha256`、`label_contract`、train/validation/test 边界、`purge_days`、`embargo_days`、`expected_direction`、阈值、随机种子、状态与 disposition。实际运行台账随实验 artifact 保存为 JSONL append log，或 immutable partitioned Parquet dataset + manifest；不写入源码目录，也不得删除或覆写 KILL/ERROR 行。
+- 相关候选按 family 计数：`{A1,A2,A4}`、`{A3,B2,R1,R2}`、`{A5,A6}`、`{B1,N1}`。N1 即使 KILL 也保留在试验台账。
+- 至少报告候选总数、family 数、有效独立试验数估计和 HAC t 值；生成组合收益后再报告 DSR/PBO 或等价选择偏差诊断。
+- `t >= 3` 与 local FDR 是统计治理参考，不能机械替换本规格的 h20 IC/RankIC 门槛。
+
+### 4.7 G0-02/G0-03：purge、embargo 与重叠 h20 推断
+
+- 固定 chronological train/validation/test；最终 test 只允许开启一次，禁止随机切分。
+- 按标签区间精确 purge。对 `close[t+21] / close[t+1] - 1`，训练/验证边界至少移除会与后段标签重叠的 20 个信号日；若采用双向 CV/CPCV，再使用预注册 embargo。
+- rolling 标准化、阈值和方向 `d` 只能由 train/validation 冻结。
+- 普通 IC/RankIC 之外，必须报告 Newey-West long-run variance 调整的 ICIR，默认 `lag = h - 1 = 19`；同时用更长 lag、stationary/block bootstrap 或非重叠抽样做敏感性检查。
+
+### 4.8 G0-04/G0-06：条件增量、信息扩散与 STATE 通道
+
+行业动量可以解释相当部分个股动量；行业内 lead-lag 也可能来自共同信息的缓慢扩散。因此 rank、相对行业收益或 leadership 不能天然视为新 alpha：
+
+- A3 必须控制 R1、`Industry_Momentum`、`SW2_MOM5` 和原始板块 20 日收益；B2 必须控制 R2、`m_stock_vs_industry_mom_20d` 和 `m_mom_residual_20d`。
+- A2/A4 必须控制 A1 和原始板块动量。除相关系数外，报告 partial IC、残差 IC 或条件回归增量。
+- A5/A6 是 `STATE`，不强迫具有固定单调方向。允许各自增加一个预注册的 `state × momentum_or_breadth` 模型交互腿，但交互不生成新的 catalog 原子因子，也不能在 test 后挑选。
+- A5 必须区分 residual cohesion、原始成员离散度和普通低波，并检查高协同性是否表现为拥挤后的反转。
+
+### 4.9 G0-05/G0-07/G0-08/G0-09：breadth、成本容量、拥挤与组合增量
+
+- 外部 breadth 研究只能支持“成员参与值得检验”的先验，不能证明 A1/A2 在 A 股有效。A1 保持 level baseline，A2 保持唯一 thrust 主公式；advance/decline、自由流通加权等仅作为预注册 sensitivity。
+- 所有候选都报告换手、实际费用、停牌/涨跌停可成交性、成交参与率和多资金规模 capacity curve。A2/A3/B1/N1 是高换手重点，A1/A5/A6 也不豁免。
+- 去重不止检查平均因子值相关性，还检查 long-leg/目标持仓重合、同向换手和冲击重合、压力期相关性、尾部亏损与成本跳升。平均相关性低但尾部持仓高度重合时，标记为“不同公式、相同拥挤风险”。
+- 最终采用标准是 GATs/LGBM 的 out-sample 组合增量，包括 `ΔIC`、净 Sharpe、回撤、换手、容量和多种子稳定性；单因子 IC 不能代替组合验证。
+
+上述门禁分别参考多重检验、PBO/DSR、行业/因子动量、信息扩散、离散度、真实交易成本和机构拥挤模型的一手研究。完整引用见第 18 节；所有外部结论都必须在冻结的 A 股 candidate 数据上重新证伪。
+
 ## 5. 代码与运行时契约
 
 当前因子研发链存在两种代码形态，本规格明确要求双产物而不是混用：
@@ -178,7 +231,7 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 | A1 | `m_sector_breadth_ma20_level` | `BASELINE` | 板块价格广度 level | close + `l2_code_id` | 20d | C |
 | A2 | `m_sector_breadth_ma20_thrust_5d` | `NEW` | 板块价格广度扩散速度 | close + `l2_code_id` | 25d | A |
 | A3 | `m_sector_rs_rank_velocity_20d_5d` | `NEW` | 板块排名进入速度 | `sw2_close` + `l2_code_id` | 25d | A |
-| A4 | `m_sector_participation_gap_20d` | `NEW` | 典型成员与指数参与差 | close + `sw2_close` + `l2_code_id` | 20d | A |
+| A4 | `m_sector_participation_gap_20d` | `NEW` | 典型成员与指数参与差 | close + `sw2_close` + `l2_code_id`；控制项 `db_circ_mv` | 20d | A |
 | A5 | `m_sector_residual_cohesion_10d_60d` | `NEW` | 板块成员残差协同性 | close + `sw2_close` + `l2_code_id` | 60d | B |
 | A6 | `m_sector_vol_compression_5d_20d` | `NEW` | 板块波动压缩状态 | `sw2_close` + `l2_code_id` | 20d | B |
 
@@ -197,8 +250,11 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 - 每日对有效板块做 percentile rank 后映射回成员。
 - 预期方向：正；成员参与度正在扩散，比绝对 level 更贴近轮动形成，但仍可能在行情末端形成追涨信号。
 - 变体门禁：只有主公式 MARGINAL/PASS 后，才允许另立 `m_sector_breadth_ma20_abnormal_60d = breadth20 - MA60(breadth20)`；不得在一个因子名下保留二选一公式。
+- 研究门禁：advance/decline、自由流通市值加权 breadth 等只能作为预注册 sensitivity；A2 是本批唯一主 thrust 公式，sensitivity 不形成新的 catalog 候选，也不得在看到 test 后择优报告。
 
 #### A3 `m_sector_rs_rank_velocity_20d_5d`——板块排名速度
+
+研究附加门禁：除原始相关性外，必须相对 R1、`Industry_Momentum`、`SW2_MOM5` 和原始板块 20 日收益报告 partial/residual IC；控制后没有稳定 h20 增量则 `DUPLICATE/REUSE/KILL`。
 
 - 在板块面板计算 `ret20[s,t] = sw2_close[s,t] / sw2_close[s,t-20] - 1`。
 - 每日等权跨板块排名：`rank20[s,t] = CsRank(ret20[:,t])`。
@@ -208,6 +264,10 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 
 #### A4 `m_sector_participation_gap_20d`——成员参与差
 
+研究附加门禁：必须控制 A1、原始板块动量、板块权重集中度、SIZE 与有效成员数；若 gap 仅重述少数权重股效应，不得 promotion。
+
+`db_circ_mv` 只用于 SIZE/集中度诊断和条件回归，不进入 A4 主公式；若后续改用权威指数成分权重，必须作为新 trial 冻结数据源与时点，不得用事后当前权重回填历史。
+
 - 个股 20 日收益：`stock_ret20[i,t]`。
 - 当日按 PIT 成员聚合：`member_median20[s,t] = median_i(stock_ret20[i,t])`。
 - 板块指数 20 日收益在板块面板上计算：`sector_ret20[s,t]`。
@@ -216,6 +276,8 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 - 风险：可能混入小盘风格，必须额外报告与 SIZE/市值因子的相关性。
 
 #### A5 `m_sector_residual_cohesion_10d_60d`——成员残差协同性
+
+研究附加门禁：同时与原始成员离散度、市场/板块波动和既有 VOL/low-vol 因子做条件比较；只允许一个预注册的 `state × momentum/breadth` 交互进入组合增量实验，该交互不作为 catalog 原子因子。
 
 - 个股日收益 `stock_ret1[i,t]` 必须在单一 instrument 的连续价格序列上由 close 执行 `pct_change(fill_method=None)`；板块日收益 `sector_ret1[s,t]` 必须在 4.1 的板块面板上由 `sw2_close` 执行同一计算。两者都不使用预填充收益列。
 - 日残差：`resid[i,t] = stock_ret1[i,t] - sector_ret1[s,t]`。
@@ -227,12 +289,14 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 
 #### A6 `m_sector_vol_compression_5d_20d`——板块波动压缩
 
+研究附加门禁：必须与 A5、既有 VOL/low-vol 因子去重，并只使用预注册交互检验条件增量；不得因测试期某个交互较优而临时改变方向或公式。
+
 - 在板块面板以 `pct_change(fill_method=None)` 计算行业日收益 `sector_ret1`。
 - 冻结定义：`RVw[s,t] = rolling_std(sector_ret1[s], window=w, min_periods=w, ddof=1)`，其中 `w ∈ {5, 20}`；不得在实现时替换为 RMS、平方和或年化波动。
 - 主公式：`compression[s,t] = -log(RV5[s,t] / RV20[s,t])`；任一窗口样本不足、`RV5 <= 0` 或 `RV20 <= 0` 时置 NaN。
 - 每日跨板块 rank 后映射回成员。
 - 方向：作为原子状态信号，不在因子内部预先乘动量；h20 方向由 train/validation 冻结。
-- 价值：把已验证有效的波动压缩方向迁移到板块层，降低对简单行业动量的依赖。
+- 研究假设：检验短长波动比在板块层是否提供区别于简单行业动量的 STATE 信息；该迁移尚未获得 A 股 h20 证据，必须允许无效或条件性结论。
 
 ### 6.2 Batch B：条件扩展候选
 
@@ -245,6 +309,8 @@ Batch B 只在 Batch A 完成快筛、相关性和失败归因后启动。
 
 #### B1 `m_sector_turnover_breadth_accel_5d`——自由流通换手异常广度
 
+研究附加门禁：属于高换手重点审计候选，必须在 A 股 T+1、停牌、涨跌停和实际费用约束下报告多资金规模/参与率的净结果与 capacity curve。
+
 - 数据：`db_turnover_rate_f` + `l2_code_id`。
 - 个股异常：`x = log1p(db_turnover_rate_f)`，`z60 = (x - MA60(x)) / STD60(x)`；只在 60 日均值/标准差有效且标准差大于 0 时计算 `hot[i,t] = 1(z60[i,t] > 1)`，否则保持 NaN。
 - 板块参与率：`turn_breadth[s,t] = mean_i(hot[i,t])`。
@@ -253,6 +319,8 @@ Batch B 只在 Batch A 完成快筛、相关性和失败归因后启动。
 - 风险：极端换手可能是出货；必须检查非线性和与换手率 Top 因子的相关性。
 
 #### B2 `m_stock_sector_leadership_persistence_20d_10d`——板块内领导持续性
+
+研究附加门禁：必须控制 R2、`m_stock_vs_industry_mom_20d` 和 `m_mom_residual_20d` 后报告 partial/residual IC；行业切换必须重置 persistence spell。
 
 - 先按 membership-safe 板块面板得到 20 日板块收益，计算 `lead20 = stock_ret20 - sector_ret20`。
 - 每日做板块内 percentile rank：`q20[i,t] = rank_within_sector(lead20[i,t])`。
@@ -272,6 +340,8 @@ Batch B 只在 Batch A 完成快筛、相关性和失败归因后启动。
 
 不新增 `m_stock_sector_leadership_20d`。复用前必须读取现有可执行源码，审计其中所有 `sw2_*` 收益和 rolling 是否按 4.1 先构造板块面板；若不合规，既有相关指标视为失效，应修复原资产并重算，不得另起近义因子规避修复。审计通过后，再对 `m_stock_vs_industry_mom_20d`、`m_mom_residual_20d` 和可用反向版本做 h20 重评估；B2 是唯一允许继续研发的结构差异版本。
 
+Gate-0 已修复 tracked regeneration source `scripts/p1_new_factors.py` 中的 F4/R2 offline 公式：先构造唯一 `(datetime,l2_code_id)` 面板、沿板块自身时序计算 20 日收益，再按当日 membership 映射回股票；unknown 不回退，板块日值冲突 fail-fast。因本批不写生产 DB，catalog 中既有 offline/realtime 资产与历史指标仍未替换；后续同步必须同时生成双代码形态、做 parity、重新计算 h20，并把旧 1d 指标标记为旧口径证据。
+
 #### N1 `m_sector_flow_rotation_10d` negative control
 
 - 板块面板上计算 `flow = sw2_mf_net_amt / sw2_amount`；`sw2_amount == 0` 时置 NaN。
@@ -289,15 +359,23 @@ Batch B 只在 Batch A 完成快筛、相关性和失败归因后启动。
 | 数据位置 | `sector_data.h5` | `static_factors.parquet` | 结论 |
 |---|---|---|---|
 | active `factor_implementation_source_data` | 22 个 `sw2_*` 字段，无 `l2_code_id` | 122 列，无 `l2_code_id` | 不能用于 A1–A6/B1/B2/N1 的正式离线验证。 |
-| candidate `factor_implementation_source_data_20260428_candidate` | 23 列，含 `l2_code_id` | 122 列，无 `l2_code_id` | `sector_data.h5` 已满足，bundle 尚未闭环。 |
+| candidate `factor_implementation_source_data_20260428_candidate` | 23 列，含 `l2_code_id` | 120 个数据列，无 `l2_code_id` | `sector_data.h5` 已满足；旧 bundle 缺离散行业键。 |
+| Gate-0 隔离产物 `gate0_sector_factor_candidate_20260711` | 复用上述 23 列 candidate | 121 个数据列；旧 candidate 的 120 个数据列全部保留并新增 `l2_code_id=int16` | 已完成物理/schema/指纹验证；仍为 gitignored candidate，未 promotion。 |
+
+2026-07-11 Gate-0 实测审计：candidate `sector_data.h5` 共 7,334,829 行、1,876 个交易日、4,691 只股票，日期为 2018-08-01 至 2026-04-28，131 个已知板块，源表 `l2_code_id` 覆盖率 100%。旧生成器会把所有列统一转为 `float32` 且遗漏 `margin_detail.h5`，因此旧 candidate bundle 不具备离散类别键语义。修复后隔离生成产物为 7,304,119 行、4,691 只股票、1,876 日：7,303,993 行为已知板块，126 行显式为 unknown `-1`，known coverage 为 99.99827494595858%，取值范围 `[-1,133]`，共 131 个已知板块；旧 120 个数据列全部保留，共同字段 dtype 无变化，只新增 `l2_code_id=int16`。`static_factors.parquet` SHA-256 为 `FE91FA9C519F4FD501D5E979F03B604C66F3904387B48C0E982D8366747D60A6`；schema JSON/CSV SHA-256 分别为 `04252DD8E8941CDD8018885B1BBBE95F4C606FBAEE49C61BAB6E1986DFFF5DFE`、`D193BDBF4B003291B5FD708A1D420FF14E6526C3473F5E786F869889B81B6FD6`。产物仍在任务 worktree 的 gitignored 目录，未修改旧 candidate、active 或数据库。
+
+输出以唯一的 `daily_basic` 索引为左连接基表：sector 有 7,334,829 个唯一键，daily-basic 有 7,304,119 个唯一键，交集 7,303,993；因此丢弃 30,836 个 sector-only keys，并将 126 个 daily-basic-only keys 的 `l2_code_id` 写为 `-1`，净行数差为 `30,836 - 126 = 30,710`。这不是随机丢行，必须随 snapshot receipt 保留。
+
+该 candidate 是截至 2026-04-28 的冻结研究快照，不代表 2026-07-11 的当前生产新鲜度。`daily_pv.close` 同样覆盖 2018-08-01 至 2026-04-28；按 T+1→T+21，最后可评估 signal date 为 2026-03-27（T+1=2026-03-30，T+21=2026-04-28）。因此 h20 的 `recent_1m/3m/6m` 均相对 `last_evaluable_signal_date=2026-03-27` 定义，不相对 wall-clock，也不相对未成熟的 2026-04-28 特征尾部；2026-03-30 至 2026-04-28 只能用于特征/data freshness。QE 或 promotion 前必须通过独立 freshness gate 刷新并重算该日期。
 
 ### 7.2 必须完成的数据 gate
 
-1. 使用 candidate `sector_data.h5` 重跑 `F:/Dev/RD-Agent-main/tools/generate_static_factors_bundle.py`，输出到隔离 candidate 目录。
-2. 验证 `static_factors.parquet` 包含 `l2_code_id`，所有有限值保持整数语义，`-1` 处理明确。
-3. 记录数据快照指纹、日期范围、行数、股票数、板块数、逐日覆盖率和最小/中位成员数。
-4. 在同一 candidate 快照上生成离线因子结果；禁止 sector、price、basic 等数据混用不同截点。
-5. candidate → active/production promotion 必须由用户单独确认；本因子研发流程不隐式执行。
+1. 修复 `generate_static_factors_bundle.py`：连续因子可下转 `float32`，`l2_code_id` 必须跳过浮点转换、校验整数/范围、连接缺失填 `-1`，并使用有符号 `int16/int32`。
+2. 使用 candidate `sector_data.h5` 在任务 worktree 运行修复后的生成器，输出到新的、gitignored 的隔离 candidate 目录；不得覆盖 active 或旧 candidate。
+3. 验证 `static_factors.parquet` 包含 `l2_code_id`、整数 dtype、取值范围、未知语义；schema 必须标记 `source=sector_data_raw`、`semantic_type=categorical_id`，receipt 必须报告 `known_coverage`、known sector 数和 `-1` 数量。
+4. 记录数据快照指纹、日期范围、行数、股票数、板块数、逐日覆盖率和最小/中位成员数。
+5. 在同一 candidate 快照上生成离线因子结果；禁止 sector、price、basic 等数据混用不同截点。
+6. candidate → active/production promotion 必须由用户单独确认；本因子研发流程不隐式执行。
 
 QE DB loader 已能返回 `l2_code_id`，但离线因子源未闭环前不能宣称完整研发链可用。自动 transformation/review 提示也必须显式列出 `l2_code_id`，避免 loader 实际支持而转换器错误拒绝或遗漏。
 
@@ -308,16 +386,21 @@ GATs embedding 在研究期可以使用同一实验内稳定映射；进入模�
 ### Stage 0：预检与去重
 
 1. 数据 gate 全部通过。
-2. 用因子 MCP 对名称、描述、公式和同族因子定向搜索；搜索摘要必须下钻到明确窗口指标。
-3. 对复用基线读取代码与 out-sample 指标，禁止换名重复开发。
-4. 为每个新候选写入预注册卡：公式、字段、窗口、方向假设、最小成员数、缺失值规则、主要相关性对照。
+2. 在任何公式运行前建立 append-only `trial_id` 台账；公式、窗口、方向、阈值、种子、切分及失败版本均计入，按 `{A1,A2,A4}`、`{A3,B2,R1,R2}`、`{A5,A6}`、`{B1,N1}` 管理相关候选族，N1 即使 KILL 也不得删除记录。
+3. 用因子 MCP 对名称、描述、公式和同族因子定向搜索；搜索摘要必须下钻到明确窗口指标。
+4. 对复用基线读取代码与 out-sample 指标，禁止换名重复开发；A2/A3/A4/B2 同时冻结其 partial/residual IC 控制集。
+5. 为每个新候选写入预注册卡：公式、字段、窗口、方向假设、最小成员数、缺失值规则、主要相关性对照、成本/容量重点和 STATE 交互（如适用）。
 
 ### Stage 1：离线执行与双周期快筛
 
 1. 在任务隔离 workspace 生成离线 `code_text` 和 `result.h5`。
 2. 检查索引、列名、日期、股票数、板块覆盖、unknown 处理和非空率。
 3. 主快筛使用与目标实验一致的 h20 裸标签；1d 只作短周期诊断。
-4. 若当前 `quick_ic_screen.py` 尚不支持 `--horizon 20`，必须先补充该能力或使用等价、受测的 h20 脚本；不得用 1d PASS 替代 h20 PASS。
+4. 正式 h20 快筛使用 `quick_ic_screen.py --horizon 20 --split-manifest split.json <workspace>`。manifest 必须冻结 `trial_id/split_id/split_role/signal_start/signal_end/label_horizon_days/purge_days/embargo_days/expected_direction/data_snapshot_sha256`，并由预切分/purge 编排器生成；脚本校验 horizon、方向、日期、SHA-256 与 `purge_days >= 20`，输出 manifest SHA-256、`label_source_end` 和 `last_evaluable_signal_date` receipt。`quick_ic_screen.py` 只是指标核，不是 split authority，也不能单独保证 final test 只开启一次；该约束由 append-only trial ledger 审计。
+   - 省略 `--split-manifest` 时，即使传入 `--direction` 也只是 diagnostic，不具备 Stage 1 PASS 资格；未传方向时保留旧 absolute verdict 仅为 1d 向后兼容。不得用 1d、unsigned 或无 split receipt 的 PASS 替代正式 h20 PASS。
+5. 固定 chronological train/validation/test；按标签信息区间精确 purge。裸 h20 边界至少移除前一分段末尾 20 个信号日；若采用双向 CV/CPCV，再使用预注册 embargo。滚动标准化、阈值与方向只能在 train/validation 冻结，最终 test 只开启一次。
+6. h20 的重叠日收益必须同时报告普通 ICIR 与 Bartlett lag=19 的 Newey-West HAC ICIR；再以 stationary/block bootstrap 或预注册非重叠抽样做区间与符号敏感性。`HAC ICIR = mean / sqrt(long-run variance)`，不是 t-stat；退化或样本不足必须显式为空。
+7. 查看 validation 后改变任何公式、窗口、方向、阈值或样本切分，必须新建 `trial_id`，不得覆写旧结果。
 
 以下 h20 初筛门槛为暂定门槛，必须先在 train/validation 上校准并冻结；在完成校准前只用于研发排序，不能据此宣称最终 out-sample PASS：
 
@@ -336,17 +419,26 @@ N1 必须 PASS 才能继续；1d 与 h20 方向不一致时不得自动翻转，
 1. 通过 manual factor API/脚本保存离线源码和 `asset_path`。
 2. 生成 loader-only `realtime_code_text`，完成离线/实时 parity。
 3. 计算统一指标，至少覆盖 `full`、`out_sample`、`recent_6m`、`recent_3m`、`recent_1m`。
-4. 补充 out-sample h20 IC、RankIC、HAC/block ICIR；主筛选不得只读 `return_horizon=1d`。
+4. RD-Agent 指标结果保持既有 1d 行与 legacy `rank_ic_20d` 兼容，并在同一结果增加 exact nullable contract：`h20_return_horizon=T21T1`、`h20_ic_mean`、`h20_ic_std`、`h20_rank_ic_mean`、`h20_rank_ic_std`、`h20_icir`、`h20_rank_icir`、`h20_icir_hac`、`h20_rank_icir_hac`、`h20_ic_positive_ratio`、`h20_n_obs`、`h20_hac_lag=19`；其中 positive ratio 与 n_obs 均按 raw Pearson IC 日序列统计，主筛选不得只读 `return_horizon=1d`。
+   - legacy 行键 `return_horizon=1d` 表示持久化主记录兼容；RD 内部计算 key `20d` 表示持有期；区间 label `T21T1` 表示 T+1 入场到 T+21 出场。三者语义不同，不得互相覆写或据字符串推断唯一键。
+   - RD 官方 naive std/ICIR 使用 NumPy population std（`ddof=0`）。quick screen 为保持旧 1d 输出继续保留 legacy `icir/rank_icir`（`ddof=1`），同时显式输出与 RD 对齐的 `ic_std_ddof0`、`icir_ddof0`、`rank_ic_std_ddof0`、`rank_icir_ddof0`；正式重叠 h20 推断优先读取 HAC 字段。不得把两种 naive ICIR 混为同一数值口径。
 5. 执行 LLM 分类和增量相关性；记录 catalog、metrics、classification、correlation 的完整性 receipt。
+6. AIstock 只提交 additive schema/upsert/router/MCP 字段支持；本 Gate-0 不应用生产 DDL、不写生产指标行。生产迁移必须作为独立 gate 执行和留证。
+7. writer authority 保持不变：official evaluation writer 是唯一允许落 `aistock_factor_metrics` 的路径；`rdagent_factor_metrics_sync` 仅保留并测试兼容 SQL/旧 payload normalization，task/loop 非官方落表继续明确禁用，不得因 h20 字段就绕过。
+   - 旧 payload 完全不含 h20 keys 时，presence flag 为 false，冲突更新必须保留已有 h20 值；新 contract 即使显式携带 `None`，presence flag 仍为 true，可正确清除本次已退化/不足的旧值。不得用简单 `COALESCE` 混淆“字段缺席”和“显式空值”。
 
 ### Stage 3：双层相关性与筛选
 
 - 股票映射层和板块原生层均要求与基线/Top 因子 `|corr| < 0.8`。
 - 同族候选高相关时只保留 h20 更稳定、覆盖更高、模型增量更好的一个。
+- 除原始相关性外，执行第 4.8 节冻结的 partial/residual IC；控制后无稳定增量的候选即使 `|corr| < 0.8` 也不得被视为新发现。
 - 沿用 Stage 1 冻结方向 `d`，定义 `IC_d = d * IC_h20`、`RankIC_d = d * RankIC_h20`、`ICIR_d = d * ICIR_h20`；不得在 Stage 2/3 重新选择符号或覆写 `d`。
 - out-sample h20 目标：`IC_d >= 0.02`、`RankIC_d >= 0.02`，且 block/HAC `ICIR_d > 0.3`；`IC_d` 或 `RankIC_d >= 0.03` 可标记为优秀，但不得忽略显著性与模型增量。
 - full 与 out-sample 的 `IC_d`、`RankIC_d` 均应为正且方向一致；近期窗口漂移必须解释。
 - 任何因子都不能仅因 QE archive 共现表现良好而跳过独立门禁。
+- 按候选族报告有效独立试验数、HAC t/ICIR、local FDR 或等价多重检验结果；组合/策略结果另外报告 DSR 与 PBO，禁止以单次最佳 Sharpe 代替。
+- 除因子值相关性外，报告目标持仓/long-leg 重合、同向换手与冲击重合、压力期相关性、尾部亏损及成本跳升；平均相关性低但尾部重合高时标记“不同公式、相同拥挤风险”。
+- 在多资金规模和成交参与率下报告换手、冲击、净 Sharpe、净回撤与 capacity curve；目标规模下净增量消失即不得 promotion。
 
 ### Stage 4：失败归因与下一批
 
@@ -371,9 +463,11 @@ GATs 继续使用 1-parallel，防止并行资源争用污染比较。不得只�
 
 LGBM 至少比较 G12 与 G12 + 通过因子。若另行把 `l2_code_id` 作为 categorical feature，必须作为单独实验腿，不能称为 GATs embedding 的等价实现。
 
+A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻结的 `state × momentum/breadth` 交互实验腿，用于判断条件组合增量。交互只属于模型消融，不新增 catalog 原子因子，也不得在测试后从多个交互中择优。
+
 ### 9.3 结果门禁
 
-报告 h20 IC/RankIC、ICIR、CAGR、Sharpe、最大回撤、换手和容量相关指标，并分训练/验证/测试及主要市场 regime。只有跨合理种子/切分稳定的增量才进入 Tier2/IC 审核。
+报告 h20 IC/RankIC、naive/HAC ICIR、bootstrap 区间、CAGR、DSR、PBO、Sharpe、最大回撤、换手、成本和容量曲线，并分训练/验证/测试及主要市场 regime。GATs 2×2 与 LGBM 都必须比较 OOS ΔIC、净 Sharpe、回撤、换手、容量和多种子稳定性；只有跨合理种子/切分稳定的增量才进入 Tier2/IC 审核。
 
 ## 10. 风险与控制
 
@@ -387,36 +481,193 @@ LGBM 至少比较 G12 与 G12 + 通过因子。若另行把 `l2_code_id` 作为 
 8. **低波/规模暴露**：A4/A5/A6 必须检查 SIZE、VOL 与行业成员数暴露。
 9. **离线/实时漂移**：双代码形态必须做数值 parity；loader 支持不等于转换提示、MCP 或 active 数据已经闭环。
 10. **运行状态混淆**：代码合并、candidate 数据准备、active promotion、QE 实验和实时启用是五个独立状态，必须分别报告。
+11. **重叠标签虚高**：h20 日度标签机械重叠；普通标准误仅作描述，决策必须包含 lag=19 HAC 和 block/non-overlap sensitivity。
+12. **回测选择偏差**：trial 台账不完整、验证后覆写结果或只报告最佳种子都视为 gate 失败；候选族必须做多重检验，策略层必须报告 DSR/PBO。
+13. **成本、容量与拥挤**：毛收益通过但目标资金规模净增量消失，或压力期持仓/冲击高度重合，均不得 promotion。
+14. **生产副作用**：Gate-0 只允许代码、隔离 candidate 和测试证据；生产 DDL、生产 DB 写入、active promotion、服务重启和实时启用均保持 pending。
 
 ## 11. 验收与交付物
 
-### 11.1 数据与接口
+### 11.1 本批 Gate-0 交付物
+
+- 融合一手机构/论文实施推论、F-001–F-012、L0–L5 验证与 production gates 的 F2 规格；
+- 隔离 candidate bundle、schema、指纹、行列/覆盖/unknown/freshness receipt，旧 candidate/active 不变；
+- `quick_ic_screen.py` 的 horizon、冻结方向、split manifest、HAC 和 exact label 契约及单测；
+- RD-Agent → AIstock 的 exact h20 companion contract、nullable additive migration/official writer/router/MCP 代码与定向测试；RD task/loop 非官方 writer 仍禁用；
+- F4/R2 tracked repair source 的 PIT 板块面板修复、冲突 fail-fast 与单测；catalog 双代码同步和指标重算后置；
+- 两仓独立 PR/验证证据，以及 merge、DDL、DB、promotion、QE、runtime 状态的分离报告。
+
+### 11.2 后续 G0-D：数据与接口
 
 - candidate `sector_data.h5` / `static_factors.parquet` 的 schema、指纹与 `l2_code_id` receipt；
+- 生成器对 `l2_code_id` 的整数 dtype、`-1` unknown、source/semantic schema 和覆盖率定向测试；
 - transformation/review 对 `l2_code_id` 的兼容性 receipt；
 - 离线/实时代码 parity 结果；
 - unknown、PIT 行业切换、最小成员数和板块字段一致性测试。
 
-### 11.2 因子研发
+### 11.3 后续 G0-D：因子研发
 
 - Batch A 的 6 个候选代码；Batch B 仅在 gate 通过后交付；
 - R1/R2 复用基线的 h20 重评估，不新增重复 catalog 项；
 - N1 negative control 的快筛与最终 disposition receipt：KILL 时记录淘汰依据，PASS 时记录后续门禁；
 - 每个候选的预注册卡、h20/1d 快筛、统一指标、双层相关性、分类与最终 disposition。
+- append-only trial ledger、候选族有效试验数、purge/embargo 记录、HAC/block 推断和 partial/residual IC receipt；
+- 多资金规模/参与率成本容量曲线，以及持仓、换手、冲击与尾部拥挤审计。
 
-### 11.3 因子库完整性
+### 11.4 后续 G0-D：因子库完整性
 
 仅对通过者要求：
 
 - `aistock_factor_catalog`：`is_available=true`，`asset_path` 指向实际可执行源码；
-- `aistock_factor_metrics`：官方窗口齐全，并有明确 h20 结果；
+- `aistock_factor_metrics`：官方窗口齐全，并有明确 h20 companion fields；生产 DDL 与生产回填未执行前必须标记 pending；
 - `qe_factor_classification`：至少一条有效分类；
 - `qe_factor_correlations`：股票映射层和板块原生层的增量相关性 receipt；
 - 失败者不得以空代码、占位实现或仅元数据记录伪装成已交付因子。
 
-### 11.4 模型验证与状态报告
+### 11.5 后续 G0-D：模型验证与状态报告
 
 - GATs 2×2 消融和 LGBM 对照结果；
 - Tier2/IC 审核结论与未满足项；
 - 分别报告：文档/代码合并状态、candidate 数据状态、active promotion 状态、QE 实验状态、模拟盘/实时状态；
 - 未完成 h20 指标、数据 promotion 或 train/serve mapping 统一时，不得宣称板块轮动能力已生产就绪。
+
+## 12. Design Acceptance Index / 设计验收索引
+
+下列条目是 F2 的稳定验收 ID。实现、测试、PR 与后续生产 gate 必须引用这些 ID；“代码存在”不等于“生产启用”。
+
+| ID | 设计要求 | 验收口径 |
+|---|---|---|
+| F-001 | 研究治理与试验台账 | 研究来源可追溯；每次公式/窗口/方向/阈值/种子/切分及失败版本有唯一 `trial_id`；候选族多重检验、purge/embargo 与最终 test 一次性开启规则明确。 |
+| F-002 | candidate bundle 离散行业键 | `l2_code_id` 连接缺失为 `-1`，保留有符号整数 dtype，schema 为 `sector_data_raw/categorical_id`，生成覆盖率 receipt，且不覆盖 active/旧 candidate。 |
+| F-003 | 通用 horizon 快筛 | `quick_ic_screen.py --horizon N` 的标签严格为 `close[t+N+1]/close[t+1]-1`；默认 1d 向后兼容；h20 提供 lag=19 HAC companion 指标，正式判定必须使用冻结方向和通过校验的 split manifest/receipt。 |
+| F-004 | RD-Agent h20 统一指标 | 保留既有 1d 与 legacy `rank_ic_20d`；同一指标记录增加 `h20_return_horizon=T21T1`、IC/RankIC mean/std、naive/HAC ICIR、raw Pearson positive ratio/n_obs 与 lag=19 共 12 个 nullable 字段，API 可序列化。 |
+| F-005 | AIstock h20 持久化与查询契约 | additive schema/upsert/router/MCP 暴露 F-004 字段；旧记录/旧客户端兼容；生产 DDL 和回填是独立 pending gate。 |
+| F-006 | F4/R2 PIT 安全 repair source | tracked regeneration source 中的 `sw2_close` 先按 `(datetime,l2_code_id)` 构造唯一板块面板，再按板块时序计算；冲突 fail-fast，旧指标明确失效且后续需双代码同步/h20 重算，不新建近义因子。 |
+| F-007 | 因子代码双形态与失败策略 | offline `code_text` 与 loader-only `realtime_code_text` 数值 parity；缺字段、重复板块值、unknown 或行业切换不静默回退。 |
+| F-008 | 去重与条件增量 | MCP 定向搜索、股票映射层/板块原生层相关性、partial/residual IC 和既有 R1/R2 代码审计均留证；无增量则 `DUPLICATE/REUSE/KILL`。 |
+| F-009 | 稳健性、成本容量与拥挤 | h20 HAC/block 推断、多重检验、DSR/PBO、真实 A 股约束下成本/容量曲线及持仓/尾部拥挤审计齐全。 |
+| F-010 | QE 组合增量 | GATs 2×2、LGBM 对照、equal-sector/stock-mapped、多种子 OOS 增量；A5/A6 仅允许预注册 STATE 交互腿。 |
+| F-011 | 零隐式生产副作用 | 本批不写生产 DB、不应用生产 DDL、不 promotion active、不重启服务、不启动 QE/模拟盘/实时交易。 |
+| F-012 | 验证与状态分离 | 定向单测、F2 设计校验、diff 检查和 receipt 通过；合并、candidate、DDL、promotion、实验、运行时状态分别报告。 |
+
+## 13. Implementation Plan / 实施计划
+
+### Phase G0-A：研究与设计冻结
+
+1. 把第 4.6–4.9 节研究门禁、候选族和研究来源写入本规格。
+2. 运行 `aistock_feature_workflow.py validate --tier F2`，在代码交付前关闭所有设计结构缺口。
+
+### Phase G0-B：数据与评估器前置能力
+
+1. RD-Agent：修复 candidate bundle 的 `l2_code_id` dtype/unknown/schema/receipt，并在隔离目录生成新 bundle。
+2. AIstock：给 `quick_ic_screen.py` 增加通用 horizon、精确 T+1→T+N+1 标签、split manifest/receipt、冻结方向及 HAC 指标。
+3. RD-Agent：给统一指标引擎与 SOTA API 增加 F-004 companion fields。
+4. AIstock：增加 F-005 additive DB/ingest/router/MCP 契约，但不执行生产迁移。
+
+### Phase G0-C：PIT 基线修复与证据
+
+1. 修复 F4/R2 可执行资产源的板块时序语义并增加切换/唯一性测试。
+2. 对两个仓库分别运行最小定向测试、lint/compile/diff check；生成 candidate receipt。
+3. 更新本矩阵为真实状态，列明所有外部门禁；各仓库独立提交 PR，禁止把跨仓库状态混写为一个“已完成”。
+
+### Phase G0-D：后续因子研发（不属于本次前置实现）
+
+F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 `develop-factor` 与因子库 MCP 按 A1→A6 顺序开展纯离线研发；无需等待 production DDL 或 active promotion。Batch B 只在 Batch A 失败归因完成后启动。每个候选独立执行预注册、快筛、统一指标、去重、分类和 disposition；生产持久化、promotion 与运行时仍受第 17 节独立门禁约束。
+
+## 14. Verification Plan / 验证计划
+
+### 14.1 Business oracle / 业务判定真值
+
+1. 标签真值：horizon=N 必须逐点等于 `close[t+N+1]/close[t+1]-1`；h20 的最后可评估信号日由 close 交易日历反推，不允许未成熟尾部进入 IC。
+2. PIT 真值：个股切换行业后，F4/R2 使用“当前行业自身的历史面板”，不能把个股切换前后的两个行业价格串接；同一板块日出现冲突值必须报错。
+3. 数据真值：static 输出以 daily-basic 键为基表，`l2_code_id` 为 signed integer，daily-basic-only 键为 `-1`，旧 120 个数据列和 dtype 不回归。
+4. 指标真值：RD 计算 key `20d`、区间 label `T21T1` 与 legacy DB row `return_horizon=1d` 三者并存；12 个 h20 字段从 RD engine 经 official writer、router 到 MCP 不丢失，旧 payload 全部补空而不报错。
+5. 权威与副作用真值：只有 official evaluation writer 可落表；RD task/loop writer 继续禁用。本批任何测试都不得连接/写生产 DB、应用 DDL、promotion 或重启 runtime。
+
+### 14.2 L0–L5 验证映射
+
+| level | 本批/后续验证 | 状态口径 |
+|---|---|---|
+| L0 | 文档章节、exact field list、SQL named-parameter 与 schema contract、F2 validator、diff check | 本批必须 PASS。 |
+| L1 | quick horizon/direction/manifest/HAC、bundle dtype/unknown/schema、F4 PIT/conflict、RD h20 engine/API 单测 | 本批必须 PASS。 |
+| L2 | 隔离的 nullable schema/upsert 参数、official summary positional mapping、router/MCP emit/旧 payload 回归 | 本批必须 PASS；不执行生产 DDL。 |
+| L3 | 用真实隔离 candidate 完成 RD engine → AIstock 非生产库/接口端到端并核对 12 字段 | `APPROVED_BY_USER: DEFERRED_TO_G0_D`，开始实际候选研发时执行。 |
+| L4 | GATs/LGBM、成本容量、拥挤/尾部、DSR/PBO 与多种子业务流 | `APPROVED_BY_USER: DEFERRED_TO_G0_D`。 |
+| L5 | 生产 DDL/回填、freshness、candidate → active、服务与 paper/live 运行时验收 | `APPROVED_BY_USER: DEFERRED_TO_PRODUCTION_GATE`。 |
+
+新增/修改业务逻辑的覆盖率目标为 line ≥ 80%、branch ≥ 70%；优先由定向 pytest coverage/CI 记录。若因嵌入式因子代码或外部引擎边界无法可靠计量，必须用上述 business oracle 分支测试补证并在矩阵记录明确例外，不得以全仓平均覆盖率掩盖关键路径。
+
+### 14.3 具体命令与证据
+
+| 层级 | 验证 | 预期证据 |
+|---|---|---|
+| Design | `python scripts/aistock_feature_workflow.py validate --design ... --tier F2` | F2 PASS，design item 与 matrix 行数一致。 |
+| Candidate unit | 生成器 dtype/unknown/schema 测试 | `l2_code_id` 为 int16/int32；NaN→`-1`；非整数/越界 fail-fast；receipt 字段齐全。 |
+| Candidate artifact | 在新隔离目录生成 bundle | 行数、日期、股票、板块、known coverage、`-1`、schema 与文件指纹 receipt；active 未改变。 |
+| Quick screen unit | horizon=1/20 标签和 HAC 边界测试 | 默认 1d 不变；h20 精确 T+1→T+21；lag=19；不足/退化返回空而非伪值。 |
+| RD metrics unit | 引擎/API 序列化测试 | legacy 字段不变，h20 companion fields 数值定义和 nullable 行为正确。 |
+| AIstock contract | schema/upsert/router/MCP 定向测试 | 新字段往返，旧 payload 兼容；不连接/修改生产库。 |
+| F4 PIT unit | 多行业、多日期、行业切换与重复值测试 | 板块收益仅按板块时序计算；切换不串组；板块日值冲突 fail-fast。 |
+| Targeted coverage | quick screen + shared h20 contract 的 line/branch coverage | 29 tests；combined coverage 92%，shared contract 100%；F4 嵌入代码以 oracle 两分支补证。 |
+| Repository | compile/lint/diff/targeted pytest | 两仓各自通过；已知基线告警与本次新增问题分离。 |
+| Baseline authority audit | `test_factor_metrics_authority_static.py` | 14 passed/2 failed；失败均在未修改的 origin/main 文件：4 个既有硬编码本地路径，以及测试引用已不存在的 `MultiAlphaGroupEditor.tsx`。不作为本批成功证据，也不归因于本改动。 |
+| External gate | 真实数据 E2E、生产 DDL、promotion、QE | `APPROVED_BY_USER: DEFERRED`；按 L3/L4/L5 分层，只有单独授权和 receipt 后更新。 |
+
+## 15. Design Acceptance Matrix / 设计验收矩阵
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | 本文 2.3、4.6–4.9、8、18 | ledger 字段/存储契约、候选族与研究来源已冻结；本批未运行候选公式 | VERIFIED | 无 |
+| F-002 | RD-Agent `tools/generate_static_factors_bundle.py` | 9 项 unit；7,304,119 行 candidate receipt；parquet/schema SHA-256 | VERIFIED | 无 |
+| F-003 | AIstock `scripts/quick_ic_screen.py` | horizon/label/direction/manifest/HAC/CLI 单测 20 passed；与 shared contract 合计 coverage 92% | VERIFIED | 无 |
+| F-004 | RD-Agent metrics engine 与 SOTA API | h20 engine/API 2 passed；与 bundle 合计 11 passed | VERIFIED | 无 |
+| F-005 | AIstock migration、`factor_metrics_contract.py`、official writer、routers/MCP | contract 9 passed；contract+MCP/emit 51 passed；official batch 26 passed/1 skipped | VERIFIED | 无 |
+| F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
+| F-007 | 后续候选 asset/realtime loader | 2.3、5、13 G0-D 与 L3 parity/fail-fast 验证契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批仅执行 Gate-0 前置批次；实际候选双资产在 G0-D 验收。 |
+| F-008 | 因子库 MCP + Stage 0/3 | 本批 R1/R2 MCP receipt；后续双层相关性/partial IC 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不运行候选公式；完整查重随各 trial 执行。 |
+| F-009 | Stage 1/3 + portfolio evaluator | HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 将真实候选与组合持仓验证后置 G0-D。 |
+| F-010 | QE GATs/LGBM experiment specs | 2×2、STATE、multi-seed OOS 与 L4 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不启动 QE。 |
+| F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
+| F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
+
+## 16. Rollout / Rollback / 发布回滚
+
+- Rollout：本批准备并提交向后兼容的代码能力与设计文档 PR；candidate artifact 留在隔离、gitignored 目录。AIstock 与 RD-Agent 分仓 PR、分仓验证，merge 仍需明确授权，不能把“PR 已提交”写成“已合入”。
+- Schema rollout：新增列全部 nullable；生产 DDL 由独立变更窗口执行，先备份/演练，再迁移、回填与查询验收。本批仅交付迁移能力，不执行。
+- Data rollout：只有 candidate receipt 通过且用户单独批准，才允许 candidate → active；必须原子切换路径/配置并保留上一 active 快照。
+- Rollback：代码按各仓 PR revert；schema 新列可先停止写读而不立即 drop；active 数据回切上一快照；任何回滚不得删除试验台账或验证 receipt。
+- Runtime rollback：本批没有重启或启用动作，因此不存在需要执行的运行时回滚；若后续启用，必须另写启动前检查与恢复步骤。
+
+## 17. Production Gates / 生产门禁
+
+| gate | 本批状态 | 放行条件 |
+|---|---|---|
+| source merge | PENDING | 两仓 PR 审查、定向验证与设计矩阵完成；合并需按用户授权。 |
+| candidate artifact | VERIFIED_ISOLATED | F-002 receipt、隔离路径与 SHA-256 已复核；尚未 promotion。 |
+| production_ddl_gate | pending | 已交付 nullable additive migration，但未应用；需独立批准、备份/演练、迁移与回填计划。 |
+| production_db_write_gate | not_performed | 仅后续因子 promotion/回填任务可单独授权；RD task/loop 非官方 writer 继续禁用。 |
+| active_promotion_gate | not_performed | candidate 完整性、新鲜度、离线结果和用户单独确认。 |
+| production_frontend_dependency_gate | noop | 本批无前端/lockfile 变化。 |
+| production_backend_dependency_gate | noop | 本批无依赖/lockfile 变化。 |
+| candidate_freshness_gate | pending | QE/promotion 前刷新到批准的 as-of date，并记录 close label end 与 `last_evaluable_signal_date`。 |
+| QE experiment | NOT_STARTED | F-001–F-009 证据与独立实验卡批准。 |
+| service/runtime restart | NOT_PERFORMED | 后续部署窗口与健康检查批准。 |
+| paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
+
+## 18. Research Sources / 一手研究来源
+
+以下来源只用于形成 Gate-0 研究先验与统计治理，不能替代 A 股、PIT、成本后样本外证据：
+
+- [Harvey, Liu & Zhu, “…and the Cross-Section of Expected Returns”](https://www.nber.org/papers/w20592)：因子动物园、多重检验与更高发现阈值。
+- [Harvey, Sancetta & Zhao, “What Threshold Should be Applied to Tests of Factor Models?” (2026)](https://www.nber.org/papers/w34898)：依赖检验、原假设分布、样本选择与 local FDR；`t≈3` 仅作治理参考。
+- [Bailey et al., Probability of Backtest Overfitting](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253) 与 [Bailey & López de Prado, Deflated Sharpe Ratio](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551)：PBO/DSR 与选择偏差治理。
+- [Research Affiliates, A Backtesting Protocol in the Era of Machine Learning](https://www.researchaffiliates.com/insights/journal-papers/702-a-backtesting-protocol-in-the-era-of-machine-learning)：其受保护测试集、经济逻辑与可复制协议形成本文预注册/untouched test 的实施推论，并非论文直接规定 AIstock 字段。
+- [López de Prado, K-Fold CV with Purging & Embargo / CPCV 方法索引](https://www.quantresearch.org/Innovations.htm)：形成 h20 split manifest、purge 与 embargo 契约的实施依据。
+- [Newey & West](https://www.nber.org/papers/t0055) 与 [Politis & Romano stationary bootstrap](https://doi.org/10.1080/01621459.1994.10476870)：重叠 h20 的自相关稳健推断和时间序列重采样。
+- [Moskowitz & Grinblatt, Do Industries Explain Momentum?](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00146)、[Ehsani & Linnainmaa, Factor Momentum](https://www.nber.org/papers/w25551) 与 [Hou, Industry Information Diffusion](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=463005)：行业动量、因子持续性和信息扩散的控制基线。
+- [Campbell & Lettau, Dispersion and Volatility](https://www.nber.org/papers/w7144) 与 [Barberis, Shleifer & Wurgler, Comovement](https://www.nber.org/papers/w8895)：区分行业/个股离散度、波动与非基本面共振。
+- [Frazzini, Israel & Moskowitz, Trading Costs](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3229719)：机构级交易成本、冲击和规模依赖。
+- [Zaremba et al., Herding for profits: Market breadth and the cross-section of global equity returns](https://www.sciencedirect.com/science/article/pii/S0264999319312982)：论文使用上涨股减下跌股类 breadth，只支持“成员参与值得检验”的先验，不直接验证 MA20 breadth。
+- [MSCI Integrated Factor Crowding Model](https://www.msci.com/research-and-insights/paper/msci-integrated-factor-crowding-model) 与 [Lazo-Paz, Moneta & Chincarini](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4618248)：其多维拥挤框架形成本文持仓、资金流、成本与尾部风险联合审计的实施推论，不声称复刻 MSCI 模型。
+- [Novy-Marx, Backtesting Strategies Based on Multiple Signals](https://www.nber.org/papers/w21329) 与 [Gu, Kelly & Xiu, Empirical Asset Pricing via Machine Learning](https://www.nber.org/papers/w25398)：组合信号的选择偏差、非线性交互与模型增量。
+- [Shin, 2026 preprint](https://arxiv.org/abs/2606.19550)：测试资产构造可能改变模型排名；仅作为前沿敏感性提示，不作为已确立结论。
