@@ -36,8 +36,8 @@
   "expected": "合法pending持续被tick驱动；对手价穿价与尾盘扫单使当日top-k基本完成；保护带触发loud且不报坏价。",
   "first_seen_at": "2026-07-10T13:02:53.441674Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1f3da8677e5407501a2d956b650da0c508d4057e",
+  "fixed_at": "2026-07-10T13:48:49.509169Z",
   "github_issue_number": 1946,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1946",
   "last_seen_at": "2026-07-10T13:02:53.441674Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1947",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -55,7 +56,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime",
     "simulation_runtime"
@@ -65,6 +66,9 @@
     "fingerprint": "7eff6de6e866e0284cb87247",
     "source_event_id": "FE-20260710-7eff6de6e866"
   },
+  "validation_evidence": [
+    "Tier2 raw diff PASS (7pts: 状态机SUBMITTING+pending不误判/对手价穿价+保护带/尾盘扫���/门闭环/不破BUG-599-600-604/无静默占位/LIVE锁) + CI green + MiniQMT回归3 passed + nox l0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
