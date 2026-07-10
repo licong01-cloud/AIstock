@@ -3,9 +3,9 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v3（Gate-0 F2 执行版，2026-07-11）
+- 当前版本：v4（Gate-0 已合入 + G0-D Batch A/B 结果同步，2026-07-11）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
-- 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
+- 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格、`sector_rotation_factors_batch_a_b_results_20260711.md`
 
 ---
 
@@ -71,6 +71,18 @@
 ### 2.3 2026-07-11 Gate-0 本批执行边界
 
 用户于 2026-07-11 明确批准按本方案启动“前置批次”。本批交付范围是：研究门禁与 F2 设计、candidate bundle 闭环、通用 h20 快筛、RD-Agent/AIstock h20 companion 指标契约，以及 F4/R2 tracked repair source 的 PIT 修复。候选 A1–A6/B1/B2/N1 的实际开发、offline/realtime 双资产生成、成本容量/拥挤回测、QE 消融、生产 DDL/回填、candidate → active promotion 与运行时启用均明确后置；这些后置项不是本批允许以简化版替代的缺口，而是下一阶段必须按 F-007–F-010 重新验收的独立工作。
+
+### 2.4 2026-07-11 G0-D Batch A/B 实际执行边界
+
+Gate-0 合入后，用户继续授权使用 `develop-factor` 开展实际因子研发并要求合格因子进入 AIstock 因子库。本次执行覆盖 A1–A6、B1、B2、N1 共 9 个预注册候选，详细结果以 `sector_rotation_factors_batch_a_b_results_20260711.md` 为准：
+
+- 9 个 offline 代码和结构 receipt 完成；A1/A5/B2 到达 Stage 2，以真实 executable asset、catalog 和 classification 入库；
+- A1/A5/B2 在 Stage 3 失败后均设置 `is_available=false`；其余 6 个 KILL 候选不入 catalog；本批没有可用因子通过；
+- A5/B2 完成双层相关性、residual/partial IC、HAC、block bootstrap 与 non-overlap 复核；A1 因 HAC ICIR 低于 0.3 停止；
+- 因无 Stage-3 通过者，realtime loader、成本容量/拥挤组合、GATs/LGBM QE 消融不启动；
+- 官方任务已成功计算 A1/A5/B2，但生产 h20 DDL 尚未独立授权/应用，metrics 写入被缺列 gate 阻断；candidate → active、runtime 和 paper/live 仍未修改。
+
+本节更新的是后续执行事实，不追溯改变 2.3 的 Gate-0 历史授权边界。
 
 ## 3. 证据口径与基线因子
 
@@ -570,9 +582,11 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 2. 对两个仓库分别运行最小定向测试、lint/compile/diff check；生成 candidate receipt。
 3. 更新本矩阵为真实状态，列明所有外部门禁；各仓库独立提交 PR，禁止把跨仓库状态混写为一个“已完成”。
 
-### Phase G0-D：后续因子研发（不属于本次前置实现）
+### Phase G0-D：后续因子研发（Batch A/B 已执行）
 
 F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 `develop-factor` 与因子库 MCP 按 A1→A6 顺序开展纯离线研发；无需等待 production DDL 或 active promotion。Batch B 只在 Batch A 失败归因完成后启动。每个候选独立执行预注册、快筛、统一指标、去重、分类和 disposition；生产持久化、promotion 与运行时仍受第 17 节独立门禁约束。
+
+2026-07-11 已按上述顺序执行 A1–A6/B1/B2，并补齐 N1 negative control。9 个候选均有最终 disposition，0 个通过 Stage-3；三项 Stage-2 研究资产已入库后禁用。后续不再沿这些公式调窗口，而按关联结果报告中的 C1–C4 建立新 trial 与新 holdout。
 
 ## 14. Verification Plan / 验证计划
 
@@ -617,22 +631,22 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文 2.3、4.6–4.9、8、18 | ledger 字段/存储契约、候选族与研究来源已冻结；本批未运行候选公式 | VERIFIED | 无 |
+| F-001 | 本文 2.3–2.4、4.6–4.9、8、18 | 9 个 trial 预注册并保留 29 条 append-only JSONL；最终 disposition 9/9 | VERIFIED | 无 |
 | F-002 | RD-Agent `tools/generate_static_factors_bundle.py` | 9 项 unit；7,304,119 行 candidate receipt；parquet/schema SHA-256 | VERIFIED | 无 |
 | F-003 | AIstock `scripts/quick_ic_screen.py` | horizon/label/direction/manifest/HAC/CLI 单测 20 passed；与 shared contract 合计 coverage 92% | VERIFIED | 无 |
 | F-004 | RD-Agent metrics engine 与 SOTA API | h20 engine/API 2 passed；与 bundle 合计 11 passed | VERIFIED | 无 |
 | F-005 | AIstock migration、`factor_metrics_contract.py`、official writer、routers/MCP | contract 9 passed；contract+MCP/emit 51 passed；official batch 26 passed/1 skipped | VERIFIED | 无 |
 | F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
-| F-007 | 后续候选 asset/realtime loader | 2.3、5、13 G0-D 与 L3 parity/fail-fast 验证契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批仅执行 Gate-0 前置批次；实际候选双资产在 G0-D 验收。 |
-| F-008 | 因子库 MCP + Stage 0/3 | 本批 R1/R2 MCP receipt；后续双层相关性/partial IC 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不运行候选公式；完整查重随各 trial 执行。 |
-| F-009 | Stage 1/3 + portfolio evaluator | HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 将真实候选与组合持仓验证后置 G0-D。 |
-| F-010 | QE GATs/LGBM experiment specs | 2×2、STATE、multi-seed OOS 与 L4 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不启动 QE。 |
-| F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
-| F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
+| F-007 | 候选 offline asset、factor catalog 与失败策略 | 9 个 offline 输出结构通过；A1/A5/B2 executable asset 入库后禁用；仅通过者要求 realtime loader，本批无通过者 | VERIFIED_NO_SURVIVOR | 无 |
+| F-008 | 因子库 MCP + Stage 0/3 | 9 个候选定向查重；A5/B2 双层相关性与 residual/partial IC；A1 在 HAC 门禁停止 | VERIFIED | 无 |
+| F-009 | Stage 1/3 + portfolio evaluator | h20 HAC；A5/B2 block/non-overlap；9 项最终 disposition；A4/A6 额外 test 诊断永久标记为不可晋级 | NOT_APPLICABLE_NO_SURVIVOR | 无 |
+| F-010 | QE GATs/LGBM experiment specs | 无候选通过 F-009，按门禁不启动 2×2、STATE 或 multi-seed QE | NOT_APPLICABLE_NO_SURVIVOR | 无 |
+| F-011 | 两仓隔离 worktree、catalog 受控写入与第 17 节 | 3 项 catalog/classification/disable 写入；active/DDL/runtime/paper/live 均未修改；metrics 缺 DDL 未落表 | VERIFIED_SCOPED_SIDE_EFFECT | 无 |
+| F-012 | Gate-0 验证 + G0-D receipts/result PR | Gate-0 AIstock 99 passed/1 skipped、RD-Agent 11 passed；G0-D 结果报告、diff check 与 F2 validation | VERIFIED | 无 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
-- Rollout：本批准备并提交向后兼容的代码能力与设计文档 PR；candidate artifact 留在隔离、gitignored 目录。AIstock 与 RD-Agent 分仓 PR、分仓验证，merge 仍需明确授权，不能把“PR 已提交”写成“已合入”。
+- Rollout：Gate-0 向后兼容代码与设计已合入；G0-D 研究产物继续留在隔离、gitignored 目录，本次只提交结果文档与设计状态同步 PR。PR、merge、DDL、active promotion 和 runtime 状态仍分别报告。
 - Schema rollout：新增列全部 nullable；生产 DDL 由独立变更窗口执行，先备份/演练，再迁移、回填与查询验收。本批仅交付迁移能力，不执行。
 - Data rollout：只有 candidate receipt 通过且用户单独批准，才允许 candidate → active；必须原子切换路径/配置并保留上一 active 快照。
 - Rollback：代码按各仓 PR revert；schema 新列可先停止写读而不立即 drop；active 数据回切上一快照；任何回滚不得删除试验台账或验证 receipt。
@@ -642,15 +656,15 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 
 | gate | 本批状态 | 放行条件 |
 |---|---|---|
-| source merge | PENDING | 两仓 PR 审查、定向验证与设计矩阵完成；合并需按用户授权。 |
+| source merge | GATE0_MERGED / RESULT_PR_PENDING | Gate-0 已合入；本次 G0-D 仅结果文档待 PR/审查。 |
 | candidate artifact | VERIFIED_ISOLATED | F-002 receipt、隔离路径与 SHA-256 已复核；尚未 promotion。 |
 | production_ddl_gate | pending | 已交付 nullable additive migration，但未应用；需独立批准、备份/演练、迁移与回填计划。 |
-| production_db_write_gate | not_performed | 仅后续因子 promotion/回填任务可单独授权；RD task/loop 非官方 writer 继续禁用。 |
+| production_db_write_gate | CATALOG_ONLY_PERFORMED | 仅写入 3 项研究 catalog/classification/disable 状态；官方 metrics 因 DDL 缺失未写，未做 promotion/回填。 |
 | active_promotion_gate | not_performed | candidate 完整性、新鲜度、离线结果和用户单独确认。 |
 | production_frontend_dependency_gate | noop | 本批无前端/lockfile 变化。 |
 | production_backend_dependency_gate | noop | 本批无依赖/lockfile 变化。 |
-| candidate_freshness_gate | pending | QE/promotion 前刷新到批准的 as-of date，并记录 close label end 与 `last_evaluable_signal_date`。 |
-| QE experiment | NOT_STARTED | F-001–F-009 证据与独立实验卡批准。 |
+| candidate_freshness_gate | RESEARCH_FROZEN / PROMOTION_PENDING | 当前研究快照固定到 2026-04-28，label source 到 2026-06-30；若后续 QE/promotion 必须重新批准 as-of date。 |
+| QE experiment | NOT_STARTED_BY_GATE | 本批无 Stage-3 通过者；新候选必须新 trial/新 holdout，不得在已打开 test 上调参。 |
 | service/runtime restart | NOT_PERFORMED | 后续部署窗口与健康检查批准。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
