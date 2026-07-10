@@ -275,6 +275,60 @@ def _build_multiindex_df(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     return result.sort_index()
 
 
+def _load_sw_l2_member_intervals(conn, ts_codes: List[str]) -> pd.DataFrame:
+    """加载给定股票的申万 L2 归属区间（in_date/out_date）。数据量小（每股少量区间）。"""
+    if not ts_codes:
+        return pd.DataFrame(columns=["ts_code", "l2_code", "in_date", "out_date"])
+    placeholders = ",".join(["%s"] * len(ts_codes))
+    sql = f"""
+        SELECT ts_code, l2_code, in_date, out_date
+        FROM market.sw_index_member
+        WHERE ts_code IN ({placeholders})
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, ts_codes)
+        rows = cur.fetchall()
+    return pd.DataFrame(rows, columns=["ts_code", "l2_code", "in_date", "out_date"])
+
+
+def _asof_l2_codes(trade_date: pd.Series, ts_code: pd.Series, members: pd.DataFrame) -> list:
+    """按 (ts_code, trade_date) 做 PIT as-of 匹配，返回与输入行一一对应的 l2_code 列表。
+
+    规则与 db_reader 的 LATERAL 一致：取 in_date <= trade_date 的最近区间，且该区间
+    out_date 为空或 >= trade_date；否则视为未归属（None）。用 pandas merge_asof 向量化，
+    避免逐行相关子查询在全市场规模下 statement timeout。
+    """
+    n = len(trade_date)
+    left = pd.DataFrame(
+        {
+            "_ord": np.arange(n, dtype=np.int64),
+            "trade_date": pd.to_datetime(pd.Series(trade_date).to_numpy()),
+            "ts_code": pd.Series(ts_code).astype(str).to_numpy(),
+        }
+    )
+    if members is None or members.empty:
+        return [None] * n
+    m = members.copy()
+    m["ts_code"] = m["ts_code"].astype(str)
+    m["in_date"] = pd.to_datetime(m["in_date"])
+    m["out_date"] = pd.to_datetime(m["out_date"])
+    m = m.dropna(subset=["in_date"]).sort_values("in_date")
+    left_sorted = left.sort_values("trade_date")
+    merged = pd.merge_asof(
+        left_sorted,
+        m,
+        left_on="trade_date",
+        right_on="in_date",
+        by="ts_code",
+        direction="backward",
+    )
+    active = merged["out_date"].isna() | (merged["out_date"] >= merged["trade_date"])
+    merged.loc[~active, "l2_code"] = None
+    merged = merged.sort_values("_ord")
+    # merge_asof 未匹配行会产生 NaN，统一规整为 None（编码侧按未知/-1 处理）
+    return [code if pd.notna(code) else None for code in merged["l2_code"].tolist()]
+
+
 def _warn_low_l2_code_coverage(df: pd.DataFrame) -> None:
     """按交易日检查 l2_code_id 覆盖率，低于阈值 loud warning（不静默、不丢行）。"""
     if df.empty or "l2_code_id" not in df.columns:
@@ -716,22 +770,13 @@ def load_sector_data(
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
-    col_list = ", ".join(f"sd.{c}" for c in SECTOR_DATA_COLUMNS)
+    col_list = ", ".join(SECTOR_DATA_COLUMNS)
     sql = f"""
-        SELECT sd.trade_date, sd.ts_code, {col_list}, ind.l2_code
-        FROM market.sector_data sd
-        LEFT JOIN LATERAL (
-            SELECT l2_code
-            FROM market.sw_index_member m
-            WHERE m.ts_code = sd.ts_code
-              AND m.in_date <= sd.trade_date
-              AND (m.out_date IS NULL OR m.out_date >= sd.trade_date)
-            ORDER BY m.in_date DESC NULLS LAST, m.out_date DESC NULLS LAST
-            LIMIT 1
-        ) ind ON TRUE
-        WHERE sd.ts_code IN ({placeholders})
-          AND sd.trade_date >= %s AND sd.trade_date <= %s
-        ORDER BY sd.trade_date, sd.ts_code
+        SELECT trade_date, ts_code, {col_list}
+        FROM market.sector_data
+        WHERE ts_code IN ({placeholders})
+          AND trade_date >= %s AND trade_date <= %s
+        ORDER BY trade_date, ts_code
     """
     params = ts_codes + [start.isoformat(), end.isoformat()]
 
@@ -740,14 +785,17 @@ def load_sector_data(
         if df.empty:
             return pd.DataFrame()
         l2_code_map = load_sw_l2_code_map(conn)
+        members = _load_sw_l2_member_intervals(conn, ts_codes)
 
-    # 在 _build_multiindex_df 变换 df 之前，按 (datetime,instrument) 编码 l2_code_id
+    # 按 (datetime,instrument) 编码 l2_code_id（PIT as-of，见 _asof_l2_codes）。
+    # 用 pandas merge_asof 而非逐行 SQL LATERAL：后者在全市场规模下会 statement timeout。
+    l2_codes = _asof_l2_codes(df["trade_date"], df["ts_code"], members)
     l2_index = pd.MultiIndex.from_arrays(
         [pd.to_datetime(df["trade_date"]), df["ts_code"].apply(_normalize_instrument)],
         names=["datetime", "instrument"],
     )
     encoded = pd.Series(
-        np.asarray(encode_l2_codes(df["l2_code"].tolist(), l2_code_map), dtype=np.int16),
+        np.asarray(encode_l2_codes(l2_codes, l2_code_map), dtype=np.int16),
         index=l2_index,
     )
     encoded = encoded[~encoded.index.duplicated(keep="last")]
