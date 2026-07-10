@@ -799,7 +799,9 @@ def main() -> int:
     official = compute_official_universe(daily_norm, pool, start, end)
     if official.empty:
         raise RuntimeError("Official IPO-filtered universe is empty")
-    official.to_csv(snapshot_dir / "metadata" / "official_universe.csv", index=False)
+    official_universe_path = snapshot_dir / "metadata" / "official_universe.csv"
+    official_universe_path.parent.mkdir(parents=True, exist_ok=True)
+    official.to_csv(official_universe_path, index=False)
     write_official_all_txt(official, snapshot_dir / "instruments" / "all.txt", ",")
     logging.info("Official IPO-filtered universe: %s instruments", len(official))
 
