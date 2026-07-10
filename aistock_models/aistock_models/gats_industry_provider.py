@@ -398,7 +398,11 @@ def _db_cfg() -> dict[str, Any]:
         "host": _first_env("TDX_DB_HOST", "POSTGRES_HOST", "PG_HOST", default="127.0.0.1"),
         "port": int(_first_env("TDX_DB_PORT", "POSTGRES_PORT", "PG_PORT", default="5432")),
         "user": _first_env("TDX_DB_USER", "POSTGRES_USER", "PG_USER", default="postgres"),
-        "password": _first_env("TDX_DB_PASSWORD", "POSTGRES_PASSWORD", "PG_PASSWORD", default=""),
+        "password": _require_env(
+            "TDX_DB_PASSWORD",
+            "POSTGRES_PASSWORD",
+            "PG_PASSWORD",
+        ),
         "dbname": _first_env("TDX_DB_NAME", "POSTGRES_DB", "PG_DATABASE", default="aistock"),
         "application_name": "AIstock-EfficientGATs-industry-provider",
         "options": "-c client_encoding=utf8",
@@ -413,6 +417,20 @@ def _first_env(*keys: str, default: str) -> str:
     return default
 
 
+def _require_env(*keys: str) -> str:
+    for key in keys:
+        try:
+            value = os.environ[key]
+        except KeyError:
+            continue
+        if value != "":
+            return value
+    raise GatsIndustryProviderError(
+        "reason_code=qe_gats_industry_db_password_missing: "
+        "set one of TDX_DB_PASSWORD/POSTGRES_PASSWORD/PG_PASSWORD"
+    )
+
+
 @contextmanager
 def _default_conn_factory() -> Iterator[Any]:
     try:
@@ -425,6 +443,8 @@ def _default_conn_factory() -> Iterator[Any]:
 
     try:
         conn = psycopg2.connect(**_db_cfg())
+    except GatsIndustryProviderError:
+        raise
     except Exception as exc:
         raise GatsIndustryProviderError(
             "reason_code=qe_gats_industry_db_connect_failed: "

@@ -3031,6 +3031,26 @@ def test_gats_industry_provider_lookup_failure_and_coverage_zero_are_loud():
         provider(index)
 
 
+def test_gats_industry_provider_missing_db_password_fails_loud(monkeypatch):
+    provider_mod = _import_gats_industry_provider_module()
+    for key in ("TDX_DB_PASSWORD", "POSTGRES_PASSWORD", "PG_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+
+    def _unexpected_connect(**_kwargs):
+        raise AssertionError("psycopg2.connect must not run without a password")
+
+    monkeypatch.setitem(sys.modules, "psycopg2", types.SimpleNamespace(connect=_unexpected_connect))
+
+    with pytest.raises(provider_mod.GatsIndustryProviderError) as exc_info:
+        with provider_mod._default_conn_factory():
+            pass
+
+    assert str(exc_info.value) == (
+        "reason_code=qe_gats_industry_db_password_missing: "
+        "set one of TDX_DB_PASSWORD/POSTGRES_PASSWORD/PG_PASSWORD"
+    )
+
+
 def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monkeypatch):
     provider_mod = _import_gats_industry_provider_module()
 
