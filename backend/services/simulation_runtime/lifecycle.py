@@ -491,14 +491,29 @@ class SimulationLifecycleOrchestrator:
                 )
                 self.mark_submit_failure(run=run, stage=submit_stage, exc=exc)
                 raise
-            next_status = SimulationDailyRunStatus.INTRADAY_RUNNING if qmt_result.success else SimulationDailyRunStatus.FAILED_RETRYABLE
             broker_called = any(result.broker_called for result in qmt_result.results)
             qmt_batch_payload = qmt_result.to_dict()
             pending_intents = int(qmt_batch_payload.get("pending") or 0)
+            failed_intents = int(qmt_batch_payload.get("failed") or qmt_result.failed or 0)
+            batch_status = qmt_batch_payload.get("batch_status") or qmt_result.batch_status or ""
+            batch_status_value = str(getattr(batch_status, "value", batch_status)).upper().rsplit(".", 1)[-1]
+            event_loop_pending = (
+                batch_status_value == "SUBMITTING"
+                and pending_intents > 0
+                and failed_intents == 0
+            )
+            # BUG-604 semantics: a preflight-approved event-loop parent with no
+            # child yet is pending work, not a retryable submit failure.
+            next_status = (
+                SimulationDailyRunStatus.INTRADAY_RUNNING
+                if qmt_result.success or event_loop_pending
+                else SimulationDailyRunStatus.FAILED_RETRYABLE
+            )
             payload_patch = {
                 "broker_called": broker_called,
                 "submitted_intents": qmt_result.succeeded,
-                "failed_intents": qmt_result.failed,
+                "failed_intents": failed_intents,
+                "event_loop_pending": event_loop_pending,
                 "pending_intents": pending_intents,
                 "qmt_batch_id": qmt_result.batch_id,
                 "qmt_batch_status": qmt_result.batch_status,
@@ -523,7 +538,7 @@ class SimulationLifecycleOrchestrator:
                 run.run_id,
                 status=next_status,
                 payload_patch=payload_patch,
-                payload_unset=("submit_failure",) if qmt_result.success else None,
+                payload_unset=("submit_failure",) if qmt_result.success or event_loop_pending else None,
             )
             return SimulationExecutionResult(
                 run=updated,

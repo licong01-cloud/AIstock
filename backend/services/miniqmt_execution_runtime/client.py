@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -70,6 +72,10 @@ from .runtime import MiniQMTExecutionRuntime
 
 RUNTIME_OWNER = "MiniQMTExecutionRuntime"
 MINIQMT_EVENT_LOOP_BROKER_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
+LOGGER = logging.getLogger(__name__)
+DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS = 1
+DEFAULT_MARKETABLE_LIMIT_PROTECTION_BAND_PCT = 0.02
+DEFAULT_A_SHARE_PRICE_TICK = 0.01
 
 
 def _normalize_runtime_kind(runtime_kind: MiniQMTExecutionRuntimeKind | str | None) -> MiniQMTExecutionRuntimeKind:
@@ -445,7 +451,11 @@ class MiniQMTExecutionRuntimeClient:
                 side=intent.side,
                 target_quantity=int(intent.quantity),
                 algo_code=algo_code,
-                limit_price=_limit_price_for_runtime(intent=intent, quote_provider=quote_provider),
+                limit_price=_limit_price_for_runtime(
+                    intent=intent,
+                    quote_provider=quote_provider,
+                    algo_config=dict(policy_json.get("algo_config") or {}),
+                ),
                 algo_config=dict(policy_json.get("algo_config") or {}),
                 min_volume=min_volume,
                 volume_increment=volume_increment,
@@ -716,7 +726,11 @@ class MiniQMTExecutionRuntimeClient:
                 side=intent.side,
                 target_quantity=int(intent.quantity),
                 algo_code=algo_code,
-                limit_price=_limit_price_for_event_loop(intent=intent, tick_payload=tick_payload),
+                limit_price=_limit_price_for_event_loop(
+                    intent=intent,
+                    tick_payload=tick_payload,
+                    algo_config=dict(policy_json.get("algo_config") or {}),
+                ),
                 algo_config=dict(policy_json.get("algo_config") or {}),
                 min_volume=1 if intent.side == OrderSide.SELL else None,
                 volume_increment=1 if intent.side == OrderSide.SELL else None,
@@ -728,6 +742,8 @@ class MiniQMTExecutionRuntimeClient:
                     "event_loop_submit": True,
                     "qmt_batch_id": batch_id,
                     "quote_source": tick_payload.get("source") or tick_payload.get("quote_source"),
+                    "marketable_limit_reference_price": _execution_reference_price(intent=intent, tick_payload=tick_payload),
+                    "marketable_limit_policy": dict(policy_json.get("algo_config") or {}),
                 },
             )
             gateway.on_tick(tick_payload)
@@ -834,6 +850,7 @@ class MiniQMTExecutionRuntimeClient:
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None = None,
         managed_order_service: QmtManagedOrderService | None = None,
+        as_of_time: datetime | None = None,
         source: str = "simulation_runtime_event_loop_tick_driver",
     ) -> MiniQMTRuntimeTickDriveResult:
         """Drive one non-blocking quote batch into active event-loop algos."""
@@ -874,7 +891,7 @@ class MiniQMTExecutionRuntimeClient:
             strategy_name=strategy_name,
             order_remark_prefix=order_remark_prefix,
         )
-        self._runtime(
+        runtime = self._runtime(
             account_group_id=account_group_id,
             trade_date=trade_date,
             runtime_config_hash=runtime_config_hash,
@@ -907,11 +924,41 @@ class MiniQMTExecutionRuntimeClient:
         for symbol in sorted(instance_by_symbol):
             instance = instance_by_symbol[symbol]
             try:
+                probe_intent = _event_loop_probe_intent_for_algo(instance, trade_date=trade_date)
                 tick_payload = _required_event_loop_tick_payload(
-                    intent=_event_loop_probe_intent_for_algo(instance, trade_date=trade_date),
+                    intent=probe_intent,
                     quote_provider=quote_provider,
                     qmt_client=qmt_client,
                     source=source,
+                )
+                policy = dict(instance.metadata.get("marketable_limit_policy") or instance.metadata.get("algo_config") or {})
+                tail_sweep = _event_loop_tail_sweep_enabled(policy, as_of_time=as_of_time)
+                cross_ticks = (
+                    _positive_int_config(
+                        policy,
+                        "tail_sweep_cross_ticks",
+                        max(2, _positive_int_config(policy, "marketable_limit_cross_ticks", DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS)),
+                    )
+                    if tail_sweep
+                    else None
+                )
+                limit_price = _marketable_limit_price(
+                    intent=probe_intent,
+                    tick_payload=tick_payload,
+                    algo_config=policy,
+                    stage=("MINIQMT_EVENT_LOOP_TAIL_SWEEP" if tail_sweep else "MINIQMT_EVENT_LOOP_TICK_REPRICE"),
+                    cross_ticks_override=cross_ticks,
+                )
+                runtime.reprice_pending_vnpy_algo(
+                    algo_instance_id=instance.algo_instance_id,
+                    limit_price=limit_price,
+                    reason_code=("MINIQMT_EVENT_LOOP_TAIL_SWEEP_MARKETABLE_LIMIT" if tail_sweep else "MINIQMT_EVENT_LOOP_TICK_MARKETABLE_REPRICE"),
+                    stage=("MINIQMT_EVENT_LOOP_TAIL_SWEEP" if tail_sweep else "MINIQMT_EVENT_LOOP_TICK_REPRICE"),
+                    metadata={
+                        "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
+                        "tail_sweep": tail_sweep,
+                        "quote_source": tick_payload.get("quote_source"),
+                    },
                 )
                 gateway.on_tick(tick_payload)
                 quote_count += 1
@@ -1284,7 +1331,12 @@ class MiniQMTExecutionRuntimeClient:
             qmt_client=qmt_client,
             source=source,
         )
-        price = _limit_price_for_event_loop(intent=intent, tick_payload=tick_payload)
+        policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
+        price = _limit_price_for_event_loop(
+            intent=intent,
+            tick_payload=tick_payload,
+            algo_config=dict(policy_json.get("algo_config") or {}) if isinstance(policy_json, dict) else {},
+        )
         child_metadata = {
             **dict(child_context),
             "source": source,
@@ -1663,7 +1715,11 @@ class MiniQMTExecutionRuntimeClient:
             side=intent.side,
             target_quantity=int(intent.quantity),
             algo_code=algo_code,
-            limit_price=_limit_price_for_runtime(intent=intent, quote_provider=quote_provider),
+            limit_price=_limit_price_for_runtime(
+                intent=intent,
+                quote_provider=quote_provider,
+                algo_config=dict(policy_json.get("algo_config") or {}),
+            ),
             algo_config=dict(policy_json.get("algo_config") or {}),
             metadata={
                 "source": source,
@@ -2340,33 +2396,208 @@ def _limit_price_for_runtime(
     *,
     intent: OrderIntent,
     quote_provider: Callable[[str], dict[str, Any] | None] | None,
+    algo_config: dict[str, Any] | None = None,
 ) -> float:
-    if intent.limit_price is not None:
-        return float(intent.limit_price)
     quote = quote_provider(intent.symbol) if quote_provider is not None else None
     if quote:
-        return float(quote.get("ask_price_1") if intent.side == OrderSide.BUY else quote.get("bid_price_1"))
+        return _marketable_limit_price(
+            intent=intent,
+            tick_payload=quote,
+            algo_config=algo_config or {},
+            stage="MINIQMT_RUNTIME_MARKETABLE_LIMIT",
+        )
+    if intent.limit_price is not None:
+        return float(intent.limit_price)
     raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py client requires quote or limit_price")
 
 
-def _limit_price_for_event_loop(*, intent: OrderIntent, tick_payload: dict[str, Any]) -> float:
-    if intent.limit_price is not None:
-        price = float(intent.limit_price)
-    elif intent.side == OrderSide.BUY:
-        price = float(tick_payload.get("ask_price_1") or tick_payload.get("price") or 0)
-    else:
-        price = float(tick_payload.get("bid_price_1") or tick_payload.get("price") or 0)
-    if price <= 0:
+def _limit_price_for_event_loop(
+    *,
+    intent: OrderIntent,
+    tick_payload: dict[str, Any],
+    algo_config: dict[str, Any] | None = None,
+) -> float:
+    return _marketable_limit_price(
+        intent=intent,
+        tick_payload=tick_payload,
+        algo_config=algo_config or {},
+        stage="MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT",
+    )
+
+
+def _marketable_limit_price(
+    *,
+    intent: OrderIntent,
+    tick_payload: dict[str, Any],
+    algo_config: dict[str, Any],
+    stage: str,
+    cross_ticks_override: int | None = None,
+) -> float:
+    """Return a valid, protected marketable-limit price for an A-share L1 quote.
+
+    The protection cap deliberately wins over immediacy: a quote outside the
+    configured band is converted into a passive cap so this tick cannot submit
+    a bad order; the next broker tick will re-evaluate it.
+    """
+    cross_ticks = _positive_int_config(
+        algo_config,
+        "marketable_limit_cross_ticks",
+        DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS,
+    ) if cross_ticks_override is None else cross_ticks_override
+    protection_band_pct = _positive_float_config(
+        algo_config,
+        "marketable_limit_protection_band_pct",
+        DEFAULT_MARKETABLE_LIMIT_PROTECTION_BAND_PCT,
+    )
+    tick_size = _positive_tick_size(tick_payload, algo_config)
+    reference_price = _execution_reference_price(intent=intent, tick_payload=tick_payload)
+    opposite_price = _positive_quote_price(
+        tick_payload.get("ask_price_1") if intent.side == OrderSide.BUY else tick_payload.get("bid_price_1"),
+        intent=intent,
+        stage=stage,
+    )
+    candidate = opposite_price + tick_size * cross_ticks if intent.side == OrderSide.BUY else opposite_price - tick_size * cross_ticks
+    protected_cap = reference_price * (1.0 + protection_band_pct) if intent.side == OrderSide.BUY else reference_price * (1.0 - protection_band_pct)
+    out_of_band = candidate > protected_cap if intent.side == OrderSide.BUY else candidate < protected_cap
+    price = protected_cap if out_of_band else candidate
+    price = _apply_exchange_price_bounds(price=price, side=intent.side, tick_payload=tick_payload)
+    price = _round_to_a_share_tick(price=price, tick_size=tick_size, side=intent.side)
+    if price <= 0 or not math.isfinite(price):
         raise BrokerSubmitError(
-            "MiniQMT event_loop submit requires positive broker quote price",
+            "MiniQMT marketable-limit price is invalid after A-share constraints",
             context={
-                "reason_code": "MINIQMT_EVENT_LOOP_QUOTE_PRICE_INVALID",
+                "reason_code": "MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT_PRICE_INVALID",
+                "stage": stage,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                "price": price,
+                "tick_size": tick_size,
+            },
+        )
+    if out_of_band:
+        LOGGER.warning(
+            "reason_code=MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT_PROTECTION_BAND stage=%s intent_id=%s symbol=%s side=%s reference_price=%s opposite_price=%s protected_cap=%s; skip aggressive crossing until next tick",
+            stage,
+            intent.intent_id,
+            intent.symbol,
+            intent.side.value,
+            reference_price,
+            opposite_price,
+            price,
+        )
+    return price
+
+
+def _execution_reference_price(*, intent: OrderIntent, tick_payload: dict[str, Any]) -> float:
+    metadata = dict(intent.metadata or {})
+    for value in (
+        metadata.get("reference_price"),
+        metadata.get("pre_close"),
+        intent.limit_price,
+        tick_payload.get("reference_price"),
+        tick_payload.get("pre_close"),
+        tick_payload.get("price"),
+        tick_payload.get("last_price"),
+    ):
+        try:
+            price = float(value)
+        except (TypeError, ValueError):
+            continue
+        if price > 0 and math.isfinite(price):
+            return price
+    raise BrokerSubmitError(
+        "MiniQMT marketable-limit requires a positive reference price",
+        context={
+            "reason_code": "MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT_REFERENCE_PRICE_MISSING",
+            "stage": "MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT",
+            "intent_id": intent.intent_id,
+            "symbol": intent.symbol,
+            "side": intent.side.value,
+        },
+    )
+
+
+def _positive_quote_price(value: Any, *, intent: OrderIntent, stage: str) -> float:
+    try:
+        price = float(value)
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError(
+            "MiniQMT marketable-limit requires a positive opposite-side L1 price",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT_QUOTE_INVALID",
+                "stage": stage,
                 "intent_id": intent.intent_id,
                 "symbol": intent.symbol,
                 "side": intent.side.value,
             },
+        ) from exc
+    if price <= 0 or not math.isfinite(price):
+        raise BrokerSubmitError(
+            "MiniQMT marketable-limit requires a positive opposite-side L1 price",
+            context={
+                "reason_code": "MINIQMT_EVENT_LOOP_MARKETABLE_LIMIT_QUOTE_INVALID",
+                "stage": stage,
+                "intent_id": intent.intent_id,
+                "symbol": intent.symbol,
+                "side": intent.side.value,
+                "quote_price": price,
+            },
         )
     return price
+
+
+def _positive_int_config(config: dict[str, Any], key: str, default: int) -> int:
+    value = config.get(key, default)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError(f"MiniQMT execution policy {key} must be a positive integer") from exc
+    if parsed < 1:
+        raise BrokerSubmitError(f"MiniQMT execution policy {key} must be a positive integer")
+    return parsed
+
+
+def _positive_float_config(config: dict[str, Any], key: str, default: float) -> float:
+    value = config.get(key, default)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError(f"MiniQMT execution policy {key} must be a positive finite number") from exc
+    if parsed <= 0 or not math.isfinite(parsed):
+        raise BrokerSubmitError(f"MiniQMT execution policy {key} must be a positive finite number")
+    return parsed
+
+
+def _positive_tick_size(tick_payload: dict[str, Any], algo_config: dict[str, Any]) -> float:
+    for value in (algo_config.get("price_tick"), tick_payload.get("price_tick"), tick_payload.get("tick_size")):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0 and math.isfinite(parsed):
+            return parsed
+    return DEFAULT_A_SHARE_PRICE_TICK
+
+
+def _apply_exchange_price_bounds(*, price: float, side: OrderSide, tick_payload: dict[str, Any]) -> float:
+    upper_keys = ("up_limit", "upper_limit", "limit_up", "high_limit")
+    lower_keys = ("down_limit", "lower_limit", "limit_down", "low_limit")
+    keys = upper_keys if side == OrderSide.BUY else lower_keys
+    for key in keys:
+        try:
+            bound = float(tick_payload.get(key))
+        except (TypeError, ValueError):
+            continue
+        if bound > 0 and math.isfinite(bound):
+            return min(price, bound) if side == OrderSide.BUY else max(price, bound)
+    return price
+
+
+def _round_to_a_share_tick(*, price: float, tick_size: float, side: OrderSide) -> float:
+    units = price / tick_size
+    rounded_units = math.ceil(units - 1e-9) if side == OrderSide.BUY else math.floor(units + 1e-9)
+    return round(rounded_units * tick_size, 8)
 
 
 def _required_event_loop_tick_payload(
@@ -2779,15 +3010,36 @@ def _event_loop_probe_intent_for_algo(
         symbol=instance.symbol,
         side=instance.side,
         quantity=max(int(instance.target_quantity), 1),
-        order_type=OrderType.MARKET,
+        order_type=OrderType.LIMIT,
+        limit_price=metadata.get("marketable_limit_reference_price") or metadata.get("limit_price"),
         target_trade_date=trade_date,
         metadata={
             **dict(child_context),
+            "reference_price": metadata.get("marketable_limit_reference_price") or metadata.get("limit_price"),
             "source": "event_loop_tick_driver_probe_intent",
             "runtime_algo_instance_id": instance.algo_instance_id,
             "runtime_parent_intent_id": instance.parent_intent_id,
         },
     )
+
+
+def _event_loop_tail_sweep_enabled(config: dict[str, Any], *, as_of_time: datetime | None) -> bool:
+    if as_of_time is None:
+        return False
+    raw_enabled = config.get("tail_sweep_enabled", True)
+    if not isinstance(raw_enabled, bool):
+        raise BrokerSubmitError("MiniQMT execution policy tail_sweep_enabled must be boolean")
+    if not raw_enabled:
+        return False
+    cutoff = str(config.get("tail_sweep_time", "14:55")).strip()
+    try:
+        hour_text, minute_text = cutoff.split(":", 1)
+        cutoff_minutes = int(hour_text) * 60 + int(minute_text)
+    except (TypeError, ValueError) as exc:
+        raise BrokerSubmitError("MiniQMT execution policy tail_sweep_time must use HH:MM") from exc
+    if not 0 <= cutoff_minutes < 24 * 60:
+        raise BrokerSubmitError("MiniQMT execution policy tail_sweep_time must use HH:MM")
+    return as_of_time.hour * 60 + as_of_time.minute >= cutoff_minutes
 
 
 def _event_loop_child_request_index(child: MiniQMTChildOrder, *, fallback: int) -> int:

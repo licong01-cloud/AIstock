@@ -1,8 +1,14 @@
 {
   "actual": "07-07=0/25、07-08=11/25、07-09=5/31、07-10=2/32；07-10 batch_status=SUBMITTING且pending=25、failed=0，但run被写FAILED_RETRYABLE并停止tick驱动。",
   "allowed_write_scope": [
-    "backend/services/paper_trading/miniqmt/lifecycle.py",
-    "backend/services/paper_trading/miniqmt/scheduler.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/execution_algos/vnpy_style/sniper_core.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
     "tests/aistock_validation/bugs/20260710_BUG-614-miniqmt-event-loop-pending-sim-top-k.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -51,7 +57,8 @@
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
-    "miniqmt_execution_runtime"
+    "miniqmt_execution_runtime",
+    "simulation_runtime"
   ],
   "title": "MiniQMT event_loop pending状态与可成交限价导致SIM top-k换仓失效",
   "trigger_condition": {

@@ -6693,6 +6693,7 @@ class SimulationLifecycleScheduler:
                     plan=plan,
                     context=context,
                     mode=mode,
+                    as_of_time=as_of_time,
                 ),
             )
         except RuntimeConfigInvalidError as exc:
@@ -6711,6 +6712,7 @@ class SimulationLifecycleScheduler:
         plan: ExecutionPlan,
         context: SimulationRunContext,
         mode: str,
+        as_of_time: datetime | None,
     ) -> Any:
         if context.managed_order_service is None:
             raise DataUnavailableError(
@@ -6729,6 +6731,7 @@ class SimulationLifecycleScheduler:
             binding=binding,
             mode=mode,
             price_by_symbol=context.price_by_symbol or context.current_prices,
+            as_of_time=as_of_time,
         )
 
     def _persist_miniqmt_tick_driver_result(
