@@ -1910,6 +1910,56 @@ class MiniQMTExecutionRuntime:
                     return instance
         return None
 
+    def reprice_pending_vnpy_algo(
+        self,
+        *,
+        algo_instance_id: str,
+        limit_price: float,
+        reason_code: str,
+        stage: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> MiniQMTExecutionAlgoInstance:
+        """Persist and apply a new limit before the next event-loop tick."""
+        if limit_price <= 0 or not math.isfinite(limit_price):
+            raise ValueError("event-loop reprice requires a positive finite limit_price")
+        instance = self._find_algo_instance(self.config.runtime_id, algo_instance_id)
+        if instance is None or instance.status != MiniQMTAlgoInstanceStatus.ACTIVE:
+            raise RuntimeError(f"active algo instance not found for event-loop reprice: {algo_instance_id}")
+        core = self._ensure_vnpy_core(instance)
+        core.price = float(limit_price)
+        stored = self.oms.record_algo_instance(
+            instance.model_copy(
+                update={
+                    "metadata": {
+                        **dict(instance.metadata),
+                        "limit_price": float(limit_price),
+                        "event_loop_last_reprice": {
+                            "reason_code": reason_code,
+                            "stage": stage,
+                            "limit_price": float(limit_price),
+                            **dict(metadata or {}),
+                        },
+                    }
+                }
+            )
+        )
+        self.events.append(
+            runtime_id=stored.runtime_id,
+            event_type=MiniQMTExecutionEventType.ALGO_ACTION_EMITTED,
+            source="algo",
+            payload={
+                "algo_instance_id": stored.algo_instance_id,
+                "parent_intent_id": stored.parent_intent_id,
+                "symbol": stored.symbol,
+                "side": stored.side.value,
+                "limit_price": float(limit_price),
+                "reason_code": reason_code,
+                "stage": stage,
+                **dict(metadata or {}),
+            },
+        )
+        return stored
+
     def _find_child_order(
         self,
         runtime_id: str,

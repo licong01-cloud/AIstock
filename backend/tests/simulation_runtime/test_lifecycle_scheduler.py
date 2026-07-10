@@ -7186,6 +7186,7 @@ def test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children(
     )
     assert submitted.results[0].status == "MINIQMT_EVENT_LOOP_PENDING"
     assert broker.place_order_payloads == []
+    assert repo.get_simulation_daily_run(run.run_id).status == SimulationDailyRunStatus.INTRADAY_RUNNING
 
     broker.quotes.update(
         {
@@ -7221,10 +7222,18 @@ def test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children(
         data_source="DB_HISTORICAL",
         broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
         submit=True,
+        as_of_time=datetime(2026, 5, 21, 14, 55),
     )
 
     latest_run = repo.get_simulation_daily_run(run.run_id)
+    assert latest_run.run_payload_json["miniqmt_event_loop_tick_driver"]["errors"] == []
+    assert latest_run.run_payload_json["miniqmt_event_loop_tick_driver"]["triggered_child_order_count"] == len(plan.intents)
     assert len(broker.place_order_payloads) == len(plan.intents)
+    submitted_price_by_symbol = {
+        payload["stock_code"]: round(float(payload["price"]), 2)
+        for payload in broker.place_order_payloads
+    }
+    assert submitted_price_by_symbol == {"000003.SZ": 8.08, "688001.SH": 19.92}
     assert latest_run.status in {SimulationDailyRunStatus.INTRADAY_RUNNING, SimulationDailyRunStatus.SUCCEEDED}
     assert latest_run.run_payload_json["broker_called"] is True
     assert latest_run.run_payload_json["submitted_intents"] == len(plan.intents)

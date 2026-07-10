@@ -380,7 +380,9 @@ class MiniQMTExecutionBridge:
                 "MiniQMT event_loop tick driver is SIM-only; LIVE requires separate live admission",
                 context={"mode": mode, "reason_code": "MINIQMT_EVENT_LOOP_TICK_DRIVER_LIVE_FORBIDDEN"},
             )
-        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**kwargs)
+        runtime_kwargs = dict(kwargs)
+        as_of_time = runtime_kwargs.pop("as_of_time", None)
+        vnpy_kwargs = self._build_vnpy_runtime_submission_kwargs(**runtime_kwargs)
         broker = getattr(self._managed_order_service, "_broker", None)
         if broker is None:
             raise BrokerUnavailableError(
@@ -429,6 +431,7 @@ class MiniQMTExecutionBridge:
             quote_provider=None,
             managed_request_factory=vnpy_kwargs["managed_request_factory"],
             managed_order_service=self._managed_order_service,
+            as_of_time=as_of_time,
             source="simulation_runtime_event_loop_tick_driver",
         )
 
