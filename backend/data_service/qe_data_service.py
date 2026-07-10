@@ -31,6 +31,11 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from backend.services.industry_code_map import (
+    UNKNOWN_L2_CODE_ID,
+    encode_l2_codes,
+    load_sw_l2_code_map,
+)
 from backend.services.market_data.instrument_validator import (
     DEFAULT_SQL_CHUNK_SIZE,
     load_chunks_with_logging,
@@ -268,6 +273,32 @@ def _build_multiindex_df(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     for c in cols:
         result[c] = pd.to_numeric(result[c], errors="coerce").astype("float32")
     return result.sort_index()
+
+
+def _warn_low_l2_code_coverage(df: pd.DataFrame) -> None:
+    """按交易日检查 l2_code_id 覆盖率，低于阈值 loud warning（不静默、不丢行）。"""
+    if df.empty or "l2_code_id" not in df.columns:
+        return
+    coverage = (
+        df["l2_code_id"].ne(UNKNOWN_L2_CODE_ID).groupby(level="datetime").agg(["sum", "count"])
+    )
+    for dt_value, row in coverage.iterrows():
+        total = int(row["count"])
+        if total <= 0:
+            continue
+        matched = int(row["sum"])
+        ratio = matched / total
+        if ratio < 0.90:
+            label = dt_value.date().isoformat() if hasattr(dt_value, "date") else str(dt_value)
+            logger.warning(
+                "sector_data_l2_code_id_coverage_below_threshold "
+                "reason_code=sector_data_l2_code_id_low_coverage "
+                "trade_date=%s coverage=%.4f missing_count=%d total_count=%d",
+                label,
+                ratio,
+                total - matched,
+                total,
+            )
 
 
 # ============================================================
@@ -666,8 +697,12 @@ def load_sector_data(
     end_date: Union[str, date],
 ) -> pd.DataFrame:
     """
-    加载申万 L2 行业板块数据（展开到个股级别），输出 sw2_* 前缀字段。
-    数据源：market.sector_data
+    加载申万 L2 行业板块数据（展开到个股级别），输出 sw2_* 前缀字段
+    以及整数 l2_code_id（PIT 申万 L2 归属，未知/未匹配=-1）。
+
+    数据源：market.sector_data（sw2_* 数值）+ market.sw_index_member（PIT LEFT JOIN
+    LATERAL 取当日有效 l2_code）。l2_code_id 用共享稳定映射
+    backend.services.industry_code_map 编码（禁 pd.factorize，回测/导出/线上口径一致）。
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
@@ -681,24 +716,50 @@ def load_sector_data(
         return cached
 
     placeholders = ",".join(["%s"] * len(ts_codes))
-    col_list = ", ".join(SECTOR_DATA_COLUMNS)
+    col_list = ", ".join(f"sd.{c}" for c in SECTOR_DATA_COLUMNS)
     sql = f"""
-        SELECT trade_date, ts_code, {col_list}
-        FROM market.sector_data
-        WHERE ts_code IN ({placeholders})
-          AND trade_date >= %s AND trade_date <= %s
-        ORDER BY trade_date, ts_code
+        SELECT sd.trade_date, sd.ts_code, {col_list}, ind.l2_code
+        FROM market.sector_data sd
+        LEFT JOIN LATERAL (
+            SELECT l2_code
+            FROM market.sw_index_member m
+            WHERE m.ts_code = sd.ts_code
+              AND m.in_date <= sd.trade_date
+              AND (m.out_date IS NULL OR m.out_date >= sd.trade_date)
+            ORDER BY m.in_date DESC NULLS LAST, m.out_date DESC NULLS LAST
+            LIMIT 1
+        ) ind ON TRUE
+        WHERE sd.ts_code IN ({placeholders})
+          AND sd.trade_date >= %s AND sd.trade_date <= %s
+        ORDER BY sd.trade_date, sd.ts_code
     """
     params = ts_codes + [start.isoformat(), end.isoformat()]
 
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
+        if df.empty:
+            return pd.DataFrame()
+        l2_code_map = load_sw_l2_code_map(conn)
 
-    if df.empty:
-        return pd.DataFrame()
+    # 在 _build_multiindex_df 变换 df 之前，按 (datetime,instrument) 编码 l2_code_id
+    l2_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(df["trade_date"]), df["ts_code"].apply(_normalize_instrument)],
+        names=["datetime", "instrument"],
+    )
+    encoded = pd.Series(
+        np.asarray(encode_l2_codes(df["l2_code"].tolist(), l2_code_map), dtype=np.int16),
+        index=l2_index,
+    )
+    encoded = encoded[~encoded.index.duplicated(keep="last")]
 
-    # 列已经是 sw2_* 前缀，无需重命名
+    # sw2_* 数值列（float32，逐值不变）
     result = _build_multiindex_df(df, "sw2_")
+    # 追加整数 l2_code_id（未知/未匹配=-1），按索引对齐；不改任何 sw2_* 值
+    result["l2_code_id"] = (
+        encoded.reindex(result.index).fillna(UNKNOWN_L2_CODE_ID).astype(np.int16)
+    )
+    _warn_low_l2_code_coverage(result)
+
     _CACHE.set("load_sector_data", ts_codes, start.isoformat(), end.isoformat(), result)
     return result
 
