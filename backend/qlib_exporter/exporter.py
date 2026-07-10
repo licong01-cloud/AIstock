@@ -1,18 +1,16 @@
-from __future__ import annotations
-
 """Qlib 数据导出协调器.
 
 封装从 DB 读取 → 生成宽表 → 写入 Snapshot 的完整流程。
 支持全量和增量导出。
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, List, Optional, Sequence
-import psycopg2
 import pandas as pd
 
-from ..db.pg_pool import get_conn
 from .db_reader import DBReader
 from .meta_repo import MetaRepo
 from .snapshot_writer import SnapshotWriter

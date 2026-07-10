@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """从本地数据库读取行情数据的工具.
 
 数据导出策略：
@@ -12,6 +10,8 @@ from __future__ import annotations
 - 日线数据（股票）
 - 分钟线数据（股票）
 """
+
+from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
@@ -28,12 +28,8 @@ from backend.services.industry_code_map import (
 )
 
 from .config import (
-    ADJ_FACTOR_TABLE,
     DAILY_RAW_TABLE,
-    FACTOR_DATA_TABLE,
-    FIELD_MAPPING_DB_DAILY,
     FIELD_MAPPING_DB_MINUTE,
-    FIELD_MAPPING_FACTOR,
     INDEX_BASIC_TABLE,
     INDEX_DAILY_TABLE,
     INDEX_DAILY_TDX_TABLE,
