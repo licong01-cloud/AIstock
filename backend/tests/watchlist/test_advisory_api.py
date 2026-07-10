@@ -34,17 +34,17 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
     created = client.post(
         "/api/v1/advisory/programs",
         json={
-            "program_name": "Fusion advisory",
-            "package_mode": "fusion_pool",
-            "package_ids": ["pkg_a", "pkg_b"],
-            "package_weights": {"pkg_a": 0.6, "pkg_b": 0.4},
+            "program_name": "Native multi-alpha parent advisory",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_multi_alpha_parent"],
+            "package_weights": {"pkg_multi_alpha_parent": 1.0},
             "target_count": 1,
             "status": "ENABLED",
         },
     )
     assert created.status_code == 200
     program = created.json()["program"]
-    assert program["fusion_method"] == "weighted_rank_fusion"
+    assert program["fusion_method"] is None
 
     bindings = client.get(f"/api/v1/advisory/programs/{program['program_id']}/bindings")
     assert bindings.status_code == 200
@@ -62,11 +62,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
                     "rank": 1,
                     "score": 0.9,
                     "next_open_executable": 10,
-                    "component_scores": {
-                        "fusion_method": "weighted_rank_fusion",
-                        "package_ranks": {"pkg_a": 1, "pkg_b": 2},
-                        "package_raw_scores": {"pkg_a": 0.8, "pkg_b": 0.7},
-                    },
+                    "component_scores": {"multi_alpha_artifact_id": "artifact_parent_v1"},
                 }
             ],
             "market_by_symbol": {"000001.SZ": {"next_open_executable": 10}},
@@ -96,10 +92,7 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
                     "rank": 1,
                     "score": 0.8,
                     "next_open_executable": 11,
-                    "component_scores": {
-                        "fusion_method": "weighted_rank_fusion",
-                        "package_ranks": {"pkg_a": 1, "pkg_b": 2},
-                    },
+                    "component_scores": {"multi_alpha_artifact_id": "artifact_parent_v1"},
                 }
             ],
             "market_by_symbol": {"000001.SZ": {"next_open_executable": 11, "mark_price": 11}},
@@ -401,9 +394,9 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
         f"/api/v1/advisory/programs/{program_id}/bindings/apply",
         json={
             "binding": {
-                "package_mode": "weighted_rank_fusion",
-                "package_ids": ["pkg_a", "pkg_b"],
-                "package_weights": {"pkg_a": 0.7, "pkg_b": 0.3},
+                "package_mode": "single_package",
+                "package_ids": ["pkg_multi_alpha_parent_b"],
+                "package_weights": {"pkg_multi_alpha_parent_b": 1.0},
                 "target_count": 1,
             },
             "activation_reason": "manual operator confirmation without replay hard gate",
@@ -445,9 +438,9 @@ def test_advisory_replay_draft_binding_does_not_mutate_active_binding() -> None:
             "start_date": "2026-06-01",
             "end_date": "2026-06-02",
             "draft_binding": {
-                "package_mode": "weighted_rank_fusion",
-                "package_ids": ["pkg_a", "pkg_b"],
-                "package_weights": {"pkg_a": 0.5, "pkg_b": 0.5},
+                "package_mode": "single_package",
+                "package_ids": ["pkg_multi_alpha_parent_b"],
+                "package_weights": {"pkg_multi_alpha_parent_b": 1.0},
                 "target_count": 1,
             },
             "candidates_by_date": {
@@ -464,7 +457,8 @@ def test_advisory_replay_draft_binding_does_not_mutate_active_binding() -> None:
     assert replay.status_code == 200
     payload = replay.json()["replay"]
     assert payload["summary"]["manual_gate"] is False
-    assert payload["summary"]["draft_binding"]["package_mode"] == "weighted_rank_fusion"
+    assert payload["summary"]["draft_binding"]["package_mode"] == "single_package"
+    assert payload["summary"]["draft_binding"]["package_ids"] == ["pkg_multi_alpha_parent_b"]
     assert [row["list_version"]["version_status"] for row in payload["daily_list_versions"]] == ["REPLAY", "REPLAY"]
     active_after = client.get(f"/api/v1/advisory/programs/{program_id}/bindings/active").json()["binding"]
     assert active_after["binding_version_id"] == active_before["binding_version_id"]
@@ -472,42 +466,9 @@ def test_advisory_replay_draft_binding_does_not_mutate_active_binding() -> None:
     assert any(row["activation_status"] == "DRAFT" for row in all_bindings)
 
 
-@pytest.mark.parametrize(
-    ("package_mode", "selection_mode"),
-    [
-        ("weighted_rank_fusion", SelectionMode.WEIGHTED_FUSION),
-        ("union", SelectionMode.UNION),
-        ("intersection", SelectionMode.INTERSECTION),
-    ],
-)
-def test_advisory_auto_review_maps_multi_package_modes(package_mode: str, selection_mode: SelectionMode) -> None:
-    class FakeSelectionService:
-        def __init__(self) -> None:
-            self.mode = None
-
-        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
-            self.mode = mode
-            return SelectionRun(
-                mode=mode,
-                trade_date=trade_date,
-                data_source=data_source,
-                package_ids=list(package_ids),
-                runtime_config=dict(runtime_config),
-                status=SelectionRunStatus.SUCCEEDED,
-                aggregate_results=[
-                    SelectionCandidate(
-                        symbol="000003.SZ",
-                        rank=1,
-                        score=0.7,
-                        selection_entry_price=10.0,
-                        reference_price=10.0,
-                        component_scores={"mode": mode.value},
-                    )
-                ],
-            )
-
-    fake_selection = FakeSelectionService()
-    client, _service = _client(selection_service=fake_selection)
+@pytest.mark.parametrize("package_mode", ["fusion_pool", "weighted_rank_fusion", "union", "intersection"])
+def test_advisory_api_retires_manual_multi_package_modes(package_mode: str) -> None:
+    client, _service = _client()
     created = client.post(
         "/api/v1/advisory/programs",
         json={
@@ -519,11 +480,5 @@ def test_advisory_auto_review_maps_multi_package_modes(package_mode: str, select
             "status": "ENABLED",
         },
     )
-    assert created.status_code == 200
-    program_id = created.json()["program"]["program_id"]
-
-    review = client.post(f"/api/v1/advisory/programs/{program_id}/reviews/preview", json={"trade_date": "2026-06-08"})
-
-    assert review.status_code == 200
-    assert fake_selection.mode == selection_mode
-    assert review.json()["review"]["list_items"][0]["component_scores_json"]["mode"] == selection_mode.value
+    assert created.status_code == 422
+    assert created.json()["detail"]["context"]["reason_code"] == "ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED"

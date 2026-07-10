@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 import inspect
 
@@ -13,14 +14,15 @@ from backend.services.advisory_program import (
     EXIT_STOP_LOSS,
     EXIT_STOP_LOSS_DEFERRED_T1,
     EXIT_TIME_STOP,
-    PACKAGE_MODE_FUSION,
     PACKAGE_MODE_SINGLE,
     PRICE_BASIS_NEXT_OPEN,
+    REASON_ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT,
+    REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED,
     AdvisoryProgramService,
     InMemoryAdvisoryProgramRepository,
 )
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
-from backend.services.trading_core.errors import RuntimeConfigInvalidError, UnsupportedFeatureError
+from backend.services.trading_core.errors import DataUnavailableError, UnsupportedFeatureError
 
 
 class FakeTradingCalendar:
@@ -84,7 +86,7 @@ def _candidate(symbol: str, rank: int, price: float, *, score: float = 1.0) -> d
     }
 
 
-def test_advisory_program_create_validates_single_fusion_version_and_clone() -> None:
+def test_advisory_program_accepts_one_native_package_and_retires_manual_multi_package() -> None:
     service, _repo = _service()
 
     single = service.create_program(
@@ -92,29 +94,91 @@ def test_advisory_program_create_validates_single_fusion_version_and_clone() -> 
         package_mode=PACKAGE_MODE_SINGLE,
         package_ids=["pkg_a"],
     )
-    fusion = service.create_program(
-        program_name="Fusion",
-        package_mode=PACKAGE_MODE_FUSION,
-        package_ids=["pkg_a", "pkg_b"],
-        package_weights={"pkg_a": 0.4, "pkg_b": 0.6},
-    )
-
     assert single.fusion_policy_sha256 is None
-    assert fusion.fusion_method == "weighted_rank_fusion"
-    assert fusion.fusion_policy_sha256
 
     updated = service.update_program(single.program_id, {"target_count": 30})
     assert updated.version == single.version + 1
 
-    cloned = service.clone_program(fusion.program_id, program_name="Fusion copy")
-    assert cloned.program_id != fusion.program_id
+    cloned = service.clone_program(single.program_id, program_name="Single copy")
+    assert cloned.program_id != single.program_id
     assert cloned.status == "DRAFT"
-    assert cloned.package_ids == fusion.package_ids
+    assert cloned.package_ids == single.package_ids
 
-    with pytest.raises(RuntimeConfigInvalidError):
+    with pytest.raises(UnsupportedFeatureError) as excinfo:
         service.create_program(program_name="bad", package_mode=PACKAGE_MODE_SINGLE, package_ids=["pkg_a", "pkg_b"])
-    with pytest.raises(UnsupportedFeatureError):
+    assert excinfo.value.context["reason_code"] == REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED
+    with pytest.raises(UnsupportedFeatureError) as excinfo:
         service.create_program(program_name="future", package_mode="sleeve_mode_future", package_ids=["pkg_a", "pkg_b"])
+    assert excinfo.value.context["reason_code"] == REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED
+
+
+def test_historical_manual_multi_package_remains_readable_but_all_continuation_paths_are_retired() -> None:
+    service, repo = _service()
+    original = service.create_program(
+        program_name="Historical manual multi",
+        package_mode=PACKAGE_MODE_SINGLE,
+        package_ids=["pkg_a"],
+        status="PAUSED",
+    )
+    legacy = replace(
+        original,
+        package_mode="weighted_rank_fusion",
+        package_ids=["pkg_a", "pkg_b"],
+        package_weights={"pkg_a": 0.6, "pkg_b": 0.4},
+        fusion_method="weighted_rank_fusion",
+    )
+    repo.update_program(legacy)
+    repo.binding_versions = [
+        replace(
+            binding,
+            package_mode="weighted_rank_fusion",
+            package_ids=["pkg_a", "pkg_b"],
+            package_weights={"pkg_a": 0.6, "pkg_b": 0.4},
+            fusion_method="weighted_rank_fusion",
+        )
+        for binding in repo.binding_versions
+    ]
+
+    assert service.get_program(legacy.program_id).package_ids == ["pkg_a", "pkg_b"]
+    assert service.list_programs()[0].program_id == legacy.program_id
+
+    operations = [
+        lambda: service.update_program(legacy.program_id, {"target_count": 30}),
+        lambda: service.change_status(legacy.program_id, "ENABLED"),
+        lambda: service.clone_program(legacy.program_id),
+        lambda: service.run_review(
+            legacy.program_id,
+            trade_date=date(2026, 6, 1),
+            candidates=[_candidate("000001.SZ", 1, 10.0)],
+            preview=True,
+        ),
+        lambda: service.run_review_from_selection(
+            legacy.program_id,
+            trade_date=date(2026, 6, 1),
+            preview=True,
+        ),
+        lambda: service.run_replay(
+            legacy.program_id,
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 1),
+            candidates_by_date={"2026-06-01": [_candidate("000001.SZ", 1, 10.0)]},
+            market_by_date={},
+        ),
+        lambda: service.apply_binding(
+            legacy.program_id,
+            binding={
+                "package_mode": "union",
+                "package_ids": ["pkg_a", "pkg_b"],
+                "package_weights": {"pkg_a": 1.0, "pkg_b": 1.0},
+                "target_count": 20,
+            },
+            activation_reason="must be rejected",
+        ),
+    ]
+    for operation in operations:
+        with pytest.raises(UnsupportedFeatureError) as excinfo:
+            operation()
+        assert excinfo.value.context["reason_code"] == REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED
 
 
 def test_advisory_list_items_show_stock_name_and_effective_date_uses_candidate_data_day_next_trading_day() -> None:
@@ -282,10 +346,9 @@ def test_multi_program_isolation_leaderboard_and_no_sample_fields() -> None:
     service, _repo = _service()
     strong = _program(service, target_count=1)
     weak = service.create_program(
-        program_name="Fusion weak",
-        package_mode=PACKAGE_MODE_FUSION,
-        package_ids=["pkg_a", "pkg_b"],
-        package_weights={"pkg_a": 0.7, "pkg_b": 0.3},
+        program_name="Single weak",
+        package_mode=PACKAGE_MODE_SINGLE,
+        package_ids=["pkg_b"],
         target_count=1,
         status="ENABLED",
         review_policy={"take_profit_mode": "fixed", "take_profit_bps": 500, "daily_replacement_budget": 1},
@@ -506,6 +569,126 @@ def test_review_from_selection_builds_default_authoritative_runtime_config() -> 
     assert fake_selection.runtime_config["selection_artifact_config"]["auto_generate"] is True
     assert fake_selection.runtime_config["selection_artifact_config"]["pit_mode"] == "PREVIOUS_TRADING_DAY_CLOSE"
     assert fake_selection.runtime_config["runtime_profile"]["selection"]["top_k"] == 40
+
+
+def test_native_multi_alpha_parent_uses_single_package_path_and_merges_binding_runtime_config() -> None:
+    class FakeSelectionService:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+            self.calls.append(
+                {
+                    "package_ids": list(package_ids),
+                    "mode": mode,
+                    "trade_date": trade_date,
+                    "runtime_config": dict(runtime_config),
+                }
+            )
+            return SelectionRun(
+                mode=mode,
+                trade_date=trade_date,
+                data_source=data_source,
+                package_ids=list(package_ids),
+                runtime_config=dict(runtime_config),
+                status=SelectionRunStatus.SUCCEEDED,
+                aggregate_results=[
+                    SelectionCandidate(
+                        symbol="000001.SZ",
+                        rank=1,
+                        score=0.9,
+                        selection_entry_price=10.0,
+                        reference_price=10.0,
+                        component_scores={"multi_alpha_artifact_id": "artifact_parent_v1"},
+                    )
+                ],
+            )
+
+    fake_selection = FakeSelectionService()
+    service = AdvisoryProgramService(
+        repository=InMemoryAdvisoryProgramRepository(),
+        selection_service=fake_selection,
+        calendar_provider=FakeTradingCalendar([date(2026, 6, 8), date(2026, 6, 9)]),
+    )
+    program = _program(service, target_count=1)
+    service.apply_binding(
+        program.program_id,
+        binding={
+            "package_mode": PACKAGE_MODE_SINGLE,
+            "package_ids": ["pkg_multi_alpha_parent"],
+            "package_weights": {"pkg_multi_alpha_parent": 1.0},
+            "target_count": 1,
+            "runtime_config_json": {
+                "selection_artifact_config": {"inference_backend": "local", "package_setting": "binding"},
+                "runtime_profile": {
+                    "hmm": {"enabled": False, "signal_preset": "binding"},
+                    "tradability": {"exclude_suspended": True, "limit_policy": "binding"},
+                },
+            },
+        },
+        activation_reason="activate validated native multi-alpha parent",
+    )
+
+    result = service.run_review_from_selection(
+        program.program_id,
+        trade_date=date(2026, 6, 9),
+        selection_as_of_trade_date=date(2026, 6, 8),
+        runtime_config={
+            "selection_artifact_config": {"package_setting": "request"},
+            "runtime_profile": {"hmm": {"signal_preset": "request"}},
+        },
+        preview=True,
+    )
+
+    call = fake_selection.calls[0]
+    runtime_config = call["runtime_config"]
+    assert call["package_ids"] == ["pkg_multi_alpha_parent"]
+    assert call["mode"] == SelectionMode.SINGLE_PACKAGE
+    assert runtime_config["selection_artifact_config"]["inference_backend"] == "local"
+    assert runtime_config["selection_artifact_config"]["package_setting"] == "request"
+    assert runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-08"
+    assert runtime_config["runtime_profile"]["hmm"] == {"enabled": False, "signal_preset": "request"}
+    assert runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    assert runtime_config["runtime_profile"]["tradability"]["limit_policy"] == "binding"
+    assert runtime_config["advisory_date_context"]["target_trade_date"] == "2026-06-09"
+    assert result.list_items[0].component_scores_json["multi_alpha_artifact_id"] == "artifact_parent_v1"
+
+
+def test_review_requires_candidate_depth_before_treating_missing_holding_as_rank_drop() -> None:
+    service, _repo = _service()
+    program = _program(service, target_count=1, rank_exit_threshold=3, rank_exit_confirm_days=2)
+    service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 1),
+        candidates=[_candidate("000001.SZ", 1, 10.0)],
+        preview=False,
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        service.run_review(
+            program.program_id,
+            trade_date=date(2026, 6, 2),
+            candidates=[_candidate("000002.SZ", 1, 20.0)],
+            market_by_symbol={"000001.SZ": {"next_open_executable": 10.0, "mark_price": 10.0}},
+            preview=False,
+        )
+    assert excinfo.value.context["reason_code"] == REASON_ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT
+    assert excinfo.value.context["required_rank_exit_threshold"] == 3
+    assert excinfo.value.context["observed_max_rank"] == 1
+
+    deep_review = service.run_review(
+        program.program_id,
+        trade_date=date(2026, 6, 2),
+        candidates=[
+            _candidate("000002.SZ", 1, 20.0),
+            _candidate("000003.SZ", 2, 30.0),
+            _candidate("000004.SZ", 3, 40.0),
+        ],
+        market_by_symbol={"000001.SZ": {"next_open_executable": 10.0, "mark_price": 10.0}},
+        preview=False,
+    )
+    active = next(row for row in deep_review.active_pool if row.symbol == "000001.SZ")
+    assert active.current_rank == 4
 
 
 def test_review_from_selection_accepts_target_date_with_explicit_data_cutoff() -> None:
