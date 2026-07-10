@@ -7,6 +7,7 @@ import importlib.util
 import inspect
 import pickle
 import types
+from contextlib import contextmanager
 from pathlib import Path
 import yaml
 
@@ -1691,6 +1692,79 @@ class _MiniGatsDataset:
         return self._segments[segment]
 
 
+class _FakeSwMemberCursor:
+    def __init__(self, rows):
+        self._rows = rows
+        self.executed = []
+        self._result = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, sql, params):
+        symbols, trade_date, asof_date = params
+        assert "ROW_NUMBER() OVER" in sql
+        assert "in_date <= %s" in sql
+        assert "(out_date IS NULL OR out_date >= %s)" in sql
+        assert trade_date == asof_date
+        self.executed.append({"sql": sql, "params": params})
+        selected = []
+        for row in self._rows:
+            ts_code, l2_code, in_date, out_date = row[:4]
+            if ts_code not in symbols:
+                continue
+            if pd.Timestamp(in_date).date() > trade_date:
+                continue
+            if out_date is not None and pd.Timestamp(out_date).date() < trade_date:
+                continue
+            selected.append((ts_code, l2_code, pd.Timestamp(in_date).date(), out_date))
+        selected.sort(
+            key=lambda item: (
+                item[0],
+                pd.Timestamp(item[2]),
+                pd.Timestamp(item[3]) if item[3] is not None else pd.Timestamp.max,
+            ),
+            reverse=True,
+        )
+        result = {}
+        for row in selected:
+            result.setdefault(row[0], row)
+        self._result = sorted(result.values(), key=lambda item: item[0])
+
+    def fetchall(self):
+        return list(self._result)
+
+
+class _FakeSwMemberConn:
+    def __init__(self, rows):
+        self.cursor_obj = _FakeSwMemberCursor(rows)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return self.cursor_obj
+
+
+def _fake_sw_member_conn_factory(rows):
+    conns = []
+
+    @contextmanager
+    def _factory():
+        conn = _FakeSwMemberConn(rows)
+        conns.append(conn)
+        yield conn
+
+    _factory.conns = conns
+    return _factory
+
+
 def test_gats_seed_composes_direct_qlib_model_with_tsdataseth():
     yaml_text = _base_yaml(model_info=_gats_model_info())
 
@@ -1784,6 +1858,8 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
             "gpu_resident": True,
             "gats_adjacency_mode": "industry_bias",
             "gats_industry_gamma_init": 0.0,
+            "gats_industry_embedding": "on",
+            "gats_industry_embedding_dim": 8,
         },
     )
     conf = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
@@ -1801,6 +1877,8 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
     assert model["kwargs"]["gpu_resident"] is True
     assert model["kwargs"]["gats_adjacency_mode"] == "industry_bias"
     assert model["kwargs"]["gats_industry_gamma_init"] == 0.0
+    assert model["kwargs"]["gats_industry_embedding"] in ("on", True)
+    assert model["kwargs"]["gats_industry_embedding_dim"] == 8
     assert "pt_model_kwargs" not in model["kwargs"]
     for key in (
         "dropout",
@@ -1812,6 +1890,8 @@ def test_gats_custom_params_route_to_model_kwargs_not_strategy_or_pt_model_kwarg
         "gpu_resident",
         "gats_adjacency_mode",
         "gats_industry_gamma_init",
+        "gats_industry_embedding",
+        "gats_industry_embedding_dim",
     ):
         assert key not in strategy_kwargs
 
@@ -2148,6 +2228,43 @@ def test_efficient_gats_adjacency_off_matches_default_fit_predict(tmp_path):
     assert np.allclose(default_preds.to_numpy(), off_preds.to_numpy(), atol=1e-6)
 
 
+def test_efficient_gats_industry_embedding_off_matches_default_fit_predict(tmp_path):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True)
+    common_kwargs = dict(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=19,
+    )
+    default_model = efficient_gats.EfficientGATs(**common_kwargs)
+    embedding_off_model = efficient_gats.EfficientGATs(
+        **common_kwargs,
+        gats_adjacency_mode="off",
+        gats_industry_embedding="off",
+        gats_industry_embedding_dim=8,
+    )
+
+    default_model.fit(dataset, evals_result={}, save_path=str(tmp_path / "default.pt"))
+    embedding_off_model.fit(dataset, evals_result={}, save_path=str(tmp_path / "embedding_off.pt"))
+    default_preds = default_model.predict(dataset)
+    off_preds = embedding_off_model.predict(dataset)
+
+    assert default_preds.index.equals(off_preds.index)
+    assert np.allclose(default_preds.to_numpy(), off_preds.to_numpy(), atol=1e-6)
+
+
 def _resident_segment_for_test(model, segment, torch):
     cpu_segment = model._preload_segment_to_cpu(segment, segment_name="train")
     return {
@@ -2276,7 +2393,7 @@ def test_efficient_gats_industry_missing_ids_are_loud_and_unbiased(capsys):
         att_off = model.GAT_model.cal_attention(hidden, hidden, industry_ids=None)
         att_bias = model.GAT_model.cal_attention(hidden, hidden, industry_ids=ids)
 
-    assert ids[1].item() == -1
+    assert ids[1].item() == 131
     assert torch.allclose(att_bias[1], att_off[1], atol=1e-6)
     assert torch.all(att_bias[:, 1] > 0)
 
@@ -2732,103 +2849,215 @@ def test_efficient_gats_industry_bias_fit_predict_non_degenerate_rank_ic(tmp_pat
     assert not rank_ic[np.isfinite(rank_ic)].empty
 
 
+def test_efficient_gats_industry_embedding_updates_weights_changes_predictions_and_unknown_works(tmp_path, capsys):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    provider_mod = _import_gats_industry_provider_module()
+    efficient_gats = _import_efficient_gats_module()
 
-def _write_sector_data_h5(path, mapping, *, dates=None):
-    dates = list(dates or pd.bdate_range("2021-01-01", periods=20))
-    code_to_value = {code: float(pos + 1) for pos, code in enumerate(sorted(set(mapping.values())))}
-    rows = []
-    values = []
-    for date in pd.to_datetime(dates):
-        for instrument, code in mapping.items():
-            rows.append((date, instrument))
-            base = code_to_value[code]
-            values.append({"sw2_open": base, "sw2_close": base, "sw2_pct_change": 0.0})
-    df = pd.DataFrame(values, index=pd.MultiIndex.from_tuples(rows, names=["datetime", "instrument"]))
-    df.to_hdf(path, key="data")
-    return df
+    dataset = _MiniGatsDataset(include_industry=False)
+    rows = [(f"STK{i:03d}", f"8010{i // 2:02d}.SI", "2020-01-01", None) for i in range(1, dataset.stocks)]
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(
+        min_coverage=0.80,
+        conn_factory=_fake_sw_member_conn_factory(rows),
+    )
+    common_kwargs = dict(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=2,
+        lr=0.01,
+        metric="loss",
+        early_stop=2,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=23,
+    )
+    off_model = efficient_gats.EfficientGATs(**common_kwargs)
+    embedding_model = efficient_gats.EfficientGATs(
+        **common_kwargs,
+        gats_industry_embedding="on",
+        gats_industry_embedding_dim=8,
+        gats_industry_id_provider=provider,
+    )
+    initial_embedding = embedding_model.GAT_model.industry_embedding.weight.detach().clone()
+
+    off_model.fit(dataset, evals_result={}, save_path=str(tmp_path / "off.pt"))
+    evals_result = {}
+    embedding_model.fit(dataset, evals_result=evals_result, save_path=str(tmp_path / "embedding.pt"))
+    off_preds = off_model.predict(dataset)
+    embedding_preds = embedding_model.predict(dataset)
+    captured = capsys.readouterr()
+
+    assert "reason_code=efficient_gats_industry_id_missing" in captured.out
+    assert not torch.allclose(
+        initial_embedding,
+        embedding_model.GAT_model.industry_embedding.weight.detach(),
+    )
+    assert embedding_model.GAT_model.industry_embedding.weight.grad is not None
+    assert embedding_preds.index.equals(off_preds.index)
+    assert not np.allclose(embedding_preds.to_numpy(), off_preds.to_numpy(), atol=1e-6)
+    assert embedding_model._preload_segment_to_cpu(dataset.prepare("train"), segment_name="train")[
+        "industry_ids"
+    ][0].item() == 131
+    assert provider.coverage_history
+    assert evals_result["train"] and evals_result["valid"]
+
+    labels = pd.Series(
+        dataset.prepare("test")._values[:, -1, -1],
+        index=dataset.prepare("test").get_index(),
+        name="label",
+    )
+    rank_ic = (
+        pd.DataFrame({"pred": embedding_preds, "label": labels})
+        .groupby(level="datetime")
+        .apply(lambda frame: frame["pred"].rank().corr(frame["label"].rank()))
+    )
+    assert not rank_ic[np.isfinite(rank_ic)].empty
 
 
-def test_gats_industry_provider_pit_asof_and_coverage(tmp_path):
+def test_efficient_gats_industry_embedding_resident_and_streaming_side_channel():
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+
+    dataset = _MiniGatsDataset(include_industry=True)
+    segment = dataset.prepare("train")
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+        gats_industry_embedding="on",
+    )
+    resident_cpu = model._preload_segment_to_cpu(segment, segment_name="train")
+    resident = {
+        "segment_name": resident_cpu["segment_name"],
+        "tensor": resident_cpu["tensor"],
+        "daily_indices": [torch.as_tensor(index, dtype=torch.long) for index in resident_cpu["daily_indices"]],
+        "index": resident_cpu["index"],
+        "industry_ids": resident_cpu["industry_ids"],
+    }
+    streaming = model._preload_streaming_segment_metadata(segment, segment_name="train")
+
+    resident_data, resident_ids = next(model._iter_resident_batches(resident, shuffle=False, include_industry=True))
+    streaming_data, streaming_ids = next(model._iter_streaming_batches(streaming, shuffle=False))
+
+    assert torch.allclose(resident_data.cpu(), streaming_data.cpu())
+    assert torch.equal(resident_ids.cpu(), streaming_ids.cpu())
+    assert resident_ids.shape == (dataset.stocks,)
+
+def test_gats_industry_provider_db_pit_asof_migration_and_no_future_leakage():
     provider_mod = _import_gats_industry_provider_module()
 
-    source = tmp_path / "sector_data.h5"
     index = pd.MultiIndex.from_tuples(
         [
-            (pd.Timestamp("2021-01-04"), "STK000"),
-            (pd.Timestamp("2021-01-05"), "STK000"),
-            (pd.Timestamp("2021-01-05"), "STK001"),
+            (pd.Timestamp("2021-01-04"), "SZ000001"),
+            (pd.Timestamp("2021-01-05"), "000001.SZ"),
+            (pd.Timestamp("2021-01-05"), "000002.SZ"),
         ],
         names=["datetime", "instrument"],
     )
-    df = pd.DataFrame(
-        {"sw2_code": ["L1_A", "L1_B"]},
-        index=pd.MultiIndex.from_tuples(
-            [
-                (pd.Timestamp("2021-01-04"), "STK000"),
-                (pd.Timestamp("2021-01-06"), "STK000"),
-            ],
-            names=["datetime", "instrument"],
-        ),
-    )
-    df.to_hdf(source, key="data")
+    rows = [
+        ("000001.SZ", "801010.SI", "2021-01-01", "2021-01-04"),
+        ("000001.SZ", "801020.SI", "2021-01-05", None),
+        ("000002.SZ", "801030.SI", "2021-01-06", None),
+    ]
+    conn_factory = _fake_sw_member_conn_factory(rows)
 
-    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=0.50)
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(
+        min_coverage=0.50,
+        conn_factory=conn_factory,
+    )
     values = provider(index)
 
-    assert values.loc[(pd.Timestamp("2021-01-04"), "STK000")] == "L1_A"
-    assert values.loc[(pd.Timestamp("2021-01-05"), "STK000")] == "L1_A"
-    assert pd.isna(values.loc[(pd.Timestamp("2021-01-05"), "STK001")])
+    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "801010.SI"
+    assert values.loc[(pd.Timestamp("2021-01-05"), "000001.SZ")] == "801020.SI"
+    assert pd.isna(values.loc[(pd.Timestamp("2021-01-05"), "000002.SZ")])
     assert provider.last_coverage["covered_rows"] == 2
+    assert provider.last_coverage["source"] == "market.sw_index_member"
+    executed_sql = "\n".join(conn.cursor_obj.executed[0]["sql"] for conn in conn_factory.conns)
+    assert "ROW_NUMBER() OVER" in executed_sql
+    assert "in_date <= %s" in executed_sql
+    assert "(out_date IS NULL OR out_date >= %s)" in executed_sql
 
 
-def test_gats_industry_provider_normalises_qlib_and_ts_code_instruments(tmp_path):
+def test_gats_industry_provider_normalises_qlib_and_ts_code_instruments():
     provider_mod = _import_gats_industry_provider_module()
 
-    source = tmp_path / "sector_data.h5"
-    df = pd.DataFrame(
-        {"sw2_code": ["L1_BANK"]},
-        index=pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "000001.SZ")], names=["datetime", "instrument"]),
-    )
-    df.to_hdf(source, key="data")
+    conn_factory = _fake_sw_member_conn_factory([("000001.SZ", "801010.SI", "2021-01-01", None)])
     target_index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "SZ000001")], names=["datetime", "instrument"])
 
-    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=1.0)
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(
+        min_coverage=1.0,
+        conn_factory=conn_factory,
+    )
     values = provider(target_index)
 
-    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "L1_BANK"
+    assert values.loc[(pd.Timestamp("2021-01-04"), "SZ000001")] == "801010.SI"
     assert provider.last_coverage["coverage"] == 1.0
 
 
-def test_gats_industry_provider_source_missing_and_coverage_zero_are_loud(tmp_path):
+def test_gats_industry_provider_lookup_failure_and_coverage_zero_are_loud():
     provider_mod = _import_gats_industry_provider_module()
 
-    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_source_missing"):
-        provider_mod.inject_gats_industry_provider_if_needed(
-            {"task": {"model": {"kwargs": {"gats_adjacency_mode": "industry_bias"}}}},
-            cwd=tmp_path,
-            print_fn=lambda *_args, **_kwargs: None,
-        )
+    @contextmanager
+    def failing_factory():
+        raise RuntimeError("db offline")
+        yield
 
-    source = tmp_path / "sector_data.h5"
-    df = pd.DataFrame(
-        {"sw2_code": ["L1_A"]},
-        index=pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "STK000")], names=["datetime", "instrument"]),
-    )
-    df.to_hdf(source, key="data")
     index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "MISSING")], names=["datetime", "instrument"])
 
-    provider = provider_mod.SectorDataIndustryIdProvider(source, min_coverage=0.90)
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(min_coverage=0.90, conn_factory=failing_factory)
+    with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_lookup_failed"):
+        provider(index)
+
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(
+        min_coverage=0.90,
+        conn_factory=_fake_sw_member_conn_factory([("STK000", "801010.SI", "2021-01-01", None)]),
+    )
     with pytest.raises(provider_mod.GatsIndustryProviderError, match="reason_code=qe_gats_industry_coverage_below_threshold"):
         provider(index)
+
+
+def test_gats_industry_provider_missing_db_password_fails_loud(monkeypatch):
+    provider_mod = _import_gats_industry_provider_module()
+    for key in ("TDX_DB_PASSWORD", "POSTGRES_PASSWORD", "PG_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+
+    def _unexpected_connect(**_kwargs):
+        raise AssertionError("psycopg2.connect must not run without a password")
+
+    monkeypatch.setitem(sys.modules, "psycopg2", types.SimpleNamespace(connect=_unexpected_connect))
+
+    with pytest.raises(provider_mod.GatsIndustryProviderError) as exc_info:
+        with provider_mod._default_conn_factory():
+            pass
+
+    assert str(exc_info.value) == (
+        "reason_code=qe_gats_industry_db_password_missing: "
+        "set one of TDX_DB_PASSWORD/POSTGRES_PASSWORD/PG_PASSWORD"
+    )
 
 
 def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monkeypatch):
     provider_mod = _import_gats_industry_provider_module()
 
     def _boom(*_args, **_kwargs):
-        raise AssertionError("sector source should not be resolved in off mode")
+        raise AssertionError("DB should not be resolved in off mode")
 
-    monkeypatch.setattr(provider_mod, "resolve_sector_source_path", _boom)
+    monkeypatch.setattr(provider_mod, "_default_conn_factory", _boom)
     result = provider_mod.inject_gats_industry_provider_if_needed(
         {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off"}}}},
         cwd=tmp_path,
@@ -2838,6 +3067,42 @@ def test_gats_industry_provider_off_mode_does_not_resolve_source(tmp_path, monke
     assert result is None
 
 
+def test_gats_industry_provider_injects_for_embedding_on_without_db_connect(tmp_path, monkeypatch):
+    provider_mod = _import_gats_industry_provider_module()
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("inject should not connect before fit/predict")
+
+    monkeypatch.setattr(provider_mod, "_default_conn_factory", _boom)
+    config = {"task": {"model": {"kwargs": {"gats_adjacency_mode": "off", "gats_industry_embedding": "on"}}}}
+
+    provider = provider_mod.inject_gats_industry_provider_if_needed(
+        config,
+        cwd=tmp_path,
+        print_fn=lambda *_args, **_kwargs: None,
+    )
+
+    assert isinstance(provider, provider_mod.SwIndexMemberIndustryIdProvider)
+    assert config["task"]["model"]["kwargs"]["gats_industry_id_provider"] is provider
+
+
+def test_gats_industry_provider_pickle_does_not_embed_source_rows_or_connection():
+    provider_mod = _import_gats_industry_provider_module()
+    conn_factory = _fake_sw_member_conn_factory([("STK000", "801010.SI", "2021-01-01", None)])
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(min_coverage=1.0, conn_factory=conn_factory)
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp("2021-01-04"), "STK000")], names=["datetime", "instrument"])
+
+    assert provider(index).iloc[0] == "801010.SI"
+    assert provider._daily_cache
+    blob = pickle.dumps(provider)
+    restored = pickle.loads(blob)
+
+    assert b"801010.SI" not in blob
+    assert restored.conn_factory is None
+    assert restored._daily_cache == {}
+    assert restored.coverage_history
+
+
 def test_efficient_gats_industry_bias_runner_injection_fit_predict(tmp_path):
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     pytest.importorskip("torch")
@@ -2845,13 +3110,11 @@ def test_efficient_gats_industry_bias_runner_injection_fit_predict(tmp_path):
     efficient_gats = _import_efficient_gats_module()
 
     dataset = _MiniGatsDataset(include_industry=False)
-    source = tmp_path / "sector_data.h5"
-    _write_sector_data_h5(source, {f"STK{i:03d}": f"L1_{i // 2}" for i in range(dataset.stocks)})
-    config = {
-        "qe_runtime": {"gats_industry_source_path": str(source), "gats_industry_min_coverage": 0.90},
-        "task": {"model": {"kwargs": {"gats_adjacency_mode": "industry_bias"}}},
-    }
-    provider = provider_mod.inject_gats_industry_provider_if_needed(config, cwd=tmp_path, print_fn=lambda *_args, **_kwargs: None)
+    rows = [(f"STK{i:03d}", f"8010{i // 2:02d}.SI", "2020-01-01", None) for i in range(dataset.stocks)]
+    provider = provider_mod.SwIndexMemberIndustryIdProvider(
+        min_coverage=0.90,
+        conn_factory=_fake_sw_member_conn_factory(rows),
+    )
 
     model = efficient_gats.EfficientGATs(
         d_feat=dataset.d_feat,

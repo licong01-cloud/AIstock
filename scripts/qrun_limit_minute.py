@@ -1201,7 +1201,11 @@ def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
     task_config = (config or {}).get("task") if isinstance(config, dict) else None
     model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
     model_kwargs = model_cfg.get("kwargs") or {}
-    if isinstance(model_kwargs, dict) and model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias":
+    if isinstance(model_kwargs, dict) and (
+        model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias"
+        or model_kwargs.get("gats_industry_embedding") is True
+        or str(model_kwargs.get("gats_industry_embedding", "off")).lower() == "on"
+    ):
         from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
 
         inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
@@ -1699,7 +1703,11 @@ def _run_backtest_only(config: dict, experiment_name: str):
             f"under {source_params_dir}; target mlruns is reserved for recorder writes."
         )
     print(f"[INFO] Loaded trained model from isolated source params.pkl {params_path}")
-    if getattr(model, "gats_adjacency_mode", None) == "industry_bias":
+    if (
+        getattr(model, "gats_adjacency_mode", None) == "industry_bias"
+        or getattr(model, "gats_industry_embedding", None) is True
+        or str(getattr(model, "gats_industry_embedding", "off")).lower() == "on"
+    ):
         from aistock_models.gats_industry_provider import attach_gats_industry_provider_to_model
 
         attach_gats_industry_provider_to_model(model, config, cwd=Path.cwd(), print_fn=print)
