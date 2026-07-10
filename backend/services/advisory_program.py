@@ -102,6 +102,9 @@ REVIEW_REASON_WAITING_EVIDENCE = "WAITING_EVIDENCE"
 REVIEW_REASON_WAITING_PRICE = "WAITING_PRICE"
 REVIEW_REASON_NOT_IN_CURRENT_TOPK = "NOT_IN_CURRENT_TOPK"
 
+REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED = "ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED"
+REASON_ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT = "ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT"
+
 WIN_INCLUDED = "INCLUDED"
 WIN_EXCLUDED = "EXCLUDED"
 WIN_OPEN_MARK = "OPEN_MARK_TO_MARKET"
@@ -1131,6 +1134,12 @@ class AdvisoryProgramService:
             )
             program = replace(program, version=program.version + 1, updated_at=_utcnow(), **config)
         if "status" in updates:
+            if self._normalize_status(str(updates["status"])) == PROGRAM_STATUS_ENABLED:
+                self._require_native_package_config(
+                    package_mode=program.package_mode,
+                    package_ids=program.package_ids,
+                    operation="update_program.enable",
+                )
             program = self._with_status(program, str(updates["status"]))
         updated = self.repository.update_program(program if changed_config or "status" in updates else replace(program, updated_at=_utcnow()))
         if changed_config:
@@ -1146,10 +1155,21 @@ class AdvisoryProgramService:
 
     def change_status(self, program_id: str, status: str) -> AdvisoryProgram:
         program = self.repository.get_program(program_id)
+        if self._normalize_status(status) == PROGRAM_STATUS_ENABLED:
+            self._require_native_package_config(
+                package_mode=program.package_mode,
+                package_ids=program.package_ids,
+                operation="change_status.enable",
+            )
         return self.repository.update_program(self._with_status(program, status))
 
     def clone_program(self, program_id: str, *, program_name: str | None = None, created_by: str | None = None) -> AdvisoryProgram:
         source = self.repository.get_program(program_id)
+        self._require_native_package_config(
+            package_mode=source.package_mode,
+            package_ids=source.package_ids,
+            operation="clone_program",
+        )
         clone = replace(
             source,
             program_id=f"advp_{uuid4().hex}",
@@ -1377,8 +1397,13 @@ class AdvisoryProgramService:
         program = self.repository.get_program(program_id)
         binding = self._ensure_active_binding(program)
         bound_program = _program_with_binding(program, binding)
+        self._require_native_package_config(
+            package_mode=bound_program.package_mode,
+            package_ids=bound_program.package_ids,
+            operation="run_review_from_selection",
+        )
         effective_runtime_config = self._with_advisory_date_context(
-            runtime_config or {},
+            _deep_merge_dicts(binding.runtime_config_json, runtime_config or {}),
             target_trade_date=review_trade_date,
             selection_as_of_trade_date=selection_as_of_trade_date,
         )
@@ -1430,6 +1455,11 @@ class AdvisoryProgramService:
         selection_run_ids: list[str] | None = None,
     ) -> AdvisoryReviewResult:
         program = program_override or self.repository.get_program(program_id)
+        self._require_native_package_config(
+            package_mode=program.package_mode,
+            package_ids=program.package_ids,
+            operation="run_review",
+        )
         binding = self._ensure_active_binding(program) if binding_version_id is None else None
         effective_binding_id = binding_version_id or (binding.binding_version_id if binding else _binding_from_program(program).binding_version_id)
         if not preview and program.status not in {PROGRAM_STATUS_ENABLED, PROGRAM_STATUS_WAITING_DATA, PROGRAM_STATUS_REVIEW_FAILED}:
@@ -1447,6 +1477,11 @@ class AdvisoryProgramService:
             for symbol, row in dict(market_by_symbol or {}).items()
         }
         active_episodes = initial_active_episodes if initial_active_episodes is not None else self.repository.active_episodes(program_id)
+        self._require_exit_observation_depth(
+            program=program,
+            candidates=normalized_candidates,
+            active_episodes=active_episodes,
+        )
         normalized_market = self._with_active_episode_market_marks(
             trade_date=trade_date,
             candidates=normalized_candidates,
@@ -1577,12 +1612,23 @@ class AdvisoryProgramService:
             entry_price_basis=self._normalize_price_basis(entry_price_basis or source_program.entry_price_basis),
             exit_price_basis=self._normalize_price_basis(exit_price_basis or source_program.exit_price_basis),
         )
+        self._require_native_package_config(
+            package_mode=program.package_mode,
+            package_ids=program.package_ids,
+            operation="run_replay",
+        )
+        replay_runtime_config = _deep_merge_dicts(binding.runtime_config_json, runtime_config or {})
         active: list[AdvisoryEpisode] = []
         daily: list[AdvisoryReviewResult] = []
         daily_list_versions: list[dict[str, Any]] = []
         previous_replay_list: AdvisoryRecommendationListVersion | None = None
         previous_replay_items: list[AdvisoryRecommendationListItem] = []
         for current in self.calendar_provider.list_trading_days(start_date, end_date):
+            day_runtime_config = self._with_advisory_date_context(
+                replay_runtime_config,
+                target_trade_date=current,
+                selection_as_of_trade_date=None,
+            )
             raw_candidates = candidates_by_date.get(current) or candidates_by_date.get(current.isoformat())
             raw_market = market_by_date.get(current) or market_by_date.get(current.isoformat())
             selection_run_ids: list[str] = []
@@ -1592,12 +1638,17 @@ class AdvisoryProgramService:
                     trade_date=current,
                     selection_run_id=None,
                     data_source=data_source,
-                    runtime_config=dict(runtime_config or {}),
+                    runtime_config=day_runtime_config,
                 )
                 selection_run_ids = [run.run_id]
                 candidates = candidates_from_selection_run(run)
             else:
                 candidates = [_candidate_from_mapping(row) for row in raw_candidates]
+            self._require_exit_observation_depth(
+                program=program,
+                candidates=candidates,
+                active_episodes=active,
+            )
             result = self._evaluate_review(
                 program=program,
                 trade_date=current,
@@ -1620,7 +1671,7 @@ class AdvisoryProgramService:
                     data_source=data_source,
                     selection_run_id=selection_run_ids[0] if selection_run_ids else None,
                     selection_run_ids=selection_run_ids,
-                    runtime_config_json=dict(runtime_config or {}),
+                    runtime_config_json=day_runtime_config,
                     finished_at=_utcnow(),
                 )
             )
@@ -2234,7 +2285,7 @@ class AdvisoryProgramService:
         config = deepcopy(dict(runtime_config or {}))
         display_top_n = int(config.get("display_top_n") or config.get("top_k") or program.target_count)
         requested_top_k = int(config.get("top_k") or display_top_n)
-        top_k = min(max(requested_top_k, int(program.review_policy["rank_exit_threshold"]), program.target_count), 50)
+        top_k = max(requested_top_k, int(program.review_policy["rank_exit_threshold"]), program.target_count)
         runtime_profile = deepcopy(config.get("runtime_profile") or {})
         if not isinstance(runtime_profile, dict):
             raise RuntimeConfigInvalidError(
@@ -2288,17 +2339,14 @@ class AdvisoryProgramService:
         if not name:
             raise RuntimeConfigInvalidError("advisory program_name is required")
         mode = str(package_mode or "").strip()
-        if mode == PACKAGE_MODE_SLEEVE_FUTURE:
-            raise UnsupportedFeatureError("sleeve_mode_future is design-reserved and is not enabled")
-        if mode not in {PACKAGE_MODE_SINGLE, PACKAGE_MODE_FUSION, PACKAGE_MODE_WEIGHTED_RANK_FUSION, PACKAGE_MODE_UNION, PACKAGE_MODE_INTERSECTION}:
-            raise RuntimeConfigInvalidError("unsupported advisory package_mode", context={"package_mode": package_mode})
         clean_package_ids = [str(item).strip() for item in package_ids if str(item).strip()]
         if len(clean_package_ids) != len(set(clean_package_ids)):
             raise RuntimeConfigInvalidError("advisory package_ids must be unique")
-        if mode == PACKAGE_MODE_SINGLE and len(clean_package_ids) != 1:
-            raise RuntimeConfigInvalidError("single_package advisory program requires exactly one StrategyPackage")
-        if mode in PACKAGE_MODES_REQUIRING_MULTI_PACKAGE and len(clean_package_ids) < 2:
-            raise RuntimeConfigInvalidError("multi-package advisory program requires at least two StrategyPackages")
+        self._require_native_package_config(
+            package_mode=mode,
+            package_ids=clean_package_ids,
+            operation="validate_config",
+        )
         if target_count <= 0 or target_count > 100:
             raise RuntimeConfigInvalidError("advisory target_count must be between 1 and 100", context={"target_count": target_count})
         weights = self._normalize_weights(clean_package_ids, package_weights)
@@ -2322,6 +2370,57 @@ class AdvisoryProgramService:
             "exit_price_basis": exit_basis,
             "review_schedule": dict(review_schedule or {"frequency": "daily_after_close"}),
         }
+
+    @staticmethod
+    def _require_native_package_config(
+        *,
+        package_mode: str,
+        package_ids: Iterable[str],
+        operation: str,
+    ) -> None:
+        clean_ids = [str(item).strip() for item in package_ids if str(item).strip()]
+        if package_mode == PACKAGE_MODE_SINGLE and len(clean_ids) == 1:
+            return
+        raise UnsupportedFeatureError(
+            "advisory manual multi-package mode is retired; select one single-alpha package or one native multi-alpha parent package",
+            context={
+                "reason_code": REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED,
+                "operation": operation,
+                "package_mode": package_mode,
+                "package_ids": clean_ids,
+                "required_package_mode": PACKAGE_MODE_SINGLE,
+                "required_package_count": 1,
+            },
+        )
+
+    @staticmethod
+    def _require_exit_observation_depth(
+        *,
+        program: AdvisoryProgram,
+        candidates: list[AdvisoryCandidate],
+        active_episodes: list[AdvisoryEpisode],
+    ) -> None:
+        if not active_episodes:
+            return
+        candidate_symbols = {row.symbol for row in candidates}
+        missing_symbols = sorted({row.symbol for row in active_episodes} - candidate_symbols)
+        if not missing_symbols:
+            return
+        observed_max_rank = max((row.rank for row in candidates), default=0)
+        required_rank = int(program.review_policy["rank_exit_threshold"])
+        if observed_max_rank >= required_rank:
+            return
+        raise DataUnavailableError(
+            "advisory selection evidence is too shallow to evaluate holdings missing from the current candidates",
+            context={
+                "reason_code": REASON_ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT,
+                "program_id": program.program_id,
+                "required_rank_exit_threshold": required_rank,
+                "observed_max_rank": observed_max_rank,
+                "candidate_count": len(candidates),
+                "missing_active_symbols": missing_symbols,
+            },
+        )
 
     @staticmethod
     def _normalize_weights(package_ids: list[str], raw: Mapping[str, Any] | None) -> dict[str, float]:
@@ -3467,6 +3566,16 @@ def _parse_datetime(value: Any) -> datetime | None:
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _deep_merge_dicts(base: Mapping[str, Any] | None, override: Mapping[str, Any] | None) -> dict[str, Any]:
+    merged = deepcopy(dict(base or {}))
+    for key, value in dict(override or {}).items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 def _optional_float(value: Any) -> float | None:

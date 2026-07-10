@@ -96,7 +96,6 @@ function stockLabel(row: { symbol: string; stock_name?: string | null; symbol_na
 }
 
 const REVIEW_PAGE_SIZE_OPTIONS = [20, 50, 100] as const;
-const PACKAGE_MODE_OPTIONS: AdvisoryPackageMode[] = ["single_package", "weighted_rank_fusion", "fusion_pool", "union", "intersection"];
 
 function fmtPct(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "-";
@@ -138,20 +137,13 @@ function packageIdsFromText(text: string): string[] {
 function packageRowsFromText(text: string): PackageWeightRow[] {
   const ids = packageIdsFromText(text);
   if (!ids.length) return [{ rowId: "pkg-1", packageId: "", weight: "1" }];
-  return ids.map((packageId, index) => ({ rowId: `pkg-${index + 1}`, packageId, weight: "1" }));
-}
-
-function newPackageRow(index: number): PackageWeightRow {
-  return { rowId: `pkg-new-${Date.now()}-${index}`, packageId: "", weight: "1" };
+  return [{ rowId: "pkg-1", packageId: ids[0], weight: "1" }];
 }
 
 function packageRowsFromIds(packageIds: string[] = [], packageWeights: Record<string, number> = {}): PackageWeightRow[] {
   if (!packageIds.length) return [{ rowId: "pkg-1", packageId: "", weight: "1" }];
-  return packageIds.map((packageId, index) => ({
-    rowId: `pkg-${index + 1}`,
-    packageId,
-    weight: String(packageWeights[packageId] ?? 1),
-  }));
+  const packageId = packageIds[0];
+  return [{ rowId: "pkg-1", packageId, weight: String(packageWeights[packageId] ?? 1) }];
 }
 
 function packageOptionLabel(pkg: SelectablePackage): string {
@@ -372,17 +364,8 @@ function reviewDateOptions(
   return options;
 }
 
-function packageIdsFromRows(rows: PackageWeightRow[], mode: AdvisoryPackageMode): string[] {
-  const ids = rows.map((row) => row.packageId.trim()).filter(Boolean);
-  return mode === "single_package" ? ids.slice(0, 1) : ids;
-}
-
-function packageWeightsFromRows(rows: PackageWeightRow[], packageIds: string[]): Record<string, number> {
-  return Object.fromEntries(packageIds.map((packageId) => {
-    const row = rows.find((item) => item.packageId.trim() === packageId);
-    const parsed = Number(row?.weight ?? "1");
-    return [packageId, Number.isFinite(parsed) && parsed > 0 ? parsed : 1];
-  }));
+function packageIdsFromRows(rows: PackageWeightRow[]): string[] {
+  return rows.map((row) => row.packageId.trim()).filter(Boolean).slice(0, 1);
 }
 
 function newQualityRow(index: number): QualityInputRow {
@@ -507,8 +490,8 @@ function buildReviewPayload(program: AdvisoryProgram, targetDate: string, select
   };
 }
 
-function modeNeedsWeights(mode: AdvisoryPackageMode): boolean {
-  return mode === "fusion_pool" || mode === "weighted_rank_fusion";
+function isLegacyManualMultiPackage(source: Pick<AdvisoryProgram, "package_mode" | "package_ids">): boolean {
+  return source.package_mode !== "single_package" || source.package_ids.length !== 1;
 }
 
 function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisoryStrategyBindingVersion | null): ProgramStrategyDraft {
@@ -525,14 +508,16 @@ function strategyDraftFromProgram(program: AdvisoryProgram, binding?: AdvisorySt
 }
 
 function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPayload {
-  const packageIds = packageIdsFromRows(draft.rows, draft.packageMode);
-  if (!packageIds.length) throw new Error("至少需要从下拉菜单选择一个策略包");
+  const packageIds = packageIdsFromRows(draft.rows);
+  if (draft.packageMode !== "single_package" || packageIds.length !== 1) {
+    throw new Error("荐股只支持一个单 Alpha 策略包或一个原生多 Alpha 父包");
+  }
   const targetCount = Number(draft.targetCount || 20);
   if (!Number.isFinite(targetCount) || targetCount <= 0) throw new Error("目标数量必须是有效正数");
   return {
-    package_mode: draft.packageMode,
+    package_mode: "single_package",
     package_ids: packageIds,
-    package_weights: draft.packageMode === "single_package" ? { [packageIds[0]]: 1 } : packageWeightsFromRows(draft.rows, packageIds),
+    package_weights: { [packageIds[0]]: 1 },
     target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
     runtime_config_json: {},
   };
@@ -558,6 +543,7 @@ function defaultWatchlistCategoryName(program: AdvisoryProgram | null | undefine
 }
 
 function reviewState(program: AdvisoryProgram, targetDate: string, hasPriorList = Boolean(program.latest_review_trade_date), targetPublished = false, blockingMissingTargetDate?: string | null) {
+  if (isLegacyManualMultiPackage(program)) return { canPreview: false, canRun: false, label: "已退役", previewLabel: "已退役", hint: "历史手工多包任务只保留查询；请改用经过回测验证的原生多 Alpha 父包。", isInitialRun: false };
   if (!targetDate) return { canPreview: false, canRun: false, label: "等待交易日", previewLabel: "等待交易日", hint: "等待交易日服务返回最近交易日。", isInitialRun: false };
   if (program.status !== "ENABLED") return { canPreview: false, canRun: false, label: "未启用", previewLabel: "预览", hint: "任务启用后才可执行首次运行或每日复评。", isInitialRun: false };
   if (targetPublished) {
@@ -633,7 +619,6 @@ function AdvisoryPageContent() {
   const [selectedProgramId, setSelectedProgramId] = useState("");
   const [sortBy, setSortBy] = useState("win_rate");
   const [programName, setProgramName] = useState("每日 Top20 荐股任务");
-  const [packageMode, setPackageMode] = useState<AdvisoryPackageMode>(packageIdsFromText(prefillPackages).length > 1 ? "weighted_rank_fusion" : "single_package");
   const [packageRows, setPackageRows] = useState<PackageWeightRow[]>(() => packageRowsFromText(prefillPackages));
   const [selectablePackages, setSelectablePackages] = useState<SelectablePackage[]>([]);
   const [targetCount, setTargetCount] = useState(20);
@@ -916,8 +901,6 @@ function AdvisoryPageContent() {
 
   useEffect(() => {
     if (prefillPackages) {
-      const ids = packageIdsFromText(prefillPackages);
-      setPackageMode(ids.length > 1 ? "weighted_rank_fusion" : "single_package");
       setPackageRows(packageRowsFromText(prefillPackages));
     }
   }, [prefillPackages]);
@@ -931,16 +914,16 @@ function AdvisoryPageContent() {
   async function createProgram() {
     setError(null);
     try {
-      const packageIds = packageIdsFromRows(packageRows, packageMode);
-      if (!packageIds.length) throw new Error("至少需要从下拉菜单选择一个策略包");
+      const packageIds = packageIdsFromRows(packageRows);
+      if (packageIds.length !== 1) throw new Error("请选择一个单 Alpha 策略包或一个原生多 Alpha 父包");
       const confirmed = window.confirm(`确认创建并启用荐股任务「${programName}」？启用后会进入每日复评与排行榜统计。`);
       if (!confirmed) return;
       const program = await advisoryApi.createProgram({
         program_name: programName,
-        package_mode: packageMode,
+        package_mode: "single_package",
         package_ids: packageIds,
         target_count: targetCount,
-        package_weights: packageWeightsFromRows(packageRows, packageIds),
+        package_weights: { [packageIds[0]]: 1 },
         status: "ENABLED",
       });
       await refreshAll(program.program_id);
@@ -1370,6 +1353,22 @@ function AdvisoryPageContent() {
     const applyRunning = strategyActionKey === `${program.program_id}:apply`;
     const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
     const replaySummary = draft.replayResult?.summary as JsonObject | undefined;
+    if (isLegacyManualMultiPackage(program)) {
+      return (
+        <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
+          <div className="pv2-card-head">
+            <div>
+              <div className="pv2-kicker">历史策略绑定</div>
+              <h3 style={{ margin: 0 }}>{program.program_name}</h3>
+              <p className="pv2-muted" data-testid={`advisory-strategy-manager-hint-${program.program_id}`}>
+                历史手工多包模式已退役，现有列表和复评证据继续保留查询。新的荐股任务请选择一个单 Alpha 策略包或一个经过回测验证的原生多 Alpha 父包。
+              </p>
+            </div>
+            <button className="pv2-button-ghost" onClick={() => setExpandedStrategyProgramId("")} type="button">收起</button>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="pv2-readable-panel" data-testid={`advisory-strategy-manager-${program.program_id}`}>
         <div className="pv2-card-head">
@@ -1389,23 +1388,6 @@ function AdvisoryPageContent() {
           </button>
         </div>
         <div className="pv2-form-grid" style={{ marginTop: 8 }}>
-          <label className="pv2-field">
-            策略模式
-            <select
-              className="pv2-select"
-              data-testid={`advisory-strategy-mode-${program.program_id}`}
-              disabled={loadingBinding}
-              value={draft.packageMode}
-              onChange={(event) => setProgramStrategyDraft(program.program_id, (current) => ({
-                ...current,
-                packageMode: event.target.value as AdvisoryPackageMode,
-                replayResult: null,
-                applyResult: null,
-              }))}
-            >
-              {PACKAGE_MODE_OPTIONS.map((mode) => <option key={mode} value={mode}>{mode}</option>)}
-            </select>
-          </label>
           <label className="pv2-field">
             目标数量
             <input
@@ -1430,9 +1412,9 @@ function AdvisoryPageContent() {
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 10 }}>
           <table className="pv2-table">
-            <thead><tr><th>策略包</th><th>权重</th><th>说明</th><th>操作</th></tr></thead>
+            <thead><tr><th>策略包</th><th>类型</th><th>状态</th></tr></thead>
             <tbody>
-              {draft.rows.map((row, index) => (
+              {draft.rows.slice(0, 1).map((row) => (
                 <tr key={row.rowId}>
                   <td>
                     <select
@@ -1453,47 +1435,14 @@ function AdvisoryPageContent() {
                       {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "当前绑定"}` : "从下拉菜单选择策略包，不需要填写或记忆内部 ID。"}
                     </div>
                   </td>
-                  <td>
-                    <input
-                      className="pv2-input"
-                      min="0.01"
-                      step="0.01"
-                      type="number"
-                      value={row.weight}
-                      onChange={(event) => updateStrategyRow(program.program_id, row.rowId, { weight: event.target.value })}
-                    />
-                  </td>
-                  <td className="pv2-muted">
-                    {draft.packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : modeNeedsWeights(draft.packageMode) ? "参与加权融合；权重不作为硬门禁" : "参与荐股集合运算"}
-                  </td>
-                  <td>
-                    <button
-                      className="pv2-button-ghost"
-                      disabled={draft.rows.length <= 1}
-                      onClick={() => setProgramStrategyDraft(program.program_id, (current) => ({ ...current, rows: current.rows.filter((item) => item.rowId !== row.rowId), replayResult: null, applyResult: null }))}
-                      type="button"
-                    >
-                      移除
-                    </button>
-                  </td>
+                  <td>{packageById.get(row.packageId)?.alpha_mode || "-"}</td>
+                  <td>{packageById.get(row.packageId)?.package_status || "当前绑定"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 10 }}>
-          <button
-            className="pv2-button"
-            onClick={() => setProgramStrategyDraft(program.program_id, (current) => ({
-              ...current,
-              rows: [...current.rows, newPackageRow(current.rows.length + 1)],
-              replayResult: null,
-              applyResult: null,
-            }))}
-            type="button"
-          >
-            添加策略包
-          </button>
           <span className="pv2-muted">回放区间：{replayStart || "未选择"} 至 {replayEnd || "未选择"}；可在页面底部回放区间中调整。</span>
         </div>
         <div className="pv2-row-actions" style={{ marginTop: 10 }}>
@@ -1579,6 +1528,7 @@ function AdvisoryPageContent() {
             </thead>
             <tbody>
               {leaderboard.map((row) => {
+                const legacyManualMulti = isLegacyManualMultiPackage(row);
                 const rowVersions = row.program_id === selectedProgram?.program_id && loadedDetailsProgramId === row.program_id ? listVersions : [];
                 const rowLatestMeta = latestRecommendationMeta(row, rowVersions);
                 const rowActionContext = reviewActionContext(tradingDefaults, row, rowVersions);
@@ -1637,7 +1587,7 @@ function AdvisoryPageContent() {
                           <button
                             className="pv2-button"
                             data-testid={`advisory-catchup-${row.program_id}`}
-                            disabled={rowContextLoading || !rowProgress.missingTargetDates.length || Boolean(reviewingKey)}
+                            disabled={legacyManualMulti || rowContextLoading || !rowProgress.missingTargetDates.length || Boolean(reviewingKey)}
                             onClick={(event) => { event.stopPropagation(); void runCatchUp(row, rowProgress.missingTargetDates); }}
                             type="button"
                           >
@@ -1676,20 +1626,19 @@ function AdvisoryPageContent() {
           <div>
             <div className="pv2-kicker">任务设置</div>
             <h2>创建或管理独立荐股任务</h2>
-            <p className="pv2-muted">每个任务按 program_id 隔离，支持单策略包或加权融合策略包组合。</p>
+            <p className="pv2-muted">每个任务绑定一个原生 StrategyPackage；单 Alpha 包和经过回测验证的多 Alpha 父包使用同一运行链路。</p>
           </div>
           <button className="pv2-button-primary" onClick={createProgram} type="button">创建并启用</button>
         </div>
         <div className="pv2-form-grid">
           <label className="pv2-field">任务名称<input className="pv2-input" value={programName} onChange={(event) => setProgramName(event.target.value)} /></label>
-          <label className="pv2-field">策略模式<select className="pv2-select" value={packageMode} onChange={(event) => setPackageMode(event.target.value as AdvisoryPackageMode)}>{PACKAGE_MODE_OPTIONS.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select></label>
           <label className="pv2-field">目标数量<input className="pv2-input" type="number" min={1} max={100} value={targetCount} onChange={(event) => setTargetCount(Number(event.target.value))} /></label>
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 12 }}>
           <table className="pv2-table">
-            <thead><tr><th>策略包</th><th>权重</th><th>说明</th><th>操作</th></tr></thead>
+            <thead><tr><th>策略包</th><th>类型</th><th>状态</th></tr></thead>
             <tbody>
-              {packageRows.map((row, index) => (
+              {packageRows.slice(0, 1).map((row) => (
                 <tr key={row.rowId}>
                   <td>
                     <select
@@ -1710,17 +1659,12 @@ function AdvisoryPageContent() {
                       {row.packageId ? `${packageLabel(row.packageId)} / ${packageById.get(row.packageId)?.package_status || "已预填"}` : "请从下拉菜单选择，无需记忆内部编号。"}
                     </div>
                   </td>
-                  <td><input className="pv2-input" min="0.01" step="0.01" type="number" value={row.weight} onChange={(event) => updatePackageRow(row.rowId, { weight: event.target.value })} /></td>
-                  <td className="pv2-muted">{packageMode === "single_package" && index > 0 ? "单策略包模式仅使用第一行" : modeNeedsWeights(packageMode) ? "参与加权融合；权重仅作配置，不写入策略包" : "参与荐股集合运算"}</td>
-                  <td><button className="pv2-button-ghost" disabled={packageRows.length <= 1} onClick={() => setPackageRows((rows) => rows.filter((item) => item.rowId !== row.rowId))} type="button">移除</button></td>
+                  <td>{packageById.get(row.packageId)?.alpha_mode || "-"}</td>
+                  <td>{packageById.get(row.packageId)?.package_status || "-"}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-          <button className="pv2-button" onClick={() => setPackageRows((rows) => [...rows, newPackageRow(rows.length + 1)])} type="button">添加策略包</button>
-          <span className="pv2-muted">加权融合模式使用每行权重；union/intersection 不把收益或换手指标作为硬门禁。</span>
         </div>
         <div className="pv2-table-wrap" style={{ marginTop: 16 }}>
           <table className="pv2-table">
@@ -1733,9 +1677,9 @@ function AdvisoryPageContent() {
                   <td>{program.status}</td>
                   <td>{program.version}</td>
                   <td className="pv2-row-actions">
-                    <button className="pv2-button" data-testid={`advisory-enable-${program.program_id}`} disabled={program.status === "ENABLED"} onClick={() => setStatus(program.program_id, "enable")} type="button">{program.status === "ENABLED" ? "已启用" : "启用"}</button>
+                    <button className="pv2-button" data-testid={`advisory-enable-${program.program_id}`} disabled={program.status === "ENABLED" || isLegacyManualMultiPackage(program)} onClick={() => setStatus(program.program_id, "enable")} type="button">{isLegacyManualMultiPackage(program) ? "已退役" : program.status === "ENABLED" ? "已启用" : "启用"}</button>
                     <button className="pv2-button-ghost" onClick={() => setStatus(program.program_id, "pause")} type="button">暂停</button>
-                    <button className="pv2-button-ghost" onClick={() => cloneProgram(program.program_id)} type="button">克隆</button>
+                    <button className="pv2-button-ghost" disabled={isLegacyManualMultiPackage(program)} onClick={() => cloneProgram(program.program_id)} type="button">克隆</button>
                     <button className="pv2-button-danger" onClick={() => setStatus(program.program_id, "archive")} type="button">归档</button>
                   </td>
                 </tr>
@@ -1777,7 +1721,7 @@ function AdvisoryPageContent() {
               className="pv2-button"
               data-testid="advisory-selected-catchup"
               onClick={() => selectedProgram && void runCatchUp(selectedProgram, selectedReviewProgress.missingTargetDates)}
-              disabled={selectedDateContextLoading || !selectedProgram || !selectedReviewProgress.missingTargetDates.length || Boolean(reviewingKey)}
+              disabled={selectedDateContextLoading || !selectedProgram || isLegacyManualMultiPackage(selectedProgram) || !selectedReviewProgress.missingTargetDates.length || Boolean(reviewingKey)}
               type="button"
             >
               {reviewingKey === selectedCatchUpKey && catchUpProgress ? `补跑 ${catchUpProgress.index}/${catchUpProgress.total}` : `补齐全部缺失复评（${selectedReviewProgress.missingTargetDates.length} 天）`}

@@ -1010,7 +1010,7 @@ test("Advisory review defaults to earliest missing target date and keeps catch-u
   expect(badResponses).toEqual([]);
 });
 
-test("Advisory leaderboard rows use each program's own review target instead of the selected task date", async ({ page }) => {
+test("Advisory leaderboard keeps legacy manual multi-package rows readable but retired", async ({ page }) => {
   const pageErrors: string[] = [];
   const badResponses: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -1069,7 +1069,7 @@ test("Advisory leaderboard rows use each program's own review target instead of 
       next_trading_day: "2026-06-11",
     },
   });
-  const { calls, reviewBodies } = await mockAdvisoryApis(page, {
+  const { calls } = await mockAdvisoryApis(page, {
     initialProgramStatus: "ENABLED",
     initialLatestReviewTradeDate: "2026-06-08",
     initialLastReviewStatus: "SUCCEEDED",
@@ -1085,26 +1085,10 @@ test("Advisory leaderboard rows use each program's own review target instead of 
   await expect(page.getByTestId(`advisory-row-latest-context-${rowProgramId}`)).toContainText("预测目标：2026-06-10");
   await expect(page.getByTestId(`advisory-row-review-progress-${rowProgramId}`)).toContainText("本行待执行目标：2026-06-11");
   await expect(page.getByTestId(`advisory-row-review-progress-${rowProgramId}`)).toContainText("缺失：无");
-  await expect(page.getByTestId(`advisory-run-${rowProgramId}`)).toBeEnabled();
-  await expect(page.getByTestId(`advisory-run-${rowProgramId}`)).toHaveText("执行复评");
-
-  await page.getByTestId(`advisory-run-${rowProgramId}`).click();
-  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/reviews/run`)).length).toBe(1);
-  expect(reviewBodies.at(-1)).toMatchObject({
-    trade_date: "2026-06-11",
-    target_trade_date: "2026-06-11",
-    selection_as_of_trade_date: "2026-06-10",
-    runtime_config: {
-      advisory_date_context: {
-        target_trade_date: "2026-06-11",
-        selection_as_of_trade_date: "2026-06-10",
-      },
-      selection_artifact_config: {
-        cutoff_date: "2026-06-10",
-        cutoff_policy: "FIXED_CUTOFF",
-      },
-    },
-  });
+  await expect(page.getByTestId(`advisory-run-${rowProgramId}`)).toBeDisabled();
+  await expect(page.getByTestId(`advisory-run-${rowProgramId}`)).toHaveText("已退役");
+  await expect(page.getByText("历史手工多包任务只保留查询；请改用经过回测验证的原生多 Alpha 父包。", { exact: true })).toBeVisible();
+  expect(calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/reviews/run`))).toHaveLength(0);
 
   expect(pageErrors).toEqual([]);
   expect(badResponses).toEqual([]);
@@ -1239,7 +1223,7 @@ test("Advisory catch-up all runs missing target dates sequentially", async ({ pa
   expect(badResponses).toEqual([]);
 });
 
-test("Advisory strategy package management is scoped per active program", async ({ page }) => {
+test("Advisory native multi-alpha parent binding is scoped per active program", async ({ page }) => {
   const pageErrors: string[] = [];
   const badResponses: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -1249,14 +1233,14 @@ test("Advisory strategy package management is scoped per active program", async 
     }
   });
 
-  const rowProgramId = "adv_dual_package_program";
+  const rowProgramId = "adv_native_parent_program";
   const rowBinding = {
     ...activeBinding,
-    binding_version_id: "advb_dual_active",
+    binding_version_id: "advb_native_active",
     program_id: rowProgramId,
-    package_mode: "weighted_rank_fusion",
-    package_ids: ["pkg_codex_smoke", "pkg_second_candidate"],
-    package_weights: { pkg_codex_smoke: 0.7, pkg_second_candidate: 0.3 },
+    package_mode: "single_package",
+    package_ids: ["pkg_codex_smoke"],
+    package_weights: { pkg_codex_smoke: 1 },
   };
   const rowVersions: JsonObject[] = [
     { ...publishedListVersion("2026-06-10", "2026-06-09"), program_id: rowProgramId, binding_version_id: rowBinding.binding_version_id, list_version_id: "advlv_dual_20260610" },
@@ -1264,11 +1248,11 @@ test("Advisory strategy package management is scoped per active program", async 
   const rowProgram = {
     ...program,
     program_id: rowProgramId,
-    program_name: "每日 Top20 荐股任务双策略包",
+    program_name: "每日 Top20 原生多 Alpha 父包",
     status: "ENABLED",
-    package_mode: "weighted_rank_fusion",
-    package_ids: ["pkg_codex_smoke", "pkg_second_candidate"],
-    package_weights: { pkg_codex_smoke: 0.7, pkg_second_candidate: 0.3 },
+    package_mode: "single_package",
+    package_ids: ["pkg_codex_smoke"],
+    package_weights: { pkg_codex_smoke: 1 },
     latest_review_trade_date: "2026-06-10",
     last_review_status: "SUCCEEDED",
   };
@@ -1326,7 +1310,6 @@ test("Advisory strategy package management is scoped per active program", async 
   await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
   await expect(page.getByText("选股运行 ID")).toHaveCount(0);
 
-  await page.getByTestId(`advisory-strategy-mode-${rowProgramId}`).selectOption("single_package");
   await page.getByTestId(`advisory-strategy-package-${rowProgramId}-pkg-1`).selectOption("pkg_second_candidate");
   await page.getByTestId(`advisory-strategy-replay-${rowProgramId}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/replay`)).length).toBe(1);
@@ -1340,7 +1323,7 @@ test("Advisory strategy package management is scoped per active program", async 
       package_weights: { pkg_second_candidate: 1 },
       target_count: 20,
     },
-    compare_to_binding_version_id: "advb_dual_active",
+    compare_to_binding_version_id: "advb_native_active",
   });
   await expect(page.getByTestId(`advisory-strategy-replay-result-${rowProgramId}`)).toContainText("回放状态：SUCCEEDED");
 
