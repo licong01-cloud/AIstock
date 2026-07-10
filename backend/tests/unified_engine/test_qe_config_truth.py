@@ -2393,7 +2393,7 @@ def test_efficient_gats_industry_missing_ids_are_loud_and_unbiased(capsys):
         att_off = model.GAT_model.cal_attention(hidden, hidden, industry_ids=None)
         att_bias = model.GAT_model.cal_attention(hidden, hidden, industry_ids=ids)
 
-    assert ids[1].item() == 131
+    assert ids[1].item() == efficient_gats._MISSING_INDUSTRY_ID
     assert torch.allclose(att_bias[1], att_off[1], atol=1e-6)
     assert torch.all(att_bias[:, 1] > 0)
 
@@ -2901,7 +2901,7 @@ def test_efficient_gats_industry_embedding_updates_weights_changes_predictions_a
     assert not np.allclose(embedding_preds.to_numpy(), off_preds.to_numpy(), atol=1e-6)
     assert embedding_model._preload_segment_to_cpu(dataset.prepare("train"), segment_name="train")[
         "industry_ids"
-    ][0].item() == 131
+    ][0].item() == efficient_gats._MISSING_INDUSTRY_ID
     assert provider.coverage_history
     assert evals_result["train"] and evals_result["valid"]
 
