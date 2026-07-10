@@ -126,7 +126,7 @@ legacy create/update/enable/clone/run/replay/apply -> fail-closed reason_code
 | F-005 | `frontend/src/app/paper-v2/advisory/page.tsx` 创建区与策略绑定管理器 | Playwright `Advisory native multi-alpha parent binding is scoped per active program`；TypeScript noEmit 通过 | verified | 无 |
 | F-006 | `isLegacyManualMultiPackage`；服务层 continuation guards | 历史 program/binding 注入测试验证读取成功且 update/enable/clone/review/replay/apply 全部拒绝；Playwright legacy 行可见但退役 | verified | 无 |
 | F-007 | `backend/tests/watchlist/test_advisory_program.py`；`test_advisory_api.py`；`paper-v2-advisory-ui.spec.ts` | Advisory 31 tests、multi-alpha/Selection Center 18 tests、Playwright 2 tests、Ruff 与 diff check | verified | 无 |
-| F-008 | 本设计；生产门禁清单 | Feature workflow validate 与 PR 创建完成后回填；合入、根目录同步和生产运行时激活按流程等待用户确认 | ready | 无 |
+| F-008 | 本设计；生产门禁清单；PR `#1942` | Feature workflow validate PASS；待审 PR 已创建；合入、根目录同步和生产运行时激活按流程等待用户确认 | verified | 无 |
 
 ## 发布与回滚
 
