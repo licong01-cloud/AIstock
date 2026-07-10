@@ -51,10 +51,14 @@ def register(registry: "ModuleRegistry") -> None:
 
     @registry.mcp.tool(name="factor_metrics_get_result")
     def factor_metrics_get_result(factor_name: str | None = None, calc_batch_id: str | None = None, eval_window: str | None = None, limit: int = 20, offset: int = 0) -> Any:
+        """Read metric rows including nullable h20/HAC companion fields."""
+
         return client.get("/results", params={"factor_name": factor_name, "calc_batch_id": calc_batch_id, "eval_window": eval_window, "limit": limit, "offset": offset})
 
     @registry.mcp.tool(name="factor_metrics_compare_versions")
     def factor_metrics_compare_versions(factor_name: str, limit: int = 20) -> Any:
+        """Compare metric versions including nullable h20/HAC companion fields."""
+
         return client.get("/compare-versions", params={"factor_name": factor_name, "limit": limit})
 
     @registry.mcp.tool(name="factor_metrics_export_result_ref")

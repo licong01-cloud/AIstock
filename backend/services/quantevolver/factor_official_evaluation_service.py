@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from ...db.pg_pool import get_conn
 from ...infra.wsl_qlib_runner import win_to_wsl_path
+from ..factor_metrics_contract import H20_METRIC_FIELDS, with_h20_metric_defaults
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
     FactorUniverseMaskService,
@@ -158,6 +159,10 @@ INSERT INTO aistock_factor_metrics (
     top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
     group_return_monotonicity, turnover, ic_decay_half_life,
     ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+    h20_return_horizon, h20_ic_mean, h20_ic_std,
+    h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+    h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+    h20_n_obs, h20_hac_lag,
     icir_annualized, rank_icir_annualized,
     direction, best_horizon, best_horizon_advantage,
     coverage, coverage_numerator, coverage_denominator, coverage_semantics,
@@ -173,6 +178,10 @@ INSERT INTO aistock_factor_metrics (
     %(top_max_drawdown)s, %(top_excess_sharpe)s, %(benchmark_annual_return)s,
     %(group_return_monotonicity)s, %(turnover)s, %(ic_decay_half_life)s,
     %(ic_csz_mean)s, %(rank_ic_1d)s, %(rank_ic_5d)s, %(rank_ic_10d)s, %(rank_ic_20d)s,
+    %(h20_return_horizon)s, %(h20_ic_mean)s, %(h20_ic_std)s,
+    %(h20_rank_ic_mean)s, %(h20_rank_ic_std)s, %(h20_icir)s, %(h20_rank_icir)s,
+    %(h20_icir_hac)s, %(h20_rank_icir_hac)s, %(h20_ic_positive_ratio)s,
+    %(h20_n_obs)s, %(h20_hac_lag)s,
     %(icir_annualized)s, %(rank_icir_annualized)s,
     %(direction)s, %(best_horizon)s, %(best_horizon_advantage)s,
     %(coverage)s, %(coverage_numerator)s, %(coverage_denominator)s, %(coverage_semantics)s,
@@ -206,6 +215,18 @@ DO UPDATE SET
     rank_ic_5d = EXCLUDED.rank_ic_5d,
     rank_ic_10d = EXCLUDED.rank_ic_10d,
     rank_ic_20d = EXCLUDED.rank_ic_20d,
+    h20_return_horizon = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_return_horizon ELSE aistock_factor_metrics.h20_return_horizon END,
+    h20_ic_mean = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_mean ELSE aistock_factor_metrics.h20_ic_mean END,
+    h20_ic_std = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_std ELSE aistock_factor_metrics.h20_ic_std END,
+    h20_rank_ic_mean = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_ic_mean ELSE aistock_factor_metrics.h20_rank_ic_mean END,
+    h20_rank_ic_std = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_ic_std ELSE aistock_factor_metrics.h20_rank_ic_std END,
+    h20_icir = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_icir ELSE aistock_factor_metrics.h20_icir END,
+    h20_rank_icir = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_icir ELSE aistock_factor_metrics.h20_rank_icir END,
+    h20_icir_hac = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_icir_hac ELSE aistock_factor_metrics.h20_icir_hac END,
+    h20_rank_icir_hac = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_icir_hac ELSE aistock_factor_metrics.h20_rank_icir_hac END,
+    h20_ic_positive_ratio = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_positive_ratio ELSE aistock_factor_metrics.h20_ic_positive_ratio END,
+    h20_n_obs = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_n_obs ELSE aistock_factor_metrics.h20_n_obs END,
+    h20_hac_lag = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_hac_lag ELSE aistock_factor_metrics.h20_hac_lag END,
     icir_annualized = EXCLUDED.icir_annualized,
     rank_icir_annualized = EXCLUDED.rank_icir_annualized,
     direction = EXCLUDED.direction,
@@ -1012,6 +1033,10 @@ class FactorOfficialEvaluationService:
                            top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
                            group_return_monotonicity, turnover, ic_decay_half_life,
                            ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+                           h20_return_horizon, h20_ic_mean, h20_ic_std,
+                           h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+                           h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+                           h20_n_obs, h20_hac_lag,
                            icir_annualized, rank_icir_annualized,
                            direction, best_horizon, best_horizon_advantage,
                            coverage, n_trading_days, source_task_id, calc_engine,
@@ -1041,7 +1066,11 @@ class FactorOfficialEvaluationService:
                         factor_name, ic_mean, top_excess_sharpe, top_excess_annual_return,
                         rank_ic_mean, icir, icir_annualized, rank_icir_annualized,
                         direction, best_horizon, best_horizon_advantage,
-                        calculated_at, snapshot_date, calc_batch_id
+                        calculated_at, snapshot_date, calc_batch_id,
+                        h20_return_horizon, h20_ic_mean, h20_ic_std,
+                        h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+                        h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+                        h20_n_obs, h20_hac_lag
                     FROM aistock_factor_metrics
                     WHERE eval_window = 'full'
                       AND calc_engine = %s
@@ -1067,6 +1096,18 @@ class FactorOfficialEvaluationService:
                 "calculated_at": str(row[11]) if row[11] is not None else None,
                 "snapshot_date": str(row[12]) if row[12] is not None else None,
                 "calc_batch_id": row[13],
+                "h20_return_horizon": row[14],
+                "h20_ic_mean": row[15],
+                "h20_ic_std": row[16],
+                "h20_rank_ic_mean": row[17],
+                "h20_rank_ic_std": row[18],
+                "h20_icir": row[19],
+                "h20_rank_icir": row[20],
+                "h20_icir_hac": row[21],
+                "h20_rank_icir_hac": row[22],
+                "h20_ic_positive_ratio": row[23],
+                "h20_n_obs": row[24],
+                "h20_hac_lag": row[25],
             }
         return {"ok": True, "summary": summary, "total": len(summary), "calc_engine": CALC_ENGINE}
 
@@ -1260,7 +1301,7 @@ class FactorOfficialEvaluationService:
                         for key in ("direction", "best_horizon", "best_horizon_advantage"):
                             if factor_enrichment.get(key) is not None:
                                 enrichment[key] = factor_enrichment[key]
-                        params = {
+                        params = with_h20_metric_defaults({
                             "factor_name": factor_name,
                             "calculated_at": calculated_at,
                             "data_start": rec.get("data_start"),
@@ -1289,6 +1330,11 @@ class FactorOfficialEvaluationService:
                             "rank_ic_5d": rec.get("rank_ic_5d"),
                             "rank_ic_10d": rec.get("rank_ic_10d"),
                             "rank_ic_20d": rec.get("rank_ic_20d"),
+                            **{
+                                field: rec[field]
+                                for field in H20_METRIC_FIELDS
+                                if field in rec
+                            },
                             "icir_annualized": enrichment["icir_annualized"],
                             "rank_icir_annualized": enrichment["rank_icir_annualized"],
                             "direction": enrichment["direction"],
@@ -1310,7 +1356,7 @@ class FactorOfficialEvaluationService:
                             "calc_engine": CALC_ENGINE,
                             "factor_catalog_id": catalog_id,
                             "snapshot_date": snapshot_date,
-                        }
+                        })
                         cur.execute(_UPSERT_SQL, params)
                         inserted += 1
                         per_factor_inserted[factor_name] = per_factor_inserted.get(factor_name, 0) + 1

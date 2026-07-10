@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..db.pg_pool import get_conn
+from .factor_metrics_contract import with_h20_metric_defaults
 from .rdagent_results_api_client import RDAgentResultsApiClient
 
 logger = logging.getLogger("aistock.factor_metrics_sync")
@@ -117,6 +118,10 @@ INSERT INTO aistock_factor_metrics (
     top_max_drawdown, top_excess_sharpe, benchmark_annual_return,
     group_return_monotonicity, turnover, ic_decay_half_life,
     ic_csz_mean, rank_ic_1d, rank_ic_5d, rank_ic_10d, rank_ic_20d,
+    h20_return_horizon, h20_ic_mean, h20_ic_std,
+    h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+    h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+    h20_n_obs, h20_hac_lag,
     coverage, n_trading_days, source_task_id, calc_batch_id, calc_engine,
     factor_catalog_id, snapshot_date
 ) VALUES (
@@ -127,6 +132,10 @@ INSERT INTO aistock_factor_metrics (
     %(top_max_drawdown)s, %(top_excess_sharpe)s, %(benchmark_annual_return)s,
     %(group_return_monotonicity)s, %(turnover)s, %(ic_decay_half_life)s,
     %(ic_csz_mean)s, %(rank_ic_1d)s, %(rank_ic_5d)s, %(rank_ic_10d)s, %(rank_ic_20d)s,
+    %(h20_return_horizon)s, %(h20_ic_mean)s, %(h20_ic_std)s,
+    %(h20_rank_ic_mean)s, %(h20_rank_ic_std)s, %(h20_icir)s, %(h20_rank_icir)s,
+    %(h20_icir_hac)s, %(h20_rank_icir_hac)s, %(h20_ic_positive_ratio)s,
+    %(h20_n_obs)s, %(h20_hac_lag)s,
     %(coverage)s, %(n_trading_days)s, %(source_task_id)s, %(calc_batch_id)s, %(calc_engine)s,
     %(factor_catalog_id)s, %(snapshot_date)s
 )
@@ -154,11 +163,29 @@ DO UPDATE SET
     rank_ic_5d = EXCLUDED.rank_ic_5d,
     rank_ic_10d = EXCLUDED.rank_ic_10d,
     rank_ic_20d = EXCLUDED.rank_ic_20d,
+    h20_return_horizon = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_return_horizon ELSE aistock_factor_metrics.h20_return_horizon END,
+    h20_ic_mean = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_mean ELSE aistock_factor_metrics.h20_ic_mean END,
+    h20_ic_std = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_std ELSE aistock_factor_metrics.h20_ic_std END,
+    h20_rank_ic_mean = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_ic_mean ELSE aistock_factor_metrics.h20_rank_ic_mean END,
+    h20_rank_ic_std = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_ic_std ELSE aistock_factor_metrics.h20_rank_ic_std END,
+    h20_icir = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_icir ELSE aistock_factor_metrics.h20_icir END,
+    h20_rank_icir = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_icir ELSE aistock_factor_metrics.h20_rank_icir END,
+    h20_icir_hac = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_icir_hac ELSE aistock_factor_metrics.h20_icir_hac END,
+    h20_rank_icir_hac = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_rank_icir_hac ELSE aistock_factor_metrics.h20_rank_icir_hac END,
+    h20_ic_positive_ratio = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_ic_positive_ratio ELSE aistock_factor_metrics.h20_ic_positive_ratio END,
+    h20_n_obs = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_n_obs ELSE aistock_factor_metrics.h20_n_obs END,
+    h20_hac_lag = CASE WHEN %(_h20_contract_present)s THEN EXCLUDED.h20_hac_lag ELSE aistock_factor_metrics.h20_hac_lag END,
     coverage = EXCLUDED.coverage,
     n_trading_days = EXCLUDED.n_trading_days,
     source_task_id = EXCLUDED.source_task_id,
     factor_catalog_id = EXCLUDED.factor_catalog_id
 """
+
+
+def _normalize_upsert_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize legacy RD payloads before any authorized SQL writer uses them."""
+
+    return with_h20_metric_defaults(params)
 
 
 def _insert_metrics_batch(

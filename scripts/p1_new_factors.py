@@ -55,11 +55,72 @@ FACTOR_NAME = "m_stock_vs_industry_mom_20d"
 pv = pd.read_hdf("daily_pv.h5")
 sector = pd.read_hdf("sector_data.h5")
 
-# 个股20日动量
-stock_mom = pv["close"].groupby(level="instrument").pct_change(20)
+required_sector_columns = {"sw2_close", "l2_code_id"}
+missing_sector_columns = required_sector_columns.difference(sector.columns)
+if missing_sector_columns:
+    raise KeyError(f"sector_data.h5 missing required columns: {sorted(missing_sector_columns)}")
+if not sector.index.is_unique:
+    raise ValueError("sector_data.h5 index must be unique by (datetime, instrument)")
 
-# 行业20日动量
-industry_mom = sector["sw2_close"].groupby(level="instrument").pct_change(20)
+# 个股20日动量
+stock_mom = (
+    pv["close"]
+    .sort_index()
+    .groupby(level="instrument", sort=False)
+    .pct_change(20, fill_method=None)
+)
+
+# 先构造唯一的 (datetime, l2_code_id) 行业面板，再沿行业自身时序计算。
+# 禁止沿 instrument 直接 pct_change，否则个股换行业时会把两个行业串成一条序列。
+sector_rows = sector[["sw2_close", "l2_code_id"]].reset_index()
+l2_numeric = pd.to_numeric(sector_rows["l2_code_id"], errors="raise")
+finite_l2 = l2_numeric.notna()
+if ((l2_numeric[finite_l2] % 1) != 0).any():
+    raise ValueError("l2_code_id must contain integer category ids")
+sector_rows["l2_code_id"] = l2_numeric
+known_sector_rows = sector_rows[finite_l2 & (l2_numeric >= 0)].copy()
+
+conflicts = (
+    known_sector_rows.groupby(["datetime", "l2_code_id"])["sw2_close"]
+    .nunique(dropna=True)
+)
+if (conflicts > 1).any():
+    bad_key = conflicts[conflicts > 1].index[0]
+    raise ValueError(f"conflicting sw2_close values for sector-day {bad_key}")
+
+sector_panel = (
+    known_sector_rows.dropna(subset=["sw2_close"])
+    .drop_duplicates(["datetime", "l2_code_id"])
+    .set_index(["datetime", "l2_code_id"])["sw2_close"]
+    .unstack("l2_code_id")
+    .sort_index()
+)
+industry_mom_panel = sector_panel.pct_change(20, fill_method=None)
+industry_mom_long = (
+    industry_mom_panel.rename_axis(index="datetime", columns="l2_code_id")
+    .reset_index()
+    .melt(
+        id_vars="datetime",
+        var_name="l2_code_id",
+        value_name="industry_mom",
+    )
+    .set_index(["datetime", "l2_code_id"])["industry_mom"]
+)
+
+# 按当日 PIT membership 映射回股票；unknown=-1 保持缺失，不静默回退。
+membership = sector_rows.loc[
+    finite_l2 & (l2_numeric >= 0), ["datetime", "instrument", "l2_code_id"]
+]
+industry_mom = (
+    membership.merge(
+        industry_mom_long.reset_index(),
+        on=["datetime", "l2_code_id"],
+        how="left",
+        validate="many_to_one",
+    )
+    .set_index(["datetime", "instrument"])["industry_mom"]
+    .reindex(stock_mom.index)
+)
 
 # 行业中性动量 = 个股动量 - 行业动量
 factor = stock_mom - industry_mom
