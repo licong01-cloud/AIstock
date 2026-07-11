@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 from psycopg2.extras import execute_values
 
 from ...db.pg_pool import get_conn
+from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from .correlation_engine import CorrelationEngine, CorrelationResult
 from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
@@ -109,6 +110,7 @@ def get_correlation_factor_cache_status() -> Dict[str, Any]:
             meta.get("data_source_mode") or meta.get("data_freshness_profile"),
         ),
         "data_freshness_profile": meta.get("data_freshness_profile"),
+        "moneyflow_unit_contract_version": meta.get("moneyflow_unit_contract_version"),
         "window_train_start": next(
             (entry.get("window_train_start") for entry in factors_meta.values() if entry.get("window_train_start")),
             meta.get("window_train_start"),
@@ -611,6 +613,23 @@ def _run_correlation_compute_local(factor_names: list, as_of_date: str = None, j
                     "infer request-factor as_of_date/date_range from offline parquet",
                     "WARN",
                 )
+            _cached_moneyflow_contract = _meta_data.get("moneyflow_unit_contract_version")
+            if _cached_moneyflow_contract != MONEYFLOW_UNIT_CONTRACT_VERSION:
+                _error_msg = (
+                    "因子缓存资金流单位契约不匹配，拒绝计算相关性: "
+                    f"cached={_cached_moneyflow_contract}, expected={MONEYFLOW_UNIT_CONTRACT_VERSION}. "
+                    "请先基于新 factor_data 重新计算独立因子缓存。"
+                )
+                _correlation_logs.append(f"[一致性校验] {_error_msg}", "ERROR")
+                _correlation_progress.finish("failed", _error_msg)
+                _update_job_status(job_id, "failed")
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error": _error_msg,
+                    "moneyflow_unit_contract_version": _cached_moneyflow_contract,
+                    "expected_moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
+                }
             _factors_meta = _meta_data.get("factors", {})
 
             # Infer missing or incomplete metadata in memory only; do not write cache files.

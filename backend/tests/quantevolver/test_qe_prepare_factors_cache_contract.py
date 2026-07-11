@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backend.data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from backend.services.quantevolver.config_composer import ConfigComposer
 from backend.services.quantevolver.config_composer import RDAGENT_DEFAULT_DATA_SPLIT
 
@@ -66,6 +67,7 @@ def test_prepare_factors_contract_accepts_official_cache_subwindow(monkeypatch, 
             {
                 "source_system": "official_offline_backtest_factor_data",
                 "as_of_date": "2026-04-30",
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 "factors": {
                     "DemoFactor": {
                         "source_hash_raw": code_hash,

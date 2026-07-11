@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.data_service.moneyflow_contract import normalize_tushare_moneyflow_units
 from backend.services.industry_code_map import (
     UNKNOWN_L2_CODE_ID,
     encode_l2_codes,
@@ -1317,36 +1318,8 @@ class DBReader:
         if df.empty:
             return df
 
-        # 单位转换：手 -> 股，万元 -> 元
-        vol_cols = [
-            "buy_sm_vol",
-            "sell_sm_vol",
-            "buy_md_vol",
-            "sell_md_vol",
-            "buy_lg_vol",
-            "sell_lg_vol",
-            "buy_elg_vol",
-            "sell_elg_vol",
-            "net_mf_vol",
-        ]
-        amt_cols = [
-            "buy_sm_amount",
-            "sell_sm_amount",
-            "buy_md_amount",
-            "sell_md_amount",
-            "buy_lg_amount",
-            "sell_lg_amount",
-            "buy_elg_amount",
-            "sell_elg_amount",
-            "net_mf_amount",
-        ]
-
-        for col in vol_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce") * 100.0
-        for col in amt_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce") * 10000.0
+        # Source DB keeps Tushare units (hand/10k CNY); all consumers use share/CNY.
+        df = normalize_tushare_moneyflow_units(df, copy=False)
 
         # 构造 MultiIndex (datetime, instrument)
         # 直接使用 ts_code 作为 instrument，保证与日线 / bin 中使用的代码格式一致（000001.SZ/600000.SH）。

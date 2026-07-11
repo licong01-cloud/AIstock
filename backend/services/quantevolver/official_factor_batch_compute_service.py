@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable, Optional
 import pandas as pd
 
 from ...db.pg_pool import get_conn
+from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from ...infra.wsl_qlib_runner import win_to_wsl_path
 from .backtest_base_data_memory_cache import BacktestBaseDataMemoryCache
 from .factor_eligibility_service import FactorEligibilityService
@@ -35,7 +36,7 @@ OFFICIAL_FACTOR_CACHE_SINGLE_DIR = OFFICIAL_FACTOR_CACHE_ROOT / "single"
 OFFICIAL_FACTOR_CACHE_META_PATH = OFFICIAL_FACTOR_CACHE_ROOT / "_meta.json"
 OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
 OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
-OFFICIAL_CACHE_SCHEMA_VERSION = "official_factor_cache_v2"
+OFFICIAL_CACHE_SCHEMA_VERSION = "official_factor_cache_v3"
 OFFICIAL_CACHE_SOURCE_SYSTEM = "official_offline_backtest_factor_data"
 DEFAULT_BATCH_SIZE = 16
 DEFAULT_METRIC_WORKERS = 2
@@ -413,6 +414,7 @@ class OfficialFactorBatchComputeService:
                     "window_train_start": start_date,
                     "window_backtest_end": end_date,
                     "batch_id": batch_id,
+                    "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 }
                 meta_entry.update(universe_meta)
                 parquet_path = self._write_single_atomic(name, df)
@@ -580,7 +582,7 @@ class OfficialFactorBatchComputeService:
             "requested_factors": requested,
             "eligible_factors": eligible_names,
             "skipped_factors": skipped,
-            "pipeline_version": "official_factor_cache_v2",
+            "pipeline_version": OFFICIAL_CACHE_SCHEMA_VERSION,
             "code_source": "code_text",
             "cache_source": OFFICIAL_CACHE_SOURCE_SYSTEM,
             "cache_root": str(OFFICIAL_FACTOR_CACHE_ROOT),
@@ -1311,6 +1313,7 @@ class OfficialFactorBatchComputeService:
             "window_train_start": data_start,
             "window_backtest_end": data_end,
             "base_data_manifest": base_cache_manifest,
+            "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
         })
         meta.update(universe_meta)
         meta.setdefault("factors", {}).update(factor_entries)

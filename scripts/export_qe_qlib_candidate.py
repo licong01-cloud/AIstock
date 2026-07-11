@@ -33,6 +33,10 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from backend.db.pg_pool import get_conn  # noqa: E402
 from backend.data_service import qe_data_service as qe_data  # noqa: E402
+from backend.data_service.moneyflow_contract import (  # noqa: E402
+    assert_moneyflow_frame_parity,
+    moneyflow_unit_contract_receipt,
+)
 from backend.qlib_exporter.config import IPO_FILTER_DAYS  # noqa: E402
 from backend.qlib_exporter.db_reader import DBReader  # noqa: E402
 from backend.qlib_exporter.field_map_service import export_field_map_for_snapshot  # noqa: E402
@@ -333,6 +337,9 @@ def build_aux_and_static(snapshot_dir: Path, instruments: list[str], daily_norm:
     for col in static.columns:
         static[col] = pd.to_numeric(static[col], errors="coerce").astype("float32")
 
+    # Fail before writing a candidate when alternate export paths drift in units.
+    assert_moneyflow_frame_parity(df_mf, static)
+
     parquet_path = snapshot_dir / "static_factors.parquet"
     static.to_parquet(parquet_path)
     stats = {
@@ -344,6 +351,7 @@ def build_aux_and_static(snapshot_dir: Path, instruments: list[str], daily_norm:
         "margin_detail_rows": int(len(df_md)),
         "static_rows": int(len(static)),
         "static_columns": int(len(static.columns)),
+        "moneyflow_unit_contract": moneyflow_unit_contract_receipt(),
     }
     del static, frames
     qe_data.clear_data_cache()
@@ -794,6 +802,10 @@ def main() -> int:
     writer.write_daily_full(args.snapshot_id, daily)
     write_data_range_all_txt(daily_norm, snapshot_dir / "instruments" / "all.txt", ",")
     aux_stats = build_aux_and_static(snapshot_dir, instruments, daily_norm, start, end)
+    meta_path = snapshot_dir / "meta.json"
+    snapshot_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    snapshot_meta["moneyflow_unit_contract"] = moneyflow_unit_contract_receipt()
+    meta_path.write_text(json.dumps(snapshot_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     field_map = export_field_map_for_snapshot(snapshot_id=args.snapshot_id, write_to_h5=True)
 
     official = compute_official_universe(daily_norm, pool, start, end)

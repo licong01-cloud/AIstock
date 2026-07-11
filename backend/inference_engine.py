@@ -25,13 +25,14 @@ import pandas as pd
 
 from .db.pg_pool import get_conn
 from .data_service.api import get_history_window
-from .data_service.cache import get_selection_data_cache, get_cache_stats
+from .data_service.cache import get_selection_data_cache
 from .data_service.preprocessor import (
     compute_precomputed_factors,
     validate_precomputed_factors,
     get_required_data_window,
     check_data_window_sufficient,
 )
+from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
 from .services.strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
@@ -724,7 +725,8 @@ class InferenceEngine:
 
         def _pick_col(candidates: List[str]) -> str:
             for c in candidates:
-                if c in df.columns: return c
+                if c in df.columns:
+                    return c
             raise KeyError(f"Missing columns: {candidates}")
 
         try:
@@ -738,9 +740,6 @@ class InferenceEngine:
             raise ValueError(f"缺少必需 OHLCV 列: {e}")
 
         close = df[close_col]
-        open_ = df[open_col]
-        high = df[high_col]
-        low = df[low_col]
         vol = df[vol_col]
         eps = 1e-12
 
@@ -917,25 +916,35 @@ class InferenceEngine:
                 )
             )
         
-        if "WVMA5" in col_list: out["WVMA5"] = _wvma_last(5)
-        if "WVMA60" in col_list: out["WVMA60"] = _wvma_last(60)
+        if "WVMA5" in col_list:
+            out["WVMA5"] = _wvma_last(5)
+        if "WVMA60" in col_list:
+            out["WVMA60"] = _wvma_last(60)
         
         vol_log = np.log(vol.abs() + 1.0)
-        if "CORR5" in col_list: out["CORR5"] = _corr_series_last(close, vol_log, 5)
-        if "CORR10" in col_list: out["CORR10"] = _corr_series_last(close, vol_log, 10)
-        if "CORR20" in col_list: out["CORR20"] = _corr_series_last(close, vol_log, 20)
-        if "CORR60" in col_list: out["CORR60"] = _corr_series_last(close, vol_log, 60)
+        if "CORR5" in col_list:
+            out["CORR5"] = _corr_series_last(close, vol_log, 5)
+        if "CORR10" in col_list:
+            out["CORR10"] = _corr_series_last(close, vol_log, 10)
+        if "CORR20" in col_list:
+            out["CORR20"] = _corr_series_last(close, vol_log, 20)
+        if "CORR60" in col_list:
+            out["CORR60"] = _corr_series_last(close, vol_log, 60)
 
         vol_log_ret = np.log(vol / (g_vol.shift(1) + eps) + 1.0)
         close_ret = close / (g_close.shift(1) + eps)
-        if "CORD5" in col_list: out["CORD5"] = _corr_series_last(close_ret, vol_log_ret, 5)
-        if "CORD10" in col_list: out["CORD10"] = _corr_series_last(close_ret, vol_log_ret, 10)
-        if "CORD60" in col_list: out["CORD60"] = _corr_series_last(close_ret, vol_log_ret, 60)
+        if "CORD5" in col_list:
+            out["CORD5"] = _corr_series_last(close_ret, vol_log_ret, 5)
+        if "CORD10" in col_list:
+            out["CORD10"] = _corr_series_last(close_ret, vol_log_ret, 10)
+        if "CORD60" in col_list:
+            out["CORD60"] = _corr_series_last(close_ret, vol_log_ret, 60)
 
         # 回归因子（避免重复计算）
         if any(x in col_list for x in ["RSQR5", "RESI5"]):
             r2, resi = _rolling_reg_r2_and_resi_last(close, 5)
-            if "RSQR5" in col_list: out["RSQR5"] = r2
+            if "RSQR5" in col_list:
+                out["RSQR5"] = r2
             if "RESI5" in col_list:
                 close_last = close.loc[last_date]
                 close_last_series = pd.Series(
@@ -951,7 +960,8 @@ class InferenceEngine:
         
         if any(x in col_list for x in ["RSQR10", "RESI10"]):
             r2, resi = _rolling_reg_r2_and_resi_last(close, 10)
-            if "RSQR10" in col_list: out["RSQR10"] = r2
+            if "RSQR10" in col_list:
+                out["RSQR10"] = r2
             if "RESI10" in col_list:
                 close_last = close.loc[last_date]
                 close_last_series = pd.Series(
@@ -965,8 +975,10 @@ class InferenceEngine:
             del r2, resi
             gc.collect()
 
-        if "RSQR20" in col_list: out["RSQR20"] = _rolling_reg_r2_and_resi_last(close, 20)[0]
-        if "RSQR60" in col_list: out["RSQR60"] = _rolling_reg_r2_and_resi_last(close, 60)[0]
+        if "RSQR20" in col_list:
+            out["RSQR20"] = _rolling_reg_r2_and_resi_last(close, 20)[0]
+        if "RSQR60" in col_list:
+            out["RSQR60"] = _rolling_reg_r2_and_resi_last(close, 60)[0]
         
         # 标准差因子（只计算最后一个窗口）
         if "VSTD5" in col_list:
@@ -1402,11 +1414,12 @@ class InferenceEngine:
                 universe=universe,
                 start=start_date,
                 end=actual_date,
-                fields=["open", "high", "low", "close", "volume", "amount"],
+                fields=["open", "high", "low", "close", "volume", "amount", "factor"],
                 freq="1d",
                 adj="front",
             )
-            if df_history.empty: raise ValueError("获取历史数据为空")
+            if df_history.empty:
+                raise ValueError("获取历史数据为空")
 
             # 从数据库获取基本面+资金流数据
             from .data_service import timescaledb_adapter
@@ -1467,20 +1480,7 @@ class InferenceEngine:
             # 重命名字段以匹配因子代码期望的字段名
             field_mapping = {
                 # 资金流字段
-                'buy_lg_amount': 'mf_lg_buy_amt',
-                'sell_lg_amount': 'mf_lg_sell_amt',
-                'buy_elg_amount': 'mf_elg_buy_amt',
-                'sell_elg_amount': 'mf_elg_sell_amt',
-                'buy_lg_vol': 'mf_lg_buy_vol',
-                'sell_lg_vol': 'mf_lg_sell_vol',
-                'buy_elg_vol': 'mf_elg_buy_vol',
-                'sell_elg_vol': 'mf_elg_sell_vol',
-                'buy_sm_amount': 'mf_sm_buy_amt',
-                'sell_sm_amount': 'mf_sm_sell_amt',
-                'buy_md_amount': 'mf_md_buy_amt',
-                'sell_md_amount': 'mf_md_sell_amt',
-                'net_mf_amount': 'mf_net_amt',
-                'net_mf_vol': 'mf_net_vol',
+                **MONEYFLOW_FIELD_MAP,
                 # 基本面字段（保持db_前缀）
                 'close': 'db_close',
                 'turnover_rate': 'db_turnover_rate',
@@ -1578,14 +1578,14 @@ class InferenceEngine:
                         logger.info(f"转换后共同instrument数量: {len(common_after)}")
                         
                         if len(common_after) > 0:
-                            logger.info(f"✓ instrument格式转换成功")
+                            logger.info("✓ instrument格式转换成功")
                         else:
                             if _strict_inference_enabled():
                                 raise ValueError(
                                     "strict inference instrument format conversion failed: "
                                     "df_history and df_fund have no common instruments"
                                 )
-                            logger.error(f"❌ instrument格式转换后仍不匹配")
+                            logger.error("❌ instrument格式转换后仍不匹配")
                             logger.error(f"df_history样例: {history_instruments[:3].tolist()}")
                             logger.error(f"df_fund转换后样例: {fund_instruments_new[:3].tolist()}")
                 else:
@@ -1638,7 +1638,7 @@ class InferenceEngine:
             if extra_cols:
                 logger.error(f"❌ df_history被污染！包含{len(extra_cols)}个额外列: {extra_cols[:20]}...")
                 logger.error(f"df_history总列数: {len(df_history.columns)}")
-                logger.error(f"强制只保留OHLCV列")
+                logger.error("强制只保留OHLCV列")
                 # 只保留OHLCV列
                 df_history = df_history[[col for col in expected_ohlcv_cols if col in df_history.columns]]
                 logger.info(f"✓ df_history已清理，当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
@@ -1728,8 +1728,8 @@ class InferenceEngine:
                         logger.warning(f"SOTA因子：目标日期 {last_date.date()} 无数据，使用最近可用日期 {closest_date.date()}")
                     else:
                         raise ValueError(
-                            f"SOTA因子计算结果中没有任何日期数据。"
-                            f"请检查因子计算函数是否正确处理了输入数据。"
+                            "SOTA因子计算结果中没有任何日期数据。"
+                            "请检查因子计算函数是否正确处理了输入数据。"
                         )
             
             # 确保返回的是MultiIndex格式

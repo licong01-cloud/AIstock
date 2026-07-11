@@ -24,6 +24,8 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
+
 logger = logging.getLogger("aistock.quantevolver.factor_value_loader")
 
 # 默认路径
@@ -250,6 +252,7 @@ class FactorValueLoader:
         expected_universe_fingerprint_sha256: Optional[str] = None,
         expected_index_policy: Optional[str] = None,
         expected_code_hashes: Optional[Dict[str, str]] = None,
+        expected_moneyflow_unit_contract_version: Optional[str] = MONEYFLOW_UNIT_CONTRACT_VERSION,
     ) -> Dict[str, Any]:
         """Validate QE sub-window cache-hit eligibility for official single cache."""
         requested = [str(name).strip() for name in factor_names if str(name).strip()]
@@ -265,6 +268,7 @@ class FactorValueLoader:
             "universe_mismatch": [],
             "index_policy_mismatch": [],
             "hash_mismatch": [],
+            "data_contract_mismatch": [],
             "schema_invalid": [],
         }
         top_level_errors: List[str] = []
@@ -286,6 +290,12 @@ class FactorValueLoader:
                 meta = json.load(fh)
 
         factors_meta = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        cached_contract_version = meta.get("moneyflow_unit_contract_version")
+        if (
+            expected_moneyflow_unit_contract_version
+            and cached_contract_version != expected_moneyflow_unit_contract_version
+        ):
+            miss_reasons["data_contract_mismatch"].extend(requested)
         requested_start = pd.Timestamp(start_date)
         requested_end = pd.Timestamp(end_date)
         if requested_start > requested_end:
@@ -343,6 +353,8 @@ class FactorValueLoader:
             "expected_as_of_date": expected_as_of_date,
             "as_of_date": meta.get("as_of_date"),
             "expected_code_hashes": expected_code_hashes or {},
+            "expected_moneyflow_unit_contract_version": expected_moneyflow_unit_contract_version,
+            "moneyflow_unit_contract_version": cached_contract_version,
             "requested_factor_count": len(requested),
             "hit_factor_count": len(hit_factor_names),
             "miss_factor_count": len(miss_factor_names),

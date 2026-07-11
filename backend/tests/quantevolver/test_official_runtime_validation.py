@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from backend.data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from backend.services.quantevolver.factor_value_loader import FactorValueLoader
 from backend.services.quantevolver.official_factor_batch_compute_service import BatchComputeConfig
 from backend.services.quantevolver.official_factor_batch_compute_service import RESOURCE_GATE_FAILED
@@ -166,6 +167,7 @@ def test_factor_value_loader_validates_qe_subwindow_official_cache_hit(tmp_path:
                 "as_of_date": "2026-04-30",
                 "universe_key": "shsz_st_pit_active_v1",
                 "index_policy": "st_pit_buy_eligible_reindexed_v1",
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 "factors": {
                     "factor_a": {
                         "as_of_date": "2026-04-30",
