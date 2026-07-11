@@ -78,6 +78,10 @@ nul
 !tests/aistock_validation/runs/**/*.json
 !tests/aistock_validation/templates/**/*.json
 !tests/aistock_validation/guardrails_baseline_*.json
+!tests/aistock_validation/history/
+!tests/aistock_validation/history/advisory_phase0a/
+!tests/aistock_validation/history/advisory_phase0a/**/*.json
+!tests/aistock_validation/history/advisory_phase0a/**/*.md
 !.mcp.json
 !.eslintrc.json
 
