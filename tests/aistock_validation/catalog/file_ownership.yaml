@@ -271,6 +271,25 @@ rules:
     layer: execution_algo
     risk_level: critical
     ownership_reason: Execution algorithms define order sizing and market-state semantics shared by QE and Paper v2.
+  - rule_id: miniqmt_quote_contract_policy
+    priority: 90
+    include:
+      - backend/miniqmt_quote_contract_config.py
+      - backend/miniqmt_quote_contract_env.py
+    primary_module: paper_v2
+    impact_modules: [platform.api, strategy_package]
+    layer: execution_policy
+    risk_level: critical
+    ownership_reason: Immutable MiniQMT quote-contract policy schema controls Phase 1 input quality and must remain isolated from broker execution and configuration UI transport.
+  - rule_id: config_manager_runtime_contract
+    priority: 90
+    include:
+      - backend/config_manager_compat.py
+    primary_module: platform.api
+    impact_modules: [paper_v2]
+    layer: platform_configuration
+    risk_level: high
+    ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
   - rule_id: hmm_services
     priority: 75
     include:

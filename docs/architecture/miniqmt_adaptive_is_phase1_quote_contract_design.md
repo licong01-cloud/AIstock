@@ -853,6 +853,38 @@ runbook 固定顺序为：只读 health -> owner/generation -> bootstrap coverag
 
 ---
 
+### 13.1 P1-A implementation acceptance record（2026-07-12）
+
+本记录只证明 §8.1 的完整契约切片已经实现并通过定向验证；它不改变上表的
+`design_ready` 含义，也不提前声明 P1-B～P1-E、`B0_QUOTE_V2` assignment、真实
+SIM observation、DDL、durable evidence 或 `ADAPTIVE_IS_L1` 已实现或已启用。
+
+| P1-A implementation item | implementation refs | test_or_evidence | status | explicit phase boundary |
+|---|---|---|---|---|
+| 中立 DTO/protocol、双 hash 与固定五档 | `backend/execution_algos/adaptive_is/contracts.py` | `test_quote_contract.py`：exact symbol、连续前缀、locked/crossed book、UTC、raw/normalized hash、无伪造五档；Calendar/Clock/Batch mapping 深层不可变且 hash 不漂移；batch aggregate、symbol/group/cross-identity 约束 fail loud | implemented_verified | 不订阅、不调 broker、不写 DB；ordering/freshness evaluator 留给 P1-C |
+| immutable RawQuoteFrame、normalizer map、timestamp parser v2、单位转换 | `backend/services/miniqmt_execution_runtime/quote_normalizer.py` | `test_quote_normalizer.py`：whitelist immutable copy、alias conflict、compact time、无当前时间 fallback、L1 不伪装为 L5、UNKNOWN/LOTS unit | implemented_verified | 不导入 xtdata、不创建 callback/lease/mailbox；这些由 P1-B 实现 |
+| 统一 loud reason/stage registry | `backend/execution_algos/adaptive_is/reasons.py` | registry completeness/不可变性、reason/allowed-stage matching、severity、retry_class、typed loud payload tests；calendar fault 保留 `CALENDAR` stage | implemented_verified | runtime first/last/count 聚合、metrics、health/restart 与 durable event 仍分别属于 P1-B/P1-D |
+| process config 与 immutable policy schema | `backend/miniqmt_quote_contract_env.py`、`backend/miniqmt_quote_contract_config.py`、`backend/config_manager_compat.py`、`backend/routers/config_env.py` | `test_config_manager_quote_ingress_roundtrip.py`：default-off、strict explicit thresholds、factory/direct constructor 同一校验、非法 quote 配置在保存前 loud 拒绝、canonical policy hash、existing unknown/TCA key round-trip preservation、new unknown key 拒绝、ConfigManager 不加载 execution-algorithm package、env read/reload failure 不伪装保存成功 | implemented_verified | 未持久化 binding policy，未切换 revision，未启用 ingress |
+| F-008/F-009 的 contract foundation | `CalendarSnapshot*`、`ExecutionClockEvent`、`TradabilitySnapshot`、`ActionQuoteEligibility` DTOs | calendar market-set、tradability data-invalid vs suspension、eligibility reason/stage tests | P1-A_scope_complete | phase projection、freshness、per-symbol evaluator、dependency watermark 仍必须由 P1-C 完整实现，不得据此宣称 runtime ready |
+| F-020 evidence/auction contract foundation | `MarketDataEvidenceV1`、`ClosingAuctionSnapshot` | 完整 source/exchange/receive/persist、L1-L5、age/lag、benchmark/mark version、source/evidence hash；capture/revision/reason-stage/schema/hash 与 auction unavailable/不合成字段反例测试 | P1-A_scope_complete | repository durable ack、markout 调度、cadence aggregate、event carrier 与 migration 仍由 P1-D 实现 |
+
+本切片新增代码及 tests 还执行 AST import-boundary 证明：算法中立 contracts 不依赖
+`backend.services`/`backend.infra`/`backend.db`/FastAPI/xtquant/vn.py，MiniQMT
+normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏此边界，必须以
+`reason_code + stage` loud 失败，而不得以旧 `VnpyTick`、旧缓存、默认时间/价格/深度或
+`LEGACY_B0` 自动回退掩盖。
+
+本记录对应的本地验证回执如下（均在 P1-A task worktree，未启动或重启任何服务）：
+
+- `pytest -q backend/tests/miniqmt_execution_runtime/test_quote_contract.py backend/tests/miniqmt_execution_runtime/test_quote_normalizer.py backend/tests/test_config_manager_quote_ingress_roundtrip.py -p no:cacheprovider`：`78 passed`；除示例单测外，参数化反例覆盖 direct-constructor schema 绕过、非法 enum/hash/stage、深层不可变、batch cross-field、未知 quote config namespace 与 env write/reload loud failure；
+- 同一 P1-A 矩阵 branch coverage 总计 line statements `88.71%`、branch `70.71%`，满足新增/修改代码 line `>=80%`、branch `>=70%` 的门槛；
+- changed-file `ruff check` 与 `git diff --check`：通过；
+- `pytest -q backend/tests/test_bug435_runtime_paths.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py -p no:cacheprovider`：`14 passed`；
+- `nox -s paper_v2_backend`：`877 passed, 1 skipped, 2 xfailed`，LEGACY_B0、Paper v2、Selection Center 与 Strategy Package 广泛回归无新增失败；
+- `nox -s l0`、`nox -s validation_module_registry_l0` 与 F2 feature workflow validator：通过。
+
+---
+
 ## 14. Exit Criteria / 设计退出条件
 
 本文可标记 `design_ready` 的条件：
