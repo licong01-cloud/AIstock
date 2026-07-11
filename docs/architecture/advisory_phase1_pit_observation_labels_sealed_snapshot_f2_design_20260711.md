@@ -8,8 +8,9 @@
 > Phase：1，最小 PIT 数据底座与不可变快照
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
+> 前置桥接设计：`docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`
 > 前置实现：PR `#1958`，merge commit `6669e00208e6e10c28901d5ba34539d851630b3e`
-> 当前状态：`design_ready`；2026-07-11 已按单用户、非实盘交易边界取消人工审批、角色和运行时 DDL，生产控制收敛为 8 类自动技术门禁；Phase 0A.1 新契约、Phase 1 代码、DDL、回填、快照和调度均未实施
+> 当前状态：`design_ready`；2026-07-11 已按单用户、非实盘交易边界取消人工审批、角色和运行时 DDL，生产控制收敛为 8 类自动技术门禁；首次真实 Phase 0A L4 只读审计已执行并因历史 producer evidence 缺口 `BLOCKED`；Phase 0A.1/0A.2 新契约、Phase 1 代码、DDL、回填、快照和调度均未合入或实施
 > 实现处置：PR `#1965` 的 authority/approval/authorization 方向已被本次设计取代，不得按原方案合入；后续实现必须基于 deterministic handoff/readiness 和 8 类自动门禁重新开始
 > 设计合并说明：统一闭合父蓝图后续文档清单第 2、3 项，避免 observation/label/snapshot 与 DDL/迁移形成竞争契约
 > 复查修订范围：原位删除 approval/authorization/RBAC，统一 deterministic handoff、source availability、canonical version、label、build attempt、CAS、invalidation、GC 和 gate satisfiability 契约；不存在仅在文末追加的勘误
@@ -30,7 +31,7 @@
 
 本文不会把 `design_ready` 解释为以下任何状态：
 
-- Phase 0A target 已实际审计并得到 readiness 结论。
+- Phase 0A target 已通过 readiness；当前仅有一个真实原生多 Alpha target 的 `BLOCKED` 只读结论。
 - Phase 1 migration 已应用。
 - 历史观察或标签已回填。
 - durable snapshot store 已配置。
@@ -71,6 +72,7 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 - HMM 与 risk policy 会在 `component_scores` 中保留部分 raw 信息，但目前没有完整持久化 `hmm_adjusted` 和 `risk_policy_adjusted` 深池的独立 rank/score 集合。
 - 当前 Advisory 生命周期表继续作为在线 review/list/episode 权威，Phase 1 新表不能替代或改写它们。
 - Phase 0A 已实现严格只读的 candidate authority、asset/runtime/HMM ledger、OOS 分类和 handoff hash；旧 `NOT_APPROVED approval_receipt` 契约已废止，后续代码需改为自动 `handoff_readiness_report`。
+- 2026-07-11 真实 L4 probe 的 audit manifest hash 为 `6ace3066b142e5158e1f4b076e02865382ec13ffa166f789131d80e5edead4a0`，readiness 为 `BLOCKED`；缺口集中在正式 policy、dated binding、canonical clock/runtime/config、PIT/source available-at 和 candidate authority producer，不允许通过降低 Phase 0A 标准消除。
 
 因此历史 observation 必须区分：
 
@@ -257,12 +259,13 @@ existing Selection / StrategyPackage / Advisory / Paper
 | A1-019 | candidate 与 universe 共用确定性现金流、cost、benchmark、corporate-action 和 outcome engine；winner 由版本化定义派生 |
 | A1-020 | build attempt 使用 lease/fencing；generation 终止、base、invalidation、blob refs、durable publish 和 GC cancel/new epoch 采用 fail-closed 状态机 |
 | A1-021 | trace 与 multi-alpha provenance 使用有界、no-throw、版本化 immutable envelope；缺失只降低对应 capability |
+| A1-022 | prospective source/observation 只消费正式 `T0` 后 daily runner 的唯一 `RUN`；历史读取、PREVIEW、REPLAY 和集中回补永久隔离 |
 
 ## 6. Phase 0A Handoff Readiness
 
 ### 6.1 Phase 0A.1 deterministic handoff bundle
 
-Phase 0A CLI 生成 `advisory_phase0a_handoff_readiness_v1`。Phase 0A.1 只校验同一 audit version 的确定性输入：
+Phase 0A CLI 生成 `advisory_phase0a_handoff_readiness_v1`。Phase 0A.1 只校验同一 audit version 的确定性输入；Phase 0A.2 负责让正式业务运行前瞻产生这些输入，不修改 handoff 判定器：
 
 ```text
 audit_id/audit_manifest_hash
@@ -320,8 +323,13 @@ created_at
 | `NONE + UNAVAILABLE` 且 replay eligible | PARTIAL | 只生成 research replay 或 gap，不伪装权威 signal |
 | `NONE + UNAVAILABLE` 且 replay 不合法 | BLOCKED | 只记录 gap，不生成候选 |
 | identity/hash/policy 冲突 | BLOCKED | 只阻断该 scope；同 target 其他 READY/PARTIAL scope 可继续 |
+| package/binding/policy/clock/candidate identity 已闭合，仅 Phase 1 source ledger 或 embargo 尚未成熟 | PARTIAL | 允许建立 prospective source/capture 和 research-only observation；禁止 formal Phase 0B |
 
 `PENDING/RIGHT_CENSORED/UNAVAILABLE` 按 projection 阻断或限制消费；`MATURED + outcome_event_status=TERMINAL` 在 settlement 闭合时可按冻结 policy 消费，不降级已经合法的 signal evidence。
+
+`PARTIAL` 必须由可枚举的未成熟项产生，例如 `SOURCE_LEDGER_PENDING` 或 `EMBARGO_MATURING`；identity conflict、manifest mismatch、历史 binding 歧义和伪造 available-at 仍为 `BLOCKED`。Phase 0A.2 双轨正向验证先证明 `PARTIAL -> HANDOFF_EMITTED`，Phase 1 observer/embargo 自然成熟后再由新 audit version 提升为 `READY`。
+
+Phase 1 prospective observer 只接受 Phase 0A.2 daily runner 在正式 `T0` 之后产生的 `run_type=RUN`、`PUBLISHED` list 和完整 daily run payload；唯一业务键为 `(program_id,target_trade_date,RUN)`，binding/manifest/policy/config hashes 必须与 payload 一致。`PREVIEW`、`REPLAY`、集中回补 review、旧 manifest DSE 和 current-semantics 历史重算只能进入 research/gap lineage，不能创建 prospective availability event 或 formal observation。
 
 ### 6.3 Programmatic mutation safety
 
@@ -344,7 +352,7 @@ target mutation 的锁顺序固定为 `sorted admission_scope locks -> resource 
 
 - producer 必须实际产生 consumer 要求的每个必填字段；字段缺口不得靠新增永远不可满足的 gate 掩盖。
 - 每个 pass predicate 都必须有单 Alpha、原生多 Alpha正向 fixture和真实 schema smoke。
-- 状态机必须做 reachability/property test，证明 READY scope 从 capture 到 SEALED 至少存在一条合法路径。
+- 状态机必须做 reachability/property test，证明 READY scope 从 capture 到 SEALED 至少存在一条合法路径，并证明合法 PARTIAL scope 能完成其获准的 source/capture 建设而不会误入 formal Phase 0B。
 - 合法策略包、完整行情、匹配 calendar/runtime/policy、足够容量和无并发冲突时，`capture -> label -> build -> materialize -> verify -> publish -> seal` 必须成功。
 - 任何正向 golden 失败都视为 P0 设计/实现缺陷，不得解释为“安全门禁生效”。
 
@@ -1984,58 +1992,68 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 - 完成单 Alpha、原生多 Alpha正向 golden、scope/hash conflict 反向测试和状态可达性测试。
 - 不新增 migration、审批表、角色、decision chain、approval bundle 或 operation authorization。
 
-### 22.3 Phase 1A：Identity/source/capture/build DDL 与 repository（默认无激活）
+### 22.3 Phase 0A.2：Prospective evidence readiness bootstrap
+
+- 按独立 F2 设计冻结正式 policy registry、dated binding `[from,to)` 和 prospective Selection evidence producer。
+- 现有单 Alpha current manifest 通过 cold-start smoke 后与现有原生多 Alpha parent/Program 走两条独立轨道；single 仅在真实 preflight 失败时发布新 identity，不复活归档包或融合候选。
+- 实现每日多 Program runner：按权威交易日和输入水位执行全部 ENABLED Program，使用唯一正式 Program/date key、单 Program 原子/可恢复持久化、失败隔离和 batch receipt。
+- 正式 `T0` 是代码、policy、current-manifest smoke、dated successor binding、runner 和输入全部就绪后的首个未处理决策交易日；历史读取/replay 永久为 retrospective。
+- 正确双轨输入先达到 `PARTIAL/HANDOFF_EMITTED`；source ledger/embargo 未成熟不得伪装 READY。
+- Phase 1 不复制 Phase 0A.2 policy/binding/evidence schema；只消费 exact hashes 和 producer refs。
+
+### 22.4 Phase 1A：Identity/source/capture/build DDL 与 repository（默认无激活）
 
 - 新增单一 dataset foundation migration、append-only repositories、native partitions、capture/build/attempt/final snapshot/invalidation/blob-ref state machines；不新增审批角色。
 - 完成 stable signal/version selector、label revision chain、lease/fencing、expected row version、CAS 和事务一致性 contract。
 - migration 只在开发/测试库和发布 migration runner 验证；运行 CLI 无 DDL 命令。不回填、不配置 store、不修改 runtime。
 
-### 22.4 Phase 1B：Stage trace、多 Alpha provenance 与 parity
+### 22.5 Phase 1B：Stage trace、多 Alpha provenance 与 parity
 
 - 抽出/接入无副作用、有界 no-throw trace sink 和 immutable outbox/DSE v2。
 - 冻结 `multi_alpha_component_evidence_v1` 与 parent combine parity。
 - 默认 Null sink。
 - capture 开/关及 callback/finalize/writer 故障下 Selection/模拟盘/Paper golden parity 全通过后才允许 Advisory opt-in。
 
-### 22.5 Phase 1C：Fixture source revision/capture/label/snapshot
+### 22.6 Phase 1C：Fixture source revision/capture/label/snapshot
 
 - 只运行 fixture/local store。
 - 完成 readiness、formal/research/gap、source revision、version selector、T/E/S/X_h、terminal/cost/benchmark、build attempt、durable CAS 和 DB/Parquet 正向 golden。
 
-### 22.6 Phase 1D：Source availability observer 与容量计划
+### 22.7 Phase 1D：Source availability observer 与容量计划
 
 - 实现默认关闭的 ingestion-completion observer；证明只追加 Advisory event，不改变 source table、StrategyPackage、Selection、Paper。
 - 在只读环境完成历史范围、revision scan、DB transaction budget、行数/磁盘/store reserve 计划。
 - observer 使用版本化配置，source ledger write 使用强类型 request、content hash 和幂等键；历史缺口不回填。
 
-### 22.7 Phase 1E：实际 Phase 0A audit、readiness 与执行计划
+### 22.8 Phase 1E：Phase 0A 双轨复验、readiness 与执行计划
 
-- 使用版本化 target/date/evidence scope 配置执行真实只读 Phase 0A audit。
+- 首次真实单 target audit 已于 2026-07-11 执行并 `BLOCKED`；同日只读复查确认 single current manifest 尚无 DSE、旧 manifest DSE 不可继承、双轨近期仅 `2026-06-29` 有精确共同 cutoff，且当前没有实际 daily runner。
+- Phase 0A.2 producer/runner/onboarding 后，使用版本化 target/date/evidence scope 对正式 `T0` 之后的单 Alpha和原生多 Alpha daily batch 执行批量只读复验；历史 replay 只进入 research scope。
 - Phase 0A.1 自动形成 handoff/scope set；随后冻结 source/capture/label/store 计划、行数/字节预算和 request hashes。
-- 任一 BLOCKED scope 只阻断自身；合法 READY/PARTIAL scope 必须可继续。
+- 任一 BLOCKED scope 只阻断自身；合法 READY/PARTIAL scope 必须可继续。PARTIAL source/embargo scope 只能执行获准建设，不能进入 formal Phase 0B。
 
-### 22.8 Phase 1F：Release schema verification
+### 22.9 Phase 1F：Release schema verification
 
 - 在开发/发布流程应用并验证 dataset foundation migration、partitions、triggers 和 comments；不创建 authority tables/roles。
 - 运行进程只验证 schema version，无 DDL 权限和 DDL 入口；本阶段不执行 source ledger、capture/label DML 或文件写入。
 
-### 22.9 Phase 1G：Source ledger 与 observation capture DML
+### 22.10 Phase 1G：Source ledger 与 observation capture DML
 
 - source event、revision set 与 observation capture 使用强类型 request、batch、事务和 receipt。
 - target 级执行；失败不自动重试，不触碰现有 Selection/Advisory/Paper 数据。
 
-### 22.10 Phase 1H：Label/universe DML 与 evidence
+### 22.11 Phase 1H：Label/universe DML 与 evidence
 
 - label revision 与 universe raw outcome 使用统一 outcome engine、版本化 policy、expected predecessor 和 calculation evidence。
 - PENDING/MATURED/RIGHT_CENSORED/UNAVAILABLE maturity counts、NONE/TERMINAL/BARRIER event counts、hash 和复算验证通过。
 
-### 22.11 Phase 1I：Durable store 与首个 SEALED snapshot
+### 22.12 Phase 1I：Durable store 与首个 SEALED snapshot
 
 - store backend 容量、备份、scrub、durability 自动检查通过。
 - freeze revision、build、materialize、verify、publish、seal 使用独立强类型 request、attempt 和 receipt；合法完整输入必须完成正向 E2E。
 - 首个 snapshot 仍只具获验证的 Phase 1 capabilities；`MODEL_TRAINING_READY=false`。
 
-### 22.12 Phase 1J：Phase 0B handoff
+### 22.13 Phase 1J：Phase 0B handoff
 
 - 输出 snapshot content/manifest hash、selected versions、capability manifest、formal/research coverage、label lifecycle、source evidence、gaps、invalidation check 和 capacity receipt。
 - snapshot capability/readiness 自动通过后可按版本化配置开始 Phase 0B 只读分析。
@@ -2156,8 +2174,8 @@ G-RUN-05 artifact_publish_cleanup
 
 1. 设计确认后，Phase 0A.1/Phase 1 实现 PR 通过 F2、正向 golden、状态可达性和隔离测试。
 2. 在开发/发布流程应用 dataset foundation migration；运行进程只验证 schema version，不能执行 DDL。
-3. 执行实际 Phase 0A target audit；Phase 0A.1 自动生成 handoff/readiness/scope set。
-4. 版本化配置 trace capture、source observer、dataset store 和 scheduler；默认 disabled，不生成审批事件。
+3. 消费 Phase 0A.2 正式 policy、current-manifest smoke、dated binding 和 daily runner prospective evidence，执行单/多 Alpha双轨只读复验；Phase 0A.1 自动生成 handoff/readiness/scope set。
+4. 版本化配置 trace capture、source observer、dataset store 和 Phase 1 scheduler；默认 disabled，不生成审批事件。Advisory daily runner 已由 Phase 0A.2 独立启用，不由 Phase 1 scheduler 替代。
 5. source revision、capture 和 label 由强类型 request、事务、行数/字节预算、幂等键和 receipt 自动控制。
 6. BUILD_CREATE 登记 exact identities；materialize 生成 attempt-scoped staging。坏 checkpoint 只有在 terminate-build CAS 全部前置条件满足后转 ABORTED，才能创建 next generation。
 7. verify/publish/seal 依次自动校验固定 file set、manifest、durability、selected versions 和 DB refs；seal 后才产生 final SEALED snapshot。
@@ -2172,7 +2190,7 @@ G-RUN-05 artifact_publish_cleanup
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | §3、§9.4、§22.4 | Null sink、有界 no-throw capture、业务外 writer 和开/关/故障 parity oracle 已定义 | design_ready | none |
+| F-001 | §3、§9.4、§22.5 | Null sink、有界 no-throw capture、业务外 writer 和开/关/故障 parity oracle 已定义 | design_ready | none |
 | F-002 | §6.1-6.2、§7、§8.3 | 单原生包 target、逐 scope 自动 readiness、多 Program/audit lineage 与独立失败规则已定义 | design_ready | none |
 | F-003 | §7、§8、§13.5 | stable signal、version chain、lineage 与 snapshot 单版本选择已定义 | design_ready | none |
 | F-004 | §9 | 四层补采、第五层不可用、缺失不反推及 immutable trace closure 已定义 | design_ready | none |
@@ -2188,10 +2206,12 @@ G-RUN-05 artifact_publish_cleanup
 | F-024 | §6.3-6.4、§18、§21.7、§22、§24、§26 | 8 类自动门禁、零人工审批、零运行时 DDL 和合法数据全链路正向可达已定义 | design_ready | none |
 | F-025 | §5、§6、§18、§22.2 | Phase 0A.1 handoff/readiness/scope set、自动分类和无角色/无授权链 CLI 契约已定义 | design_ready | none |
 | F-026 | §7、§8、§13.5、§21 | stable economic sample、evidence revision、selector 与 double-count 防护已定义 | design_ready | none |
-| F-027 | §9.4、§21.4-21.6、§22.4 | trace callback/finalize/outbox/writer 故障隔离、预算和 immutable raw payload 已定义 | design_ready | none |
-| F-028 | §3、§9.1-9.3、§21.2、§22.4 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
+| F-027 | §9.4、§21.4-21.6、§22.5 | trace callback/finalize/outbox/writer 故障隔离、预算和 immutable raw payload 已定义 | design_ready | none |
+| F-028 | §3、§9.1-9.3、§21.2、§22.5 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
 | F-029 | §10、§11、§15、§21 | 时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
 | F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、程序化 generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
+| F-039 | §6.2、§22.3、§22.8、§26 | Phase 1 只消费 daily runner 正式唯一 RUN，Program 独立、幂等和失败隔离边界已定义 | design_ready | none |
+| F-040 | §6.2、§22.3、§22.8 | 正式 T0 与历史 DSE/PREVIEW/REPLAY/集中回补的 research-only 隔离已定义 | design_ready | none |
 
 ## 28. DESIGN-COMPLIANCE-001 交付前检查
 
@@ -2200,6 +2220,7 @@ G-RUN-05 artifact_publish_cleanup
 - [x] 未引入静默 fallback、零成本、零 benchmark、默认价格或未来数据。
 - [x] 单 Alpha、原生多 Alpha、多 Program、空候选和 historical binding 均有契约。
 - [x] Phase 0A.1 deterministic handoff、逐 scope READY/PARTIAL/BLOCKED、formal/research/gap 和无审批边界明确。
+- [x] Phase 0A.2 current-manifest smoke、policy、dated binding、daily runner、prospective evidence、正式 T0/replay 隔离、双轨 PARTIAL/HANDOFF 和 source/embargo 到 READY 的桥接边界明确。
 - [x] stable signal/version、lineage、label revision、selected version 和防重复样本规则明确。
 - [x] T/E/S/X_h、可执行 path、cost/benchmark、terminal/censor、universe raw outcome 和复算证据明确。
 - [x] source availability/revision、capture/build/attempt/final snapshot、hash、lease/fencing、base/invalidation/GC 明确。
@@ -2214,7 +2235,7 @@ G-RUN-05 artifact_publish_cleanup
 
 - F2 workflow validator 通过。
 - Design Acceptance Matrix 无 gap。
-- 父蓝图与 Phase 0A 的 Phase 0A.1/Phase 1 handoff、identity、snapshot state 和新增 F-025 至 F-030 同步。
+- 父蓝图、Phase 0A 与 Phase 0A.2 的 handoff、producer、identity、snapshot state 和新增设计条款同步。
 - Phase 0A.1 producer/consumer、handoff/readiness 自动分类、snapshot 单版本 selector、trace enabled failure parity、multi-alpha component v1 和 gate satisfiability 均在正文对应章节闭合。
 - `git diff --check` 通过。
 - 用户确认本设计后，才可建立 Phase 1A 实现 worktree。
