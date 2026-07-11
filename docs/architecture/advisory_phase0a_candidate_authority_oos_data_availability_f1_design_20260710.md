@@ -5,7 +5,7 @@
 > Phase：0A，口径冻结与数据可用性审计
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父蓝图提交：`3e871a78`，PR `#1951`
-> 当前状态：详细设计与只读审计框架已合入；实际 target audit、人工 approval receipt 和 Phase 1 退出批准尚未执行
+> 当前状态：详细设计与只读审计框架已合入；实际 target audit 尚未执行；初始 receipt 固定为 `NOT_APPROVED`，Phase 0A.1 finalizer/approval authority 与 Phase 1 均未实施
 > 实现边界：PR `#1958` 仅新增隔离的只读审计服务/CLI/测试；未修改数据库、策略包、HMM、调度器或运行时
 
 ## 0. 文档定位与权威边界
@@ -20,7 +20,7 @@
 4. 当前实际代码、数据库 schema 和不可变制品所能证明的现状事实。
 5. 较早文档中与以上内容不冲突的部分。
 
-本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已审计或批准。正式审计仍必须由用户批准 audit request 和 policy registry，并生成 append-only approval receipt；没有 `APPROVED_FOR_PHASE1` 时 Phase 1 生产回填与快照 promotion 保持阻断。
+本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已审计或批准。正式审计仍必须由用户批准 audit request 和 policy registry；现有 CLI 只生成 append-only `NOT_APPROVED` 初始 receipt。该 receipt 必须交给 Phase 1 F2 设计规定的 Phase 0A.1 finalizer，由权威 registry 形成 GLOBAL/逐 admission-scope decision chains 和 approval bundle；不存在有效 bundle 时，Phase 1 生产 capture、回填与 snapshot promotion/seal 保持阻断。
 
 文档与证据保存规则：
 
@@ -169,7 +169,7 @@ audit_policy_version
 - `PACKAGE_PREFLIGHT` 可在没有 Program 时检查包资产，但不能产出 Program 级 signal context 或正式推荐结论。
 - legacy manual multi-package、preview aggregate、历史 combine diagnostic 和归档后继续运行路径一律排除。
 - 原生多 Alpha 父包保持唯一 package identity，不把 leg 展开成多个 Program 或多个推荐池。
-- 多个 Program 即使引用同一包，也分别保留 Program/binding lineage；只有 deterministic signal/label 内容相同才共享 canonical observation identity。
+- 多个 Program 即使引用同一包，也分别保留 Program/binding lineage；Phase 0A evidence context 相同时可共享 audit observation identity，Phase 1 的经济样本去重由 Phase 0A.1 `stable_signal_semantics_hash` 加逐日日期/cutoff 生成的 `canonical_signal_scope_hash` 决定。
 
 ### 6.2 Target scope 与 prior cohort 分离
 
@@ -219,7 +219,28 @@ canonical_signal_observation_id = sha256(
 label_context_hash = sha256(canonical_signal_observation_id, label_policy_hash)
 ```
 
-改变 label/horizon 不能复制同一个市场信号样本，只能增加该 observation 的新标签投影。
+现有 `signal_context_hash/canonical_signal_observation_id` 是 Phase 0A 的 evidence-rich audit identity，包含 stage/artifact hashes，证据补齐时允许变化；它不能直接充当 Phase 1 stable economic sample id。Phase 0A.1 必须另生成：
+
+```text
+selection_runtime_semantics_hash = hash({selection_runtime_semantics_id})
+package_effective_config_hash = hash(sorted named effective_config_hashes map)
+
+stable_signal_semantics_hash = sha256(
+  package_id/manifest_sha256,
+  selection_runtime_semantics_hash,
+  package_effective_config_hash,
+  calendar_hash
+)
+
+canonical_signal_scope_hash = sha256(
+  stable_signal_semantics_hash,
+  decision_as_of_trade_date/target_trade_date/decision_cutoff_ts
+)
+```
+
+`package_id/manifest_sha256` 只取 target scope registry exact values；runtime semantics 只取现有 `selection_runtime_semantics_id`；effective config 对 receipt 中全部命名 `effective_config_hashes` 排序后整体 hash；calendar 只取 metric/label registry 且必须与 decision-clock evidence 一致。缺失、多值、名称冲突或与 asset ledger 不一致时 Phase 0A.1 scope gap，禁止默认/选首项。
+
+stable semantics/scope 排除 Program/audit/approval/binding/review/list、stage/artifact payload、source revision 和 build identity。Phase 1 `canonical_signal_id` 使用 per-signal scope；Phase 0A `signal_context_hash` 进入 observation version/lineage。改变 evidence、label/horizon 不能复制同一个市场信号样本，只能增加 version 或标签投影。
 
 `AISTOCK_CANONICAL_JSON_V1` 作为 hash serializer：UTF-8、键排序、紧凑分隔符、ISO-8601 日期/时间、禁止 NaN/Infinity。数值先转十进制字符串，score/return 使用 scale=12、price 使用 scale=6、rounding=`ROUND_HALF_EVEN`，禁止科学计数法，`-0` 归一为 `0`；仅诊断 reason code 不进入业务 content hash，改变候选成员/排除语义的 reason 必须进入。Phase 1 必须复用同一 serializer，不得另建 hash 规则。
 
@@ -352,7 +373,9 @@ selection_as_of_trade_date = T
 target_trade_date = review_trade_date = selection_run_trade_date = next_trade_date(T)
 score_trade_date = T
 reference_price_trade_date = T
-effective_entry_trade_date = next_trade_date(T)
+intended_entry_trade_date = E = next_trade_date(T)
+effective_entry_trade_date = E  # Phase 0A legacy field alias
+earliest_sell_eligible_trade_date = S = next_trade_date(E)
 legacy episode.signal_date = review_trade_date
 ```
 
@@ -362,7 +385,7 @@ legacy episode.signal_date = review_trade_date
 
 新观察必须同时保存上述日期、`data_available_at`、`decision_generated_at`、`decision_cutoff_ts` 和 timezone。legacy `episode.signal_date` 只作为旧字段映射，不能解释成 T 日信息截止日。
 
-当前 price guidance 中名为 `next_open_executable` 的候选价格可能实际来自 T 日实时价或 cutoff close。Phase 0A 必须把该数值映射为 `decision_ref_price` 并保留真实 `price_reference_basis`；不得把它当作 T+1 实际开盘成交价、Outcome label entry 或已执行价格。`effective_entry_trade_date=T+1` 是标签政策的目标日身份，是否可成交及实际 entry price 只能由 T+1 outcome/execution evidence 决定。
+当前 price guidance 中名为 `next_open_executable` 的候选价格可能实际来自 T 日实时价或 cutoff close。Phase 0A 必须把该数值映射为 `decision_ref_price` 并保留真实 `price_reference_basis`；不得把它当作 E 日实际开盘成交价、Outcome label entry 或已执行价格。`intended_entry_trade_date=E` 是标签政策目标日，是否可成交及实际 entry price 只能由 E 日 outcome/execution evidence 决定；A 股 T+1 下最早可卖日为 S，`h=1` 固定期限退出不能落在 E。
 
 ### 8.2 PIT 判定
 
@@ -700,11 +723,11 @@ formal_start = first decision trade date strictly after
 
 ```text
 latest_evaluable_decision_date(h) =
-  latest decision date whose target entry and full outcome window
+  latest decision date whose E entry, S sell eligibility and X_h outcome window
   are covered by all mandatory source watermarks and label rules
 ```
 
-分钟 fill、日线收益和长期 180 日标签的 latest evaluable date 可以不同。它只决定 `label_maturity_status` 和指标可评价范围，不改变对应策略信号已确定的 evidence level。
+分钟 fill、日线收益和长期 180 日标签的 latest evaluable date 可以不同。它只决定 projection-specific `maturity_status/outcome_event_status` 和指标可评价范围，不改变对应策略信号已确定的 evidence level。
 
 ### 13.6 Signal evidence、formal status 与 label maturity
 
@@ -713,12 +736,13 @@ latest_evaluable_decision_date(h) =
 | `FORMAL_OOS + AVAILABLE` | mandatory closure 完整、当时语义可用、日期在 formal start 后、全部 signal PIT/source 成立 | Phase 0B 正式信号审计；仍不等于 Advisory 模型 OOS |
 | `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE` | identity/PIT 可复算，但使用后来冻结语义、位于 formal start 前或缺历史 activation proof | 内部 research bootstrap；不得用户可见校准/canary |
 | `NONE + UNAVAILABLE` | mandatory cutoff/hash/PIT/source/candidate authority 无法证明且不可可信回放，或正式区间为空 | 阻断该 context 正式路径 |
-| `label_maturity_status=PENDING` | signal 已存在，但 horizon 尚未走完 | 保留 signal，暂不进入该 horizon 指标分母 |
-| `label_maturity_status=MATURED` | entry 和完整 outcome 窗口可评价 | 按 label policy 进入指标 |
-| `label_maturity_status=CENSORED` | 发生预登记 delist/suspend/data-terminal 事件 | 按 censor policy 纳入或排除并单独报 coverage |
-| `label_maturity_status=UNAVAILABLE` | 必需 outcome/price-quality 来源无法恢复 | 不降级 signal evidence；阻断该 label capability |
+| `maturity_status=PENDING` | signal 已存在，但该 projection closure 尚未闭合 | 保留 signal，暂不进入该 projection 指标分母 |
+| `maturity_status=MATURED` | 该 projection 的 entry/outcome/必要 benchmark closure 可评价 | 按 label policy 进入指标 |
+| `maturity_status=RIGHT_CENSORED` | 仅满足预登记 non-informative right-censor 条件 | 只进入 survival/hazard，不能当固定期限收益 |
+| `maturity_status=UNAVAILABLE` | 必需 outcome/price-quality/terminal settlement 来源无法恢复 | 不降级 signal evidence；阻断该 label capability |
+| `outcome_event_status=TERMINAL` | delist/吸收式停牌/competing event | payoff 完整时与 MATURED 组合进入收益，缺失时与 UNAVAILABLE 组合 |
 
-组合不变量只有 `FORMAL_OOS -> AVAILABLE`、`RETROSPECTIVE_RESEARCH_ONLY -> UNAVAILABLE`、`NONE -> UNAVAILABLE`。`label_maturity_status` 与该组合独立；近期正式信号不得因为 180 日标签仍为 PENDING 被降级，replay eligibility 也不能提升为正式。
+组合不变量只有 `FORMAL_OOS -> AVAILABLE`、`RETROSPECTIVE_RESEARCH_ONLY -> UNAVAILABLE`、`NONE -> UNAVAILABLE`。`maturity_status/outcome_event_status` 与该组合独立；近期正式信号不得因为 180 日标签仍为 PENDING 被降级，replay eligibility 也不能提升为正式。
 
 ### 13.7 策略信号 OOS 与 Advisory 模型 OOS
 
@@ -752,7 +776,7 @@ Phase 0A 只冻结定义，不计算数值。
 
 ### 14.2 预登记指标
 
-v1 统一记号：`U_T` 为 T 日 PIT eligible universe，`C_T(D)` 为权威 artifact 在合法深度 D 的候选，`Top_T(K,s)` 为 stage `s` 的前 K，`W_i(q,h)` 为 label policy 下 horizon h 的 winner。所有截面先在 T 日内计算，再对有定义的 decision date 等权聚合；同时报告总交易日、可评价日、无 winner 日、PENDING/CENSORED/UNAVAILABLE 数量，禁止直接按股票行数加权。
+v1 统一记号：`U_T` 为 T 日 PIT eligible universe，`C_T(D)` 为权威 artifact 在合法深度 D 的候选，`Top_T(K,s)` 为 stage `s` 的前 K，`W_i(q,h)` 为 label/winner definition 下 horizon h 的 winner。winner 必须由 Phase 1 universe raw outcome 派生，不能依赖无 identity 布尔列。所有截面先在 T 日内计算，再对有定义的 decision date 等权聚合；同时报告总交易日、可评价日、无 winner 日、PENDING/MATURED/RIGHT_CENSORED/UNAVAILABLE maturity counts 与 TERMINAL/BARRIER event counts，禁止直接按股票行数加权。
 
 | 指标族 | 冻结定义 |
 |---|---|
@@ -764,12 +788,12 @@ v1 统一记号：`U_T` 为 T 日 PIT eligible universe，`C_T(D)` 为权威 art
 | HMM/risk incremental lift | 相同 signal/label policy 下逐 stage 配对差异 |
 | `NDCG@5` | 每个 ranking group 使用 `gain_i=max(0,r_net_excess_h)`、discount=`1/log2(rank+1)`；ideal DCG 在同一 group 内排序，全部 gain=0 时 undefined |
 | fixed `Precision@5` | `Top5` 中满足预登记 winner 的数量除以固定 5；不足 5 个候选的空位按失败计，同时单报 eligible coverage |
-| return/risk | win/payoff、MFE/MAE、turnover、drawdown、Brier、reliability、quantile coverage |
+| return/risk | win/payoff、EXECUTABLE_MFE/EXECUTABLE_MAE、PATH_MFE/PATH_MAE diagnostic、turnover、drawdown、Brier、reliability、quantile coverage |
 | long trend | barrier AUCPR、time-to-hit、capture ratio、false early exit |
 
 v1 所有均值、比例、rank bucket 和 paired stage lift 的 95% CI 使用按 decision date 的 stationary bootstrap，`replicates=5000`、seed/block rule 与 §15.2 一致。描述性报告最少 60 个可评价 decision dates；进入任何 inferential/晋级结论最少 252 个可评价 decision dates，Recall 另需至少 50 个 winner events；不足时只输出 `INSUFFICIENT_EFFECTIVE_SAMPLE` 和 coverage。rank monotonicity 固定报告 rank bucket 均值、相邻倒置数及 bucket 序号与收益的 Spearman 相关，不允许事后改 bucket。
 
-候选/score tie 使用冻结 artifact rank；需要重建时按 score direction、规范 score、symbol 升序确定唯一顺序，不按未来收益拆 tie。Recall 的 winner event 必须携带 `horizon + label_policy_hash`；不能写成无期限的 `MFE >= x%`。
+候选/score tie 使用冻结 artifact rank；需要重建时按 score direction、规范 score、symbol 升序确定唯一顺序，不按未来收益拆 tie。Recall 的 winner event 必须携带 `projection=EXECUTABLE_MFE + horizon + label_policy_hash`；不能写成无 projection/期限的 `MFE >= x%`。
 
 ### 14.3 Label registry contract
 
@@ -779,26 +803,30 @@ v1 所有均值、比例、rank bucket 和 paired stage lift 的 95% CI 使用�
 r_total_gross_h
 r_net_absolute_h
 r_net_excess_h
-MFE_h
-MAE_h
+EXECUTABLE_MFE_h
+EXECUTABLE_MAE_h
+PATH_MFE_h                  # diagnostic projection，不进入 v1 winner family
+PATH_MAE_h                  # diagnostic projection，不进入 v1 winner family
 gap_1d
 fill_status + fill_probability target
 style_specific_survival_h
 ordered target/trend-break/timeout event
-label_maturity_status
-censor_reason
+maturity_status
+outcome_event_status
+terminal_event/settlement_status
+censor_assumption/reason
 price_quality_status
 ```
 
 规则：
 
-- horizon 按 effective entry 后的 A 股交易日计数，exit 使用 label policy 锁定的 executable close/open basis；未成交不得伪造 entry。
+- horizon 从 E 后排他计数，`X_h=shift_trading_days(E,h)`，因此 `h=1` 的 exit 为 S；exit 使用 label policy 锁定的 executable close/open basis，未成交不得伪造 entry。
 - `r_total_gross_h = normalized_exit_value / normalized_entry_value - 1`。
-- `r_net_absolute_h = (exit_value - entry_value - buy_cost - sell_cost - slippage_impact) / entry_value`。
-- `r_net_excess_h = r_net_absolute_h - benchmark_total_return_h`，benchmark 使用相同 entry/exit timestamp 和 total-return policy。
-- `MFE_h = max(normalized_executable_high_path / normalized_entry - 1)`；`MAE_h = min(normalized_executable_low_path / normalized_entry - 1)`。
+- `r_net_absolute_h` 使用 Phase 1 冻结的 reference notional、lot rounding、Q0/Qh、execution price、逐项费用和 corporate-action cashflow 计算；slippage/impact 进入 execution price，不重复扣减。
+- `r_net_excess_h = r_net_absolute_h - benchmark_net_total_return_h`；benchmark 在 T cutoff 冻结成分/权重，使用相同 entry/exit、cost、terminal 和 corporate-action policy，E 日不可执行权重留现金且不事后重加权。
+- `EXECUTABLE_MFE_h/EXECUTABLE_MAE_h` 只使用 S 起可卖且满足 tradability policy 的 executable window；`PATH_MFE_h/PATH_MAE_h` 使用 E 至 X_h 的完整价格路径，仅作不可执行路径诊断。四个 projection identity 不得用裸 `MFE_h/MAE_h` 互相代替。
 - `gap_1d = normalized_target_open / normalized_decision_pre_close - 1`；target open 缺失时保持 unavailable，禁止用 decision ref price 替代。
-- 收益/MFE/MAE 在企业行动一致的归一化路径上生成，所有 formula、horizon、entry/exit、cost 和 benchmark 字段进入 label policy hash。
+- 收益、EXECUTABLE/PATH MFE/MAE 在企业行动一致的归一化路径上生成，projection identity、formula、horizon、entry/exit、cost 和 benchmark 字段进入 label policy hash。
 - 用户展示价格才转换为 raw、CNY、yuan，并记录 storage scale。
 - 退市、长期停牌、涨跌停不可执行和数据中断有显式 censor/terminal rule。
 - 所有 deep-pool candidate 都产生固定期限标签，不只给 ENTER 或人工选择股票打标。
@@ -896,8 +924,8 @@ economic significance threshold
 
 搜索空间 v1 固定为：
 
-- `SHORT_REBOUND` horizons=`{1,3,5,10,20}`，winner family=`{r_net_excess_h>0, MFE_h>=5%, MFE_h>=10%}`。
-- `LONG_TREND` horizons=`{20,40,60,120,180}`，winner family=`{MFE_h>=30%, MFE_h>=50%, MFE_h>=70%}`。
+- `SHORT_REBOUND` horizons=`{1,3,5,10,20}`，winner family=`{r_net_excess_h>0, EXECUTABLE_MFE_h>=5%, EXECUTABLE_MFE_h>=10%}`。
+- `LONG_TREND` horizons=`{20,40,60,120,180}`，winner family=`{EXECUTABLE_MFE_h>=30%, EXECUTABLE_MFE_h>=50%, EXECUTABLE_MFE_h>=70%}`。
 - candidate depths=`{5,20}`；`50` 仅当 target manifest/artifact 通过正式深度审计时进入，`100` 明确排除。
 - stage ablations=`{alpha_raw, hmm_adjusted, risk_policy_adjusted, selection_effective}`；disabled stage 记 N/A，不虚构对照。
 - rank buckets=`{1-5,6-10,11-20,21-50}`，后两档只在合法深度覆盖时评价。
@@ -905,7 +933,7 @@ economic significance threshold
 
 v1 锁定规则，不得在查看结果后切换：
 
-- 主对照固定为 `SELECTION_EFFECTIVE_TOP5_CASH_PADDED_V1`：stage=`selection_effective`、depth=`5`、variant=该 target/as-of manifest 的 frozen runtime variant；每个 T 对最多 5 只等权各占 1/5，不足 5 只的空位持有现金，cash absolute return=0、cash net excess=`-benchmark_total_return_h`。baseline policy hash 覆盖 target/style/horizon、manifest/runtime variant、candidate authority、benchmark/cost、label 和 cash return policy，逐 target/style/horizon 生成唯一 return series。
+- 主对照固定为 `SELECTION_EFFECTIVE_TOP5_CASH_PADDED_V1`：stage=`selection_effective`、depth=`5`、variant=该 target/as-of manifest 的 frozen runtime variant；每个 T 对最多 5 只等权各占 1/5，不足 5 只的空位持有现金，cash absolute return=0、cash net excess=`-benchmark_net_total_return_h`。baseline policy hash 覆盖 target/style/horizon、manifest/runtime variant、candidate authority、benchmark/cost、label 和 cash return policy，逐 target/style/horizon 生成唯一 return series。
 - 主晋级族固定使用 Hansen SPA 单侧检验，统计量是每个 decision date 的扣费后候选方案 Top5 net excess return 相对上述 baseline return series 的 loss differential；显著性 `alpha=0.05`。
 - SPA 使用 stationary bootstrap，`replicates=5000`，seed=`uint32(sha256(multiple_testing_registry_hash)[0:8])`，期望 block length=`clamp(round(n_decision_dates^(1/3)), 5, 60)`；同一 family 的候选深度、期限、HMM/risk ablation、style 和 variant 同时进入。
 - 经济显著性同时要求 mean net excess lift 不低于 `max(25bp, cost_policy.round_trip_cost_bps)`，且 95% stationary-bootstrap CI 下界大于 0；统计显著但未过经济门槛不得晋级。
@@ -1073,7 +1101,7 @@ backend/tests/advisory_phase0a/
 7. historical binding rollover fixture。
 8. future no-candidate authority contract fixture；当前 runtime fixture 预期 `NONE + UNAVAILABLE`。
 9. duplicate same-day run content-conflict fixture。
-10. formal signal plus `label_maturity_status=PENDING` fixture。
+10. formal signal plus `maturity_status=PENDING` fixture。
 11. source revision/missing-interval fixture。
 12. forbidden research-only prior fixture。
 
@@ -1102,7 +1130,7 @@ rtk git diff --cached --check
 
 新增/修改 Python line coverage 目标 `>=80%`、branch coverage `>=70%`；serializer、OOS classifier、interval builder、authority resolver 和 no-write guard 的关键分支目标 100%。长窗与真实 DB 验证交由 Validation Center/CI/nightly，当前交互窗口只跑 L0/L1 和最小 L2；nightly 失败阻断 Phase 0A 审计批准，但不触发任何服务或调度器激活。
 
-不适合完全自动化的人工确认项：target/prior cohort 是否完整、manifest 结构字段是否仅用于 runtime contract、不可证明 vintage 的证据等级、embargo/benchmark/cost/label/multiple-testing registry 初次批准，以及审计 summary 与 source owner 的冲突裁决。人工批准必须写 `approval_receipt.json`，自动测试不得代签。
+不适合完全自动化的人工确认项：target/prior cohort 是否完整、manifest 结构字段是否仅用于 runtime contract、不可证明 vintage 的证据等级、embargo/benchmark/cost/label/multiple-testing registry 初次批准，以及审计 summary 与 source owner 的冲突裁决。本阶段只输出 `NOT_APPROVED approval_receipt.json`；人工 decision 必须由 Phase 0A.1 authenticated approver 写入 authority registry，自动测试不得代签。
 
 ## 19. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1126,7 +1154,7 @@ rtk git diff --cached --check
 
 ### 19.1 Implementation Acceptance Matrix / 实现验收矩阵（2026-07-11）
 
-本表验收 Phase 0A 审计器代码及其本地验证，不表示任何实际 Program/package target 已被审计、获批或进入 Phase 1。真实 target audit 仍必须由用户提供并批准 `audit request`、policy registry 和 `approval_receipt.json`；本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
+本表验收 Phase 0A 审计器代码及其本地验证，不表示任何实际 Program/package target 已被审计、获批或进入 Phase 1。真实 target audit 仍必须由用户提供并批准 `audit request`、policy registry；本阶段只生成初始 `NOT_APPROVED approval_receipt.json`，还必须经过 Phase 0A.1 handoff/approval bundle。本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1151,7 +1179,7 @@ rtk git diff --cached --check
 以下内容必须全部冻结并获批准，否则停止 Phase 1：
 
 - target scope、单原生包权威链和 canonical identity。
-- T/T+1 日期时钟、decision cutoff、field available-at 和 calendar policy。
+- `T -> E(T+1) -> S(T+2) -> X_h` 日期时钟、decision cutoff、field available-at 和 calendar policy。
 - PIT universe、package cohort 和 survivorship 规则。
 - asset/runtime/HMM ledger schema、admissibility 和 effective cutoff 算法。
 - embargo、benchmark、cost、label、barrier、prior 和 multiple-testing policy。
@@ -1161,19 +1189,19 @@ rtk git diff --cached --check
 
 每个 `(signal_context, interval, signal_capability)` 必须得到唯一 `formal_oos_status` 及可选的 `signal_evidence_level`；每个 label projection 另有独立 maturity：
 
-- `FORMAL_OOS + AVAILABLE`：允许 Phase 1 构建正式 signal observation；只有 `MATURED/CENSORED` 且符合 policy 的 label 才进入 Phase 0B 对应指标。
-- `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE`：允许 Phase 1 构建明确标记的 research-only 数据，禁止用户可见校准/canary。
+- `FORMAL_OOS + AVAILABLE`：允许 Phase 0A.1 对该 admission scope 批准 formal；Phase 1 只有 `maturity_status=MATURED` 才能进入对应固定期限指标，其中 terminal 事件还必须同时满足 `outcome_event_status=TERMINAL` 且 settlement/payoff closure 完整。
+- `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE`：只有 Phase 0A.1 对对应 admission scope 明确批准 research 后，Phase 1 才可构建 research-only 数据；禁止用户可见校准/canary。
 - 无 signal evidence + `UNAVAILABLE`：阻断该 target/capability；`research_replay_eligible` 单独决定是否还能做内部研究。
-- `label_maturity_status=PENDING/UNAVAILABLE`：只阻断该 label/horizon 的评价，不降级已经正式的 signal observation。
+- `maturity_status=PENDING/RIGHT_CENSORED/UNAVAILABLE`：按 Phase 1 policy 阻断相应 fixed-horizon projection 或只允许 survival 分析；`MATURED + outcome_event_status=TERMINAL` 按 settlement policy 消费，不降级已经正式的 signal evidence。
 
 没有合法 prior 不阻断 Phase 1 数据审计，但阻断用户可见预测。没有合法 formal window 不阻断其他包，也不允许把 retrospective 改名为正式。
 
 ### 20.3 Phase 1 handoff payload
 
-Phase 1 只消费已批准的：
+下列 payload 是 Phase 0A.1 finalizer 的输入，不是 Phase 1 mutation 的直接授权：
 
 ```text
-audit_manifest_id/hash
+audit_id/audit_manifest_hash
 target_scope_registry hash
 signal/label serializer version
 source availability matrix hash
@@ -1184,16 +1212,17 @@ metric/label/benchmark/cost policy hashes
 prior and multiple-testing registry hashes
 candidate authority/stage capability report hash
 prior cohort report hash
-approval receipt hash
+initial NOT_APPROVED approval receipt hash
 ```
 
-任一 hash 变化均创建新的 Phase 0A audit version，不能原地覆盖旧 receipt。
+Phase 0A.1 必须据此生成 `advisory_phase0a_handoff_bundle_v2`、GLOBAL/逐 admission-scope decision chains 和 `advisory_phase0a_approval_bundle_v2`。Phase 1 只消费 exact handoff/approval bundle hashes，并在每个 admission scope 和每类 mutation 上另行验证 action authorization。任一 Phase 0A hash 变化均创建新的 audit/handoff/approval version，不能原地覆盖旧 receipt；scope revoke 只阻断对应 scope，global revoke 阻断整个 bundle。
 
 ## 21. Rollout / Rollback / 发布与回滚
 
 - 当前设计 PR 只发布文档，不执行审计。
 - 未来 Phase 0A 代码先以 fixture/golden 运行，再执行受控 read-only DB smoke，最后由用户批准正式 audit request。
 - 审计输出 append-only；新 policy 或 source watermark 产生新 audit id。
+- Phase 0A.1 是独立的后续 control-plane 阶段；其 authority DDL、decision/revoke 写入和 operation authorization 不属于本 Phase 0A 只读实现。
 - 回滚停止审计入口并恢复上一批准 policy/receipt 引用，不删除历史证据。
 - Phase 0A 不改变线上荐股，因此没有 Program、Selection、Paper、HMM 或数据回滚动作。
 

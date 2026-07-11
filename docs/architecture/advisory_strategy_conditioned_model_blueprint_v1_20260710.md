@@ -2,7 +2,7 @@
 
 > 日期：2026-07-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-new` 交付
-> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入，Phase 1 F2 详细设计已形成但尚未实施
+> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入，Phase 1 F2 详细设计已按 2026-07-11 复查结果修订但尚未实施
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -138,7 +138,7 @@
 3. 所有在线特征必须满足 point-in-time，记录 `feature_availability_ts` 和 `market_data_asof`。
 4. 模型能力仅属于 Advisory，下游不能反写 Selection、StrategyPackage 或 Paper。
 5. 模型制品、数据快照、包 manifest、HMM snapshot 和预测必须可追溯到不可变版本。
-6. 市场样本身份、标签策略和 Program lineage 必须拆分：相同候选上下文只形成一个 canonical signal observation，实际改变候选/特征的 selection profile 与改变标签的 label policy 才进入训练/校准条件分布；Program/binding/review lineage 独立留证并用于部署，不得让两个等价 Program 把同一市场样本重复加权。
+6. stable 市场样本、evidence version、标签策略和 Program lineage 必须拆分：同一 `canonical_signal_scope_hash` 只形成一个 economic sample，stage/artifact/source 修订只增加 observation version；实际改变 selection semantics/config 或 label policy 才进入不同训练/校准条件分布。Program/binding/review lineage 独立留证并用于部署，不得让两个等价 Program 把同一市场样本重复加权。
 
 ### 4.2 模型原则
 
@@ -163,7 +163,7 @@
 
 | 研究或机构结论 | 本蓝图采用点 | 限制 |
 |---|---|---|
-| [Cross-sectional Learning-to-Rank](https://arxiv.org/abs/2012.07149) 直接优化资产相对顺序 | 候选按 decision-as-of/target 日期、canonical signal context 和 label policy 形成去重 ranking group，优化 Top5 | 论文结果不能代替 A 股 OOS 验证 |
+| [Cross-sectional Learning-to-Rank](https://arxiv.org/abs/2012.07149) 直接优化资产相对顺序 | 候选按 decision-as-of/target 日期、stable canonical signal scope 和 label policy 形成去重 ranking group，优化 Top5 | 论文结果不能代替 A 股 OOS 验证 |
 | [Gu、Kelly、Xiu 的机器学习资产定价研究](https://doi.org/10.1093/rfs/hhaa009) 强调非线性和高维交互 | 支持以树模型学习候选、行业与市场状态交互 | 论文预测目标和美股样本不能直接迁移 |
 | [LightGBM LambdaRank](https://lightgbm.readthedocs.io/en/latest/Parameters.html) 支持 NDCG Top-K 目标 | 第一版候选重排采用 GBDT ranker | 仍需独立概率和风险模型 |
 | [TRA, KDD 2021](https://arxiv.org/abs/2106.12950) 通过多个预测器处理不同交易模式 | 使用显式风格路由和专家模型 | 不直接照搬深度网络实现 |
@@ -340,7 +340,7 @@ hmm_freshness_lag, coefficient_artifact_hash
 
 ### 9.1 候选条件重排
 
-训练 ranking group 是 `(decision_as_of_trade_date, target_trade_date, signal_context_hash, label_policy_hash)` 下的一组候选，标签另存 `effective_entry_trade_date`。其中 `signal_context_hash` 覆盖 package/manifest、Selection deterministic content/stage hash、selection runtime code commit、adapter/query semantic version、决策 cutoff、PIT universe、HMM 状态和实际影响候选/特征的 effective selection profile；它必须排除 `run_id`、`created_at`、Program/binding lineage 等非内容身份。`label_policy_hash` 覆盖期限、入场基准、benchmark/cost、barrier 和企业行动口径。Program/binding/review lineage 随观察保存，但除非配置确实改变 signal context 或该模型的标签定义，否则不产生重复训练样本。第一版模型包：
+训练 ranking group 是 `(decision_as_of_trade_date,target_trade_date,canonical_signal_scope_hash,label_policy_hash)` 下的一组候选，标签另存 `intended_entry_trade_date`。`canonical_signal_scope_hash` 只覆盖 package/manifest、selection runtime semantics、effective config、日期/cutoff/calendar 等稳定语义；Phase 0A evidence-rich `signal_context_hash` 覆盖 Selection deterministic content/stage/artifact、PIT universe、HMM/risk evidence，并进入 observation version/lineage而不进入 stable sample id。`label_policy_hash` 覆盖期限、入场基准、benchmark/cost、barrier 和企业行动口径。Program/binding/review lineage 随观察保存，但除非配置确实改变 stable scope 或标签定义，否则不产生重复训练样本。第一版模型包：
 
 ```text
 AdvisoryCandidateRerankerBundle
@@ -385,7 +385,7 @@ conditional_recall@K(q, h, label_policy_hash) =
   权威最大深池中在期限 h 内满足 q 的股票且进入 TopK 的数量
   / 权威最大深池中在期限 h 内满足 q 的股票数量
 
-q(h) in {MFE_h >= 30%, MFE_h >= 50%, MFE_h >= 70%}
+q(h) in {EXECUTABLE_MFE_h >= 30%, EXECUTABLE_MFE_h >= 50%, EXECUTABLE_MFE_h >= 70%}
 ```
 
 `label_policy_hash` 固定 effective entry basis、horizon、企业行动、停牌/退市、benchmark/cost 和 censor 口径。`strategy_recall@K` 判断策略包是否把未来赢家召回到候选池，`conditional_recall@K` 判断在已生成深池内截断到 K 的损失。二者的完整参数、denominator、eligible universe hash、最大深池深度和数据可用时点必须一同落库；不同 h/policy 的 Recall 不得直接比较。
@@ -449,10 +449,10 @@ AdvisoryLongTrendHazardLGBM v1
 
 ```text
 r_total_gross_h = corporate-action-consistent executable total return
-r_net_absolute_h = r_total_gross_h - explicit transaction costs
-r_net_excess_h = r_net_absolute_h - benchmark_total_return_h
-MFE_h = max future corporate-action-normalized path / normalized entry - 1
-MAE_h = min future corporate-action-normalized path / normalized entry - 1
+r_net_absolute_h = fixed-capital (residual cash + net exit cash) / reference notional - 1
+r_net_excess_h = r_net_absolute_h - benchmark_net_total_return_h
+PATH_MFE_h/PATH_MAE_h = extrema on the full E-to-X_h corporate-action-normalized path
+EXECUTABLE_MFE_h/EXECUTABLE_MAE_h = extrema on the S-to-X_h sellable path under tradability policy
 gap_1d = corporate-action-normalized target-day open / decision-as-of pre_close - 1
 fill(candidate_price) = minute path crosses price while tradable
 survival_h = signal remains valid and risk conditions have not failed
@@ -630,11 +630,13 @@ ST/风险状态历史复算以现有 `market.stock_universe_pit_spans` 为权威
 decision_as_of_trade_date = T
 selection_as_of_trade_date = T
 target_trade_date = review_trade_date = SelectionRun.trade_date = T+1
-effective_entry_trade_date = T+1
+intended_entry_trade_date = E = T+1
+earliest_sell_eligible_trade_date = S = next_trading_day(E)，通常 T+2
+fixed_horizon_exit_trade_date X_h = shift_trading_days(E, h)，不包含 E
 legacy episode.signal_date = review_trade_date = T+1
 ```
 
-新 observation/prediction 必须同时保存 decision-as-of 与 target/review 日期，禁止把 legacy `episode.signal_date` 重新解释为 T 日信号截止日。特征只能使用 T 日 cutoff 前已知信息；历史库中已经存在的 T+1 停牌、涨跌停、开盘价和分钟路径只能作为 outcome/price-quality label，不能反向参与 T 日候选过滤。线上无法预知的 T+1 可交易性不得在历史 builder 中被“补知道”。
+新 observation/prediction 必须同时保存 decision-as-of 与 target/review 日期，禁止把 legacy `episode.signal_date` 重新解释为 T 日信号截止日。特征只能使用 T 日 cutoff 前已知信息；历史库中已经存在的 T+1 停牌、涨跌停、开盘价和分钟路径只能作为 outcome/price-quality label，不能反向参与 T 日候选过滤。线上无法预知的 T+1 可交易性不得在历史 builder 中被“补知道”。A 股 T+1 下 `h=1` 的首个固定期限退出日是 S，不是 E；收益、`EXECUTABLE_MFE/MAE`、`PATH_MFE/MAE`、barrier 和 benchmark 必须使用 Phase 1 冻结的时间窗/可执行性契约。
 
 ### 14.3 文件快照
 
@@ -642,11 +644,14 @@ legacy episode.signal_date = review_trade_date = T+1
 
 ```text
 dataset_snapshot_id
-snapshot_state: BUILDING, SEALED, FAILED
+snapshot_content_hash and manifest_core_sha256
+snapshot_state: final rows are SEALED only
+capture batch ids/receipt hashes
+build id/checkpoint and attempt lease/fencing receipts
 query/template version
-source watermark
+append-only source availability/revision set
 feature cutoff policy
-canonical signal context and label policy hashes
+stable canonical signal, selected observation/label version and label policy hashes
 program/binding lineage and package/manifest/model/HMM versions
 effective selection profile and review policy hashes
 selection runtime code commit and adapter/query semantic versions
@@ -654,13 +659,16 @@ benchmark and cost policy hashes
 row counts and date coverage
 file list and SHA256
 schema fingerprint
-label maturity summary
+label lifecycle/terminal/censor summary
 durable_snapshot_uri, storage_backend, promotion_receipt
+invalidation and blob-reference status
 ```
 
 数据库仍是数据权威。训练不得反复对数据库执行逐股票、逐日期高频查询。
 
-快照采用原子发布：构建期间为 `BUILDING`，所有文件、行数、schema 和 SHA 校验通过并提升到项目目录外、Windows/WSL 均可访问的 durable immutable dataset store 后，一次性转为 `SEALED`；失败为 `FAILED`。只有带 promotion receipt 的 `SEALED` 可训练；相同 build key 重试必须幂等，旧快照按详细设计的保留策略只读保留。
+capture、build/attempt 和 final snapshot 分离：业务证据先进入 COMPLETE capture batch；build/attempt 用 checkpoint、lease 和 fencing 管理 materialize/verify/promote/seal；只有 durable CAS publish 完成后，才按 canonical manifest content 生成 immutable SEALED snapshot。失败只属于 capture/build attempt，final snapshot 表不写非 SEALED row。只有带 promotion receipt、完整 blob refs 且未 invalidated 的 SEALED 可消费；旧快照按详细设计的保留策略只读保留。
+
+checkpoint 一旦固定不可替换；坏 checkpoint generation 只能经独立 BUILD_TERMINATE authorization 原子转 ABORTED 后创建下一 generation，FAILED_TERMINAL 不得按同 logical key 重建。GC quarantine 在 v1 只记录逻辑状态、不移动 blob；删除前出现新引用必须追加 CANCELLED_REFERENCE_CHANGED，并在引用再次归零后用新 epoch 重新等待保留期。
 
 初始构建从最早可复算的 PIT 日期开始批量生成历史观察，不要求等待新系统在线累计数月。回看区间可以立即训练内部 research bootstrap 并标记 `evidence_level=RETROSPECTIVE_RESEARCH_ONLY`、`deployment_state=SHADOW`，但不得向用户显示为已校准数字预测；只有满足模型 vintage、最晚研究决策 cutoff 和 embargo 的区间才进入正式 OOS，之后随新交易日持续追加并逐步形成包级校准证据。
 
@@ -727,7 +735,7 @@ LONG_TREND_READY
 最小 artifact closure：
 
 - `RERANK_READY(style)`：该风格专属 reranker、ranking feature/label schema、score normalization 和 OOS 报告；不包含用户可见收益胜率。
-- `RETURN_HORIZON_READY(style)`：该风格的 net return/positive-return probability、style-specific survival、MFE/MAE、benchmark/cost policy、校准和 OOS 报告。
+- `RETURN_HORIZON_READY(style)`：该风格的 net return/positive-return probability、style-specific survival、`EXECUTABLE_MFE/MAE` 主 projection、`PATH_MFE/MAE` diagnostic、benchmark/cost policy、校准和 OOS 报告。
 - `PRICE_RANGE_READY(style)`：必须精确依赖兼容的 `RETURN_HORIZON_READY(style)` bundle version/hash，再包含 price path、fill/`IntradayExecutionEventOrderModel`、raw/CNY/yuan 转换、硬风险 policy、校准和分钟覆盖报告；没有 Outcome 依赖时只能显示执行可行性，不能声明价格区间 READY。
 - `LONG_TREND_READY`：必须联合包含 `RERANK_READY(LONG_TREND)` 和 `RETURN_HORIZON_READY(LONG_TREND)`，其中单一 competing-risk hazard 负责 ordered barrier、time-to-hit、trend-stage survival 与 competing event；再加 capture label、校准和长期 OOS 报告。展示价格区间时还必须包含 `PRICE_RANGE_READY(LONG_TREND)`。
 
@@ -764,7 +772,7 @@ Top5 展示与 active list 迁移规则：
 
 每次预测至少记录：
 
-- Program、binding lineage、package、manifest、SelectionRun、canonical signal observation、`decision_as_of_trade_date`、`target/review_trade_date` 和 `effective_entry_trade_date`。
+- Program、binding lineage、package、manifest、SelectionRun、stable canonical signal + selected observation version、`decision_as_of_trade_date`、`target/review_trade_date` 和 `intended_entry_trade_date`。
 - signal context/label policy/effective selection profile/review policy hash、requested top_k、eligible universe hash 和各 stage 数量。
 - 数据 snapshot、market_data_asof、feature availability。
 - HMM snapshot/preset、as-of/effective 日期、generation mode、input max dates 和 coefficient artifact hash。
@@ -791,9 +799,13 @@ Top5 展示与 active list 迁移规则：
 | 逻辑实体 | 建议名称 | 作用 |
 |---|---|---|
 | 策略风格画像 | `app.advisory_strategy_style_profile` | 包 manifest 到风格、期限和目标的版本化映射 |
-| 信号观察 | `app.advisory_signal_observation` | 决策时 PIT 候选、特征引用和来源证据 |
-| 结果标签 | `app.advisory_outcome_label` | 多期限收益、MFE/MAE、生存和事件标签 |
-| 数据快照 | `app.advisory_dataset_snapshot` | DB 到 Parquet 的 manifest、watermark 和哈希 |
+| Phase 0A.1 批准 | `app.advisory_phase0a_approval_event/bundle` | GLOBAL/逐 admission-scope append-only decision、revoke 与 handoff bundle |
+| Source availability/revision | `app.advisory_source_availability_event/revision_set` | 未来 first-seen、纠正和 stable source revision evidence |
+| 稳定信号 | `app.advisory_signal_observation` | 不受证据修订影响的 canonical economic signal |
+| 信号证据版本 | `app.advisory_signal_observation_version` | PIT 候选、stage、runtime/HMM 与 source evidence revision |
+| 结果标签 | `app.advisory_outcome_label` | 多期限收益、EXECUTABLE/PATH MFE/MAE、生存和事件标签 |
+| Capture/build control | `app.advisory_capture_batch/advisory_dataset_build_attempt` | capture receipt、checkpoint、lease/fencing 和失败恢复 |
+| 数据快照 | `app.advisory_dataset_snapshot` | final SEALED manifest-content identity、selected versions、blob refs 与 invalidation |
 | 模型版本 | `app.advisory_model_version` | 单模型、数据、代码、校准和不可变制品证据 |
 | 模型 bundle | `app.advisory_model_bundle_version` | 原子绑定全部模型头、能力、期限和 hash |
 | Program 模型部署 | `app.advisory_model_deployment_binding` | Program 级乐观并发版本、当前状态和生效范围 |
@@ -883,7 +895,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 |---|---|
 | F-001 | Advisory 模型能力与 Selection、StrategyPackage、QE、Paper 严格隔离 |
 | F-002 | 多个策略包通过独立 Program 并行荐股，禁止跨包候选融合 |
-| F-003 | 建立 canonical signal/label scope、Program deployment lineage、Advisory 风格画像和层级校准 |
+| F-003 | 建立 stable canonical signal、versioned evidence/label scope、Program deployment lineage、Advisory 风格画像和层级校准 |
 | F-004 | Alpha raw、HMM adjusted、risk-policy adjusted、Selection effective、Advisory model 五层 rank/score 可追溯且影子阶段不覆盖正式 Selection 排名 |
 | F-005 | 权威单包深池、候选重排、Top5 shortlist 约束及 strategy/conditional Recall@K 分母完整 |
 | F-006 | HMM 只作为可验证先验/特征，禁止二次固定乘权 |
@@ -896,15 +908,21 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 | F-013 | 止盈/止损区间模型化，硬风险上限独立且 A 股约束完整 |
 | F-014 | shortlist 与 active target 分离，每日复评有界、显式退出且旧 Program 缩容受控迁移 |
 | F-015 | 数据库是训练/推理数据权威，禁止回测和 Paper 数据污染 |
-| F-016 | 历史观察满足无存活偏差 PIT universe、最晚研究决策时点、模型 vintage、cutoff、embargo 和删失处理 |
-| F-017 | DB 到不可变 Parquet 采用 BUILDING/SEALED/FAILED 原子快照、完整 manifest 和哈希 |
+| F-016 | 历史观察满足无存活偏差 PIT universe、最晚研究决策时点、模型 vintage、cutoff、embargo、T/E/S/X_h 和 terminal/删失处理 |
+| F-017 | DB 到不可变 Parquet 采用 capture/build-attempt/final SEALED 分层、manifest-content identity、完整 hashes 和 invalidation |
 | F-018 | capability-closed 不可变模型 bundle、Program 级部署、校准、漂移和版本匹配可治理可审计 |
 | F-019 | 数据/模型不足时模型通道 fail-closed，基线连续性策略明确且返回稳定 reason code |
 | F-020 | UI 只展示决策证据，最终人工买入且不增加订单/逐股编辑 |
 | F-021 | 所有模型先影子运行，晋级后仅影响指定 Advisory Program |
 | F-022 | 分阶段详细设计、开发、验证、发布和回滚边界明确 |
 | F-023 | 验证覆盖排名、概率、收益、风险、价格、生命周期和业务隔离 |
-| F-024 | 生产 DDL、回填/影子 DML、数据快照/模型制品库、依赖、训练调度和 Program 激活分阶段独立门禁 |
+| F-024 | authority producer、生产 DDL、回填/影子 DML、build terminate、数据快照/模型制品库、依赖、训练调度和 Program 激活分阶段独立门禁 |
+| F-025 | Phase 0A.1 GLOBAL/逐 admission-scope approval、handoff bundle、action authorization 和 revoke 可治理可审计 |
+| F-026 | stable signal、versioned evidence/lineage 与 snapshot 单版本选择阻止重复样本 |
+| F-027 | Selection trace capture 开关和所有失败状态不改变现有业务结果 |
+| F-028 | 原生多 Alpha 父包具有版本化 component/weight/combine provenance，禁止手工跨包融合 |
+| F-029 | outcome 时间轴、成本、benchmark、terminal/censor、universe raw outcome 和计算证据可复算 |
+| F-030 | append-only source revision、attempt fencing、authorized generation termination、durable CAS、base/invalidation/blob refs/GC cancel 闭合 |
 
 ## 19. Implementation Plan / 分阶段实施方案
 
@@ -918,17 +936,26 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 退出门禁：每个目标包都能判定合法历史起点；未知 vintage/决策时点有明确 `RETROSPECTIVE_RESEARCH_ONLY` 或 `FORMAL_OOS_UNAVAILABLE` 处置。
 - 发布/回滚：只读分析，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：F1。
-- 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入，实际 target audit 和人工 approval receipt 仍未执行。
+- 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入，实际 target audit 未执行，Phase 0A.1 handoff/approval authority 未实施。
+
+### Phase 0A.1：Handoff finalization 与批准权威
+
+- 目标：把 Phase 0A 初始 `NOT_APPROVED` receipt 转换为不可变 handoff bundle、GLOBAL/逐 admission-scope decision chains 和 approval bundle，并为 Phase 1 mutation 提供 action-specific authorization authority。
+- 进入条件：Phase 0A audit outputs/hash contract 完整；approval authority DDL/ACL 已通过独立门禁。
+- 交付物：handoff v2、逐 admission scope approve/reject/revoke/重新批准 chain、approval bundle、authority registry，以及 authenticated operation authorization grant/revoke/verify CLI。
+- 退出门禁：global terminal 唯一且 APPROVED；每个 requested admission scope 有唯一 terminal，approval bundle 只收录其中 APPROVED scopes，REJECTED/REVOKED scopes 显式阻断但不阻断其他 scope；fork/cycle/tamper/revoke/scope mismatch tests 通过。
+- 发布/回滚：只新增 append-only authority/control evidence；revoke 新增 event，不覆盖 Phase 0A receipt。
+- 详细设计等级：纳入 Phase 1 F2 详细设计 §6、§18、§22.2；尚未实施。
 
 ### Phase 1：最小 PIT 数据底座与不可变快照
 
 - 目标：先建立可供基线审计的最小 historical observation、全候选 outcome label、dataset snapshot 和 Parquet 流水线。
-- 进入条件：Phase 0A 口径获批准。
-- 交付物：五层 rank 补采、权威深池和 pre/post-HMM/risk-policy 证据、DDL/保留周期、PIT builder、标签成熟/删失、防泄漏、DB 到 Parquet 详细设计。
-- 数据要求：数据库权威、effective runtime/review scope、查询模板版本、水位、benchmark/cost hash、文件 SHA 和抽样回查。
-- 快照状态：`BUILDING -> SEALED` 原子发布或 `FAILED`；只有 `SEALED` 可供 Phase 0B/训练使用，重试幂等。
-- 退出门禁：同一 build key 可重复构建；DB/Parquet 抽样一致；所有深池候选有成熟/删失标签；T+1 信息未进入 T 日特征；非法 vintage 被拒绝或正确分级。
-- 发布/回滚：DDL、历史回填 DML、durable dataset store 和 builder activation 各自需要独立门禁；默认离线禁用。
+- 进入条件：Phase 0A.1 approval bundle 对 GLOBAL 与 requested admission scopes 有效，且对应 action authorization 可机器校验。
+- 交付物：stable signal/versioned evidence、五层 rank、多 Alpha component provenance、全候选 labels、source revision/capture、build attempt/final snapshot、invalidation/GC 和 deterministic Parquet。
+- 数据要求：数据库权威、append-only available-at/revision、effective runtime/review scope、查询模板、benchmark/cost/terminal hashes、calculation evidence、file SHA 和全量 partition reconcile。
+- 快照状态：capture 与 build/attempt 承担进行中/失败状态；`advisory_dataset_snapshot` 只保存 manifest-content-addressed SEALED rows。只有未 invalidated SEALED 可供 Phase 0B 使用。
+- 退出门禁：同一 request/source/capture 命中同 logical build key，坏 checkpoint 只有经 authorized termination 才能增加受控 generation；final manifest content 命中同 snapshot；DB/Parquet 全量 hashes 一致；所有 deep-pool projection 有明确 maturity/event；T+1 信息未进入 T feature；lease/fencing/durable publish/base/invalidation/GC cancel/new-epoch tests 通过。
+- 发布/回滚：approval/operation authority、DDL、source ledger、capture DML、label DML、store、build terminate、materialize、verify、promotion、seal、invalidation/GC 和 scheduler 各自独立门禁；默认离线禁用。
 - 详细设计等级：F2。
 - 已形成详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；当前仅 `design_ready`，未执行 DDL、DML、store 配置、快照构建或调度激活。
 
@@ -975,10 +1002,10 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 
 ### Phase 5：分钟路径与价格区间模型
 
-- 目标：使用分钟行情完善同一 Outcome bundle 的 MFE/MAE 标签/版本，并由 PricePath bundle 训练跳空、成交和事件先后，生成买入、止盈和止损范围；不得发布第二套 MFE/MAE prediction head。
+- 目标：使用分钟行情完善同一 Outcome bundle 的 `EXECUTABLE_MFE/MAE` 与 `PATH_MFE/MAE` 标签/版本，并由 PricePath bundle 训练跳空、成交和事件先后，生成买入、止盈和止损范围；不得发布第二套同 projection prediction head。
 - 进入条件：对应 style 的 Phase 4 结果模型稳定且分钟数据覆盖率通过审计；LONG_TREND 在 Phase 8C 按本阶段同一契约执行。
 - 交付物：分钟标签、新的 immutable Outcome/model bundle version、兼容 Outcome bundle version/hash、`raw + CNY + yuan` 单位转换、T+1/涨跌停/停牌/tick、硬风险上限、`PRICE_RANGE_READY` 详细设计。
-- 退出门禁：MFE/MAE 标签或头升级后必须产生新 bundle，完整重跑 Phase 4 数值/OOS/校准门禁，并重新验证所有下游 compatibility；随后成交概率校准、分钟事件顺序、价格基准、除权、可交易性和真实行情 shadow 验证全部通过，否则停止。旧 READY bundle 保持不可变，不自动继承新能力。
+- 退出门禁：任一 EXECUTABLE/PATH MFE/MAE 标签或头升级后必须产生新 bundle，完整重跑 Phase 4 数值/OOS/校准门禁，并重新验证所有下游 compatibility；随后成交概率校准、分钟事件顺序、价格基准、除权、可交易性和真实行情 shadow 验证全部通过，否则停止。旧 READY bundle 保持不可变，不自动继承新能力。
 - 发布/回滚：`rule_default` 继续作为明确基线；模型区间可独立关闭。
 - 详细设计等级：F2。
 
@@ -1055,7 +1082,9 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过数据、OOS、影子
 - PIT 字段不得晚于决策时点；财务和行业数据使用真实可用时间。
 - 日期身份满足 `decision/selection_as_of=T`、`target/review/SelectionRun/legacy episode.signal_date=T+1`，新观察不得把 legacy 字段误作 T 日 cutoff。
 - 父包及全部 leg/model/HMM 的 effective OOS cutoff、最晚研究/冻结决策时点、embargo、manifest 和 vintage 完整。
-- `BUILDING/FAILED` 快照不可训练，`SEALED` 发布原子且同 build key 重试幂等。
+- 非 COMPLETE capture、非 SEALED build checkpoint 和 ACTIVE/FAILED/EXPIRED attempt 不可消费；final snapshot 表只存在未 invalidated SEALED rows。
+- observation/label selector 先解析 cutoff/as-of terminal revision，再检查 capability；最新失效 revision 不得回退旧 MATURED/COMPLETE。
+- checkpoint 损坏只能经 authorized build termination 切换 generation；GC 新引用必须取消当前 epoch，logical quarantine 不移动 blob。
 - 权威深池的所有候选均有固定期限成熟/删失标签，ENTER 与否不影响打标。
 - T+1 交易状态只进入 outcome/price-quality label，不进入 T 日候选特征。
 - 长周期标签的 censor、停牌、涨跌停和企业行动处理可复算。
@@ -1068,7 +1097,7 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过数据、OOS、影子
 ```text
 NDCG@5, Precision@5
 Top5 cost-after excess return by benchmark_policy_hash/cost_policy_hash
-win rate, payoff ratio, MAE, MFE, max drawdown, turnover
+win rate, payoff ratio, EXECUTABLE_MAE/MFE, PATH_MAE/MFE diagnostics, max drawdown, turnover
 Brier score, reliability curve, quantile coverage
 industry/regime/package/version stability
 ```
@@ -1076,7 +1105,7 @@ industry/regime/package/version stability
 长期趋势额外指标：
 
 ```text
-Recall@20/50 for MFE thresholds; @100 only after an approved deep-pool contract
+Recall@20/50 for EXECUTABLE_MFE thresholds; @100 only after an approved deep-pool contract
 conditional +30/+50/+70 calibration
 time-to-hit calibration
 trend capture ratio
@@ -1118,7 +1147,7 @@ peak-before-stop path correctness
 |---|---|---|---|---|
 | F-001 | §3、§6.2、§17 | 隔离架构和业务 oracle 已定义 | design_ready | none |
 | F-002 | §2、§6.4 | 独立 Program 和禁止跨包融合契约已定义 | design_ready | none |
-| F-003 | §4.1、§7、§9.1、Phase 2 | canonical signal/label scope、Program lineage、风格画像和层级收缩已定义 | design_ready | none |
+| F-003 | §4.1、§7、§9.1、Phase 1、Phase 2 | stable signal/versioned evidence/label scope、Program lineage、风格画像和层级收缩已定义 | design_ready | none |
 | F-004 | §6.2、§8.1、§8.4、§16.2、Phase 1 | 五层 rank/score、补采和影子写入边界已定义 | design_ready | none |
 | F-005 | §6.3、§9、Phase 0B、Phase 3、Phase 8 | 权威深池、Top5 shortlist 和双口径 Recall@K 已定义 | design_ready | none |
 | F-006 | §8.1、§8.2 | HMM 边际特征和禁止二次乘权已定义 | design_ready | none |
@@ -1131,15 +1160,21 @@ peak-before-stop path correctness
 | F-013 | §12.3、Phase 5 | 模型软区间、独立硬风险和 A 股约束已定义 | design_ready | none |
 | F-014 | §9.2、§13.3、§16.1、Phase 7 | shortlist/target 分离、迁移、有界列表和显式退出已定义 | design_ready | none |
 | F-015 | §4.1、§14.1 | DB 权威及禁止回测/Paper 污染已定义 | design_ready | none |
-| F-016 | §14.1、§14.2、Phase 0A、§21.1 | 无存活偏差 universe、决策时钟、最晚研究时点、vintage、embargo 和 censor 已定义 | design_ready | none |
-| F-017 | §14.3、Phase 1 | 原子 SEALED snapshot、manifest、watermark 和哈希已定义 | design_ready | none |
+| F-016 | §14.1-14.2、Phase 0A、Phase 1、§21.1 | PIT universe、决策时钟、最晚研究时点、vintage、embargo、T/E/S/X_h、terminal/censor 已定义 | design_ready | none |
+| F-017 | §14.3、Phase 1 | capture/build-attempt/final SEALED、manifest-content identity、durable CAS 与 invalidation 已定义 | design_ready | none |
 | F-018 | §15.2、§15.3、§17.1、Phase 9 | capability-closed 不可变 bundle、Program 部署、校准和漂移治理已定义 | design_ready | none |
 | F-019 | §4.2、§16.3、§17.4、§21.3 | 模型通道拒绝、基线连续性和 reason code 已定义 | design_ready | none |
 | F-020 | §3、§17.3、Phase 6 | 仅决策展示、无逐股编辑和订单已定义 | design_ready | none |
 | F-021 | §15.3、Phase 3、Phase 6、Phase 7 | shadow、champion 和 Program 级晋级已定义 | design_ready | none |
-| F-022 | §19、§20 | 分阶段路线和十六份详细设计输出已定义 | design_ready | none |
-| F-023 | §21 | 数据、模型、业务、隔离和测试分层已定义 | design_ready | none |
-| F-024 | §19、§23、§25 | DDL、DML、dataset/model store、调度和 Program activation 门禁已定义 | design_ready | none |
+| F-022 | §19、§20 | Phase 0A.1 与后续分阶段路线、详细设计输出已定义 | design_ready | none |
+| F-023 | §21、Phase 1 F2 §21 | 数据、模型、授权、版本、业务、故障隔离和 durable recovery 测试分层已定义 | design_ready | none |
+| F-024 | §19、§23、§25、Phase 1 F2 §26 | authority producer 与 action-specific DDL/DML/build terminate/dataset/model store/调度/Program activation 门禁已定义 | design_ready | none |
+| F-025 | Phase 0A.1、Phase 1 F2 §6/§18 | GLOBAL/admission-scope decision、handoff/approval bundle、authenticated authorization grant/revoke 与共享锁已定义 | design_ready | none |
+| F-026 | §14.3、Phase 1 F2 §7/§8/§13.5 | stable signal、version chain、lineage 和 snapshot 单版本 selector 已定义 | design_ready | none |
+| F-027 | §6.2、Phase 1 F2 §9.4/§21 | trace no-op/no-throw/budget/outbox 与 failure parity 已定义 | design_ready | none |
+| F-028 | §6.4、Phase 1 F2 §9.1-9.3 | 原生父包权威、component evidence、weight/variant/combine parity 已定义 | design_ready | none |
+| F-029 | §11-14、Phase 1 F2 §10/§11 | 可执行时间轴、cashflow、benchmark、terminal、raw denominator 和复算 evidence 已定义 | design_ready | none |
+| F-030 | §14.3、Phase 1 F2 §12-§16/§20 | source revision、attempt fencing、authorized generation termination、durable CAS、base/invalidation/blob-ref/GC cancel 已定义 | design_ready | none |
 
 ## 23. Rollout / Rollback / 发布与回滚
 
@@ -1208,8 +1243,8 @@ peak-before-stop path correctness
 后续阶段：
 
 - 任何 Phase 如新增或修改表结构，都必须提交正式 migration，并执行独立 `production_ddl_gate`。
-- Phase 1 历史观察/标签回填必须独立执行 `production_backfill_dml_gate`，不能因 DDL 合入自动运行。
-- Durable dataset store 配置、权限、容量、原子 promotion 和读取 smoke 必须通过 `production_dataset_snapshot_store_gate`。
+- Phase 1 authority bootstrap、approval/operation authority、source ledger、observation capture 与 label/universe DML 必须使用独立 gates，不能因 DDL 合入自动运行。
+- Durable dataset store 配置、权限、容量、durability、build termination、promotion、seal、invalidation/GC 和读取 smoke 必须使用 action-specific gates；final snapshot 只能在 seal 时产生。
 - 任何 Phase 的 shadow prediction 持久化都必须先通过容量、保留和 `production_shadow_prediction_write_gate`。
 - WSL 训练产物进入 Windows 可访问 `artifact_content_addressed_store` 前必须通过 `production_model_artifact_store_gate` 和 promotion receipt 验证。
 - 新 Python/WSL 依赖必须提交 lock/环境变更并执行 backend dependency gate。
