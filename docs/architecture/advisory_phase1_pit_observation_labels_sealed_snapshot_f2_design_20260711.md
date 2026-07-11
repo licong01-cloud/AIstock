@@ -9,10 +9,10 @@
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 前置实现：PR `#1958`，merge commit `6669e00208e6e10c28901d5ba34539d851630b3e`
-> 当前状态：`design_ready`；已完成 2026-07-11 设计复查修订，Phase 0A.1、Phase 1 代码、DDL、回填、快照和调度均未实施
+> 当前状态：`design_ready`；Phase 0A.1 authority-only control plane 已在独立实现分支完成 fixture/local-dev 验证，authority migration 尚未应用；Phase 1 数据面代码、生产 DDL、回填、快照和调度均未实施
 > 设计合并说明：统一闭合父蓝图后续文档清单第 2、3 项，避免 observation/label/snapshot 与 DDL/迁移形成竞争契约
 > 复查修订范围：原位统一 approval、source availability、canonical version、label、build attempt、CAS、invalidation 和 GC 契约；不存在仅在文末追加的勘误
-> 生产影响：本设计 PR 为文档-only；DDL、DML、dataset store、依赖、调度、API、UI 和运行时门禁均为 `noop`
+> 当前实现分支的生产影响：authority migration 仅随代码提交、未应用；未执行 DML、未创建 dataset store、未变更依赖、调度、API、UI 或运行时门禁，均为 `noop`
 > 主要验证链：F2 Feature Workflow -> Design Acceptance Matrix -> DESIGN-COMPLIANCE-001 -> `git diff --check` -> PR CI
 
 ## 0. 文档定位与权威边界
@@ -2311,6 +2311,19 @@ production_runtime_restart_gate = noop
 | F-028 | §3、§9.1-9.3、§21.2、§22.4 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
 | F-029 | §10、§11、§15、§21 | 时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
 | F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、authorized generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
+
+### 27.1 Phase 0A.1 Implementation Acceptance Matrix / 实现验收矩阵（2026-07-11）
+
+本表只验收 Phase 0A.1 的 authority-only control plane。它不表示 authority migration 已应用、任何真实 target 已审计或获批，也不表示 Phase 1 data DDL、DML、store、snapshot、scheduler 或运行时已实施或激活。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-002 | `backend/services/advisory_phase0a/authority.py` 的 `TargetHandoff`、`AdmissionScope`、`build_handoff_bundle` | `backend/tests/advisory_phase0a/test_authority.py` 多 target handoff；`test_audit_service.py::test_equivalent_programs_share_signal_context_but_keep_lineage` 归属回归 | completed | none |
+| F-015 | `backend/db/migrations/add_advisory_phase0a1_authority_20260711.sql`；`approval_repository.py` | append-only trigger、least-privilege roles/grants 的迁移契约测试；未执行 production DDL | completed | none |
+| F-019 | `authority.py` 的 hash/scope/chain fail-closed 校验；`advisory_phase0a_finalize.py` | handoff hash、cross-handoff、scope、revoke、fork 和 bundle 缺失的纯函数/CLI 测试 | completed | none |
+| F-023 | `authority.py`、`approval_repository.py`、`advisory_phase0a_finalize.py` | `python -m pytest backend/tests/advisory_phase0a/test_authority.py backend/tests/advisory_phase0a/test_audit_service.py -q` | completed | none |
+| F-024 | `OperationAuthorizationRequest`、`OperationAuthorizationEvent`、operation matrix 和 CLI execute acknowledgements | business/governance/DDL matrix、revoke/re-authorize chain、default database-free validation 测试 | completed | none |
+| F-025 | `authority.py`、`approval_repository.py`、authority-only migration、`scripts/advisory_phase0a_finalize.py` | GLOBAL/admission-scope approval、approval bundle、scope revoke、reapproval、operation authorization、CLI handoff validation tests | completed | none |
 
 ## 28. DESIGN-COMPLIANCE-001 交付前检查
 

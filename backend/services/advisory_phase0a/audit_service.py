@@ -448,8 +448,16 @@ def receipt_artifact_payloads(
     oos = {
         "schema_version": "advisory_phase0a_oos_interval_report_v1",
         "audit_id": receipt.audit_id,
-        "classifications": [entry.model_dump(mode="python") for result in results for entry in result.oos_classifications],
-        "intervals": [entry.model_dump(mode="python") for result in results for entry in result.oos_intervals],
+        "classifications": [
+            {"audit_target_id": result.audit_target_id, **entry.model_dump(mode="python")}
+            for result in results
+            for entry in result.oos_classifications
+        ],
+        "intervals": [
+            {"audit_target_id": result.audit_target_id, **entry.model_dump(mode="python")}
+            for result in results
+            for entry in result.oos_intervals
+        ],
         "embargo": [entry.model_dump(mode="python") for result in results for entry in result.embargo_evidence],
     }
     metric_label = {
@@ -492,7 +500,10 @@ def receipt_artifact_payloads(
     capability = {
         "schema_version": "advisory_phase0a_candidate_authority_stage_capability_v1",
         "audit_id": receipt.audit_id,
-        "entries": [entry.model_dump(mode="python") for _result, entry in authority_entries],
+        "entries": [
+            {"audit_target_id": result.audit_target_id, **entry.model_dump(mode="python")}
+            for result, entry in authority_entries
+        ],
         "canonical_observation_groups": [
             {
                 "signal_context_hash": signal_hash,

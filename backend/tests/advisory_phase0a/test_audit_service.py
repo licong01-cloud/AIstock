@@ -670,8 +670,21 @@ def test_equivalent_programs_share_signal_context_but_keep_lineage(tmp_path) -> 
     capability = json.loads(
         (destination / "candidate_authority_stage_capability_report.json").read_text(encoding="utf-8")
     )
+    oos = json.loads((destination / "oos_interval_report.json").read_text(encoding="utf-8"))
     assert len(capability["canonical_observation_groups"]) == 1
     assert len(capability["canonical_observation_groups"][0]["lineage"]) == 2
+    assert {entry["audit_target_id"] for entry in capability["entries"]} == {
+        "target_phase0a",
+        "target_phase0a_second",
+    }
+    assert {entry["audit_target_id"] for entry in oos["classifications"]} == {
+        "target_phase0a",
+        "target_phase0a_second",
+    }
+    assert {entry["audit_target_id"] for entry in oos["intervals"]} == {
+        "target_phase0a",
+        "target_phase0a_second",
+    }
 
 
 def test_hmm_config_id_without_historical_snapshot_is_unavailable() -> None:
