@@ -661,6 +661,8 @@ PACKAGE_READY
 
 ### 15.3 Phase 0A.2C：Prospective evidence producer
 
+字段级 schema、producer 插入点、artifact/DSE 不可变写入、自然 `VALID_NO_CANDIDATE`、兼容与 L0-L5 验收以 `docs/architecture/advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md` 为准。该详细设计已完成并复查，当前仍是 `design_ready`，不表示 F-035/F-036 代码或生产 evidence 已完成。
+
 - 扩展 SelectionScoreArtifact/DailySelectionEvidence payload，保存 §9 全部 mandatory evidence。
 - 复用当前 candidate 计算结果，旁路生成 canonical hashes；不二次运行策略。
 - 实现显式 `VALID_NO_CANDIDATE` authority。
