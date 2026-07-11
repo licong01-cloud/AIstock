@@ -9,6 +9,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from backend.miniqmt_quote_contract_env import (
+    QUOTE_INGRESS_ENV_METADATA,
+    QuoteIngressEnvValidationError,
+    parse_quote_ingress_env_values,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -359,6 +365,7 @@ class ConfigManager:
                 "type": "boolean",
             },
         }
+        self.default_config.update(QUOTE_INGRESS_ENV_METADATA)
 
     def read_env(self) -> Dict[str, str]:
         """Read .env file and fill missing keys with defaults."""
@@ -385,8 +392,8 @@ class ConfigManager:
                     elif value.startswith("'") and value.endswith("'"):
                         value = value[1:-1]
                     config[key] = value
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"读取.env文件失败: {exc}")
+        except OSError as exc:
+            raise RuntimeError(f"CONFIG_ENV_READ_FAILED: {self.env_file}") from exc
 
         for key, info in self.default_config.items():
             if key not in config:
@@ -398,10 +405,20 @@ class ConfigManager:
         """Write configuration back to .env.
 
         This follows the grouping and formatting of the legacy implementation.
-        Unknown keys are currently ignored (same behaviour as legacy).
+        Existing unknown keys are deliberately preserved: a configuration-page
+        save must not delete registered TCA/quote keys or another subsystem's
+        runtime setting just because that key is not rendered by this UI.
         """
 
         try:
+            existing = self.read_env()
+            submitted = {str(key): str(value) for key, value in config.items()}
+            known_keys = set(self.default_config)
+            existing_unknown = set(existing) - known_keys
+            newly_introduced_unknown = sorted(set(submitted) - known_keys - existing_unknown)
+            if newly_introduced_unknown:
+                raise ValueError(f"CONFIG_ENV_UNKNOWN_KEY: {newly_introduced_unknown}")
+            config = {**existing, **submitted}
             lines: list[str] = []
             lines.append("# AI股票分析系统环境配置")
             lines.append("# 由系统自动生成和管理")
@@ -517,6 +534,12 @@ class ConfigManager:
             lines.append(f'MINIQMT_PORT="{config.get("MINIQMT_PORT", "58610")}"')
             lines.append("")
 
+            # Phase 1 MiniQMT quote ingress: default-off process lifecycle only.
+            lines.append("# ========== MiniQMT quote ingress（默认关闭）==========")
+            for key in QUOTE_INGRESS_ENV_METADATA:
+                lines.append(f'{key}="{config.get(key, QUOTE_INGRESS_ENV_METADATA[key]["value"])}"')
+            lines.append("")
+
             # Email
             lines.append("# ========== 邮件通知配置（可选）==========")
             lines.append(
@@ -575,13 +598,19 @@ class ConfigManager:
                 f'NEWS_INGEST_VERBOSE_LOG="{config.get("NEWS_INGEST_VERBOSE_LOG", "false")}"'
             )
 
+            preserved_unknown = sorted(key for key in config if key not in known_keys)
+            if preserved_unknown:
+                lines.append("")
+                lines.append("# ========== 保留的未注册配置（禁止保存时丢失）==========")
+                for key in preserved_unknown:
+                    lines.append(f'{key}="{config[key]}"')
+
             with self.env_file.open("w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
 
             return True
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"保存.env文件失败: {exc}")
-            return False
+        except OSError as exc:
+            raise RuntimeError(f"CONFIG_ENV_WRITE_FAILED: {self.env_file}") from exc
 
     def get_config_info(self) -> Dict[str, Dict[str, Any]]:
         """Return config metadata + current values, for UI rendering."""
@@ -603,6 +632,10 @@ class ConfigManager:
     def validate_config(self, config: Dict[str, str]) -> Tuple[bool, str]:
         """Validate configuration before saving."""
 
+        unknown = sorted(str(key) for key in config if str(key) not in self.default_config)
+        if unknown:
+            return False, f"CONFIG_ENV_UNKNOWN_KEY: {unknown}"
+
         for key, meta in self.default_config.items():
             if meta.get("required") and not config.get(key):
                 return False, f"必填项 {meta.get('description', key)} 不能为空"
@@ -610,6 +643,11 @@ class ConfigManager:
         api_key = config.get("DEEPSEEK_API_KEY") or ""
         if api_key and len(api_key) < 20:
             return False, "DeepSeek API Key格式不正确（长度太短）"
+
+        try:
+            parse_quote_ingress_env_values(config)
+        except QuoteIngressEnvValidationError as exc:
+            return False, f"ADAPTIVE_IS_QUOTE_POLICY_SCHEMA_INVALID: {exc}"
 
         return True, "配置验证通过"
 
@@ -620,8 +658,8 @@ class ConfigManager:
             from dotenv import load_dotenv
 
             load_dotenv(dotenv_path=self.env_file, override=True)
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"重新加载.env失败: {exc}")
+        except (ImportError, OSError) as exc:
+            raise RuntimeError(f"CONFIG_ENV_RELOAD_FAILED: {self.env_file}") from exc
 
 
 config_manager = ConfigManager()
