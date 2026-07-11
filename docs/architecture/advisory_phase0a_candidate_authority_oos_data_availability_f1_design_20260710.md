@@ -5,7 +5,7 @@
 > Phase：0A，口径冻结与数据可用性审计
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父蓝图提交：`3e871a78`，PR `#1951`
-> 当前状态：详细设计与只读审计框架已合入；实际 target audit 尚未执行；2026-07-11 取消 `NOT_APPROVED`、人工审批和 authority 转换，改为确定性 handoff readiness；现有 receipt writer 需在后续代码 PR 对齐
+> 当前状态：详细设计与只读审计框架已合入；2026-07-11 已对当前原生多 Alpha target 执行真实生产 DB 只读审计，结果因 policy、dated binding、clock/runtime/source evidence 缺口为 `BLOCKED`；同日只读复查确认现有单 Alpha current manifest 尚无 DSE、历史 DSE 属于旧 manifest，且 `review_schedule` 没有实际日调度器；人工审批和 authority 转换已取消，现有 receipt writer 仍需在后续代码 PR 对齐
 > 实现边界：PR `#1958` 仅新增隔离的只读审计服务/CLI/测试；未修改数据库、策略包、HMM、调度器或运行时
 
 ## 0. 文档定位与权威边界
@@ -20,7 +20,7 @@
 4. 当前实际代码、数据库 schema 和不可变制品所能证明的现状事实。
 5. 较早文档中与以上内容不冲突的部分。
 
-本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已完成审计。正式审计由版本化 audit request 和 policy registry 配置驱动，不要求人工签署。Phase 0A 根据冻结规则直接生成 append-only `handoff_readiness_report.json`；Phase 0A.1 只做确定性 normalization，不生成 GLOBAL/逐 scope decision、approval bundle、角色或 operation authorization。合法完整输入必须自动得到 `READY` 并进入 Phase 1；不存在人工“放行”步骤。
+本文的详细设计与只读审计框架已经闭合，且已产生一个真实 target 的只读 `BLOCKED` receipt；这不等于任一 target 已通过 Phase 0A。正式审计由版本化 audit request 和 policy registry 配置驱动，不要求人工签署。Phase 0A 根据冻结规则直接生成 append-only `handoff_readiness_report.json`；Phase 0A.1 只做确定性 normalization，不生成 GLOBAL/逐 scope decision、approval bundle、角色或 operation authorization。合法完整输入必须自动得到 `READY` 或可消费的 `PARTIAL` 并进入对应 Phase 1 scope；不存在人工“放行”步骤。
 
 文档与证据保存规则：
 
@@ -65,10 +65,30 @@ Phase 0A 因此不计算表现，而是先回答：
 - active binding 当前只冻结 package identity/set hash，不直接冻结 manifest SHA；`DailySelectionEvidence` 虽冻结自身 payload hash、manifest、cutoff、runtime profile 和候选，但不直接保存原始 `SelectionScoreArtifact` 的 id/hash。
 - HMM 中间 rank、risk-policy 调整后 rank 以及逐 stage content hash 尚未完整持久化。
 - 历史 SelectionRun 不一定记录当时 executable code、adapter、query semantics 和全部输入水位。
+- `review_schedule` 只保存 metadata，没有按交易日枚举全部启用 Program 的正式 daily runner；集中回补的 review 不能证明逐日前瞻执行。
 - 当前股票列表、当前 active package 列表和只保留成功包的 prior cohort 都会造成 survivorship bias。
 - 策略信号自身的正式 OOS 与未来 Advisory 模型的滚动 OOS 尚未分开登记。
 
 这些缺口不是允许推断默认值的理由。Phase 0A 必须把缺口输出为明确分类和 reason code。
+
+### 1.4 2026-07-11 真实 L4 只读结论
+
+首次真实只读审计使用 `audit_id=l4_probe_multi_alpha_20260711` 检查当前启用的原生多 Alpha Program/package，未执行 DDL/DML、服务重启或业务生成。结果：
+
+```text
+audit_manifest_hash = 6ace3066b142e5158e1f4b076e02865382ec13ffa166f789131d80e5edead4a0
+handoff_readiness = BLOCKED
+handoff_readiness_hash = 2d3a5d9222d3b491837bba7f1204de8008b1cf3e0ae3a51ed6eaa0d39d8f2ebf
+formal = 0
+retrospective = 0
+gap = 1
+```
+
+包当前 manifest 与选择 evidence identity 一致，但所有已观察 binding 的 effective interval 为空，正式 policy registry、canonical clock、runtime/config chain、HMM/PIT/source available-at 和 candidate authority closure 不完整；因此不能通过当前历史记录生成正向 handoff。该结果证明 fail-closed 路径真实有效，也证明上游 producer contract 必须补齐，不能把“全部 BLOCKED”当作本阶段完成。
+
+同日进一步只读核对确认：当前启用单 Alpha Program/package 为 `advp_ac2885f728a84409a263d30f06664196` / `pkg_378eb9c91e104c64935404e257e932ee`；当前 manifest `2aae3560563bd669e5f1951c40ae939744f82a67be5b7479f239b9f910270300` 的 StrategyPackage selection readiness 通过，但尚无 DSE。已观察的 67 条单 Alpha 历史 DSE 全部属于旧 manifest `8f6d8b0235459a0b657a3c0bb3a00e9a63707578e0bd7de978add42855d31ebf`，不得继承为 current-manifest evidence。两条当前轨道在两至三周窗口内仅 `2026-06-29` 有精确共同 DSE cutoff。
+
+后续修复由 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md` 统一定义：现有单 Alpha current manifest 与现有原生多 Alpha parent 先通过独立 cold-start smoke，再走各自 dated successor binding 和每日多 Program runner，从正式 `T0` 前瞻积累 evidence；只有 current-manifest preflight 失败时才发布新单 Alpha identity。历史 null binding、旧/归档 manifest、未知 available-at 和 current-semantics replay 不做 formal 回填。
 
 ## 2. Scope / 范围
 
@@ -90,7 +110,7 @@ Phase 0A 可以一次审计多个 Program/包，但每个 Program 保持独立 l
 
 本文明确不做：
 
-- 不执行 Phase 0A 实际数据审计；本交付仅完成详细设计。
+- 不从 Phase 0A audit 命令触发生产 DDL/DML、Selection/Advisory 业务生成或 HMM generation-on-miss；真实 target 验证只能是只读。
 - 不生成历史候选，不调用会创建 SelectionRun/selection evidence 的正式运行入口。
 - 不构建 observation、outcome label、Parquet snapshot 或模型训练集。
 - 不计算 Alpha、Recall、收益、NDCG、胜率或价格路径表现。
@@ -1043,7 +1063,7 @@ industry_blacklisted
 
 ## 17. Implementation Plan / 实施方案
 
-本节最初定义 Phase 0A 实施方案；当前只读审计框架已由 PR `#1958` 合入。真实 target audit 和新的 handoff readiness 输出仍需后续代码 PR 对齐，不存在人工批准步骤。
+本节最初定义 Phase 0A 实施方案；当前只读审计框架已由 PR `#1958` 合入，且已执行一次真实 target 只读审计并得到 `BLOCKED` receipt。新的 handoff readiness 输出仍需后续代码 PR 对齐；policy、dated binding 与 prospective evidence producer 由 Phase 0A.2 实现，不存在人工批准步骤。
 
 1. 新增纯数据模型：audit request、target scope、availability row、asset ledger、OOS interval、policy registry 和 receipt。
 2. 新增 Program/package resolver，按 T 只读解析 as-of binding、manifest、leg/asset closure 和 lineage。
@@ -1137,10 +1157,10 @@ rtk git diff --cached --check
 | L1 | serializer、hash、date、cutoff、interval、OOS、metric/label/prior/multiplicity 纯函数单测 | 相同输入同 hash；边界/冲突 fail-closed；raw/CNY/yuan/storage_scale 不混用 |
 | L2 | read-only repository/DB source probe、artifact header、HMM metadata integration | DB write probe 被拒；文件系统除允许 output/scratch 外无变化；不调用 generation-on-miss |
 | L3 | fixture 到 CLI receipt 的完整业务流，多 Program/单 Alpha/原生多 Alpha/空候选 | as-of binding、候选权威、五层 capability、formal/retrospective/unavailable 与 label maturity 结论正确 |
-| L4 | Validation Center 受控真实只读 DB 多 target audit、重复运行和 receipt diff | query/config/source watermark 相同则业务 hash 相同；合法完整输入必须产生 `READY` |
+| L4 | Validation Center 受控真实只读 DB 多 target audit、重复运行和 receipt diff | 首次单 target probe 已稳定得到 `BLOCKED`；producer 补齐后，合法完整输入必须先产生可消费 `PARTIAL` 或 `READY`，source/embargo 成熟后产生 `READY` |
 | L5/nightly | 长日期窗、source revision、survivorship、HMM/runtime vintage、跨包 cohort 与长期标签成熟回归 | 漂移/修订生成新 audit version；registry 事后变更只标 exploratory；不得自动激活 runtime |
 
-接口 oracle：Phase 0A 不新增 API，路由差异必须为空；CLI schema/exit code/reason code 是接口契约。DB oracle：所有 session read-only，DDL/DML/write probe fail。UI oracle：本阶段 N/A，前端 diff 必须为空。Log oracle：结构化记录 audit/target/stage/reason/query hash，禁止密钥、SQL 参数原值和逐股敏感 payload。Business oracle：人工抽取至少一个单 Alpha、一个原生多 Alpha、一个空候选日和一个历史 binding 切换日，与 DB/不可变 artifact identity 逐项核对。
+接口 oracle：Phase 0A 不新增 API，路由差异必须为空；CLI schema/exit code/reason code 是接口契约。DB oracle：所有 session read-only，DDL/DML/write probe fail。UI oracle：本阶段 N/A，前端 diff 必须为空。Log oracle：结构化记录 audit/target/stage/reason/query hash，禁止密钥、SQL 参数原值和逐股敏感 payload。Business oracle：自动抽取至少一个单 Alpha、一个原生多 Alpha的真实 identity 并逐项对照 DB/不可变 artifact；空候选日和 binding 切换只在自然真实样本存在时补证，可选人工复核报告不构成运行门禁或审批。
 
 新增/修改 Python line coverage 目标 `>=80%`、branch coverage `>=70%`；serializer、OOS classifier、interval builder、readiness resolver 和 no-write guard 的关键分支目标 100%。长窗与真实 DB 验证交由 Validation Center/CI/nightly，当前交互窗口只跑 L0/L1 和最小 L2；nightly 失败阻断对应数据制品发布，但不触发任何服务或调度器激活。
 
@@ -1165,7 +1185,7 @@ READY | PARTIAL -> HANDOFF_EMITTED
 BLOCKED -> 新配置/新输入产生新的 audit_id，禁止原地人工放行
 ```
 
-L3 必须提供单 Alpha和原生多 Alpha的完整正向 golden；L4 必须在受控真实只读数据库证明至少一个数据准确 target 可得到 `HANDOFF_EMITTED`。若没有正向 target，不得把全部 BLOCKED 解释为“门禁有效”，必须先修正生产者/消费者字段契约。
+L3 必须提供单 Alpha、原生多 Alpha和 daily multi-Program runner 的完整正向 golden；L4 必须在受控真实只读数据库证明至少一个数据准确 target 可得到 `HANDOFF_EMITTED`。2026-07-11 首次 L4 只有 `BLOCKED`，因此必须按 Phase 0A.2 修正 producer/consumer 字段契约并从正式 `T0` 前瞻运行；不得把该结果或历史 replay 解释为正向门禁已通过。
 
 ## 19. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1251,6 +1271,21 @@ handoff readiness report hash
 ```
 
 Phase 0A.1 必须据此确定性生成 `advisory_phase0a_handoff_bundle_v2` 和 sorted admission scope set。Phase 1 只消费 exact audit/handoff/readiness hashes，并按每个 scope 的自动 evidence classification 选择 formal、research-only 或 blocked 路径。任一 Phase 0A hash 变化均创建新的 audit/handoff version，不能原地覆盖旧 receipt。不存在 GLOBAL/scope decision、approval bundle、revoke 或 action authorization。
+
+### 20.4 Phase 0A.2 producer handoff
+
+首次 L4 已证明当前生产记录无法满足 §20.3。Phase 0A.2 不修改审计判定器的安全阈值，而是补齐以下正式 producer：
+
+- 首次 signal 前冻结的 immutable policy registry。
+- 对每个 Program 唯一可解析的未来 dated binding `[from,to)`。
+- 现有单 Alpha current manifest 的 cold-start smoke、与旧 manifest DSE 的 identity 隔离，以及必要时才发布新 identity 的条件式路径。
+- 单 Alpha与原生多 Alpha共用体验、但 Program/lineage 独立的 prospective Selection evidence。
+- 以 `(program_id,target_trade_date,RUN)` 为正式唯一业务键的 daily runner；binding/manifest/policy/config 是冲突谓词，Program 失败相互隔离。
+- 代码、policy、current-manifest smoke、dated binding、runner 与输入全部就绪后的首个未处理决策交易日作为正式 `T0`；过去区间 replay 永久为 retrospective。
+- canonical decision clock、effective config/runtime/HMM、PIT universe/risk、asset/source/stage lineage 和合法空候选 header。
+- Phase 1 source ledger 尚未成熟时的 `PARTIAL -> HANDOFF_EMITTED`，以及 source/20 日 embargo 成熟后的重新审计 `READY`。
+
+历史 null binding、旧/已归档 manifest、未知 available-at、集中回补 review 和缺失空候选样本不回填猜测值。Phase 0A.2 详细契约以 `docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md` 为准。
 
 ## 21. Rollout / Rollback / 发布与回滚
 
