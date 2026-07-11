@@ -1,8 +1,10 @@
 {
-  "actual": "BUG-615 P1: SIM scheduler must not require binding approval state",
+  "actual": "The scheduler default approval-state filter excludes DRAFT bindings, so valid active LocalSim and MiniQMT SIM bindings are never selected.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260711_BUG-615-bug-615-p1-sim-scheduler-must-not-require-binding-approval-state.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-615",
@@ -13,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-11T12:29:55.778918Z",
-  "description": "BUG-615 P1: SIM scheduler must not require binding approval state",
+  "description": "Single-user LocalSim and MiniQMT SIM scheduling must not require a binding approval-state transition. All active non-RETIRED bindings must be eligible; LIVE approval, SIM/LIVE isolation, broker/preflight correctness, and TCA evidence guards remain out of scope.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +25,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "DRAFT, SIM_VALIDATING, SIM_PASSED, LIVE_APPROVAL_PENDING, and LIVE_APPROVED bindings remain eligible for SIM scheduling; only RETIRED bindings are excluded.",
   "first_seen_at": "2026-07-11T12:29:55.778918Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -152,5 +154,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "scope_ready"
 }
