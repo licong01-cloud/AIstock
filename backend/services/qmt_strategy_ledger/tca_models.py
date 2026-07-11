@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_EVEN, localcontext
 from enum import Enum
 from hashlib import sha256
 from types import MappingProxyType
@@ -52,6 +52,18 @@ def canonical_json_sha256(value: Any) -> str:
     return sha256(encoded).hexdigest()
 
 
+def canonical_json_value(value: Any) -> Any:
+    """Return the same JSON-safe value used by canonical evidence hashing."""
+
+    return _json_safe(value)
+
+
+def canonical_tca_manifest_sha256(value: Any) -> str:
+    """Hash Phase 0A-3 manifests with UTC milliseconds and fixed Decimal text."""
+
+    return canonical_json_sha256(_tca_manifest_safe(value))
+
+
 def content_id(prefix: str, *parts: Any) -> str:
     return f"{prefix}{canonical_json_sha256(parts)[:32]}"
 
@@ -66,6 +78,26 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, datetime):
         normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
         return normalized.astimezone(UTC).isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _tca_manifest_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _tca_manifest_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_tca_manifest_safe(item) for item in value]
+    if isinstance(value, Decimal):
+        with localcontext() as context:
+            context.prec = max(context.prec, 38)
+            context.rounding = ROUND_HALF_EVEN
+            return format(value.quantize(Decimal("0.00000001")), "f")
+    if isinstance(value, datetime):
+        normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return normalized.astimezone(UTC).isoformat(timespec="milliseconds")
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, Enum):

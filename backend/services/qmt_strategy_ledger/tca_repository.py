@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
 import psycopg2.extras
@@ -22,6 +23,7 @@ from .tca_models import (
     TcaMaterializationOutcome,
     TcaTradeObservationOutcome,
     canonical_json_sha256,
+    canonical_json_value,
     content_id,
 )
 
@@ -84,6 +86,9 @@ class ExecutionTcaRebuildScope:
 class ExecutionTcaSourceSnapshot:
     planning_subjects: tuple[Mapping[str, Any], ...]
     parents: tuple[Mapping[str, Any], ...]
+    runtime_events: tuple[Mapping[str, Any], ...]
+    child_orders: tuple[Mapping[str, Any], ...]
+    orders: tuple[Mapping[str, Any], ...]
     order_status_events: tuple[Mapping[str, Any], ...]
     trades: tuple[Mapping[str, Any], ...]
     trade_observations: tuple[Mapping[str, Any], ...]
@@ -214,6 +219,60 @@ class ExecutionTcaEvidenceRepository:
             inserted_rows=inserted,
             idempotent_rows=idempotent,
         )
+
+    def acquire_scope_lock(self, *, cursor: Any, receipt_scope_hash: str) -> int:
+        """Acquire the design-mandated transaction-scoped deterministic lock."""
+
+        digest = bytes.fromhex(receipt_scope_hash) if re.fullmatch(r"[0-9a-f]{64}", receipt_scope_hash) else sha256(receipt_scope_hash.encode("utf-8")).digest()
+        unsigned = int.from_bytes(digest[:8], byteorder="big", signed=False)
+        lock_key = unsigned if unsigned < (1 << 63) else unsigned - (1 << 64)
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+        return lock_key
+
+    def receipt_head(self, *, cursor: Any, receipt_scope_hash: str) -> Mapping[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT * FROM qmt_strategy.execution_tca_rebuild_receipt
+            WHERE receipt_scope_hash = %s AND receipt_status = 'COMPLETED'
+            ORDER BY receipt_generation DESC LIMIT 1
+            """,
+            (receipt_scope_hash,),
+        )
+        row = cursor.fetchone()
+        return _row_mapping(cursor, row) if row is not None else None
+
+    def receipt_latest(self, *, cursor: Any, receipt_scope_hash: str) -> Mapping[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT * FROM qmt_strategy.execution_tca_rebuild_receipt
+            WHERE receipt_scope_hash = %s ORDER BY receipt_generation DESC LIMIT 1
+            """,
+            (receipt_scope_hash,),
+        )
+        row = cursor.fetchone()
+        return _row_mapping(cursor, row) if row is not None else None
+
+    def result_head(self, *, cursor: Any, result_series_key: str) -> Mapping[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT * FROM qmt_strategy.execution_parent_tca
+            WHERE result_series_key = %s ORDER BY result_generation DESC LIMIT 1
+            """,
+            (result_series_key,),
+        )
+        row = cursor.fetchone()
+        return _row_mapping(cursor, row) if row is not None else None
+
+    def mark_head(self, *, cursor: Any, mark_series_key: str) -> Mapping[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT * FROM qmt_strategy.execution_tca_mark
+            WHERE mark_series_key = %s ORDER BY mark_revision DESC LIMIT 1
+            """,
+            (mark_series_key,),
+        )
+        row = cursor.fetchone()
+        return _row_mapping(cursor, row) if row is not None else None
 
     def list_parent_joined(
         self,
@@ -472,6 +531,8 @@ class ExecutionTcaSourceRepository:
 
     def read_scope(self, *, cursor: Any, scope: ExecutionTcaRebuildScope) -> ExecutionTcaSourceSnapshot:
         binding_ids = list(scope.binding_ids)
+        account_scope = list(scope.account_ids)
+        parent_scope = list(scope.parent_intent_ids)
         dates = (scope.trade_date_from, scope.trade_date_to)
         cursor.execute(
             """
@@ -489,15 +550,44 @@ class ExecutionTcaSourceRepository:
             JOIN paper_v2.simulation_daily_run r ON r.run_id = b.run_id
             JOIN paper_v2.execution_plan p ON p.plan_id = b.execution_plan_id
             WHERE b.binding_id = ANY(%s) AND b.trade_date BETWEEN %s AND %s
+              AND (cardinality(%s::text[]) = 0 OR b.account_id = ANY(%s))
+              AND (cardinality(%s::text[]) = 0 OR b.parent_intent_id = ANY(%s))
             ORDER BY b.trade_date, b.parent_intent_id, b.parent_revision
             """,
-            (binding_ids, *dates),
+            (binding_ids, *dates, account_scope, account_scope, parent_scope, parent_scope),
         )
         parents = _rows(cursor)
         parent_ids = [str(row["parent_intent_id"]) for row in parents]
         if not parent_ids:
             empty: tuple[Mapping[str, Any], ...] = ()
-            return ExecutionTcaSourceSnapshot(planning_subjects, parents, empty, empty, empty, empty, empty, empty, empty, empty)
+            return ExecutionTcaSourceSnapshot(planning_subjects, parents, empty, empty, empty, empty, empty, empty, empty, empty, empty, empty, empty)
+        runtime_ids = sorted({str(row["runtime_id"]) for row in parents if row.get("runtime_id")})
+        if runtime_ids:
+            cursor.execute(
+                """
+                SELECT * FROM qmt_strategy.execution_runtime_event
+                WHERE runtime_id = ANY(%s) AND event_type = 'TICK'
+                ORDER BY runtime_id, sequence, event_id
+                """,
+                (runtime_ids,),
+            )
+            runtime_events = _rows(cursor)
+        else:
+            runtime_events = ()
+        cursor.execute(
+            """
+            SELECT * FROM qmt_strategy.execution_child_order
+            WHERE parent_intent_id = ANY(%s)
+            ORDER BY parent_intent_id, submitted_at, child_order_id
+            """,
+            (parent_ids,),
+        )
+        child_orders = _rows(cursor)
+        cursor.execute(
+            "SELECT * FROM qmt_strategy.order_ledger WHERE intent_id = ANY(%s) ORDER BY account_id, qmt_order_id",
+            (parent_ids,),
+        )
+        orders = _rows(cursor)
         cursor.execute(
             "SELECT * FROM qmt_strategy.order_status_event WHERE intent_id = ANY(%s) ORDER BY event_time, event_id",
             (parent_ids,),
@@ -531,7 +621,11 @@ class ExecutionTcaSourceRepository:
             (parent_ids,),
         )
         conflicts = _rows(cursor)
-        account_ids = sorted({str(row["account_id"]) for row in trades} | set(scope.account_ids))
+        account_ids = sorted(
+            {str(row["account_id"]) for row in parents}
+            | {str(row["account_id"]) for row in trades}
+            | set(scope.account_ids)
+        )
         if account_ids:
             cursor.execute(
                 """
@@ -554,20 +648,35 @@ class ExecutionTcaSourceRepository:
             reconciliation_issues = _rows(cursor)
         else:
             reconciliation_issues = ()
-        cursor.execute(
-            "SELECT * FROM qmt_strategy.unattributed_order WHERE trade_date BETWEEN %s AND %s ORDER BY account_id, trade_date, qmt_order_id",
-            dates,
-        )
-        unattributed_orders = _rows(cursor)
-        cursor.execute(
-            "SELECT * FROM qmt_strategy.unattributed_trade WHERE trade_date BETWEEN %s AND %s ORDER BY account_id, trade_date, trade_id",
-            dates,
-        )
-        unattributed_trades = _rows(cursor)
+        if account_ids:
+            cursor.execute(
+                """
+                SELECT * FROM qmt_strategy.unattributed_order
+                WHERE account_id = ANY(%s) AND trade_date BETWEEN %s AND %s
+                ORDER BY account_id, trade_date, qmt_order_id
+                """,
+                (account_ids, *dates),
+            )
+            unattributed_orders = _rows(cursor)
+            cursor.execute(
+                """
+                SELECT * FROM qmt_strategy.unattributed_trade
+                WHERE account_id = ANY(%s) AND trade_date BETWEEN %s AND %s
+                ORDER BY account_id, trade_date, trade_id
+                """,
+                (account_ids, *dates),
+            )
+            unattributed_trades = _rows(cursor)
+        else:
+            unattributed_orders = ()
+            unattributed_trades = ()
         _ = trade_keys  # retained for debugger visibility and future canonical content receipts
         return ExecutionTcaSourceSnapshot(
             planning_subjects,
             parents,
+            runtime_events,
+            child_orders,
+            orders,
             status_events,
             trades,
             observations,
@@ -587,7 +696,7 @@ def _checked_identifier(value: str) -> str:
 
 def _db_value(column: str, value: Any) -> Any:
     if column in _JSON_COLUMNS:
-        return psycopg2.extras.Json(value)
+        return psycopg2.extras.Json(canonical_json_value(value))
     if isinstance(value, tuple):
         return list(value)
     return value
