@@ -262,16 +262,30 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
     facts["official_instruments"] = int(len(expected_official))
     if not all_txt.empty:
         all_txt = all_txt.sort_values("instrument").reset_index(drop=True)
+    # F-013: 支持一股多 PIT span(ST 断段/退市回归)。不再要求 all.txt 行数 == 股票数;
+    # 校验:instruments 集合一致 + 每个 span 落在该股 [data_start, data_end] 数据区间内。
     inst_status = "PASS"
-    inst_details = {"actual": int(len(all_txt)), "expected": int(len(expected_h5_all))}
-    if len(all_txt) != len(expected_h5_all):
+    act_insts = set(all_txt["instrument"]) if not all_txt.empty else set()
+    exp_insts = set(expected_h5_all["instrument"])
+    inst_details = {
+        "all_txt_span_lines": int(len(all_txt)),
+        "all_txt_unique_instruments": int(len(act_insts)),
+        "expected_instruments": int(len(exp_insts)),
+        "multi_span_instruments": int(len(all_txt) - len(act_insts)) if not all_txt.empty else 0,
+    }
+    missing = exp_insts - act_insts
+    extra = act_insts - exp_insts
+    if missing or extra:
         inst_status = "FAIL"
+        inst_details["missing_instruments"] = sorted(missing)[:20]
+        inst_details["extra_instruments"] = sorted(extra)[:20]
     else:
-        merged = all_txt.merge(expected_h5_all, on="instrument", suffixes=("_actual", "_expected"), how="outer", indicator=True)
-        bad = merged[(merged["_merge"] != "both") | (merged["start_actual"] != merged["start_expected"]) | (merged["end_actual"] != merged["end_expected"])]
-        if not bad.empty:
+        rng = expected_h5_all.rename(columns={"start": "data_start", "end": "data_end"})
+        chk = all_txt.merge(rng, on="instrument", how="left")
+        oob = chk[(chk["start"] < chk["data_start"]) | (chk["end"] > chk["data_end"])]
+        if not oob.empty:
             inst_status = "FAIL"
-            inst_details["examples"] = bad.head(20).to_dict(orient="records")
+            inst_details["spans_out_of_data_range"] = oob.head(20).to_dict(orient="records")
     checks.append(Check("snapshot_all_txt_data_range_rule", inst_status, inst_details))
 
     expected_static_cols = baseline_static_columns()
@@ -287,9 +301,26 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
             "start": sf_dates.min().strftime("%Y-%m-%d") if len(sf_dates) else None,
             "end": sf_dates.max().strftime("%Y-%m-%d") if len(sf_dates) else None,
         }
-        if list(static.columns) != expected_static_cols:
+        # F-012: 期望 121 数据列(+2 索引 = 123 物理列)且含 l2_code_id;
+        # 不再与陈旧 baseline(无 l2_code_id)做精确列名相等比较。
+        sf_details["data_columns"] = int(len(static.columns))
+        sf_details["baseline_only_columns"] = sorted(set(expected_static_cols) - set(static.columns))[:20]
+        sf_details["new_vs_baseline_added"] = sorted(set(static.columns) - set(expected_static_cols))[:20]
+        if len(static.columns) != 121:
             sf_status = "FAIL"
-            sf_details["schema_mismatch"] = True
+            sf_details["expected_data_columns"] = 121
+        if "l2_code_id" not in static.columns:
+            sf_status = "FAIL"
+            sf_details["missing_l2_code_id"] = True
+        else:
+            l2 = static["l2_code_id"]
+            sf_details["l2_code_id_dtype"] = str(l2.dtype)
+            if str(l2.dtype) != "int16":
+                sf_status = "FAIL"
+                sf_details["l2_code_id_dtype_bad"] = True
+            if int(l2.min()) < -1:
+                sf_status = "FAIL"
+                sf_details["l2_code_id_below_-1"] = int(l2.min())
         if sf_details["end"] != end.isoformat():
             sf_status = "FAIL"
         if bj_count(pd.Series(sf_inst.unique())) > 0 or static.index.has_duplicates:
