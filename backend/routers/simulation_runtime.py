@@ -17,6 +17,8 @@ from backend.services.miniqmt_execution_runtime import (
 from backend.services.simulation_runtime import SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.models import OperatorCommand
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
+from backend.services.simulation_runtime.tca_read_api import ExecutionTcaReadService
+from backend.services.qmt_strategy_ledger.tca_read_service import TcaReadError
 from backend.services.trading_core.errors import DataUnavailableError, TradingCoreError, UnsupportedFeatureError
 
 router = APIRouter(prefix="/simulation-runtime", tags=["simulation-runtime"])
@@ -51,6 +53,10 @@ def get_miniqmt_gateway() -> QmtClientMiniQMTEventLoopGateway:
     )
 
 
+def get_execution_tca_read_service() -> ExecutionTcaReadService:
+    return ExecutionTcaReadService()
+
+
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
@@ -58,6 +64,10 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _raise_tca_http(exc: TcaReadError) -> None:
+    raise HTTPException(status_code=exc.http_status, detail=exc.to_dict()) from exc
 
 
 def _parse_backend(raw: str | None) -> SimulationBrokerBackend | None:
@@ -137,6 +147,71 @@ def _operator_payload(command: OperatorCommand, raw_payload: dict[str, Any]) -> 
     if isinstance(raw_payload.get("positions"), list):
         payload["positions"] = raw_payload["positions"]
     return payload
+
+
+@router.get("/execution-parents")
+def list_execution_parents(
+    binding_id: str = Query(""),
+    trade_date: str = Query(""),
+    terminal_state: str | None = Query(None),
+    limit: str = Query("100"),
+    cursor: str | None = Query(None),
+    service: ExecutionTcaReadService = Depends(get_execution_tca_read_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **service.list_execution_parents(
+                binding_id=binding_id,
+                trade_date=trade_date,
+                terminal_state=terminal_state,
+                limit=limit,
+                cursor=cursor,
+            ),
+        }
+    except TcaReadError as exc:
+        _raise_tca_http(exc)
+
+
+@router.get("/execution-parents/{parent_id}")
+def get_execution_parent(
+    parent_id: str,
+    revision: str | None = Query(None),
+    service: ExecutionTcaReadService = Depends(get_execution_tca_read_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **service.get_execution_parent(parent_intent_id=parent_id, parent_revision=revision),
+        }
+    except TcaReadError as exc:
+        _raise_tca_http(exc)
+
+
+@router.get("/execution-parents/{parent_id}/tca")
+def get_execution_tca(
+    parent_id: str,
+    revision: str = Query(""),
+    snapshot_kind: str = Query(""),
+    tca_version: str | None = Query(None),
+    receipt_id: str | None = Query(None),
+    as_of: str | None = Query(None),
+    service: ExecutionTcaReadService = Depends(get_execution_tca_read_service),
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            **service.get_execution_tca(
+                parent_intent_id=parent_id,
+                parent_revision=revision,
+                snapshot_kind=snapshot_kind,
+                tca_version=tca_version,
+                receipt_id=receipt_id,
+                as_of=as_of,
+            ),
+        }
+    except TcaReadError as exc:
+        _raise_tca_http(exc)
 
 
 @router.get("/scheduler/status")
@@ -304,7 +379,9 @@ def execute_miniqmt_operator_command(
     scheduler = getattr(service.scheduler, "lifecycle_scheduler", service.scheduler)
     if command.command_type == "RECONCILE_STALE_RUNTIME_NO_BROKER_SIDE_EFFECT":
         try:
-            scheduler.require_no_side_effect_reconciling_run_for_operator_recovery(run_id=str(operator_payload["run_id"]))
+            scheduler.require_no_side_effect_reconciling_run_for_operator_recovery(
+                run_id=str(operator_payload["run_id"])
+            )
         except TradingCoreError as exc:
             _raise_http(exc)
 
