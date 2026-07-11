@@ -33,6 +33,7 @@ from backend.services.qmt_strategy_ledger.models import (
     is_partial_order_status,
     is_terminal_order_status,
 )
+from backend.services.qmt_strategy_ledger.tca_models import canonical_trade_fact_sha256
 from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.trading_core.models import OrderSide
 
@@ -156,6 +157,18 @@ class MiniQMTOmsLedger:
                 "runtime_algo_instance_id": child_order.algo_instance_id,
                 "runtime_parent_intent_id": child_order.parent_intent_id,
             },
+            first_ingest_source="BROKER_CALLBACK",
+            first_ingested_at=datetime.now(UTC),
+            canonical_trade_fact_sha256=canonical_trade_fact_sha256(
+                account_id=self._account_id or "",
+                trade_date=self._trade_date,
+                trade_id=trade_id,
+                qmt_order_id=qmt_order_id,
+                symbol=child_order.symbol,
+                side=child_order.side.value,
+                price=_decimal(price, field_name="trade_price"),
+                quantity=max(int(quantity), 0),
+            ),
         )
         return self._strategy_ledger_repository.upsert_trade_ledger(trade)
 

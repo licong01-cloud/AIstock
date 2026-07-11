@@ -7,6 +7,7 @@ not connect to MiniQMT, submit orders, cancel orders, or run schema DDL.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -56,6 +57,10 @@ from .models import (
     VirtualAccount,
     VirtualAccountStatus,
 )
+from .tca_models import TcaTradeObservationOutcome, build_trade_observation
+from .tca_repository import ExecutionTradeObservationRepository
+
+logger = logging.getLogger(__name__)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -1009,8 +1014,9 @@ class QmtStrategyLedgerRepository:
             INSERT INTO qmt_strategy.trade_ledger (
                 trade_id, intent_id, strategy_id, qmt_order_id, qmt_order_sysid,
                 symbol, side, price, quantity, amount, commission, trade_date,
-                account_id, trade_time, order_remark, raw_json
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                account_id, trade_time, order_remark, raw_json, first_ingest_source,
+                first_ingested_at, canonical_trade_fact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             {conflict_clause}
             """,
             (
@@ -1030,9 +1036,68 @@ class QmtStrategyLedgerRepository:
                 trade.trade_time,
                 trade.order_remark,
                 _json(trade.raw_json),
+                trade.first_ingest_source,
+                trade.first_ingested_at,
+                trade.canonical_trade_fact_sha256,
             ),
         )
-        return cur.fetchone() is not None
+        inserted = cur.fetchone() is not None
+        if trade.first_ingest_source is not None:
+            self._persist_tca_trade_observation_with_cursor(cur, trade)
+        return inserted
+
+    @staticmethod
+    def _persist_tca_trade_observation_with_cursor(cur: Any, trade: TradeLedgerRecord) -> None:
+        """Persist observation behind a savepoint so evidence failure never changes broker settlement."""
+
+        if trade.first_ingested_at is None or trade.canonical_trade_fact_sha256 is None:
+            logger.error(
+                "TCA prospective trade provenance is incomplete; reason_code=ADAPTIVE_IS_TCA_TRADE_PROVENANCE_INCOMPLETE, "
+                "stage=trade_ledger_ingest, trade_id=%s, ingest_source=%s",
+                trade.trade_id,
+                trade.first_ingest_source,
+            )
+            return
+        savepoint = f"tca_obs_{sha1(trade.trade_id.encode('utf-8')).hexdigest()[:12]}"
+        cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            observation = build_trade_observation(
+                account_id=trade.account_id,
+                trade_date=trade.trade_date,
+                trade_id=trade.trade_id,
+                intent_id=trade.intent_id,
+                qmt_order_id=trade.qmt_order_id,
+                child_order_id=str(trade.raw_json.get("runtime_child_order_id") or "") or None,
+                symbol=trade.symbol,
+                side=trade.side,
+                ingest_source=trade.first_ingest_source,
+                observed_at=trade.first_ingested_at,
+                broker_trade_time=trade.trade_time,
+                price=trade.price,
+                quantity=trade.quantity,
+                commission=trade.commission,
+                raw_payload=trade.raw_json,
+            )
+            outcome = ExecutionTradeObservationRepository().record_observation(cursor=cur, observation=observation)
+            if outcome in {
+                TcaTradeObservationOutcome.CANONICAL_CONFLICT,
+                TcaTradeObservationOutcome.TRADE_TIME_CONFLICT,
+            }:
+                logger.error(
+                    "TCA trade evidence conflict persisted; reason_code=ADAPTIVE_IS_TCA_TRADE_EVIDENCE_CONFLICT, "
+                    "stage=trade_ledger_ingest, trade_id=%s, outcome=%s",
+                    trade.trade_id,
+                    outcome.value,
+                )
+            cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            logger.exception(
+                "TCA trade observation failed without changing broker settlement; "
+                "reason_code=ADAPTIVE_IS_TCA_OBSERVATION_WRITE_FAILED, stage=trade_ledger_ingest, trade_id=%s",
+                trade.trade_id,
+            )
 
     def _insert_position_lot_with_cursor(self, cur: Any, lot: PositionLotRecord, *, ignore_conflict: bool) -> bool:
         if lot.available_quantity > lot.remaining_quantity:
@@ -1356,6 +1421,83 @@ class QmtStrategyLedgerRepository:
                 )
                 rows = cur.fetchall()
         return [_row_to_reconciliation_issue(row) for row in rows]
+
+    def append_open_tca_conflicts_to_reconciliation(
+        self,
+        *,
+        run_id: str,
+        account_id: str,
+        trade_date: date,
+    ) -> tuple[ReconciliationIssueRecord, ...]:
+        """Map every OPEN TCA conflict head into one formal reconciliation run."""
+
+        mapped: list[ReconciliationIssueRecord] = []
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT c.*
+                    FROM qmt_strategy.execution_tca_trade_conflict c
+                    LEFT JOIN qmt_strategy.execution_tca_trade_conflict successor
+                      ON successor.supersedes_conflict_fact_id = c.trade_conflict_fact_id
+                    WHERE c.account_id = %s AND c.trade_date = %s
+                      AND c.conflict_status = 'OPEN'
+                      AND successor.trade_conflict_fact_id IS NULL
+                    ORDER BY c.trade_id, c.conflict_series_key, c.conflict_generation
+                    FOR UPDATE OF c
+                    """,
+                    (account_id, trade_date),
+                )
+                for conflict in cur.fetchall():
+                    issue_type = (
+                        "TRADE_KEY_CONFLICT"
+                        if conflict["conflict_type"] == "CORE_FACT"
+                        else "TRADE_TIME_CONFLICT"
+                    )
+                    issue = ReconciliationIssueRecord(
+                        issue_id=_stable_id("qmtissue", run_id, conflict["trade_conflict_fact_id"]),
+                        run_id=run_id,
+                        issue_type=issue_type,
+                        severity="ERROR",
+                        message="MiniQMT TCA trade evidence conflict blocks FINAL execution-cost evidence",
+                        trade_id=conflict["trade_id"],
+                        context={
+                            "reason_code": f"ADAPTIVE_IS_TCA_{issue_type}",
+                            "stage": "reconciliation_trade_conflict_mapping",
+                            "trade_conflict_fact_id": conflict["trade_conflict_fact_id"],
+                            "conflict_series_key": conflict["conflict_series_key"],
+                            "conflict_generation": conflict["conflict_generation"],
+                            "existing_ingest_source": conflict["existing_ingest_source"],
+                            "incoming_ingest_source": conflict["incoming_ingest_source"],
+                            "existing_canonical_sha256": conflict["existing_canonical_sha256"],
+                            "incoming_canonical_sha256": conflict["incoming_canonical_sha256"],
+                            "existing_timing_sha256": conflict["existing_timing_sha256"],
+                            "incoming_timing_sha256": conflict["incoming_timing_sha256"],
+                        },
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO qmt_strategy.reconciliation_issue (
+                            issue_id, run_id, strategy_id, symbol, qmt_order_id, trade_id,
+                            issue_type, severity, message, context
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (issue_id) DO NOTHING
+                        """,
+                        (
+                            issue.issue_id,
+                            issue.run_id,
+                            issue.strategy_id,
+                            issue.symbol,
+                            issue.qmt_order_id,
+                            issue.trade_id,
+                            issue.issue_type,
+                            issue.severity,
+                            issue.message,
+                            _json(issue.context),
+                        ),
+                    )
+                    mapped.append(issue)
+        return tuple(mapped)
 
     def upsert_unattributed_order(self, record: UnattributedOrderRecord) -> UnattributedOrderRecord:
         with self._conn_factory() as conn:
@@ -2090,6 +2232,16 @@ class InMemoryQmtStrategyLedgerRepository:
     def list_reconciliation_issues(self, run_id: str) -> list[ReconciliationIssueRecord]:
         issues = [issue for issue in self._reconciliation_issues.values() if issue.run_id == run_id]
         return sorted(issues, key=lambda issue: (issue.created_at, issue.issue_id))
+
+    def append_open_tca_conflicts_to_reconciliation(
+        self,
+        *,
+        run_id: str,
+        account_id: str,
+        trade_date: date,
+    ) -> tuple[ReconciliationIssueRecord, ...]:
+        _ = (run_id, account_id, trade_date)
+        return ()
 
     def upsert_unattributed_order(self, record: UnattributedOrderRecord) -> UnattributedOrderRecord:
         key = (record.account_id, record.trade_date, record.qmt_order_id)

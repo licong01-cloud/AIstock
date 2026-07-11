@@ -656,6 +656,9 @@ class TradeLedgerRecord:
     trade_time: datetime | None = None
     order_remark: str = ""
     raw_json: dict[str, Any] = field(default_factory=dict)
+    first_ingest_source: str | None = None
+    first_ingested_at: datetime | None = None
+    canonical_trade_fact_sha256: str | None = None
 
 
 @dataclass(frozen=True)

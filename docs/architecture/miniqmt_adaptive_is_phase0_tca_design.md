@@ -1,7 +1,7 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
 - 文档日期：2026-07-11
-- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 observation-only 实现待 scoped PR 验收；Phase 0A、DDL、生产配置与运行时激活均未完成
+- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 migration/repository/projector 实现待 scoped PR 验收；Phase 0A、生产 DDL、生产配置与运行时激活均未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
@@ -1896,6 +1896,25 @@ Gate：
 | 0A1-08 B0/BUG-604/LIVE不回归 | observation sidecar不进入request metadata；现有SIM-only bridge gate保持不变 | pending tick与LIVE deny定向测试；dependent-buy终态断言在干净`origin/main@9bc0810d`同样失败，作为baseline证据 | verified | - |
 
 Batch 0A-1 merge gate：上述行必须全部`implemented`，F2 validator、targeted matrix、`nox l0`、`validation_module_registry_l0`与`git diff --check`通过；若某项仅在代码存在但无证据，不得请求合入。
+
+### 8.3 Batch 0A-2 Design Acceptance Matrix
+
+本矩阵只验收 Batch 0A-2，不扩大为 Phase 0A 完成声明。0A-3 calculator/result population、0A-4 API/EOD hook与任何生产 projector activation 均不在本批次。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| 0A2-01 forward/rollback、11张表、3个prospective provenance列 | `backend/migrations/miniqmt_execution_tca_phase0a_20260711.sql`及rollback | PostgreSQL 16 scratch：base migrations→forward→idempotent forward→rollback→legacy row/column核对→final forward；11 tables、0 missing comments、11 immutable triggers、0 cascade | verified | - |
+| 0A2-02 typed immutable rows与same-hash CAS | `qmt_strategy_ledger/tca_models.py`、`tca_repository.py`: `ImmutableTcaRow`、`insert_immutable`、`materialize_receipt` | `test_immutable_row_rejects_missing_identity_and_mutation`、`test_repository_returns_inserted_idempotent_and_conflict_without_overwrite` | verified | - |
+| 0A2-03 immutable plan投影且REJECT coverage不丢失 | `qmt_strategy_ledger/tca_projector.py`: `project_execution_tca_evidence` | `test_projector_keeps_rejected_subject_and_materializes_emitted_parent`；planning subject count包含REJECT | verified | - |
+| 0A2-04 carrier→parent benchmark投影与缺失evidence loud | `qmt_strategy_ledger/tca_projector.py`: `_decision_values`、`_arrival_values`、`_eligibility_values` | 完整carrier投影测试；`test_projector_missing_carrier_is_loud_but_does_not_drop_parent` | verified | - |
+| 0A2-05 trade provenance、observation与conflict-aware ingest | `qmt_strategy_ledger/models.py`、`repository.py`、`sync_service.py`、`miniqmt_execution_runtime/oms.py`、`tca_models.py`、`tca_repository.py` | canonical/transport/timing/fee hash tests；snapshot sync 23 tests；event-loop OMS与seam 2 tests | verified | - |
+| 0A2-06 trade/observation/status/reconciliation/parent joined readers | `tca_repository.py`: `ExecutionTcaSourceRepository.read_scope`、`list_parent_joined` | 单cursor source contract静态复核；PostgreSQL schema/FK/index smoke | verified | - |
+| 0A2-07 OPEN conflict映射正式reconciliation issue | `repository.py`: `append_open_tca_conflicts_to_reconciliation`；`reconciliation.py` mapping hook | `test_reconciliation_maps_open_tca_conflict_and_cannot_report_success`；既有reconciliation tests全绿 | verified | - |
+| 0A2-08 no startup migration、SIM/LIVE与B0 side-effect边界 | migration独立且无bootstrap hook；projector显式拒绝非`minqmt_sim`；不改submit/cancel/query次数 | compile/ruff/diff；既有OMS、sync、0A-1/BUG-604/LIVE回归进入最终门禁 | verified | - |
+
+Batch 0A-2 merge gate：本矩阵全部`verified`，F2 validator、targeted matrix、changed-file lint/compile、`nox l0`、`validation_module_registry_l0`与`git diff --check`通过；生产DDL不得在本开发批次执行。
+
+批次边界（不是缺口）：生产DDL仍需实现PR合并后由用户单独授权，当前`production_ddl_gate=pending`；observation failure以savepoint loud隔离且不改变broker settlement；calculator/canonical snapshot hash归属0A-3；人工conflict resolution不属于Phase 0A；projector/EOD hook保持default-off并归属0A-4。
 
 ---
 
