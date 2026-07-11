@@ -23,6 +23,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.db.pg_pool import get_conn  # noqa: E402
+from backend.data_service.moneyflow_contract import (  # noqa: E402
+    MONEYFLOW_UNIT_CONTRACT_VERSION,
+    assert_moneyflow_frame_parity,
+)
 from backend.qlib_exporter.config import IPO_FILTER_DAYS  # noqa: E402
 
 
@@ -245,6 +249,14 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     meta_status = "PASS" if meta.get("start") == start.isoformat() and meta.get("end") == end.isoformat() else "FAIL"
     checks.append(Check("snapshot_meta_date_range", meta_status, {"meta": meta}))
+    contract = meta.get("moneyflow_unit_contract", {})
+    checks.append(
+        Check(
+            "snapshot_moneyflow_unit_contract",
+            "PASS" if contract.get("version") == MONEYFLOW_UNIT_CONTRACT_VERSION else "FAIL",
+            {"contract": contract, "expected": MONEYFLOW_UNIT_CONTRACT_VERSION},
+        )
+    )
 
     cal_path = snapshot_dir / "calendars" / "day.txt"
     cal = [x.strip() for x in cal_path.read_text(encoding="utf-8").splitlines() if x.strip()] if cal_path.exists() else []
@@ -276,6 +288,7 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
 
     expected_static_cols = baseline_static_columns()
     static_path = snapshot_dir / "static_factors.parquet"
+    static: pd.DataFrame | None = None
     if static_path.exists():
         static = pd.read_parquet(static_path)
         sf_dates = pd.to_datetime(static.index.get_level_values("datetime")).normalize()
@@ -334,6 +347,12 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
             status = "FAIL"
             details["extra_instruments"] = sorted(extra)[:20]
         checks.append(Check(f"snapshot_aux_{name}", status, details))
+        if name == "moneyflow.h5" and static is not None:
+            try:
+                assert_moneyflow_frame_parity(df, static)
+                checks.append(Check("snapshot_moneyflow_h5_static_parity", "PASS"))
+            except ValueError as exc:
+                checks.append(Check("snapshot_moneyflow_h5_static_parity", "FAIL", {"error": str(exc)}))
 
     facts["expected_official_df"] = expected_official
     return checks, facts

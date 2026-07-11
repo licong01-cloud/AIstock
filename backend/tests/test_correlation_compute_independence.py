@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backend.data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "backend" / "scripts" / "run_correlation_compute_wsl.py"
@@ -170,6 +171,7 @@ def test_correlation_infers_missing_meta_from_offline_parquet(monkeypatch, tmp_p
     (cache_root / "_meta.json").write_text(
         json.dumps(
             {
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 "factors": {
                     "factor_a": {"as_of_date": "2026-04-10"}
                 }
@@ -275,6 +277,7 @@ def test_local_correlation_compute_path_is_service_owned_and_db_safe(monkeypatch
     (tmp_path / "_meta.json").write_text(
         json.dumps(
             {
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 "factors": {
                     "factor_a": {"as_of_date": "2026-04-10"},
                     "factor_b": {"as_of_date": "2026-04-10"},
@@ -383,6 +386,7 @@ def test_local_correlation_compute_classifies_matrix_factor_with_no_valid_pairs(
     (tmp_path / "_meta.json").write_text(
         json.dumps(
             {
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
                 "factors": {
                     name: {"as_of_date": "2026-04-30"}
                     for name in factors

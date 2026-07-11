@@ -107,7 +107,7 @@ const INCREMENTAL_TYPES: ExportType[] = [
 const DATASET_CONFIG: Record<ExportType, { label: string; file: string; isDaily: boolean }> = {
   daily: { label: "日频行情 (daily_pv.h5)", file: "daily_pv.h5", isDaily: true },
   minute: { label: "分钟线 (minute_1min.h5)", file: "minute_1min.h5", isDaily: false },
-  moneyflow: { label: "个股资金流向 (moneyflow.h5)", file: "moneyflow.h5", isDaily: true },
+  moneyflow: { label: "个股资金流向 (moneyflow.h5，量=股/额=元)", file: "moneyflow.h5", isDaily: true },
   daily_basic: { label: "每日指标 (daily_basic.h5)", file: "daily_basic.h5", isDaily: true },
   bak_basic: { label: "历史股票列表 (bak_basic.h5)", file: "bak_basic.h5", isDaily: true },
   margin_detail: { label: "融资融券明细 (margin_detail.h5)", file: "margin_detail.h5", isDaily: true },
@@ -123,6 +123,21 @@ interface StepResult {
   rows?: number;
   duration?: number;
   error?: string;
+  detail?: string;
+}
+
+interface StaticFactorsResponse {
+  snapshot_id: string;
+  rows: number;
+  moneyflow_unit_contract?: StaticFactorsResponse["moneyflow_unit_contract"];
+  columns: number;
+  parquet_path: string;
+  moneyflow_unit_contract: {
+    version: string;
+    factor_volume_unit: "share";
+    factor_amount_unit: "cny";
+    total_net_source: string;
+  };
 }
 
 // 数据检查响应
@@ -562,7 +577,14 @@ export default function QlibPage() {
 
             setStepResults(prev => {
               const m = new Map(prev);
-              m.set(ds, { status: "done", rows: resp.rows, duration: elapsed });
+              m.set(ds, {
+                status: "done",
+                rows: resp.rows,
+                duration: elapsed,
+                detail: resp.moneyflow_unit_contract
+                  ? `资金流契约 ${resp.moneyflow_unit_contract.version}（股/元）`
+                  : undefined,
+              });
               return m;
             });
           } catch (err: any) {
@@ -584,10 +606,18 @@ export default function QlibPage() {
         });
         const t0 = Date.now();
         try {
-          await backendRequest("POST", `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId.trim())}/static_factors`);
+          const resp = await backendRequest<StaticFactorsResponse>(
+            "POST",
+            `/api/v1/qlib/snapshots/${encodeURIComponent(snapshotId.trim())}/static_factors`,
+          );
           setStepResults(prev => {
             const m = new Map(prev);
-            m.set("static_factors", { status: "done", duration: Date.now() - t0 });
+            m.set("static_factors", {
+              status: "done",
+              rows: resp.rows,
+              duration: Date.now() - t0,
+              detail: `资金流契约 ${resp.moneyflow_unit_contract.version}（股/元）`,
+            });
             return m;
           });
         } catch (err: any) {
@@ -796,6 +826,9 @@ export default function QlibPage() {
                   <span>生成字段映射 CSV</span>
                 </label>
               </div>
+              <p className="mt-2 text-xs text-gray-500">
+                资金流源表保持 Tushare 手/万元；moneyflow.h5、static_factors、QE 与实时选股统一输出股/元。
+              </p>
               <div className="mt-2 flex gap-2">
                 <button type="button" onClick={selectAllDaily} style={btnSecondary}>全选日频</button>
                 <button type="button" onClick={selectAll} style={btnSecondary}>全选</button>
@@ -986,6 +1019,9 @@ export default function QlibPage() {
                       <span className="text-green-600 text-xs">
                         — 完成 ({(result.duration / 1000).toFixed(1)}s)
                       </span>
+                    )}
+                    {result.status === "done" && result.detail && (
+                      <span className="text-gray-500 text-xs">— {result.detail}</span>
                     )}
                     {result.status === "running" && (
                       <span className="text-blue-500 text-xs">导出中...</span>

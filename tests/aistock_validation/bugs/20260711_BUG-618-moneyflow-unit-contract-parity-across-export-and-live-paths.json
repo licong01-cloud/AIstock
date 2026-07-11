@@ -1,6 +1,30 @@
 {
   "actual": "Tushare-moneyflow-raw-units-are-hand-and-10k-yuan-but-H5-static-factor-QE-live-selection-paper-and-export-paths-apply-inconsistent-conversions.-Preserve-existing-field-names-and-fix-values-docs-skills-and-UI-API-export.",
   "allowed_write_scope": [
+    ".claude/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/agents/openai.yaml",
+    "backend/data_service/moneyflow_contract.py",
+    "backend/data_service/preprocessor.py",
+    "backend/data_service/qe_data_service.py",
+    "backend/data_service/timescaledb_adapter.py",
+    "backend/inference_engine.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/qlib_exporter/router.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/data_service/test_moneyflow_contract.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "backend/tests/test_qe_static_factors_live_asof.py",
+    "backend/tests/quantevolver/test_moneyflow_cache_contract.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
+    "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+    "docs/analysis/qlib_backtest_dataset_export_guide_20260712.md",
+    "frontend/src/app/qlib/page.tsx",
+    "scripts/export_qe_qlib_candidate.py",
+    "scripts/validate_qe_qlib_candidate.py",
     "tests/aistock_validation/bugs/20260711_BUG-618-moneyflow-unit-contract-parity-across-export-and-live-paths.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -23,7 +47,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Keep existing mf_total_net_* names while every offline export, static factor, QE, factor-library and live inference path emits the same shares/yuan moneyflow contract and derives total net flow from Tushare net_mf_*.",
   "first_seen_at": "2026-07-11T16:20:34.979794Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,7 +62,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/data_service/test_moneyflow_contract.py -q",
   "required_verification": [
     "l0"
   ],

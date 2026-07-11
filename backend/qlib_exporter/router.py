@@ -10,6 +10,8 @@ from __future__ import annotations
 - POST /api/v1/qlib/snapshots/minute    分钟线全量导出
 """
 
+# ruff: noqa: E402
+
 import json
 import os
 import shutil
@@ -37,7 +39,6 @@ from .config import (
     FIELD_MAPPING_DB_MINUTE,
     IPO_FILTER_DAYS,
     MINUTE_QFQ_TABLE,
-    MONEYFLOW_TS_TABLE,
     QLIB_MARKET,
     QLIB_SNAPSHOT_ROOT,
 )
@@ -53,6 +54,10 @@ from .exporter import (
     QlibSectorDataExporter,
 )
 from .field_map_service import export_field_map_for_snapshot
+from ..data_service.moneyflow_contract import (
+    assert_moneyflow_frame_parity,
+    moneyflow_unit_contract_receipt,
+)
 from .data_quality import DataReporter, DataValidator
 from .db_reader import DBReader
 from .authoritative_bin_exporter import (
@@ -181,6 +186,7 @@ class MoneyflowSnapshotResponse(BaseModel):
     end: date
     ts_codes: List[str]
     rows: int
+    moneyflow_unit_contract: Dict[str, Any]
 
     @classmethod
     def from_result(cls, result: ExportResult) -> "MoneyflowSnapshotResponse":
@@ -191,6 +197,7 @@ class MoneyflowSnapshotResponse(BaseModel):
             end=result.end,
             ts_codes=result.ts_codes,
             rows=result.rows,
+            moneyflow_unit_contract=moneyflow_unit_contract_receipt(),
         )
 
 
@@ -241,6 +248,26 @@ _bak_basic_exporter = QlibBakBasicExporter()
 _margin_detail_exporter = QlibMarginDetailExporter()
 _cyq_perf_exporter = QlibCyqPerfExporter()
 _sector_data_exporter = QlibSectorDataExporter()
+
+
+def _record_moneyflow_unit_contract(snapshot_id: str) -> Dict[str, Any]:
+    """Persist the canonical contract so UI, scripts and operators can verify it."""
+
+    snap_dir = QLIB_SNAPSHOT_ROOT / snapshot_id
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = snap_dir / "meta.json"
+    meta: Dict[str, Any] = {}
+    if meta_path.exists():
+        try:
+            loaded = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                meta = loaded
+        except Exception:
+            traceback.print_exc()
+    receipt = moneyflow_unit_contract_receipt()
+    meta["moneyflow_unit_contract"] = receipt
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return receipt
 
 
 @router.post("/api/v1/qlib/snapshots/daily", response_model=DailySnapshotResponse)
@@ -453,6 +480,7 @@ async def create_moneyflow_snapshot(body: MoneyflowSnapshotRequest) -> Moneyflow
             pit_ensure=pit_ensure,
             all_txt_summary=all_txt_summary,
         )
+        _record_moneyflow_unit_contract(body.snapshot_id)
         # 导出成功后自动触发字段映射生成
         try:
             export_field_map_for_snapshot(
@@ -901,12 +929,8 @@ try:
     CyqPerfSnapshotRequest.model_rebuild()
     MoneyflowSnapshotRequest.model_rebuild()
     FieldMapExportRequest.model_rebuild()
-    MinuteSnapshotRequest.model_rebuild()
-    IncrementalExportRequest.model_rebuild()
     BinExportRequest.model_rebuild()
     BinExportResponse.model_rebuild()
-    BinExportInfo.model_rebuild()
-    BinExportListResponse.model_rebuild()
 except Exception:
     # If rebuild fails, let runtime raise the original error for diagnosis.
     pass
@@ -1402,16 +1426,6 @@ async def export_qlib_bin(body: BinExportRequest) -> BinExportResponse:
     # 因此：
     # - 若 all.txt 原本存在：dump 后恢复原内容（避免指数写入影响股票 universe）
     # - 若 all.txt 原本不存在：dump 后删除新生成的 all.txt
-    instruments_dir_for_all = bin_dir / "instruments"
-    all_file = instruments_dir_for_all / "all.txt"
-    all_file_existed = all_file.exists()
-    all_file_backup: Optional[bytes] = None
-    if all_file_existed:
-        try:
-            all_file_backup = all_file.read_bytes()
-        except Exception:
-            all_file_backup = None
-
     csv_dir_wsl = win_to_wsl_path(str(csv_dir))
     bin_dir_wsl = win_to_wsl_path(str(bin_dir))
 
@@ -1851,19 +1865,6 @@ async def export_index_bin(body: IndexBinExportRequest) -> IndexBinExportRespons
             check_ok = None
             stdout_check = None
             stderr_check = str(exc)
-
-    # dump_bin.py 可能已修改/生成 instruments/all.txt；这里按策略恢复/删除
-    try:
-        if all_file_existed:
-            if all_file_backup is not None:
-                instruments_dir_for_all.mkdir(parents=True, exist_ok=True)
-                all_file.write_bytes(all_file_backup)
-        else:
-            if all_file.exists():
-                all_file.unlink()
-    except Exception:
-        # 不影响导出主流程
-        pass
 
     # 5. 维护 instruments/index.txt
     instruments_dir = bin_dir / "instruments"
@@ -2642,6 +2643,7 @@ async def create_moneyflow_incremental(body: IncrementalExportRequest) -> Increm
             fallback_start=result.start,
             end=body.end,
         )
+        _record_moneyflow_unit_contract(body.snapshot_id)
         return IncrementalExportResponse.from_result(result)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -2804,6 +2806,7 @@ class StaticFactorsResponse(BaseModel):
     rows: int
     columns: int
     parquet_path: str
+    moneyflow_unit_contract: Dict[str, Any]
 
 
 @router.post("/api/v1/qlib/snapshots/{snapshot_id}/static_factors", response_model=StaticFactorsResponse)
@@ -2817,6 +2820,9 @@ async def build_static_factors_for_snapshot(snapshot_id: str) -> StaticFactorsRe
     h5_path = snap_dir / "daily_pv.h5"
     if not h5_path.exists():
         raise HTTPException(status_code=404, detail=f"Snapshot {sid} 中未找到 daily_pv.h5，请先导出日频数据")
+    moneyflow_path = snap_dir / "moneyflow.h5"
+    if not moneyflow_path.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot {sid} 中未找到 moneyflow.h5，请先导出资金流数据")
 
     try:
         df_daily = pd.read_hdf(str(h5_path), key="data")
@@ -2827,15 +2833,19 @@ async def build_static_factors_for_snapshot(snapshot_id: str) -> StaticFactorsRe
 
         from ..data_service.qe_data_service import build_static_factors
         df_sf = build_static_factors(instruments, start_date, end_date)
+        df_moneyflow = pd.read_hdf(str(moneyflow_path), key="data")
+        assert_moneyflow_frame_parity(df_moneyflow, df_sf)
 
         parquet_path = snap_dir / "static_factors.parquet"
         df_sf.to_parquet(str(parquet_path))
+        unit_contract = _record_moneyflow_unit_contract(sid)
 
         return StaticFactorsResponse(
             snapshot_id=sid,
             rows=len(df_sf),
             columns=len(df_sf.columns),
             parquet_path=str(parquet_path),
+            moneyflow_unit_contract=unit_contract,
         )
     except Exception as exc:
         traceback.print_exc()
@@ -3958,8 +3968,6 @@ async def validate_snapshot_data(
 # 数据库源数据检查 API
 # =============================================================================
 
-from .db_reader import DBReader
-
 _db_reader = DBReader()
 
 
@@ -3994,9 +4002,6 @@ async def check_database_data(body: DataCheckRequest) -> DataCheckResponse:
     3. 数据样本预览
     """
     try:
-        from datetime import date as date_type
-        import pandas as pd
-        
         # Build the checked stock universe with the same SH/SZ-only export rule.
         normalized_exchanges = set(normalize_stock_export_exchanges(body.exchanges))
         if body.ts_codes:
@@ -4007,9 +4012,12 @@ async def check_database_data(body: DataCheckRequest) -> DataCheckResponse:
             codes = _db_reader.get_all_ts_codes()
             def match_exchange(code: str) -> bool:
                 uc = code.upper()
-                if uc.endswith(".SH"): return "sh" in normalized_exchanges
-                if uc.endswith(".SZ"): return "sz" in normalized_exchanges
-                if uc.endswith(".BJ"): return False
+                if uc.endswith(".SH"):
+                    return "sh" in normalized_exchanges
+                if uc.endswith(".SZ"):
+                    return "sz" in normalized_exchanges
+                if uc.endswith(".BJ"):
+                    return False
                 return False
             codes = [c for c in codes if match_exchange(c)]
         issues = []

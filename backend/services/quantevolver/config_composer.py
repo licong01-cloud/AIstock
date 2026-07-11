@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 
 from ...db.pg_pool import get_conn
+from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
@@ -4080,6 +4081,7 @@ class ConfigComposer:
         lines.append("        'universe_mismatch': [],")
         lines.append("        'index_policy_mismatch': [],")
         lines.append("        'hash_mismatch': [],")
+        lines.append("        'data_contract_mismatch': [],")
         lines.append("        'schema_invalid': [],")
         lines.append('    }')
         lines.append('')
@@ -4100,6 +4102,7 @@ class ConfigComposer:
         lines.append("        'start_date': TRAIN_START,")
         lines.append("        'end_date': TEST_END,")
         lines.append("        'expected_as_of_date': TEST_END,")
+        lines.append(f"        'expected_moneyflow_unit_contract_version': '{MONEYFLOW_UNIT_CONTRACT_VERSION}',")
         lines.append("        'requested_factor_count': 1,")
         lines.append("        'hit_factor_count': 0,")
         lines.append("        'miss_factor_count': 1,")
@@ -4129,6 +4132,12 @@ class ConfigComposer:
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")
         lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
         lines.append('        return contract')
+        lines.append(f"    expected_data_contract = '{MONEYFLOW_UNIT_CONTRACT_VERSION}'")
+        lines.append("    cached_data_contract = meta.get('moneyflow_unit_contract_version')")
+        lines.append("    contract['moneyflow_unit_contract_version'] = cached_data_contract")
+        lines.append('    if cached_data_contract != expected_data_contract:')
+        lines.append("        logger.info(f'  {factor_name}: moneyflow data contract mismatch ({cached_data_contract} vs {expected_data_contract})')")
+        lines.append("        miss_reasons['data_contract_mismatch'].append(factor_name)")
         lines.append("    entry = meta.get('factors', {}).get(factor_name)")
         lines.append('    if not isinstance(entry, dict):')
         lines.append("        miss_reasons['missing_meta'].append(factor_name)")

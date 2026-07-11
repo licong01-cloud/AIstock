@@ -47,6 +47,8 @@ def test_live_asof_fill_only_slow_static_prefixes(monkeypatch) -> None:
         "mf_lg_sell_vol",
         "mf_elg_buy_vol",
         "mf_elg_sell_vol",
+        "mf_net_amt",
+        "mf_net_vol",
     ]
     monkeypatch.setattr(
         qe_data_service,
@@ -77,7 +79,12 @@ def test_live_asof_fill_only_slow_static_prefixes(monkeypatch) -> None:
         qe_data_service,
         "load_daily_pv",
         lambda *_args, **_kwargs: pd.DataFrame(
-            {"close": [10.0, 11.0], "amount": [100.0, 101.0], "volume": [1000.0, 1001.0]},
+            {
+                "close": [10.0, 11.0],
+                "amount": [100.0, 101.0],
+                "volume": [1000.0, 1001.0],
+                "factor": [1.0, 1.0],
+            },
             index=daily_index,
         ),
     )
