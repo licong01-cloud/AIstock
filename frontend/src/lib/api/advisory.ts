@@ -111,9 +111,11 @@ export type AdvisoryStrategyBindingVersion = {
   fusion_method?: string | null;
   package_set_hash: string;
   fusion_policy_sha256?: string | null;
-  runtime_config_json?: JsonObject;
+  runtime_config_json?: JsonObject | null;
   effective_from_trade_date?: string | null;
   effective_to_trade_date?: string | null;
+  binding_interval_semantics?: "LEFT_CLOSED_RIGHT_OPEN" | string;
+  binding_payload_hash?: string;
   activation_status: "DRAFT" | "ACTIVE" | "RETIRED" | string;
   activation_reason?: string | null;
   source_replay_run_id?: string | null;
@@ -242,6 +244,8 @@ export type AdvisoryBindingPayload = {
 export type AdvisoryBindingApplyPayload = {
   binding: AdvisoryBindingPayload;
   activation_reason: string;
+  expected_program_version: number;
+  expected_binding_version_id: string;
   source_replay_run_id?: string | null;
   effective_from_trade_date?: string | null;
   created_by?: string | null;
@@ -250,6 +254,14 @@ export type AdvisoryBindingApplyPayload = {
 export type AdvisoryBindingApplyResponse = {
   program: AdvisoryProgram;
   binding: AdvisoryStrategyBindingVersion;
+};
+
+export type AdvisoryBindingDefaults = {
+  program_id: string;
+  expected_program_version: number;
+  expected_binding_version_id: string;
+  effective_from_trade_date: string;
+  binding_interval_semantics: "LEFT_CLOSED_RIGHT_OPEN" | string;
 };
 
 export type AdvisoryReviewPreviewPayload = {
@@ -333,6 +345,9 @@ export const advisoryApi = {
   async activeBinding(programId: string): Promise<AdvisoryStrategyBindingVersion> {
     const data = await apiFetch<{ binding: AdvisoryStrategyBindingVersion }>(`/advisory/programs/${encodeURIComponent(programId)}/bindings/active`);
     return data.binding;
+  },
+  async bindingDefaults(programId: string): Promise<AdvisoryBindingDefaults> {
+    return apiFetch<AdvisoryBindingDefaults>(`/advisory/programs/${encodeURIComponent(programId)}/bindings/defaults`);
   },
   async applyBinding(programId: string, payload: AdvisoryBindingApplyPayload): Promise<AdvisoryBindingApplyResponse> {
     return apiFetch<AdvisoryBindingApplyResponse>(`/advisory/programs/${encodeURIComponent(programId)}/bindings/apply`, body(payload));

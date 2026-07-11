@@ -9,8 +9,8 @@
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 后继设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
-> 当前状态：`design_ready`；本文只完成设计，不代表代码、策略包、Program、binding、生产 DML 或 Phase 1 source ledger 已产生
-> 生产影响：本文为文档变更；DDL、DML、依赖、服务、调度、API、UI 和运行时均为 `noop`
+> 当前状态：`design_ready`；F-033 dated binding lifecycle 与 F-034 policy registry 已完成；F-033 已通过本机 DEV-DB rollback-only PostgreSQL readback gate；F-031/F-032/F-035 至 F-040 仍仅为设计；未创建持久化策略包或 Program/binding 业务记录、生产 DML 或 Phase 1 source ledger
+> 生产影响：本次新增 F-033 源码和 comment-only migration；Trading Core v2、荐股生命周期及 comment migration 仅应用到 `127.0.0.1:5433/aistock_dev`，生产 migration 尚未应用；未执行依赖安装、服务重启、调度启用、生产 API/UI 发布或运行时操作
 
 ## 0. 文档定位与权威边界
 
@@ -132,7 +132,7 @@ scripts/advisory_phase0a_audit.py
 
 ## 3. Non-Goals / 非目标
 
-- 不在本文档变更中写业务代码、创建策略包、修改 Program/binding 或写生产数据库。
+- F-033/F-034 以外的设计项不在本次代码切片中实现；本次不会创建策略包、持久化 Program/binding 业务记录或写生产数据库。
 - 不复活、改写或重新命名两个已归档单 Alpha 包。
 - 不创建只为通过测试的虚假模型、空资产包、伪造候选或伪造空候选日。
 - 不要求当前单 Alpha包仅因历史 DSE 使用旧 manifest 就重新发布；是否需要新 identity 由 current-manifest cold-start 结果确定。
@@ -284,7 +284,7 @@ run acquisition 与 review/list/item/episode/decision 持久化必须在单 Prog
 binding applies when from <= T < to
 ```
 
-`effective_to_trade_date` 等于 successor 的 `effective_from_trade_date`，不是“最后一个仍有效交易日”。数据库 comment、模型和 API 必须使用相同语义。
+`effective_to_trade_date` 等于 successor 的 `effective_from_trade_date`，不是“最后一个仍有效交易日”。运行时服务、持久化值、数据库 comment 和 API 必须使用相同语义；`advisory_binding_interval_comments_20260712.sql` 只修正 comment，不改变表结构或业务数据。
 
 ### 7.2 新 binding 生效日算法
 
@@ -508,7 +508,7 @@ evidence_payload.decision/runtime/universe/policy closure complete
 
 ### 12.1 API
 
-未来 Program create/update/clone/apply binding API 必须返回：
+F-033 已实现的 Program create/update/clone/apply binding API 必须返回：
 
 ```text
 binding_version_id
@@ -517,14 +517,15 @@ effective_to_trade_date
 binding_interval_semantics = LEFT_CLOSED_RIGHT_OPEN
 program_version
 binding_payload_hash
-runtime_profile id/version/hash
 ```
+
+`runtime_profile id/version/hash` 由 F-035 prospective evidence producer 在其实现时加入正式 response/evidence contract；当前 `runtime_config_json` 不是该字段的替代品，也不得据此把 F-035 视为完成。
 
 过期 expected version、日期回溯、区间重叠或 package/preflight 失败返回稳定 reason code。API 不新增 approve/reject/revoke/authorize endpoint。
 
 ### 12.2 DB
 
-Phase 0A.2 优先复用现有表和 JSON evidence，不新增 migration：
+Phase 0A.2 复用现有表和 JSON evidence，不新增表、列、约束或索引；仅增加 comment-only migration `backend/db/migrations/advisory_binding_interval_comments_20260712.sql`，统一 `[from,to)` 语义：
 
 - `app.advisory_strategy_binding_version` 保存 dated intervals。
 - `strategy_pkg.selection_score_artifact` 保存 candidate artifact/empty declaration。
@@ -533,7 +534,7 @@ Phase 0A.2 优先复用现有表和 JSON evidence，不新增 migration：
 
 `app.advisory_review_run.run_payload_json` 保存 daily run key、execution origin、decision/target dates、binding/manifest/policy/config hashes、source watermarks、attempt/resume 信息和 runner batch id。正式 `RUN` 继续使用现有 Program/date partial unique index；`REPLAY/PREVIEW` 不得规避正式唯一性生成 published list。
 
-binding 并发使用 §7.3 固定的 Program row lock、expected version 和事务内 overlap query，不依赖新 exclusion constraint。daily runner 复用现有 review/list unique index，并按 §6.4 补齐事务或可恢复状态机。Phase 0A.2 的 `G-DEV-02=noop`；Phase 1 source tables仍由 Phase 1 dataset foundation migration 唯一创建。
+binding 并发使用 §7.3 固定的 Program row lock、expected version 和事务内 overlap query，不依赖新 exclusion constraint。正式 RUN 获取相同 Program lock 并在写入前验证 decision-date binding。daily runner 复用现有 review/list unique index，并按 §6.4 补齐事务或可恢复状态机。Phase 0A.2 的 DEV-DB `G-DEV-02` 已应用并验证上述 comment migration，生产 `G-DEV-02=required_pending`；Phase 1 source tables仍由 Phase 1 dataset foundation migration 唯一创建。
 
 ### 12.3 UI
 
@@ -606,7 +607,7 @@ G-RUN-04 transaction_data_integrity
 G-RUN-05 artifact_publish_cleanup
 ```
 
-本文不增加第 9 类门禁。`G-DEV-02` 在 Phase 0A.2 无 migration 时为可验证 `noop`；未来 Phase 1 DDL 仍在开发/发布阶段应用。
+本文不增加第 9 类门禁。`G-DEV-02` 只负责验证并应用 comment-only migration，不进入运行时业务流程；未来 Phase 1 DDL 仍在开发/发布阶段应用。
 
 ### 14.2 Gate satisfiability matrix
 
@@ -649,7 +650,9 @@ PACKAGE_READY
 - 补齐 typed models、reason code 和正式 audit 禁止 scratch policy 规则。
 - 用 fixture 验证完整 registry PASS、缺字段/hash/effective-range fail-closed。
 
-### 15.2 Phase 0A.2B：Dated binding lifecycle
+### 15.2 Phase 0A.2B：Dated binding lifecycle（实现与 DEV-DB gate 完成）
+
+2026-07-12 已完成源码、API 契约、前端请求、后端隔离测试和 Playwright 验证；在显式授权后，已向 `127.0.0.1:5433/aistock_dev` 应用所需 Trading Core v2、荐股生命周期和 comment migration，并通过真实 DEV-DB rollback-only readback 用例。测试 Program/binding 数据已回滚；没有执行生产 DML、生产 DDL 或运行时启用。实现证据见 §20.1 的 F-033 行。
 
 - 统一 create/update/clone/apply/_ensure active binding 的 effective-date 算法。
 - 增加 expected version、无重叠、同事务 retire/insert 和日期语义测试。
@@ -751,7 +754,7 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 ### 17.1 Rollout
 
 1. 合入 policy/binding/evidence producer 代码和测试；不执行生产 DML。
-2. 部署代码并验证 release health；Phase 0A.2 固定无 migration，`production_ddl_gate=noop`。
+2. 在发布阶段应用并核验 comment-only migration，随后部署代码并验证 release health；运行时不执行 DDL。
 3. 对现有 single current manifest 和 native multi parent 执行隔离 smoke；仅在 single 失败时另行发布新 identity。
 4. 使用程序化 request 创建两个 Program 的 future-effective successor binding，冻结 runner/policy/config，并确定正式 `T0`。
 5. 激活 daily runner；观察正常业务日证据并执行只读 L4 audit/handoff。
@@ -791,10 +794,10 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 
 ## 19. Production Gates / 生产门禁
 
-本文是文档-only：
+当前 F-033 实现切片的生产门禁：
 
 ```text
-production_ddl_gate = noop
+production_ddl_gate = required_pending
 production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 production_dml_gate = noop
@@ -804,7 +807,7 @@ production_runtime_gate = noop
 未来实现/运行必须分别报告：
 
 - 代码是否合入及本地 main/origin main 是否同步。
-- Phase 0A.2 `production_ddl_gate=noop` 是否得到验证；Phase 1 migration 必须另行报告，不能混入本阶段运行命令。
+- F-033 comment-only migration 是否已在发布阶段应用并 readback；Phase 1 migration 必须另行报告，不能混入本阶段运行命令。
 - current-manifest smoke、两个 dated successor binding 和正式 `T0` 是否已由程序化流程产生并 readback。
 - daily runner 是否实际激活、最新 batch/Program receipt、是否存在未恢复 key；`review_schedule` metadata 不作为激活证据。
 - source observer 是否启用、当前积累到哪个 trade date。
@@ -834,6 +837,7 @@ production_runtime_gate = noop
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
+| F-033 | `backend/services/advisory_program.py` dated interval、事务内 RUN/date 复核、payload 同步、runtime 继承、expected version、原子 create/replace、legacy repair；`backend/routers/advisory.py` binding defaults/repair 和 create/update/clone/apply 返回契约；`frontend/src/lib/api/advisory.ts`、`frontend/src/app/paper-v2/advisory/page.tsx` 后端默认日期/版本令牌调用；`advisory_binding_interval_comments_20260712.sql` comment 语义统一 | `test_advisory_binding_lifecycle.py` payload/runtime/legacy/并发锁序；`test_advisory_api.py` API contract；`paper-v2-advisory-ui.spec.ts` 9 passed；`test_advisory_binding_lifecycle_devdb.py` 在 `127.0.0.1:5433/aistock_dev` 以 `AISTOCK_DEV_DB_E2E=1` 执行，1 passed，事务回滚；focused backend suite 43 passed，完整 Advisory backend suite 59 passed；TypeScript/Ruff/compile/diff check passed | completed | none |
 | F-034 | `backend/services/advisory_phase0a/policy.py` registry loader/hash validator；`models.py` typed request/registry contract；`audit_service.py` frozen id/hash/effective-range enforcement；`scripts/advisory_phase0a_audit.py validate-policy-registry` | `test_policy_registry.py` valid/tampered/missing/effective-range/prohibited-field/scratch-root cases；`test_audit_service.py` scratch/hash mismatch cases；focused suite 33 passed；Ruff passed；direct CLI registry validation passed | completed | none |
 
 ## 21. Exit Criteria / 设计退出条件
@@ -847,4 +851,4 @@ production_runtime_gate = noop
 - Phase 1 文档允许 `PARTIAL/HANDOFF_EMITTED` scope 建设 source capability，并禁止其进入 formal Phase 0B。
 - `git diff --check` 通过。
 
-用户确认本文后，才进入 Phase 0A.2 实现。真实业务验收仍需后续代码证据、现有 single current-manifest smoke、双轨 dated successor binding、daily runner 的正常交易日 prospective evidence、exactly-once/失败隔离 receipt、L4 `HANDOFF_EMITTED` receipt，以及 source/embargo 成熟后的 `READY` receipt。
+用户确认设计后已进入 Phase 0A.2 实现；当前 F-033 与 F-034 已完成，F-033 已通过真实 DEV-DB rollback-only gate。真实业务验收仍需后续 F-031/F-032 current-manifest smoke、双轨 dated successor binding、F-039 daily runner 的正常交易日 prospective evidence、exactly-once/失败隔离 receipt、L4 `HANDOFF_EMITTED` receipt，以及 source/embargo 成熟后的 `READY` receipt。

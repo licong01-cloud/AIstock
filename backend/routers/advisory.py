@@ -44,6 +44,9 @@ class AdvisoryProgramUpdateRequest(BaseModel):
     exit_price_basis: str | None = None
     review_schedule: dict[str, Any] | None = None
     status: str | None = None
+    expected_program_version: int | None = Field(default=None, ge=1)
+    expected_binding_version_id: str | None = Field(default=None, min_length=1)
+    effective_from_trade_date: date | None = None
 
 
 class AdvisoryStatusRequest(BaseModel):
@@ -71,13 +74,24 @@ class AdvisoryBindingPayload(BaseModel):
     package_ids: list[str] = Field(min_length=1)
     package_weights: dict[str, float] | None = None
     target_count: int | None = Field(default=None, gt=0, le=100)
-    runtime_config_json: dict[str, Any] = Field(default_factory=dict)
+    runtime_config_json: dict[str, Any] | None = None
 
 
 class AdvisoryBindingApplyRequest(BaseModel):
     binding: AdvisoryBindingPayload
     activation_reason: str = Field(min_length=1)
+    expected_program_version: int = Field(ge=1)
+    expected_binding_version_id: str = Field(min_length=1)
     source_replay_run_id: str | None = None
+    effective_from_trade_date: date | None = None
+    created_by: str | None = None
+
+
+class AdvisoryLegacyBindingRepairRequest(BaseModel):
+    binding: AdvisoryBindingPayload
+    repair_reason: str = Field(min_length=1)
+    expected_program_version: int = Field(ge=1)
+    expected_binding_version_id: str = Field(min_length=1)
     effective_from_trade_date: date | None = None
     created_by: str | None = None
 
@@ -132,7 +146,7 @@ def create_program(
 ) -> dict[str, Any]:
     try:
         program = service.create_program(**req.model_dump())
-        return {"ok": True, "program": program_to_dict(program)}
+        return {"ok": True, "program": program_to_dict(program), "binding": service.active_binding(program.program_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -156,7 +170,8 @@ def update_program(
 ) -> dict[str, Any]:
     try:
         updates = {key: value for key, value in req.model_dump().items() if value is not None}
-        return {"ok": True, "program": program_to_dict(service.update_program(program_id, updates))}
+        program = service.update_program(program_id, updates)
+        return {"ok": True, "program": program_to_dict(program), "binding": service.active_binding(program.program_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -183,6 +198,17 @@ def active_binding(
         _raise_http(exc)
 
 
+@router.get("/programs/{program_id}/bindings/defaults")
+def binding_defaults(
+    program_id: str,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, **service.binding_defaults(program_id)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/programs/{program_id}/bindings/apply")
 def apply_binding(
     program_id: str,
@@ -195,6 +221,29 @@ def apply_binding(
             binding=req.binding.model_dump(),
             activation_reason=req.activation_reason,
             source_replay_run_id=req.source_replay_run_id,
+            effective_from_trade_date=req.effective_from_trade_date,
+            created_by=req.created_by,
+            expected_program_version=req.expected_program_version,
+            expected_binding_version_id=req.expected_binding_version_id,
+        )
+        return {"ok": True, **result}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/programs/{program_id}/bindings/repair-legacy")
+def repair_legacy_binding(
+    program_id: str,
+    req: AdvisoryLegacyBindingRepairRequest,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        result = service.repair_legacy_binding(
+            program_id,
+            binding=req.binding.model_dump(),
+            repair_reason=req.repair_reason,
+            expected_program_version=req.expected_program_version,
+            expected_binding_version_id=req.expected_binding_version_id,
             effective_from_trade_date=req.effective_from_trade_date,
             created_by=req.created_by,
         )
@@ -246,7 +295,8 @@ def clone_program(
     service: AdvisoryProgramService = Depends(get_advisory_program_service),
 ) -> dict[str, Any]:
     try:
-        return {"ok": True, "program": program_to_dict(service.clone_program(program_id, program_name=req.program_name, created_by=req.created_by))}
+        program = service.clone_program(program_id, program_name=req.program_name, created_by=req.created_by)
+        return {"ok": True, "program": program_to_dict(program), "binding": service.active_binding(program.program_id)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

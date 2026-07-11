@@ -663,6 +663,20 @@ async function mockAdvisoryApis(page: Page, options: {
         },
       });
     }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/defaults`) && method === "GET") {
+      const targetProgram = currentRouteProgramId === PROGRAM_ID
+        ? currentProgram()
+        : staticExtraPrograms.find((item) => item.program_id === currentRouteProgramId) || program;
+      const targetBinding = bindingsByProgramId[currentRouteProgramId]?.[0] || activeBinding;
+      return json(route, {
+        ok: true,
+        program_id: currentRouteProgramId,
+        expected_program_version: targetProgram.version,
+        expected_binding_version_id: targetBinding.binding_version_id,
+        effective_from_trade_date: "2026-06-11",
+        binding_interval_semantics: "LEFT_CLOSED_RIGHT_OPEN",
+      });
+    }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/apply`) && method === "POST") {
       const body = request.postDataJSON() as JsonObject;
       applyBindingBodies.push(body);
@@ -1338,6 +1352,9 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       target_count: 20,
     },
     source_replay_run_id: `advreplay_${rowProgramId}`,
+    expected_program_version: 1,
+    expected_binding_version_id: "advb_native_active",
+    effective_from_trade_date: "2026-06-11",
   });
   await expect(page.getByTestId(`advisory-strategy-apply-result-${rowProgramId}`)).toContainText("已应用新策略绑定");
   await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("预测目标：2026-06-09");
