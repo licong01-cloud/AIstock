@@ -347,10 +347,16 @@ def _qe_experiment_dir(experiment_name: str) -> Path:
 #
 # `test_end` is the last day used by the data handler/signals.  Qlib daily
 # portfolio simulation needs one following calendar row, so the default
-# portfolio backtest stops at 2026-04-27 while the provider still contains
-# 2026-04-28 for signal/price lookups.
-QE_DEFAULT_SIGNAL_END = "2026-04-28"
-QE_DEFAULT_BACKTEST_END = "2026-04-27"
+# portfolio backtest stops at 2026-06-29 while the provider still contains
+# 2026-06-30 (the last trading day) for signal/price lookups.
+#
+# 2026-07-11 data refresh: dataset extended to 2026-06-30.  test_end follows
+# the framework convention signal_end = data_end / backtest_end = data_end-1td
+# (the h20 label is NaN for the trailing ~20 test days and auto-drops from IC;
+# the mark-to-market backtest NAV to 2026-06-29 is complete).  train/valid
+# unchanged (2018-08-01..2024-06-30) so test = 2024-07-01..2026-06-30 (~2y OOS).
+QE_DEFAULT_SIGNAL_END = "2026-06-30"
+QE_DEFAULT_BACKTEST_END = "2026-06-29"
 
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
@@ -370,6 +376,9 @@ _LEGACY_QE_DEFAULT_SPLIT_MARKERS = (
     {"test_end": "2026-03-10", "backtest_end": None},
     {"test_end": "2026-03-10", "backtest_end": "2026-03-09"},
     {"test_end": "2025-12-01", "backtest_end": None},
+    # Pre-2026-06-30 refresh default (2026-04-28 dataset).
+    {"test_end": "2026-04-28", "backtest_end": None},
+    {"test_end": "2026-04-28", "backtest_end": "2026-04-27"},
 )
 
 # ── RDAgent 默认 LGBModel 超参数（与 conf_baseline.yaml 一致） ──
@@ -481,8 +490,8 @@ class ConfigComposer:
         """Ensure every QE path has a safe portfolio backtest end.
 
         Qlib daily backtest reads calendar[index+1].  With the official data
-        currently ending on 2026-04-28, the safe default portfolio end is
-        2026-04-27.  Data/signal coverage still uses `test_end`.
+        currently ending on 2026-06-30, the safe default portfolio end is
+        2026-06-29.  Data/signal coverage still uses `test_end`.
         """
         if not data_split.get("test_end"):
             return
