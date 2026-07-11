@@ -57,6 +57,7 @@ class SimulationRuntimeOpsService:
 
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
+        default_submit = bool(status.get("default_submit", False))
         last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
         last_result_errors = (
             list(last_result.get("errors") or [])
@@ -73,8 +74,9 @@ class SimulationRuntimeOpsService:
             "last_result": last_result,
             "last_result_errors": last_result_errors,
             "last_error_count": len(last_result_errors),
-            "default_submit": bool(status.get("default_submit", False)),
+            "default_submit": default_submit,
             "approval_states": list(status.get("approval_states") or []),
+            "sim_binding_selection_policy": status.get("sim_binding_selection_policy"),
             "schedule_windows": list(status.get("schedule_windows") or []),
             "restart_recovery_mode": status.get("restart_recovery_mode") or "persisted_state_only",
             "window_orchestration": status.get("window_orchestration") or {},
@@ -99,7 +101,7 @@ class SimulationRuntimeOpsService:
                 "next_action": "monitor scheduler windows, or use the controlled start/stop/tick APIs",
                 "safety_note": (
                     "Status is read-only. start/stop/tick are controlled operations; "
-                    "default_submit remains false unless explicitly enabled."
+                    f"default_submit is {'enabled' if default_submit else 'disabled'}."
                 ),
             },
         }
