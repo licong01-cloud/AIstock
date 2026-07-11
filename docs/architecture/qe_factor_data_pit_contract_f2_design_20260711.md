@@ -138,35 +138,34 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | PIT 解析器(待建) | 单测:多 span 展开每日集合 | PLANNED | |
-| F-002 | bundle 生成脚本 | 单测:rolling 前裁剪 | PLANNED | |
-| F-003 | bundle + Data Doctor | Data Doctor 检查 | PLANNED | |
-| F-004 | bundle 生成 | 单测:停牌日 NaN 非 0 | PLANNED | |
-| F-005 | 路径/规则文档 | preflight | PLANNED | |
-| F-006 | bundle 生成 | 越界行=0(post) | PLANNED | |
-| F-007 | bundle 报告 | 行数表 | PLANNED | |
-| F-008 | schema 生成 | schema 行数=121 | PLANNED | |
-| F-009 | meta.json 生成 | meta 校验 | PLANNED | |
-| F-010 | bundle 打包 | 文件集检查 | PLANNED | |
-| F-011 | RD-Agent PR | 副本一致 | PLANNED | |
-| F-012 | validator | Data Doctor | PLANNED | |
-| F-013 | validator | 5409 不误判 4643 | PLANNED | |
-| F-014 | Data Doctor | 检查输出 | PLANNED | |
-| F-015 | Data Doctor | 分开统计 | PLANNED | |
-| F-016 | Data Doctor | 不误报 mirror | PLANNED | |
-| F-017 | infra.compute_nodes | DB 值证据 | PLANNED | |
-| F-018 | AIstock .env | .env diff | PLANNED | |
-| F-019 | RD-Agent PR | 单测 fail-fast | PLANNED | |
-| F-020 | QE 命令生成 | 命令日志 | PLANNED | |
-| F-021 | 路径解析 | 单测:mismatch raise | PLANNED | |
-| F-022 | 文档 | 定义记录 | PLANNED | |
-| F-023 | 部署脚本 | 目录存在 | PLANNED | |
-| F-024 | 部署脚本 | 校验回执 | PLANNED | |
-| F-025 | 部署脚本 | 全过回执 | PLANNED | |
-| F-026 | 部署脚本 | dry-run 回执 | PLANNED | |
-| F-027 | 部署脚本 | 不含相关调用 | PLANNED | |
-| F-028 | 部署脚本 | dry-run 回执 | PLANNED | |
-
+| F-001 | PIT 解析器(待建) | 单测:多 span 展开每日集合 | pass |  |
+| F-002 | bundle 生成脚本 | 单测:rolling 前裁剪 | pass |  |
+| F-003 | bundle + Data Doctor | Data Doctor 检查 | pass |  |
+| F-004 | bundle 生成 | 单测:停牌日 NaN 非 0 | pass |  |
+| F-005 | 路径/规则文档 | preflight | pass |  |
+| F-006 | bundle 生成 | 越界行=0(post) | pass |  |
+| F-007 | bundle 报告 | 行数表 | pass |  |
+| F-008 | schema 生成 | schema 行数=121 | pass |  |
+| F-009 | meta.json 生成 | meta 校验 | pass |  |
+| F-010 | bundle 打包 | 文件集检查 | pass |  |
+| F-011 | RD-Agent PR | 副本一致 | pass |  |
+| F-012 | validator | Data Doctor | pass |  |
+| F-013 | validator | 5409 不误判 4643 | pass |  |
+| F-014 | Data Doctor | 检查输出 | deferred | 用户批准延后: Data Doctor 检查族(l2一致性已验0mismatch;expected_sparse/schema覆盖待补) |
+| F-015 | Data Doctor | 分开统计 | deferred | 用户批准延后: Data Doctor sw_member 告警拆分 |
+| F-016 | Data Doctor | 不误报 mirror | deferred | 用户批准延后: Data Doctor WSL 权威 |
+| F-017 | infra.compute_nodes | DB 值证据 | deferred | 用户批准延后: infra.compute_nodes 生产 DB 写(激活 gated) |
+| F-018 | AIstock .env | .env diff | deferred | 用户批准延后: .env 运行时生效(激活 gated) |
+| F-019 | RD-Agent PR | 单测 fail-fast | pass |  |
+| F-020 | QE 命令生成 | 命令日志 | pass |  |
+| F-021 | 路径解析 | 单测:mismatch raise | pass |  |
+| F-022 | 文档 | 定义记录 | pass |  |
+| F-023 | 部署脚本 | 目录存在 | deferred | 用户批准延后: node1 版本目录(WSL 验证后直接同步,不预拷贝) |
+| F-024 | 部署脚本 | 校验回执 | deferred | 用户批准延后: node1 校验(随同步) |
+| F-025 | 部署脚本 | 全过回执 | deferred | 用户批准延后: QE 实测(Data Doctor 全量+QE preflight) |
+| F-026 | 部署脚本 | dry-run 回执 | deferred | 用户批准延后: 生产 symlink 切换(生产替换 gated) |
+| F-027 | 部署脚本 | 不含相关调用 | pass |  |
+| F-028 | 部署脚本 | dry-run 回执 | pass |  |
 ## 9. Rollout & Rollback / 发布与回滚
 - Rollout:生成版本目录 → 校验 → Data Doctor/smoke/preflight → dry-run 回执 → 用户授权后原子 `ln -sfn <version> /home/lc999/data/factor_data`(WSL + node1 各自)→ 冒烟。
 - Rollback:`ln -sfn <prev_version> /home/lc999/data/factor_data`(保留旧版本目录,单命令回滚)。
