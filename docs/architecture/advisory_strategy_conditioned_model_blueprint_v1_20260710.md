@@ -2,7 +2,7 @@
 
 > 日期：2026-07-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-new` 交付
-> 当前状态：蓝图设计已形成，尚未进入任何阶段的详细设计或代码实施
+> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入，Phase 1 F2 详细设计已形成但尚未实施
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -918,6 +918,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 退出门禁：每个目标包都能判定合法历史起点；未知 vintage/决策时点有明确 `RETROSPECTIVE_RESEARCH_ONLY` 或 `FORMAL_OOS_UNAVAILABLE` 处置。
 - 发布/回滚：只读分析，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：F1。
+- 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入，实际 target audit 和人工 approval receipt 仍未执行。
 
 ### Phase 1：最小 PIT 数据底座与不可变快照
 
@@ -929,6 +930,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 退出门禁：同一 build key 可重复构建；DB/Parquet 抽样一致；所有深池候选有成熟/删失标签；T+1 信息未进入 T 日特征；非法 vintage 被拒绝或正确分级。
 - 发布/回滚：DDL、历史回填 DML、durable dataset store 和 builder activation 各自需要独立门禁；默认离线禁用。
 - 详细设计等级：F2。
+- 已形成详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；当前仅 `design_ready`，未执行 DDL、DML、store 配置、快照构建或调度激活。
 
 ### Phase 0B：基线质量与可建模性审计
 
@@ -1028,9 +1030,9 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过数据、OOS、影子
 
 建议按以下顺序新建，每份文档必须声明依赖的蓝图编号、Feature tier、验收索引、验证矩阵和生产门禁：
 
-1. 候选权威源、决策时钟、OOS/vintage、benchmark/cost 和数据可用性口径设计。
-2. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计。
-3. Advisory 模型数据表、DDL、保留周期、回填和迁移设计。
+1. 候选权威源、决策时钟、OOS/vintage、benchmark/cost 和数据可用性口径设计：已形成 `advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`。
+2. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
+3. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 2 项；模型表与部署表仍由 Phase 2 专项设计闭合。
 4. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
 5. 策略风格画像、特征/标签注册、原子 bundle 和 Program 部署治理设计。
 6. HMM、行业黑名单和风格化行业优先级设计。

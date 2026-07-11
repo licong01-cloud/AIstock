@@ -5,8 +5,8 @@
 > Phase：0A，口径冻结与数据可用性审计
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父蓝图提交：`3e871a78`，PR `#1951`
-> 当前状态：`design_ready`，不代表审计程序、数据审计或任何模型已经执行
-> 变更边界：仅新增持久设计文档；不修改代码、数据库、策略包、HMM、调度器或运行时
+> 当前状态：详细设计与只读审计框架已合入；实际 target audit、人工 approval receipt 和 Phase 1 退出批准尚未执行
+> 实现边界：PR `#1958` 仅新增隔离的只读审计服务/CLI/测试；未修改数据库、策略包、HMM、调度器或运行时
 
 ## 0. 文档定位与权威边界
 
@@ -20,7 +20,7 @@
 4. 当前实际代码、数据库 schema 和不可变制品所能证明的现状事实。
 5. 较早文档中与以上内容不冲突的部分。
 
-本文中的 `design_ready` 只表示详细设计闭合。未来 Phase 0A 实现 PR 必须把设计矩阵替换为真实代码、只读运行 receipt 和测试证据，之后才能请求执行正式审计。
+本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已审计或批准。正式审计仍必须由用户批准 audit request 和 policy registry，并生成 append-only approval receipt；没有 `APPROVED_FOR_PHASE1` 时 Phase 1 生产回填与快照 promotion 保持阻断。
 
 文档与证据保存规则：
 
@@ -1001,7 +1001,7 @@ industry_blacklisted
 
 ## 17. Implementation Plan / 实施方案
 
-本节描述未来 Phase 0A 实现，不在当前文档 PR 编写代码。
+本节最初定义 Phase 0A 实施方案；当前只读审计框架已由 PR `#1958` 合入，真实 target audit 和人工批准仍按本节门禁另行执行。
 
 1. 新增纯数据模型：audit request、target scope、availability row、asset ledger、OOS interval、policy registry 和 receipt。
 2. 新增 Program/package resolver，按 T 只读解析 as-of binding、manifest、leg/asset closure 和 lineage。
@@ -1089,7 +1089,7 @@ rtk git diff --cached --check
 
 ### 18.5 L0-L5、oracles、覆盖率与人工确认
 
-| Level | 未来 Phase 0A 实现验证 | 业务 oracle |
+| Level | Phase 0A 实现验证 | 业务 oracle |
 |---|---|---|
 | L0 | compileall、changed-only guardrail、schema/static contract、feature workflow | 无运行时/DDL/DML/API/UI 变更，输出路径符合规范 |
 | L1 | serializer、hash、date、cutoff、interval、OOS、metric/label/prior/multiplicity 纯函数单测 | 相同输入同 hash；边界/冲突 fail-closed；raw/CNY/yuan/storage_scale 不混用 |
@@ -1236,4 +1236,4 @@ approval receipt hash
 - `production_runtime_activation=not_performed`
 - `production_service_restart=not_performed`
 
-未来 Phase 0A 实现仍必须保持 read-only；任何 DDL、DML、训练、调度或 runtime activation 都超出本阶段设计，必须停止并重新分级审批。
+已合入的 Phase 0A 实现及其未来变更都必须保持 read-only；任何 DDL、DML、训练、调度或 runtime activation 都超出本阶段设计，必须停止并重新分级审批。
