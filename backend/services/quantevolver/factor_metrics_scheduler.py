@@ -26,7 +26,7 @@ from ...db.pg_pool import get_conn
 from ...ingestion.tdx_scheduler import _build_frequency_job, _FutureTracker
 from ..dispatch_service import DispatchService
 OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
-OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
+OFFICIAL_FACTOR_WINDOW_END = "2026-06-30"
 
 logger = logging.getLogger("aistock.factor_metrics_scheduler")
 

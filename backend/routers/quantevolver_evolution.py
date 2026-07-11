@@ -53,7 +53,7 @@ from ..services.strategy_package.promotion_review import PromotionReviewService
 from ..services.trading_core.errors import TradingCoreError
 
 OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
-OFFICIAL_FACTOR_WINDOW_END = "2026-04-30"
+OFFICIAL_FACTOR_WINDOW_END = "2026-06-30"
 
 # RD-Agent QE workspace API base URL
 RDAGENT_QE_BASE = os.getenv("RDAGENT_RESULTS_API_BASE_URL", "http://127.0.0.1:9000").rstrip("/")
@@ -2534,7 +2534,7 @@ def compute_correlations(req: CorrelationComputeRequest):
             "start": cache_status.get("window_train_start") or "2018-08-01",
             "end": cache_status.get("window_backtest_end")
             or cache_status.get("as_of_date")
-            or "2026-04-30",
+            or OFFICIAL_FACTOR_WINDOW_END,
             "cache_root": cache_status.get("cache_root"),
             "cache_source": cache_status.get("cache_source"),
         },

@@ -6,7 +6,7 @@ import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const FACTOR_CACHE_DEFAULT_START = "2018-08-01";
-const FACTOR_CACHE_DEFAULT_END = "2026-04-30";
+const FACTOR_CACHE_DEFAULT_END = "2026-06-30";
 const FACTOR_CACHE_WARMUP_TOLERANCE_DAYS = 60;
 
 type FactorCacheCoverageInput = {

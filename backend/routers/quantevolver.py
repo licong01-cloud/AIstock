@@ -1338,7 +1338,7 @@ class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
     data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
     start_date: str = Field("2018-08-01", description="官方离线训练/回测起始日期")
-    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期；空时使用 data_date 或默认 2026-04-30")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期；空时使用 data_date 或默认 2026-06-30")
     include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
@@ -5156,7 +5156,7 @@ class FactorTransformRequest(BaseModel):
     llm_model_id: Optional[str] = None
     test_instruments: Optional[list] = None
     test_start_date: str = "2022-01-01"
-    test_end_date: str = "2026-04-28"
+    test_end_date: str = "2026-06-30"
 
 
 class BatchTransformRequest(BaseModel):
