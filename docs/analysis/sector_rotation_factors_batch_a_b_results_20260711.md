@@ -4,7 +4,7 @@
 - 执行日期：2026-07-11
 - 执行 skill：`develop-factor`、`analyze-factor-library`、`smart-explore`
 - 批次：`sector_rotation_batch_a1_20260711`
-- 结论：9 个预注册候选均未通过完整 Stage-3；本批没有可用因子晋级。A1/A5/B2 以真实可执行研究资产进入因子库后已禁用，其余 6 个候选不入库。
+- 结论：9 个预注册候选均未通过完整 Stage-3；本批没有因子完成生产晋级。A1/A5/B2 以真实可执行研究资产进入因子库，初始按 Stage-3 结论禁用；用户随后明确批准三者恢复 `is_available=true`，进入实际验证池。其余 6 个候选不入库。
 
 ## 1. 结论与边界
 
@@ -16,7 +16,7 @@
 - A5、B2 的原始 OOS IC 较好，但在控制既有因子/风险暴露后，block-bootstrap 区间跨零；
 - 因此本批没有 `is_available=true` 的新因子，没有 candidate → active promotion，没有 realtime transformation，没有 QE/模拟盘/实时启用。
 
-三项到达 Stage 2 的资产已真实写入 `aistock_factor_catalog`、落地 offline 源码并完成 LLM 分类；Stage-3 失败后均设置 `is_available=false` 和明确 `disable_reason`。这保留了可审计研究资产，同时满足“失败者不得伪装成可用因子”的设计约束。
+三项到达 Stage 2 的资产已真实写入 `aistock_factor_catalog`、落地 offline 源码并完成 LLM 分类；Stage-3 失败后曾设置 `is_available=false` 和明确 `disable_reason`。2026-07-11 用户决定先进行实际组合验证，再决定淘汰，因此三项资产恢复为 `is_available=true` 并清空禁用字段。该 operator override 只表示“研究验证可选”，不推翻 Stage-3 统计结论，也不表示 production-ready。
 
 ## 2. 冻结数据与试验契约
 
@@ -122,9 +122,9 @@ A5 的输出尾日为 2026-03-10，早于 bundle 尾日；其 test 仍有足够�
 
 | catalog id | factor | asset | 分类 | 最终状态 |
 |---:|---|---|---|---|
-| 1523 | `m_sector_breadth_ma20_level` | `rdagent_assets/manual_factors/m_sector_breadth_ma20_level.py` | `STAT` | `is_available=false`；HAC 稳定性不足 |
-| 1524 | `m_sector_residual_cohesion_10d_60d` | `rdagent_assets/manual_factors/m_sector_residual_cohesion_10d_60d.py` | `STAT` | `is_available=false`；控制后增量不稳定 |
-| 1525 | `m_stock_sector_leadership_persistence_20d_10d` | `rdagent_assets/manual_factors/m_stock_sector_leadership_persistence_20d_10d.py` | `STAT` | `is_available=false`；partial IC bootstrap 跨零 |
+| 1523 | `m_sector_breadth_ma20_level` | `rdagent_assets/manual_factors/m_sector_breadth_ma20_level.py` | `STAT` | `is_available=true`；研究验证 override；HAC 风险保留 |
+| 1524 | `m_sector_residual_cohesion_10d_60d` | `rdagent_assets/manual_factors/m_sector_residual_cohesion_10d_60d.py` | `STAT` | `is_available=true`；研究验证 override；控制后增量风险保留 |
+| 1525 | `m_stock_sector_leadership_persistence_20d_10d` | `rdagent_assets/manual_factors/m_stock_sector_leadership_persistence_20d_10d.py` | `STAT` | `is_available=true`；研究验证 override；partial IC 风险保留 |
 
 源码与研究版本做了 `git diff --no-index`，内容相同；Windows catalog asset 使用 CRLF，隔离研究文件使用 LF，因此 raw byte SHA-256 不同。官方 remote 271 已直接从 catalog `code_text` 成功计算三项资产。
 
@@ -148,11 +148,11 @@ A2/A3/A4/A6/B1/N1 均没有 catalog 行，符合 KILL 不入库约束。
 
 | design item | 本批状态 | 结论 |
 |---|---|---|
-| F-007 offline/realtime 与失败策略 | `VERIFIED_NO_SURVIVOR` | 9 个 offline 代码/输出完成；三项 Stage-2 offline asset 入库后禁用。没有通过者，因此不生成 realtime loader，不得声称双形态完成。 |
+| F-007 offline/realtime 与失败策略 | `VERIFIED_NO_SURVIVOR` | 9 个 offline 代码/输出完成；三项 Stage-2 offline asset 按用户 override 进入实际验证池。没有统计通过者，因此不生成 realtime loader，不得声称双形态或生产晋级完成。 |
 | F-008 去重与条件增量 | `VERIFIED` | MCP 查重、控制因子、A5/B2 residual/partial IC 与相关性 receipt 完成；无稳定增量。 |
 | F-009 稳健性/成本容量/拥挤 | `STOPPED_BY_GATE` | h20 HAC 与 A5/B2 block/non-overlap 完成；没有 Stage-3 通过者，因此 DSR/PBO、组合成本容量和持仓拥挤不启动。 |
 | F-010 QE 组合增量 | `NOT_STARTED_BY_GATE` | 无因子通过 F-009，不启动 GATs/LGBM 组合试验。 |
-| F-011 生产副作用 | `SCOPED` | 已执行授权范围内的 catalog/classification/disable 写入；未执行 DDL、metrics 回填、active promotion、服务重启或交易运行。 |
+| F-011 生产副作用 | `SCOPED` | 已执行授权范围内的 catalog/classification、初始 disable 和后续 enable 写入；未执行 DDL、metrics 回填、active promotion、服务重启或交易运行。 |
 
 ## 8. 证据驱动的下一批研发建议
 
@@ -181,7 +181,7 @@ C1/C2 优先于 C3/C4：前两者改变信息结构，后两者属于从本批�
 | 状态面 | 当前事实 |
 |---|---|
 | 研究代码/结果 | 9 个 offline 候选和 receipts 位于隔离、gitignored RD worktree |
-| 因子库 | 3 个真实研究资产已登记并禁用；6 个 KILL 未登记；0 个新可用因子 |
+| 因子库 | 3 个真实研究资产已登记并按用户 override 恢复可用；6 个 KILL 未登记；0 个已完成生产晋级的因子 |
 | 官方 metrics | 计算成功；生产 DDL 未执行，DB 指标未落表 |
 | candidate 数据 | 隔离且冻结；未 promotion active |
 | QE | 未启动 |

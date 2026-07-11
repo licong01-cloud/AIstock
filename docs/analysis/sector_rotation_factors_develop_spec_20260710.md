@@ -77,7 +77,7 @@
 Gate-0 合入后，用户继续授权使用 `develop-factor` 开展实际因子研发并要求合格因子进入 AIstock 因子库。本次执行覆盖 A1–A6、B1、B2、N1 共 9 个预注册候选，详细结果以 `sector_rotation_factors_batch_a_b_results_20260711.md` 为准：
 
 - 9 个 offline 代码和结构 receipt 完成；A1/A5/B2 到达 Stage 2，以真实 executable asset、catalog 和 classification 入库；
-- A1/A5/B2 在 Stage 3 失败后均设置 `is_available=false`；其余 6 个 KILL 候选不入 catalog；本批没有可用因子通过；
+- A1/A5/B2 在 Stage 3 失败后曾设置 `is_available=false`；用户随后明确批准三者恢复 `is_available=true` 进入实际验证池。该状态不改变 Stage-3 未通过结论；其余 6 个 KILL 候选不入 catalog；
 - A5/B2 完成双层相关性、residual/partial IC、HAC、block bootstrap 与 non-overlap 复核；A1 因 HAC ICIR 低于 0.3 停止；
 - 因无 Stage-3 通过者，realtime loader、成本容量/拥挤组合、GATs/LGBM QE 消融不启动；
 - 官方任务已成功计算 A1/A5/B2，但生产 h20 DDL 尚未独立授权/应用，metrics 写入被缺列 gate 阻断；candidate → active、runtime 和 paper/live 仍未修改。
@@ -586,7 +586,7 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 
 F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 `develop-factor` 与因子库 MCP 按 A1→A6 顺序开展纯离线研发；无需等待 production DDL 或 active promotion。Batch B 只在 Batch A 失败归因完成后启动。每个候选独立执行预注册、快筛、统一指标、去重、分类和 disposition；生产持久化、promotion 与运行时仍受第 17 节独立门禁约束。
 
-2026-07-11 已按上述顺序执行 A1–A6/B1/B2，并补齐 N1 negative control。9 个候选均有最终 disposition，0 个通过 Stage-3；三项 Stage-2 研究资产已入库后禁用。后续不再沿这些公式调窗口，而按关联结果报告中的 C1–C4 建立新 trial 与新 holdout。
+2026-07-11 已按上述顺序执行 A1–A6/B1/B2，并补齐 N1 negative control。9 个候选均有最终 disposition，0 个通过 Stage-3；三项 Stage-2 研究资产初始禁用，随后按用户明确决定恢复为研究验证可用。后续不在已打开 test 上沿这些公式调窗口；实际组合验证与关联结果报告中的 C1–C4 新 trial/new holdout 分开执行。
 
 ## 14. Verification Plan / 验证计划
 
@@ -637,11 +637,11 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-004 | RD-Agent metrics engine 与 SOTA API | h20 engine/API 2 passed；与 bundle 合计 11 passed | VERIFIED | 无 |
 | F-005 | AIstock migration、`factor_metrics_contract.py`、official writer、routers/MCP | contract 9 passed；contract+MCP/emit 51 passed；official batch 26 passed/1 skipped | VERIFIED | 无 |
 | F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
-| F-007 | 候选 offline asset、factor catalog 与失败策略 | 9 个 offline 输出结构通过；A1/A5/B2 executable asset 入库后禁用；仅通过者要求 realtime loader，本批无通过者 | VERIFIED_NO_SURVIVOR | 无 |
+| F-007 | 候选 offline asset、factor catalog 与失败策略 | 9 个 offline 输出结构通过；A1/A5/B2 executable asset 按用户 override 恢复为研究验证可用；仅统计通过者要求 realtime loader，本批无通过者 | VERIFIED_NO_SURVIVOR | 无 |
 | F-008 | 因子库 MCP + Stage 0/3 | 9 个候选定向查重；A5/B2 双层相关性与 residual/partial IC；A1 在 HAC 门禁停止 | VERIFIED | 无 |
 | F-009 | Stage 1/3 + portfolio evaluator | h20 HAC；A5/B2 block/non-overlap；9 项最终 disposition；A4/A6 额外 test 诊断永久标记为不可晋级 | NOT_APPLICABLE_NO_SURVIVOR | 无 |
 | F-010 | QE GATs/LGBM experiment specs | 无候选通过 F-009，按门禁不启动 2×2、STATE 或 multi-seed QE | NOT_APPLICABLE_NO_SURVIVOR | 无 |
-| F-011 | 两仓隔离 worktree、catalog 受控写入与第 17 节 | 3 项 catalog/classification/disable 写入；active/DDL/runtime/paper/live 均未修改；metrics 缺 DDL 未落表 | VERIFIED_SCOPED_SIDE_EFFECT | 无 |
+| F-011 | 两仓隔离 worktree、catalog 受控写入与第 17 节 | 3 项 catalog/classification、初始 disable 与用户批准的 enable 写入；active/DDL/runtime/paper/live 均未修改；metrics 缺 DDL 未落表 | VERIFIED_SCOPED_SIDE_EFFECT | 无 |
 | F-012 | Gate-0 验证 + G0-D receipts/result PR | Gate-0 AIstock 99 passed/1 skipped、RD-Agent 11 passed；G0-D 结果报告、diff check 与 F2 validation | VERIFIED | 无 |
 
 ## 16. Rollout / Rollback / 发布回滚
