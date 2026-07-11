@@ -4,14 +4,15 @@
 > Feature Tier：F2
 > Task Tier：T3 设计驱动
 > Module：Advisory 数据底座 / Selection evidence / market PIT / dataset snapshot
-> Risk Level：高；涉及未来生产 DDL、历史 DML、大规模数据导出和跨 Windows/WSL 制品边界
+> Risk Level：高；涉及开发/发布 migration、历史 DML、大规模数据导出和跨 Windows/WSL 制品边界
 > Phase：1，最小 PIT 数据底座与不可变快照
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 前置实现：PR `#1958`，merge commit `6669e00208e6e10c28901d5ba34539d851630b3e`
-> 当前状态：`design_ready`；已完成 2026-07-11 设计复查修订，Phase 0A.1、Phase 1 代码、DDL、回填、快照和调度均未实施
+> 当前状态：`design_ready`；2026-07-11 已按单用户、非实盘交易边界取消人工审批、角色和运行时 DDL，生产控制收敛为 8 类自动技术门禁；Phase 0A.1 新契约、Phase 1 代码、DDL、回填、快照和调度均未实施
+> 实现处置：PR `#1965` 的 authority/approval/authorization 方向已被本次设计取代，不得按原方案合入；后续实现必须基于 deterministic handoff/readiness 和 8 类自动门禁重新开始
 > 设计合并说明：统一闭合父蓝图后续文档清单第 2、3 项，避免 observation/label/snapshot 与 DDL/迁移形成竞争契约
-> 复查修订范围：原位统一 approval、source availability、canonical version、label、build attempt、CAS、invalidation 和 GC 契约；不存在仅在文末追加的勘误
+> 复查修订范围：原位删除 approval/authorization/RBAC，统一 deterministic handoff、source availability、canonical version、label、build attempt、CAS、invalidation、GC 和 gate satisfiability 契约；不存在仅在文末追加的勘误
 > 生产影响：本设计 PR 为文档-only；DDL、DML、dataset store、依赖、调度、API、UI 和运行时门禁均为 `noop`
 > 主要验证链：F2 Feature Workflow -> Design Acceptance Matrix -> DESIGN-COMPLIANCE-001 -> `git diff --check` -> PR CI
 
@@ -21,7 +22,7 @@
 
 权威优先级：
 
-1. 用户明确批准的业务决策和实际 Phase 0A approval receipt。
+1. 用户明确确认的业务决策和实际 Phase 0A audit/readiness receipt。
 2. 父蓝图的隔离、PIT、OOS、数据权威、模型晋级和阶段边界。
 3. Phase 0A 审计的 target、canonical identity、availability、OOS、policy 与 handoff hash。
 4. 本文对 Phase 1 schema、状态机、构建、快照、迁移、验证和停止条件的定义。
@@ -29,7 +30,7 @@
 
 本文不会把 `design_ready` 解释为以下任何状态：
 
-- Phase 0A target 已实际审计或批准。
+- Phase 0A target 已实际审计并得到 readiness 结论。
 - Phase 1 migration 已应用。
 - 历史观察或标签已回填。
 - durable snapshot store 已配置。
@@ -69,7 +70,7 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 - `selection.run`、`selection.package_result` 和 `selection.excluded_result` 保存 Selection Center 运行、最终包结果和排除结果。
 - HMM 与 risk policy 会在 `component_scores` 中保留部分 raw 信息，但目前没有完整持久化 `hmm_adjusted` 和 `risk_policy_adjusted` 深池的独立 rank/score 集合。
 - 当前 Advisory 生命周期表继续作为在线 review/list/episode 权威，Phase 1 新表不能替代或改写它们。
-- Phase 0A 已实现严格只读的 candidate authority、asset/runtime/HMM ledger、OOS 分类和 handoff hash，但默认 approval receipt 仍为 `NOT_APPROVED`。
+- Phase 0A 已实现严格只读的 candidate authority、asset/runtime/HMM ledger、OOS 分类和 handoff hash；旧 `NOT_APPROVED approval_receipt` 契约已废止，后续代码需改为自动 `handoff_readiness_report`。
 
 因此历史 observation 必须区分：
 
@@ -102,10 +103,10 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 固定规则：
 
 - 当前 watermark 或当前 `refreshed_at` 只能作为构建时 source freeze，不能倒推历史 available-at。
-- `FORMAL_OOS` 必须来自获批的 Phase 0A source availability/OOS evidence。
+- `FORMAL_OOS` 必须来自 Phase 0A 冻结规则验证通过的 source availability/OOS evidence。
 - 缺少历史可用证据的 replay 只能是 `RETROSPECTIVE_RESEARCH_ONLY`。
 - Phase 1 不通过猜测、默认收盘后可用或当前库已存在来提升证据等级。
-- Phase 1 必须新增 Advisory 专属 append-only `source_availability_event`。未来每次获批数据刷新完成后记录 first-seen、provider/job、业务分区、schema/content/revision hash 和纠正/撤销事件；不得修改行情业务表，也不得改变 StrategyPackage、Selection 或 Paper 的读取语义。
+- Phase 1 必须新增 Advisory 专属 append-only `source_availability_event`。未来每次数据刷新程序成功完成并通过内容校验后记录 first-seen、provider/job、业务分区、schema/content/revision hash 和纠正/失效事件；不得修改行情业务表，也不得改变 StrategyPackage、Selection 或 Paper 的读取语义。
 - `source_availability_event` 只从启用后的真实 ingestion completion 开始积累正式证据，不追溯伪造历史；历史缺口保持 research-only。
 - build 使用由 availability event 或分区内容哈希组成的持久 `source_revision_set`。短命 transaction token、backend pid、xid 和观察时间只作运行审计，不进入稳定 source hash。
 
@@ -113,8 +114,8 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 
 ### 2.1 In Scope
 
-- 校验并消费获批的 Phase 0A handoff。
-- 定义并实施 Phase 0A.1 approval finalizer、GLOBAL/逐 admission-scope decision chain、handoff bundle 和撤销契约。
+- 校验并消费 Phase 0A 自动生成的 audit/readiness handoff。
+- 定义并实施 Phase 0A.1 deterministic normalizer、handoff bundle 和逐 scope 自动可用性契约。
 - 为单 Alpha 包和原生多 Alpha 父包独立构建 stable canonical signal 与 observation versions。
 - 保留 Program/binding/review lineage，但避免等价 Program 重复市场样本。
 - 补采或登记四个 Selection stage；第五层 `advisory_model` 在 Phase 1 固定不可用。
@@ -125,9 +126,9 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 - 定义 observation/label/snapshot/build event 的字段级 DDL。
 - 定义历史 backfill、增量追加、成熟标签、删失和 source revision 规则。
 - 定义 DB 到 deterministic Parquet 的批量流水线。
-- 定义 capture batch、build/attempt lease/fencing、内容寻址 final snapshot、项目外 durable store、原子 promotion、invalidation 和 GC 门禁。
+- 定义 capture batch、build/attempt lease/fencing、内容寻址 final snapshot、项目外 durable store、原子 publish、invalidation 和 GC 自动校验。
 - 定义 Windows 编排与 WSL 只读训练缓存边界。
-- 定义迁移、DML、store、builder activation 的独立生产门禁。
+- 定义 3 类开发/发布门禁和 5 类运行时自动技术门禁；所有门禁必须有可满足正向路径。
 
 ### 2.2 Out of Scope
 
@@ -153,13 +154,13 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 8. T+1 开盘、停牌、涨跌停和路径只能进入 outcome，不能进入 T 日 feature/candidate filter。
 9. 回测、Paper、人工持仓和未来模型输出不得进入 Phase 1 observation/label。
 10. 非 COMPLETE capture、未到 SEALED checkpoint 的 build、ACTIVE/FAILED/EXPIRED attempt 均不可供 Phase 0B；final snapshot 表只存在 SEALED rows。
-11. `SEALED` 只表示数据制品闭合，不表示正式 OOS、模型有效或用户可见能力已批准。
-12. 无 Phase 0A 初始 receipt 和有效 Phase 0A.1 approval bundle 时只允许 fixture/dry-run；不允许生产 capture DML 或 snapshot promotion。
-13. GLOBAL policy approval 与逐 admission-scope approval 分开；scope 拒绝/撤销只阻断该 scope，全局撤销才阻断整个 bundle。
+11. `SEALED` 只表示数据制品闭合，不表示正式 OOS、模型有效或用户可见能力已经通过对应指标。
+12. 无 Phase 0A audit/readiness receipt 和有效 Phase 0A.1 handoff/scope set 时只允许 fixture/dry-run；合法完整 receipt 必须可自动进入 capture/build 正向路径。
+13. 每个 admission scope 按冻结 evidence classification 独立消费；一个 scope BLOCKED 不阻断同 target 其他 READY/PARTIAL scope，也不存在 GLOBAL 人工放行或撤销。
 14. 一个 snapshot 对一个 `canonical_signal_id` 只能选择一个 `observation_version_id`；证据补齐不得增加经济样本计数。
 15. trace callback、finalize、outbox 和 writer 的失败、超时或超限不得改变 Selection/Advisory 返回值、事务和异常语义；失败必须显式留 receipt/gap。
 16. T+1 入场后最早可卖日为下一交易日；`h=1` 不得在入场日成熟。
-17. build 的人工门禁之间不得持有 PostgreSQL exported snapshot 或执行 lease；final snapshot 只在 durable promotion 后按 manifest content 生成。
+17. build 的独立命令之间不得持有 PostgreSQL exported snapshot 或执行 lease；final snapshot 只在 durable publish 验证后按 manifest content 生成。
 18. invalidated snapshot、过期 attempt、无 fencing 权限的 worker 和 GC 待删 blob 均不得被 reader 或增量 build 静默接受。
 
 ## 4. Design Acceptance Index / 设计验收索引
@@ -181,31 +182,31 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 | F-019 | gap、partial、research-only、冲突和失败有稳定 reason code | A1-012 |
 | F-022 | Phase 1 交付、Phase 0B handoff、停止条件和回滚闭合 | A1-013、A1-014 |
 | F-023 | schema、纯函数、DB/Parquet、PIT、崩溃恢复和容量验证完整 | A1-015 |
-| F-024 | authority producer、DDL、DML、store、build terminate、seal、GC、调度和 runtime 门禁独立 | A1-014 |
-| F-025 | Phase 0A.1 finalizer、GLOBAL/逐 admission-scope decision、bundle、授权与 revoke 闭合 | A1-016 |
+| F-024 | 3 类开发/发布门禁和 5 类运行时自动技术门禁闭合；零人工审批、零运行时 DDL且全部正向可达 | A1-014、A1-015 |
+| F-025 | Phase 0A.1 deterministic handoff/readiness、逐 scope 自动分类和无角色/无授权链闭合 | A1-016 |
 | F-026 | 稳定 signal、versioned evidence、lineage 与 snapshot 单版本选择闭合 | A1-017 |
 | F-027 | trace capture 开启时故障隔离且 immutable evidence 可追溯 | A1-001、A1-021 |
 | F-028 | 原生多 Alpha component provenance 使用版本化强类型契约 | A1-003、A1-021 |
 | F-029 | 标签执行时钟、成本、benchmark、terminal/censor 和 denominator raw outcome 可复算 | A1-018、A1-019 |
-| F-030 | source revision、attempt fencing、authorized generation termination、durable CAS、base/invalidation 与 GC cancel 闭合 | A1-010、A1-020 |
+| F-030 | source revision、attempt fencing、程序化 generation termination、durable CAS、base/invalidation 与 GC cancel 闭合 | A1-010、A1-020 |
 
 ## 5. Architecture / 总体架构与规则
 
 Phase 1 分为控制面、证据面和文件面，三者不反向改变 Selection 或 Advisory 业务面：
 
 ```text
-initial Phase 0A NOT_APPROVED receipt
-  -> Phase 0A.1 handoff finalizer
-  -> immutable GLOBAL/admission-scope decision events + approval bundle
-  -> admission controller + action-scoped authorization
+immutable Phase 0A audit + handoff readiness receipt
+  -> Phase 0A.1 deterministic handoff normalizer
+  -> sorted admission scopes + automatic evidence classification
+  -> automatic readiness/data-integrity checks
   -> append-only source availability/revision set
-  -> immutable evidence readers / authorized historical adapter
+  -> immutable evidence readers / contract-validated historical adapter
   -> capture batch
   -> canonical signal + selected observation version + Program lineage + stage evidence
   -> append-only label versions + PIT universe raw outcomes
   -> build + leased/fenced materialize attempt
   -> deterministic partition exporter + immutable calculation evidence
-  -> durable content-addressed store + verify/promotion receipts
+  -> durable content-addressed store + verify/publish receipts
   -> manifest-content-addressed final SEALED snapshot
   -> Phase 0B read-only consumer
 
@@ -218,16 +219,16 @@ existing Selection / StrategyPackage / Advisory / Paper
 
 | 组件 | 职责 | 禁止事项 |
 |---|---|---|
-| `Phase0AApprovalFinalizer` | 生成 handoff bundle、GLOBAL/逐 admission-scope decision chain 和 approval bundle | 不修改初始 receipt，不代替人工决定 |
-| `Phase1AdmissionController` | 从权威 approval registry 校验 bundle、逐 admission scope、revoke 和 action authorization | 不接受自由文本 reference，不修补 receipt |
-| `SourceAvailabilityLedger` | 从获批 ingestion completion 追加 availability/revision event | 不回填未知历史，不修改源业务表 |
+| `Phase0AHandoffNormalizer` | 从 audit/readiness receipt 确定性生成 handoff bundle 和 sorted admission scopes | 不修改 receipt，不接受人工 override |
+| `Phase1ReadinessValidator` | 校验 handoff/readiness hash、逐 scope evidence classification 和自动 pass predicate | 不猜值，不依赖审批状态 |
+| `SourceAvailabilityLedger` | 从校验成功的 ingestion completion 追加 availability/revision event | 不回填未知历史，不修改源业务表 |
 | `ObservationEvidenceReader` | 读取既有 immutable evidence | 不触发 Selection 写入 |
 | `HistoricalObservationAdapter` | 受控 research replay / proven-semantics replay | 不生成 HMM、不写 Paper/Selection |
 | `SelectionStageTraceSink` | 旁路捕获 stage 副本 | 不改变候选对象或异常语义 |
-| `CaptureBatchService` | 追加 observation version、stage、lineage、label/gap 并形成 capture receipt | 不预造 snapshot，不跨人工门禁保持事务 |
+| `CaptureBatchService` | 追加 observation version、stage、lineage、label/gap 并形成 capture receipt | 不预造 snapshot，不跨命令保持事务 |
 | `ObservationRepository` | append-only canonical signal/version/stage/lineage | 不覆盖同 key 异 hash |
 | `OutcomeLabelBuilder` | 统一候选与 universe label 公式 | 不使用未来 feature 或实际持仓 |
-| `DatasetBuildCoordinator` | build/attempt lease、短时一致读取、materialize、verify 和 seal | 不跨人工门禁持有 exported snapshot |
+| `DatasetBuildCoordinator` | build/attempt lease、短时一致读取、materialize、verify 和 seal | 不跨命令持有 exported snapshot |
 | `AdvisoryDatasetStore` | create-if-absent CAS、durable barrier、manifest、promotion、blob refs | 不覆盖 blob，不提供可变 latest 文件 |
 | `Phase0BDatasetReader` | 只消费未 invalidated 的 SEALED capability 和唯一选中版本 | 不自动降级或补数据 |
 
@@ -241,29 +242,27 @@ existing Selection / StrategyPackage / Advisory / Paper
 | A1-004 | observation/label 写入 append-only；同 key 不同 hash 直接冲突 |
 | A1-005 | historical adapter 不调用 Selection/Advisory/Paper 写服务，不生成 HMM 系数 |
 | A1-006 | 所有 source、calendar、universe、HMM、risk、price 和 corporate-action 证据 PIT 化 |
-| A1-007 | identity/hash 复用 Phase 0A canonical serializer；audit、approval、stage/source revision 和 lineage 不污染 stable signal hash |
+| A1-007 | identity/hash 复用 Phase 0A canonical serializer；audit、stage/source revision 和 lineage 不污染 stable signal hash |
 | A1-008 | label 采用无 fork append-only revision 与冻结 transition matrix；selector 先解析 as-of terminal，再校验 capability；maturity 与 outcome event 正交 |
 | A1-009 | capture 与 dataset build 解耦；materialize 只在一个有时限的一致读窗口内完成所有源读取 |
 | A1-010 | final snapshot 由 manifest content 寻址，采用 durable CAS、promotion receipt、DB seal 和 invalidation 双重门禁 |
 | A1-011 | candidate label 与 PIT universe denominator 分离；后者不进入荐股列表 |
 | A1-012 | 所有 fail-closed 状态输出 `ADVISORY_PHASE1_*` reason code |
 | A1-013 | Phase 0B 只消费能力清单允许且标签成熟的 SEALED snapshot |
-| A1-014 | authority grant/revoke、DDL、observation/label DML、store、build terminate、promotion/seal、invalidation/GC、调度分别审批 |
-| A1-015 | 实现必须通过 DESIGN-COMPLIANCE-001、F2 workflow 和分层验证 |
-| A1-016 | Phase 0A.1 使用权威 append-only registry 形成 GLOBAL/逐 admission-scope decision chain；每个写操作有独立、可撤销、不可重放授权 |
+| A1-014 | 只保留 8 类自动技术门禁；DDL 仅在开发/发布执行，运行时 DML/store/build/publish/invalidation/GC/scheduler 由程序契约和状态机约束 |
+| A1-015 | 实现必须通过 DESIGN-COMPLIANCE-001、F2 workflow、gate satisfiability、正向 golden 和分层验证 |
+| A1-016 | Phase 0A.1 直接从 audit/readiness receipt 生成 handoff/scope set；零人工审批、零角色、零 approval/authorization registry |
 | A1-017 | stable signal 与 evidence version 分离；snapshot 显式选择每个 signal 的唯一 observation/label version |
 | A1-018 | `T -> E(T+1) -> S(T+2) -> X_h`、sellable path、terminal/censor 和 maturity timestamp 使用一个冻结 calendar/policy |
 | A1-019 | candidate 与 universe 共用确定性现金流、cost、benchmark、corporate-action 和 outcome engine；winner 由版本化定义派生 |
 | A1-020 | build attempt 使用 lease/fencing；generation 终止、base、invalidation、blob refs、durable publish 和 GC cancel/new epoch 采用 fail-closed 状态机 |
 | A1-021 | trace 与 multi-alpha provenance 使用有界、no-throw、版本化 immutable envelope；缺失只降低对应 capability |
 
-## 6. Phase 0A Handoff Admission
+## 6. Phase 0A Handoff Readiness
 
-### 6.1 Phase 0A.1 handoff bundle
+### 6.1 Phase 0A.1 deterministic handoff bundle
 
-当前 Phase 0A CLI 产生 `advisory_phase0a_approval_receipt_v1`，其初始状态固定为 `NOT_APPROVED`。该 receipt 和现有 handoff hashes 是 Phase 0A.1 的输入，不是生产 Phase 1 的直接授权。
-
-Phase 0A.1 finalizer 先校验同一 audit version 的下列输入：
+Phase 0A CLI 生成 `advisory_phase0a_handoff_readiness_v1`。Phase 0A.1 只校验同一 audit version 的确定性输入：
 
 ```text
 audit_id/audit_manifest_hash
@@ -279,174 +278,75 @@ metric_label_policy_hash
 prior_registry_hash
 multiple_testing_registry_hash
 policy_registry_hash
-initial_approval_receipt_hash
+handoff_readiness_report_hash
 ```
 
 然后生成不可变 `advisory_phase0a_handoff_bundle_v2`：
 
 ```text
 schema_version
-audit_id
-audit_manifest_hash
-request_hash
+audit_id/audit_manifest_hash/request_hash
 serializer_version
 global_handoff_hashes
 sorted_target_handoffs[]:
-  audit_target_id
-  target_scope_hash
+  audit_target_id/target_scope_hash
   admission_scopes[] sorted by admission_scope_id:
     admission_scope_id/hash
-    stable_signal_semantics_payload_v1
-    stable_signal_semantics_hash
+    stable_signal_semantics_payload_v1/hash
     phase0a_signal_context_hash
     oos_interval_id/hash
     capability_hash
     date_start/date_end
-    evidence_scope
+    evidence_scope = FORMAL_OOS | RETROSPECTIVE_RESEARCH_ONLY | GAP_ONLY
+    readiness = READY | PARTIAL | BLOCKED
+    blocking_reason_codes[]
   target_handoff_hash
-initial_approval_receipt_hash
+admission_scope_set_hash
+handoff_readiness_report_hash
 phase1_handoff_bundle_hash
 created_at
 ```
 
-所有 hash 使用 `AISTOCK_CANONICAL_JSON_V1`；自 hash 对排除自身 hash 字段后的 canonical payload 计算。数组按稳定 identity 排序。`admission_scope_id` 的唯一键为 `(audit_target_id,phase0a_signal_context_hash,oos_interval_id,capability,date_start,date_end)`；同一 target 可以合法包含多个 context/interval/capability 和重叠日期。只有相同 scope identity 重复、同 capability 的区间分类互相冲突或未登记 overlap 才停止。Phase 1 不从零散文件猜值。
+所有 hash 使用 `AISTOCK_CANONICAL_JSON_V1`；数组按稳定 identity 排序。`admission_scope_id` 的唯一键为 `(audit_target_id,phase0a_signal_context_hash,oos_interval_id,capability,date_start,date_end)`。相同输入必须生成相同业务 hash；created_at 不进入业务 identity。Phase 1 不从零散文件猜值，也不读取审批状态。
 
-### 6.2 权威 GLOBAL/逐 admission-scope approval chain
+### 6.2 Automatic scope readiness
 
-Phase 0A.1 使用受 DB role/ACL 保护的 append-only `app.advisory_phase0a_approval_event` 作为唯一批准权威；导出的 JSON 只作校验副本，builder 不接受任意本地 JSON 或自由文本 reference 作为授权。操作者身份来自已认证 DB session/identity provider，不接受 CLI 自报字符串。
+每个 `admission_scope_id` 根据 Phase 0A 机器结论独立判定：
 
-```text
-schema_version = advisory_phase0a_approval_decision_v2
-decision_id
-decision_kind = GLOBAL | ADMISSION_SCOPE
-event_type = APPROVE | REJECT | REVOKE
-audit_id/audit_manifest_hash/request_hash
-initial_approval_receipt_hash
-phase1_handoff_bundle_hash
-audit_target_id/target_handoff_hash nullable for GLOBAL
-admission_scope_id/hash nullable for GLOBAL
-stable_signal_semantics_hash/phase0a_signal_context_hash/oos_interval_id/capability nullable for GLOBAL
-date_start/date_end nullable for GLOBAL
-allowed_evidence_scope = FORMAL_OOS | RETROSPECTIVE_RESEARCH_ONLY | GAP_ONLY | NOT_APPLICABLE
-previous_terminal_decision_hash nullable
-revokes_decision_hash nullable
-actor_principal/authority_backend_id
-decision_at/approval_reference
-decision_hash
-```
-
-状态机：
-
-```text
-UNDECIDED -> APPROVED | REJECTED
-APPROVED -> REVOKED
-REJECTED | REVOKED -> APPROVED  # 必须引用前一 terminal decision
-```
-
-规则：
-
-- `GLOBAL` decision 只批准 global handoff/policy，`allowed_evidence_scope` 必须为 NOT_APPLICABLE，所有 admission-scope 字段为 NULL；每个 requested admission scope 必须有独立 decision。
-- decision chain 必须是单链：同一 scope 的 `previous_terminal_decision_hash` 只能被一个有效后继引用；fork、cycle、hash tamper 或跨 scope revoke 全部拒绝。
-- revoke 和重新批准只追加新事件，不覆盖初始 receipt 或旧 decision；禁止可变 `latest.json` 权威。
-- finalizer 从每条 chain 的唯一 terminal event 生成 `advisory_phase0a_approval_bundle_v2`，包含 global terminal hash、按 admission scope 排序的 terminal decision hashes、scope hash、authority backend hash 和 `approval_bundle_hash`。
-- global revoke 使整个 bundle 失效；scope revoke 只使对应 admission scope 失效，同 target 其他 scope 不受影响。重新批准必须生成新 approval bundle，旧 bundle 保持不可变且不可继续使用。
-
-Approval bundle DB contract：
-
-```text
-app.advisory_phase0a_approval_bundle
-  approval_bundle_id TEXT PK
-  schema_version = advisory_phase0a_approval_bundle_v2
-  audit_id/audit_manifest_hash/request_hash
-  initial_approval_receipt_hash/phase1_handoff_bundle_hash
-  global_terminal_decision_hash
-  admission_scope_set_hash/scope_member_count
-  authority_backend_id/hash
-  approval_bundle_content_hash TEXT UNIQUE
-  created_by/created_at
-
-app.advisory_phase0a_approval_bundle_scope
-  approval_bundle_id FK
-  admission_scope_id/hash
-  terminal_decision_hash
-  allowed_evidence_scope
-  scope_member_content_hash UNIQUE
-  PRIMARY KEY(approval_bundle_id, admission_scope_id)
-```
-
-`admission_scope_set_hash=hash(sorted scope member content hashes)`；bundle content hash 覆盖除自身/created_at 外全部字段。bundle 只包含 terminal state=APPROVED 的 requested scopes，global terminal 也必须 APPROVED。两表 append-only；decision chain 后续 revoke 使旧 bundle在查询时失效，但不修改 bundle row。
-
-### 6.3 Target admission
-
-每个 `admission_scope_id` 独立判定。Admission 必须同时满足：global terminal state 为 APPROVED、requested scope terminal state 为 APPROVED、requested scope 与 decision 精确相等、requested evidence scope 不高于获批 scope，以及所有 handoff hashes 一致。
-
-| Phase 0A 结论与获批 scope | Phase 1 行为 |
-|---|---|
-| `FORMAL_OOS + AVAILABLE` 且 admission scope 批准 formal | 可生成 formal lineage；label lifecycle 另判 |
-| `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE` 且 admission scope 批准 research | 可生成明确 research-only lineage，禁止用户可见校准 |
-| `NONE + UNAVAILABLE` 且 replay eligible、仅批准 research | 只可生成 research replay 或 gap，不伪装权威 signal |
-| `NONE + UNAVAILABLE` 且 replay 不合法 | 只记录 gap，不生成候选 |
-| admission scope `REJECTED/REVOKED` | 只阻断该 scope；同 target 其他 scope 和其他 target 可继续 |
-| global `REJECTED/REVOKED` 或 serializer/policy 冲突 | 阻断整个 build/capture |
+| Phase 0A 结论 | readiness | Phase 1 行为 |
+|---|---|---|
+| `FORMAL_OOS + AVAILABLE` | READY | 可生成 formal lineage；label lifecycle 另判 |
+| `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE` | PARTIAL | 可生成 research-only lineage，禁止用户可见校准 |
+| `NONE + UNAVAILABLE` 且 replay eligible | PARTIAL | 只生成 research replay 或 gap，不伪装权威 signal |
+| `NONE + UNAVAILABLE` 且 replay 不合法 | BLOCKED | 只记录 gap，不生成候选 |
+| identity/hash/policy 冲突 | BLOCKED | 只阻断该 scope；同 target 其他 READY/PARTIAL scope 可继续 |
 
 `PENDING/RIGHT_CENSORED/UNAVAILABLE` 按 projection 阻断或限制消费；`MATURED + outcome_event_status=TERMINAL` 在 settlement 闭合时可按冻结 policy 消费，不降级已经合法的 signal evidence。
 
-### 6.4 Phase 1 action authorization
+### 6.3 Programmatic mutation safety
 
-Phase 0A approval 只批准业务 scope，不替代生产操作授权。所有写操作使用独立 append-only `app.advisory_phase1_operation_authorization_event`：
+Phase 1 写操作不使用人工审批、角色或 operation authorization。安全边界来自版本化 request、唯一业务键、事务、expected row version、lease/fencing、CAS、行数/字节预算和不可变 receipt：
 
-```text
-authorization_id
-operation_type = DDL | TRACE_CAPTURE_ACTIVATE | SOURCE_LEDGER_ACTIVATE | SOURCE_LEDGER_WRITE |
-                 CAPTURE_DML | CAPTURE_RECOVER | LABEL_DML |
-                 STORE_INIT | MATERIALIZE | VERIFY_REGISTER | PROMOTE |
-                 BUILD_CREATE | BUILD_TERMINATE | SEAL | INVALIDATE | RECOVER |
-                 RESERVATION_RELEASE | STAGING_CLEANUP | GC_MARK_QUARANTINE | GC_DELETE |
-                 SCHEDULER_ACTIVATE
-environment
-approval_bundle_hash nullable by operation
-governance_scope_hash nullable by operation
-build_request_hash/build_id/snapshot_id nullable by operation
-admission_scope_set_hash nullable by operation
-source_revision_set_hash nullable
-store_backend_hash nullable
-operation_payload_hash
-max_rows/max_bytes
-valid_from/expires_at
-event_type = AUTHORIZE | REVOKE
-previous_event_hash/revokes_event_hash
-actor_principal/event_at/approval_reference
-authorization_event_hash
-```
+| Operation group | 自动必须绑定 | commit 前重验 |
+|---|---|---|
+| source ledger | dataset/partition/observer config/revision content hashes | 同 source key 无不同 terminal content |
+| capture/recover/label | audit/handoff/scope/request/batch/source revision/policy hashes | scope 非 BLOCKED、batch token、planned rows/bytes |
+| store/build/materialize/verify/publish/seal | logical build/generation/source/capture/store/file-set hashes | current attempt、fencing、checkpoint、capacity、content hash |
+| invalidate/release/cleanup/GC | snapshot/build/refset/reason/retention hashes | terminal state、零引用、retention、refset 未变化 |
 
-Required-field matrix（`R` 必填，`N` 必须 NULL）：
+运行任务没有 DDL 权限和 DDL 命令。schema migration 只在开发/发布流程由 migration runner 执行，并在应用启动时通过 schema version check 验证。
 
-| Operation group | approval bundle | admission scopes | governance scope | operation payload 必须绑定 |
-|---|---|---|---|---|
-| authority 后的 `DDL` | R | N | R | migration/commit/schema-diff hashes |
-| `TRACE_CAPTURE_ACTIVATE` | R | R | N | capture policy/runtime config hash |
-| `SOURCE_LEDGER_ACTIVATE` | N | N | R | observer allowlist/config/owner/schedule hashes |
-| `SOURCE_LEDGER_WRITE` | N | N | R | dataset/partition/observer policy/revision event hashes |
-| `CAPTURE_DML/CAPTURE_RECOVER/LABEL_DML` | R | R | N | request/batch/source revision/policy hashes |
-| `STORE_INIT` | N | N | R | store backend/ACL/capacity/durability/backup hashes |
-| `BUILD_CREATE/MATERIALIZE/VERIFY_REGISTER/PROMOTE/SEAL/RECOVER` | R | R | N | logical build/build generation/source/capture/store/file-set hashes as applicable |
-| `BUILD_TERMINATE` | R | R | N | build/generation/row version/checkpoint/current attempt/file-set/terminal status/reason hashes |
-| `INVALIDATE` | N | N | R | snapshot/manifest/reason/replacement hashes |
-| `RESERVATION_RELEASE/STAGING_CLEANUP` | N | N | R | terminal build/generation/file-set/reservation hashes |
-| `GC_MARK_QUARANTINE/GC_DELETE` | N | N | R | gc epoch/refset/store/blob-set hashes |
-| `SCHEDULER_ACTIVATE` | N | N | R | scheduler config/job/owner hashes |
+target mutation 的锁顺序固定为 `sorted admission_scope locks -> resource lock`；不存在 global approval lock 或 operation authorization lock。每个 mutation 在锁内、写入前和 commit 前重验 handoff/readiness hash、scope、current state、限额和 content identity。合法输入重复执行必须幂等返回；same key 不同 hash 必须冲突，不能覆盖。
 
-DB CHECK/repository validator 必须按 operation type 强制 R/N 和 payload schema；不得用空 approval bundle、虚构 admission scope 或自由 JSON 绕过。
+### 6.4 Gate satisfiability contract
 
-- CLI 只接受 `authorization_id + authorization_event_hash`，不接受自由文本批准。
-- target-dependent mutation 的锁顺序固定为 `global audit/handoff lock -> sorted admission_scope locks -> operation authorization lock -> resource lock`；GLOBAL revoke 获取同一 global lock，scope revoke 获取 global lock 后再取对应 scope lock。所有锁均为 transaction-scoped advisory lock，禁止换序。
-- governance-only mutation 不伪造业务 scope，只获取 operation authorization lock 和对应 governance/resource lock。每个 mutation 在锁内、写入前和 commit 前同时重验 approval bundle terminal chains、operation authorization chain、environment、scope、限额和 expiry；approval revoke 与 mutation 因共享 global/scope locks 不得交错提交。
-- 人工等待期间不持有 DB transaction、exported snapshot、lease 或 advisory lock。
-- research-only DML、store 和 seal 同样需要对应 action authorization，不能借“内部研究”绕过门禁。
+所有自动检查必须既能拒绝错误数据，也能让合法数据通过：
 
-首次 authority bootstrap 是唯一例外：`app.advisory_phase0a_approval_event`、`app.advisory_phase0a_approval_bundle`、`app.advisory_phase0a_approval_bundle_scope`、`app.advisory_phase1_operation_authorization_event` 及专用 DB roles 尚不存在时，只允许通过现有 AIstock production approval + DBA ACL 执行一份 exact authority-bootstrap migration。receipt 必须绑定 environment、commit、migration SHA、operator、时间和 schema diff，并保存于 validation history。该 gate 只能创建这四张 authority tables/roles，不得写 approval、capture 或业务数据；bootstrap 验证完成后永久关闭，后续 DDL 全部使用 registry 内 `DDL` authorization。
-
-approval decision/revoke、approval bundle finalization 和 operation authorization grant/revoke 分别由专用 approver/finalizer/operation-authorizer DB role 写入 authority event，不递归要求 operation authorization；CLI 必须从 authenticated session 取得 actor，并使用 operation-specific 显式 execute 开关。普通 builder/sealer role 无权写任何 authority event。operation authorizer 只能对仍有效的 approval scope 或治理 scope、冻结 payload/限额/expiry 生成 grant；相同 content hash 幂等返回，same id/key 不同 hash 冲突。
+- producer 必须实际产生 consumer 要求的每个必填字段；字段缺口不得靠新增永远不可满足的 gate 掩盖。
+- 每个 pass predicate 都必须有单 Alpha、原生多 Alpha正向 fixture和真实 schema smoke。
+- 状态机必须做 reachability/property test，证明 READY scope 从 capture 到 SEALED 至少存在一条合法路径。
+- 合法策略包、完整行情、匹配 calendar/runtime/policy、足够容量和无并发冲突时，`capture -> label -> build -> materialize -> verify -> publish -> seal` 必须成功。
+- 任何正向 golden 失败都视为 P0 设计/实现缺陷，不得解释为“安全门禁生效”。
 
 ## 7. Canonical Identity 与去重
 
@@ -471,7 +371,7 @@ observation_version_identity
 
 lineage_identity
   = observation_version_id
-  + Phase 0A audit/target/approval identity
+  + Phase 0A audit/target/handoff identity
   + Program/binding/source-run identity
 
 dataset_identity
@@ -479,7 +379,7 @@ dataset_identity
   -> final manifest content -> snapshot_id
 ```
 
-Phase 0A.1 先生成区间级 `stable_signal_semantics_hash=hash(stable_signal_semantics_payload_v1)`，明确排除 Phase 0A evidence-rich `signal_context_hash` 中的 stage/artifact/source revision。Phase 1 再按每个 T 生成 `canonical_signal_scope_hash=hash(stable_signal_semantics_hash + decision/target/cutoff)`；该完整 hash 即 stable economic identity。两层均排除 Program、audit、approval、binding、review/list run、label revision、build、created_at 和 writer version。证据补齐、source correction 或不同 audit 只能产生新 version/lineage，不产生新的经济信号。
+Phase 0A.1 先生成区间级 `stable_signal_semantics_hash=hash(stable_signal_semantics_payload_v1)`，明确排除 Phase 0A evidence-rich `signal_context_hash` 中的 stage/artifact/source revision。Phase 1 再按每个 T 生成 `canonical_signal_scope_hash=hash(stable_signal_semantics_hash + decision/target/cutoff)`；该完整 hash 即 stable economic identity。两层均排除 Program、audit、binding、review/list run、label revision、build、created_at 和 writer version。证据补齐、source correction 或不同 audit 只能产生新 version/lineage，不产生新的经济信号。
 
 Phase 0A.1 mapping 固定如下，不能由实现自行选字段：
 
@@ -490,7 +390,7 @@ Phase 0A.1 mapping 固定如下，不能由实现自行选字段：
 | `package_effective_config_hash` | `hash(sorted named effective_config_hashes map)`；保留键名，缺 mandatory member/HMM effective config 即 gap，不选“第一个” |
 | `calendar_hash` | metric/label policy registry 的 exact calendar hash，必须与 decision-clock evidence 一致 |
 
-finalizer 将 canonical stable payload 与 hash 一起写入 handoff scope。Phase 1 recompute 后逐字段比较；payload/hash或其与显式 package/date成员不一致时返回 `ADVISORY_PHASE1_STABLE_SIGNAL_SEMANTICS_MISMATCH`。
+normalizer 将 canonical stable payload 与 hash 一起写入 handoff scope。Phase 1 recompute 后逐字段比较；payload/hash或其与显式 package/date成员不一致时返回 `ADVISORY_PHASE1_STABLE_SIGNAL_SEMANTICS_MISMATCH`。
 
 ### 7.2 ID 生成
 
@@ -532,7 +432,7 @@ Observation as-of terminal resolution：
 1. 校验完整 predecessor 单链、revision_no 连续且无 fork/cycle/tamper
 2. 在 evidence_available_at <= requested_source_cutoff 的 revision 中解析唯一最大 revision_no
 3. 若 cutoff 内无 revision、存在多个 terminal 或 cutoff 后 predecessor 反向污染，直接失败
-4. 对该 terminal revision 检查 canonical/admission scope、approval bundle、exact source revision map、stage/content/hash closure
+4. 对该 terminal revision 检查 canonical/admission scope、handoff readiness、exact source revision map、stage/content/hash closure
 5. 最后检查 observation_status 与 required composite capability；不满足则 gap/unavailable，不回退旧 COMPLETE/PARTIAL
 ```
 
@@ -553,7 +453,7 @@ Label as-of terminal resolution：
 
 ### 8.1 `app.advisory_signal_observation`
 
-一行只保存稳定 canonical signal header，不保存可修订 evidence、Phase 0A approval 或 Program lineage。
+一行只保存稳定 canonical signal header，不保存可修订 evidence、Phase 0A readiness 或 Program lineage。
 
 | 字段 | 类型/约束 | 语义 |
 |---|---|---|
@@ -615,7 +515,7 @@ Label as-of terminal resolution：
 | `lineage_id` | deterministic PK |
 | `canonical_signal_id/observation_version_id` | stable signal 与实际 evidence version |
 | `phase0a_audit_id/manifest_hash` | exact Phase 0A audit |
-| `approval_bundle_hash/admission_scope_decision_hash` | exact approved scope decision |
+| `handoff_readiness_hash/admission_scope_hash` | exact automatic scope readiness identity |
 | `audit_target_id/target_scope_hash` | Phase 0A aggregate target |
 | `admission_scope_id/hash` | exact approved context/interval/capability/date scope |
 | `capability` | scope 内 exact capability |
@@ -741,7 +641,7 @@ capture_state:
 - `max_candidates/max_bytes/max_capture_ms` 必须冻结在 capture policy；超限立即标记 PARTIAL/FAILED，不无界分配内存或阻塞业务线程。
 - sink 内禁止数据库、网络、broker、HMM generation 和任何业务 DML。
 - Advisory 业务结果成功后，在业务事务外把 canonical trace envelope 写入 Phase 1 专属 append-only outbox；不修改现有 Selection DSE schema。raw score 必须复制进 immutable payload，不能只引用会被覆盖的 `selection_score_artifact` 当前行。
-- 非 Null trace 需要独立 TRACE_CAPTURE_ACTIVATE authorization；该授权只允许启用 capture policy，不允许写 DB。每个 outbox/capture batch 写入仍需 CAPTURE_DML authorization，失效时只标记 capture unavailable，不影响业务结果。
+- 非 Null trace 由版本化 `TRACE_CAPTURE` config binding 显式启用；binding 只定义 capture policy，不允许 sink 在线写 DB。outbox/capture writer 按配置、batch、lease/fencing 和内容 hash 自动校验，失败时只标记 capture unavailable，不影响业务结果。
 - outbox/writer 按 `trace_content_hash` 幂等重试，不重新运行 Selection；writer 成功后才允许生成 COMPLETE observation version。
 - capture/outbox/writer 失败只产生 gap 或 PARTIAL version，不回滚、不改写已完成的 Selection/Advisory 结果。进程崩溃且无 durable envelope 时必须明确 `TRACE_CAPTURE_LOST`，不得从后续可变 artifact 伪造。
 
@@ -751,8 +651,7 @@ Outbox 契约：
 app.advisory_selection_stage_trace_outbox
   trace_outbox_id PK
   selection_run_id/package_id/manifest_sha256/decision_as_of_trade_date
-  approval_bundle_hash/admission_scope_id/hash
-  operation_authorization_hash
+  handoff_readiness_hash/admission_scope_id/hash
   capture_batch_id/capture_fencing_token
   trace_schema_version/capture_policy_hash
   trace_content_jsonb/trace_content_hash UNIQUE
@@ -767,7 +666,7 @@ app.advisory_selection_stage_trace_delivery_event
   writer_attempt_no/event_at/reason_codes/payload_hash
 ```
 
-两表 append-only。outbox insert 以 `trace_content_hash` 幂等，并在 insert/commit 前按 §6.4 校验 CAPTURE_DML authorization、admission scope、RUNNING capture batch、lease/fencing。delivery 使用 `(trace_outbox_id,delivery_event_no)` 唯一递增，predecessor 只能有一个后继，DB/repository 拒绝 fork/cycle。reconciliation 以 SelectionRun/Advisory review 与 outbox identity 对账；业务成功但没有 outbox 时追加 capture gap `TRACE_CAPTURE_LOST`，不回放 Selection。
+两表 append-only。outbox insert 以 `trace_content_hash` 幂等，并在 insert/commit 前按 §6.3 校验 handoff readiness、admission scope、RUNNING capture batch、lease/fencing 和大小预算。delivery 使用 `(trace_outbox_id,delivery_event_no)` 唯一递增，predecessor 只能有一个后继，DB/repository 拒绝 fork/cycle。reconciliation 以 SelectionRun/Advisory review 与 outbox identity 对账；业务成功但没有 outbox 时追加 capture gap `TRACE_CAPTURE_LOST`，不回放 Selection。
 
 ### 9.5 历史补采
 
@@ -951,7 +850,7 @@ storage_scale = li_to_yuan_1000
 
 ### 10.5 Entry 与可执行性
 
-entry basis 来自获批 label policy。`next_open_executable` 不是“无条件取 open”：
+entry basis 来自冻结并通过 schema/hash 校验的 label policy。`next_open_executable` 不是“无条件取 open”：
 
 - 停牌、无报价、不可成交涨跌停或数据缺失必须记录 entry_status。
 - 未形成合法 entry 时不伪造收益标签。
@@ -1046,7 +945,7 @@ universe denominator 与 candidate label 必须调用同一 outcome engine 和�
 
 ### 12.1 Append-only source availability ledger
 
-Phase 1 新增 `app.advisory_source_availability_event`，由获批的 ingestion-completion observer 追加，不修改 market 源表：
+Phase 1 新增 `app.advisory_source_availability_event`，由版本化配置启用的 ingestion-completion observer 在数据刷新成功后追加，不修改 market 源表：
 
 ```text
 availability_event_id PK
@@ -1072,7 +971,7 @@ created_by_service_principal/created_at
 
 - `formal_available_at = max(可证明的 provider_published_at, first_observed_at)`；provider 时间无权威证据时只使用 first-observed，禁止回填更早时间。
 - 同一 partition chain 使用 `(partition_chain_key,event_revision_no)` 唯一递增序号；非首事件必须引用同 chain、revision 恰好小 1 的 predecessor，且 predecessor hash 只能被一个后继引用。DB constraint/repository 同时拒绝 fork、cycle 和跨分区链接。
-- 纠正或撤销必须追加 event；`INVALIDATED` terminal 不能进入 revision set。恢复必须追加获批 `REVALIDATED`，绑定新 revision/content hash，不得重新选旧 event。禁止 UPDATE/DELETE。
+- 纠正或失效必须追加 event；`INVALIDATED` terminal 不能进入 revision set。恢复必须由程序在新 revision/content hash 完整且 predecessor 精确匹配时追加 `REVALIDATED`，不得重新选旧 event。禁止 UPDATE/DELETE。
 - as-of selector 只选择 `formal_available_at <= requested cutoff` 的唯一 terminal event；多个合法 terminal、chain fork 或最新 terminal=INVALIDATED 时 fail-closed。
 - observer 只在生产 gate 启用后积累未来 evidence。启用前的历史数据不补造事件，仍按 Phase 0A 归为 retrospective 或 unavailable。
 - `market.dataset_date_refresh_audit` 只作当前 readiness 辅证，不是 availability authority。
@@ -1110,7 +1009,7 @@ member:
 - `WATERMARK_ONLY` 不能支持 formal signal 或 MATURED outcome，只能 retrospective/coverage diagnostic。
 - `FEATURE_T/UNIVERSE_T` 及参与 T 日 identity 的 calendar/runtime member 使用 `DECISION_CUTOFF`：正式 signal 必须精确绑定 availability event，且 `formal_available_at <= decision_cutoff_ts`；没有 ledger event 只能 retrospective。
 - `OUTCOME/CORPORATE_ACTION/TRADABILITY/BENCHMARK` 使用 `LABEL_AS_OF`：这些未来结果不得要求在 T 时已知。已存在 member 必须具有 immutable revision/partition content hash、event-time 合法性和 outcome source evidence，且实际 available-at `<= label_as_of_ts`；MATURED 另要求 `source_closed_at <= label_as_of_ts`。UNAVAILABLE 可没有 source_closed_at，但必须以 `failure_observed_at <= label_as_of_ts + missing_source_receipt_hash` 证明截至 as-of 无法闭合。历史 observer 启用前数据可用 PARTITION_CONTENT_HASH + immutable evidence 成熟标签，不会降级原 signal 的 FORMAL_OOS 身份。
-- `COST`、label/calendar policy assets 使用 `POLICY_PREAPPROVED`：必须匹配 Phase 0A.1 获批 policy hash/effective range；数据成员的可用时间仍按其实际用途选择 DECISION_CUTOFF 或 LABEL_AS_OF。
+- `COST`、label/calendar policy assets 使用 `POLICY_FROZEN`：必须匹配 Phase 0A.1 handoff 中的 policy hash/effective range；数据成员的可用时间仍按其实际用途选择 DECISION_CUTOFF 或 LABEL_AS_OF。
 - 任一绑定 availability event 的 member，其 revision kind/id/content/available-at 必须与 event 逐字段相等。
 - 对没有可靠 ingestion revision 的源，materialize 必须在一致读取窗口内计算并持久化 canonical partition content hash；只记录 watermark/count 不足以复用。
 - `signal_source_revision_set_hash` 只覆盖 T cutoff 前候选/runtime/HMM/universe 证据；`label_source_revision_set_hash` 覆盖具体 label version 的未来行情、复权、交易状态、benchmark 和 terminal 证据；`snapshot_source_revision_set_hash` 覆盖本次 snapshot 选择的 signal/label/universe/capture versions。
@@ -1167,8 +1066,8 @@ v1 仅允许版本化模板访问：
 
 | 契约面 | Producer | Consumer | 版本/失败边界 |
 |---|---|---|---|
-| Phase 0A.1 handoff/approval | finalizer + approval authority | admission controller | GLOBAL/admission-scope 单链、scope/hash/revoke 任一不合法即拒绝对应范围 |
-| Operation authorization | authorized operator registry | mutation CLI | action/environment/scope/expiry/limit 精确匹配，commit 前重验 |
+| Phase 0A.1 handoff/readiness | deterministic normalizer | readiness validator | audit/handoff/scope/hash 精确匹配；合法完整输入必须可通过 |
+| Automatic mutation safety | versioned request + repository/state machine | mutation CLI/worker | scope/current state/expected version/lease/fencing/limit 精确匹配，commit 前重验 |
 | Source availability/revision | ingestion observer + source freezer | capture/label/materialize | append-only revision；未知历史不倒推 available-at |
 | Selection stage trace | Selection pure stage engine | immutable outbox + capture writer | 默认 no-op；no-throw/有界；缺层显式 PARTIAL/GAP |
 | Observation/label capture | capture repositories | dataset build | stable signal + append-only version/lineage/label，COMPLETE batch 才可消费 |
@@ -1182,10 +1081,6 @@ Phase 1 不新增 HTTP API、UI 或 MCP 契约。未来 operator 入口仅为受
 ### 13.2 新表清单
 
 ```text
-app.advisory_phase0a_approval_event
-app.advisory_phase0a_approval_bundle
-app.advisory_phase0a_approval_bundle_scope
-app.advisory_phase1_operation_authorization_event
 app.advisory_phase1_control_binding_event
 app.advisory_source_availability_event
 app.advisory_source_revision_set
@@ -1220,30 +1115,29 @@ app.advisory_dataset_build_gap
 
 现有表不删除、不改主键、不改变语义。v1 优先新增表而不是扩张现有 JSONB。
 
-`app.advisory_phase1_control_binding_event` 是 trace capture、source-ledger observer、dataset store 和 scheduler 的 append-only生效证据：
+`app.advisory_phase1_control_binding_event` 是 trace capture、source-ledger observer、dataset store 和 scheduler 的版本化配置记录，不是审批或授权证据：
 
 ```text
 binding_event_id PK
 control_type = TRACE_CAPTURE | SOURCE_LEDGER_OBSERVER | DATASET_STORE | SCHEDULER
 environment/admission_scope_set_hash/governance_scope_hash nullable by control type
 config_or_store_backend_hash
-operation_authorization_id/hash
 predecessor_binding_event_hash nullable
-actor_principal/bound_at/binding_event_hash
+config_source/bound_at/binding_event_hash
 ```
 
-同 `(control_type,environment,scope)` 只允许单链，runtime/build admission 每次使用前重验 terminal binding 的 operation authorization 仍有效；`revoke-authorization` 会使该 binding fail-closed，无需可变 enabled row。same content 幂等，fork/cycle 或授权 scope/config 不匹配拒绝。TRACE_CAPTURE/SOURCE_LEDGER/SCHEDULER 未绑定时默认关闭；DATASET_STORE 未绑定时禁止 materialize/promote/seal。
+同 `(control_type,environment,scope)` 只允许单链；新的 config binding 通过 predecessor hash 和 expected current hash 原子替换有效配置。same content 幂等，fork/cycle 或 scope/config 不匹配拒绝。TRACE_CAPTURE/SOURCE_LEDGER/SCHEDULER 未配置时默认关闭；DATASET_STORE 未配置或健康检查失败时禁止 materialize/publish/seal。不存在 revoke authorization；停用由新 `enabled=false` 配置事件表达。
 
 ### 13.3 `app.advisory_capture_batch`
 
-capture 负责把已授权 evidence 追加到 app DB，不创建或预分配 snapshot：
+capture 负责把通过 readiness 校验的 evidence 追加到 app DB，不创建或预分配 snapshot：
 
 ```text
 capture_batch_id TEXT PK
 capture_request_hash TEXT NOT NULL
 capture_attempt_no INTEGER NOT NULL
 predecessor_capture_batch_id TEXT NULL
-approval_bundle_hash/operation_authorization_hash TEXT NOT NULL
+phase1_handoff_bundle_hash/handoff_readiness_hash TEXT NOT NULL
 admission_scope_set_hash/date_start/date_end NOT NULL
 signal_source_revision_set_hash TEXT NOT NULL
 label_source_revision_set_hash TEXT NULL
@@ -1261,7 +1155,7 @@ UNIQUE(capture_request_hash, capture_attempt_no)
 
 状态只允许 `PLANNED -> RUNNING -> COMPLETE|FAILED|EXPIRED|ABORTED`，使用 expected row version、lease 和递增 fencing token CAS。每个 child evidence insert 都保存 `capture_batch_id/fencing_token`，trigger/repository 在事务内校验 batch 仍 RUNNING、lease 未过期且 token 为 current；COMPLETE CAS 同样重验。只有 COMPLETE 且 receipt/hash/counts 闭合的 batch 可进入 snapshot build。
 
-FAILED/EXPIRED/ABORTED retry 使用 CAPTURE_RECOVER authorization 创建 `capture_attempt_no+1` 的新 batch并引用 predecessor；旧 token 永久失效。旧 batch 已写 immutable rows可被新 batch按 content hash 幂等命中，但旧 worker不能继续追加。
+FAILED/EXPIRED/ABORTED retry 由 recover-capture 程序在 predecessor terminal、request hash、expected row version 和旧 token 失效全部成立时创建 `capture_attempt_no+1`；旧 batch 已写 immutable rows 可被新 batch 按 content hash 幂等命中，但旧 worker 不能继续追加。
 
 每个 batch 使用 append-only `app.advisory_capture_batch_evidence_membership` 冻结实际消费集合：
 
@@ -1285,7 +1179,7 @@ logical_build_key_sha256 TEXT NOT NULL
 build_generation INTEGER NOT NULL
 predecessor_build_id TEXT NULL
 build_request_hash/snapshot_source_revision_set_hash/capture_set_hash TEXT NOT NULL
-approval_bundle_hash/admission_scope_set_hash/query_registry_hash TEXT NOT NULL
+phase1_handoff_bundle_hash/handoff_readiness_hash/admission_scope_set_hash/query_registry_hash TEXT NOT NULL
 base_snapshot_id/base_snapshot_content_hash/base_manifest_sha256 TEXT NULL
 date_start/date_end
 builder_version/code_commit/writer_version/partition_policy_hash
@@ -1316,16 +1210,16 @@ lease_owner_id/lease_token/fencing_token
 lease_acquired_at/heartbeat_at/expires_at
 started_at/finished_at
 staging_uri
-operation_authorization_hash
+operation_request_hash
 error_code/hash
 UNIQUE(build_id, attempt_no)
 ```
 
-同一 logical key 只允许一个 ACTIVE generation（partial unique index）。每个独立 CLI 命令创建独立 attempt；获取 attempt 使用短事务 `pg_advisory_xact_lock(logical build key)` 加 build row `FOR UPDATE`，递增 fencing token。checkpoint、event、attempt file、manifest publish 和 seal 都必须校验 active attempt、未过期 lease 与 fencing token。人工审批期间不持有 lease。stale attempt 只能追加 EXPIRED；显式 recovery authorization 后创建新 attempt，旧 token 永久失去写权限。
+同一 logical key 只允许一个 ACTIVE generation（partial unique index）。每个独立 CLI 命令创建独立 attempt；获取 attempt 使用短事务 `pg_advisory_xact_lock(logical build key)` 加 build row `FOR UPDATE`，递增 fencing token。checkpoint、event、attempt file、manifest publish 和 seal 都必须校验 active attempt、未过期 lease 与 fencing token。命令之间不持有 lease。stale attempt 只能追加 EXPIRED；recover-build 在 predecessor、expected row version 和 current fencing 全部匹配后创建新 attempt，旧 token 永久失去写权限。
 
-每个 checkpoint 必须在同一 CAS transaction 固定取得它的 attempt、receipt 和 file/manifest set hash，字段一旦非空不可替换：VERIFY 只能消费 `materialized_attempt_id/file_set_hash`；PROMOTE 只能消费 verified set；SEAL 只能消费 promoted manifest/receipt。attempt 在 checkpoint 前失败可重试同 operation；checkpoint 成功后若其 file set 因瞬态写坏/环境故障不可用，必须先经 BUILD_TERMINATE authorization 把该 generation 原子置为 ABORTED，再经 BUILD_CREATE authorization 建立同 logical key 的下一 generation，不能回退或替换旧 checkpoint。
+每个 checkpoint 必须在同一 CAS transaction 固定取得它的 attempt、receipt 和 file/manifest set hash，字段一旦非空不可替换：VERIFY 只能消费 `materialized_attempt_id/file_set_hash`；PROMOTE 只能消费 verified set；SEAL 只能消费 promoted manifest/receipt。attempt 在 checkpoint 前失败可重试同 operation；checkpoint 成功后若其 file set 因瞬态写坏/环境故障不可用，terminate-build 必须在 expected row version、checkpoint、current attempt/fencing 和 terminal payload 全部匹配后把该 generation 原子置为 ABORTED，随后 create-build 才能建立同 logical key 的下一 generation，不能回退或替换旧 checkpoint。
 
-`terminate-build` 在一个 CAS transaction 中锁定 build row，要求 lifecycle 仍为 ACTIVE，并校验 expected row version、checkpoint、当前 attempt/fencing、已固定 file/manifest set 和 termination payload。若仍有 ACTIVE attempt，必须在同一 transaction 将其追加 ABORTED terminal event并使 token 失效；随后写 `termination_receipt_hash/terminated_at` 和唯一 `BUILD_TERMINATED` event。`ABORTED` 表示获批的同 logical key 新 generation 可恢复；`FAILED_TERMINAL` 表示 request/semantic/admission 不可重试，同 logical key 永久停止。两种终态均不自动释放 reservation 或删除 staging，后续仍分别需要 RESERVATION_RELEASE/STAGING_CLEANUP authorization。
+`terminate-build` 在一个 CAS transaction 中锁定 build row，要求 lifecycle 仍为 ACTIVE，并校验 expected row version、checkpoint、当前 attempt/fencing、已固定 file/manifest set 和 termination payload。若仍有 ACTIVE attempt，必须在同一 transaction 将其追加 ABORTED terminal event并使 token 失效；随后写 `termination_receipt_hash/terminated_at` 和唯一 `BUILD_TERMINATED` event。`ABORTED` 表示同 logical key 可按确定状态机创建新 generation；`FAILED_TERMINAL` 表示 request/semantic/readiness 不可重试，同 logical key 永久停止。两种终态均不自动释放 reservation 或删除 staging，release/cleanup 程序必须分别验证 terminal state、reservation set 和 file set 后执行。
 
 ### 13.5 Attempt files 与 final SEALED snapshot
 
@@ -1356,7 +1250,7 @@ build_id TEXT UNIQUE NOT NULL
 snapshot_schema_version
 snapshot_source_revision_set_hash/capture_set_hash
 base_snapshot_id/base_snapshot_content_hash/base_manifest_sha256
-phase0a_audit_hash/approval_bundle_hash/admission_scope_set_hash
+phase0a_audit_hash/handoff_readiness_hash/admission_scope_set_hash
 query_registry_hash/builder_version/code_commit/writer_version/partition_policy_hash
 dataset_capability_manifest/hash
 schema_fingerprint/file_count/row_count/total_bytes
@@ -1399,9 +1293,9 @@ seal 的单一 DB transaction 必须同时插入 snapshot、snapshot file、sele
 `app.advisory_dataset_build_event` append-only event types：
 
 ```text
-REQUESTED | ADMISSION_PASSED | ATTEMPT_STARTED | SOURCE_VIEW_OPENED |
+REQUESTED | READINESS_PASSED | ATTEMPT_STARTED | SOURCE_VIEW_OPENED |
 MATERIALIZED | VERIFIED | PROMOTED | SEALED | ATTEMPT_FAILED |
-ATTEMPT_EXPIRED | RECOVERY_AUTHORIZED | BUILD_TERMINATED | ABORTED
+ATTEMPT_EXPIRED | RECOVERY_STARTED | BUILD_TERMINATED | ABORTED
 ```
 
 字段至少包含 `event_id/build_id/attempt_id/fencing_token/event_type/event_at/actor/payload_hash/reason_codes`。禁止 UPDATE/DELETE。
@@ -1415,7 +1309,7 @@ canonical_signal_id nullable
 audit_target_id/program_id/package_id
 decision_as_of_trade_date
 signal_capability
-gap_class = NO_AUTHORITY|MISSING_SOURCE|MISSING_RUNTIME|CONFLICT|NOT_REPLAYABLE|CAPTURE_FAILED
+gap_class = NO_CANDIDATE_EVIDENCE|MISSING_SOURCE|MISSING_RUNTIME|CONFLICT|NOT_REPLAYABLE|CAPTURE_FAILED
 evidence_scope/missing_evidence_hashes/reason_codes
 gap_content_hash TEXT UNIQUE/created_at
 ```
@@ -1429,7 +1323,7 @@ invalidation_id PK
 snapshot_id/manifest_sha256
 invalidated_at/by
 reason_code/hash
-operation_authorization_hash
+invalidation_request_hash
 replacement_snapshot_id nullable
 invalidation_content_hash UNIQUE
 ```
@@ -1438,7 +1332,7 @@ v1 不允许 reinstatement。reader、base admission 和 Phase 0B handoff 必须
 
 `invalidation_epoch_hash` 是 snapshot 与实际复用 base chain 的排序 `(snapshot_id,current invalidation_event_hash or NONE)` hash。并发协议：child seal 与 base invalidation 对每个 base snapshot 获取相同 transaction-scoped advisory lock，并在 commit 前重验 base；invalidation 先提交则 child seal 失败，child seal 先提交后其 reader 仍检查完整 base chain。长文件 consumer 不持有 DB lock，而是在 admission receipt 保存 epoch hash，结果发布、报告登记或模型 bundle 写入前再次查询；epoch 变化则丢弃本次结果并返回 `SNAPSHOT_INVALIDATED_DURING_READ`。
 
-`app.advisory_dataset_blob` 保存 blob hash/size/store identity；`app.advisory_dataset_snapshot_blob_ref` 保存 final snapshot 完整引用。其余引用使用 append-only authority：
+`app.advisory_dataset_blob` 保存 blob hash/size/store identity；`app.advisory_dataset_snapshot_blob_ref` 保存 final snapshot 完整引用。其余引用使用 append-only evidence：
 
 ```text
 app.advisory_dataset_blob_reservation_event
@@ -1452,7 +1346,7 @@ app.advisory_dataset_legal_hold_event
 
 app.advisory_dataset_gc_event
   gc_epoch/blob_sha256/gc_event_no/predecessor_event_hash
-  state=MARKED|QUARANTINED|DELETE_AUTHORIZED|DELETED|CANCELLED_REFERENCE_CHANGED|FAILED
+  state=MARKED|QUARANTINED|DELETE_CHECKED|DELETED|CANCELLED_REFERENCE_CHANGED|FAILED
   observed_refset_hash/event_at/event_hash
 
 app.advisory_dataset_blob_deletion_receipt
@@ -1460,11 +1354,11 @@ app.advisory_dataset_blob_deletion_receipt
   predelete_refset_hash/postdelete_scrub_hash/receipt_hash
 ```
 
-MATERIALIZED checkpoint 固定 file set 时，在同一 control transaction 为全部 blob hashes 建立 BUILD_FILE_SET reservations；PROMOTED 后增加 PUBLISHED_MANIFEST reservation。SEAL transaction 先写 final snapshot refs，再释放对应 reservations。ABORTED/FAILED_TERMINAL 只能经 RESERVATION_RELEASE authorization 追加 RELEASE；STAGING_CLEANUP 另行授权并写 cleanup receipt。没有 final ref 也没有有效 reservation/hold 的 blob 才能进入 GC；不能只扫描 active attempt 或 final snapshot 表。
+MATERIALIZED checkpoint 固定 file set 时，在同一 control transaction 为全部 blob hashes 建立 BUILD_FILE_SET reservations；PROMOTED 后增加 PUBLISHED_MANIFEST reservation。SEAL transaction 先写 final snapshot refs，再释放对应 reservations。ABORTED/FAILED_TERMINAL 的 reservation release 程序必须校验 terminal receipt 和完整 reservation set；staging cleanup 必须校验 terminal build、file set 和 retention policy并写 cleanup receipt。没有 final ref 也没有有效 reservation/hold 的 blob 才能进入 GC；不能只扫描 active attempt 或 final snapshot 表。
 
-每个 `(gc_epoch,blob_sha256)` 的 GC event 按 `gc_event_no` 单链，predecessor 只能有一个后继。完整状态机为 `MARKED -> QUARANTINED -> DELETE_AUTHORIZED -> DELETED`，从 QUARANTINED/DELETE_AUTHORIZED 发现 refset 变化时转 `CANCELLED_REFERENCE_CHANGED`，不可恢复的验证/IO 失败转 `FAILED`。CANCELLED/FAILED/DELETED 都是该 epoch 终态；引用以后再次归零必须创建新 gc_epoch 并重新等待 30 天。
+每个 `(gc_epoch,blob_sha256)` 的 GC event 按 `gc_event_no` 单链，predecessor 只能有一个后继。完整状态机为 `MARKED -> QUARANTINED -> DELETE_CHECKED -> DELETED`，从 QUARANTINED/DELETE_CHECKED 发现 refset 变化时转 `CANCELLED_REFERENCE_CHANGED`，不可恢复的验证/IO 失败转 `FAILED`。CANCELLED/FAILED/DELETED 都是该 epoch 终态；引用以后再次归零必须创建新 gc_epoch 并重新等待 30 天。
 
-v1 quarantine 仅是持久化逻辑状态，不移动、不改名 CAS blob，因此取消时无需恢复物理路径。`mark-gc-quarantine` 持久化 MARKED 与 QUARANTINED events，30 天从 QUARANTINED event_at 计算。`apply-gc-delete` 在全局 GC lock 下重新计算 refset：变化则追加 CANCELLED_REFERENCE_CHANGED 并整批停止；一致且零引用时先追加 DELETE_AUTHORIZED，再删除 blob、durable flush parent directory、写 deletion receipt 与 DELETED event。删除或 durable receipt 任一步失败必须追加/恢复为可审计 FAILED，不得把缺 receipt 的 blob当成已删除。
+v1 quarantine 仅是持久化逻辑状态，不移动、不改名 CAS blob，因此取消时无需恢复物理路径。`mark-gc-quarantine` 持久化 MARKED 与 QUARANTINED events，30 天从 QUARANTINED event_at 计算。`apply-gc-delete` 在全局 GC lock 下重新计算 refset：变化则追加 CANCELLED_REFERENCE_CHANGED 并整批停止；一致、零引用且 retention 到期时先追加 DELETE_CHECKED，再删除 blob、durable flush parent directory、写 deletion receipt 与 DELETED event。删除或 durable receipt 任一步失败必须追加/恢复为可审计 FAILED，不得把缺 receipt 的 blob 当成已删除。
 
 ### 13.7 索引与分区
 
@@ -1474,25 +1368,25 @@ v1 quarantine 仅是持久化逻辑状态，不移动、不改名 CAS blob，因
 - stage candidate：`(observation_version_id,stage_evidence_id,rank,symbol)`；label：`(canonical_signal_id,symbol,horizon,projection)`、`label_key_hash/revision_no`、maturity/event/source available-at。
 - source availability：`(dataset_name,partition_key_hash,first_observed_at)`；revision member：`(source_revision_set_id,dataset_name,partition_key_hash)` 唯一。
 - capture：status/date/scope；build：lifecycle/checkpoint/logical key/generation；attempt：build/state/lease expiry/fencing；snapshot：content/manifest/sealed_at；invalidation：snapshot/date。
-- 分区预创建与 retention 由受控 migration/maintenance CLI 完成；缺目标 partition 时 fail-closed，不在 runtime 隐式 DDL。
-- 所有大索引在新空表 DDL 阶段创建；未来已有大表加索引必须 `CONCURRENTLY` 且独立 gate。
+- 分区预创建只由开发/发布 migration 完成；retention 由 maintenance CLI 处理既有分区内的数据/制品。缺目标 partition 时 fail-closed，运行时不得创建分区或执行任何隐式 DDL。
+- 所有大索引在开发/发布 migration 阶段创建；未来已有大表加索引必须 `CONCURRENTLY` 并经过 migration smoke，运行任务禁止发起 DDL。
 
 ### 13.8 Append-only enforcement
 
-- approval event/bundle/scope member、authorization event、source availability/revision member、capture evidence membership、canonical signal/version、trace outbox/delivery、lineage、stage、candidate、label、attempt file、final snapshot/file/version mapping/invalidation/blob/ref/reservation/hold/GC/deletion receipt 和 build event 加 no-update/no-delete trigger。abandoned attempt file row 仍保留，staging bytes 清理通过独立 cleanup receipt 留证，不改写 payload。
+- source availability/revision member、capture evidence membership、canonical signal/version、trace outbox/delivery、lineage、stage、candidate、label、attempt file、final snapshot/file/version mapping/invalidation/blob/ref/reservation/hold/GC/deletion receipt 和 build event 加 no-update/no-delete trigger。abandoned attempt file row 仍保留，staging bytes 清理通过独立 cleanup receipt 留证，不改写 payload。
 - capture/build/attempt 只允许定义的 CAS transition/checkpoint/lease 字段变化；attempt 结束后不可修改。final snapshot 从插入起即不可变，不存在 `FAILED -> BUILDING` snapshot transition。
 - repository 写入 immutable entity 时使用 `INSERT ... ON CONFLICT DO NOTHING` 后读取并比较完整 identity/content hash。
 - 禁止 `ON CONFLICT DO UPDATE` 覆盖 evidence payload。
-- DB role 分离 approver、approval finalizer、operation authorizer、control binder、source-ledger writer、capture writer、build worker、sealer、GC operator 和 reader；reader 无 event/evidence UPDATE/DELETE 权限，各 writer 不能越权生成自己的 authorization。
+- 不新增人员或审批角色。现有应用数据库身份按程序所需表权限运行；真正的防误写边界是无运行时 DDL、表级约束、append-only trigger、事务、唯一键、lease/fencing、expected row version 和 CAS。测试必须证明绕过 service 的非法 UPDATE/DELETE/状态跳转仍被数据库拒绝。
 
 ## 14. Build Request、幂等与并发
 
 ### 14.1 Build request
 
 ```text
-approved_phase0a_audit_id/hash
-initial_approval_receipt_hash
-phase1_handoff_bundle_hash/approval_bundle_hash
+phase0a_audit_id/hash
+handoff_readiness_report_hash
+phase1_handoff_bundle_hash
 sorted admission scope ids/hashes
 sorted COMPLETE capture batch ids/receipt hashes
 decision date range
@@ -1513,7 +1407,7 @@ requested_source_cutoff
 label_as_of_ts
 ```
 
-action authorization 不属于数据语义，不进入 build request hash；它由每个 attempt/event 单独保存和重验。build request 不允许只给 `base_snapshot_id` 而省略 base content/manifest hash。
+operation request、attempt、lease、fencing 和运行时间不属于数据语义，不进入 build request hash。build request 不允许只给 `base_snapshot_id` 而省略 base content/manifest hash。
 
 ### 14.2 Build 与 final snapshot hashes
 
@@ -1529,11 +1423,11 @@ snapshot_content_hash = manifest_core_sha256
 snapshot_id = advsnap_<snapshot_content_hash[:24]>
 ```
 
-同 request、capture set 和 stable source revision set 必须命中同 logical build key。正常幂等调用返回当前 ACTIVE/SEALED generation；失败 generation 的受控重做只增加 `build_generation`，不伪造新语义。任一 source/capture revision 变化产生新 logical key。transaction token、URI、attempt、lease、authorization、时间戳和 receipt 不进入 logical build/snapshot content identity。
+同 request、capture set 和 stable source revision set 必须命中同 logical build key。正常幂等调用返回当前 ACTIVE/SEALED generation；失败 generation 的受控重做只增加 `build_generation`，不伪造新语义。任一 source/capture revision 变化产生新 logical key。transaction token、URI、attempt、lease、运行时间戳和 receipt 不进入 logical build/snapshot content identity。
 
-`freeze-source-revisions` 必须在 build 前先形成持久 source revision set。存在 immutable ingestion revision 时只校验 revision/content；缺可靠 revision 时在一个有时限的只读事务中扫描并持久化 partition content hash。该命令结束事务后才允许等待人工 build authorization。
+`freeze-source-revisions` 必须在 build 前先形成持久 source revision set。存在 immutable ingestion revision 时只校验 revision/content；缺可靠 revision 时在一个有时限的只读事务中扫描并持久化 partition content hash。该命令结束事务后再启动 build；命令之间不保持 exported snapshot、事务或 lease。
 
-materialize attempt 在新的 `REPEATABLE READ READ ONLY` coordinator transaction 中重新验证 source revision set 并完成所有 DB-to-staging 读取；并行 reader 只在该事务存活期间导入 exported snapshot。事务关闭且 staging 已 durable flush 后，短 control-plane transaction 才登记 attempt files 和 MATERIALIZED checkpoint。若 source hash 不匹配或超出事务预算，attempt 失败并要求新 revision set 或获批 durable DB/replica snapshot；禁止拆成多个不一致视图。
+materialize attempt 在新的 `REPEATABLE READ READ ONLY` coordinator transaction 中重新验证 source revision set 并完成所有 DB-to-staging 读取；并行 reader 只在该事务存活期间导入 exported snapshot。事务关闭且 staging 已 durable flush 后，短 control-plane transaction 才登记 attempt files 和 MATERIALIZED checkpoint。若 source hash 不匹配或超出事务预算，attempt 失败并要求新 revision set 或预配置的 durable DB/replica snapshot；禁止拆成多个不一致视图。
 
 base admission 必须验证 base 存在、SEALED、未 invalidated、全量 hash 完整、无 base cycle，且 schema/query/policy/symbol/calendar/target scope 兼容。只有 partition revision/content hash 未变化时才可复用 blob；manifest 必须展开完整文件集合。
 
@@ -1541,11 +1435,11 @@ base admission 必须验证 base 存在、SEALED、未 invalidated、全量 hash
 
 - build/attempt 获取规则按 §13.4 使用 logical-key transaction advisory lock、row lock、lease 和递增 fencing token。
 - 同 logical key 的任一 generation 已 SEALED：返回其 content-addressed snapshot 并重新校验未 invalidated。若已 invalidated，禁止用新 generation 重新 materialize 相同语义/内容；数据或政策错误必须先形成新的 source/capture/policy/schema revision，从而得到新 logical key/content。纯存储损坏只允许按原 hash 从备份恢复 bytes 并 scrub，不创建 semantic invalidation。误 invalidation 在 v1 永久阻断相同 snapshot，不支持 reinstatement。
-- 同 logical key 有 ACTIVE generation：返回 current build/attempt 状态。同 key 最后 generation 为 ABORTED 时，BUILD_CREATE authorization 必须引用 termination receipt、最后 generation、重做原因和 expected next generation，才能创建下一 generation；最后 generation 为 FAILED_TERMINAL 时禁止同 logical key 重建，必须修正 request/source/policy 形成新 logical key。
+- 同 logical key 有 ACTIVE generation：返回 current build/attempt 状态。同 key 最后 generation 为 ABORTED 时，create-build 必须引用 termination receipt、最后 generation、重做原因和 expected next generation，才能创建下一 generation；最后 generation 为 FAILED_TERMINAL 时禁止同 logical key 重建，必须修正 request/source/policy 形成新 logical key。
 - 同 operation 有 ACTIVE 且未过期 attempt：第二调用返回 `BUILD_ALREADY_RUNNING`；不同 checkpoint 的合法下一命令可创建对应 operation attempt。
-- stale attempt 只能经显式 RECOVER authorization 标记 EXPIRED 并创建新 attempt；不得复活旧 attempt 或混用旧 file rows。
-- checkpoint 只前进；attempt failure 不回退 checkpoint。只有 BUILD_TERMINATE authorization 和 `terminate-build` CAS 成功后 build 才进入 FAILED_TERMINAL/ABORTED；不得由 worker 自行改终态。
-- 所有写入校验 current attempt、fencing token、lease、operation authorization 和 expected row version。
+- stale attempt 只能由 recover-build 在 expected row version 和 predecessor state 匹配时标记 EXPIRED 并创建新 attempt；不得复活旧 attempt 或混用旧 file rows。
+- checkpoint 只前进；attempt failure 不回退 checkpoint。只有 `terminate-build` CAS 成功后 build 才进入 FAILED_TERMINAL/ABORTED；不得由普通 worker 自行改终态。
+- 所有写入校验 handoff readiness、current attempt、fencing token、lease 和 expected row version。
 - 不使用“最后写入者获胜”。
 
 ## 15. DB 到 Parquet 流水线
@@ -1617,7 +1511,7 @@ AISTOCK_ADVISORY_DATASET_STORE_ROOT
 - 生产启用前生成 immutable `store_backend_receipt`：`store_backend_id/hash`、canonical root、filesystem/volume identity、backend type、atomic publish mode、durability mode、ACL policy hash、backup policy/RPO/RTO、scrub policy、capacity probe hash。
 - writer/staging/sealer 与 reader 使用独立最小权限；WSL consumer 只读，GC/invalidator 不与 writer 共用凭据。
 - build admission 必须验证 `free_bytes >= projected_new_bytes + reserved_bytes + min_free_bytes`；空间或能力未知时 fail-closed，不在写到一半后依赖 OS ENOSPC。
-- 本地文件 backend 必须支持同卷 atomic rename、create-if-absent 和 `FlushFileBuffers`/目录 durable flush；不满足时必须更换获批 backend，不能假设普通 rename 等价于断电持久。
+- 本地文件 backend 必须支持同卷 atomic rename、create-if-absent 和 `FlushFileBuffers`/目录 durable flush；不满足时必须更换满足技术契约的 backend，不能假设普通 rename 等价于断电持久。
 
 ### 16.2 URI 与布局
 
@@ -1627,7 +1521,7 @@ root/blobs/sha256/<prefix>/<sha256>
 root/snapshots/<snapshot_id>/manifest.json
 root/snapshots/<snapshot_id>/promotion_receipt.json
 root/tmp/<build_id>/<attempt_id>/...
-root/gc-receipts/<gc_epoch>/...      # 仅 receipt；blob 保持原 CAS 路径直到 DELETE_AUTHORIZED
+root/gc-receipts/<gc_epoch>/...      # 仅 receipt；blob 保持原 CAS 路径直到 DELETE_CHECKED
 ```
 
 manifest 引用 blob hash，不依赖可变软链接。
@@ -1705,7 +1599,7 @@ capability_rows[] with exact composite key:
 
 ### 17.1 初始构建
 
-不等待在线累计数月。对每个 Phase 0A.1 approval bundle 中获批 target：
+不等待在线累计数月。对每个 Phase 0A.1 handoff 中 READY/PARTIAL target：
 
 1. 从 Phase 0A 判定的最早合法/可研究日期开始。
 2. 优先读取历史 immutable evidence。
@@ -1720,7 +1614,7 @@ capability_rows[] with exact composite key:
 
 ### 17.2 持续追加
 
-- 获批 ingestion observer 先追加 source availability/revision event；它不改变行情表和 Selection/StrategyPackage reader。
+- 版本化配置启用的 ingestion observer 在数据刷新校验成功后追加 source availability/revision event；它不改变行情表和 Selection/StrategyPackage reader。
 - 新交易日 signal/evidence 通过独立 capture batch 追加；evidence 修订只生成 observation version，不增加 stable signal sample。
 - label maturity/correction job 只追加无 fork revision，并保留旧 calculation evidence。
 - 每次 build 都固定新的 capture set 与 snapshot source revision set；final snapshot id 由 manifest content 决定。
@@ -1729,27 +1623,21 @@ capability_rows[] with exact composite key:
 
 ### 17.3 DML 批次
 
-- source ledger、capture、label DML 使用互相独立的 action authorization 和小事务，不与 materialize exported snapshot 跨命令共享事务。
+- source ledger、capture、label DML 使用独立小事务、版本化 request 和幂等业务键，不与 materialize exported snapshot 跨命令共享事务。
 - canonical signal/version/stage/lineage 每个 decision date 或固定小批事务提交；capture batch 完成时另用短 CAS transaction 封 receipt。
-- label 按 horizon/date partition 分批；每个 revision 先验证 predecessor、source evidence 和 action authorization。
+- label 按 horizon/date partition 分批；每个 revision 先验证 predecessor、source evidence、policy hash 和 expected current revision。
 - 每批有 planned/inserted/idempotent/conflict/failed counts 和 hash receipt。
 - 任一 content conflict 立即停止当前 target，不自动覆盖。
-- 一个 target batch 失败不回滚其他 target 已完成 batch；approval/global conflict 则阻断后续 batch。
+- 一个 target batch 失败不回滚其他 target 已完成 batch；handoff/readiness 或 identity conflict 只阻断对应 scope 的后续 batch。
 
 ## 18. CLI 与运行边界
 
-Phase 0A.1 CLI：`scripts/advisory_phase0a_finalize.py`。
+Phase 0A.1 CLI：`scripts/advisory_phase0a_handoff.py`。
 
 ```text
 validate-handoff             纯校验 Phase 0A receipt/hashes
-build-handoff-bundle         生成 canonical v2 bundle，未批准
-register-decision            需 authenticated approver role + --execute-finalize + GLOBAL/ADMISSION_SCOPE payload
-revoke-decision              需 authenticated approver role + --execute-revoke + exact decision hash
-build-approval-bundle        需 authenticated finalizer role + --execute-bundle；从唯一 terminal chains 幂等写 bundle/scope rows
-verify-decision-chain        read-only，验证 fork/cycle/revoke/scope/hash
-authorize-operation          需 authenticated operation-authorizer role + --execute-authorize + exact scope/payload/limit/expiry
-revoke-authorization         需 authenticated operation-authorizer role + --execute-auth-revoke + exact authorization event hash
-verify-authorization         read-only，验证 chain/environment/scope/payload/expiry/revoke
+build-handoff-bundle         从 readiness report 确定性生成 canonical v2 handoff/scope set
+verify-handoff-readiness     验证 READY/PARTIAL/BLOCKED、scope/hash 和正向可达条件
 ```
 
 Phase 1 CLI：`scripts/advisory_phase1_dataset.py`。
@@ -1757,35 +1645,33 @@ Phase 1 CLI：`scripts/advisory_phase1_dataset.py`。
 ```text
 validate-request             纯校验，不连 DB
 probe-capacity               强制 read-only，仅 counts/schema/size
-apply-authorized-data-ddl    只允许 approved migration allowlist；需 DDL authorization 和 --execute-ddl
-activate-trace-capture       需 TRACE_CAPTURE_ACTIVATE authorization，写精确 capture config binding
-activate-source-ledger       需 SOURCE_LEDGER_ACTIVATE authorization，写 observer config binding；不补历史 event
-freeze-source-revisions      一致读扫描；登记 revision set 需 SOURCE_LEDGER_WRITE authorization
+verify-schema-version        只读检查已由开发/发布 migration runner 应用的 schema；运行 CLI 无 DDL 命令
+configure-trace-capture      写版本化 capture config binding；默认 disabled
+configure-source-ledger      写版本化 observer config binding；默认 disabled，不补历史 event
+freeze-source-revisions      一致读扫描并按 content hash 幂等登记 revision set
 plan-capture                 read-only，输出 target/batch/DML 计划和 hash
-capture-observations         需 CAPTURE_DML authorization
-recover-capture              需 CAPTURE_RECOVER authorization；创建新 batch/token
-mature-labels                需独立 LABEL_DML authorization
-initialize-dataset-store     需 STORE_INIT authorization；验证 ACL/capacity/durability/backup/scrub 后登记 binding
-create-build                 需 BUILD_CREATE authorization，登记 exact request/capture/source/base identities
-materialize-snapshot         需 MATERIALIZE authorization + store/capacity gate
-verify-snapshot              文件只读；登记 receipt 需 VERIFY_REGISTER authorization
-promote-snapshot             需 PROMOTE authorization + durable store gate
-seal-snapshot                需独立 SEAL authorization
-invalidate-snapshot          需 INVALIDATE authorization
-recover-build                需 RECOVER authorization；只创建新 attempt
-terminate-build              需 BUILD_TERMINATE authorization；原子终止 current generation
+capture-observations         按 frozen plan、scope、batch、行数/字节预算和事务写入
+recover-capture              仅 terminal predecessor + expected row version 可创建新 batch/token
+mature-labels                按 horizon/date/source revision/policy hash 幂等追加
+configure-dataset-store      验证 capacity/durability/backup/scrub 后写版本化 binding
+create-build                 登记 exact request/capture/source/base identities；same content 幂等
+materialize-snapshot         校验 store/capacity/source revision/lease/fencing 后写 staging
+verify-snapshot              文件只读校验；按 content hash 幂等登记 receipt
+publish-snapshot             校验 durable store、verified file set 和 manifest hash 后原子发布
+seal-snapshot                校验 published manifest、selected versions 和 DB refs 后原子 seal
+invalidate-snapshot          追加 exact snapshot/manifest/reason invalidation event
+recover-build                仅 stale/terminal predecessor + expected row version 创建新 attempt
+terminate-build              expected state/checkpoint/fencing 全匹配时原子终止 current generation
 scrub-store                  read-only 全量/抽样完整性检查
 plan-gc                      read-only refset/mark/quarantine 计划
-release-build-reservations   需 RESERVATION_RELEASE authorization；仅终态 build
-cleanup-staging              需 STAGING_CLEANUP authorization + cleanup receipt
-mark-gc-quarantine           需 GC_MARK_QUARANTINE authorization，持久化 quarantine 起点
-apply-gc-delete              需 GC_DELETE authorization；零引用则删除，refset 变化则追加 CANCELLED_REFERENCE_CHANGED
-activate-phase1-scheduler    需 SCHEDULER_ACTIVATE authorization；Phase 1 默认不执行
+release-build-reservations   仅 terminal build + exact reservation set 可释放
+cleanup-staging              仅 terminal build + retention 到期 + exact file set 可清理并写 receipt
+mark-gc-quarantine           零引用候选按 refset hash 持久化 quarantine 起点
+apply-gc-delete              retention 到期且 refset 未变化才删除；变化则追加 CANCELLED_REFERENCE_CHANGED
+configure-phase1-scheduler   写版本化 scheduler config binding；默认 disabled
 ```
 
-authority bootstrap 仍由 §6.4 的一次性 DBA gate 执行，不可由普通 CLI 自举。bootstrap 完成后，所有 operation authorization 只能由 `authorize-operation` 生产，业务 mutation CLI 只能消费 exact id/hash；grant/revoke CLI 与 target mutation 使用 §6.4 同一 global/admission-scope lock 顺序。`build-approval-bundle`、grant 和 revoke 都从 authenticated DB session 取 actor，same canonical content 幂等返回，same id/key 不同 content hash fail-closed。
-
-所有命令使用版本化 request schema；mutation 命令只接受 exact `authorization_id/event_hash`。JSON stdout/receipt 固定包含：
+所有命令使用版本化 request schema；mutation 命令接受 exact request/content hashes、expected row version、planned limits 和 current state。JSON stdout/receipt 固定包含：
 
 ```text
 schema_version/command/status
@@ -1796,33 +1682,27 @@ reason_codes
 exit_code
 ```
 
-退出码冻结：`0=success_or_idempotent`、`2=validation`、`3=authorization`、`4=identity_or_content_conflict`、`5=source_or_capacity`、`6=store_or_integrity`、`7=lease_or_recovery`、`8=internal`。禁止失败返回 0 或仅写日志。
+退出码冻结：`0=success_or_idempotent`、`2=validation`、`3=readiness_or_state`、`4=identity_or_content_conflict`、`5=source_or_capacity`、`6=store_or_integrity`、`7=lease_or_recovery`、`8=internal`。禁止失败返回 0 或仅写日志。
 
 保护：
 
 - 默认命令都是 validation/plan，不执行写入。
-- approval finalization、authorization grant/revoke、DDL、trace/source activation、source ledger、capture DML、label DML、store、build terminate、materialize、verify registration、promote、seal、invalidation、recovery、reservation/staging cleanup、GC quarantine/delete 和 scheduler 使用不同 operation type/显式开关，不能一个 `--execute` 全开。
-- mutation 在开始和 commit 前按 §6.4 重验 authorization/revoke；过期、scope mismatch、environment mismatch 或限额超出立即拒绝。
+- 运行 CLI 不提供 DDL、approval、grant 或 revoke 命令。trace/source/scheduler/store 使用版本化配置；source/capture/label/build/publish/invalidation/cleanup 使用各自强类型 request schema，不能一个自由 JSON 或通用 `--execute` 绕过字段约束。
+- mutation 在开始和 commit 前按 §6.3 重验 handoff readiness、scope、environment、current state、expected version、content hash 和限额；任一变化立即拒绝当前事务。
 - DB read sessions 设置 statement timeout；大导出使用配置化超时和 operator receipt，不继承 API 默认超时。
 - 不新增 FastAPI router 或前端入口。
 - Parquet builder 运行在 Windows 项目离线 CLI/worker 环境；FastAPI 启动路径不得 import PyArrow 或初始化 dataset store。
 - WSL Conda 在 Phase 1 只作为 SEALED snapshot 的只读 cache/验证消费者；训练仍属于后续阶段。
-- PyArrow 采用 CLI 路径 lazy import；若未来实现需要修改依赖清单，必须先完成 `production_backend_dependency_gate`，不能假定 WSL 依赖等于 Windows runtime 依赖。
+- PyArrow 采用 CLI 路径 lazy import；若未来实现需要修改依赖清单，必须在开发/发布阶段更新 lock 并通过依赖 smoke，不能假定 WSL 依赖等于 Windows runtime 依赖。
 - 日志只记录 ids、hashes、counts、dates、bytes、duration、reason code；不打印连接密钥和逐股 payload。
 
 ## 19. Reason Code 基线
 
 ```text
-ADVISORY_PHASE1_PHASE0A_APPROVAL_MISSING
+ADVISORY_PHASE1_PHASE0A_READINESS_MISSING
 ADVISORY_PHASE1_PHASE0A_HASH_MISMATCH
-ADVISORY_PHASE0A_APPROVAL_CHAIN_INVALID
-ADVISORY_PHASE0A_APPROVAL_CHAIN_FORKED
-ADVISORY_PHASE0A_APPROVAL_REVOKED
-ADVISORY_PHASE0A_TARGET_APPROVAL_SCOPE_MISMATCH
-ADVISORY_PHASE1_OPERATION_AUTHORIZATION_MISSING
-ADVISORY_PHASE1_OPERATION_AUTHORIZATION_REVOKED
-ADVISORY_PHASE1_OPERATION_AUTHORIZATION_SCOPE_MISMATCH
-ADVISORY_PHASE1_OPERATION_AUTHORIZATION_EXPIRED
+ADVISORY_PHASE0A_HANDOFF_READINESS_BLOCKED
+ADVISORY_PHASE0A_HANDOFF_SCOPE_MISMATCH
 ADVISORY_PHASE1_TARGET_NOT_ADMITTED
 ADVISORY_PHASE1_FORMAL_OOS_EVIDENCE_MISSING
 ADVISORY_PHASE1_RESEARCH_ONLY
@@ -1877,13 +1757,13 @@ ADVISORY_PHASE1_BUILD_TERMINATION_REQUIRED
 ADVISORY_PHASE1_BUILD_TERMINATED
 ADVISORY_PHASE1_ATTEMPT_LEASE_EXPIRED
 ADVISORY_PHASE1_FENCING_TOKEN_STALE
-ADVISORY_PHASE1_RECOVERY_AUTHORIZATION_REQUIRED
+ADVISORY_PHASE1_RECOVERY_PRECONDITION_MISMATCH
 ADVISORY_PHASE1_BASE_SNAPSHOT_INCOMPATIBLE
 ADVISORY_PHASE1_BASE_SNAPSHOT_INVALIDATED
 ADVISORY_PHASE1_PARQUET_SCHEMA_MISMATCH
 ADVISORY_PHASE1_PARQUET_HASH_MISMATCH
 ADVISORY_PHASE1_DB_PARQUET_RECONCILIATION_FAILED
-ADVISORY_PHASE1_PROMOTION_RECEIPT_MISSING
+ADVISORY_PHASE1_PUBLISH_RECEIPT_MISSING
 ADVISORY_PHASE1_SNAPSHOT_NOT_SEALED
 ADVISORY_PHASE1_SNAPSHOT_INVALIDATED
 ADVISORY_PHASE1_SNAPSHOT_INVALIDATED_DURING_READ
@@ -1900,31 +1780,31 @@ reason code 只能追加，不复用旧 code 表示不同语义。
 
 ## 20. Retention、修订与删除边界
 
-- approval/authorization/source availability/revision、canonical signal/version、stage、lineage、label、capture/build/attempt/event：Phase 1 默认永久保留，不自动删除。
+- source availability/revision、canonical signal/version、stage、lineage、label、capture/build/attempt/event：Phase 1 默认永久保留，不自动删除。
 - SEALED snapshot 默认永久保留；任何 Phase 0B report/model/bundle、legal hold 或 audit reference 存在时绝对不可物理删除。invalidation 只阻断消费，不解除 blob reference。
 - ACTIVE attempt staging 到 lease expiry 后只追加 EXPIRED；72 小时仅触发 stale 报告，不自动接管。FAILED/EXPIRED staging 至少保留 14 天并先持久化 failure receipt。
 - source correction 产生新 source/observation/label/build/snapshot version，旧版及 calculation evidence 不修改。
 - 逻辑撤销只使用 `advisory_dataset_snapshot_invalidation`；v1 不支持 reinstatement，不执行业务证据 DELETE。
-- GC 使用 `MARKED -> QUARANTINED -> DELETE_AUTHORIZED -> DELETED | CANCELLED_REFERENCE_CHANGED | FAILED` append-only lifecycle，保存 `gc_epoch/event_no/predecessor/observed_refset_hash/reason/actor`。refset 覆盖 SEALED snapshot refs、active attempt files、已发布未 SEALED manifest、reservations、legal hold 和 invalidated snapshot refs。
+- GC 使用 `MARKED -> QUARANTINED -> DELETE_CHECKED -> DELETED | CANCELLED_REFERENCE_CHANGED | FAILED` append-only lifecycle，保存 `gc_epoch/event_no/predecessor/observed_refset_hash/reason/actor`。refset 覆盖 SEALED snapshot refs、active attempt files、已发布未 SEALED manifest、reservations、legal hold 和 invalidated snapshot refs。
 - v1 quarantine 只改变 DB 逻辑状态，不移动 CAS blob。blob 至少 quarantine 30 天；实际删除前获取全局 GC lock并重新计算零引用。refset hash 变化即追加 `CANCELLED_REFERENCE_CHANGED`、返回 `ADVISORY_PHASE1_GC_REFERENCE_CHANGED` 并整批停止；引用再次归零时必须使用新 epoch 重走 30 天，不能复活旧 epoch。
-- 删除必须有独立 GC_DELETE authorization、逐 blob deletion receipt 和删除后 scrub；janitor 默认只读 dry-run，Phase 1 不启用自动 GC scheduler。
-- store backend 的备份、RPO/RTO、完整性 scrub 和磁盘告警在 STORE_INIT gate 冻结；未形成可验证 receipt 时不得发布首个 snapshot。
+- 删除程序必须在 retention 到期、全局 GC lock、零引用和 refset hash 未变化时执行，并生成逐 blob deletion receipt 与删除后 scrub；janitor 默认只读 dry-run，Phase 1 不启用自动 GC scheduler。
+- store backend 的备份、RPO/RTO、完整性 scrub 和磁盘告警在版本化 DATASET_STORE 配置中冻结；未形成可验证 receipt 时不得发布首个 snapshot。
 
 ## 21. Verification Plan / 验证方案
 
 ### 21.1 L0 静态与 schema
 
 - migration SQL parse、表/列/约束/index/trigger contract。
-- authority-bootstrap 与 remaining data migrations 分离；approval/source/version/trace-outbox/capture/build/attempt/final snapshot/invalidation/blob reservation/hold/GC 状态与 DB role contract。
+- 单一 Phase 1 data migration 的 source/version/trace-outbox/capture/build/attempt/final snapshot/invalidation/blob reservation/hold/GC schema 与状态约束；不存在 authority migration 或新增审批角色。
 - runtime 不执行 DDL。
 - changed-file lint/compile、`git diff --check`。
 - no forbidden imports/calls：Paper/QMT/HMM generation/Selection write services。
 
 ### 21.2 L1 纯函数
 
-- Phase 0A.1 GLOBAL/admission-scope approve、reject、revoke、重新批准、fork/cycle/hash tamper 和 scope mismatch。
-- authority bootstrap receipt；approval bundle finalizer、operation grant/revoke producer 的 role/idempotency，以及 action authorization environment/scope/expiry/limit/revoke chain 与 commit 前重验。
-- global/scope approval revoke 与 target mutation 按固定 lock 顺序并发，证明 revoke 不会在 mutation validation 与 commit 之间穿透。
+- Phase 0A.1 handoff/readiness 的 READY/PARTIAL/BLOCKED、scope/hash mismatch、相同输入确定性和多 Program lineage。
+- 8 类自动技术门禁的 producer/consumer 字段闭合、pass predicate、正向 fixture、反向 fixture 和状态可达性。
+- scope readiness 与 target mutation 按固定锁顺序并发；readiness/input hash 改变必须产生新 request/audit version，旧事务因 expected hash 不匹配而失败。
 - stable signal、observation/label revision chain、snapshot 单版本 selector 和多 Program/audit lineage 去重。
 - exact/latest-eligible selector 的两阶段 as-of terminal resolution、future correction、0/multiple terminal、terminal capability failure 和“最新 UNAVAILABLE 不回退旧 MATURED/COMPLETE”测试。
 - stage FULL/PARTIAL/N/A 和缺层不反推。
@@ -1936,21 +1816,21 @@ reason code 只能追加，不复用旧 code 表示不同语义。
 - E 日 touch 与后续 executable barrier 共存、exit=open 不使用退出后 high/low、sellable barrier ambiguous、停牌、涨跌停、退市结算、无结算退市、长期停牌，以及 maturity/event 正交组合。
 - candidate/benchmark fixed-capital returns、allocation 内含 buy fee 的最大 lot Q0、residual cash/零手留现金、每订单最低佣金和禁止隐式追加资本。
 - terminal candidate net absolute 可提前闭合，但 net excess 必须等待 X_h benchmark closure。
-- capture/build checkpoint、attempt lease/fencing、authorized build termination/generation、base admission、invalidation 和 GC terminal/cancel state/reason code。
+- capture/build checkpoint、attempt lease/fencing、程序化 build termination/generation、base admission、invalidation 和 GC terminal/cancel state/reason code。
 
 ### 21.3 L2 DB integration
 
 - migration 在空库和已存在 schema 上幂等。
 - append-only trigger 拒绝 UPDATE/DELETE。
 - 同 hash 幂等、同 key 异 hash冲突。
-- approval target A revoke 不影响 B；global revoke 阻断全部；mutation/revoke race 在相同 advisory lock 下正确串行。
+- target A scope BLOCKED 不影响 B；同 target 其他 READY/PARTIAL scope 可继续；旧 readiness hash 的 mutation 在 commit 前被拒绝。
 - source availability correction/invalidation/revalidation 只追加 event；predecessor fork/cycle/跨分区、多个 as-of terminal 和无 event formal member 均被拒绝。
 - FEATURE_T/UNIVERSE_T decision-cutoff 与 OUTCOME/BENCHMARK label-as-of availability 分离；outcome correction 不降级 formal signal。
 - observation/label predecessor fork/cycle 被拒绝；snapshot 对同一 signal/label 选择两个版本必须失败。
 - capture batch `(request,attempt_no)`、lease/fencing、旧 worker insert 拒绝、COMPLETE membership set/admission 和 retry 对旧 payload 的新 membership。
 - build logical key/generation、attempt advisory lock、lease heartbeat、fencing 拒绝旧 worker、checkpoint 单向、每 checkpoint fixed attempt/receipt/file-set、BUILD_TERMINATE CAS/receipt 和 retry 文件隔离。
 - server-side cursor 按日期批量查询，无逐股查询。
-- exported snapshot 只在 materialize coordinator transaction 存活期间有效；人工门禁之间无长事务/lease。
+- exported snapshot 只在 materialize coordinator transaction 存活期间有效；独立命令之间无长事务/lease。
 - read-only source transaction 不产生 DML；source/capture/build control transaction 独立且短。
 - observation/label DML 只写新 app 表，不触碰 Selection/Advisory/Paper 源表。
 - final seal transaction 原子写 snapshot/file/selected version/blob refs/event/build mapping；客户端超时后幂等返回。
@@ -1993,9 +1873,9 @@ reason code 只能追加，不复用旧 code 表示不同语义。
 - DB seal 成功后客户端超时。
 - attempt lease 过期后旧 worker 恢复写入。
 - durable flush 前进程终止、snapshot 目录已存在、promotion receipt 已写但 checkpoint 未登记。
-- invalidation 与 reader/base admission/child seal 并发、consumer result publish 前 epoch 变化、GC quarantine 后并发 reservation/new ref、DELETE_AUTHORIZED 后删除/receipt 间崩溃。
+- invalidation 与 reader/base admission/child seal 并发、consumer result publish 前 epoch 变化、GC quarantine 后并发 reservation/new ref、DELETE_CHECKED 后删除/receipt 间崩溃。
 
-每种情况必须证明 reader 不消费半成品/invalidated snapshot、旧 fencing token 无效、retry 不混合 attempt files、坏 checkpoint 只能经 authorized termination 建新 generation、GC 新引用追加 CANCELLED 且不移动 blob、orphan 可盘点、final snapshot/CAS 不被覆盖，并在进程重启后执行全量 scrub。
+每种情况必须证明 reader 不消费半成品/invalidated snapshot、旧 fencing token 无效、retry 不混合 attempt files、坏 checkpoint 只能经满足 CAS 前置条件的 terminate-build 建新 generation、GC 新引用追加 CANCELLED 且不移动 blob、orphan 可盘点、final snapshot/CAS 不被覆盖，并在进程重启后执行全量 scrub。
 
 ### 21.6 Leakage 与业务 Oracle
 
@@ -2014,7 +1894,33 @@ reason code 只能追加，不复用旧 code 表示不同语义。
 - 单维 capability map 不能推导联合 ready；必须 exact composite row 命中。
 - source evidence 任一字节篡改必须触发 hash/reconciliation failure。
 
-### 21.7 容量与性能
+### 21.7 Gate Satisfiability Matrix / 门禁可满足性矩阵
+
+| Gate | Producer/输入 | PASS 条件 | 正向业务证据 | 反向与故障证据 |
+|---|---|---|---|---|
+| G-DEV-01 代码与测试 | Git diff、设计索引、测试清单 | lint、target tests、F2 workflow、CI 和隔离 oracle 通过 | 当前荐股 golden 在无 Phase 1 配置时保持完全一致 | schema/API/runtime 漂移被阻断 |
+| G-DEV-02 Schema migration | versioned migration + expected schema | 开发/测试库可重复应用，应用进程只读验证 schema version | 空库与升级库 migration smoke 均 PASS | runtime DDL 调用和 schema mismatch 被拒绝 |
+| G-DEV-03 发布健康 | lock/config/schema/service health | 依赖、配置、schema、启动和回滚 smoke 全部正常 | 发布后现有荐股 API golden PASS | 缺依赖、错误 schema、启动失败触发回滚 |
+| G-RUN-01 策略包可执行性 | StrategyPackage manifest/asset registry | enabled、单 Alpha或原生多 Alpha父包、资产/依赖 hash 闭合 | 两类包各一个正向 fixture 和真实 package preflight PASS | 归档、缺 leg、hash drift、手工多包拒绝 |
+| G-RUN-02 行情与输入就绪 | calendar、行情、HMM/risk、readiness receipt | date/as-of/source/runtime/policy 全部匹配 | 完整行情 target 自动产生 READY/PARTIAL handoff | future vintage、source gap、clock mismatch 返回 exact reason |
+| G-RUN-03 幂等与并发 | request hash、业务唯一键、lease/fencing | same content 幂等，same key 异 hash 冲突，单 active worker | 重复荐股、capture 和 build 不复制名单或样本 | 并发旧 token、fork、stale expected version 被拒绝 |
+| G-RUN-04 事务与一致性 | frozen plan、scope、source revision、row/byte budget | 所有状态/版本/hash/limit 在 commit 前仍匹配 | `capture -> label -> build` 真实 schema integration PASS | 中途失败全事务回滚，无半成品可消费 |
+| G-RUN-05 制品发布与清理 | verified file set、manifest、refs、retention | 全量 hash/row/schema 一致后原子 seal；零引用且到期才删除 | `materialize -> verify -> publish -> seal -> read` golden PASS | 崩溃、refset 变化、磁盘不足、scrub 失败均保持旧制品可读 |
+
+完整正向业务流必须在一次 L3/L4 E2E 中贯通：
+
+```text
+合法策略包 + 完整行情 + 匹配配置
+  -> 推荐名单正常生成和原子写入
+  -> trace/capture（启用时）
+  -> label maturity
+  -> build/materialize/verify/publish/seal
+  -> Phase 0B reader 成功读取
+```
+
+验证器必须检查 producer/consumer 必填字段闭合和状态图可达性。若正向 fixture 在数据准确时被任一门禁拒绝，属于 P0 缺陷；不得通过增加 bypass、人工 override 或把预期状态改成 BLOCKED 规避。
+
+### 21.8 容量与性能
 
 实现前和生产前分别记录：
 
@@ -2033,10 +1939,10 @@ retry and reconciliation duration
 
 验收 oracle：查询数量随 partition 数增长，不随 symbol×date 增长；数据库只在 revision freeze/capture/materialize 批次访问，Phase 0B 只读文件；超过冻结内存、事务时长、临时空间、durable reserve 或 duration budget 时 fail-closed。
 
-### 21.8 Coverage 与委派
+### 21.9 Coverage 与委派
 
 - 新增 Python line coverage `>=80%`、branch coverage `>=70%`。
-- approval/authorization、identity/version selector、state machine/fencing、label maturity、price/cost/benchmark、no-write/no-leakage 关键分支目标 100%。
+- readiness/handoff、8 类 gate pass predicates、identity/version selector、state machine/fencing、label maturity、price/cost/benchmark、no-write/no-leakage 关键分支目标 100%。
 - 长窗、多年全量、崩溃注入和跨 Windows/WSL 由 Validation Center/CI/nightly 执行。
 - 本地仅跑最小 fixture、迁移 contract、lint/compile/diff gate。
 
@@ -2045,14 +1951,12 @@ retry and reconciliation duration
 ### 22.1 计划模块边界
 
 ```text
-backend/db/migrations/add_advisory_phase0a1_authority_bootstrap_<date>.sql
 backend/db/migrations/add_advisory_phase1_dataset_foundation_<date>.sql
-backend/services/advisory_phase0a/finalization.py
-backend/services/advisory_phase0a/approval_repository.py
+backend/services/advisory_phase0a/handoff.py
 backend/services/advisory_phase1/__init__.py
 backend/services/advisory_phase1/models.py
-backend/services/advisory_phase1/admission.py
-backend/services/advisory_phase1/authorization.py
+backend/services/advisory_phase1/readiness.py
+backend/services/advisory_phase1/gates.py
 backend/services/advisory_phase1/source_ledger.py
 backend/services/advisory_phase1/source_revision.py
 backend/services/advisory_phase1/stage_trace.py
@@ -2066,25 +1970,25 @@ backend/services/advisory_phase1/build_coordinator.py
 backend/services/advisory_phase1/snapshot_writer.py
 backend/services/advisory_phase1/dataset_store.py
 backend/services/advisory_phase1/invalidation_gc.py
-scripts/advisory_phase0a_finalize.py
+scripts/advisory_phase0a_handoff.py
 scripts/advisory_phase1_dataset.py
 backend/tests/advisory_phase1/
 ```
 
 Selection Center 只允许为 pure stage engine/optional sink 做最小接线；StrategyPackage、模拟盘、Paper 和 Advisory 生命周期模块不承载 Phase 1 repository、label 或 snapshot 逻辑。
 
-### 22.2 Phase 0A.1：Finalizer、approval authority 与 handoff v2
+### 22.2 Phase 0A.1：Deterministic readiness 与 handoff v2
 
-- 实现 handoff bundle、GLOBAL/admission-scope decision chain、approval bundle、revoke/重新批准和 authority registry。
-- 实现 operation authorization event contract 与 CLI schema/exit code；默认只允许 fixture/local DB。
-- 未完成 chain/hash/scope/revoke tests 前，Phase 1 production admission 永久阻断。
-- 经一次性 `production_authority_bootstrap_ddl_gate` 应用并验证 authority-only migration；该步骤先于任何真实 approval event，不创建 Phase 1 evidence/data tables，不执行业务 DML。
+- 实现 `handoff_readiness_report`、handoff bundle、sorted admission scope set 和 stable semantics hash。
+- 实现 READY/PARTIAL/BLOCKED 自动分类、CLI schema/exit code 和相同输入确定性。
+- 完成单 Alpha、原生多 Alpha正向 golden、scope/hash conflict 反向测试和状态可达性测试。
+- 不新增 migration、审批表、角色、decision chain、approval bundle 或 operation authorization。
 
 ### 22.3 Phase 1A：Identity/source/capture/build DDL 与 repository（默认无激活）
 
-- 新增 migration、DB roles、append-only repositories、native partitions、capture/build/attempt/final snapshot/invalidation/blob-ref state machines。
-- 完成 stable signal/version selector、label revision chain、lease/fencing 和 action authorization transaction contract。
-- 不回填、不配置 store、不修改 runtime；production DDL 另在 Phase 1F 执行。
+- 新增单一 dataset foundation migration、append-only repositories、native partitions、capture/build/attempt/final snapshot/invalidation/blob-ref state machines；不新增审批角色。
+- 完成 stable signal/version selector、label revision chain、lease/fencing、expected row version、CAS 和事务一致性 contract。
+- migration 只在开发/测试库和发布 migration runner 验证；运行 CLI 无 DDL 命令。不回填、不配置 store、不修改 runtime。
 
 ### 22.4 Phase 1B：Stage trace、多 Alpha provenance 与 parity
 
@@ -2096,45 +2000,45 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 ### 22.5 Phase 1C：Fixture source revision/capture/label/snapshot
 
 - 只运行 fixture/local store。
-- 完成 approval、formal/research/gap、source revision、version selector、T/E/S/X_h、terminal/cost/benchmark、build attempt、durable CAS 和 DB/Parquet golden。
+- 完成 readiness、formal/research/gap、source revision、version selector、T/E/S/X_h、terminal/cost/benchmark、build attempt、durable CAS 和 DB/Parquet 正向 golden。
 
 ### 22.6 Phase 1D：Source availability observer 与容量计划
 
 - 实现默认关闭的 ingestion-completion observer；证明只追加 Advisory event，不改变 source table、StrategyPackage、Selection、Paper。
 - 在只读环境完成历史范围、revision scan、DB transaction budget、行数/磁盘/store reserve 计划。
-- observer activation 和 SOURCE_LEDGER_WRITE 分别审批；历史缺口不回填。
+- observer 使用版本化配置，source ledger write 使用强类型 request、content hash 和幂等键；历史缺口不回填。
 
-### 22.7 Phase 1E：实际 Phase 0A audit、approval 与执行计划
+### 22.7 Phase 1E：实际 Phase 0A audit、readiness 与执行计划
 
-- 用户批准具体 target/date/evidence scope，执行真实只读 Phase 0A audit。
-- authority bootstrap 已验证后，Phase 0A.1 才能形成 handoff/approval bundle；随后冻结 source/capture/label/store 计划和各 action authorization scope。
-- 任一 target 可独立拒绝；global conflict 阻断后续生产步骤。
+- 使用版本化 target/date/evidence scope 配置执行真实只读 Phase 0A audit。
+- Phase 0A.1 自动形成 handoff/scope set；随后冻结 source/capture/label/store 计划、行数/字节预算和 request hashes。
+- 任一 BLOCKED scope 只阻断自身；合法 READY/PARTIAL scope 必须可继续。
 
-### 22.8 Phase 1F：Remaining Phase 1 Production DDL
+### 22.8 Phase 1F：Release schema verification
 
-- 使用 registry 内 DDL authorization 单独批准、应用、验证 Phase 1 evidence/data migration、roles、partitions、triggers 和 comments；不重复 authority bootstrap。
-- 不执行 source ledger、capture/label DML 或文件写入。
+- 在开发/发布流程应用并验证 dataset foundation migration、partitions、triggers 和 comments；不创建 authority tables/roles。
+- 运行进程只验证 schema version，无 DDL 权限和 DDL 入口；本阶段不执行 source ledger、capture/label DML 或文件写入。
 
 ### 22.9 Phase 1G：Source ledger 与 observation capture DML
 
-- source event、revision set 与 observation capture 使用独立 authorization/batch/receipt。
+- source event、revision set 与 observation capture 使用强类型 request、batch、事务和 receipt。
 - target 级执行；失败不自动重试，不触碰现有 Selection/Advisory/Paper 数据。
 
 ### 22.10 Phase 1H：Label/universe DML 与 evidence
 
-- label revision 与 universe raw outcome 使用独立 authorization、统一 outcome engine 和 calculation evidence。
+- label revision 与 universe raw outcome 使用统一 outcome engine、版本化 policy、expected predecessor 和 calculation evidence。
 - PENDING/MATURED/RIGHT_CENSORED/UNAVAILABLE maturity counts、NONE/TERMINAL/BARRIER event counts、hash 和复算验证通过。
 
 ### 22.11 Phase 1I：Durable store 与首个 SEALED snapshot
 
-- store backend/ACL/容量/备份/scrub/durability gate 获批。
-- freeze revision、build、materialize、verify、promotion、seal 分开 authorization/attempt/receipt。
+- store backend 容量、备份、scrub、durability 自动检查通过。
+- freeze revision、build、materialize、verify、publish、seal 使用独立强类型 request、attempt 和 receipt；合法完整输入必须完成正向 E2E。
 - 首个 snapshot 仍只具获验证的 Phase 1 capabilities；`MODEL_TRAINING_READY=false`。
 
 ### 22.12 Phase 1J：Phase 0B handoff
 
 - 输出 snapshot content/manifest hash、selected versions、capability manifest、formal/research coverage、label lifecycle、source evidence、gaps、invalidation check 和 capacity receipt。
-- 用户批准后才开始 Phase 0B 分析设计/执行。
+- snapshot capability/readiness 自动通过后可按版本化配置开始 Phase 0B 只读分析。
 
 每一子阶段可独立停止；不得用后续阶段成功掩盖前一阶段缺口。
 
@@ -2151,7 +2055,7 @@ manifest_sha256
 promotion_receipt_hash
 snapshot_schema_version
 dataset_capability_manifest
-phase0a audit/handoff/approval bundle hashes
+phase0a audit/handoff/readiness hashes
 admission scope set hash
 snapshot source revision set hash
 capture set hash
@@ -2178,7 +2082,7 @@ invalidation check receipt hash
 - formal 与 retrospective 行不可混合且有明确 scope。
 - 每个 canonical signal 恰好选择一个 observation version；每个 requested label key 恰好选择一个 legal label version。
 - denominator 提供 raw outcomes；Phase 0B 只能用 handoff 指定的 winner definition registry 派生 winner。
-- 没有未批准 identity/content conflict。
+- 没有未解决的 identity/content conflict。
 
 不满足时 Phase 0B 返回 `DATASET_CAPABILITY_UNAVAILABLE`，不自行补数据或降级口径。
 
@@ -2187,16 +2091,17 @@ invalidation check receipt hash
 ### 24.1 发布
 
 - 设计 PR：文档-only。
-- Phase 0A.1/DDL PR：只建 authority/schema/repository，默认 inactive。
-- builder PR：默认 dry-run/no DML/no promotion。
-- operation authorization grant/revoke、source ledger observer、capture DML、label DML、store init、build termination、materialize、verify registration、promotion、seal、invalidation/GC 和 scheduler 各自独立批准。
+- Phase 0A.1 PR：只实现 deterministic handoff/readiness，无 DDL、角色或审批表。
+- dataset foundation PR：实现 migration/schema/repository，默认无调度和无自动回填；运行入口无 DDL。
+- builder PR：默认 dry-run/no DML/no publish；真实写入仅在强类型计划、事务、预算和状态前置条件满足时执行。
+- source observer、capture、label、store、build、publish、invalidation/GC 和 scheduler 通过版本化配置与自动技术门禁控制，不产生审批事件。
 - 没有任何阶段自动启用荐股页面模型能力。
 
 ### 24.2 回滚
 
 - 代码回滚：Null sink、关闭 source observer/capture/builder；现有 Selection/Advisory 继续运行。
 - DDL：forward-only，不 drop evidence table。
-- approval：target/global revoke 追加新 event；不覆盖旧 chain。operation authorization 可独立 revoke。
+- handoff/readiness：新输入或规则产生新 audit/handoff version；不覆盖旧 receipt，也不存在人工 revoke。
 - DML：不删除 source/canonical/version/label；错误 capture 追加 failure/invalidation evidence 并新建 batch/version。
 - build：失败 attempt 不复活；创建新 attempt 或新 build。final snapshot 永不退回 BUILDING。
 - snapshot：SEALED 不覆盖；错误 snapshot 追加 invalidation 并新建 content-addressed version。
@@ -2207,13 +2112,13 @@ invalidation check receipt hash
 
 | 风险 | 后果 | 强制处置 |
 |---|---|---|
-| 伪造文件 hash 或宽泛 global approval 放行 scope | 未授权 DML/数据 scope | authority registry、GLOBAL/admission-scope chain、exact scope 和 revoke recheck |
-| operation 开始后 approval 被撤销 | revoke race 仍提交 | 同 authorization advisory lock + commit 前重验 |
+| producer 未生成 gate 必填字段 | 合法数据也永久 BLOCKED | producer/consumer 字段闭合检查、正向 fixture 和状态可达性测试 |
+| mutation 开始后 readiness/source/current state 变化 | 旧计划仍提交 | expected hash/version、固定锁顺序和 commit 前重验 |
 | 当前 watermark 倒推历史可用 | OOS 泄漏 | future append-only availability ledger；legacy research-only |
 | source 行原地纠正但 watermark/count 不变 | 错误复用旧数据 | ingestion revision 或 canonical partition content hash |
 | score artifact 同键被覆盖 | raw 历史证据丢失 | immutable trace/DSE v2 payload；仅绑定旧 hash 不足 |
 | stage evidence 补齐改变 signal id | 样本重复膨胀 | stable canonical signal + version + snapshot single selection |
-| 多 audit/Program 共用 signal 时 provenance 冲突 | scope 不可审计 | versioned lineage 包含 audit/approval/source-run identity |
+| 多 audit/Program 共用 signal 时 provenance 冲突 | scope 不可审计 | versioned lineage 包含 audit/handoff/source-run identity |
 | multi-alpha leg/权重/variant 漂移 | component 归因虚假 | versioned component evidence + parent combine parity |
 | sink callback/writer 影响业务 | Selection 行为或延迟漂移 | immutable copy、no-throw/budget、故障 parity；失败只记 gap |
 | 只给最终名单打标 | 选择偏差 | deep-pool coverage oracle |
@@ -2222,9 +2127,9 @@ invalidation check receipt hash
 | 最低佣金/手数/benchmark 重加权未冻结 | 标签不可复算或未来信息 | deterministic cashflow + T 时成分/权重冻结 |
 | corporate action 单位/路径错误 | 虚假收益/MFE/MAE | raw/adj/quantity/cashflow/source-slice contract |
 | T+1 信息进 T feature | 时间穿越 | cutoff predicate/hash + leakage fixture 必须失败 |
-| DB 逐股查询或跨人工门禁长事务 | 数据库瓶颈/vacuum 风险/视图失效 | set-based partition query；exported snapshot 仅限一次 materialize |
+| DB 逐股查询或跨命令长事务 | 数据库瓶颈/vacuum 风险/视图失效 | set-based partition query；exported snapshot 仅限一次 materialize |
 | stale worker 与 retry 混合文件 | manifest 不唯一 | attempt lease/fencing + attempt-scoped files + checkpoint 单向 |
-| 坏 checkpoint 无法合法切换 generation | build 永久卡 ACTIVE 或越权覆写 | BUILD_TERMINATE authorization + terminal CAS/receipt；仅 ABORTED 可建下一 generation |
+| 坏 checkpoint 无法合法切换 generation | build 永久卡 ACTIVE 或越权覆写 | terminate-build expected state/fencing + terminal CAS/receipt；仅 ABORTED 可建下一 generation |
 | snapshot id 在内容前固定 | 同 ID 不同 bytes | final manifest content-addressed snapshot id |
 | Parquet/CAS 仅原子可见但未 durable | 断电后 SEALED 损坏 | same-volume create-if-absent、file/dir flush、post-restart scrub |
 | invalidated snapshot/base 仍被消费 | 已知错误继续扩散 | append-only invalidation + reader/base/Phase 0B hard gate |
@@ -2232,58 +2137,34 @@ invalidation check receipt hash
 | snapshot 文件过碎或磁盘不足 | WSL 性能/ENOSPC | target size/row-group + projected/reserved/min-free gate |
 | research 与 formal 混用 | 错误校准 | row/partition/capability scope hard split |
 
-## 26. Production Gates / 生产门禁
+## 26. Production Gates / 自动技术门禁
 
-本设计 PR：
+本设计固定为零人工审批、零审批角色、零 approval/authorization registry 和零运行时 DDL。8 类门禁与父蓝图一致：
 
 ```text
-production_ddl_gate = noop
-production_authority_bootstrap_ddl_gate = noop
-production_phase1_data_ddl_gate = noop
-production_phase0a1_approval_authority_gate = noop
-production_phase1_operation_authorization_gate = noop
-production_trace_capture_activation_gate = noop
-production_source_ledger_activation_gate = noop
-production_source_ledger_write_gate = noop
-production_observation_capture_dml_gate = noop
-production_label_backfill_dml_gate = noop
-production_advisory_dataset_store_gate = noop
-production_dataset_build_create_gate = noop
-production_dataset_build_terminate_gate = noop
-production_snapshot_materialize_gate = noop
-production_snapshot_verify_register_gate = noop
-production_snapshot_promotion_gate = noop
-production_snapshot_seal_gate = noop
-production_snapshot_invalidation_gate = noop
-production_build_reservation_release_gate = noop
-production_staging_cleanup_gate = noop
-production_snapshot_gc_quarantine_gate = noop
-production_snapshot_gc_delete_gate = noop
-production_builder_activation_gate = noop
-production_scheduler_gate = noop
-production_frontend_dependency_gate = noop
-production_backend_dependency_gate = noop
-production_runtime_restart_gate = noop
+G-DEV-01 code_and_test
+G-DEV-02 schema_migration
+G-DEV-03 release_health
+G-RUN-01 strategy_package_preflight
+G-RUN-02 market_input_readiness
+G-RUN-03 idempotency_concurrency
+G-RUN-04 transaction_data_integrity
+G-RUN-05 artifact_publish_cleanup
 ```
 
 未来执行顺序固定为：
 
-1. 用户批准修订后的设计。
-2. Phase 0A.1/Phase 1 实现 PR 通过 F2 设计验收和隔离测试。
-3. 通过一次性 authority-bootstrap DDL gate 应用 approval/authorization tables 与 roles；使用现有 production approval/DBA ACL，验证后永久关闭 bootstrap gate。
-4. 执行实际 Phase 0A target audit；Phase 0A.1 GLOBAL/admission-scope decisions 与 approval bundle 单独完成。
-5. 使用 registry 内 DDL authorization 应用/验证剩余 Phase 1 data DDL、partitions/triggers/comments；不自动执行任何业务 DML。
-6. trace capture activation、source availability observer activation、每次 SOURCE_LEDGER_WRITE 和 source revision freeze 分别授权；历史 available-at 不补造。
-7. trace outbox/observation capture 的 CAPTURE_DML 按 scope/batch 单独授权。
-8. label/universe plan/LABEL_DML 按 horizon/batch 单独授权。
-9. durable store backend、ACL、容量、备份、durability 和 scrub receipt 单独配置并验证。
-10. BUILD_CREATE authorization 只登记 exact control-plane identities；MATERIALIZE 生成 attempt-scoped staging，不产生 final snapshot。坏 checkpoint 必须先通过独立 BUILD_TERMINATE gate 终止 generation，只有 ABORTED receipt 允许创建 next generation。
-11. VERIFY_REGISTER 通过后分别批准 PROMOTE 和 SEAL；seal 后才产生 final SEALED snapshot id/row。
-12. invalidation、terminal-build reservation release、staging cleanup、GC mark/quarantine 与 GC_DELETE 各自独立授权，默认不执行；GC refset 变化只追加 CANCELLED 并要求新 epoch，reader 在每次消费前校验 invalidation。
-13. Phase 0B 只读分析另行批准。
-14. scheduler/runtime activation 保持关闭，直到后续专项设计。
+1. 设计确认后，Phase 0A.1/Phase 1 实现 PR 通过 F2、正向 golden、状态可达性和隔离测试。
+2. 在开发/发布流程应用 dataset foundation migration；运行进程只验证 schema version，不能执行 DDL。
+3. 执行实际 Phase 0A target audit；Phase 0A.1 自动生成 handoff/readiness/scope set。
+4. 版本化配置 trace capture、source observer、dataset store 和 scheduler；默认 disabled，不生成审批事件。
+5. source revision、capture 和 label 由强类型 request、事务、行数/字节预算、幂等键和 receipt 自动控制。
+6. BUILD_CREATE 登记 exact identities；materialize 生成 attempt-scoped staging。坏 checkpoint 只有在 terminate-build CAS 全部前置条件满足后转 ABORTED，才能创建 next generation。
+7. verify/publish/seal 依次自动校验固定 file set、manifest、durability、selected versions 和 DB refs；seal 后才产生 final SEALED snapshot。
+8. invalidation、reservation release、staging cleanup 和 GC 按 terminal state、refset、retention、expected hash 和 receipt 自动执行；默认 scheduler disabled。
+9. Phase 0B 只在 snapshot capability/readiness 自动通过后按版本化配置启动。
 
-除一次性 authority bootstrap 外，每个 mutation gate 必须使用 §6.4 的 action-specific authorization artifact，绑定 environment、approval bundle、scope/build/snapshot/source/store hashes、限额和有效期；PR 文本、聊天确认或自由字符串 reference 不能替代机器校验。
+所有自动门禁遵循 §21.7：正确数据必须有完整可通过路径。配置、计划和 mutation request 均使用强类型 schema，不能用自由 JSON 或通用 bypass 绕过；但也不得要求上游不存在的字段或把合法输入永久 BLOCKED。
 
 ## 27. Design Acceptance Matrix / 设计验收矩阵
 
@@ -2292,7 +2173,7 @@ production_runtime_restart_gate = noop
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | §3、§9.4、§22.4 | Null sink、有界 no-throw capture、业务外 writer 和开/关/故障 parity oracle 已定义 | design_ready | none |
-| F-002 | §6.2-6.3、§7、§8.3 | 单原生包 target、GLOBAL/admission-scope approval、多 Program/audit lineage 与独立失败规则已定义 | design_ready | none |
+| F-002 | §6.1-6.2、§7、§8.3 | 单原生包 target、逐 scope 自动 readiness、多 Program/audit lineage 与独立失败规则已定义 | design_ready | none |
 | F-003 | §7、§8、§13.5 | stable signal、version chain、lineage 与 snapshot 单版本选择已定义 | design_ready | none |
 | F-004 | §9 | 四层补采、第五层不可用、缺失不反推及 immutable trace closure 已定义 | design_ready | none |
 | F-005 | §9、§11、§16.4、§23 | deep pool、stage hash、universe raw outcome、winner registry 与 capability 已定义 | design_ready | none |
@@ -2301,16 +2182,16 @@ production_runtime_restart_gate = noop
 | F-015 | §1.4、§12、§15、§16 | DB authority、append-only availability/revision、Parquet derivative、回测/Paper 禁止已定义 | design_ready | none |
 | F-016 | §6.3、§10、§12、§21 | T/E/S/X_h、available-at、survivorship、maturity/terminal/censor/cost/benchmark/leakage 已定义 | design_ready | none |
 | F-017 | §13.3-13.6、§14、§15、§16 | capture、build/attempt、manifest-content snapshot、durable CAS、promotion、invalidation 与 reader gate 已定义 | design_ready | none |
-| F-019 | §6、§7.3、§19、§23 | approval/version/source/attempt/store fail-closed reason code、gap 与 capability 拒绝已定义 | design_ready | none |
+| F-019 | §6、§7.3、§19、§23 | readiness/version/source/attempt/store fail-closed reason code、gap 与 capability 拒绝已定义 | design_ready | none |
 | F-022 | §22、§23、§24 | Phase 0A.1 至 1J 交付、Phase 0B handoff、停止与回滚已定义 | design_ready | none |
-| F-023 | §21 | approval、version、label、DB、golden、crash/durability、leakage、容量和 GC 验证已定义 | design_ready | none |
-| F-024 | §6.4、§18、§22、§24、§26 | authority producer 与 action-specific DDL/DML/store/build terminate/materialize/verify/promote/seal/invalidation/GC/scheduler 门禁已定义 | design_ready | none |
-| F-025 | §5、§6、§18、§22.2 | Phase 0A.1 handoff v2、authority registry、decision/bundle/revoke/CLI 契约已定义 | design_ready | none |
+| F-023 | §21 | readiness、version、label、DB、正向 golden、gate satisfiability、crash/durability、leakage、容量和 GC 验证已定义 | design_ready | none |
+| F-024 | §6.3-6.4、§18、§21.7、§22、§24、§26 | 8 类自动门禁、零人工审批、零运行时 DDL 和合法数据全链路正向可达已定义 | design_ready | none |
+| F-025 | §5、§6、§18、§22.2 | Phase 0A.1 handoff/readiness/scope set、自动分类和无角色/无授权链 CLI 契约已定义 | design_ready | none |
 | F-026 | §7、§8、§13.5、§21 | stable economic sample、evidence revision、selector 与 double-count 防护已定义 | design_ready | none |
 | F-027 | §9.4、§21.4-21.6、§22.4 | trace callback/finalize/outbox/writer 故障隔离、预算和 immutable raw payload 已定义 | design_ready | none |
 | F-028 | §3、§9.1-9.3、§21.2、§22.4 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
 | F-029 | §10、§11、§15、§21 | 时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
-| F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、authorized generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
+| F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、程序化 generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
 
 ## 28. DESIGN-COMPLIANCE-001 交付前检查
 
@@ -2318,14 +2199,14 @@ production_runtime_restart_gate = noop
 - [x] 未把当前实现子集、POC、mock 或 fixture 声明为完整能力。
 - [x] 未引入静默 fallback、零成本、零 benchmark、默认价格或未来数据。
 - [x] 单 Alpha、原生多 Alpha、多 Program、空候选和 historical binding 均有契约。
-- [x] Phase 0A.1 GLOBAL/admission-scope approval、authority bootstrap、operation authorization、formal/research/gap 和 revoke 边界明确。
+- [x] Phase 0A.1 deterministic handoff、逐 scope READY/PARTIAL/BLOCKED、formal/research/gap 和无审批边界明确。
 - [x] stable signal/version、lineage、label revision、selected version 和防重复样本规则明确。
 - [x] T/E/S/X_h、可执行 path、cost/benchmark、terminal/censor、universe raw outcome 和复算证据明确。
 - [x] source availability/revision、capture/build/attempt/final snapshot、hash、lease/fencing、base/invalidation/GC 明确。
 - [x] Selection/StrategyPackage/Paper/Advisory 隔离、no-op 默认和 capture 故障 parity 明确。
 - [x] DB/Parquet/durable CAS/Windows/WSL/ACL/容量/备份/scrub 边界明确。
-- [x] DDL、source ledger、capture/label DML、store、materialize、verify、promotion、seal、invalidation、GC、调度和运行时门禁独立。
-- [x] 验证矩阵覆盖授权、身份、功能、数据、业务、故障/断电恢复、性能、TOCTOU 和防泄漏。
+- [x] DDL 仅存在于开发/发布；运行时 source/capture/label/store/build/publish/invalidation/GC/调度由 5 类自动门禁覆盖。
+- [x] 验证矩阵覆盖 8 类门禁正向可满足性、身份、功能、数据、业务、故障/断电恢复、性能、TOCTOU 和防泄漏。
 
 ## 29. Exit Criteria / 设计退出条件
 
@@ -2334,8 +2215,8 @@ production_runtime_restart_gate = noop
 - F2 workflow validator 通过。
 - Design Acceptance Matrix 无 gap。
 - 父蓝图与 Phase 0A 的 Phase 0A.1/Phase 1 handoff、identity、snapshot state 和新增 F-025 至 F-030 同步。
-- Phase 0A.1 producer/consumer、GLOBAL/admission-scope approval、snapshot 单版本 selector、trace enabled failure parity 和 multi-alpha component v1 均在正文对应章节闭合。
+- Phase 0A.1 producer/consumer、handoff/readiness 自动分类、snapshot 单版本 selector、trace enabled failure parity、multi-alpha component v1 和 gate satisfiability 均在正文对应章节闭合。
 - `git diff --check` 通过。
 - 用户确认本设计后，才可建立 Phase 1A 实现 worktree。
 
-本文明确不满足 Phase 1 实施退出门禁；实际 Phase 1 完成仍需代码、authority/data DDL、Phase 0A 初始 receipt、有效 Phase 0A.1 handoff/approval bundle、action-authorized DML、首个 SEALED snapshot、验证 receipt 和用户批准。
+本文明确不满足 Phase 1 实施退出门禁；实际 Phase 1 完成仍需代码、dataset foundation migration、Phase 0A readiness receipt、有效 Phase 0A.1 handoff/scope set、程序化 DML、首个 SEALED snapshot、8 类门禁正向/反向验证 receipt 和真实数据全链路 E2E。

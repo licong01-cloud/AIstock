@@ -2,7 +2,7 @@
 
 > 日期：2026-07-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-new` 交付
-> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入，Phase 1 F2 详细设计已按 2026-07-11 复查结果修订但尚未实施
+> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入；2026-07-11 根据单用户、非实盘交易边界统一取消人工审批、角色和运行时 DDL，并把生产控制收敛为 8 类自动技术门禁
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -20,13 +20,13 @@
 - 每个实施阶段的目标、进入条件、交付物、退出门禁和回滚边界。
 - 后续详细设计文档清单及其 Feature tier。
 
-本文档不负责锁定字段级 DDL、最终 API schema、具体模型超参数、页面像素级交互和生产调度参数。这些内容必须在对应 Phase 的 F1/F2 详细设计中完成并通过审批后，才可开始代码实施。
+本文档不负责锁定字段级 DDL、最终 API schema、具体模型超参数、页面像素级交互和生产调度参数。这些内容必须在对应 Phase 的 F1/F2 详细设计中完成并通过自动验证后，才可开始代码实施。
 
 文档权威优先级如下：
 
-1. 用户在本轮及后续明确批准的决策。
+1. 用户在本轮及后续明确确认的决策。
 2. 本蓝图中列出的总体边界和阶段门禁。
-3. 最新已批准的专项 F2 设计和当前实际代码/DDL。
+3. 最新已确认的专项 F2 设计和当前实际代码/DDL。
 4. 较早文档中与以上内容不冲突的部分。
 
 若本蓝图与早期手工多包或荐股生命周期文档冲突，以已落地的原生单包契约为准：一个荐股程序绑定一个单 Alpha 包或一个原生多 Alpha 父包；多个策略包通过多个独立荐股程序并行运行，不在一个荐股程序中手工融合。
@@ -668,7 +668,7 @@ invalidation and blob-reference status
 
 capture、build/attempt 和 final snapshot 分离：业务证据先进入 COMPLETE capture batch；build/attempt 用 checkpoint、lease 和 fencing 管理 materialize/verify/promote/seal；只有 durable CAS publish 完成后，才按 canonical manifest content 生成 immutable SEALED snapshot。失败只属于 capture/build attempt，final snapshot 表不写非 SEALED row。只有带 promotion receipt、完整 blob refs 且未 invalidated 的 SEALED 可消费；旧快照按详细设计的保留策略只读保留。
 
-checkpoint 一旦固定不可替换；坏 checkpoint generation 只能经独立 BUILD_TERMINATE authorization 原子转 ABORTED 后创建下一 generation，FAILED_TERMINAL 不得按同 logical key 重建。GC quarantine 在 v1 只记录逻辑状态、不移动 blob；删除前出现新引用必须追加 CANCELLED_REFERENCE_CHANGED，并在引用再次归零后用新 epoch 重新等待保留期。
+checkpoint 一旦固定不可替换；坏 checkpoint generation 只能由程序在 expected row version、current attempt、fencing token 和 terminal reason 全部匹配时原子转 ABORTED，随后才能创建下一 generation；FAILED_TERMINAL 不得按同 logical key 重建。GC quarantine 在 v1 只记录逻辑状态、不移动 blob；删除前出现新引用必须追加 CANCELLED_REFERENCE_CHANGED，并在引用再次归零后用新 epoch 重新等待保留期。
 
 初始构建从最早可复算的 PIT 日期开始批量生成历史观察，不要求等待新系统在线累计数月。回看区间可以立即训练内部 research bootstrap 并标记 `evidence_level=RETROSPECTIVE_RESEARCH_ONLY`、`deployment_state=SHADOW`，但不得向用户显示为已校准数字预测；只有满足模型 vintage、最晚研究决策 cutoff 和 embargo 的区间才进入正式 OOS，之后随新交易日持续追加并逐步形成包级校准证据。
 
@@ -764,7 +764,7 @@ Top5 展示与 active list 迁移规则：
 - `candidate_observation_top_k` 决定候选/退出观察深度，`shortlist_top_n=5` 决定模型页面 shortlist，`program.target_count` 决定正式 active episode 数，三者不得互相隐式改写。
 - 现有 `target_count=20` 的 Program 在 Phase 7 前继续保持 20；启用 Top5 shortlist 不触发 15 只股票的批量退出。
 - Phase 7 如要把正式目标改为 5，必须先给出迁移预览并由用户对该 Program 单独确认。默认迁移模式为 `DRAIN_TO_TARGET`：安全/模型退出照常发生，`active_count > new_target_count` 时不补位，逐步收敛后恢复正常 replacement budget。
-- 需要立即缩容时只能使用另行批准的 `RECONCILE_TO_TARGET`，逐项记录退出原因；也可选择新建独立 Top5 Program。禁止以“重排更新”名义无解释批量退出。
+- 需要立即缩容时只能使用显式配置并由程序验证的 `RECONCILE_TO_TARGET`，逐项记录退出原因；也可选择新建独立 Top5 Program。禁止以“重排更新”名义无解释批量退出。
 - 迁移期允许 `active_count > new_target_count`，但必须有 `migration_state`、旧/新目标、remaining excess 和预计收敛规则；`rank_enter_threshold`、`rank_exit_threshold`、确认期和 replacement budget 随 style/target/policy version 一起版本化。
 - 回滚模型不会复活已经退出的 episode，也不会删除模型生成的 ENTER/HOLD/EXIT 决策；恢复基线后的后续复评继续 append-only 演进。
 
@@ -799,7 +799,7 @@ Top5 展示与 active list 迁移规则：
 | 逻辑实体 | 建议名称 | 作用 |
 |---|---|---|
 | 策略风格画像 | `app.advisory_strategy_style_profile` | 包 manifest 到风格、期限和目标的版本化映射 |
-| Phase 0A.1 批准 | `app.advisory_phase0a_approval_event/bundle` | GLOBAL/逐 admission-scope append-only decision、revoke 与 handoff bundle |
+| Phase 0A handoff | `advisory_phase0a_handoff_bundle_v2` | 从不可变审计制品确定性生成 scope、稳定语义和可消费范围；无审批表、角色或授权链 |
 | Source availability/revision | `app.advisory_source_availability_event/revision_set` | 未来 first-seen、纠正和 stable source revision evidence |
 | 稳定信号 | `app.advisory_signal_observation` | 不受证据修订影响的 canonical economic signal |
 | 信号证据版本 | `app.advisory_signal_observation_version` | PIT 候选、stage、runtime/HMM 与 source evidence revision |
@@ -916,17 +916,17 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 | F-021 | 所有模型先影子运行，晋级后仅影响指定 Advisory Program |
 | F-022 | 分阶段详细设计、开发、验证、发布和回滚边界明确 |
 | F-023 | 验证覆盖排名、概率、收益、风险、价格、生命周期和业务隔离 |
-| F-024 | authority producer、生产 DDL、回填/影子 DML、build terminate、数据快照/模型制品库、依赖、训练调度和 Program 激活分阶段独立门禁 |
-| F-025 | Phase 0A.1 GLOBAL/逐 admission-scope approval、handoff bundle、action authorization 和 revoke 可治理可审计 |
+| F-024 | 生产控制收敛为 3 类开发/发布门禁和 5 类运行时自动技术门禁；零人工审批、零运行时 DDL，且每个门禁都有可满足正向路径 |
+| F-025 | Phase 0A 审计制品直接确定性生成 handoff/scope，可用范围由冻结规则自动判定；不引入 GLOBAL/scope approval、角色、approval bundle 或 action authorization |
 | F-026 | stable signal、versioned evidence/lineage 与 snapshot 单版本选择阻止重复样本 |
 | F-027 | Selection trace capture 开关和所有失败状态不改变现有业务结果 |
 | F-028 | 原生多 Alpha 父包具有版本化 component/weight/combine provenance，禁止手工跨包融合 |
 | F-029 | outcome 时间轴、成本、benchmark、terminal/censor、universe raw outcome 和计算证据可复算 |
-| F-030 | append-only source revision、attempt fencing、authorized generation termination、durable CAS、base/invalidation/blob refs/GC cancel 闭合 |
+| F-030 | append-only source revision、attempt fencing、程序化 generation termination、durable CAS、base/invalidation/blob refs/GC cancel 闭合 |
 
 ## 19. Implementation Plan / 分阶段实施方案
 
-所有阶段都遵循：详细设计先审批，代码后实施；未达到阶段退出门禁时不得进入正式晋级。
+所有阶段都遵循：详细设计先确认，代码后实施；未通过自动技术门禁时不得进入正式晋级。门禁必须同时具备正向和反向验证，禁止只设计拒绝路径。
 
 ### Phase 0A：口径冻结与数据可用性审计
 
@@ -936,26 +936,27 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 退出门禁：每个目标包都能判定合法历史起点；未知 vintage/决策时点有明确 `RETROSPECTIVE_RESEARCH_ONLY` 或 `FORMAL_OOS_UNAVAILABLE` 处置。
 - 发布/回滚：只读分析，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：F1。
-- 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入，实际 target audit 未执行，Phase 0A.1 handoff/approval authority 未实施。
+- 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入，实际 target audit 未执行，确定性 handoff 尚未实施。
 
-### Phase 0A.1：Handoff finalization 与批准权威
+### Phase 0A.1：确定性 Handoff normalization
 
-- 目标：把 Phase 0A 初始 `NOT_APPROVED` receipt 转换为不可变 handoff bundle、GLOBAL/逐 admission-scope decision chains 和 approval bundle，并为 Phase 1 mutation 提供 action-specific authorization authority。
-- 进入条件：Phase 0A audit outputs/hash contract 完整；approval authority DDL/ACL 已通过独立门禁。
-- 交付物：handoff v2、逐 admission scope approve/reject/revoke/重新批准 chain、approval bundle、authority registry，以及 authenticated operation authorization grant/revoke/verify CLI。
-- 退出门禁：global terminal 唯一且 APPROVED；每个 requested admission scope 有唯一 terminal，approval bundle 只收录其中 APPROVED scopes，REJECTED/REVOKED scopes 显式阻断但不阻断其他 scope；fork/cycle/tamper/revoke/scope mismatch tests 通过。
-- 发布/回滚：只新增 append-only authority/control evidence；revoke 新增 event，不覆盖 Phase 0A receipt。
+- 目标：把 Phase 0A 不可变 audit receipt 按冻结规则直接转换为 handoff bundle、admission scope set 和稳定 signal semantics，不引入人工决策。
+- 进入条件：Phase 0A audit outputs/hash contract 完整；目标策略包已通过现有 StrategyPackage 可执行性检查。
+- 交付物：handoff v2、逐 admission scope 自动可用性分类、稳定语义 hash 和确定性校验 CLI；不创建审批表、角色、decision chain、approval bundle 或 operation authorization。
+- 退出门禁：合法资产、完整行情、匹配的 runtime/calendar/policy 输入必须稳定得到可消费 scope；缺失或冲突输入得到明确 reason code。相同输入重复执行 hash 相同，多 Program lineage 不混淆，正向 golden 与反向 fixture 全部通过。
+- 发布/回滚：纯函数和不可变 handoff 制品，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：纳入 Phase 1 F2 详细设计 §6、§18、§22.2；尚未实施。
 
 ### Phase 1：最小 PIT 数据底座与不可变快照
 
 - 目标：先建立可供基线审计的最小 historical observation、全候选 outcome label、dataset snapshot 和 Parquet 流水线。
-- 进入条件：Phase 0A.1 approval bundle 对 GLOBAL 与 requested admission scopes 有效，且对应 action authorization 可机器校验。
+- 进入条件：Phase 0A.1 handoff/scope set hash 完整且自动技术校验通过。
 - 交付物：stable signal/versioned evidence、五层 rank、多 Alpha component provenance、全候选 labels、source revision/capture、build attempt/final snapshot、invalidation/GC 和 deterministic Parquet。
 - 数据要求：数据库权威、append-only available-at/revision、effective runtime/review scope、查询模板、benchmark/cost/terminal hashes、calculation evidence、file SHA 和全量 partition reconcile。
 - 快照状态：capture 与 build/attempt 承担进行中/失败状态；`advisory_dataset_snapshot` 只保存 manifest-content-addressed SEALED rows。只有未 invalidated SEALED 可供 Phase 0B 使用。
-- 退出门禁：同一 request/source/capture 命中同 logical build key，坏 checkpoint 只有经 authorized termination 才能增加受控 generation；final manifest content 命中同 snapshot；DB/Parquet 全量 hashes 一致；所有 deep-pool projection 有明确 maturity/event；T+1 信息未进入 T feature；lease/fencing/durable publish/base/invalidation/GC cancel/new-epoch tests 通过。
-- 发布/回滚：approval/operation authority、DDL、source ledger、capture DML、label DML、store、build terminate、materialize、verify、promotion、seal、invalidation/GC 和 scheduler 各自独立门禁；默认离线禁用。
+- 退出门禁：同一 request/source/capture 命中同 logical build key，坏 checkpoint 由程序状态机 CAS 终止后才能增加受控 generation；final manifest content 命中同 snapshot；DB/Parquet 全量 hashes 一致；所有 deep-pool projection 有明确 maturity/event；T+1 信息未进入 T feature；lease/fencing/durable publish/base/invalidation/GC cancel/new-epoch tests通过。
+- 正向要求：合法数据必须贯通 capture -> label -> build -> publish golden E2E。
+- 发布/回滚：DDL 只在开发/发布阶段执行；运行时 source/capture/label/build/snapshot/GC 全部由已设计程序、事务和状态机自动约束，无人工审批。
 - 详细设计等级：F2。
 - 已形成详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；当前仅 `design_ready`，未执行 DDL、DML、store 配置、快照构建或调度激活。
 
@@ -1025,7 +1026,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 ### Phase 7：Advisory Top5 受控晋级
 
 - 目标：通过门禁的模型可以影响指定 Program 的 Advisory 排名和 Top5，但不影响 Selection/Paper。
-- 进入条件：稳定 `SHADOW/CHALLENGER` bundle、Phase 9A 最小 ModelOps 已通过、用户批准 canary、拟部署 binding 的 `deployment_expected_row_version`、canary policy 和完整回滚证据。
+- 进入条件：稳定 `SHADOW/CHALLENGER` bundle、Phase 9A 最小 ModelOps 已通过、canary 配置已显式启用、拟部署 binding 的 `deployment_expected_row_version`、canary policy 和完整回滚证据。
 - 交付物：`selection_effective_rank` 到 model rank 的动作接入、生命周期滞回、Program 级乐观并发启停、Top5 shortlist/active target 分离及缩容迁移详细设计。
 - 退出门禁：canary 业务指标、业务 E2E、稳态/迁移态列表约束、退出补位、DRAIN_TO_TARGET、重跑幂等、跨日连续性和隔离 oracle 全部通过后，才可用 expected row version 将该 Program deployment binding 晋级为 `CHAMPION`。
 - 发布/回滚：Program 级 canary；模型部署回退到 `selection_effective_rank`，价格能力独立回退 `rule_default`；不复活已退出 episode，保留全部决策与预测审计。
@@ -1048,7 +1049,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - Phase 9B 持续治理：至少一个 bundle 经 Phase 7 晋级后，再建立可重复调度、自动重训、champion/challenger、自动停用候选和高级漂移治理。
 - 交付物：调度、容量、保留、模型注册、告警、重新训练和灾备详细设计。
 - 退出门禁：9A 必须通过加载健康、告警、手动停用、回滚演练和历史预测可读；9B 必须再通过重复训练一致性、制品哈希、失败隔离和自动治理验证。
-- 发布/回滚：自动训练不等于自动晋级；自动停用策略和 champion 变更需受控审批，紧急手动回滚始终可用。
+- 发布/回滚：自动训练不等于自动晋级；自动停用策略和 champion 变更必须满足冻结指标、expected row version 和回滚检查，紧急手动回滚始终可用，但不引入审批角色或事件链。
 - 详细设计等级：F2。
 
 Phase 8 在 Phase 2 后可以并行准备，但不得绕过数据、OOS、影子和共同 Phase 7 晋级门禁。Phase 3 与 Phase 8 严禁共用同一个收益标签头。
@@ -1167,26 +1168,26 @@ peak-before-stop path correctness
 | F-020 | §3、§17.3、Phase 6 | 仅决策展示、无逐股编辑和订单已定义 | design_ready | none |
 | F-021 | §15.3、Phase 3、Phase 6、Phase 7 | shadow、champion 和 Program 级晋级已定义 | design_ready | none |
 | F-022 | §19、§20 | Phase 0A.1 与后续分阶段路线、详细设计输出已定义 | design_ready | none |
-| F-023 | §21、Phase 1 F2 §21 | 数据、模型、授权、版本、业务、故障隔离和 durable recovery 测试分层已定义 | design_ready | none |
-| F-024 | §19、§23、§25、Phase 1 F2 §26 | authority producer 与 action-specific DDL/DML/build terminate/dataset/model store/调度/Program activation 门禁已定义 | design_ready | none |
-| F-025 | Phase 0A.1、Phase 1 F2 §6/§18 | GLOBAL/admission-scope decision、handoff/approval bundle、authenticated authorization grant/revoke 与共享锁已定义 | design_ready | none |
+| F-023 | §21、Phase 1 F2 §21 | 数据、模型、版本、业务、故障隔离、正向 gate satisfiability 和 durable recovery 测试分层已定义 | design_ready | none |
+| F-024 | §19、§23、§25、Phase 1 F2 §21/§26 | 8 类自动技术门禁、零人工审批、零运行时 DDL 和全链路正向可达性已定义 | design_ready | none |
+| F-025 | Phase 0A.1、Phase 1 F2 §6/§18 | 审计 receipt 到 handoff/scope 的确定性直通、自动分类和无角色/无授权链契约已定义 | design_ready | none |
 | F-026 | §14.3、Phase 1 F2 §7/§8/§13.5 | stable signal、version chain、lineage 和 snapshot 单版本 selector 已定义 | design_ready | none |
 | F-027 | §6.2、Phase 1 F2 §9.4/§21 | trace no-op/no-throw/budget/outbox 与 failure parity 已定义 | design_ready | none |
 | F-028 | §6.4、Phase 1 F2 §9.1-9.3 | 原生父包权威、component evidence、weight/variant/combine parity 已定义 | design_ready | none |
 | F-029 | §11-14、Phase 1 F2 §10/§11 | 可执行时间轴、cashflow、benchmark、terminal、raw denominator 和复算 evidence 已定义 | design_ready | none |
-| F-030 | §14.3、Phase 1 F2 §12-§16/§20 | source revision、attempt fencing、authorized generation termination、durable CAS、base/invalidation/blob-ref/GC cancel 已定义 | design_ready | none |
+| F-030 | §14.3、Phase 1 F2 §12-§16/§20 | source revision、attempt fencing、程序化 generation termination、durable CAS、base/invalidation/blob-ref/GC cancel 已定义 | design_ready | none |
 
 ## 23. Rollout / Rollback / 发布与回滚
 
 ### 23.1 发布顺序
 
-1. 先发布 expand-only DDL、只读数据和模型元数据能力。
-2. 经独立门禁后执行历史回填、制品提升和离线训练。
-3. 经独立门禁后启用 shadow prediction writer。
+1. 在开发/发布流程完成 migration 验证并部署 schema；运行任务不执行 DDL。
+2. 启动程序化历史回填、制品提升和离线训练；参数、事务、行数与磁盘边界由代码自动校验。
+3. 配置启用 shadow prediction writer；无需审批事件或授权角色。
 4. 再按 capability 发布 UI 影子展示。
 5. Phase 9A 最小 ModelOps、告警、手动停用、灾备读取和回滚演练通过。
-6. 完成规定的 OOS 和 shadow 观察后，由用户批准 Program 级 canary。
-7. 最后才允许该 Program 的 champion deployment binding 影响 Advisory shortlist/正式列表。
+6. 完成规定的 OOS 和 shadow 观察并通过冻结指标后，配置 Program 级 canary。
+7. 最后才允许该 Program 的 champion deployment binding 影响 Advisory shortlist/正式列表；切换使用 expected row version 和自动回滚检查，不使用审批链。
 
 每一步都可独立停止。自动训练不得自动晋级 champion。
 
@@ -1224,33 +1225,47 @@ peak-before-stop path correctness
 | 趋势股短期整理 | 每日重排导致过早退出 | 入选/持有/退出阈值分离和确认期 |
 | 规则 fallback 冒充模型 | 错误的可信度展示 | `rule_default` 与 `model_predicted` 强区分 |
 
-## 25. Production Gates / 生产门禁
+## 25. Production Gates / 自动技术门禁
 
-本蓝图文档交付本身：
+本设计不引入人工审批、审批角色、approval registry 或 operation authorization。数据库写入全部由版本化程序、事务、唯一约束和状态机执行；DDL 只存在于开发/发布流程，运行任务禁止执行 DDL。8 类门禁如下：
 
-- `production_ddl_gate=noop`
-- `production_backfill_dml_gate=noop`
-- `production_shadow_prediction_write_gate=noop`
-- `production_dataset_snapshot_store_gate=noop`
-- `production_model_artifact_store_gate=noop`
-- `production_training_scheduler_activation_gate=noop`
-- `production_program_model_activation_gate=noop`
-- `production_frontend_dependency_gate=noop`
-- `production_backend_dependency_gate=noop`
-- `production_runtime_activation=not_performed`
-- `production_service_restart=not_performed`
+| ID | 阶段 | 自动门禁 | 通过条件 |
+|---|---|---|---|
+| G-DEV-01 | 开发 | 代码与测试 | lint、契约测试、Feature Workflow、CI 和隔离 oracle 全部通过 |
+| G-DEV-02 | 开发/发布 | Schema migration | migration 在开发/测试库可重复应用，schema diff 与代码版本匹配；运行进程无 DDL 权限和入口 |
+| G-DEV-03 | 发布 | 发布健康 | 依赖、配置、schema version、服务 health 和回滚 smoke 正常 |
+| G-RUN-01 | 运行 | 策略包可执行性 | 已启用的单 Alpha 包或原生多 Alpha 父包 manifest、模型、因子、组件和依赖完整 |
+| G-RUN-02 | 运行 | 行情与输入数据就绪 | 交易日、行情、calendar、HMM/risk 所需输入及 data-as-of 满足冻结契约 |
+| G-RUN-03 | 运行 | 任务幂等与并发 | 唯一业务键、lease/fencing/CAS 和重试语义保证同一任务不重复、不分叉 |
+| G-RUN-04 | 运行 | 事务与数据一致性 | 程序化 DML 在事务内满足版本、hash、行数、状态转换和回滚约束，不产生半成品 |
+| G-RUN-05 | 运行 | 制品发布与清理 | snapshot/model 仅在全量校验后原子发布；清理只处理无引用且达到保留期的制品 |
 
-后续阶段：
+门禁不是人工审批。调度器、capture、label、build、prediction writer 和 Program model binding 都由版本化配置启停；配置变化保留操作日志和 content hash，但不生成审批事件。
 
-- 任何 Phase 如新增或修改表结构，都必须提交正式 migration，并执行独立 `production_ddl_gate`。
-- Phase 1 authority bootstrap、approval/operation authority、source ledger、observation capture 与 label/universe DML 必须使用独立 gates，不能因 DDL 合入自动运行。
-- Durable dataset store 配置、权限、容量、durability、build termination、promotion、seal、invalidation/GC 和读取 smoke 必须使用 action-specific gates；final snapshot 只能在 seal 时产生。
-- 任何 Phase 的 shadow prediction 持久化都必须先通过容量、保留和 `production_shadow_prediction_write_gate`。
-- WSL 训练产物进入 Windows 可访问 `artifact_content_addressed_store` 前必须通过 `production_model_artifact_store_gate` 和 promotion receipt 验证。
-- 新 Python/WSL 依赖必须提交 lock/环境变更并执行 backend dependency gate。
-- 前端新增依赖必须执行 frontend dependency gate。
-- 训练调度器必须单独执行 `production_training_scheduler_activation_gate`；Program shadow/champion/canary 激活必须单独执行 `production_program_model_activation_gate`，不能因代码合入或自动训练而启用。
-- 每个实现 PR 必须单独证明 Selection、Paper、StrategyPackage 无行为副作用，并把生产 DB 的预期 DDL/DML 与“无非预期副作用”证据分开报告。
+### 25.1 Gate satisfiability / 门禁可满足性
+
+每个门禁必须在详细设计和实现中同时提供：
+
+- 唯一上游 producer 和字段来源，禁止消费者猜值或要求上游永不产生的字段。
+- 明确 pass predicate、失败 reason code 和可重试/不可重试分类。
+- 至少一个合法正向 fixture 和一个针对每个关键拒绝分支的反向 fixture。
+- 从合法策略包、完整行情和正确配置出发的全链路 golden E2E；不得用 mock-only 证明业务可达。
+- 状态机 reachability 检查，证明每个非终态都有合法后继，且合法输入不存在“所有分支均拒绝”的死门禁。
+- 生产同构只读或隔离 smoke，验证真实 schema/type/timezone/hash 与 fixture 一致。
+
+荐股正向路径固定为：
+
+```text
+enabled StrategyPackage
+  -> G-RUN-01 package preflight PASS
+  -> G-RUN-02 market/input readiness PASS
+  -> G-RUN-03 idempotent run acquisition PASS
+  -> Selection/Advisory inference
+  -> G-RUN-04 atomic list-version persistence PASS
+  -> recommendation list available
+```
+
+在策略包合法、资产完整、行情准确且配置匹配时，上述路径必须通过。模型、训练数据或 snapshot 子系统不可阻塞现有荐股基线；其不可用只能关闭对应模型能力并输出 reason code。
 
 ## 26. 开放决策与后续评审点
 
@@ -1260,7 +1275,7 @@ peak-before-stop path correctness
 - 包级校准的最小有效 OOS 样本、市场阶段和时间跨度。
 - 长期趋势的风险屏障、time stop 和移动保护口径。
 - 行业集中度和相关性簇约束的默认值。
-- 自动重训频率、champion 晋级审批人和漂移停用阈值。
+- 自动重训频率、champion 自动晋级阈值、配置变更和漂移停用阈值。
 - 分钟数据覆盖不足时允许展示的最粗价格区间等级。
 - 模型预测表按候选、期限展开还是 JSONB 混合存储。
 
