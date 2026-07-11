@@ -98,10 +98,20 @@ UI 和 REST 依次执行：
 脚本入口：
 
 ```bash
-python scripts/export_qe_qlib_candidate.py ...
+python scripts/export_qe_qlib_candidate.py \
+  --start 2018-08-01 --end <cutoff> \
+  --snapshot-id <h5_candidate> --bin-id <bin_candidate> \
+  --static-schema-source \
+  F:/Dev/AIstock/qlib_snapshots/qlib_st_pit_active_h5_daily_candidate_20180801_20260630/static_factors.parquet
 ```
 
 两条路径必须共用 canonical moneyflow contract。不得使用 RD-Agent 旧 `generate_static_factors_bundle.py` 重新派生资金流字段。
+
+`--static-schema-source` 必须指向包含 121 个数据列的权威 static 基线；Parquet
+连同 `datetime/instrument` 共 123 列，并包含 `l2_code_id int16`。导出器会在读取
+DB 前 fail-fast 拒绝缺少 `l2_code_id` 的旧 120 列 `qlib_test` schema。股票按去重
+代码全局分批读取；不得再按每个 `list_date` 拆成上千批。逐股票上市日起点在复权
+合并前过滤，上市满 365 天仍由 official universe mask 处理。
 
 ### 4.4 PIT bundle
 
@@ -111,6 +121,7 @@ canonical index 必须由 `instruments/all.txt` 多区间 spans 与 `calendars/d
 - 缺失保持 NaN，禁止补0；
 - `sector_data.h5` 包含 `l2_code_id int16`；
 - static 同样包含 `l2_code_id`；
+- 尚未进入申万二级行业的新股显式编码为 `UNKNOWN_L2_CODE_ID=-1`，不得填 0；
 - debug 子集从完整候选切片，保持100股和既定 debug 日期窗。
 
 ## 5. 强制签收
@@ -121,8 +132,13 @@ canonical index 必须由 `instruments/all.txt` 多区间 spans 与 `calendars/d
 python scripts/validate_qe_qlib_candidate.py \
   --start 2018-08-01 --end <cutoff> \
   --snapshot-dir <candidate_snapshot> \
-  --bin-dir <candidate_bin>
+  --bin-dir <candidate_bin> \
+  --static-schema-source \
+  F:/Dev/AIstock/qlib_snapshots/qlib_st_pit_active_h5_daily_candidate_20180801_20260630/static_factors.parquet
 ```
+
+仅重建 H5/static 时显式加 `--skip-bin`；这会生成 WARN 回执而不是伪造 bin
+验证通过。需要完整发布时仍必须单独完成 bin smoke。
 
 至少通过：
 

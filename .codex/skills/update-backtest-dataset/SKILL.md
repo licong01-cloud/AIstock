@@ -22,10 +22,15 @@ description: Rebuild, validate, and candidate-deploy AIstock Qlib daily/minute b
 - 日线/分钟 bin：`python scripts/qlib_authoritative_bin_export.py ...`
 - H5 REST：`/api/v1/qlib/snapshots/{daily,daily_basic,moneyflow,bak_basic,margin_detail,cyq_perf,sector_data}`
 - static：`POST /api/v1/qlib/snapshots/{snapshot_id}/static_factors`
-- 脚本候选：`python scripts/export_qe_qlib_candidate.py ...`
-- 完整校验：`python scripts/validate_qe_qlib_candidate.py --snapshot-dir <candidate> ...`
+- 脚本候选：`python scripts/export_qe_qlib_candidate.py ... --static-schema-source <121列static基线>`
+- 完整校验：`python scripts/validate_qe_qlib_candidate.py --snapshot-dir <candidate> --static-schema-source <同一基线> ...`
 
 优先 REST 生成完整 H5；脚本路径和 REST 路径必须产生相同单位契约。不要使用 RD-Agent 旧版 `generate_static_factors_bundle.py` 重新派生资金流字段。
+
+当前 2026-06-30 权威 schema 基线为
+`F:/Dev/AIstock/qlib_snapshots/qlib_st_pit_active_h5_daily_candidate_20180801_20260630/static_factors.parquet`。
+它包含 121 个数据列（Parquet 连同 `datetime/instrument` 共 123 列）和
+`l2_code_id int16`。不得使用缺少 `l2_code_id` 的 `qlib_test` 旧 120 列基线。
 
 ## 资金流签收门禁
 
@@ -39,6 +44,7 @@ description: Rebuild, validate, and candidate-deploy AIstock Qlib daily/minute b
 - 成交量比例分母为原始成交股数，即 `daily_pv.volume * factor`
 - 5日/20日派生值由相同 canonical 字段重新计算
 - `sector_data.h5` 和 static 都包含 PIT `l2_code_id int16`
+- 尚未进入申万二级行业的新股使用显式 `UNKNOWN_L2_CODE_ID=-1`；不得补 0
 
 不得只凭列存在、日期截止或文件大小判定合格。
 
