@@ -2,7 +2,11 @@
   "actual": "The exporter issues one or more DB reads per distinct listing date and projected 1037 batches.",
   "allowed_write_scope": [
     "scripts/export_qe_qlib_candidate.py",
+    "scripts/validate_qe_qlib_candidate.py",
     "backend/tests/scripts/test_export_qe_qlib_candidate.py",
+    "backend/tests/scripts/test_validate_qe_qlib_candidate.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/tests/qlib_exporter/test_db_reader_instrument_start_dates.py",
     "tests/aistock_validation/bugs/20260711_BUG-619-candidate-h5-export-groups-db-reads-by-every-listing-date.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
