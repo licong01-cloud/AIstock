@@ -32,12 +32,18 @@
   ],
   "evidence_uris": [],
   "expected": "All newly composed QE scenarios use test_end=2026-06-30 and backtest_end=2026-06-29; official factor windows end 2026-06-30; exact legacy defaults upgrade safely; completed history is immutable.",
+  "fix_commit": "9606ff644e510d3a669b4f8fd2e53c22672cfcb7",
+  "fixed_at": "2026-07-11T19:22:06.996647Z",
   "github_issue_number": 1986,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1986",
   "module": "quantevolver",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1987",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
     "l0",
@@ -47,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -55,5 +61,9 @@
   "trigger_condition": {
     "fingerprint": "05edf233060fe4a0e20a1f99",
     "source_event_id": "FE-20260711-05edf233060f"
-  }
+  },
+  "validation_evidence": [
+    "PR #1987 checks -> 14 passed, 0 failed, 0 pending",
+    "local targeted QE cutoff tests, ruff, eslint, l0, validation_module_registry_l0, and migration dry-run -> passed"
+  ]
 }
