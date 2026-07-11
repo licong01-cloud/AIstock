@@ -130,6 +130,7 @@ def _release_and_bindings(
     qmt_only: bool = False,
     release_metadata: dict | None = None,
     execution_policy_json: dict[str, Any] | None = None,
+    approval_state: SimulationBindingApprovalState = SimulationBindingApprovalState.SIM_VALIDATING,
 ):
     repo = InMemorySimulationRuntimeRepository()
     service = StrategyRuntimeReleaseService(repository=repo)
@@ -165,7 +166,7 @@ def _release_and_bindings(
         broker_account_id="QMT_SIM_ACCOUNT",
         strategy_name="SchedulerQMT",
         order_remark_prefix="sched-qmt",
-        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        approval_state=approval_state,
         created_by="unit-test",
         created_reason="scheduler test",
     )
@@ -176,7 +177,7 @@ def _release_and_bindings(
         release=release,
         broker_backend=SimulationBrokerBackend.LOCAL_SIM,
         capital_allocation=100_000,
-        approval_state=SimulationBindingApprovalState.SIM_VALIDATING,
+        approval_state=approval_state,
         created_by="unit-test",
         created_reason="scheduler test",
     )
@@ -1660,6 +1661,51 @@ def test_scheduler_plans_active_local_and_miniqmt_bindings_from_same_selection_e
     ]
     assert normalized_intents[0] == normalized_intents[1]
     assert ("000003.SZ", "SELL", 77, "DROPPED_FROM_SELECTION") in normalized_intents[0]
+
+
+def test_scheduler_runs_draft_sim_bindings_without_approval_gate() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings(
+        approval_state=SimulationBindingApprovalState.DRAFT
+    )
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_draft"),
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_draft"),
+            }
+        ),
+    )
+
+    result = scheduler.run_once(trade_date=TRADE_DATE, data_source="DB_HISTORICAL", submit=False)
+
+    assert result.total_bindings == 2
+    assert result.planned_count == 2
+    assert result.failed_count == 0
+
+
+def test_scheduler_keeps_retired_sim_bindings_out_of_selection() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings(
+        approval_state=SimulationBindingApprovalState.RETIRED
+    )
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={
+                local_binding.binding_id: _position_context(portfolio_id="portfolio_retired"),
+                qmt_binding.binding_id: _position_context(portfolio_id="portfolio_retired"),
+            }
+        ),
+    )
+
+    result = scheduler.run_once(trade_date=TRADE_DATE, data_source="DB_HISTORICAL", submit=False)
+
+    assert result.total_bindings == 0
+    assert result.results == ()
 
 
 @pytest.mark.parametrize(
@@ -7866,6 +7912,9 @@ def test_scheduler_status_reports_provider_and_controlled_tick_capability():
     assert status["context_provider_mode"] == "production"
     assert status["context_provider"]["miniqmt_preview_enabled"] is True
     assert status["default_submit"] is False
+    assert status["sim_binding_selection_policy"] == "all_non_retired"
+    assert SimulationBindingApprovalState.DRAFT.value in status["approval_states"]
+    assert SimulationBindingApprovalState.RETIRED.value not in status["approval_states"]
 
 
 def test_fail_fast_provider_still_rejects():
