@@ -828,6 +828,14 @@ production_runtime_gate = noop
 | F-039 | §1.3、§6.4、§12-16 | daily runner、正式唯一键、事务/恢复、失败隔离、批次回执和运行证据已定义 | design_ready | none |
 | F-040 | §1.3-1.4、§7.2、§11.3、§16-17 | 正式 T0、共同历史窗口、current-semantics replay 和 formal OOS 隔离已定义 | design_ready | none |
 
+### 20.1 实现验收记录
+
+本表只记录已完成的实现切片；设计矩阵继续覆盖完整 F2 范围，未在本表列出的条目不得据此宣称已实现。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-034 | `backend/services/advisory_phase0a/policy.py` registry loader/hash validator；`models.py` typed request/registry contract；`audit_service.py` frozen id/hash/effective-range enforcement；`scripts/advisory_phase0a_audit.py validate-policy-registry` | `test_policy_registry.py` valid/tampered/missing/effective-range/prohibited-field/scratch-root cases；`test_audit_service.py` scratch/hash mismatch cases；focused suite 33 passed；Ruff passed；direct CLI registry validation passed | completed | none |
+
 ## 21. Exit Criteria / 设计退出条件
 
 本文可标记 `design_ready` 的条件：

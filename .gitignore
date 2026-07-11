@@ -82,6 +82,8 @@ nul
 !tests/aistock_validation/history/advisory_phase0a/
 !tests/aistock_validation/history/advisory_phase0a/**/*.json
 !tests/aistock_validation/history/advisory_phase0a/**/*.md
+# Frozen Phase 0A policy contracts are versioned source, not generated runtime JSON.
+!backend/services/advisory_phase0a/policy_registry/**/*.json
 !.mcp.json
 !.eslintrc.json
 

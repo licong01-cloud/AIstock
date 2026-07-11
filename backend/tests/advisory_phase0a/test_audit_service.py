@@ -6,7 +6,16 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from backend.services.advisory_phase0a.audit_service import AdvisoryPhase0AAuditService, write_receipt_artifacts
+from backend.services.advisory_phase0a.audit_service import (
+    AdvisoryPhase0AAuditService,
+    write_receipt_artifacts,
+)
+from backend.services.advisory_phase0a.handoff import (
+    Phase0AHandoffNormalizer,
+    audit_manifest_base,
+    build_handoff_readiness_report,
+    build_phase1_handoff_bundle,
+)
 from backend.services.advisory_phase0a.models import (
     AuditDateRange,
     AuditRequest,
@@ -310,7 +319,11 @@ def _target(*, expected_alpha_mode: ExpectedAlphaMode = ExpectedAlphaMode.SINGLE
 
 def _policy() -> Phase0APolicyRegistry:
     return Phase0APolicyRegistry(
+        policy_registry_id="phase0a_test_registry",
         policy_version="phase0a_policy_v1",
+        frozen_at="2025-12-01T00:00:00+00:00",
+        effective_from_trade_date=date(2025, 1, 1),
+        registry_content_hash="e" * 64,
         benchmark_policy={
             "policy_id": "PIT_ELIGIBLE_UNIVERSE_EQ_WEIGHT_TOTAL_RETURN_V1",
             "policy_hash": "1" * 64,
@@ -523,9 +536,27 @@ def _readers(
 def _request(*, expected_alpha_mode: ExpectedAlphaMode = ExpectedAlphaMode.SINGLE_ALPHA) -> AuditRequest:
     return AuditRequest(
         audit_id="audit_phase0a",
+        policy_registry_id="phase0a_test_registry",
         audit_policy_version="phase0a_policy_v1",
+        policy_registry_content_hash="e" * 64,
         targets=[_target(expected_alpha_mode=expected_alpha_mode)],
     )
+
+
+def test_formal_audit_rejects_a_scratch_policy_registry() -> None:
+    readers, _fakes = _readers()
+    scratch_policy = Phase0APolicyRegistry(policy_version="phase0a_policy_v1")
+
+    with pytest.raises(Phase0AAuditError, match="ADVISORY_PHASE0A_POLICY_REGISTRY_NOT_FROZEN"):
+        AdvisoryPhase0AAuditService(readers=readers, policy=scratch_policy).audit(_request())
+
+
+def test_formal_audit_rejects_request_policy_hash_mismatch() -> None:
+    readers, _fakes = _readers()
+    mismatched_request = _request().model_copy(update={"policy_registry_content_hash": "f" * 64})
+
+    with pytest.raises(Phase0AAuditError, match="ADVISORY_PHASE0A_POLICY_REGISTRY_HASH_MISMATCH"):
+        AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(mismatched_request)
 
 
 def test_audit_builds_formal_receipt_and_only_uses_reader_methods(tmp_path) -> None:
@@ -563,17 +594,27 @@ def test_audit_builds_formal_receipt_and_only_uses_reader_methods(tmp_path) -> N
         "audit_summary.md",
         "candidate_authority_stage_capability_report.json",
         "prior_cohort_report.json",
-        "approval_receipt.json",
+        "handoff_readiness_report.json",
+        "phase1_handoff_bundle.json",
     }
     manifest = json.loads((destination / "audit_manifest.json").read_text(encoding="utf-8"))
     manifest_hash = manifest.pop("audit_manifest_hash")
+    handoff_readiness_hash = manifest.pop("handoff_readiness_report_hash")
     assert manifest_hash == receipt.audit_manifest_hash == canonical_json_sha256(manifest)
-    assert (destination / "approval_receipt.json").read_text(encoding="utf-8").find("NOT_APPROVED") > 0
+    readiness = json.loads((destination / "handoff_readiness_report.json").read_text(encoding="utf-8"))
+    bundle = json.loads((destination / "phase1_handoff_bundle.json").read_text(encoding="utf-8"))
+    assert readiness["schema_version"] == "advisory_phase0a_handoff_readiness_v1"
+    assert readiness["readiness"] == "READY"
+    assert readiness["handoff_readiness_hash"] == handoff_readiness_hash
+    assert bundle["schema_version"] == "advisory_phase0a_handoff_bundle_v2"
+    assert bundle["handoff_readiness_report_hash"] == handoff_readiness_hash
+    assert len(bundle["sorted_target_handoffs"][0]["admission_scopes"]) == 1
+    assert not any("approval" in path.name for path in destination.iterdir())
     with pytest.raises(Phase0AAuditError, match="already exists"):
         write_receipt_artifacts(receipt=receipt, request=_request(), policy=_policy(), output_root=tmp_path)
 
 
-def test_no_candidate_never_becomes_formal_authority() -> None:
+def test_no_candidate_never_becomes_formal_authority_or_consumable_handoff(tmp_path) -> None:
     readers, _fakes = _readers(no_candidate=True)
     receipt = AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(_request())
 
@@ -582,9 +623,34 @@ def test_no_candidate_never_becomes_formal_authority() -> None:
     assert report.status == CandidateAuthorityStatus.NONE
     assert classification.formal_oos_status == FormalOOSStatus.NONE
     assert "ADVISORY_PHASE0A_NO_CANDIDATE_AUTHORITY_MISSING" in report.phase0a_reason_codes
+    destination = write_receipt_artifacts(
+        receipt=receipt,
+        request=_request(),
+        policy=_policy(),
+        output_root=tmp_path,
+    )
+    readiness = json.loads((destination / "handoff_readiness_report.json").read_text(encoding="utf-8"))
+    assert readiness["readiness"] == "BLOCKED"
+    assert not (destination / "phase1_handoff_bundle.json").exists()
 
 
-def test_native_multi_alpha_parent_uses_one_program_binding_and_formal_source_type() -> None:
+def _receipt_with_results(*, receipt, request: AuditRequest, policy: Phase0APolicyRegistry, results):
+    result_hash = canonical_json_sha256([result.model_dump(mode="python") for result in results])
+    refreshed = receipt.model_copy(update={"results": results, "result_hash": result_hash})
+    manifest_hash = canonical_json_sha256(
+        audit_manifest_base(
+            audit_id=refreshed.audit_id,
+            audit_policy_version=refreshed.audit_policy_version,
+            request_hash=refreshed.request_hash,
+            result_hash=refreshed.result_hash,
+            results=refreshed.results,
+            policy=policy,
+        )
+    )
+    return refreshed.model_copy(update={"audit_manifest_hash": manifest_hash})
+
+
+def test_native_multi_alpha_parent_uses_one_program_binding_and_formal_source_type(tmp_path) -> None:
     readers, _fakes = _readers(alpha_mode=AlphaMode.MULTI_ALPHA)
     receipt = AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(
         _request(expected_alpha_mode=ExpectedAlphaMode.MULTI_ALPHA)
@@ -594,6 +660,45 @@ def test_native_multi_alpha_parent_uses_one_program_binding_and_formal_source_ty
     assert result.candidate_authority[0].status == CandidateAuthorityStatus.FORMAL
     assert result.oos_classifications[0].formal_oos_status == FormalOOSStatus.FORMAL_OOS
     assert len(result.asset_ledger) == 8
+    destination = write_receipt_artifacts(
+        receipt=receipt,
+        request=_request(expected_alpha_mode=ExpectedAlphaMode.MULTI_ALPHA),
+        policy=_policy(),
+        output_root=tmp_path,
+    )
+    bundle = json.loads((destination / "phase1_handoff_bundle.json").read_text(encoding="utf-8"))
+    scopes = bundle["sorted_target_handoffs"][0]["admission_scopes"]
+    assert len(scopes) == 1
+    assert scopes[0]["stable_signal_semantics_payload_v1"]["package_id"] == "pkg_phase0a"
+    assert scopes[0]["stable_signal_semantics_payload_v1"]["manifest_sha256"] == result.manifest_sha256
+
+
+def test_handoff_hashes_are_stable_and_tampered_receipts_fail_closed() -> None:
+    readers, _fakes = _readers()
+    request = _request()
+    policy = _policy()
+    receipt = AdvisoryPhase0AAuditService(readers=readers, policy=policy).audit(request)
+
+    normalizer = Phase0AHandoffNormalizer(policy=policy)
+    first, first_bundle = normalizer.normalize(
+        receipt=receipt,
+        request=request,
+        created_at=datetime(2026, 2, 6, tzinfo=UTC),
+    )
+    second, second_bundle = normalizer.normalize(
+        receipt=receipt,
+        request=request,
+        created_at=datetime(2026, 2, 6, tzinfo=UTC),
+    )
+    assert first.handoff_readiness_hash == second.handoff_readiness_hash
+    assert first_bundle is not None and second_bundle is not None
+    assert first_bundle.phase1_handoff_bundle_hash == second_bundle.phase1_handoff_bundle_hash
+
+    tampered = receipt.model_copy(update={"result_hash": "0" * 64})
+    blocked = build_handoff_readiness_report(receipt=tampered, request=request, policy=policy)
+    assert blocked.readiness.value == "BLOCKED"
+    assert "ADVISORY_PHASE0A_HANDOFF_RESULT_HASH_MISMATCH" in blocked.blocking_reason_codes
+    assert build_phase1_handoff_bundle(report=blocked, policy=policy) is None
 
 
 def test_current_watermark_without_historical_available_at_is_not_formal_oos() -> None:
@@ -627,6 +732,59 @@ def test_current_watermark_without_historical_available_at_is_not_formal_oos() -
     classification = receipt.results[0].oos_classifications[0]
     assert classification.formal_oos_status == FormalOOSStatus.RETROSPECTIVE_RESEARCH_ONLY
     assert classification.availability_status.value == "UNAVAILABLE"
+    handoff = build_handoff_readiness_report(receipt=receipt, request=_request(), policy=_policy())
+    scope = handoff.sorted_target_handoffs[0].admission_scopes[0]
+    assert handoff.readiness.value == "PARTIAL"
+    assert scope.evidence_scope.value == "RETROSPECTIVE_RESEARCH_ONLY"
+    assert scope.readiness.value == "PARTIAL"
+    assert build_phase1_handoff_bundle(report=handoff, policy=_policy()) is not None
+
+
+def test_handoff_blocks_target_scope_drift_without_blocking_receipt_serialization() -> None:
+    readers, _fakes = _readers()
+    request = _request()
+    policy = _policy()
+    receipt = AdvisoryPhase0AAuditService(readers=readers, policy=policy).audit(request)
+    result = receipt.results[0].model_copy(update={"package_id": "pkg_other"})
+    drifted = _receipt_with_results(receipt=receipt, request=request, policy=policy, results=[result])
+
+    report = build_handoff_readiness_report(receipt=drifted, request=request, policy=policy)
+
+    assert report.readiness.value == "BLOCKED"
+    assert "ADVISORY_PHASE0A_HANDOFF_TARGET_SCOPE_MISMATCH" in report.blocking_reason_codes
+
+
+def test_handoff_blocks_incomplete_runtime_config_and_receipt_identity_drift() -> None:
+    readers, _fakes = _readers()
+    request = _request()
+    policy = _policy()
+    receipt = AdvisoryPhase0AAuditService(readers=readers, policy=policy).audit(request)
+    result = receipt.results[0]
+    runtime = result.runtime_semantics[0].model_copy(update={"effective_config_chain_complete": False})
+    invalid_runtime_result = result.model_copy(update={"runtime_semantics": [runtime]})
+    invalid_runtime = _receipt_with_results(
+        receipt=receipt,
+        request=request,
+        policy=policy,
+        results=[invalid_runtime_result],
+    )
+
+    report = build_handoff_readiness_report(receipt=invalid_runtime, request=request, policy=policy)
+    assert report.readiness.value == "BLOCKED"
+    assert "ADVISORY_PHASE0A_HANDOFF_EFFECTIVE_CONFIG_MISSING" in report.blocking_reason_codes
+
+    identity_drift = receipt.model_copy(
+        update={
+            "audit_id": "audit_phase0a_drift",
+            "audit_policy_version": "phase0a_policy_drift",
+            "request_hash": "0" * 64,
+        }
+    )
+    blocked = build_handoff_readiness_report(receipt=identity_drift, request=request, policy=policy)
+    assert blocked.readiness.value == "BLOCKED"
+    assert "ADVISORY_PHASE0A_HANDOFF_AUDIT_ID_MISMATCH" in blocked.blocking_reason_codes
+    assert "ADVISORY_PHASE0A_HANDOFF_AUDIT_POLICY_MISMATCH" in blocked.blocking_reason_codes
+    assert "ADVISORY_PHASE0A_HANDOFF_REQUEST_HASH_MISMATCH" in blocked.blocking_reason_codes
 
 
 def test_equivalent_programs_share_signal_context_but_keep_lineage(tmp_path) -> None:
@@ -651,7 +809,9 @@ def test_equivalent_programs_share_signal_context_but_keep_lineage(tmp_path) -> 
     target_two = _target().model_copy(update={"audit_target_id": "target_phase0a_second", "program_id": second_program.program_id})
     request = AuditRequest(
         audit_id="audit_phase0a_two_programs",
+        policy_registry_id="phase0a_test_registry",
         audit_policy_version="phase0a_policy_v1",
+        policy_registry_content_hash="e" * 64,
         targets=[target_one, target_two],
     )
     audited_readers = AuditReaders(

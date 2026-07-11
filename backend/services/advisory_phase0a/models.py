@@ -69,6 +69,18 @@ class SourceAvailabilityStatus(str, Enum):
     FORBIDDEN = "FORBIDDEN"
 
 
+class HandoffReadiness(str, Enum):
+    READY = "READY"
+    PARTIAL = "PARTIAL"
+    BLOCKED = "BLOCKED"
+
+
+class HandoffEvidenceScope(str, Enum):
+    FORMAL_OOS = "FORMAL_OOS"
+    RETROSPECTIVE_RESEARCH_ONLY = "RETROSPECTIVE_RESEARCH_ONLY"
+    GAP_ONLY = "GAP_ONLY"
+
+
 class AuditDateRange(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,17 +165,25 @@ class AuditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     audit_id: str
+    policy_registry_id: str
     audit_policy_version: str
+    policy_registry_content_hash: str
     targets: list[AuditTarget]
-    requested_by: str | None = None
-    approved_request_reference: str | None = None
 
-    @field_validator("audit_id", "audit_policy_version")
+    @field_validator("audit_id", "policy_registry_id", "audit_policy_version")
     @classmethod
     def _required_text(cls, value: str) -> str:
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("field is required")
+        return normalized
+
+    @field_validator("policy_registry_content_hash")
+    @classmethod
+    def _policy_registry_hash_format(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+            raise ValueError("policy_registry_content_hash must be a lowercase 64-character sha256 digest")
         return normalized
 
     @model_validator(mode="after")
@@ -184,8 +204,14 @@ class Phase0APolicyRegistry(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    schema_version: str = "advisory_phase0a_policy_registry_v1"
+    policy_registry_id: str | None = None
     policy_version: str
     serializer_version: str = "advisory_phase0a_canonical_v1"
+    frozen_at: datetime | None = None
+    effective_from_trade_date: date | None = None
+    effective_to_trade_date: date | None = None
+    registry_content_hash: str | None = None
     formal_start_date: date | None = None
     minimum_trading_day_gap: int = Field(default=20, ge=0)
     benchmark_policy: dict[str, Any] = Field(default_factory=dict)
@@ -194,6 +220,8 @@ class Phase0APolicyRegistry(BaseModel):
     prior_policy: dict[str, Any] = Field(default_factory=dict)
     multiple_testing_policy: dict[str, Any] = Field(default_factory=dict)
     universe_policy: dict[str, Any] = Field(default_factory=dict)
+    embargo_policy: dict[str, Any] = Field(default_factory=dict)
+    style_assignment_policy: dict[str, Any] = Field(default_factory=dict)
     embargo_policy_id: str | None = None
     embargo_policy_version: str | None = None
     embargo_policy_hash: str | None = None
@@ -202,13 +230,51 @@ class Phase0APolicyRegistry(BaseModel):
     calendar_version: str | None = None
     calendar_hash: str | None = None
 
-    @field_validator("policy_version", "serializer_version")
+    @field_validator("schema_version", "policy_version", "serializer_version")
     @classmethod
     def _policy_text_required(cls, value: str) -> str:
         normalized = str(value or "").strip()
         if not normalized:
             raise ValueError("policy identifier is required")
         return normalized
+
+    @model_validator(mode="after")
+    def _normalize_embargo_and_effective_range(self) -> "Phase0APolicyRegistry":
+        if (
+            self.effective_from_trade_date is not None
+            and self.effective_to_trade_date is not None
+            and self.effective_to_trade_date < self.effective_from_trade_date
+        ):
+            raise ValueError("effective_to_trade_date must not be before effective_from_trade_date")
+        if not self.embargo_policy:
+            return self
+
+        mapped_values = {
+            "embargo_policy_id": self.embargo_policy.get("policy_id"),
+            "embargo_policy_version": self.embargo_policy.get("policy_version"),
+            "embargo_policy_hash": self.embargo_policy.get("policy_hash"),
+            "cutoff_timestamp_normalization": self.embargo_policy.get("cutoff_timestamp_normalization"),
+            "training_label_information_end_rule": self.embargo_policy.get("training_label_information_end_rule"),
+            "calendar_version": self.embargo_policy.get("calendar_version"),
+            "calendar_hash": self.embargo_policy.get("calendar_hash"),
+        }
+        for attribute, value in mapped_values.items():
+            if getattr(self, attribute) is None and value not in (None, ""):
+                object.__setattr__(self, attribute, value)
+        gap = self.embargo_policy.get("minimum_trading_day_gap")
+        if gap is not None:
+            object.__setattr__(self, "minimum_trading_day_gap", gap)
+        return self
+
+    @property
+    def is_frozen(self) -> bool:
+        return bool(
+            self.policy_registry_id
+            and self.policy_version
+            and self.registry_content_hash
+            and self.frozen_at is not None
+            and self.effective_from_trade_date is not None
+        )
 
 
 class AssetLedgerEntry(BaseModel):
@@ -488,6 +554,7 @@ class OOSClassification(BaseModel):
     formal_oos_status: FormalOOSStatus
     availability_status: AvailabilityStatus
     effective_cutoff: date | None = None
+    research_replay_eligible: bool = False
     label_maturity_status: LabelMaturityStatus = LabelMaturityStatus.UNAVAILABLE
     phase0a_reason_codes: list[str] = Field(default_factory=list)
     upstream_reason_codes: list[str] = Field(default_factory=list)
@@ -515,6 +582,7 @@ class OOSInterval(BaseModel):
     formal_oos_status: FormalOOSStatus
     availability_status: AvailabilityStatus
     effective_cutoff: date | None = None
+    research_replay_eligible: bool = False
     phase0a_reason_codes: list[str] = Field(default_factory=list)
     upstream_reason_codes: list[str] = Field(default_factory=list)
 
@@ -558,4 +626,68 @@ class AuditReceipt(BaseModel):
     results: list[TargetAuditResult]
     phase0a_reason_codes: list[str] = Field(default_factory=list)
     upstream_reason_codes: list[str] = Field(default_factory=list)
-    approval_status: str = "NOT_APPROVED"
+
+
+class HandoffAdmissionScope(BaseModel):
+    """One deterministic Phase 1 admission decision derived from Phase 0A evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    admission_scope_id: str
+    admission_scope_hash: str
+    audit_target_id: str
+    target_scope_hash: str
+    phase0a_signal_context_hash: str | None = None
+    oos_interval_id: str
+    oos_interval_hash: str
+    capability: str
+    capability_hash: str
+    date_start: date
+    date_end: date
+    formal_oos_status: FormalOOSStatus
+    signal_evidence_level: CandidateAuthorityStatus
+    evidence_scope: HandoffEvidenceScope
+    readiness: HandoffReadiness
+    stable_signal_semantics_payload_v1: dict[str, Any] | None = None
+    stable_signal_semantics_hash: str | None = None
+    decision_clock_hash: str | None = None
+    blocking_reason_codes: list[str] = Field(default_factory=list)
+
+
+class HandoffTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    audit_target_id: str
+    target_scope_hash: str
+    admission_scopes: list[HandoffAdmissionScope] = Field(default_factory=list)
+    target_handoff_hash: str
+
+
+class HandoffReadinessReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "advisory_phase0a_handoff_readiness_v1"
+    audit_id: str
+    audit_manifest_hash: str
+    request_hash: str
+    readiness: HandoffReadiness
+    sorted_target_handoffs: list[HandoffTarget] = Field(default_factory=list)
+    global_handoff_hashes: dict[str, str] = Field(default_factory=dict)
+    blocking_reason_codes: list[str] = Field(default_factory=list)
+    handoff_readiness_hash: str
+
+
+class Phase1HandoffBundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "advisory_phase0a_handoff_bundle_v2"
+    audit_id: str
+    audit_manifest_hash: str
+    request_hash: str
+    serializer_version: str
+    global_handoff_hashes: dict[str, str] = Field(default_factory=dict)
+    sorted_target_handoffs: list[HandoffTarget] = Field(default_factory=list)
+    admission_scope_set_hash: str
+    handoff_readiness_report_hash: str
+    phase1_handoff_bundle_hash: str
+    created_at: datetime
