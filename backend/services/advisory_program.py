@@ -14,8 +14,9 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from math import isfinite
 from statistics import mean, median
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import psycopg2.extras
 
@@ -76,6 +77,14 @@ ACTION_WAITING = "WAITING"
 BINDING_STATUS_DRAFT = "DRAFT"
 BINDING_STATUS_ACTIVE = "ACTIVE"
 BINDING_STATUS_RETIRED = "RETIRED"
+BINDING_INTERVAL_SEMANTICS = "LEFT_CLOSED_RIGHT_OPEN"
+
+REASON_BINDING_EFFECTIVE_DATE_REQUIRED = "ADVISORY_BINDING_EFFECTIVE_DATE_REQUIRED"
+REASON_BINDING_EFFECTIVE_DATE_IN_PAST = "ADVISORY_BINDING_EFFECTIVE_DATE_IN_PAST"
+REASON_BINDING_EFFECTIVE_DATE_NOT_TRADING = "ADVISORY_BINDING_EFFECTIVE_DATE_NOT_TRADING"
+REASON_BINDING_INTERVAL_OVERLAP = "ADVISORY_BINDING_INTERVAL_OVERLAP"
+REASON_BINDING_EXPECTED_VERSION_CONFLICT = "ADVISORY_BINDING_EXPECTED_VERSION_CONFLICT"
+REASON_LEGACY_NULL_BINDING_RESEARCH_ONLY = "ADVISORY_PHASE0A_LEGACY_NULL_BINDING_RESEARCH_ONLY"
 
 REVIEW_RUN_TYPE_PREVIEW = "PREVIEW"
 REVIEW_RUN_TYPE_RUN = "RUN"
@@ -110,6 +119,7 @@ WIN_EXCLUDED = "EXCLUDED"
 WIN_OPEN_MARK = "OPEN_MARK_TO_MARKET"
 
 MARKET_PRICE_UNIT_DIVISOR = 1000.0
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 DEFAULT_REVIEW_POLICY: dict[str, Any] = {
     "rank_enter_threshold": 20,
@@ -360,7 +370,16 @@ class AdvisoryReviewResult:
 
 class AdvisoryProgramRepository(Protocol):
     def create_program(self, program: AdvisoryProgram) -> AdvisoryProgram: ...
+    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram: ...
     def update_program(self, program: AdvisoryProgram) -> AdvisoryProgram: ...
+    def replace_program_binding(
+        self,
+        program: AdvisoryProgram,
+        binding: AdvisoryStrategyBindingVersion,
+        *,
+        expected_program_version: int,
+        expected_binding_version_id: str,
+    ) -> tuple[AdvisoryProgram, AdvisoryStrategyBindingVersion]: ...
     def get_program(self, program_id: str) -> AdvisoryProgram: ...
     def list_programs(self, *, include_archived: bool = False) -> list[AdvisoryProgram]: ...
     def create_binding_version(self, binding: AdvisoryStrategyBindingVersion) -> AdvisoryStrategyBindingVersion: ...
@@ -368,6 +387,7 @@ class AdvisoryProgramRepository(Protocol):
     def get_active_binding_version(self, program_id: str) -> AdvisoryStrategyBindingVersion | None: ...
     def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]: ...
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun: ...
+    def latest_acquired_decision_date(self, program_id: str) -> date | None: ...
     def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
     def list_version_for_date(self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
     def create_list_version(self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]) -> AdvisoryRecommendationListVersion: ...
@@ -387,6 +407,86 @@ class AdvisoryProgramRepository(Protocol):
 
 class AdvisoryTradingCalendarProvider(Protocol):
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]: ...
+    def next_trading_day(self, anchor_date: date, *, inclusive: bool = False) -> date: ...
+
+
+def _binding_error(reason_code: str, message: str, **context: Any) -> RuntimeConfigInvalidError:
+    return RuntimeConfigInvalidError(message, context={"reason_code": reason_code, **context})
+
+
+def _successor_runtime_config(
+    active_binding: AdvisoryStrategyBindingVersion,
+    requested_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    requested = requested_binding.get("runtime_config_json")
+    if requested is None:
+        return deepcopy(active_binding.runtime_config_json)
+    if not isinstance(requested, Mapping):
+        raise RuntimeConfigInvalidError("advisory binding runtime_config_json must be an object")
+    return deepcopy(dict(requested))
+
+
+def _latest_acquired_decision_date_with_cursor(cur: Any, program_id: str) -> date | None:
+    cur.execute(
+        """
+        SELECT MAX(trade_date) AS latest_trade_date
+        FROM (
+            SELECT trade_date
+            FROM app.advisory_review_run
+            WHERE program_id = %s AND run_type = %s
+            UNION ALL
+            SELECT trade_date
+            FROM app.advisory_recommendation_list_version
+            WHERE program_id = %s AND version_status = %s
+        ) AS acquired_decision_dates
+        """,
+        (program_id, REVIEW_RUN_TYPE_RUN, program_id, LIST_VERSION_STATUS_PUBLISHED),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    value = row.get("latest_trade_date") if isinstance(row, Mapping) else row[0]
+    return _parse_date(value)
+
+
+def _validate_successor_binding(
+    *,
+    binding: AdvisoryStrategyBindingVersion,
+    existing_bindings: Iterable[AdvisoryStrategyBindingVersion],
+    active_binding: AdvisoryStrategyBindingVersion | None,
+) -> None:
+    if binding.effective_from_trade_date is None:
+        raise _binding_error(REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "advisory binding effective_from_trade_date is required")
+    if binding.effective_to_trade_date is not None and binding.effective_to_trade_date <= binding.effective_from_trade_date:
+        raise _binding_error(
+            REASON_BINDING_INTERVAL_OVERLAP,
+            "advisory binding interval must be non-empty and left-closed/right-open",
+        )
+    if (
+        active_binding is not None
+        and active_binding.effective_from_trade_date is not None
+        and binding.effective_from_trade_date <= active_binding.effective_from_trade_date
+    ):
+        raise _binding_error(
+            REASON_BINDING_INTERVAL_OVERLAP,
+            "successor binding must start after the active dated binding",
+            active_effective_from_trade_date=active_binding.effective_from_trade_date.isoformat(),
+            requested_effective_from_trade_date=binding.effective_from_trade_date.isoformat(),
+        )
+    for row in existing_bindings:
+        if row.binding_version_id == binding.binding_version_id or row.binding_version_id == (active_binding.binding_version_id if active_binding else None):
+            continue
+        if row.effective_from_trade_date is None:
+            continue
+        existing_to = row.effective_to_trade_date or date.max
+        successor_to = binding.effective_to_trade_date or date.max
+        if binding.effective_from_trade_date < existing_to and row.effective_from_trade_date < successor_to:
+            raise _binding_error(
+                REASON_BINDING_INTERVAL_OVERLAP,
+                "successor binding overlaps an existing dated binding",
+                conflicting_binding_version_id=row.binding_version_id,
+                requested_effective_from_trade_date=binding.effective_from_trade_date.isoformat(),
+            )
 
 
 class InMemoryAdvisoryProgramRepository:
@@ -407,11 +507,77 @@ class InMemoryAdvisoryProgramRepository:
         self.programs[program.program_id] = program
         return program
 
+    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram:
+        if program.program_id in self.programs:
+            raise RuntimeConfigInvalidError("advisory program already exists", context={"program_id": program.program_id})
+        if binding.program_id != program.program_id or binding.program_version != program.version:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "initial binding must belong to the created advisory program version",
+            )
+        _validate_successor_binding(binding=binding, existing_bindings=[], active_binding=None)
+        self.programs[program.program_id] = program
+        self.binding_versions.append(binding)
+        return program
+
     def update_program(self, program: AdvisoryProgram) -> AdvisoryProgram:
         if program.program_id not in self.programs:
             raise DataUnavailableError("advisory program does not exist", context={"program_id": program.program_id})
         self.programs[program.program_id] = program
         return program
+
+    def replace_program_binding(
+        self,
+        program: AdvisoryProgram,
+        binding: AdvisoryStrategyBindingVersion,
+        *,
+        expected_program_version: int,
+        expected_binding_version_id: str,
+    ) -> tuple[AdvisoryProgram, AdvisoryStrategyBindingVersion]:
+        current = self.get_program(program.program_id)
+        if current.version != expected_program_version:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "advisory program version changed before binding replacement",
+                expected_program_version=expected_program_version,
+                actual_program_version=current.version,
+            )
+        active = self.get_active_binding_version(program.program_id)
+        if active is None or active.binding_version_id != expected_binding_version_id:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "advisory active binding changed before replacement",
+                expected_binding_version_id=expected_binding_version_id,
+                actual_binding_version_id=active.binding_version_id if active else None,
+            )
+        if binding.program_id != current.program_id or binding.program_version != program.version:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "successor binding must use the updated advisory program version",
+            )
+        existing = [row for row in self.binding_versions if row.program_id == program.program_id]
+        _validate_successor_binding(binding=binding, existing_bindings=existing, active_binding=active)
+        latest_acquired_date = self.latest_acquired_decision_date(program.program_id)
+        if latest_acquired_date is not None and binding.effective_from_trade_date <= latest_acquired_date:
+            raise _binding_error(
+                REASON_BINDING_EFFECTIVE_DATE_IN_PAST,
+                "successor binding cannot cover an already acquired decision date",
+                latest_acquired_decision_date=latest_acquired_date.isoformat(),
+                requested_effective_from_trade_date=binding.effective_from_trade_date.isoformat(),
+            )
+
+        retired_active = replace(
+            active,
+            activation_status=BINDING_STATUS_RETIRED,
+            effective_to_trade_date=(binding.effective_from_trade_date if active.effective_from_trade_date is not None else active.effective_to_trade_date),
+        )
+        self.binding_versions = [
+            retired_active if row.binding_version_id == active.binding_version_id else row
+            for row in self.binding_versions
+        ]
+        self.programs[program.program_id] = program
+        self.binding_versions.append(binding)
+        return program, binding
 
     def get_program(self, program_id: str) -> AdvisoryProgram:
         program = self.programs.get(program_id)
@@ -429,19 +595,30 @@ class InMemoryAdvisoryProgramRepository:
         if any(row.binding_version_id == binding.binding_version_id for row in self.binding_versions):
             raise RuntimeConfigInvalidError("advisory binding version already exists", context={"binding_version_id": binding.binding_version_id})
         if binding.activation_status == BINDING_STATUS_ACTIVE:
-            self.binding_versions = [
-                replace(row, activation_status=BINDING_STATUS_RETIRED, effective_to_trade_date=binding.effective_from_trade_date)
-                if row.program_id == binding.program_id and row.activation_status == BINDING_STATUS_ACTIVE else row
-                for row in self.binding_versions
-            ]
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "direct ACTIVE binding writes are retired; use replace_program_binding",
+                program_id=binding.program_id,
+            )
         self.binding_versions.append(binding)
         return binding
 
     def activate_binding_version(self, binding: AdvisoryStrategyBindingVersion) -> AdvisoryStrategyBindingVersion:
-        return self.create_binding_version(replace(binding, activation_status=BINDING_STATUS_ACTIVE, activated_at=binding.activated_at or _utcnow()))
+        raise _binding_error(
+            REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+            "direct binding activation is retired; use replace_program_binding",
+            program_id=binding.program_id,
+        )
 
     def get_active_binding_version(self, program_id: str) -> AdvisoryStrategyBindingVersion | None:
         rows = [row for row in self.binding_versions if row.program_id == program_id and row.activation_status == BINDING_STATUS_ACTIVE]
+        if len(rows) > 1:
+            raise _binding_error(
+                REASON_BINDING_INTERVAL_OVERLAP,
+                "advisory program has multiple active binding versions",
+                program_id=program_id,
+                active_binding_version_ids=sorted(row.binding_version_id for row in rows),
+            )
         return sorted(rows, key=lambda row: row.created_at)[-1] if rows else None
 
     def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]:
@@ -454,6 +631,20 @@ class InMemoryAdvisoryProgramRepository:
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun:
         self.review_runs.append(review_run)
         return review_run
+
+    def latest_acquired_decision_date(self, program_id: str) -> date | None:
+        review_dates = [
+            row.trade_date
+            for row in self.review_runs
+            if row.program_id == program_id and row.run_type == REVIEW_RUN_TYPE_RUN
+        ]
+        published_dates = [
+            row.trade_date
+            for row in self.list_versions_store
+            if row.program_id == program_id and row.version_status == LIST_VERSION_STATUS_PUBLISHED
+        ]
+        dates = [*review_dates, *published_dates]
+        return max(dates) if dates else None
 
     def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
         rows = [row for row in self.list_versions_store if row.program_id == program_id and row.version_status == status]
@@ -560,6 +751,20 @@ class AdvisoryProgramPGRepository:
                 self._replace_program_packages(cur, program)
         return program
 
+    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram:
+        if binding.program_id != program.program_id or binding.program_version != program.version:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "initial binding must belong to the created advisory program version",
+            )
+        _validate_successor_binding(binding=binding, existing_bindings=[], active_binding=None)
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                _insert_program_row(cur, program)
+                self._replace_program_packages(cur, program)
+                _insert_binding_row(cur, binding)
+        return program
+
     def update_program(self, program: AdvisoryProgram) -> AdvisoryProgram:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -605,6 +810,101 @@ class AdvisoryProgramPGRepository:
                 self._replace_program_packages(cur, program)
         return program
 
+    def replace_program_binding(
+        self,
+        program: AdvisoryProgram,
+        binding: AdvisoryStrategyBindingVersion,
+        *,
+        expected_program_version: int,
+        expected_binding_version_id: str,
+    ) -> tuple[AdvisoryProgram, AdvisoryStrategyBindingVersion]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT version FROM app.advisory_program WHERE program_id = %s FOR UPDATE",
+                    (program.program_id,),
+                )
+                program_row = cur.fetchone()
+                if program_row is None:
+                    raise DataUnavailableError("advisory program does not exist", context={"program_id": program.program_id})
+                current_version = int(program_row["version"])
+                if current_version != expected_program_version:
+                    raise _binding_error(
+                        REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                        "advisory program version changed before binding replacement",
+                        expected_program_version=expected_program_version,
+                        actual_program_version=current_version,
+                    )
+                cur.execute(
+                    "SELECT * FROM app.advisory_strategy_binding_version WHERE program_id = %s FOR UPDATE",
+                    (program.program_id,),
+                )
+                existing = [_binding_from_row(row) for row in cur.fetchall()]
+                active_rows = [row for row in existing if row.activation_status == BINDING_STATUS_ACTIVE]
+                if len(active_rows) > 1:
+                    raise _binding_error(
+                        REASON_BINDING_INTERVAL_OVERLAP,
+                        "advisory program has multiple active binding versions",
+                        program_id=program.program_id,
+                        active_binding_version_ids=sorted(row.binding_version_id for row in active_rows),
+                    )
+                active = active_rows[0] if active_rows else None
+                if active is None or active.binding_version_id != expected_binding_version_id:
+                    raise _binding_error(
+                        REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                        "advisory active binding changed before replacement",
+                        expected_binding_version_id=expected_binding_version_id,
+                        actual_binding_version_id=active.binding_version_id if active else None,
+                    )
+                if binding.program_id != program.program_id or binding.program_version != program.version:
+                    raise _binding_error(
+                        REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                        "successor binding must use the updated advisory program version",
+                    )
+                _validate_successor_binding(binding=binding, existing_bindings=existing, active_binding=active)
+                latest_acquired_date = _latest_acquired_decision_date_with_cursor(cur, program.program_id)
+                if latest_acquired_date is not None and binding.effective_from_trade_date <= latest_acquired_date:
+                    raise _binding_error(
+                        REASON_BINDING_EFFECTIVE_DATE_IN_PAST,
+                        "successor binding cannot cover an already acquired decision date",
+                        latest_acquired_decision_date=latest_acquired_date.isoformat(),
+                        requested_effective_from_trade_date=binding.effective_from_trade_date.isoformat(),
+                    )
+                _update_program_row(cur, program)
+                self._replace_program_packages(cur, program)
+                retired_active = replace(
+                    active,
+                    activation_status=BINDING_STATUS_RETIRED,
+                    effective_to_trade_date=(
+                        binding.effective_from_trade_date
+                        if active.effective_from_trade_date is not None
+                        else active.effective_to_trade_date
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE app.advisory_strategy_binding_version
+                    SET activation_status = %s,
+                        effective_to_trade_date = %s,
+                        binding_payload_json = %s
+                    WHERE binding_version_id = %s
+                    """,
+                    (
+                        BINDING_STATUS_RETIRED,
+                        retired_active.effective_to_trade_date,
+                        psycopg2.extras.Json(_binding_payload(retired_active)),
+                        active.binding_version_id,
+                    ),
+                )
+                if cur.rowcount != 1:
+                    raise _binding_error(
+                        REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                        "active advisory binding disappeared during replacement",
+                        binding_version_id=active.binding_version_id,
+                    )
+                _insert_binding_row(cur, binding)
+        return program, binding
+
     def get_program(self, program_id: str) -> AdvisoryProgram:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -623,6 +923,12 @@ class AdvisoryProgramPGRepository:
         return [_program_from_row(row) for row in rows]
 
     def create_binding_version(self, binding: AdvisoryStrategyBindingVersion) -> AdvisoryStrategyBindingVersion:
+        if binding.activation_status == BINDING_STATUS_ACTIVE:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "direct ACTIVE binding writes are retired; use replace_program_binding",
+                program_id=binding.program_id,
+            )
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -642,33 +948,11 @@ class AdvisoryProgramPGRepository:
         return binding
 
     def activate_binding_version(self, binding: AdvisoryStrategyBindingVersion) -> AdvisoryStrategyBindingVersion:
-        active = replace(binding, activation_status=BINDING_STATUS_ACTIVE, activated_at=binding.activated_at or _utcnow())
-        with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE app.advisory_strategy_binding_version
-                    SET activation_status = %s,
-                        effective_to_trade_date = COALESCE(%s, effective_to_trade_date)
-                    WHERE program_id = %s AND activation_status = %s
-                    """,
-                    (BINDING_STATUS_RETIRED, active.effective_from_trade_date, active.program_id, BINDING_STATUS_ACTIVE),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO app.advisory_strategy_binding_version (
-                        binding_version_id, program_id, program_version, package_mode, package_ids,
-                        package_weights, fusion_method, package_set_hash, fusion_policy_sha256,
-                        runtime_config_json, effective_from_trade_date, effective_to_trade_date,
-                        activation_status, activation_reason, source_replay_run_id, created_by,
-                        created_at, activated_at, binding_payload_json
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    """,
-                    _binding_sql_params(active),
-                )
-        return active
+        raise _binding_error(
+            REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+            "direct binding activation is retired; use replace_program_binding",
+            program_id=binding.program_id,
+        )
 
     def get_active_binding_version(self, program_id: str) -> AdvisoryStrategyBindingVersion | None:
         with self._conn_factory() as conn:
@@ -679,12 +963,19 @@ class AdvisoryProgramPGRepository:
                     FROM app.advisory_strategy_binding_version
                     WHERE program_id = %s AND activation_status = %s
                     ORDER BY activated_at DESC NULLS LAST, created_at DESC
-                    LIMIT 1
+                    LIMIT 2
                     """,
                     (program_id, BINDING_STATUS_ACTIVE),
                 )
-                row = cur.fetchone()
-        return _binding_from_row(row) if row else None
+                rows = cur.fetchall()
+        if len(rows) > 1:
+            raise _binding_error(
+                REASON_BINDING_INTERVAL_OVERLAP,
+                "advisory program has multiple active binding versions",
+                program_id=program_id,
+                active_binding_version_ids=sorted(str(row["binding_version_id"]) for row in rows),
+            )
+        return _binding_from_row(rows[0]) if rows else None
 
     def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]:
         with self._conn_factory() as conn:
@@ -703,7 +994,39 @@ class AdvisoryProgramPGRepository:
 
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun:
         with self._conn_factory() as conn:
-            with conn.cursor() as cur:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if review_run.run_type == REVIEW_RUN_TYPE_RUN:
+                    cur.execute(
+                        "SELECT program_id FROM app.advisory_program WHERE program_id = %s FOR UPDATE",
+                        (review_run.program_id,),
+                    )
+                    if cur.fetchone() is None:
+                        raise DataUnavailableError(
+                            "advisory program does not exist",
+                            context={"program_id": review_run.program_id},
+                        )
+                    cur.execute(
+                        "SELECT * FROM app.advisory_strategy_binding_version WHERE program_id = %s FOR UPDATE",
+                        (review_run.program_id,),
+                    )
+                    bindings = [_binding_from_row(row) for row in cur.fetchall()]
+                    matching = [
+                        row
+                        for row in bindings
+                        if row.activation_status != BINDING_STATUS_DRAFT
+                        and row.effective_from_trade_date is not None
+                        and row.effective_from_trade_date <= review_run.trade_date
+                        and (row.effective_to_trade_date is None or review_run.trade_date < row.effective_to_trade_date)
+                    ]
+                    if len(matching) != 1 or matching[0].binding_version_id != review_run.binding_version_id:
+                        raise _binding_error(
+                            REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                            "formal advisory run binding is not the unique binding for its decision date",
+                            program_id=review_run.program_id,
+                            trade_date=review_run.trade_date.isoformat(),
+                            expected_binding_version_id=(matching[0].binding_version_id if len(matching) == 1 else None),
+                            actual_binding_version_id=review_run.binding_version_id,
+                        )
                 cur.execute(
                     """
                     INSERT INTO app.advisory_review_run (
@@ -716,6 +1039,11 @@ class AdvisoryProgramPGRepository:
                     _review_run_sql_params(review_run),
                 )
         return review_run
+
+    def latest_acquired_decision_date(self, program_id: str) -> date | None:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                return _latest_acquired_decision_date_with_cursor(cur, program_id)
 
     def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
         with self._conn_factory() as conn:
@@ -1045,11 +1373,13 @@ class AdvisoryProgramService:
         selection_service: SelectionCenterService | Any | None = None,
         calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
         symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository or AdvisoryProgramPGRepository()
         self.selection_service = selection_service or SelectionCenterService()
         self.calendar_provider = calendar_provider or TradingCalendarStatusService()
         self.symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver()
+        self._now_provider = now_provider or _utcnow
 
     def create_program(
         self,
@@ -1080,7 +1410,7 @@ class AdvisoryProgramService:
         clean_status = self._normalize_status(status)
         if clean_status == PROGRAM_STATUS_REVIEWING:
             raise RuntimeConfigInvalidError("new advisory program cannot start in REVIEWING status")
-        now = _utcnow()
+        now = self._now_provider()
         program = AdvisoryProgram(
             program_id=f"advp_{uuid4().hex}",
             status=clean_status,
@@ -1090,21 +1420,19 @@ class AdvisoryProgramService:
             updated_at=now,
             **config,
         )
-        created = self.repository.create_program(program)
-        self.repository.activate_binding_version(
-            _binding_from_program(
-                created,
-                activation_reason="initial advisory program binding",
-                created_by=created_by,
-                effective_from_trade_date=None,
-            )
+        initial_binding = _binding_from_program(
+            program,
+            activation_reason="initial advisory program binding",
+            created_by=created_by,
+            effective_from_trade_date=self._next_eligible_binding_trade_date(program_id=program.program_id, active_binding=None),
         )
-        return created
+        return self.repository.create_program_with_binding(program, initial_binding)
 
     def update_program(self, program_id: str, updates: Mapping[str, Any]) -> AdvisoryProgram:
         program = self.repository.get_program(program_id)
         if program.status == PROGRAM_STATUS_ARCHIVED:
             raise InvalidStateTransitionError("archived advisory program cannot be updated", context={"program_id": program_id})
+        active = self._ensure_active_binding(program)
         config_fields = {
             "program_name",
             "package_mode",
@@ -1116,23 +1444,31 @@ class AdvisoryProgramService:
             "exit_price_basis",
             "review_schedule",
         }
-        unknown = set(updates) - config_fields - {"status"}
+        concurrency_fields = {"expected_program_version", "expected_binding_version_id", "effective_from_trade_date"}
+        unknown = set(updates) - config_fields - {"status"} - concurrency_fields
         if unknown:
             raise RuntimeConfigInvalidError("unsupported advisory program update fields", context={"fields": sorted(unknown)})
         changed_config = any(field_name in updates for field_name in config_fields)
+        binding_semantics_changed = any(field_name in updates for field_name in {"package_mode", "package_ids", "package_weights"})
         if changed_config:
+            requested_package_ids = list(updates.get("package_ids", program.package_ids))
+            package_weights = updates.get("package_weights")
+            if package_weights is None and requested_package_ids != program.package_ids:
+                package_weights = None
+            elif package_weights is None:
+                package_weights = program.package_weights
             config = self._validated_config(
                 program_name=str(updates.get("program_name", program.program_name)),
                 package_mode=str(updates.get("package_mode", program.package_mode)),
-                package_ids=list(updates.get("package_ids", program.package_ids)),
+                package_ids=requested_package_ids,
                 target_count=int(updates.get("target_count", program.target_count)),
-                package_weights=updates.get("package_weights", program.package_weights),
+                package_weights=package_weights,
                 review_policy=updates.get("review_policy", program.review_policy),
                 entry_price_basis=str(updates.get("entry_price_basis", program.entry_price_basis)),
                 exit_price_basis=str(updates.get("exit_price_basis", program.exit_price_basis)),
                 review_schedule=updates.get("review_schedule", program.review_schedule),
             )
-            program = replace(program, version=program.version + 1, updated_at=_utcnow(), **config)
+            program = replace(program, version=program.version + 1, updated_at=self._now_provider(), **config)
         if "status" in updates:
             if self._normalize_status(str(updates["status"])) == PROGRAM_STATUS_ENABLED:
                 self._require_native_package_config(
@@ -1141,16 +1477,29 @@ class AdvisoryProgramService:
                     operation="update_program.enable",
                 )
             program = self._with_status(program, str(updates["status"]))
-        updated = self.repository.update_program(program if changed_config or "status" in updates else replace(program, updated_at=_utcnow()))
-        if changed_config:
-            self.repository.activate_binding_version(
-                _binding_from_program(
-                    updated,
-                    activation_reason="advisory program config update",
-                    created_by=updated.created_by,
-                    effective_from_trade_date=None,
-                )
-            )
+        updated = program if changed_config or "status" in updates else replace(program, updated_at=self._now_provider())
+        if not binding_semantics_changed:
+            return self.repository.update_program(updated)
+
+        expected_program_version, expected_binding_version_id = self._expected_binding_versions(updates)
+        effective_from_trade_date = self._resolve_successor_effective_date(
+            program_id=program_id,
+            active_binding=active,
+            requested_date=updates.get("effective_from_trade_date"),
+        )
+        successor = _binding_from_program(
+            updated,
+            activation_reason="advisory program package config update",
+            created_by=updated.created_by,
+            effective_from_trade_date=effective_from_trade_date,
+            runtime_config_json=deepcopy(active.runtime_config_json),
+        )
+        updated, _binding = self.repository.replace_program_binding(
+            updated,
+            successor,
+            expected_program_version=expected_program_version,
+            expected_binding_version_id=expected_binding_version_id,
+        )
         return updated
 
     def change_status(self, program_id: str, status: str) -> AdvisoryProgram:
@@ -1165,6 +1514,12 @@ class AdvisoryProgramService:
 
     def clone_program(self, program_id: str, *, program_name: str | None = None, created_by: str | None = None) -> AdvisoryProgram:
         source = self.repository.get_program(program_id)
+        source_binding = self.repository.get_active_binding_version(program_id)
+        if source_binding is None:
+            raise DataUnavailableError(
+                "advisory program has no active binding to clone",
+                context={"reason_code": REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "program_id": program_id},
+            )
         self._require_native_package_config(
             package_mode=source.package_mode,
             package_ids=source.package_ids,
@@ -1180,19 +1535,17 @@ class AdvisoryProgramService:
             enabled_since=None,
             last_review_status=None,
             latest_review_trade_date=None,
-            created_at=_utcnow(),
-            updated_at=_utcnow(),
+            created_at=self._now_provider(),
+            updated_at=self._now_provider(),
         )
-        created = self.repository.create_program(clone)
-        self.repository.activate_binding_version(
-            _binding_from_program(
-                created,
-                activation_reason="cloned advisory program binding",
-                created_by=created.created_by,
-                effective_from_trade_date=None,
-            )
+        initial_binding = _binding_from_program(
+            clone,
+            activation_reason="cloned advisory program binding",
+            created_by=clone.created_by,
+            effective_from_trade_date=self._next_eligible_binding_trade_date(program_id=clone.program_id, active_binding=None),
+            runtime_config_json=deepcopy(source_binding.runtime_config_json),
         )
-        return created
+        return self.repository.create_program_with_binding(clone, initial_binding)
 
     def list_programs(self, *, include_archived: bool = False) -> list[AdvisoryProgram]:
         return self.repository.list_programs(include_archived=include_archived)
@@ -1208,6 +1561,20 @@ class AdvisoryProgramService:
         program = self.repository.get_program(program_id)
         return binding_to_dict(self._ensure_active_binding(program))
 
+    def binding_defaults(self, program_id: str) -> dict[str, Any]:
+        program = self.repository.get_program(program_id)
+        active = self._ensure_active_binding(program)
+        return {
+            "program_id": program.program_id,
+            "expected_program_version": program.version,
+            "expected_binding_version_id": active.binding_version_id,
+            "effective_from_trade_date": self._next_eligible_binding_trade_date(
+                program_id=program.program_id,
+                active_binding=active,
+            ).isoformat(),
+            "binding_interval_semantics": BINDING_INTERVAL_SEMANTICS,
+        }
+
     def apply_binding(
         self,
         program_id: str,
@@ -1217,34 +1584,130 @@ class AdvisoryProgramService:
         source_replay_run_id: str | None = None,
         effective_from_trade_date: date | None = None,
         created_by: str | None = None,
+        expected_program_version: int | None = None,
+        expected_binding_version_id: str | None = None,
     ) -> dict[str, Any]:
         if not str(activation_reason or "").strip():
             raise RuntimeConfigInvalidError("advisory binding activation_reason is required")
         program = self.repository.get_program(program_id)
+        requested_package_ids = list(binding.get("package_ids", program.package_ids))
+        package_weights = binding.get("package_weights")
+        if package_weights is None and requested_package_ids != program.package_ids:
+            package_weights = None
+        elif package_weights is None:
+            package_weights = program.package_weights
         config = self._validated_config(
             program_name=program.program_name,
             package_mode=str(binding.get("package_mode", program.package_mode)),
-            package_ids=list(binding.get("package_ids", program.package_ids)),
+            package_ids=requested_package_ids,
             target_count=int(binding.get("target_count", program.target_count)),
-            package_weights=binding.get("package_weights", program.package_weights),
+            package_weights=package_weights,
             review_policy=program.review_policy,
             entry_price_basis=program.entry_price_basis,
             exit_price_basis=program.exit_price_basis,
             review_schedule=program.review_schedule,
         )
-        updated = replace(program, version=program.version + 1, updated_at=_utcnow(), **config)
-        updated = self.repository.update_program(updated)
-        active_binding = self.repository.activate_binding_version(
-            _binding_from_program(
-                updated,
-                activation_reason=str(activation_reason).strip(),
-                source_replay_run_id=source_replay_run_id,
-                created_by=created_by,
-                effective_from_trade_date=effective_from_trade_date,
-                runtime_config_json=dict(binding.get("runtime_config_json") or {}),
-            )
+        expected_program_version, expected_binding_version_id = self._expected_binding_versions(
+            {
+                "expected_program_version": expected_program_version,
+                "expected_binding_version_id": expected_binding_version_id,
+            }
+        )
+        active = self._ensure_active_binding(program)
+        successor_date = self._resolve_successor_effective_date(
+            program_id=program.program_id,
+            active_binding=active,
+            requested_date=effective_from_trade_date,
+        )
+        updated = replace(program, version=program.version + 1, updated_at=self._now_provider(), **config)
+        successor = _binding_from_program(
+            updated,
+            activation_reason=str(activation_reason).strip(),
+            source_replay_run_id=source_replay_run_id,
+            created_by=created_by,
+            effective_from_trade_date=successor_date,
+            runtime_config_json=_successor_runtime_config(active, binding),
+        )
+        updated, active_binding = self.repository.replace_program_binding(
+            updated,
+            successor,
+            expected_program_version=expected_program_version,
+            expected_binding_version_id=expected_binding_version_id,
         )
         return {"program": program_to_dict(updated), "binding": binding_to_dict(active_binding)}
+
+    def repair_legacy_binding(
+        self,
+        program_id: str,
+        *,
+        binding: Mapping[str, Any],
+        repair_reason: str,
+        expected_program_version: int,
+        expected_binding_version_id: str,
+        effective_from_trade_date: date | None = None,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        if not str(repair_reason or "").strip():
+            raise RuntimeConfigInvalidError("legacy advisory binding repair_reason is required")
+        program = self.repository.get_program(program_id)
+        active = self.repository.get_active_binding_version(program_id)
+        if active is None or active.binding_version_id != expected_binding_version_id:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "advisory active binding changed before legacy repair",
+                expected_binding_version_id=expected_binding_version_id,
+                actual_binding_version_id=active.binding_version_id if active else None,
+            )
+        if active.effective_from_trade_date is not None:
+            raise _binding_error(
+                REASON_LEGACY_NULL_BINDING_RESEARCH_ONLY,
+                "legacy repair only accepts an active null-date binding",
+                binding_version_id=active.binding_version_id,
+            )
+        if program.version != expected_program_version:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "advisory program version changed before legacy repair",
+                expected_program_version=expected_program_version,
+                actual_program_version=program.version,
+            )
+        requested_package_ids = list(binding.get("package_ids", program.package_ids))
+        package_weights = binding.get("package_weights")
+        if package_weights is None and requested_package_ids != program.package_ids:
+            package_weights = None
+        elif package_weights is None:
+            package_weights = program.package_weights
+        config = self._validated_config(
+            program_name=program.program_name,
+            package_mode=str(binding.get("package_mode", program.package_mode)),
+            package_ids=requested_package_ids,
+            target_count=int(binding.get("target_count", program.target_count)),
+            package_weights=package_weights,
+            review_policy=program.review_policy,
+            entry_price_basis=program.entry_price_basis,
+            exit_price_basis=program.exit_price_basis,
+            review_schedule=program.review_schedule,
+        )
+        successor_date = self._resolve_successor_effective_date(
+            program_id=program.program_id,
+            active_binding=None,
+            requested_date=effective_from_trade_date,
+        )
+        updated = replace(program, version=program.version + 1, updated_at=self._now_provider(), **config)
+        successor = _binding_from_program(
+            updated,
+            activation_reason=str(repair_reason).strip(),
+            created_by=created_by,
+            effective_from_trade_date=successor_date,
+            runtime_config_json=_successor_runtime_config(active, binding),
+        )
+        updated, repaired_binding = self.repository.replace_program_binding(
+            updated,
+            successor,
+            expected_program_version=expected_program_version,
+            expected_binding_version_id=expected_binding_version_id,
+        )
+        return {"program": program_to_dict(updated), "binding": binding_to_dict(repaired_binding)}
 
     def leaderboard(self, *, sort_by: str = "win_rate", include_archived: bool = False) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -1586,6 +2049,12 @@ class AdvisoryProgramService:
             raise RuntimeConfigInvalidError("advisory replay start_date must be <= end_date")
         source_program = self.repository.get_program(program_id)
         if draft_binding is not None:
+            active_source_binding = self.repository.get_active_binding_version(source_program.program_id)
+            if active_source_binding is None:
+                raise DataUnavailableError(
+                    "advisory program has no active binding for replay",
+                    context={"program_id": source_program.program_id},
+                )
             draft_config = self._validated_config(
                 program_name=source_program.program_name,
                 package_mode=str(draft_binding.get("package_mode", source_program.package_mode)),
@@ -1602,7 +2071,7 @@ class AdvisoryProgramService:
                 source_program,
                 activation_status=BINDING_STATUS_DRAFT,
                 activation_reason="advisory replay draft binding",
-                runtime_config_json=dict(draft_binding.get("runtime_config_json") or {}),
+                runtime_config_json=_successor_runtime_config(active_source_binding, draft_binding),
             )
             self.repository.create_binding_version(binding)
         else:
@@ -1751,17 +2220,103 @@ class AdvisoryProgramService:
             "compare_summary": {"manual_gate": False, "compare_to_binding_version_id": compare_to_binding_version_id},
         }
 
+    @staticmethod
+    def _expected_binding_versions(updates: Mapping[str, Any]) -> tuple[int, str]:
+        expected_program_version = updates.get("expected_program_version")
+        expected_binding_version_id = str(updates.get("expected_binding_version_id") or "").strip()
+        if not isinstance(expected_program_version, int) or expected_program_version < 1 or not expected_binding_version_id:
+            raise _binding_error(
+                REASON_BINDING_EXPECTED_VERSION_CONFLICT,
+                "expected_program_version and expected_binding_version_id are required for binding replacement",
+            )
+        return expected_program_version, expected_binding_version_id
+
+    def _next_trading_day(self, anchor_date: date, *, inclusive: bool) -> date:
+        next_trading_day = getattr(self.calendar_provider, "next_trading_day", None)
+        if not callable(next_trading_day):
+            raise DataUnavailableError(
+                "authoritative trading calendar does not provide next_trading_day",
+                context={"reason_code": REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "anchor_date": anchor_date.isoformat()},
+            )
+        next_date = next_trading_day(anchor_date, inclusive=inclusive)
+        if not isinstance(next_date, date):
+            raise DataUnavailableError(
+                "authoritative trading calendar returned an invalid next trading day",
+                context={"reason_code": REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "anchor_date": anchor_date.isoformat()},
+            )
+        return next_date
+
+    def _next_eligible_binding_trade_date(
+        self,
+        *,
+        program_id: str,
+        active_binding: AdvisoryStrategyBindingVersion | None,
+    ) -> date:
+        activation_now = self._now_provider()
+        activation_date = activation_now.astimezone(SHANGHAI_TZ).date() if activation_now.tzinfo is not None else activation_now.date()
+        candidates = [self._next_trading_day(activation_date, inclusive=False)]
+        acquired_date = self.repository.latest_acquired_decision_date(program_id)
+        if acquired_date is not None:
+            candidates.append(self._next_trading_day(acquired_date, inclusive=False))
+        if active_binding is not None and active_binding.effective_from_trade_date is not None:
+            candidates.append(self._next_trading_day(active_binding.effective_from_trade_date, inclusive=False))
+        return max(candidates)
+
+    def _resolve_successor_effective_date(
+        self,
+        *,
+        program_id: str,
+        active_binding: AdvisoryStrategyBindingVersion | None,
+        requested_date: Any,
+    ) -> date:
+        earliest = self._next_eligible_binding_trade_date(program_id=program_id, active_binding=active_binding)
+        if requested_date is None:
+            return earliest
+        if not isinstance(requested_date, date):
+            raise _binding_error(
+                REASON_BINDING_EFFECTIVE_DATE_REQUIRED,
+                "effective_from_trade_date must be a date",
+            )
+        if requested_date < earliest:
+            raise _binding_error(
+                REASON_BINDING_EFFECTIVE_DATE_IN_PAST,
+                "requested effective_from_trade_date is before the first eligible trading date",
+                requested_effective_from_trade_date=requested_date.isoformat(),
+                earliest_effective_from_trade_date=earliest.isoformat(),
+            )
+        if self._next_trading_day(requested_date, inclusive=True) != requested_date:
+            raise _binding_error(
+                REASON_BINDING_EFFECTIVE_DATE_NOT_TRADING,
+                "effective_from_trade_date must be an authoritative trading day",
+                requested_effective_from_trade_date=requested_date.isoformat(),
+            )
+        return requested_date
+
     def _ensure_active_binding(self, program: AdvisoryProgram) -> AdvisoryStrategyBindingVersion:
         binding = self.repository.get_active_binding_version(program.program_id)
-        if binding is not None:
-            return binding
-        return self.repository.activate_binding_version(
-            _binding_from_program(
-                program,
-                activation_reason="backfilled active binding from advisory program",
-                created_by=program.created_by,
+        if binding is None:
+            raise DataUnavailableError(
+                "advisory program has no active dated binding",
+                context={"reason_code": REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "program_id": program.program_id},
             )
-        )
+        if binding.effective_from_trade_date is None:
+            raise DataUnavailableError(
+                "legacy null-date binding is research-only and cannot run the formal path",
+                context={"reason_code": REASON_LEGACY_NULL_BINDING_RESEARCH_ONLY, "program_id": program.program_id},
+            )
+        if binding.effective_to_trade_date is not None and binding.effective_to_trade_date <= binding.effective_from_trade_date:
+            raise _binding_error(
+                REASON_BINDING_INTERVAL_OVERLAP,
+                "active advisory binding has an empty interval",
+                binding_version_id=binding.binding_version_id,
+            )
+        if binding.effective_to_trade_date is not None:
+            raise _binding_error(
+                REASON_BINDING_INTERVAL_OVERLAP,
+                "active advisory binding must have an open-ended interval",
+                binding_version_id=binding.binding_version_id,
+            )
+        return binding
 
     def _with_active_episode_market_marks(
         self,
@@ -2601,7 +3156,12 @@ def episode_to_dict(episode: AdvisoryEpisode) -> dict[str, Any]:
 
 
 def binding_to_dict(binding: AdvisoryStrategyBindingVersion) -> dict[str, Any]:
-    return _json_ready(asdict(binding))
+    payload = _json_ready(asdict(binding))
+    payload["binding_interval_semantics"] = BINDING_INTERVAL_SEMANTICS
+    payload["binding_payload_hash"] = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 def list_version_to_dict(list_version: AdvisoryRecommendationListVersion) -> dict[str, Any]:
@@ -3056,7 +3616,6 @@ def _binding_from_program(
 def _program_with_binding(program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram:
     return replace(
         program,
-        version=binding.program_version,
         package_mode=binding.package_mode,
         package_ids=list(binding.package_ids),
         package_weights=dict(binding.package_weights),
@@ -3126,6 +3685,84 @@ def _binding_sql_params(binding: AdvisoryStrategyBindingVersion) -> tuple[Any, .
         binding.created_at,
         binding.activated_at,
         psycopg2.extras.Json(_binding_payload(binding)),
+    )
+
+
+def _insert_program_row(cur: Any, program: AdvisoryProgram) -> None:
+    cur.execute(
+        """
+        INSERT INTO app.advisory_program (
+            program_id, program_name, status, target_count, package_mode,
+            package_ids, package_weights, fusion_method, package_set_hash,
+            fusion_policy_sha256, review_policy, review_policy_sha256,
+            entry_price_basis, exit_price_basis, review_schedule, version,
+            created_by, enabled_since, last_review_status,
+            latest_review_trade_date, program_payload_json, created_at, updated_at
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """,
+        _program_sql_params(program),
+    )
+
+
+def _update_program_row(cur: Any, program: AdvisoryProgram) -> None:
+    cur.execute(
+        """
+        UPDATE app.advisory_program
+        SET program_name = %s, status = %s, target_count = %s, package_mode = %s,
+            package_ids = %s, package_weights = %s, fusion_method = %s,
+            package_set_hash = %s, fusion_policy_sha256 = %s, review_policy = %s,
+            review_policy_sha256 = %s, entry_price_basis = %s, exit_price_basis = %s,
+            review_schedule = %s, version = %s, created_by = %s, enabled_since = %s,
+            last_review_status = %s, latest_review_trade_date = %s,
+            program_payload_json = %s, updated_at = %s
+        WHERE program_id = %s
+        """,
+        (
+            program.program_name,
+            program.status,
+            program.target_count,
+            program.package_mode,
+            psycopg2.extras.Json(program.package_ids),
+            psycopg2.extras.Json(program.package_weights),
+            program.fusion_method,
+            program.package_set_hash,
+            program.fusion_policy_sha256,
+            psycopg2.extras.Json(program.review_policy),
+            program.review_policy_sha256,
+            program.entry_price_basis,
+            program.exit_price_basis,
+            psycopg2.extras.Json(program.review_schedule),
+            program.version,
+            program.created_by,
+            program.enabled_since,
+            program.last_review_status,
+            program.latest_review_trade_date,
+            psycopg2.extras.Json(program_to_dict(program)),
+            program.updated_at,
+            program.program_id,
+        ),
+    )
+    if cur.rowcount == 0:
+        raise DataUnavailableError("advisory program does not exist", context={"program_id": program.program_id})
+
+
+def _insert_binding_row(cur: Any, binding: AdvisoryStrategyBindingVersion) -> None:
+    cur.execute(
+        """
+        INSERT INTO app.advisory_strategy_binding_version (
+            binding_version_id, program_id, program_version, package_mode, package_ids,
+            package_weights, fusion_method, package_set_hash, fusion_policy_sha256,
+            runtime_config_json, effective_from_trade_date, effective_to_trade_date,
+            activation_status, activation_reason, source_replay_run_id, created_by,
+            created_at, activated_at, binding_payload_json
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """,
+        _binding_sql_params(binding),
     )
 
 

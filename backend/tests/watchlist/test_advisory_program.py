@@ -611,6 +611,7 @@ def test_native_multi_alpha_parent_uses_single_package_path_and_merges_binding_r
         calendar_provider=FakeTradingCalendar([date(2026, 6, 8), date(2026, 6, 9)]),
     )
     program = _program(service, target_count=1)
+    active_binding = service.active_binding(program.program_id)
     service.apply_binding(
         program.program_id,
         binding={
@@ -627,6 +628,8 @@ def test_native_multi_alpha_parent_uses_single_package_path_and_merges_binding_r
             },
         },
         activation_reason="activate validated native multi-alpha parent",
+        expected_program_version=program.version,
+        expected_binding_version_id=str(active_binding["binding_version_id"]),
     )
 
     result = service.run_review_from_selection(

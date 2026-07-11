@@ -15,6 +15,11 @@ class FakeTradingCalendar:
     def list_trading_days(self, start_date: date, end_date: date) -> list[date]:
         return [day for day in [date(2026, 6, 1), date(2026, 6, 2), date(2026, 6, 8)] if start_date <= day <= end_date]
 
+    def next_trading_day(self, anchor_date: date, *, inclusive: bool = False) -> date:
+        start = anchor_date if inclusive else anchor_date.fromordinal(anchor_date.toordinal() + 1)
+        eligible = self.list_trading_days(start, date(2026, 12, 31))
+        return eligible[0] if eligible else start
+
 
 def _client(selection_service=None) -> tuple[TestClient, AdvisoryProgramService]:
     app = FastAPI()
@@ -379,6 +384,10 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
     program_id = program["program_id"]
 
     before_binding = client.get(f"/api/v1/advisory/programs/{program_id}/bindings/active").json()["binding"]
+    defaults = client.get(f"/api/v1/advisory/programs/{program_id}/bindings/defaults")
+    assert defaults.status_code == 200
+    assert defaults.json()["expected_program_version"] == program["version"]
+    assert defaults.json()["expected_binding_version_id"] == before_binding["binding_version_id"]
     review = client.post(
         f"/api/v1/advisory/programs/{program_id}/reviews/run",
         json={
@@ -400,6 +409,8 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
                 "target_count": 1,
             },
             "activation_reason": "manual operator confirmation without replay hard gate",
+            "expected_program_version": defaults.json()["expected_program_version"],
+            "expected_binding_version_id": defaults.json()["expected_binding_version_id"],
             "created_by": "tester",
         },
     )
@@ -414,6 +425,38 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
     assert any(row["binding_version_id"] == before_binding["binding_version_id"] and row["activation_status"] == "RETIRED" for row in all_bindings)
     active_after = client.get(f"/api/v1/advisory/programs/{program_id}/active-pool").json()["active_pool"]
     assert [row["symbol"] for row in active_after] == [row["symbol"] for row in active_before]
+
+
+def test_advisory_program_update_and_clone_return_active_binding_contract() -> None:
+    client, _service = _client()
+    created = client.post(
+        "/api/v1/advisory/programs",
+        json={
+            "program_name": "Binding API contract",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_a"],
+            "target_count": 1,
+        },
+    )
+    assert created.status_code == 200
+    created_payload = created.json()
+    program_id = created_payload["program"]["program_id"]
+    assert created_payload["binding"]["program_id"] == program_id
+    assert created_payload["binding"]["effective_from_trade_date"] is not None
+    assert created_payload["binding"]["binding_interval_semantics"] == "LEFT_CLOSED_RIGHT_OPEN"
+    assert len(created_payload["binding"]["binding_payload_hash"]) == 64
+
+    updated = client.patch(f"/api/v1/advisory/programs/{program_id}", json={"program_name": "Renamed contract"})
+    assert updated.status_code == 200
+    assert updated.json()["binding"]["program_id"] == program_id
+
+    cloned = client.post(
+        f"/api/v1/advisory/programs/{program_id}/clone",
+        json={"program_name": "Cloned contract"},
+    )
+    assert cloned.status_code == 200
+    assert cloned.json()["binding"]["program_id"] == cloned.json()["program"]["program_id"]
+    assert cloned.json()["binding"]["effective_from_trade_date"] is not None
 
 
 def test_advisory_replay_draft_binding_does_not_mutate_active_binding() -> None:

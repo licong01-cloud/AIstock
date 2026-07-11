@@ -519,7 +519,6 @@ function bindingPayloadFromDraft(draft: ProgramStrategyDraft): AdvisoryBindingPa
     package_ids: packageIds,
     package_weights: { [packageIds[0]]: 1 },
     target_count: Math.min(100, Math.max(1, Math.round(targetCount))),
-    runtime_config_json: {},
   };
 }
 
@@ -1136,11 +1135,14 @@ function AdvisoryPageContent() {
     try {
       const binding = bindingPayloadFromDraft(draft);
       const replayRun = draft.replayResult?.replay_run as JsonObject | undefined;
+      const defaults = await advisoryApi.bindingDefaults(program.program_id);
       const result = await advisoryApi.applyBinding(program.program_id, {
         binding,
         activation_reason: activationReason,
         source_replay_run_id: typeof replayRun?.replay_run_id === "string" ? replayRun.replay_run_id : null,
-        effective_from_trade_date: tradingDefaults?.next_trading_day || tradingDefaults?.latest_trading_day || null,
+        expected_program_version: defaults.expected_program_version,
+        expected_binding_version_id: defaults.expected_binding_version_id,
+        effective_from_trade_date: defaults.effective_from_trade_date,
         created_by: "advisory_ui",
       });
       setProgramStrategyDrafts((drafts) => ({
