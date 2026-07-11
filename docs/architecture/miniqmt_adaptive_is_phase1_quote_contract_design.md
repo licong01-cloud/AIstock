@@ -1,0 +1,879 @@
+# AIstock MiniQMT Adaptive IS Phase 1：五档行情、执行时钟与收盘竞价契约 F2 详细设计
+
+> 文档类型：F2 详细设计；Phase 1 的唯一设计蓝图
+>
+> 上位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
+>
+> Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
+>
+> 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
+
+---
+
+## 0. 修订后的权威决策与开发红线
+
+### 0.1 Phase 1 权威交付口径
+
+Phase 1 必须完整交付以下两条彼此隔离的路径：
+
+1. `LEGACY_B0`：保留 BUG-614 已验证的原始 quote ingress、B0 policy 和 control identity，不原地修改。
+2. `B0_QUOTE_V2`：使用本文定义的强类型五档、时钟、tradability 和 freshness adapter；对 fresh/valid quote 保持 LEGACY_B0 的下单决策等价，对 stale/duplicate/out-of-order/invalid quote fail closed。这是新的、不可变的 B0 control revision。
+
+同一 parent、binding、trade date 只能选择一个 control revision。两条路径不得同时驱动同一 parent，不得重复下单；`B0_QUOTE_V2` 也不得在运行中静默切换回 `LEGACY_B0`。Phase 0B 的正式基线必须绑定 `B0_QUOTE_V2` 的 policy/config/adapter/code/schema hashes。
+
+Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker side effect 仍然来自既有 B0 policy，数量、价格、保护带、尾盘 reprice 与 broker source 语义必须等价；异常 quote 被阻止是预注册的安全差异，不算新增交易动作。
+
+### 0.2 禁止简化交付
+
+后续实施不得以任何理由交付或宣称完成以下内容：
+
+- 只实现 L1 而省略 L2-L5、单位、时间、tradability、calendar、bootstrap、persistence 或 markout；
+- 只实现 DTO/mock/fixture，不接真实 MiniQMT callback、`get_full_tick` bootstrap 和既有 runtime evidence；
+- 只保留 in-memory latest quote，省略 `market_data_id`、action/child/markout durable evidence；
+- 用通用错误字符串代替本文 reason registry、stage、per-symbol state 和 failure context；
+- 只证明进程启动、订阅成功或测试通过，就宣称 Phase 1/B0_QUOTE_V2/Phase 0B ready；
+- 把未实现条款留作未声明的“后续优化”，或以最小版、子集版、占位版、POC、mock-only 版本请求合入。
+
+任何条款无法实现时，实施必须停止并向用户报告具体设计项、影响和需要调整的条款；未经用户明确批准不得删减。
+
+### 0.3 禁止静默改变业务逻辑
+
+- 禁止 `except: pass`、吞异常、返回假成功或以空 payload 表示成功。
+- 禁止缺 quote/timestamp/depth/status/config 时回退到 last price、pre-close、limit price、`datetime.now()`、旧缓存、默认五档、默认单位或另一算法。
+- 禁止 adapter、ingress、scheduler 或 recovery 自动改变 algo code、control revision、side、quantity、price policy、保护带、尾盘策略或 parent ownership。
+- 正常市场不可交易状态必须进入明确的 WAIT/NO_DEPTH/SUSPENDED/LIMIT_BLOCKED；数据、配置、时钟和能力错误必须进入明确 invalid/failure，二者不得互换。
+- 每个错误都必须 loud：稳定 `reason_code + stage + identity/hash context`，并改变可查询 health/evidence；日志限频不得丢失计数、最后样本和首个样本。
+
+### 0.4 禁止新增任务外审批和角色门禁
+
+本阶段不得新增 RBAC、角色、审批人、approval bundle、人工 permit、confirm-run、人工 acknowledge 或 SIM 运行前置审批。恢复必须由合法数据/配置到达后自动完成，不能等待人工点选。
+
+只允许以下自动技术条件：schema/单位/时钟/行情 freshness/tradability/capacity 的确定性校验，以及现有 LIVE hard lock。它们不是业务审批；不得扩展到无关的 B0、其他 binding、Paper 或 LIVE 功能。本文已确认 event CHECK constraint 需要 migration；实施只能提交本文规定的精确 DDL，并在合入后提醒用户授权执行，不能顺手增加其他表、角色或门禁。
+
+---
+
+## 1. Background / 背景与现状证据
+
+### 1.1 阶段目标与上游边界
+
+上位蓝图已选择“组合级净额化 + Arrival-Price / Implementation Shortfall 目标 + 约束型滚动控制器 + 五档深度感知 micro executor + 独立 Completion Governor”作为不受 V25 遗留资产限制时的目标路线。本 Phase 1 只补齐该路线的**行情输入、时钟和市场阶段契约**，不实现新的下单策略、parent 净额化或 Completion Governor。
+
+它承接蓝图中的 `F-003`、`F-008`、`F-009`、`F-011`、`F-015`、`F-016`、`F-017`、`F-019`、`F-020`。其中 LEGACY_B0 是已合入的可靠控制组，B0_QUOTE_V2 是 Phase 1 必须产生的新 control revision；`ADAPTIVE_IS_L1` 在本阶段没有可达的 broker submit 路径。
+
+### 1.2 当前代码事实
+
+截至本文设计冻结时，精准定位得到以下事实：
+
+- `backend/infra/qmt_client.py` 已将 `get_full_tick()` 暴露为 broker 行情读取接口，并在需要 freshness 时先走 whole-quote 订阅；`SimulatorQMTClient` 对这类真实行情请求 loud 拒绝，而不是伪造行情。
+- `backend/infra/realtime_quote_subscriber.py` 已调用 `xtdata.subscribe_whole_quote(code_list=..., callback=...)`，但回调线程直接逐个调用消费者，尚无按标的合并、背压、时钟或五档强类型校验。
+- `backend/services/miniqmt_execution_runtime/runtime.py` 目前把 broker payload 转为 `VnpyTick`；该 DTO 显式只有 `bid/ask_price_1` 和 `bid/ask_volume_1`，缺 timestamp 时还会使用当前时间。它不能成为 B0_QUOTE_V2 或 Adaptive IS 的五档输入契约。
+- `backend/services/miniqmt_execution_runtime/client.py` 已强制 event-loop broker quote source 为 `MINIQMT_REALTIME.broker_quote`，并拒绝非 broker source。这条 B0 来源不变式必须保留。
+- 已合入的 B0 可靠性基线包括：真实 event-loop 路径、`SUBMITTING + pending` 持续 tick 驱动、marketable-limit/保护带/尾盘 protected reprice 与 loud residual。Phase 1 不改变这些语义。
+
+当前 `RealtimeQuoteSubscriber` 的 callback registry 还以订阅号和 symbol list 管理消费者；一份订阅的取消会删除该 symbol 的 callbacks。Phase 1 若直接在该结构上叠加执行消费者，可能使一个观测消费者影响既有 B0 订阅。因此必须先把订阅 ownership 改为可独立释放的 lease，不能以“强制重订阅”替代隔离。
+
+### 1.3 迅投/xtquant 能力边界
+
+迅投的官方资料区分本地数据、订阅数据和全推数据：`get_full_tick` 读取当前最新全推快照，`subscribe_whole_quote` 回调增量更新的品种；全推行情是否带五档取决于行情源级别，而不是 Python 代码可自行补齐。[股票行情与全推接口](https://dict.thinktrader.net/dictionary/stock.html) 与 [行情常见问题](https://dict.thinktrader.net/innerApi/question_answer.html) 还明确说明：全推数据只有最新值，五档能力依赖行情源设置，不能把无五档的最新价伪装成盘口。
+
+官方接口把 `subscribe_whole_quote(code_list, callback)` 定义为回调接收 `{code: {field: value}}` 的增量数据，返回订阅号并可 `unsubscribe_quote`；它并未保证回调时序、完整五档、收盘集合竞价指示价或逐笔队列位置。[接口检索表](https://dict.thinktrader.net/VBA/check_sheet.html) 的该定义是本设计对原始 callback shape 的唯一外部依据。故本设计只承诺验证实际提供的 L1 五档字段，不推导 L2、队列位置、逐笔身份或虚构 auction 指标。
+
+### 1.4 核心问题
+
+目前的 pull + 直接 callback 结构无法稳定回答下列执行级问题：
+
+1. 一条 quote 是否具备完整、可解释的五档、exchange time 与 receive time？
+2. 对一个 action cohort 而言，多个 active symbol 的快照是否足够新、时间偏差是否可接受？
+3. callback burst、重复推送、时钟漂移、重连旧回调与队列溢出时，系统是否会静默使用旧缓存？
+4. 14:57 以后是连续竞价、收盘集合竞价，还是数据源根本没有所需 auction 指标？
+5. 行情观测故障如何 loud，而不阻断 B0 已跑通的 event-loop 或影响 order/trade/clock 通道？
+
+本文将这些问题转化为强类型输入契约、单写者 ingress、只读 snapshot batch 与可验证的失败语义。
+
+---
+
+## 2. Scope / 范围
+
+本阶段交付的设计范围如下。
+
+1. `FiveLevelQuote`、`ExecutionClockEvent`、`ClosingAuctionSnapshot`、`QuoteSnapshotBatch` 的字段、单位、有效性、版本与 hash 契约。
+2. `xtdata.subscribe_whole_quote` 到单写者 ingress 的隔离、subscription lease、per-symbol coalescing、背压和 telemetry 设计。
+3. 交易日历/时段、exchange time/receive time、quote age、重复/乱序、clock skew、active-symbol watermark/max-skew 的定义。
+4. normal session 与 closing auction 的能力区分；当 auction 字段不可用时的显式 `UNAVAILABLE` 语义。
+5. `execution_policy` 中与 Phase 1 输入质量有关的版本化配置，及其 default-off observation rollout。
+6. LEGACY_B0 与 B0_QUOTE_V2 的版本身份、决策等价、安全差异、测试、指标、runbook 和回滚。
+7. Phase 0A 预留 `market_data_id`、benchmark/mark policy 与 Phase 0B 可重建证据的完整交接。
+
+### 2.1 代码 ownership（实施时）
+
+| 责任 | 拟定 owner | 说明 |
+|---|---|---|
+| 原始 xtdata 订阅 lease 与回调入口 | `backend/infra/realtime_quote_subscriber.py` | 保留公共订阅能力；改为 consumer lease，不让一个 consumer 取消另一个 consumer |
+| broker client capability 与 health | `backend/infra/qmt_client.py` | 声明 full-tick/whole-quote capability；不在这里写策略动作 |
+| 算法中立 DTO/protocol | `backend/execution_algos/adaptive_is/contracts.py`（新） | 纯类型与 protocol；不得依赖 MiniQMT/FastAPI/DB |
+| MiniQMT normalizer、clock/tradability adapter | `backend/services/miniqmt_execution_runtime/quote_normalizer.py`（新） | xtdata payload 转换；不得改变 core/B0 policy |
+| 单写者 mailbox、snapshot store、telemetry | `backend/services/miniqmt_execution_runtime/quote_ingress.py`（新） | callback 不写 DB、不调 broker；按 runtime/consumer 只读分发 |
+| durable market-data evidence/markout | `backend/services/miniqmt_execution_runtime/quote_evidence.py`（新） | 单写者消费端追加 evidence；不得在 callback 写 DB |
+| event-loop adapter | `backend/services/miniqmt_execution_runtime/gateway.py` | 仅把已验证 snapshot 提供给未来 core；保留现有 `on_tick` |
+| runtime integration | `backend/services/miniqmt_execution_runtime/runtime.py` | 新 B0_QUOTE_V2 adapter 与 evidence；LEGACY_B0 `VnpyTick` 语义不变 |
+| SIM lifecycle/配置投影 | `backend/services/simulation_runtime/` | 只传递版本化 policy evidence；不增加审批或身份链 |
+| 测试 | `backend/tests/miniqmt_execution_runtime/`、`backend/tests/infra/` | 合同、并发、failure isolation、B0 parity |
+
+文件名是实施定位，不等于本设计 PR 已创建这些模块。任何跨越表中范围的改动须先更新本文的 acceptance matrix。
+
+---
+
+## 3. Non-Goals / 非目标与边界
+
+本 Phase 1 明确不做以下事项：
+
+- 不新增、替换或激活 `ADAPTIVE_IS_L1` broker 下单逻辑；不改变 `SNIPER_MINIQMT`、`BEST_LIMIT_MINIQMT`、`TWAP_LITE_MINIQMT`、V25 或 LEGACY_B0 的 action 语义。B0_QUOTE_V2 仅新增严格 ingress 与新 revision identity。
+- 不把普通五档快照合成为收盘集合竞价的 indicative match price、未匹配量或 auction depth；没有原始能力即标记不可用。
+- 不构建 L2、逐笔成交、真实队列位置、完整 LOB RL 或被动单反事实 fill。
+- 不放宽 `LIVE` 硬锁，不引入 live order，不重新启用 retired compiler/shadow 路线。
+- 不新增角色、RBAC、人工审批、approval bundle、人工 permit、confirm-run 或模拟盘运行前置审批。SIM 的正常运行与自动恢复不等待 Phase 1 人工操作。
+- 不在 callback 中逐行写 PostgreSQL、发 HTTP、调用 FastAPI、运行策略 core、调用 `place_order` 或 `cancel_order`。
+- 不将 quote source、时间、深度或状态缺失时静默回退到 last price、pre-close、`datetime.now()`、缓存旧 quote、零量一档或默认五档。
+- 本设计复用现有 runtime event/TCA evidence carrier，不新增表或列；但必须用显式 migration 扩展既有 event type/source CHECK constraints。本文不执行 DDL，生产应用必须另获用户授权；禁止运行时隐式改表。
+
+---
+
+## 4. Architecture / 目标架构
+
+### 4.1 分层与单向数据流
+
+```text
+xtdata.subscribe_whole_quote generation-bound callback
+        |
+        +--> immutable RawQuoteFrame capture
+        |
+        v
+SubscriptionLeaseRegistry
+  one physical feed / independent logical leases
+        |
+        +--> get_full_tick bootstrap for desired active symbols
+        |
+        v
+ReservedSymbolMailbox
+  one pre-admitted slot per active symbol
+  latest-value coalescing; no active-symbol drop
+        |
+        v
+single QuoteIngress writer + heartbeat
+  normalize -> unit/time/status validation -> ordering -> SnapshotStore
+        |                                             |
+        |                                             +--> metrics / loud evidence
+        v
+CalendarSnapshotSet + ExecutionClockEvent + TradabilitySnapshot
+        |
+        v
+ActionQuoteEligibility per symbol
+        |
+        +--> QuoteEvidenceAppender / durable outbox
+        |
+        +--> B0_QUOTE_V2 adapter -> existing B0 policy -> existing OMS/Gateway
+        |
+        +--> Phase 2 future AdaptiveExecutionCore
+
+LEGACY_B0 -----------------------> existing B0 quote path -> existing B0 policy
+
+order / trade / disconnect / clock events
+        +--> independent high-priority channels; never share quote mailbox
+```
+
+行情 consumer 有独立 `consumer_id`、lease 和 telemetry，但没有 submit/cancel 权限。B0_QUOTE_V2 adapter 只能把已验证的 L1 投影送入既有 B0 policy；只有 `MiniQMTExecutionRuntime -> OMS/Gateway -> broker` 可以产生 side effect。control revision 在 parent 创建前冻结，不允许运行中自动切换。
+
+QuoteSnapshotBatch 是观测集合，不是全局交易门。每个 symbol 独立计算 eligibility；只有具有显式 `dependency_group_id` 的现金/净额依赖组才计算组内 watermark，并且一个组失败不得阻塞其他组。
+
+### 4.2 Subscription lease 与现有 subscriber 的兼容
+
+现有 `RealtimeQuoteSubscriber` 演进为：
+
+1. **physical feed**：每个 backend scheduler-owner process、每个 `data_session_key` 最多一个活动 physical subscription。
+2. **logical lease**：每个 consumer 有 `lease_id/owner/symbols/generation/callback/status`；释放 lease 只影响该 consumer。
+3. **generation callback closure**：callback closure 固化 generation；新 generation 激活后，旧 callback 即使仍到达也只能记 `STALE_GENERATION`。
+4. **bootstrap**：正 subscription id 返回后，对 desired active symbols 调用一次 `get_full_tick`。bootstrap frame 使用同 generation；若 callback 已产生更新的 exchange time/sequence，bootstrap 不得覆盖。
+
+重建顺序固定为：
+
+```text
+compute desired symbol union
+-> verify desired_count <= process max_symbols
+-> create new physical subscription with generation-bound callback
+-> require positive subscription id
+-> get_full_tick bootstrap and record per-symbol coverage
+-> atomically publish new generation
+-> fence old generation
+-> unsubscribe old physical subscription
+```
+
+新 subscription 或 bootstrap 失败时，旧 physical feed/leases 保持有效；不得先删旧订阅。unsubscribe 失败时新 generation 仍可运行，旧 closure 被 fencing；错误必须 loud。
+
+LEGACY_B0 使用原 key/health。Phase 1 consumer 使用独立 key 和 health，不覆盖 LEGACY_B0。B0_QUOTE_V2 读取 Phase 1 SnapshotStore，但不取得 subscription ownership。
+
+Phase 1 的唯一 lifecycle owner 是 simulation lifecycle scheduler 所在的 backend process；只读 API 不得启动 feed。当前阶段只支持一个 scheduler-owner process。检测到第二 owner 时 quote ingress loud `OWNER_CONFLICT` 并拒绝第二实例，LEGACY_B0 不受影响；不增加人工审批。
+
+### 4.3 ReservedSymbolMailbox：有界、合并、单写者
+
+active-symbol set 更新时先执行 admission。每个已接纳 symbol 预留一个 slot；queue 只保存“该 symbol 待 drain”的 token，因此 pending token 上限不超过 admitted symbol 数。
+
+callback thread 只复制白名单 action-relevant scalars，并把五档 list 冻结为 tuple，形成 immutable `RawQuoteFrame`。禁止把 xtdata 提供的可变 dict/list 引用直接放入 mailbox。callback 不做完整策略校验、不写 DB、不调 broker、不等待 consumer。
+
+mailbox 的行为固定如下：
+
+| 情形 | 行为 | telemetry / loud 语义 |
+|---|---|---|
+| admitted symbol 已排队 | 原子替换 slot 为最新 immutable frame；不追加 token | `coalesced_count += 1` |
+| admitted symbol 未排队 | 更新 slot 并追加一个 token | `accepted_count += 1` |
+| active-set 扩容超过 capacity | 新 symbol 不加入 lease/slot；已有 symbols 继续 | `ADAPTIVE_IS_QUOTE_CAPACITY_EXCEEDED` |
+| callback 出现未 admitted symbol | 不写 slot | `ADAPTIVE_IS_QUOTE_UNEXPECTED_SYMBOL` |
+| payload 不是 mapping | 不进入 queue | `ADAPTIVE_IS_QUOTE_PAYLOAD_INVALID` |
+| writer/consumer 异常 | consumer health=FAILED；自动有界重启 | `ADAPTIVE_IS_QUOTE_CONSUMER_FAILURE`；不抛回 xtdata callback |
+
+QuoteIngress single writer 是唯一可以构造 DTO、更新 SnapshotStore、生成 evidence candidate 和更新 ingress metrics 的线程；它不等待 DB。它必须暴露 `thread_alive/last_drain_at/backlog/admitted_symbols/restart_count/last_failure`。watchdog 只重启 quote consumer，不重启服务、scheduler 或 broker；每次重启创建新 generation。达到自动重试上限后 health=FAILED，合法后续 lifecycle tick 可再次自动拉起，不需要人工 acknowledge。
+
+`QuoteEvidenceAppender` 是独立 durable writer：action input/reject、child receipt、protection trigger 和 markout 使用不可丢的高优先级 outbox；cadence aggregate 使用可合并低优先级 slot。B0_QUOTE_V2 新 child 必须在对应 action-input/reject evidence 获得 durable ack 后才可提交；persist failure 停止该 symbol 新 child。order/trade/reconcile event 通道仍独立且优先，不受 quote/cadence backlog 阻塞。
+
+quote 队列不得承载 order、trade、disconnect 或 clock。后四类事件使用独立的优先级通道；其入队失败属于运行时严重错误，必须直接进入现有 gateway loud/暂停语义，而不是等待 quote consumer drain。
+
+### 4.4 状态、identity 与持久化
+
+| 对象 | authority/identity | 存储策略 | 禁止事项 |
+|---|---|---|---|
+| `FiveLevelQuote` | `source_session_id + generation + symbol + ingress_sequence` | 仅 bounded in-memory latest snapshot | 不把 raw account、raw callback 全量写入 DB |
+| `ActionQuoteEligibility` | `runtime_id + parent/algo + symbol + clock_event_id + market_data_id` | 每次 B0_QUOTE_V2 决策都写 durable event | 不用 batch 总状态替代 per-symbol 状态 |
+| `QuoteRejectEvidence` | `market_data_id + reason + stage + policy hash` | ring buffer + structured log；被 active decision 考察时写 durable event | 不以 reject 覆盖上一次合法 quote |
+| `QuoteSnapshotBatch` | `runtime_id + clock_event_id + active/dependency-set hash + policy_sha256` | 观测汇总与 group evidence | 不作为全 runtime action gate |
+| `ClosingAuctionSnapshot` | `symbol + exchange_time + source capability version` | in-memory/read-only evidence | 不从 normal quote 推导字段 |
+| `MarketDataEvidenceV1` | stable `market_data_id` | dedicated outbox -> append-only runtime/TCA carrier | 不逐 tick 全量写、不丢 action/child/markout evidence |
+| telemetry | process/session/config hash | metrics + periodic durable aggregate + logs | 不含账号、完整 raw callback、secret |
+
+本设计选择扩展既有 `MiniQMTExecutionEvent`：
+
+- 新 event types：`QUOTE_OBSERVED`、`QUOTE_REJECTED`、`QUOTE_ELIGIBILITY_EVALUATED`、`QUOTE_MARK_CAPTURED`、`QUOTE_INGRESS_HEALTH`；
+- 新 source literal：`quote_ingress`；
+- action/child/markout 事件保存完整 normalized L1-L5、时间、单位、tradability reference 和 hashes；
+- 普通未使用 tick 只留 latest snapshot 与周期 aggregate，避免回调逐行写 PostgreSQL。
+
+当前 schema 已确认 `ck_miniqmt_event_type` 和 `ck_miniqmt_event_source` 会拒绝新值，因此 P1-D 必须提交：
+
+- `backend/migrations/miniqmt_quote_ingress_event_types_20260712.sql`；
+- 对应 rollback；
+- transaction 内 drop/recreate 两个 CHECK，保留全部旧值并增加本文五个 event types 与 `quote_ingress` source；
+- schema preflight、幂等/rollback 和生产 readback 验证。
+
+不得复用 `TICK`、`ALGO_ACTION_EMITTED` 或 `runtime` source 冒充 quote evidence。代码合入后、启用 ingress 前，生产状态必须报告 `production_ddl_pending`，直到用户授权应用并验证。
+
+---
+
+## 5. Contracts / 契约
+
+### 5.1 `RawQuoteFrame` 与通用 envelope
+
+callback 首先构造 immutable `RawQuoteFrame`：
+
+```text
+schema_version / normalizer_map_version / timestamp_parser_version
+source=MINIQMT_REALTIME.broker_quote
+source_method=WHOLE_QUOTE_CALLBACK | BOOTSTRAP_FULL_TICK
+source_session_id / ingress_generation / ingress_sequence
+symbol_raw / symbol
+received_at_utc / received_monotonic_ns / clock_domain_id
+source_timestamp_raw
+whitelisted_raw_fields
+source_payload_sha256
+```
+
+内部 wall time 一律 UTC；市场时段投影使用 `Asia/Shanghai`，wire format 使用带 offset 的 ISO-8601。同一 `clock_domain_id` 的 monotonic 值才允许相减。callback 必须复制以下白名单：symbol、time/timetag、last/preClose、bidPrice/bidVol、askPrice/askVol、volume/amount、stockStatus/openint 及经设计登记的 auction 字段；未知字段不进入 action hash。
+
+`source_payload_sha256` 对冻结后的白名单 raw fields 求 canonical hash；`normalized_quote_sha256` 对标准 DTO 求 hash。两个 hash 分离，且都排除 account id、secret、callback object、wall-clock receive time 和本地 sequence。
+
+### 5.2 字段映射、symbol 与单位
+
+normalizer map 使用确定性优先级：
+
+| 标准字段 | raw aliases，按优先级 | 规则 |
+|---|---|---|
+| symbol | callback map key、`stock_code`、`symbol` | 必须带 SH/SZ/BJ 后缀并 exact match；禁止仅按六位代码模糊匹配 |
+| source timestamp | `time`、`timetag`、`datetime`、`quote_time`、`quoteTime`、`timestamp`、`ServerTime` | parser version 固定；冲突 aliases loud |
+| last price | `lastPrice`、`last_price`、`price` | 只用于诊断/benchmark，不能替代缺失对手深度 |
+| pre-close | `lastClose`、`preClose`、`pre_close` | 必须声明 raw price basis |
+| bid prices | `bidPrice` array；兼容 `bid_price_1/bidPrice1` 仅投影 L1 | FIVE_LEVEL capability 必须来自完整 array |
+| bid volumes | `bidVol` array；兼容 `bid_volume_1/bidVolume1/bidVol1` 仅投影 L1 | 单位必须由 capability evidence 证明 |
+| ask prices | `askPrice` array；兼容 `ask_price_1/askPrice1` 仅投影 L1 | 同上 |
+| ask volumes | `askVol` array；兼容 `ask_volume_1/askVolume1/askVol1` 仅投影 L1 | 同上 |
+| security/session status | `stockStatus`、`openint` 及已登记 aliases | 作为 tradability/session cross-check，不替代 calendar |
+
+价格 basis 固定为 `RAW_CNY_PER_SHARE`。depth quantity unit 枚举为 `SHARES/LOTS/UNKNOWN`，并保存 `unit_evidence_version`；只有已证明可转换为 shares 的 quote 可进入 B0_QUOTE_V2。若源为 LOTS，使用同一 TradabilitySnapshot 的 lot size 做显式转换并保存原值/转换值；UNKNOWN 必须 fail closed。
+
+### 5.3 `FiveLevelQuote`
+
+```text
+schema/source/session/generation/sequence/method
+symbol / market / board
+source_exchange_time_utc | null
+source_trade_date | null
+clock_trade_date
+received_at_utc / received_monotonic_ns / clock_domain_id
+last_price / pre_close / total_volume / total_amount
+price_basis=RAW_CNY_PER_SHARE
+depth_quantity_unit / unit_evidence_version
+bid_prices[5] / bid_quantities[5]
+ask_prices[5] / ask_quantities[5]
+quote_capabilities
+source_payload_sha256 / normalized_quote_sha256
+validation_state / validation_reasons / normalization_notes
+```
+
+严格规则：
+
+- 五档 capability 只在四个 array 均存在且长度恰为 5 时成立；L1 aliases 不能补齐 L2-L5。
+- 空档固定为 `price=null, quantity=0`。有效档必须形成从 L1 开始的连续前缀；L1 为空而 L2 非空属于 invalid。
+- 有效 bid prices 必须严格递减，有效 ask prices 必须严格递增；零/空档不参与排序。
+- quantity 非负；quantity>0 必须有正价。任何非有限数 invalid。
+- continuous session 中 `bid1>ask1` invalid；locked `bid1==ask1` 保留为显式状态。
+- source trade date 与 clock trade date 冲突时 invalid；缺 source exchange time 时仅 observation，不能进入 B0_QUOTE_V2。
+- zero opposite depth 是市场状态候选，不等于数据错误；必须结合 TradabilitySnapshot 分类。
+
+`VALID` 只表示 quote 结构与单位正确，不表示当前 side 可交易。
+
+### 5.4 `TradabilitySnapshot`
+
+```text
+schema_version / tradability_id
+symbol / market / board / trade_date
+price_basis=RAW_CNY_PER_SHARE
+pre_close / limit_up / limit_down / price_tick / lot_size
+is_suspended / suspension_source / security_status / openint_status
+observed_at_utc / source / source_version / evidence_sha256
+state=TRADABLE | SUSPENDED | INTRADAY_HALT |
+      LIMIT_UP_BUY_BLOCKED | LIMIT_DOWN_SELL_BLOCKED |
+      STATUS_UNKNOWN | DATA_INVALID
+```
+
+quote zero depth、stockStatus/openint 与权威 pre-trade tradability evidence 必须联合分类。停牌、临停、涨跌停封板是 WAIT/NO_FILL；缺 pre-close、limit、tick、lot、status 且无权威市场状态解释时是 data failure。B0_QUOTE_V2 不改变 BUG-614 price/tick/limit/protection-band 计算，只替换其输入质量契约。
+
+### 5.5 `CalendarSnapshotSet` 与 `ExecutionClockEvent`
+
+```text
+CalendarSnapshot
+  calendar_id / calendar_sha256 / market / trade_date / timezone=Asia/Shanghai
+  session_segments / effective_at / source_version
+
+CalendarSnapshotSet
+  snapshot_set_id / set_sha256 / snapshot_by_market[SH,SZ,BJ]
+
+ExecutionClockEvent
+  clock_event_id / clock_at_utc / clock_monotonic_ns / clock_domain_id
+  clock_trade_date / calendar_snapshot_set_id
+  phase_by_market / source / observed_at_utc
+```
+
+calendar 是 session authority；`openint` 是交叉证据。二者不一致输出 `ADAPTIVE_IS_MARKET_PHASE_MISMATCH`，该 symbol fail closed，其他市场不受影响。不得用 wall-clock date、上一交易日或 quote timetag 代替 calendar。多市场 runtime 按 symbol market 选择 snapshot，不使用单一 market 覆盖 SH/SZ/BJ。
+
+clock 倒退、clock domain 变化或 calendar hash 变化都会创建新 clock continuity generation。新 generation 自动等待合法 quote/bootstrap，不需要人工恢复。
+
+### 5.6 freshness、duplicate 与乱序
+
+```text
+receive_age_ms = clock_at_utc - received_at_utc
+source_lag_ms = received_at_utc - source_exchange_time_utc
+exchange_age_ms = clock_at_utc - source_exchange_time_utc
+monotonic_receive_age_ms =
+  (clock_monotonic_ns - received_monotonic_ns) / 1_000_000
+```
+
+wall 与 monotonic receive age 必须在 policy tolerance 内一致。任何负值保留原符号并按 `max_negative_skew_ms` 校验；禁止先取 abs 或 clamp 后声称 fresh。
+
+duplicate identity 为 `(source_session_id,generation,symbol,source_timestamp_raw,source_payload_sha256)`。exact duplicate 不刷新 receive time。相同 source time 但 hash 不同是新 observation；exchange time 早于最新 accepted quote 为 OUT_OF_ORDER。source time 缺失时只能记录 ingress ordering，不能进入 B0_QUOTE_V2。
+
+### 5.7 `ActionQuoteEligibility` 与观测 batch
+
+```text
+ActionQuoteEligibility
+  runtime_id / parent_intent_id / algo_instance_id / symbol / side
+  market_data_id / clock_event_id / tradability_id
+  policy/control revision hashes
+  state=READY | WAITING_FIRST_QUOTE | STALE | INVALID |
+        CAPABILITY_MISSING | NO_OPPOSITE_DEPTH | SUSPENDED |
+        LIMIT_BLOCKED | WRONG_SESSION | CLOCK_INVALID
+  reason_code / stage / evaluated_at_utc
+
+QuoteSnapshotBatch
+  batch_id / runtime_id / clock_event_id / policy_sha256
+  active_symbols / dependency_groups
+  eligibility_by_symbol
+  quote_by_symbol
+  group_watermark/max_skew
+  aggregate_state=OBSERVED | PARTIAL | INVALID | NO_ACTIVE_SYMBOLS
+```
+
+B0_QUOTE_V2 每个 symbol 独立判定 READY。一个 symbol 的 STALE/SUSPENDED/INVALID 不得阻塞无 dependency 的 symbol。只有显式 dependency group 才要求组内 `max(received_at)-min(received_at) <= max_group_skew_ms`；失败只影响该组。aggregate state 只用于 health/TCA coverage，禁止作为全 runtime 下单开关。
+
+### 5.8 `ClosingAuctionSnapshot`
+
+```text
+schema_version / symbol / clock_event_id / market_phase=CLOSING_AUCTION
+capability_state=AVAILABLE | UNAVAILABLE | INVALID
+exchange_time / received_at / source / normalized_quote_sha256
+indicative_match_price / indicative_match_volume
+unmatched_side / unmatched_quantity
+reasons
+```
+
+现有 full-tick 文档不保证 auction indicative 字段，因此默认 capability 为 UNAVAILABLE。普通五档不得合成 auction 字段。Phase 1 的 `auction_mode` 默认为 `OBSERVE_ONLY`，缺 capability 不阻塞 continuous B0_QUOTE_V2。
+
+选择 LEGACY_B0 时继续原 B0 terminal protected-limit；选择 B0_QUOTE_V2 时继续同 revision 的 B0 terminal policy。未来 B1 若需要 auction action，必须由 Phase 3 明确定义，禁止运行中切换到 B0。
+
+### 5.9 `MarketDataEvidenceV1` 与 Phase 0A handoff
+
+```text
+market_data_id / evidence_schema_version
+runtime/binding/trade_date/parent/child/action identities
+capture_type=ACTION_INPUT | ACTION_REJECT | CHILD_RECEIPT |
+             MARKOUT_60S | MARKOUT_300S | MARKOUT_900S |
+             PROTECTION_BAND_TRIGGER | CADENCE_AGGREGATE
+source/exchange/receive/persist times
+FiveLevelQuote / TradabilitySnapshot / clock references and hashes
+mid/bid1/ask1/last / complete L1-L5 normalized arrays
+quote age/source lag/transport lag/quality/reason/stage
+benchmark_policy_version / mark_policy_version
+control_revision / policy/config/adapter/code/schema hashes
+source_input_sha256 / evidence_sha256
+```
+
+`market_data_id` 必须写入 Phase 0A 已预留的 benchmark/mark evidence link。Phase 1 只能追加 evidence 或产生 superseding result，不能覆盖已冻结 decision/arrival。
+
+持久化触发点完整固定为：每次 B0_QUOTE_V2 action 输入或拒绝、child receipt、保护带触发、以及 fill/child receipt 对应的 60/300/900 秒 markout。markout 到点无 fresh quote 也必须写 `UNAVAILABLE` evidence。普通未使用 tick 不逐条写库，只写周期 cadence/coverage/coalesce/capacity aggregate。
+
+`persisted_at` 在 repository 成功提交后生成；DB 失败必须 loud，不能把内存 evidence 当 durable success。该失败只停止 B0_QUOTE_V2 对应的新 action evidence path，不回滚 broker 已确认的事实，也不改变 LEGACY_B0。
+
+### 5.10 API / DB / UI / MCP 边界
+
+Phase 1 不新增提交 API、交易按钮、审批界面或角色模型。只读 diagnostics 可以展示 health、metrics、capability、per-symbol eligibility 和最近 reject，但：
+
+- 查询不得启动订阅、重连、scheduler、订单或撤单；
+- 默认只输出 hashes、symbol、reason/stage、计数、时间和版本，不输出 secret、account id 或完整 raw callback；
+- API schema 必须版本化；
+- 新 event type/source/retention 和 `market_data_id` 必须在实现中显式注册；
+- 不允许以 UI/API 可见“成功”替代 durable evidence；
+- 只允许应用 §4.4 已定义的 CHECK-constraint migration；任何新增表、列、索引或其他 DB 对象必须停止并另获用户授权。
+
+---
+
+## 6. 配置、版本与 capability 规则
+
+### 6.1 双层配置
+
+运行期只允许职责不重叠的两层配置。
+
+**进程级 runtime config**：
+
+```json
+{
+  "MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": false,
+  "MINIQMT_QUOTE_INGRESS_OWNER_MODE": "simulation_scheduler",
+  "MINIQMT_QUOTE_INGRESS_MAX_SYMBOLS": 128,
+  "MINIQMT_QUOTE_INGRESS_DRAIN_BUDGET": 128,
+  "MINIQMT_QUOTE_INGRESS_HEARTBEAT_TIMEOUT_MS": 10000,
+  "MINIQMT_QUOTE_INGRESS_RESTART_BACKOFF_MS": 1000,
+  "MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS": 30000,
+  "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": 30,
+  "MINIQMT_QUOTE_EVIDENCE_OUTBOX_MAX_EVENTS": 4096,
+  "MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE": 128
+}
+```
+
+这些字段管理进程容量/lifecycle，不能放进 per-binding execution policy。所有键必须注册到 `ConfigManager.default_config/write_env` 或改为无损保留 unknown keys，并添加 round-trip 测试，确保配置页面保存不会删除 TCA/quote 配置。
+
+**immutable execution policy**：
+
+```json
+{
+  "quote_contract": {
+    "schema_version": "miniqmt_quote_contract_policy_v2",
+    "control_revision": "B0_QUOTE_V2",
+    "required_capabilities": [
+      "FIVE_LEVEL_DEPTH",
+      "EXCHANGE_TIMESTAMP",
+      "RAW_PRICE_BASIS",
+      "DEPTH_UNIT_SHARES",
+      "TRADABILITY",
+      "CALENDAR"
+    ],
+    "max_receive_age_ms": "<explicit>",
+    "max_source_lag_ms": "<explicit>",
+    "max_exchange_age_ms": "<explicit>",
+    "max_negative_skew_ms": "<explicit>",
+    "max_dependency_group_skew_ms": "<explicit>",
+    "auction_mode": "OBSERVE_ONLY"
+  }
+}
+```
+
+action 阈值没有全局默认值，也不得从环境变量、LEGACY_B0 或 300 秒旧 freshness 默认推断。B0_QUOTE_V2 binding 必须显式携带全部阈值和 canonical `policy_sha256`；合法范围由 schema validator 验证。Phase 1 observation 先统计实际 cadence/age/skew，P1-E 的 pilot policy 使用预注册显式值，Phase 0B 再据实冻结正式 baseline revision。
+
+process switch=false 时 LEGACY_B0 不变；选择 B0_QUOTE_V2 而 ingress 未启用属于明确配置错误，不得自动退回 LEGACY_B0。
+
+### 6.2 capability probe
+
+启动 observation consumer 前执行只读 capability probe，结果为版本化 evidence，而不是人工 gate：
+
+```text
+WHOLE_QUOTE_SUBSCRIBE_AVAILABLE
+FIVE_LEVEL_DEPTH_AVAILABLE
+EXCHANGE_TIMESTAMP_AVAILABLE
+CLOSING_AUCTION_INDICATOR_AVAILABLE
+CALENDAR_AVAILABLE
+```
+
+probe 分为 session capability 与 per-symbol quality：
+
+- session capability 证明 API、schema、price basis、unit evidence、timestamp parser、calendar/tradability source 是否存在；
+- per-symbol quality 证明本次 quote 的 arrays 是否完整、zero depth 是否由市场状态解释、timestamp 是否 fresh；
+- 五档 capability 根据字段存在/单位证明判定，不根据数量是否非零判定；
+- auction capability 独立，不由普通五档或 subscription success 推断。
+
+probe 是自动技术观察，不是人工 gate。SIM simulator client 不具备 xtdata 时 observation 标记 UNAVAILABLE；LEGACY_B0 不受影响。B0_QUOTE_V2 若缺 required capability，则该 symbol fail closed 并自动等待下一次有效 capability/quote，不发生算法切换。
+
+### 6.3 version chain
+
+每一个 observation/batch 必须可以回溯：
+
+```text
+source payload hash
+-> normalizer map / timestamp parser / unit evidence versions
+-> normalized quote / tradability / calendar hashes
+-> ingress build/code revision and data-session generation
+-> MarketDataEvidence schema / market_data_id
+-> execution policy id/version/hash
+-> control revision / adapter/code/schema hashes
+-> runtime / binding / parent / child / action / trade date
+```
+
+任何 action-evidence 链缺失时，B0_QUOTE_V2 当前 symbol 不释放新 child；已有 broker order/trade facts保持权威且必须 reconcile。LEGACY_B0 和 B0_QUOTE_V2 均不可原地覆盖。Phase 1 无条件创建新的 B0_QUOTE_V2 revision；fresh/valid quote 等价性和异常 quote 安全差异都写入 revision evidence。
+
+---
+
+## 7. Failure Modes / 风险与失败模式
+
+### 7.1 强制 loud envelope
+
+所有 Phase 1 异常或不满足输入条件的事件统一包含：
+
+```text
+reason_code / stage / severity / retry_class
+runtime/binding/parent/algo/child identities when applicable
+symbol / side / source_session_hash / generation / sequence
+market_data_id / clock_event_id / tradability_id
+control_revision / policy/config/adapter/schema hashes
+exception_type / first_observed_at / last_observed_at / occurrence_count
+```
+
+stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK/CALENDAR/TRADABILITY/ELIGIBILITY/PERSIST/MARKOUT/ADAPTER`。reason code 在一个 registry 中定义；failure matrix、日志、API、event 和测试必须引用同一常量，禁止一处用细码、另一处用模糊聚合码。
+
+日志限频必须保留 first/last sample、occurrence count 和按 reason/symbol 的 metrics。异常被 callback boundary 捕获后，consumer health 必须变为 DEGRADED/FAILED 并自动恢复；不得只打印日志后继续声称 healthy。
+
+### 7.2 Failure matrix
+
+| 条件 | reason_code | stage | Phase 1 行为 | 对 B0/交易 side effect |
+|---|---|---|---|---|
+| 第二 scheduler owner | `ADAPTIVE_IS_QUOTE_OWNER_CONFLICT` | `OWNER` | 拒绝第二 ingress；自动保持唯一 owner | LEGACY_B0 不变；不重复订阅/下单 |
+| xtdata 不可用/订阅号非正 | `ADAPTIVE_IS_QUOTE_SUBSCRIPTION_UNAVAILABLE` | `SUBSCRIBE` | consumer UNAVAILABLE，自动重试 | LEGACY_B0 不变；B0_QUOTE_V2 等待 |
+| replacement/lease 重建失败 | `ADAPTIVE_IS_QUOTE_LEASE_REBUILD_FAILED` | `SUBSCRIBE` | 保留旧 feed/其他 leases | 不取消旧订阅 |
+| bootstrap 缺 symbol/失败 | `ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE` | `BOOTSTRAP` | per-symbol WAITING_FIRST_QUOTE | 其他 READY symbols 继续 |
+| active-set 超 capacity | `ADAPTIVE_IS_QUOTE_CAPACITY_EXCEEDED` | `INGRESS` | 新 symbols 不 admission；已有 symbols 继续 | 不丢已有 active quote |
+| raw payload/symbol 非法 | `ADAPTIVE_IS_QUOTE_PAYLOAD_INVALID` | `INGRESS` | reject frame/evidence | 不调 broker |
+| array 长度/连续前缀/排序错误 | `ADAPTIVE_IS_QUOTE_DEPTH_SCHEMA_INVALID` | `NORMALIZE` | 不覆盖 latest valid；当前 symbol INVALID | 仅该 symbol 不释放新 child |
+| 单位/price basis 未证明 | `ADAPTIVE_IS_QUOTE_UNIT_UNPROVEN` | `UNIT` | capability missing | 禁止深度 sizing |
+| duplicate/out-of-order/stale generation | `ADAPTIVE_IS_QUOTE_ORDERING_REJECTED` | `NORMALIZE` | 不刷新 receive time/不覆盖 latest | 无 |
+| clock/domain/calendar/phase 冲突 | `ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID` | `CLOCK/CALENDAR` | 仅对应 market/symbol invalid，自动等新 generation | 不改 scheduler run status |
+| suspend/halt/limit/zero depth | `ADAPTIVE_IS_QUOTE_MARKET_NOT_TRADABLE` | `TRADABILITY` | 显式 WAIT/NO_FILL | 不归类为程序成功或数据错误 |
+| 必填 tradability 字段缺失 | `ADAPTIVE_IS_TRADABILITY_DATA_INVALID` | `TRADABILITY` | data failure | 禁止默认 pre-close/limit/tick/lot |
+| action quote stale/capability missing | `ADAPTIVE_IS_ACTION_QUOTE_INELIGIBLE` | `ELIGIBILITY` | 写 action reject evidence；等待下一 tick | 不切换 LEGACY_B0 |
+| auction 指标缺失且 OBSERVE_ONLY | `ADAPTIVE_IS_CLOSING_AUCTION_CAPABILITY_UNAVAILABLE` | `ELIGIBILITY` | 记录 unavailable；continuous 不受影响 | 不合成 auction action |
+| evidence outbox 满 | `ADAPTIVE_IS_MARKET_DATA_EVIDENCE_OUTBOX_FULL` | `PERSIST` | 对应 symbol 停止新 child；不可丢 evidence | order/trade/reconcile 通道继续 |
+| durable evidence 写失败 | `ADAPTIVE_IS_MARKET_DATA_EVIDENCE_PERSIST_FAILED` | `PERSIST` | B0_QUOTE_V2 停止释放新 child并自动重试 | 已有 broker facts 继续 reconcile |
+| markout 到点无 fresh quote | `ADAPTIVE_IS_MARKOUT_QUOTE_UNAVAILABLE` | `MARKOUT` | 写 durable unavailable evidence | 无 broker side effect |
+| B0 projection 与 LEGACY 决策不等价 | `ADAPTIVE_IS_B0_QUOTE_V2_PARITY_VIOLATION` | `ADAPTER` | revision invalid，停止 B0_QUOTE_V2 | 不自动切回其他算法 |
+| writer 抛异常/heartbeat 超时 | `ADAPTIVE_IS_QUOTE_CONSUMER_FAILURE` | `INGRESS` | health FAILED；fenced automatic restart | order/trade/clock 通道继续 |
+
+### 7.3 不变式证明目标
+
+实施 PR 必须逐项证明：
+
+- BUG-599：Phase 1 没有 fake broker/order 路径；B0_QUOTE_V2 仍通过真实 runtime/OMS/Gateway，且一个 parent 只绑定一个 revision。
+- BUG-600：callback 不同步写 PostgreSQL，mailbox single writer 有界，异常不会阻塞 scheduler/watchdog。
+- BUG-604：`SUBMITTING + pending` tick 驱动和 scheduler status mapping 不在 write scope；一个 symbol 的 quote wait 不终止 run，也不阻塞其他 symbol。
+- BUG-614：LEGACY_B0 identity 不变；B0_QUOTE_V2 是新 identity，但 fresh/valid quote 的 marketable-limit、保护带、tick/limit、尾盘 protected reprice 和 broker source 决策等价。
+- 所有不变式必须有真实 implementation refs 与直接 nodeid；文档声明不能替代测试。
+
+---
+
+## 8. Implementation Plan / 分阶段实施方案
+
+本节是可直接派生实施 PR 的顺序。切片是交付顺序，不是删减范围；每个切片必须完整实现自身契约，禁止以“先做最小版”跳过字段、失败语义、持久化或测试。每个 PR 回填 implementation acceptance record，并保留完整 F2 matrix。
+
+### 8.1 P1-A：算法中立 contracts、reason registry 与配置 schema
+
+**范围**：
+
+- 新增 `backend/execution_algos/adaptive_is/contracts.py`，完整定义 RawQuoteFrame 之外的算法中立 DTO/protocol；
+- 新增 MiniQMT normalizer map、timestamp parser v2、unit/tradability validation；
+- 建立统一 reason/stage registry；
+- 拆分 process config 与 execution policy schema，并补 ConfigManager round-trip preservation；
+- 不调用 xtdata、DB 或 broker。
+
+**退出条件**：五档/单位/symbol/time/calendar/tradability/eligibility/hash/policy 的完整 unit/property tests 通过；缺字段无 fallback；LEGACY_B0 import/action tests 无变化。
+
+### 8.2 P1-B：lease、bootstrap、reserved mailbox 与 worker lifecycle
+
+**范围**：实现 logical leases、generation-bound callback、replacement order、`get_full_tick` bootstrap、immutable RawQuoteFrame、reserved symbol slots、single writer、owner conflict、heartbeat、automatic restart 和 shutdown fencing。
+
+**退出条件**：两个 consumer 独立 release/rebuild；bootstrap/callback race 确定性；active symbol 永不因 queue 满被丢；capacity 只拒绝新 admission；writer death 自动 fenced restart；callback thread 无 DB/broker；LEGACY_B0 lease 不受影响。
+
+### 8.3 P1-C：clock/calendar、tradability 与 per-symbol eligibility
+
+**范围**：实现 UTC/monotonic clock、CalendarSnapshotSet、SH/SZ/BJ phase、openint cross-check、TradabilitySnapshot、freshness/ordering 和 ActionQuoteEligibility；batch 只作观测/group watermark。
+
+**退出条件**：fresh/stale/negative skew/duplicate/out-of-order/generation/clock rollback/multi-market/停牌/临停/涨跌停/zero depth 全覆盖；一个 symbol/依赖组失败不阻塞无关 symbol；scheduler `non_trading_day` 与 BUG-604 pending run 不变。
+
+### 8.4 P1-D：durable evidence、markout、auction、metrics 与 runbook
+
+**范围**：
+
+- 扩展 runtime event type/source、提交精确 CHECK-constraint migration 与 rollback；
+- 实现 MarketDataEvidenceV1、`market_data_id`、action reject/input、child receipt、60/300/900 秒 markout、保护带触发和 cadence aggregate；
+- 实现 auction capability/OBSERVE_ONLY；
+- 提供 metrics、alerts、只读 diagnostics 和 operator runbook；
+- 持久化全部在 single writer/observation coordinator，callback 不写 DB。
+
+**退出条件**：任一 action/child/markout 可按 market_data_id 重建；persist failure loud 且不会伪装 durable success；普通 quote 不能合成 auction；Phase 0A benchmark/mark policy link 可 readback；migration/rollback/schema tests 通过。生产 DDL 未经用户授权时保持 `production_ddl_pending`，不得启用 ingress。
+
+### 8.5 P1-E：B0_QUOTE_V2、真实 SIM parity 与 Phase 0B handoff
+
+**范围**：
+
+- 冻结新的 B0_QUOTE_V2 control revision；
+- fresh/valid normalized quote 投影到既有 B0 policy；
+- stale/invalid/duplicate/capability-missing quote 只阻止对应 symbol，并写 durable evidence；
+- 正常交易日 SIM 中由 binding 显式选择 revision；不得双跑同 parent；
+- 不启用 ADAPTIVE_IS_L1。
+
+**退出条件**：fresh/valid golden action 与 LEGACY_B0 逐字段等价；异常 quote safety differences 与 reason evidence 符合预注册；pending tick-driver、scheduler、broker order/trade/reconcile 继续；订单可见且无重复；Phase 0B 可从同一查询重建 quote/depth/age/cadence/markout coverage。
+
+### 8.6 实施切片依赖表
+
+| 切片 | 依赖 | 不可越过的边界 | 允许的运行验证 |
+|---|---|---|---|
+| P1-A | 本设计、Phase 0A handoff | 无 xtdata/DB/broker；不得把 DTO 放入 service core 依赖 | unit/property |
+| P1-B | P1-A | 不将 raw callback 直接送入 action；不改 LEGACY_B0 | callback fixture / isolated SIM feed |
+| P1-C | P1-B、权威 calendar/tradability | 不用全 runtime batch gate；不改 scheduler status | read-only per-symbol health |
+| P1-D | P1-C、现有 event/TCA carrier | 不逐 tick 写 DB；不合成 auction | SIM observation + durable readback |
+| P1-E | P1-D、新 B0_QUOTE_V2 identity | 不启用 Adaptive IS；一个 parent 一个 revision | 正常交易日真实 SIM B0 control |
+
+所有服务重启由用户执行。Codex 只能提出重启要求并在重启后验证。P1-E 的 binding/config 持久化与真实 SIM 选择需要用户单独授权；LIVE、DDL、依赖安装和任务外功能始终不在本阶段默认授权内。
+
+---
+
+## 9. Verification Plan / 验证方案
+
+### 9.1 单元与属性测试
+
+| 组 | 关键断言 |
+|---|---|
+| RawQuoteFrame / normalizer | immutable whitelist copy、exact symbol、alias conflict、五档连续前缀、raw/normalized hashes、无默认时间/价格/深度 |
+| basis / unit | RAW_CNY_PER_SHARE、SHARES/LOTS 显式转换、UNKNOWN fail closed、lot/tick/limit 同 basis |
+| ordering/bootstrap | existing cache bootstrap、callback race、exact duplicate 不刷新 receive time、乱序/旧 generation 不覆盖 |
+| freshness/clock | UTC/monotonic 同 domain、正负 skew、clock rollback、source/clock trade-date mismatch |
+| calendar/tradability | SH/SZ/BJ phase、openint mismatch、停牌/临停/涨跌停/zero depth 与 data error 分离 |
+| eligibility/group | per-symbol READY/WAIT/INVALID；仅 dependency group 使用 watermark；无关 symbol 不互相阻塞 |
+| mailbox/worker | reserved slot、capacity admission、coalescing、unexpected symbol、writer death、automatic restart、shutdown fencing |
+| lease/owner | 多 consumer 独立 release、replacement failure 保留旧 feed、第二 owner fail loud |
+| evidence/markout | durable-ack-before-submit、outbox capacity/backpressure、market_data_id、persisted_at、action/child/protection trigger、60/300/900 秒 markout 与 unavailable evidence |
+| auction | OBSERVE_ONLY 默认；UNAVAILABLE 不合成字段、不阻塞 continuous |
+| B0 parity | fresh/valid action 逐字段等价；invalid/stale 只产生预注册安全差异；不得自动切换 revision |
+| config | process/policy 分层、ConfigManager round-trip、unknown/illegal schema loud |
+| migration | 旧/new event types 与 sources、constraint preflight、idempotent apply、rollback、production readback |
+
+### 9.2 回归与集成测试
+
+实施阶段至少新增/扩展以下定向测试文件：
+
+```text
+backend/tests/miniqmt_execution_runtime/test_quote_contract.py
+backend/tests/miniqmt_execution_runtime/test_quote_ingress.py
+backend/tests/miniqmt_execution_runtime/test_quote_eligibility.py
+backend/tests/miniqmt_execution_runtime/test_quote_evidence.py
+backend/tests/miniqmt_execution_runtime/test_closing_auction_contract.py
+backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_parity.py
+backend/tests/infra/test_realtime_quote_subscriber_leases.py
+backend/tests/test_config_manager_quote_ingress_roundtrip.py
+backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py
+```
+
+必须运行 broker quote source、event-loop callbacks、BUG-604 pending tick driving、BUG-614 marketable-limit/protection/tail、lifecycle status 和 TCA sidecar join 的定向 regression。失败后先重跑具体 nodeid；广泛回归交由 CI/Validation Center。任何失败不得通过弱化 validator、扩大 age、切回 LEGACY_B0 或删除测试掩盖。
+
+### 9.3 SIM 运行证据
+
+P1-E 的真实 SIM 证据最少包含：
+
+1. process config 持久化/readback 与 owner 唯一性；
+2. subscription id、generation、bootstrap coverage、callback progression 和 worker heartbeat；
+3. capability probe 区分 session capability、per-symbol quality、单位、exchange timestamp、tradability 与 auction；
+4. 每个 active symbol 的 eligibility、age、market phase、reason/stage；不得只展示 batch 总状态；
+5. capacity/coalesce/restart metrics，且 order/trade/clock/tick-driver 持续前进；
+6. MarketDataEvidenceV1 对 action、child receipt、protection-band 与 markout 可 readback/rebuild；
+7. LEGACY_B0 与 B0_QUOTE_V2 fresh/valid golden action diff 为零，异常安全差异符合预注册；
+8. B0_QUOTE_V2 的 broker_called/order/trade/reconcile 证据与无重复 parent/revision；
+9. auction 缺失明确 UNAVAILABLE，continuous B0_QUOTE_V2 不被无关阻塞；
+10. Phase 0B 查询可重建 quote age、五档 coverage、Q/depth、cadence 和 markout。
+
+这些证据只验收 B0_QUOTE_V2 market-data control，不证明 ADAPTIVE_IS_L1、M1/B1 或策略效果。
+
+### 9.4 Metrics、alerts 与 operator runbook
+
+必须提供以下 metrics：
+
+```text
+miniqmt_quote_ingress_owner
+miniqmt_quote_subscription_generation
+miniqmt_quote_bootstrap_coverage_ratio
+miniqmt_quote_callback_total
+miniqmt_quote_coalesced_total
+miniqmt_quote_capacity_rejected_total
+miniqmt_quote_consumer_restart_total
+miniqmt_quote_writer_heartbeat_age_ms
+miniqmt_quote_valid_depth_ratio
+miniqmt_quote_action_ready_ratio
+miniqmt_quote_age_ms{quantile}
+miniqmt_quote_market_data_persist_failures_total
+miniqmt_quote_evidence_outbox_backlog
+miniqmt_quote_markout_coverage_ratio
+miniqmt_b0_quote_v2_parity_violations_total
+```
+
+alerts 至少覆盖 owner conflict、bootstrap coverage 不完整、heartbeat 超时、持续 capability/unit 缺失、persist failure、markout coverage 下降和任何 parity violation。告警不得暂停 LEGACY_B0 或无关 binding。
+
+runbook 固定顺序为：只读 health -> owner/generation -> bootstrap coverage -> per-symbol eligibility -> evidence persist/readback -> broker order/trade reconcile。恢复由合法配置/行情和 worker lifecycle 自动完成；runbook 不包含人工 approval/acknowledge。需要配置变更、重启、DDL 或 binding 变更时只报告给用户，由用户授权相应操作。
+
+---
+
+## 10. Rollout / Rollback / 发布与回滚
+
+### 10.1 发布顺序
+
+1. 合入 P1-A～P1-D 代码、migration/rollback 与测试，process switch=false，所有 bindings 仍为 LEGACY_B0。
+2. 只读执行 production schema preflight；提醒用户授权应用精确 CHECK migration；应用后验证旧/new event type/source 与 constraints。
+3. 用户持久化 process config 并执行重启；重启后只读验证 owner/health/config/schema readback。
+4. 用户授权后在 SIM 开启 observation ingress；完成 bootstrap/capability/evidence/metrics 验证，bindings 仍为 LEGACY_B0。
+5. 创建不可变 B0_QUOTE_V2 revision 和显式 pilot policy；未绑定前不产生订单。
+6. 用户授权后仅对预注册 SIM binding/date 选择 B0_QUOTE_V2；同 parent 不运行 LEGACY_B0。
+7. 正常交易日完成 parity、安全差异、broker/reconcile、durable evidence 和 Phase 0B query 证明。
+8. Phase 1 完成后仍不自动启用 ADAPTIVE_IS_L1、Phase 2/3 policy 或 LIVE。
+
+步骤中的用户授权只针对现有生产配置、重启和真实 SIM binding 变更，不新增审批/RBAC/permit 产品功能。
+
+### 10.2 回滚
+
+`MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED=false` 表示停止接纳新的 B0_QUOTE_V2 parent。若仍有 active B0_QUOTE_V2 parent，ingress 进入 DRAINING，继续行情、订单/成交 reconcile 和 evidence，直到 parent terminal 后再释放 lease；禁止立即停 feed 使活动 parent 失去行情。
+
+回滚步骤：
+
+1. 新 binding/run 明确选择 LEGACY_B0 revision；
+2. active B0_QUOTE_V2 parent 保持原 revision，停止新 child 的条件仍由原 policy 决定，不切算法；
+3. 活动 broker order 继续通过 OMS/Gateway reconcile，不盲目撤单；
+4. 无 active B0_QUOTE_V2 parent 后停止 ingress、释放本 consumer lease、保留 telemetry/evidence；
+5. 输出 `ADAPTIVE_IS_QUOTE_INGRESS_STOPPED` 或明确 failure reason。
+
+回滚不得：
+
+- 取消其他 B0 lease；
+- 自动取消活动订单；
+- 改写 active parent revision、run status、scheduler 状态、execution policy 或 broker client singleton；
+- 擦除已有 quote reject/observation evidence。
+
+若发现 shared subscriber 影响 LEGACY_B0，停止新的 B0_QUOTE_V2 assignment，保持 active facts reconcile，并回退到上一个已验证 subscriber build；不能通过关闭 loud 校验掩盖。代码合入、配置持久化、重启、进程状态、binding revision、broker side effect 和运行证据必须分别报告。
+
+---
+
+## 11. Production Gates / 自动运行条件（无人工审批）
+
+本节是自动数据完整性条件，不是人工审批、角色门禁或 permit。它们只约束对应 symbol 是否可被 B0_QUOTE_V2 使用；LEGACY_B0、无关 symbol/binding 和其他模块不得被联动阻断。
+
+| 条件 | 自动结果 | 人工审批/RBAC |
+|---|---|---|
+| ingress switch=false | 不接纳新 B0_QUOTE_V2 parent；active parent 自动 drain | 无 |
+| policy/schema/阈值缺失 | 对应 B0_QUOTE_V2 assignment loud invalid | 无；不得切换 LEGACY_B0 |
+| owner conflict/capacity不足 | 拒绝第二 owner或新 symbol admission；已有 symbols 继续 | 无 |
+| 当前 symbol 无五档/单位/timestamp/tradability | 该 symbol WAIT/INVALID 并自动等下一证据 | 无；不阻塞无关 symbol |
+| quote stale/duplicate/out-of-order | 该 symbol 不释放新 child并写 durable reject | 无；下一合法 quote 自动恢复 |
+| market suspended/limit/zero depth | 明确 WAIT/NO_FILL，保持 pending liveness | 无 |
+| evidence 持久化失败 | 对应 B0_QUOTE_V2 停止新 child，已有 broker facts reconcile | 无；不得报 durable success |
+| production schema 未应用新 CHECK migration | ingress 保持关闭，LEGACY_B0 继续 | 无产品审批；应用 DDL 需要用户操作授权 |
+| closing auction 指标缺失且 OBSERVE_ONLY | 只记录 unavailable；continuous/tail B0 policy 不变 | 无 |
+| parity violation | B0_QUOTE_V2 revision invalid，不再分配新 parent | 无；不静默切算法 |
+| LIVE | 维持现有 hard lock | 本设计不放宽或新增 live 流程 |
+
+所有条件必须可由合法数据、配置或生命周期自动正向满足；不得引入“审批完成”状态、人工 ack 或永久全局停机。数据/config fault 恢复后自动进入下一次 eligibility；任何恢复不得改写历史 evidence、parent revision 或业务逻辑。
+
+---
+
+## 12. Design Acceptance Index / 设计验收索引
+
+| ID | 本 Phase 1 设计验收项 |
+|---|---|
+| F-003 | 算法中立 `FiveLevelQuote` 完整覆盖固定五档、exact symbol、raw price basis、深度单位、exchange/receive/monotonic time、hash、duplicate/乱序且不伪造字段 |
+| F-008 | CalendarSnapshotSet、clock continuity、per-market session、closing auction OBSERVE_ONLY 与 B0/B1 terminal ownership 明确 |
+| F-009 | TradabilitySnapshot 将停牌/临停/涨跌停/zero depth/WAIT 与 schema、单位、时间、配置错误严格分离 |
+| F-011 | LEGACY_B0 不变；Phase 1 必须创建不可变 B0_QUOTE_V2，完整 version/hash chain 且 fresh/valid action 等价、异常安全差异预注册 |
+| F-015 | contracts 位于算法中立层，MiniQMT normalizer/ingress/runtime 仅作 adapter；旧 `VnpyTick`/vn.py cores 不变 |
+| F-016 | owner、subscription、bootstrap、payload、capacity、clock、tradability、persist、markout、parity、consumer 失败均引用统一 loud registry；禁止任何 silent fallback/业务逻辑漂移/简化交付 |
+| F-017 | SIM-first/default-off/active-parent drain/显式 revision 回滚与 LIVE hard lock不变；不新增审批、RBAC、permit、confirm-run 或人工 ack |
+| F-019 | generation lease、bootstrap、reserved slots、single writer、heartbeat/restart、独立高优先级通道、per-symbol eligibility 与 dependency-group watermark 完整 |
+| F-020 | `market_data_id`、MarketDataEvidenceV1、action/child/protection/markout/cadence evidence、event types、API、retention、精确 CHECK-constraint migration/rollback 与 Phase 0A/0B join 完整 |
+
+---
+
+## 13. Design Acceptance Matrix / 设计验收矩阵
+
+本矩阵表示本详细设计已闭合，不表示实施代码、SIM 运行或交易效果已经产生。实施 PR 需保留该完整矩阵，并另加真实路径、nodeid、CI 与运行证据的 implementation record。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-003 | §5.1–§5.3、§8.1、§9.1 | exact field map、five-level prefix/order、basis/unit、UTC/monotonic、dual hash、duplicate/ordering tests 已定义 | design_ready | none |
+| F-008 | §5.5、§5.8、§8.3–§8.5、§10 | multi-market clock/calendar、auction OBSERVE_ONLY、terminal ownership 与 rollout/rollback tests 已定义 | design_ready | none |
+| F-009 | §5.4、§5.7、§7、§9.1 | per-symbol tradability/eligibility 将 WAIT/NO_FILL 与 data/config failure 分离，reason evidence 完整 | design_ready | none |
+| F-011 | §0.1、§4、§6.3、§8.5、§10 | mandatory B0_QUOTE_V2 identity、fresh/valid parity、safety difference、single-revision parent 和 hash chain 已定义 | design_ready | none |
+| F-015 | §2.1、§4、§5.1–§5.3、§8.1 | neutral contracts、MiniQMT adapter boundary、LEGACY_B0 `VnpyTick` unchanged 与 no-algo-switch tests 已定义 | design_ready | none |
+| F-016 | §0.2–§0.3、§7、§9 | no-simplification/no-silent-business-drift、统一 reason/stage、failure health/evidence 与 direct tests 已定义 | design_ready | none |
+| F-017 | §0.4、§6、§8.5、§10–§11 | default-off SIM、user-owned restart/config activation、active drain、LIVE hard lock、no approval/RBAC/permit 已定义 | design_ready | none |
+| F-019 | §4.2–§4.3、§5.6–§5.7、§8.2–§8.3、§9.4 | bootstrap/generation/reserved slot/worker/priority/per-symbol/group watermark、metrics/alerts/runbook 已定义 | design_ready | none |
+| F-020 | §4.4、§5.9–§5.10、§8.4、§9.2–§9.4 | MarketDataEvidenceV1、market_data_id、action/child/markout/cadence、event carrier、Phase 0A/0B readback、CHECK migration/rollback 与授权边界已定义 | design_ready | none |
+
+---
+
+## 14. Exit Criteria / 设计退出条件
+
+本文可标记 `design_ready` 的条件：
+
+- F2 Feature Workflow validator 通过，Design Acceptance Matrix 无未批准缺口。
+- `git diff --check` 通过，文档仅位于本任务 worktree，未污染运行根目录。
+- 对现有订阅/五档/时钟/B0 source guard 的代码事实和官方 xtquant 能力边界已经记录。
+- 与主蓝图 Phase 1 mandatory B0 revision、Phase 0A market_data_id/markout handoff 和 Phase 0B baseline query 一致。
+- 每个实施切片都有 ownership、完整范围、测试、metrics/alerts/runbook、B0 不变式与运行验证边界。
+- 不得把静态、占位、简化或 mock-only 产物写成已完成。
+- 不存在人工审批/RBAC/permit/confirm-run/ack；所有技术条件可自动正向满足且只影响对应 symbol/revision。
+
+用户确认后，后续工作从 P1-A 开始。P1-A 完成前不得宣称 contracts 已实现；P1-D 完成前不得宣称 Phase 0A handoff/观测 evidence 已闭合；P1-E 完成前不得宣称 Phase 1/B0_QUOTE_V2 已实现。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1 或 B1 可下单。
+
+---
+
+## 15. 参考资料
+
+- 上位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
+- 上游交接：[MiniQMT Adaptive IS Phase 0A TCA 详细设计](./miniqmt_adaptive_is_phase0_tca_design.md)
+- 迅投知识库：[股票数据与 `get_full_tick` / `subscribe_whole_quote`](https://dict.thinktrader.net/dictionary/stock.html)
+- 迅投知识库：[行情相关常见问题：全推、五档与行情源能力](https://dict.thinktrader.net/innerApi/question_answer.html)
+- 迅投知识库：[订阅全推数据接口与 callback shape](https://dict.thinktrader.net/VBA/check_sheet.html)
+- 迅投知识库：[行情订阅和回调示例](https://dict.thinktrader.net/nativeApi/code_examples.html?id=7zqjlm)
