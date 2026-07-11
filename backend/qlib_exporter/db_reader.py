@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,25 @@ from .config import (
     PRICE_UNIT_DIVISOR,
 )
 from .adj_factor_provider import AdjFactorProvider
+
+
+def _filter_instrument_start_dates(
+    price_df: pd.DataFrame,
+    instrument_start_dates: Mapping[str, date] | None,
+) -> pd.DataFrame:
+    """Drop source rows earlier than each instrument's admissible start date."""
+
+    if price_df.empty or not instrument_start_dates:
+        return price_df
+    starts = {
+        str(code).strip().upper(): pd.Timestamp(start_date).date()
+        for code, start_date in instrument_start_dates.items()
+        if start_date is not None
+    }
+    row_starts = price_df["ts_code"].astype(str).str.strip().str.upper().map(starts)
+    trade_dates = pd.to_datetime(price_df["trade_date"], errors="coerce").dt.date
+    keep = row_starts.isna() | (trade_dates >= row_starts)
+    return price_df.loc[keep].copy()
 
 
 class DBReader:
@@ -982,6 +1001,7 @@ class DBReader:
         start: date,
         end: date,
         use_tushare_adj: bool = True,
+        instrument_start_dates: Mapping[str, date] | None = None,
     ) -> pd.DataFrame:
         """加载 Qlib 格式日线数据.
 
@@ -999,6 +1019,7 @@ class DBReader:
             start: 开始日期
             end: 结束日期
             use_tushare_adj: 是否使用 Tushare 复权因子（当本地无数据时）
+            instrument_start_dates: 可选的逐股票最早有效日期；在复权合并前过滤更早源记录
 
         Returns:
             符合 Qlib 格式的 DataFrame
@@ -1029,6 +1050,7 @@ class DBReader:
         with get_conn() as conn:
             price_df = pd.read_sql(sql, conn, params=params)
 
+        price_df = _filter_instrument_start_dates(price_df, instrument_start_dates)
         if price_df.empty:
             return pd.DataFrame()
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import struct
 import sys
 import warnings
@@ -55,12 +56,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--end", default=DEFAULT_END)
     parser.add_argument("--recent-start", default=DEFAULT_RECENT_START)
     parser.add_argument("--snapshot-dir", default=str(DEFAULT_SNAPSHOT_DIR))
+    parser.add_argument(
+        "--static-schema-source",
+        default=os.getenv("QE_STATIC_SCHEMA_SOURCE", str(BASELINE_STATIC)),
+        help="Parquet file whose ordered columns define the expected static schema.",
+    )
     parser.add_argument("--bin-dir", default=str(DEFAULT_BIN_DIR))
     parser.add_argument("--rdagent-prod-dir", default=str(DEFAULT_RDAGENT_PROD))
     parser.add_argument("--rdagent-debug-dir", default=str(DEFAULT_RDAGENT_DEBUG))
     parser.add_argument("--report-json", default=str(REPORT_JSON))
     parser.add_argument("--report-md", default=str(REPORT_MD))
     parser.add_argument("--skip-rdagent", action="store_true")
+    parser.add_argument(
+        "--skip-bin",
+        action="store_true",
+        help="Validate only the H5/static candidate when no new bin candidate was built.",
+    )
     parser.add_argument("--skip-recent-db", action="store_true")
     return parser.parse_args()
 
@@ -83,15 +94,25 @@ def normalize_code(code: str) -> str:
     return s
 
 
-def baseline_static_columns() -> list[str]:
+def baseline_static_columns(schema_source: Path) -> list[str]:
     import pyarrow.parquet as pq
 
-    pf = pq.ParquetFile(BASELINE_STATIC)
-    return [
+    if not schema_source.exists():
+        raise FileNotFoundError(
+            f"Baseline static_factors schema source not found: {schema_source}; "
+            "pass --static-schema-source or set QE_STATIC_SCHEMA_SOURCE"
+        )
+    pf = pq.ParquetFile(schema_source)
+    columns = [
         name
         for name in pf.schema_arrow.names
         if not name.startswith("__index_level_") and name not in {"datetime", "instrument"}
     ]
+    if "l2_code_id" not in columns:
+        raise ValueError(
+            f"Static schema source is stale and lacks l2_code_id: {schema_source}"
+        )
+    return columns
 
 
 def parse_all_txt(path: Path) -> pd.DataFrame:
@@ -135,7 +156,7 @@ def get_h5_pool(end: date) -> pd.DataFrame:
               SELECT 1
               FROM market.stock_st st
               WHERE st.ts_code = s.ts_code
-                AND st.ann_date < %(end)s
+                AND st.ann_date <= %(end)s
           )
         ORDER BY s.ts_code
     """
@@ -200,7 +221,13 @@ def bj_count(values: pd.Series) -> int:
     return int(values.astype(str).str.upper().str.endswith(".BJ").sum() + values.astype(str).str.upper().str.startswith("BJ").sum())
 
 
-def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: list[str]) -> tuple[list[Check], dict[str, Any]]:
+def check_snapshot(
+    snapshot_dir: Path,
+    start: date,
+    end: date,
+    expected_dates: list[str],
+    static_schema_source: Path,
+) -> tuple[list[Check], dict[str, Any]]:
     checks: list[Check] = []
     facts: dict[str, Any] = {}
     pool = get_h5_pool(end)
@@ -264,7 +291,6 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
 
     all_txt = parse_all_txt(snapshot_dir / "instruments" / "all.txt")
     daily_ranges_for_official = daily_expected[["instrument", "data_start", "data_end"]].copy()
-    expected_h5_all = expected_h5_all_txt(daily_ranges_for_official)
     expected_official = expected_official_universe(
         pool,
         daily_ranges_for_official,
@@ -275,18 +301,24 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
     if not all_txt.empty:
         all_txt = all_txt.sort_values("instrument").reset_index(drop=True)
     inst_status = "PASS"
-    inst_details = {"actual": int(len(all_txt)), "expected": int(len(expected_h5_all))}
-    if len(all_txt) != len(expected_h5_all):
+    inst_details = {"actual": int(len(all_txt)), "expected": int(len(expected_official))}
+    if len(all_txt) != len(expected_official):
         inst_status = "FAIL"
     else:
-        merged = all_txt.merge(expected_h5_all, on="instrument", suffixes=("_actual", "_expected"), how="outer", indicator=True)
+        merged = all_txt.merge(
+            expected_official,
+            on="instrument",
+            suffixes=("_actual", "_expected"),
+            how="outer",
+            indicator=True,
+        )
         bad = merged[(merged["_merge"] != "both") | (merged["start_actual"] != merged["start_expected"]) | (merged["end_actual"] != merged["end_expected"])]
         if not bad.empty:
             inst_status = "FAIL"
             inst_details["examples"] = bad.head(20).to_dict(orient="records")
     checks.append(Check("snapshot_all_txt_data_range_rule", inst_status, inst_details))
 
-    expected_static_cols = baseline_static_columns()
+    expected_static_cols = baseline_static_columns(static_schema_source)
     static_path = snapshot_dir / "static_factors.parquet"
     static: pd.DataFrame | None = None
     if static_path.exists():
@@ -303,6 +335,13 @@ def check_snapshot(snapshot_dir: Path, start: date, end: date, expected_dates: l
         if list(static.columns) != expected_static_cols:
             sf_status = "FAIL"
             sf_details["schema_mismatch"] = True
+        if "l2_code_id" not in static.columns or str(static["l2_code_id"].dtype) != "int16":
+            sf_status = "FAIL"
+            sf_details["l2_code_id_dtype"] = (
+                str(static["l2_code_id"].dtype)
+                if "l2_code_id" in static.columns
+                else "missing"
+            )
         if sf_details["end"] != end.isoformat():
             sf_status = "FAIL"
         if bj_count(pd.Series(sf_inst.unique())) > 0 or static.index.has_duplicates:
@@ -657,7 +696,11 @@ def check_recent_db_completeness(recent_start: date, end: date) -> tuple[list[Ch
     return checks, facts
 
 
-def check_rdagent_dirs(prod_dir: Path, debug_dir: Path) -> list[Check]:
+def check_rdagent_dirs(
+    prod_dir: Path,
+    debug_dir: Path,
+    static_schema_source: Path,
+) -> list[Check]:
     checks: list[Check] = []
     required = [
         "daily_pv.h5",
@@ -679,7 +722,7 @@ def check_rdagent_dirs(prod_dir: Path, debug_dir: Path) -> list[Check]:
             sf = pd.read_parquet(directory / "static_factors.parquet")
             details["static_rows"] = int(len(sf))
             details["static_columns"] = int(len(sf.columns))
-            if list(sf.columns) != baseline_static_columns():
+            if list(sf.columns) != baseline_static_columns(static_schema_source):
                 missing.append("static_schema_mismatch")
         checks.append(Check(f"rdagent_{label}_candidate_files", "PASS" if not missing else "FAIL", details))
     return checks
@@ -714,6 +757,7 @@ def main() -> int:
     recent_start = to_date(args.recent_start)
     snapshot_dir = Path(args.snapshot_dir)
     bin_dir = Path(args.bin_dir)
+    static_schema_source = Path(args.static_schema_source)
 
     checks: list[Check] = []
     facts: dict[str, Any] = {}
@@ -722,11 +766,25 @@ def main() -> int:
     facts["expected_start"] = expected_dates[0] if expected_dates else None
     facts["expected_end"] = expected_dates[-1] if expected_dates else None
 
-    snapshot_checks, snapshot_facts = check_snapshot(snapshot_dir, start, end, expected_dates)
+    snapshot_checks, snapshot_facts = check_snapshot(
+        snapshot_dir,
+        start,
+        end,
+        expected_dates,
+        static_schema_source,
+    )
     checks.extend(snapshot_checks)
     facts.update({k: v for k, v in snapshot_facts.items() if not k.endswith("_df")})
     expected_official = snapshot_facts.get("expected_official_df")
-    if expected_official is not None:
+    if args.skip_bin:
+        checks.append(
+            Check(
+                "bin_validation_skipped",
+                "WARN",
+                {"reason": "explicit --skip-bin for H5/static-only candidate"},
+            )
+        )
+    elif expected_official is not None:
         checks.extend(check_bin(bin_dir, start, end, expected_dates, expected_official))
     else:
         checks.append(Check("bin_validation_skipped", "FAIL", {"reason": "missing expected official universe from snapshot checks"}))
@@ -737,7 +795,13 @@ def main() -> int:
         facts.update(db_facts)
 
     if not args.skip_rdagent:
-        checks.extend(check_rdagent_dirs(Path(args.rdagent_prod_dir), Path(args.rdagent_debug_dir)))
+        checks.extend(
+            check_rdagent_dirs(
+                Path(args.rdagent_prod_dir),
+                Path(args.rdagent_debug_dir),
+                static_schema_source,
+            )
+        )
 
     ok = all(c.status in {"PASS", "WARN"} for c in checks)
     report = {
