@@ -1124,6 +1124,26 @@ rtk git diff --cached --check
 | F-023 | §18 | 纯函数、read-only、golden、survivorship 和边界验证已定义 | design_ready | none |
 | F-024 | §17、§21、§23 | 文档阶段及未来只读审计的生产门禁已定义 | design_ready | none |
 
+### 19.1 Implementation Acceptance Matrix / 实现验收矩阵（2026-07-11）
+
+本表验收 Phase 0A 审计器代码及其本地验证，不表示任何实际 Program/package target 已被审计、获批或进入 Phase 1。真实 target audit 仍必须由用户提供并批准 `audit request`、policy registry 和 `approval_receipt.json`；本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| F-001 | `backend/services/advisory_phase0a/`；`scripts/advisory_phase0a_audit.py` | `test_cli_and_source_probe.py`；2026-07-11 dev DB session smoke: `transaction_read_only=on`, `statement_timeout=5s` | completed | none |
+| F-002 | `models.py:AuditTarget`；`resolvers.py:resolve_as_of_binding` | 单 Alpha、原生多 Alpha 父包及多 Program fixture | completed | none |
+| F-003 | `policy.py:canonical_json_*`；`resolvers.py:_signal_context_hash`；receipt canonical groups | serializer、等价 Program 去重及 manifest hash test | completed | none |
+| F-004 | `resolvers.py:_stage_capabilities` | raw/HMM/risk/selection/advisory 五层 stage hash/capability fixture | completed | none |
+| F-005 | `resolvers.py:resolve_depth_evidence`；`resolve_universe_survivorship` | Top-k variant mismatch、deep-pool depth、PIT universe layer fixture | completed | none |
+| F-006 | `resolvers.py:resolve_hmm_vintage` | disabled、config-only latest rejection、explicit snapshot/header fixture | completed | none |
+| F-007 | `resolvers.py:resolve_risk_policy_evidence`；universe evidence resolver | enabled risk stage partial、industry/tradability config 和 PIT layer fixture | completed | none |
+| F-015 | read-only repositories/probe adapters；`build_asset_ledger` | backtest `data_vintage` forbidden entry、fixed SELECT allowlist/no-write test | completed | none |
+| F-016 | `resolve_decision_clock`；`effective_cutoff`；`embargo_formal_start`；OOS classifier | T/T+1、asset closure、20 trading-day embargo、formal/retrospective/none label maturity fixture | completed | none |
+| F-019 | `policy.py` reason registry；`AuditReceipt` | no-candidate、missing source vintage、HMM latest and multi-alpha variant reason-code fixture | completed | none |
+| F-022 | `audit_service.py:receipt_artifact_payloads`；Phase 1 handoff hashes | exact 15-file receipt contract、append-only writer and unapproved exit gate test | completed | none |
+| F-023 | `backend/tests/advisory_phase0a/` | 19 focused tests；new-module coverage 85%；adjacent Advisory/Selection/Multi-Alpha/Paper selection tests passed | completed | none |
+| F-024 | isolated service/CLI only；no migration/router/frontend changes | `git diff --check`；production DDL/DML/model/scheduler/program activation gates remain noop | completed | none |
+
 ## 20. Phase 0A 退出门禁与 Phase 1 交接
 
 ### 20.1 全局退出门禁
