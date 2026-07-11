@@ -98,11 +98,12 @@ from .performance import (
 from .tail import TailHandlingPolicyService
 
 
-DEFAULT_SCHEDULER_APPROVAL_STATES = (
-    SimulationBindingApprovalState.SIM_VALIDATING,
-    SimulationBindingApprovalState.SIM_PASSED,
-    SimulationBindingApprovalState.LIVE_APPROVAL_PENDING,
-    SimulationBindingApprovalState.LIVE_APPROVED,
+# SIM scheduling is single-user and must not require an approval transition.
+# RETIRED remains an explicit operational stop state, not an approval gate.
+DEFAULT_SCHEDULER_SIM_BINDING_STATES = tuple(
+    state
+    for state in SimulationBindingApprovalState
+    if state is not SimulationBindingApprovalState.RETIRED
 )
 MINIQMT_REALTIME_QUOTE_SOURCE = "MINIQMT_REALTIME.broker_quote"
 SIMULATION_SELECTION_INFERENCE_TIMEOUT_ENV = "SIMULATION_RUNTIME_SELECTION_INFERENCE_TIMEOUT_SEC"
@@ -2136,7 +2137,8 @@ class SimulationLifecycleScheduler:
             "scheduler": "simulation_lifecycle_scheduler",
             "autostart": False,
             "default_submit": False,
-            "approval_states": [state.value for state in DEFAULT_SCHEDULER_APPROVAL_STATES],
+            "approval_states": [state.value for state in DEFAULT_SCHEDULER_SIM_BINDING_STATES],
+            "sim_binding_selection_policy": "all_non_retired",
             "manual_tick_endpoint_enabled": True,
             "scheduler_control_api_enabled": False,
             "context_provider": provider_status,
@@ -2313,7 +2315,7 @@ class SimulationLifecycleScheduler:
         broker_backend: SimulationBrokerBackend | str | None = None,
         strategy_id: str | None = None,
         release_id: str | None = None,
-        approval_states: tuple[SimulationBindingApprovalState, ...] | None = DEFAULT_SCHEDULER_APPROVAL_STATES,
+        approval_states: tuple[SimulationBindingApprovalState, ...] | None = DEFAULT_SCHEDULER_SIM_BINDING_STATES,
         submit: bool = False,
         mode: str = "SIM",
         as_of_time: datetime | None = None,
