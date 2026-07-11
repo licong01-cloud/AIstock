@@ -210,6 +210,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     scheduler = response.json()["scheduler"]
     assert scheduler["autostart"] is False
     assert scheduler["default_submit"] is False
+    assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
     assert scheduler["read_only_status_api"] is True
     assert scheduler["read_only_ops_api"] is False
     assert scheduler["controlled_ops_api"] is True
@@ -219,6 +220,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "fail_fast"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
+    assert scheduler["summary"]["safety_note"].endswith("default_submit is disabled.")
     assert [window["window_id"] for window in scheduler["schedule_windows"]] == [
         "pre_open",
         "selection",
@@ -226,6 +228,22 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
         "execution",
         "post_close_reconcile",
     ]
+
+
+def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
+    class _EnabledSubmitScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "default_submit": True,
+                "sim_binding_selection_policy": "all_non_retired",
+            }
+
+    scheduler = SimulationRuntimeOpsService(scheduler=_EnabledSubmitScheduler()).scheduler_status()
+
+    assert scheduler["default_submit"] is True
+    assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
+    assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
 
 
 def test_list_runs_returns_business_summary_and_filters(
