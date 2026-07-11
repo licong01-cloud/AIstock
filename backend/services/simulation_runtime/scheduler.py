@@ -20,7 +20,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
@@ -91,6 +91,8 @@ from .models import (
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
+from .tca_eod_observation import TcaEodObservationHook
+from .tca_observation_metrics import TcaObservationMetricsEmitter
 from .performance import (
     StrategyPerformanceProjectionService,
     with_miniqmt_capacity_residual_observability,
@@ -7921,9 +7923,13 @@ class SimulationLifecycleBackgroundScheduler:
         *,
         lifecycle_scheduler: SimulationLifecycleScheduler | None = None,
         trading_calendar_service: Any | None = None,
+        tca_eod_observation_hook: TcaEodObservationHook | None = None,
+        tca_observation_metrics_emitter: TcaObservationMetricsEmitter | None = None,
     ) -> None:
         self.lifecycle_scheduler = lifecycle_scheduler or SimulationLifecycleScheduler()
         self._trading_calendar_service = trading_calendar_service or TradingCalendarStatusService()
+        self._tca_eod_observation_hook = tca_eod_observation_hook or TcaEodObservationHook()
+        self._tca_observation_metrics_emitter = tca_observation_metrics_emitter or TcaObservationMetricsEmitter()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
@@ -8055,8 +8061,23 @@ class SimulationLifecycleBackgroundScheduler:
                         submit=bool(decision["submit"]),
                         as_of_time=now,
                     )
+                observation_outcomes: list[dict[str, Any]] = []
+                if decision["reason"] == "eod_reconcile":
+                    observation_outcomes = self._run_tca_eod_observation(
+                        terminalized_runs=tuple(tick.stale_run_results),
+                        trade_date=trade_date,
+                        as_of_time=now,
+                    )
                 processed = []
                 alerts = []
+                if observation_outcomes:
+                    result["tca_eod_observation"] = observation_outcomes
+                    metrics, observation_alerts = self._emit_tca_observation_metrics(
+                        outcomes=observation_outcomes,
+                        trade_date=trade_date,
+                    )
+                    result["tca_eod_observation_metrics"] = metrics
+                    alerts.extend(observation_alerts)
                 for item in tick.results:
                     capacity_fields = SimulationLifecycleScheduler._miniqmt_capacity_residual_result_fields(item.run)
                     alert = capacity_fields.get("alert")
@@ -8117,6 +8138,59 @@ class SimulationLifecycleBackgroundScheduler:
                 result["errors"].append(payload)
                 logger.warning("Simulation runtime scheduler tick failed: %s", payload)
         return self._record_result(started_at=now, result=result)
+
+    def _run_tca_eod_observation(
+        self,
+        *,
+        terminalized_runs: tuple[Mapping[str, Any], ...],
+        trade_date: date,
+        as_of_time: datetime,
+    ) -> list[dict[str, Any]]:
+        """Keep observation failures out of scheduler/run/broker outcome handling."""
+
+        try:
+            outcomes = self._tca_eod_observation_hook.observe_post_reconciliation(
+                lifecycle_scheduler=self.lifecycle_scheduler,
+                terminalized_runs=terminalized_runs,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            )
+            return [dict(item) for item in outcomes]
+        except Exception as exc:  # noqa: BLE001 - hook isolation is a Phase 0A safety contract.
+            payload = {
+                "status": "FAILED",
+                "reason_code": "ADAPTIVE_IS_TCA_EOD_HOOK_EXCEPTION",
+                "stage": "TCA_EOD_SCHEDULER_SEAM",
+                "error_type": type(exc).__name__,
+            }
+            logger.error("MiniQMT TCA EOD observation hook failed: %s", payload, exc_info=True)
+            return [payload]
+
+    def _emit_tca_observation_metrics(
+        self, *, outcomes: list[dict[str, Any]], trade_date: date
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Metrics remain fail-isolated facts and cannot block scheduler completion."""
+
+        try:
+            emission = self._tca_observation_metrics_emitter.emit(
+                outcomes=outcomes,
+                trade_date=trade_date,
+                source="simulation_runtime_background_scheduler",
+            )
+            return [dict(item) for item in emission.metrics], [dict(item) for item in emission.alerts]
+        except Exception as exc:  # noqa: BLE001 - metric failure must not alter terminal reconciliation.
+            payload = {
+                "alert_type": "MINIQMT_TCA_OBSERVATION_METRIC_FAILURE",
+                "severity": "WARNING",
+                "reason_code": "ADAPTIVE_IS_TCA_METRIC_EMIT_FAILED",
+                "stage": "TCA_EOD_METRIC",
+                "trade_date": trade_date.isoformat(),
+                "execution_gate": False,
+                "observation_only": True,
+                "error_type": type(exc).__name__,
+            }
+            logger.error("MiniQMT TCA observation metric emission failed: %s", payload, exc_info=True)
+            return [], [payload]
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():

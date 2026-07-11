@@ -1867,6 +1867,19 @@ Gate：
 - B0 broker行为、调度不冻结和逐行写无回归；
 - 仅在Phase 0A与Phase 1 gate通过后进入Phase 0B观察窗口。
 
+#### 0A-4 implementation contract
+
+0A-4 不是把既有 SQL row 直接透出给 UI 的薄包装。本批必须以独立 read/export/EOD 边界实现下列契约，并将每项写入 `8.5` 的 acceptance matrix：
+
+- 新增 `ExecutionTcaReadService` 与只读 repository query layer。三个 REST adapter 只能调用该 service，router 不得拼接 SQL、不得触发 rebuild、不得触发 scheduler tick、不得写入 run、ledger 或 broker；
+- `TcaReadRuntimeConfig` 必须显式解析 `MINIQMT_TCA_ACTIVE_READ_VERSION` 的完整 version tuple 与 SHA-256，以及 `AISTOCK_TCA_EXPORT_HMAC_KEY` / `AISTOCK_TCA_EXPORT_HMAC_KEY_VERSION`。缺少 active tuple 时仅 explicit `tca_version` 可继续解析结果；缺少 HMAC key/version 时所有会返回 account pseudonym 的 parent/list/TCA API 和 export 一律 `503` + stable reason，不得生成临时、固定或可逆 pseudonym；
+- list cursor 以 HMAC 签名，包含最后 `(trade_date, parent_intent_id, parent_revision)`、完整 filter hash 和 schema version；signature、schema、filter 或 cursor 语义不匹配必须 `400` loud，不能悄悄降级为 offset 或重新从第一页读取；
+- `GetExecutionTca` 的默认分支必须严格按 `parent_key + snapshot_kind + active version tuple` 的 `result_series_key` 选择唯一 completed-receipt head。`tca_version`、`receipt_id`、`as_of`、fork/gap/missing result 的行为遵循 §5.13/§5.14，不能以 `created_at`、跨 scope receipt generation 或“最近有效值”代替；
+- evidence CLI 只输出 canonical JSON/NDJSON 和带 schema/version/query/hash/key-version 的 manifest；不输出 raw account、secret、broker credential 或 raw transport payload。所有 export 读取均在 read-only snapshot 内完成；
+- EOD hook 仅在 `MINIQMT_TCA_EOD_OBSERVATION_ENABLED=true`、SIM scope 与 post-reconciliation terminal result 同时成立时才调用 rebuild。默认关闭；任何 config/query/rebuild/export/metric 失败必须以 `ADAPTIVE_IS_TCA_*` reason code + stage loud 记录，且不得修改 scheduler result、run status、broker submit/cancel/query 次数或 reconciliation outcome；
+- metrics/alerts 只报告 observation/rebuild/coverage/failure facts，不能作为新的 execution gate。operator runbook 明确区分“代码已合入”“配置已持久化”“hook 已激活”“prospective receipt 已生成”和“周一 B0 SIM 验证”；
+- 0A-4 可以在周一前实现并保持 default-off，但 Phase 0A 不得因 mock-only API/export 成功被宣布完成。prospective receipt、B0 side-effect parity 与真实 SIM evidence 仍是周一及之后的独立验收事实。
+
 ### 8.1 推荐提交切片
 
 | commit | 内容 | 可独立回退 |
@@ -1938,6 +1951,29 @@ Batch 0A-2 closure receipt：PR #1960，merge commit `e534390246b25ceafffe5c8ecf
 Batch 0A-3 merge gate：上表全部转为`verified`，F2 validator、targeted calculator/rebuild/0A-2回归、changed-file lint/compile、scratch PostgreSQL materialization、`nox l0`、`validation_module_registry_l0`、`git diff --check`全部通过后，才可提交PR。0A-3合入仍不代表Phase 0A完成。
 
 Batch 0A-3 closure receipt：PR #1963，squash merge commit `91b80e6090594ff6c6db9132706dc01fba8f1650`（2026-07-11）。targeted `32 passed`，sync/reconciliation与0A-3组合回归`62 passed`，event-loop/reconcile-after-submit周边`8 passed`；整个`backend/tests/qmt_strategy_ledger`为`173 passed, 1 failed`，唯一失败`test_execution_plan_order_preview_uses_shared_miniqmt_bridge`已在干净`origin/main@b7e4d333`同节点复现，判定为非0A-3回归；F2 validator PASS（8个0A-3条目、总矩阵32行、0 warning）；ruff/compile/diff、`nox l0`与`validation_module_registry_l0`通过；scratch DB已清理。PR 的静态门禁、Semgrep、CodeQL Python/JavaScript、PR Quality 和全部 7 个后端分片均通过。production DDL、production DML、service restart、projector/rebuild activation、broker side effect与LIVE capability均为noop。
+
+---
+
+### 8.5 Batch 0A-4 Design Acceptance Matrix
+
+本矩阵只验收 Batch 0A-4 的 read/export/observation capability。`verified` 表示实现和确定性本地测试已完成；`approved_by_user` 仅表示本次已获明确授权、必须在已合入且已加载的真实 SIM 中取得的独立运行时证据尚未产生。无论哪一种状态，未产生 prospective SIM receipt 时都禁止将 Phase 0A 描述为完成。production config、projector activation、service restart、broker side effect、production DML 与 LIVE capability 均不属于本开发批次。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| 0A4-01 active read config、HMAC pseudonym 与无默认 fallback | `qmt_strategy_ledger/tca_read_service.py`: `TcaReadRuntimeConfig`、`AccountPseudonymizer` | `test_tca_phase0a4_read_config.py`：active tuple、key/version 503、stable pseudonym、explicit/default version；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: real config must confirm missing HMAC remains 503 loud. |
+| 0A4-02 parent/list/TCA read repository 与 result-series authority | `qmt_strategy_ledger/tca_read_repository.py`: `ExecutionTcaReadRepository` | `test_tca_phase0a4_read_repository.py`：legacy parent、completed receipt head、series fork/gap、receipt/as-of/tca_version conflict、无 `created_at` 排序、read-only repeatable-read contract；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: real SIM/scratch PostgreSQL read evidence remains required; never substitute timestamp ordering. |
+| 0A4-03 三个只读 REST adapter、signed keyset cursor 与 stable error contract | `simulation_runtime/tca_read_api.py`: `ExecutionTcaReadService`；`routers/simulation_runtime.py`: three `execution-parents` adapters | `test_tca_read_api.py`：cursor/filter signing、400/404/409/503、router read-service spy；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: endpoint checks remain read-only and cannot trigger rebuild/tick/write. |
+| 0A4-04 canonical pseudonymized evidence CLI/export manifest | `simulation_runtime/tca_read_api.py`: `render_canonical_evidence_export`；`scripts/export_miniqmt_execution_tca_evidence.py` | `test_tca_read_api.py`、`test_tca_manual_rebuild_cli.py`：JSON/NDJSON determinism、manifest/key-version、泄漏拒绝、read-only contract、`--execute` 显式；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: real account export/rebuild needs separate authorization before any evidence DB write. |
+| 0A4-05 default-off SIM EOD post-reconciliation rebuild hook | `simulation_runtime/tca_eod_observation.py`: `TcaEodObservationHook`；`scheduler.py`: post-close seam | `test_tca_eod_observation.py`、`test_tca_eod_scheduler_seam.py`：disabled no-op、SIM-only、terminal reconcile prerequisite、loud isolation；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: hook stays default-off; configuration, activation and real EOD receipt are not authorized by this merge. |
+| 0A4-06 observation metrics、alerts 与 operator runbook | `simulation_runtime/tca_observation_metrics.py`: `TcaObservationMetricsEmitter`；`docs/runbooks/miniqmt_phase0a_tca_observation.md` | `test_tca_observation_metrics.py`、`test_tca_observation_runbook.py`：reason/stage、alert-only、code/config/activation/evidence 分离；targeted matrix 60 passed | verified | user approved staged runtime smoke after restart: real scheduler emission is read-only/log verification and never an execution gate. |
+| 0A4-07 prospective receipt 与 scoped coverage evidence | `scripts/rebuild_miniqmt_execution_tca.py`：SIM-only explicit `--execute` path；`TcaEodObservationHook` | command safety/receipt input contract已测；尚无真实 SIM receipt、membership或 exactly-once coverage evidence | approved_by_user | user approved staged runtime evidence after restart: receipt requires real SIM data plus separate authorization for evidence DB materialization; fixture/mock cannot substitute. |
+| 0A4-08 B0/BUG-599/600/604/614/615 与 LIVE non-regression | read/export/hook SIM hard-gated、default-off 且位于 broker critical path 外；scheduler isolation seam | targeted 60 passed、`nox l0`、`validation_module_registry_l0`、F2 validator与 `git diff --check` 通过 | approved_by_user | user approved staged runtime evidence after restart: Monday SIM must prove broker calls, row writes, pending tick, marketable-limit/tail sweep and LIVE deny end to end; this merge changes neither B0 nor LIVE. |
+
+Batch 0A-4 batch-closure gate：所有 0A4-01～08 必须具备真实实现与相应测试/证据；F2 validator、targeted read/API/export/EOD matrix、B0 safety regression、scratch PostgreSQL read/rebuild evidence、changed-file lint/compile、`nox l0`、`validation_module_registry_l0` 与 `git diff --check`通过。若 prospective SIM receipt 尚未产生，不得将本批或 Phase 0A 标记为完成，也不能以本地 mock 成功替代。
+
+2026-07-11 的 code-availability staged integration 由操作方明确授权：为使合入后的代码可由操作方重启并执行非交易日加载验证，可先合入已本地验证的 0A4-01～06 与 0A4-07/08 的安全代码边界；`approved_by_user` 行仍保留为本批 closure 的硬缺口。该授权不等同于 projector/hook activation、生产 evidence DB materialization、broker side effect、LIVE capability 或 Phase 0A completion，PR/merge handoff 必须显式列出这些待验证事实。
+
+0A-4 rollout boundary：实现和合并不等于激活。production configuration、EOD hook/projector activation、service restart、broker side effect 和 LIVE capability 均需单独用户授权并分别报告；周一 B0 SIM 验证只使用已合入且已加载的 B0/BUG-615/BUG-617 行为，不等待 0A-4 hook activation。
 
 ---
 
