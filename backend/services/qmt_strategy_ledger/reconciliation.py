@@ -233,6 +233,16 @@ class QmtStrategyLedgerReconciliationService:
                 )
             )
 
+        map_tca_conflicts = getattr(self._repository, "append_open_tca_conflicts_to_reconciliation", None)
+        if callable(map_tca_conflicts):
+            issues.extend(
+                map_tca_conflicts(
+                    run_id=run.run_id,
+                    account_id=account_id,
+                    trade_date=trade_date,
+                )
+            )
+
         status = "SUCCEEDED" if not issues else "WARNING"
         summary_json = {
             "broker_symbol_count": len(broker_quantities),

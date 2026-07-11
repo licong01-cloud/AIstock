@@ -43,6 +43,7 @@ from .models import (
     new_id,
 )
 from .repository import InMemoryQmtStrategyLedgerRepository
+from .tca_models import canonical_trade_fact_sha256
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -410,6 +411,18 @@ class QmtStrategyLedgerSyncService:
                         trade_time=_parse_trade_time(self._trade_date, trade.traded_time),
                         order_remark=trade.order_remark,
                         raw_json=payload,
+                        first_ingest_source="BROKER_SNAPSHOT_SYNC",
+                        first_ingested_at=datetime.now(UTC),
+                        canonical_trade_fact_sha256=canonical_trade_fact_sha256(
+                            account_id=self._account_id,
+                            trade_date=self._trade_date,
+                            trade_id=trade.traded_id,
+                            qmt_order_id=trade.order_id,
+                            symbol=trade.stock_code,
+                            side=_side_from_order_type(trade.order_type),
+                            price=trade.traded_price,
+                            quantity=trade.traded_volume,
+                        ),
                     ),
                 )
             )
