@@ -4814,8 +4814,16 @@ class ConfigComposer:
             env_lines.append(f"export QE_LOOP_INDEX={loop_index_text}")
             env_lines.append(f"export QE_LOOP_ID=Loop{loop_index_text}")
         effective_factor_data_dir = str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "").strip()
-        if effective_factor_data_dir:
-            env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
+        # F-021: factor_data_dir 必须显式解析;为空即 fail fast,禁静默回退(避免 /mnt 或当前目录 fallback)。
+        if not effective_factor_data_dir:
+            raise RuntimeError(
+                "reason_code=qe_factor_data_dir_unresolved: effective factor_data_dir is empty; "
+                "set RDAGENT_FACTOR_DATA_WSL (本机 .env) 或 infra.compute_nodes.factor_data_dir (远端节点);"
+                "禁静默 /mnt fallback"
+            )
+        env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
+        # F-020: 显式打印并记录 effective factor_data_dir(进 QE 运行日志)。
+        env_lines.append(f'echo "[QE] effective factor_data_dir={effective_factor_data_dir}"')
 
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
@@ -4834,7 +4842,8 @@ class ConfigComposer:
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
         link_data_cmd = (
-            '_FDD="${RDAGENT_FACTOR_DATA_WSL:-.}" && '
+            # F-021: RDAGENT_FACTOR_DATA_WSL 未设置即报错退出,禁回退当前目录(`:-.`)。
+            '_FDD="${RDAGENT_FACTOR_DATA_WSL:?reason_code=qe_factor_data_dir_unset refuse /mnt or cwd fallback}" && '
             'for f in daily_basic.h5 daily_pv.h5 moneyflow.h5 bak_basic.h5 cyq_perf.h5 sector_data.h5 static_factors.parquet; do '
             '[ ! -e "$f" ] && [ -e "$_FDD/$f" ] && ln -sf "$_FDD/$f" .; done; true'
         )
