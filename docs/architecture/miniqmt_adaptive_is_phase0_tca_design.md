@@ -1,7 +1,7 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
 - 文档日期：2026-07-11
-- 文档状态：F2 详细设计蓝图；可进入分批实现，不代表运行时代码、DDL 或生产配置已经完成
+- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 observation-only 实现待 scoped PR 验收；Phase 0A、DDL、生产配置与运行时激活均未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
@@ -1879,6 +1879,23 @@ Gate：
 | C6 | read API/CLI/metrics/runbook | 是 |
 
 不得把缺少 calculator、receipt或reconciliation gate的中间切片描述为 Phase 0A 完成。
+
+### 8.2 Batch 0A-1 Design Acceptance Matrix
+
+本矩阵只验收 Batch 0A-1，不扩大为 Phase 0A 完成声明。`implementation_refs` 采用稳定 symbol/file 引用；精确提交与 PR receipt 在 scoped PR 创建后补入 PR evidence。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| 0A1-01 typed benchmark、显式 policy、无默认时间阈值 | `simulation_runtime/tca_capture.py`: `TcaBenchmarkPolicy`、`ExecutionBenchmarkCapture`、`resolve_tca_benchmark_policy` | `test_decision_capture_is_hashed_and_uses_bbo_mid`、`test_tca_policy_never_silently_defaults`；生产 policy 写入仍受独立配置 gate控制 | verified | - |
+| 0A1-02 planning subject覆盖 emitted 与 rejected decision | `simulation_runtime/tca_capture.py`: `ExecutionPlanningSubject`、`build_execution_planning_subjects` | `test_planning_subject_projection_keeps_rejected_decision_coverage`；DB materialization按设计归属0A-2 | verified | - |
+| 0A1-03 decision capture写入run sidecar且不进入plan hash | `simulation_runtime/lifecycle.py`: `_capture_tca_decision_sidecar`；`simulation_runtime/repository.py`: `merge_run_tca_capture_sidecar` | capture hash/policy tests；normalized benchmark表按设计归属0A-2 | verified | - |
+| 0A1-04 首次既有event-loop tick形成arrival capture | `miniqmt_execution_runtime/client.py`: `_event_loop_parent_request`、`_persist_event_loop_tca_batch_observations` | `test_event_loop_first_tick_capture_is_sidecar_only_and_keeps_request_identity`；不新增行情调用 | verified | - |
+| 0A1-05 preflight eligibility funnel、deadline和evidence hash | `simulation_runtime/tca_capture.py`: `ExecutionEligibilityCapture`、`build_preflight_eligibility_capture`、`resolve_execution_deadline` | event-loop sidecar test、`test_full_day_deadline_never_silently_defaults_to_close`；无calendar时明确unresolved | verified | - |
+| 0A1-06 run/batch first-write CAS与旧writer carry-forward | `trading_core/tca_sidecar.py`；两个repository的capture-only merge；batch upsert保留namespace | `test_run_sidecar_parent_entry_is_first_write_only`、event-loop metadata rewrite断言；scratch PostgreSQL按设计归属0A-2 | verified | - |
+| 0A1-07 first batch mapping与batch前arrival失败loud | `simulation_runtime/lifecycle.py`: `_capture_tca_first_batch_mapping`、`_capture_tca_arrival_attempt_failure` | missing-policy loud test；changed-file compile；失败不改变run/broker状态 | verified | - |
+| 0A1-08 B0/BUG-604/LIVE不回归 | observation sidecar不进入request metadata；现有SIM-only bridge gate保持不变 | pending tick与LIVE deny定向测试；dependent-buy终态断言在干净`origin/main@9bc0810d`同样失败，作为baseline证据 | verified | - |
+
+Batch 0A-1 merge gate：上述行必须全部`implemented`，F2 validator、targeted matrix、`nox l0`、`validation_module_registry_l0`与`git diff --check`通过；若某项仅在代码存在但无证据，不得请求合入。
 
 ---
 

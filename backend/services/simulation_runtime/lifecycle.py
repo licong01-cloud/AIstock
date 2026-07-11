@@ -9,7 +9,8 @@ generation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time
+import logging
+from datetime import UTC, date, datetime, time
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
@@ -45,6 +46,13 @@ from .models import (
     canonical_json_sha256,
 )
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
+from .tca_capture import (
+    CaptureMergeOutcome,
+    TcaCaptureConfigurationError,
+    build_capture_error,
+    build_decision_benchmark_capture,
+    resolve_tca_benchmark_policy,
+)
 
 
 SCHEDULER_TZ = ZoneInfo("Asia/Shanghai")
@@ -63,6 +71,7 @@ DEFAULT_SCHEDULER_WINDOWS = (
     },
 )
 MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW = "MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW"
+LOGGER = logging.getLogger(__name__)
 
 
 def scheduler_now() -> datetime:
@@ -323,6 +332,14 @@ class SimulationLifecycleOrchestrator:
             execution_plan=persisted_plan,
             payload_patch={"execution_plan_intent_count": len(persisted_plan.intents)},
         )
+        self._capture_tca_decision_sidecar(
+            run=updated_run,
+            binding=binding,
+            execution_plan=persisted_plan,
+            pre_trade_tradability=pre_trade_tradability,
+            execution_policy_payload=execution_policy_payload,
+        )
+        updated_run = self.repository.get_simulation_daily_run(updated_run.run_id)
         return SimulationPlanBuildResult(
             run=updated_run,
             runtime_release=runtime_release,
@@ -333,6 +350,169 @@ class SimulationLifecycleOrchestrator:
             rebalance=rebalance,
             execution_plan=persisted_plan,
         )
+
+    def _capture_tca_decision_sidecar(
+        self,
+        *,
+        run: SimulationDailyRun,
+        binding: SimulationReleaseBinding,
+        execution_plan: ExecutionPlan,
+        pre_trade_tradability: dict[str, dict[str, Any]] | None,
+        execution_policy_payload: dict[str, Any] | None,
+    ) -> None:
+        if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
+            return
+        merger = getattr(self.repository, "merge_run_tca_capture_sidecar", None)
+        if not callable(merger):
+            LOGGER.error(
+                "TCA decision capture unavailable reason_code=ADAPTIVE_IS_TCA_CAPTURE_REPOSITORY_MISSING stage=CAPTURE run_id=%s plan_id=%s",
+                run.run_id,
+                execution_plan.plan_id,
+            )
+            return
+        decision_event_at = datetime.now(UTC)
+        try:
+            policy = resolve_tca_benchmark_policy(execution_policy_payload)
+        except TcaCaptureConfigurationError as exc:
+            for intent in execution_plan.intents:
+                outcome = merger(
+                    run_id=run.run_id,
+                    expected_plan_id=execution_plan.plan_id,
+                    expected_plan_hash=execution_plan.plan_hash,
+                    parent_intent_id=intent.intent_id,
+                    capture_error=build_capture_error(
+                        parent_intent_id=intent.intent_id,
+                        stage="CAPTURE",
+                        reason_code=exc.reason_code,
+                        message=str(exc),
+                        context={"plan_id": execution_plan.plan_id, "symbol": intent.symbol},
+                        occurred_at=decision_event_at,
+                    ),
+                )
+                self._log_tca_capture_outcome(outcome=outcome, parent_intent_id=intent.intent_id, stage="CAPTURE")
+            return
+        for intent in execution_plan.intents:
+            try:
+                tradability = (pre_trade_tradability or {}).get(intent.symbol) or {}
+                quote_evidence = tradability.get("quote_evidence") if isinstance(tradability, dict) else None
+                price_policy = intent.price_policy if isinstance(intent.price_policy, dict) else {}
+                capture = build_decision_benchmark_capture(
+                    execution_plan_id=execution_plan.plan_id,
+                    execution_plan_hash=execution_plan.plan_hash,
+                    parent_intent_id=intent.intent_id,
+                    symbol=intent.symbol,
+                    side=intent.side.value,
+                    decision_event_at=decision_event_at,
+                    quote_evidence=quote_evidence if isinstance(quote_evidence, dict) else None,
+                    policy=policy,
+                    strategy_decision_price=price_policy.get("reference_price"),
+                    strategy_decision_source="execution_plan.price_policy.reference_price",
+                    strategy_decision_time=None,
+                    strategy_decision_quality="DIAGNOSTIC_UNTIMED",
+                )
+                outcome = merger(
+                    run_id=run.run_id,
+                    expected_plan_id=execution_plan.plan_id,
+                    expected_plan_hash=execution_plan.plan_hash,
+                    parent_intent_id=intent.intent_id,
+                    decision_capture=capture.model_dump(mode="json"),
+                )
+            except Exception as exc:  # capture is observation-only and must never roll back B0 planning.
+                outcome = merger(
+                    run_id=run.run_id,
+                    expected_plan_id=execution_plan.plan_id,
+                    expected_plan_hash=execution_plan.plan_hash,
+                    parent_intent_id=intent.intent_id,
+                    capture_error=build_capture_error(
+                        parent_intent_id=intent.intent_id,
+                        stage="CAPTURE",
+                        reason_code="ADAPTIVE_IS_TCA_DECISION_CAPTURE_FAILED",
+                        message=f"{type(exc).__name__}: {exc}",
+                        context={"plan_id": execution_plan.plan_id, "symbol": intent.symbol},
+                    ),
+                )
+            self._log_tca_capture_outcome(outcome=outcome, parent_intent_id=intent.intent_id, stage="CAPTURE")
+
+    @staticmethod
+    def _log_tca_capture_outcome(*, outcome: Any, parent_intent_id: str, stage: str) -> None:
+        if str(getattr(outcome, "value", outcome)) in {
+            CaptureMergeOutcome.CONFLICT.value,
+            CaptureMergeOutcome.IDENTITY_DRIFT.value,
+            CaptureMergeOutcome.NOT_FOUND.value,
+        }:
+            LOGGER.error(
+                "TCA capture sidecar merge failed reason_code=ADAPTIVE_IS_TCA_CAPTURE_MERGE_%s stage=%s parent_intent_id=%s",
+                str(getattr(outcome, "value", outcome)),
+                stage,
+                parent_intent_id,
+            )
+
+    def _capture_tca_first_batch_mapping(
+        self,
+        *,
+        run: SimulationDailyRun,
+        execution_plan: ExecutionPlan,
+        batch_id: str | None,
+    ) -> None:
+        if not batch_id:
+            return
+        merger = getattr(self.repository, "merge_run_tca_capture_sidecar", None)
+        if not callable(merger):
+            LOGGER.error(
+                "TCA batch mapping unavailable reason_code=ADAPTIVE_IS_TCA_CAPTURE_REPOSITORY_MISSING stage=CAPTURE run_id=%s plan_id=%s",
+                run.run_id,
+                execution_plan.plan_id,
+            )
+            return
+        for intent in execution_plan.intents:
+            outcome = merger(
+                run_id=run.run_id,
+                expected_plan_id=execution_plan.plan_id,
+                expected_plan_hash=execution_plan.plan_hash,
+                parent_intent_id=intent.intent_id,
+                capture_batch_id=batch_id,
+            )
+            self._log_tca_capture_outcome(outcome=outcome, parent_intent_id=intent.intent_id, stage="CAPTURE")
+
+    def _capture_tca_arrival_attempt_failure(
+        self,
+        *,
+        run: SimulationDailyRun,
+        execution_plan: ExecutionPlan,
+        exc: BaseException,
+    ) -> None:
+        context = getattr(exc, "context", None)
+        parent_id = str(context.get("intent_id") or "").strip() if isinstance(context, dict) else ""
+        if not parent_id:
+            LOGGER.error(
+                "TCA arrival capture failure has no parent identity reason_code=ADAPTIVE_IS_TCA_PARENT_IDENTITY_MISSING stage=CAPTURE run_id=%s plan_id=%s",
+                run.run_id,
+                execution_plan.plan_id,
+            )
+            return
+        merger = getattr(self.repository, "merge_run_tca_capture_sidecar", None)
+        if not callable(merger):
+            LOGGER.error(
+                "TCA arrival failure cannot persist reason_code=ADAPTIVE_IS_TCA_CAPTURE_REPOSITORY_MISSING stage=CAPTURE run_id=%s parent_intent_id=%s",
+                run.run_id,
+                parent_id,
+            )
+            return
+        upstream_reason = str(context.get("reason_code") or "") if isinstance(context, dict) else ""
+        outcome = merger(
+            run_id=run.run_id,
+            expected_plan_id=execution_plan.plan_id,
+            expected_plan_hash=execution_plan.plan_hash,
+            parent_intent_id=parent_id,
+            capture_error=build_capture_error(
+                parent_intent_id=parent_id,
+                stage="CAPTURE",
+                reason_code="ADAPTIVE_IS_TCA_ARRIVAL_CAPTURE_ATTEMPT_FAILED",
+                message=f"{type(exc).__name__}: {exc}",
+                context={"upstream_reason_code": upstream_reason or None, "plan_id": execution_plan.plan_id},
+            ),
+        )
+        self._log_tca_capture_outcome(outcome=outcome, parent_intent_id=parent_id, stage="CAPTURE")
 
     def build_batch_execution_plans(self, requests: Iterable[dict[str, Any]]) -> list[SimulationPlanBuildResult]:
         return [self.build_execution_plan(**request) for request in requests]
@@ -489,9 +669,19 @@ class SimulationLifecycleOrchestrator:
                     plan=plan,
                     binding=binding,
                 )
+                self._capture_tca_arrival_attempt_failure(
+                    run=run,
+                    execution_plan=plan,
+                    exc=exc,
+                )
                 self.mark_submit_failure(run=run, stage=submit_stage, exc=exc)
                 raise
             broker_called = any(result.broker_called for result in qmt_result.results)
+            self._capture_tca_first_batch_mapping(
+                run=run,
+                execution_plan=plan,
+                batch_id=qmt_result.batch_id,
+            )
             qmt_batch_payload = qmt_result.to_dict()
             pending_intents = int(qmt_batch_payload.get("pending") or 0)
             failed_intents = int(qmt_batch_payload.get("failed") or qmt_result.failed or 0)

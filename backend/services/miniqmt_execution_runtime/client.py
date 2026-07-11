@@ -1178,8 +1178,10 @@ class MiniQMTExecutionRuntimeClient:
         source: str,
     ) -> MiniQMTEventLoopPreflightResult:
         parent_by_id = {intent.intent_id: intent for intent in parent_intents}
-        requests = _batch_submission_order(
-            [
+        arrival_capture_context_by_parent: dict[str, dict[str, Any]] = {}
+        built_requests: list[ManagedOrderRequest] = []
+        for index, intent in enumerate(parent_intents, start=1):
+            built_requests.append(
                 self._event_loop_parent_request(
                     runtime=runtime,
                     intent=intent,
@@ -1201,10 +1203,15 @@ class MiniQMTExecutionRuntimeClient:
                     managed_request_factory=managed_request_factory,
                     source=source,
                     index=index,
+                    arrival_capture_context_by_parent=arrival_capture_context_by_parent,
                 )
-                for index, intent in enumerate(parent_intents, start=1)
-            ]
-        )
+            )
+        requests = _batch_submission_order(built_requests)
+        request_quantity_before_cash_by_parent = {
+            _parent_id_from_request(request): int(request.quantity)
+            for request in requests
+            if _parent_id_from_request(request)
+        }
         requests = _shrink_near_cash_overshoot_requests(
             requests,
             preview_order=lambda request: self._event_loop_preview_order(
@@ -1244,6 +1251,15 @@ class MiniQMTExecutionRuntimeClient:
                 results=results,
                 runtime_evidence=self._evidence(runtime, source=source),
                 source=source,
+            )
+            _persist_event_loop_tca_batch_observations(
+                repository=self.strategy_ledger_repository,
+                batch_id=batch_id,
+                requests=requests_with_batch,
+                results=results,
+                arrival_capture_context_by_parent=arrival_capture_context_by_parent,
+                request_quantity_before_cash_by_parent=request_quantity_before_cash_by_parent,
+                policy_context=policy_context,
             )
             return MiniQMTEventLoopPreflightResult(
                 batch_id=batch_id,
@@ -1301,6 +1317,15 @@ class MiniQMTExecutionRuntimeClient:
             runtime_evidence=self._evidence(runtime, source=source),
             source=source,
         )
+        _persist_event_loop_tca_batch_observations(
+            repository=self.strategy_ledger_repository,
+            batch_id=batch_id,
+            requests=requests_with_batch,
+            results=results,
+            arrival_capture_context_by_parent=arrival_capture_context_by_parent,
+            request_quantity_before_cash_by_parent=request_quantity_before_cash_by_parent,
+            policy_context=policy_context,
+        )
         return MiniQMTEventLoopPreflightResult(
             batch_id=batch_id,
             retry_of_batch_id=None,
@@ -1324,13 +1349,20 @@ class MiniQMTExecutionRuntimeClient:
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None,
         source: str,
         index: int,
+        arrival_capture_context_by_parent: dict[str, dict[str, Any]],
     ) -> ManagedOrderRequest:
+        arrival_time = datetime.now(UTC)
         tick_payload = _required_event_loop_tick_payload(
             intent=intent,
             quote_provider=quote_provider,
             qmt_client=qmt_client,
             source=source,
         )
+        arrival_capture_context_by_parent[intent.intent_id] = {
+            "arrival_time": arrival_time,
+            "arrival_quote_received_at": datetime.now(UTC),
+            "tick_payload": dict(tick_payload),
+        }
         policy_json = policy_context.get("policy_json") if isinstance(policy_context, dict) else None
         price = _limit_price_for_event_loop(
             intent=intent,
@@ -3175,6 +3207,176 @@ def _event_loop_compensation_required(
         and _is_non_compensating_batch_residual(request, result.preflight)
     )
     return failed - pending != residual_failed
+
+
+def _persist_event_loop_tca_batch_observations(
+    *,
+    repository: Any,
+    batch_id: str,
+    requests: tuple[ManagedOrderRequest, ...],
+    results: tuple[ManagedOrderSubmitResult, ...],
+    arrival_capture_context_by_parent: dict[str, dict[str, Any]],
+    request_quantity_before_cash_by_parent: dict[str, int],
+    policy_context: dict[str, Any],
+) -> None:
+    """Persist observation-only arrival/preflight evidence after the existing batch write."""
+
+    merger = getattr(repository, "merge_order_batch_tca_capture_sidecar", None)
+    if not callable(merger):
+        LOGGER.error(
+            "TCA batch capture unavailable reason_code=ADAPTIVE_IS_TCA_CAPTURE_REPOSITORY_MISSING stage=CAPTURE batch_id=%s",
+            batch_id,
+        )
+        return
+    try:
+        from backend.services.simulation_runtime.tca_capture import (
+            CaptureMergeOutcome,
+            TcaCaptureConfigurationError,
+            build_arrival_benchmark_capture,
+            build_capture_error,
+            build_preflight_eligibility_capture,
+            resolve_execution_deadline,
+            resolve_tca_benchmark_policy,
+        )
+        from backend.services.trading_core.tca_sidecar import canonical_json_sha256
+
+        scope_rows = []
+        for request in requests:
+            parent_id = _parent_id_from_request(request)
+            if parent_id:
+                scope_rows.append(
+                    {
+                        "parent_intent_id": parent_id,
+                        "execution_plan_id": request.metadata.get("execution_plan_id"),
+                        "execution_plan_hash": request.metadata.get("execution_plan_hash"),
+                    }
+                )
+        logical_tca_scope_hash = canonical_json_sha256({"batch_id": batch_id, "parents": sorted(scope_rows, key=lambda item: item["parent_intent_id"])})
+        policy = resolve_tca_benchmark_policy(policy_context)
+    except TcaCaptureConfigurationError as exc:
+        for request in requests:
+            parent_id = _parent_id_from_request(request)
+            if not parent_id:
+                continue
+            outcome = merger(
+                batch_id=batch_id,
+                logical_tca_scope_hash=logical_tca_scope_hash,
+                parent_intent_id=parent_id,
+                capture_error=build_capture_error(
+                    parent_intent_id=parent_id,
+                    stage="CAPTURE",
+                    reason_code=exc.reason_code,
+                    message=str(exc),
+                    context={"batch_id": batch_id},
+                ),
+            )
+            LOGGER.error(
+                "TCA batch capture policy missing reason_code=%s stage=CAPTURE batch_id=%s parent_intent_id=%s outcome=%s",
+                exc.reason_code,
+                batch_id,
+                parent_id,
+                getattr(outcome, "value", outcome),
+            )
+        return
+    except Exception as exc:  # Observation evidence must never alter broker execution.
+        LOGGER.exception(
+            "TCA batch capture setup failed reason_code=ADAPTIVE_IS_TCA_BATCH_CAPTURE_SETUP_FAILED stage=CAPTURE batch_id=%s error_type=%s",
+            batch_id,
+            type(exc).__name__,
+        )
+        return
+
+    for request, result in zip(requests, results, strict=False):
+        parent_id = _parent_id_from_request(request)
+        if not parent_id:
+            LOGGER.error(
+                "TCA batch capture skipped reason_code=ADAPTIVE_IS_TCA_PARENT_IDENTITY_MISSING stage=CAPTURE batch_id=%s",
+                batch_id,
+            )
+            continue
+        try:
+            plan_id = str(request.metadata.get("execution_plan_id") or "").strip()
+            plan_hash = str(request.metadata.get("execution_plan_hash") or "").strip()
+            if not plan_id or not plan_hash:
+                raise ValueError("execution_plan_id/execution_plan_hash missing from canonical managed request metadata")
+            arrival_context = arrival_capture_context_by_parent.get(parent_id)
+            if not isinstance(arrival_context, dict):
+                raise ValueError("first event-loop quote capture context is missing")
+            arrival = build_arrival_benchmark_capture(
+                execution_plan_id=plan_id,
+                execution_plan_hash=plan_hash,
+                parent_intent_id=parent_id,
+                symbol=request.symbol,
+                side=request.side,
+                arrival_time=arrival_context["arrival_time"],
+                arrival_quote_received_at=arrival_context["arrival_quote_received_at"],
+                tick_payload=arrival_context["tick_payload"],
+                policy=policy,
+            )
+            outcome = merger(
+                batch_id=batch_id,
+                logical_tca_scope_hash=logical_tca_scope_hash,
+                parent_intent_id=parent_id,
+                arrival_capture=arrival.model_dump(mode="json"),
+            )
+            if getattr(outcome, "value", outcome) in {CaptureMergeOutcome.CONFLICT.value, CaptureMergeOutcome.IDENTITY_DRIFT.value, CaptureMergeOutcome.NOT_FOUND.value}:
+                LOGGER.error(
+                    "TCA arrival merge failed reason_code=ADAPTIVE_IS_TCA_CAPTURE_MERGE_%s stage=CAPTURE batch_id=%s parent_intent_id=%s",
+                    getattr(outcome, "value", outcome),
+                    batch_id,
+                    parent_id,
+                )
+            eligibility = build_preflight_eligibility_capture(
+                parent_intent_id=parent_id,
+                batch_id=batch_id,
+                eligibility_as_of=datetime.now(UTC),
+                request_quantity_before_cash=request_quantity_before_cash_by_parent.get(parent_id, int(request.quantity)),
+                request_quantity_after_cash=int(request.quantity),
+                preflight_result=result.preflight.to_dict(),
+                is_dependent_buy=_is_dependent_buy_proceeds_deferred(request, result.preflight),
+                is_capacity_residual=_is_capacity_residual_skipped(request, result.preflight),
+                dependency_parent_ids=tuple(str(item) for item in request.metadata.get("dependent_parent_intent_ids", ()) if str(item).strip()),
+                deadline_context=resolve_execution_deadline(
+                    schedule_window=(
+                        policy_context.get("policy_json", {}).get("schedule_window", {})
+                        if isinstance(policy_context.get("policy_json"), dict)
+                        else {}
+                    ),
+                    trade_date=request.trade_date,
+                ),
+            )
+            outcome = merger(
+                batch_id=batch_id,
+                logical_tca_scope_hash=logical_tca_scope_hash,
+                parent_intent_id=parent_id,
+                eligibility_capture=eligibility.model_dump(mode="json"),
+            )
+            if eligibility.eligibility_class == "UNKNOWN_UNMAPPED":
+                LOGGER.error(
+                    "TCA eligibility unmapped reason_code=ADAPTIVE_IS_TCA_ELIGIBILITY_REASON_UNMAPPED stage=CAPTURE batch_id=%s parent_intent_id=%s primary_reason_code=%s",
+                    batch_id,
+                    parent_id,
+                    eligibility.primary_reason_code,
+                )
+        except Exception as exc:  # evidence failure is loud and isolated from B0.
+            outcome = merger(
+                batch_id=batch_id,
+                logical_tca_scope_hash=logical_tca_scope_hash,
+                parent_intent_id=parent_id,
+                capture_error=build_capture_error(
+                    parent_intent_id=parent_id,
+                    stage="CAPTURE",
+                    reason_code="ADAPTIVE_IS_TCA_EVENT_LOOP_CAPTURE_FAILED",
+                    message=f"{type(exc).__name__}: {exc}",
+                    context={"batch_id": batch_id, "symbol": request.symbol},
+                ),
+            )
+            LOGGER.exception(
+                "TCA event-loop capture failed reason_code=ADAPTIVE_IS_TCA_EVENT_LOOP_CAPTURE_FAILED stage=CAPTURE batch_id=%s parent_intent_id=%s outcome=%s",
+                batch_id,
+                parent_id,
+                getattr(outcome, "value", outcome),
+            )
 
 
 def _event_loop_batch_metadata(
