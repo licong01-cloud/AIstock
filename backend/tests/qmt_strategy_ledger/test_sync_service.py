@@ -272,6 +272,12 @@ def test_sync_service_upserts_attributed_order_trade_and_lot_without_broker_subm
     assert summary.accounts_revalued == 1
     assert summary.unattributed_orders == 0
     assert summary.unattributed_trades == 0
+    assert summary.orders_query_succeeded is True
+    assert summary.trades_query_succeeded is True
+    assert summary.orders_snapshot_count == 1
+    assert summary.trades_snapshot_count == 1
+    assert len(summary.orders_snapshot_sha256 or "") == 64
+    assert len(summary.trades_snapshot_sha256 or "") == 64
     assert repo.list_position_lots("strat_a", symbol="300604.SZ")[0].remaining_quantity == 1000
     account = repo.get_virtual_account("strat_a")
     assert account.cash == Decimal("9989745.000000")

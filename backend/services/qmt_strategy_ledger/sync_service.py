@@ -43,7 +43,7 @@ from .models import (
     new_id,
 )
 from .repository import InMemoryQmtStrategyLedgerRepository
-from .tca_models import canonical_trade_fact_sha256
+from .tca_models import canonical_json_sha256, canonical_trade_fact_sha256
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -92,6 +92,12 @@ class SyncSummary:
     orphan_buy_freeze_released_amount: Decimal = Decimal("0")
     stale_broker_snapshot: bool = False
     stale_broker_payload_samples: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    orders_query_succeeded: bool = False
+    trades_query_succeeded: bool = False
+    orders_snapshot_count: int | None = None
+    trades_snapshot_count: int | None = None
+    orders_snapshot_sha256: str | None = None
+    trades_snapshot_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -126,6 +132,12 @@ class SyncSummary:
             "orphan_buy_freeze_released_amount": float(self.orphan_buy_freeze_released_amount),
             "stale_broker_snapshot": self.stale_broker_snapshot,
             "stale_broker_payload_samples": list(self.stale_broker_payload_samples),
+            "orders_query_succeeded": self.orders_query_succeeded,
+            "trades_query_succeeded": self.trades_query_succeeded,
+            "orders_snapshot_count": self.orders_snapshot_count,
+            "trades_snapshot_count": self.trades_snapshot_count,
+            "orders_snapshot_sha256": self.orders_snapshot_sha256,
+            "trades_snapshot_sha256": self.trades_snapshot_sha256,
         }
 
 
@@ -556,6 +568,12 @@ class QmtStrategyLedgerSyncService:
             orphan_buy_freeze_released_amount=orphan_buy_freeze_released_amount,
             stale_broker_snapshot=stale_orders_skipped > 0 or stale_trades_skipped > 0,
             stale_broker_payload_samples=tuple(stale_payload_samples[:10]),
+            orders_query_succeeded=True,
+            trades_query_succeeded=True,
+            orders_snapshot_count=len(raw_orders),
+            trades_snapshot_count=len(raw_trades),
+            orders_snapshot_sha256=_broker_snapshot_sha256(raw_orders),
+            trades_snapshot_sha256=_broker_snapshot_sha256(raw_trades),
         )
 
     def _unlock_tplus1_lots(self, strategy_ids: Any) -> int:
@@ -1227,6 +1245,12 @@ def _trade_settlement_sort_key(item: _AttributedTrade) -> tuple[int, str, dateti
     side_priority = 0 if item.trade.order_type == SELL_ORDER_TYPE else 1
     trade_time = item.ledger_trade.trade_time or datetime.min.replace(tzinfo=UTC)
     return (side_priority, item.strategy_id, trade_time, item.trade.traded_id, item.index)
+
+
+def _broker_snapshot_sha256(rows: Any) -> str:
+    """Hash a broker snapshot independently of callback/query row ordering."""
+
+    return canonical_json_sha256(sorted(canonical_json_sha256(dict(row)) for row in rows))
 
 
 def _parse_trade_time(trade_date: date, value: str) -> datetime | None:

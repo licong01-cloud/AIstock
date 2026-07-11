@@ -10,6 +10,7 @@ from typing import Any
 from .models import MiniQmtStrategySlot, ReconciliationIssueRecord, ReconciliationRunRecord, new_id
 from .repository import InMemoryQmtStrategyLedgerRepository
 from .sync_service import SyncSummary
+from .tca_models import canonical_json_sha256
 
 
 @dataclass(frozen=True)
@@ -234,14 +235,14 @@ class QmtStrategyLedgerReconciliationService:
             )
 
         map_tca_conflicts = getattr(self._repository, "append_open_tca_conflicts_to_reconciliation", None)
+        conflict_scan_performed = False
+        mapped_conflict_issues: tuple[ReconciliationIssueRecord, ...] = ()
         if callable(map_tca_conflicts):
-            issues.extend(
-                map_tca_conflicts(
-                    run_id=run.run_id,
-                    account_id=account_id,
-                    trade_date=trade_date,
-                )
+            mapped_conflict_issues = tuple(
+                map_tca_conflicts(run_id=run.run_id, account_id=account_id, trade_date=trade_date)
             )
+            conflict_scan_performed = True
+            issues.extend(mapped_conflict_issues)
 
         status = "SUCCEEDED" if not issues else "WARNING"
         summary_json = {
@@ -255,7 +256,24 @@ class QmtStrategyLedgerReconciliationService:
             "broker_authoritative": True,
         }
         if sync_summary is not None:
-            summary_json["sync_summary"] = sync_summary.to_dict()
+            sync_evidence = sync_summary.to_dict()
+            sync_evidence.update(
+                {
+                    "trade_conflict_heads_scanned": conflict_scan_performed,
+                    "trade_conflict_head_count": len(mapped_conflict_issues),
+                    "trade_conflict_heads_sha256": (
+                        canonical_json_sha256(
+                            sorted(
+                                str(issue.context.get("trade_conflict_fact_id") or issue.issue_id)
+                                for issue in mapped_conflict_issues
+                            )
+                        )
+                        if conflict_scan_performed
+                        else None
+                    ),
+                }
+            )
+            summary_json["sync_summary"] = sync_evidence
         completed_run = replace(
             run,
             status=status,

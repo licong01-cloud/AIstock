@@ -1,7 +1,7 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
 - 文档日期：2026-07-11
-- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 migration/repository/projector 已由 PR #1960 合入且生产 DDL 已应用验证；Phase 0A、生产配置、projector与运行时激活仍未完成
+- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 已由 PR #1960 合入且生产 DDL 已应用验证；Batch 0A-3 calculator/marks/fees/deterministic rebuild 已实现且本地验收通过，尚未提交PR；Phase 0A、0A-4 API/EOD hook、生产配置、projector与运行时激活仍未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
@@ -1917,6 +1917,27 @@ Batch 0A-2 merge gate：本矩阵全部`verified`，F2 validator、targeted matr
 批次边界（不是缺口）：observation failure以savepoint loud隔离且不改变broker settlement；calculator/canonical snapshot hash归属0A-3；人工conflict resolution不属于Phase 0A；projector/EOD hook保持default-off并归属0A-4。
 
 Batch 0A-2 closure receipt：PR #1960，merge commit `e534390246b25ceafffe5c8ecfb177d9b91b0c93`；production migration `miniqmt_execution_tca_phase0a_20260711.sql` SHA-256=`14003b7be6910233e1cc553bbf52b4db9baefe7f5e693ac32a89e8017ef351ff`。目标DB为`aistock@172.17.0.3/32:5432`；应用后11张表、3个provenance列、11个immutable triggers、2个关键CHECK均存在，缺失列COMMENT=0、TCA表cascade FK=0；既有`trade_ledger/order_ledger/reconciliation_run`行数保持`1559/611/6508`，legacy provenance非NULL行数=0。`production_ddl_gate=applied_and_verified`；production DML、service restart、projector activation、broker side effect与LIVE capability均为noop。
+
+---
+
+### 8.4 Batch 0A-3 Design Acceptance Matrix
+
+本矩阵只验收 Batch 0A-3，不扩大为 Phase 0A 完成声明。0A-4 read API、evidence export、EOD hook、metrics/runbook以及任何生产 projector/rebuild activation 均不在本批次。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| 0A3-01 signed Decimal IS与deadline/post-deadline分账 | `qmt_strategy_ledger/tca_calculator.py`: `calculate_parent_tca`、`TcaCalculationInput`、`TcaFill` | BUY/SELL镜像、scale invariance、direct/decomposed equality、partial/overfill/missing mark golden tests | verified | - |
+| 0A3-02 mark方向、freshness、缺失与partial coverage | `tca_calculator.py`: `select_mark`；`tca_rebuild.py`: `_quote_candidates`、`_draft_mark` | backward deadline、forward markout、future/stale/clock-skew/missing测试；仅消费含archived row的既有TICK evidence，不新增quote query；Phase 0A不承诺有效mark coverage | verified | - |
+| 0A3-03 actual/estimated fee与order-level stable allocation | `tca_calculator.py`: `estimate_fee_allocations`、`_actual_fee`、`_largest_remainder` | 0.005元边界、minimum commission、完整component policy、permutation与严格分摊守恒；缺frozen component规则即MISSING | verified | - |
+| 0A3-04 strict finality与NULL语义 | `tca_rebuild.py`: `_finality`、`_select_observations`；`tca_calculator.py`: metric validity | latest reconciliation、query/count/hash/conflict-scan proof、terminal order、aggregate、conflict/orphan/provenance门；缺proof保持PROVISIONAL | verified | - |
+| 0A3-05 deterministic rebuild与canonical manifests | `tca_rebuild.py`: `build_rebuild_draft`、`_source_manifest`、`_canonical_source_row` | source permutation相同input/output hash；DB生成审计时间不入hash；late pre-deadline fact产生新receipt/result hash | verified | - |
+| 0A3-06 advisory lock、generation、supersedes与stale拒绝 | `tca_repository.py`: `acquire_scope_lock`、head readers；`tca_rebuild.py`: `ExecutionTcaRebuildService`、`_reject_stale_snapshot` | signed int64 lock测试；scratch PostgreSQL同输入复用、late fact generation 2、receipt/result supersedes、immutable trigger拒绝UPDATE | verified | - |
+| 0A3-07 planning/result/mark/trade-observation membership与receipt coverage | `tca_rebuild.py`: membership builders、`_completed_receipt_values` | planning membership 100%、CORE/TIMING/FEE/ATTRIBUTION角色；scratch物化1 receipt/1 result/5 marks/4 observation memberships | verified | - |
+| 0A3-08 SIM/LIVE、B0与激活边界 | `TcaRebuildRequest`与`ExecutionTcaRebuildScope` SIM hard gate；read-only snapshot + append-only evidence transaction | 0A-2回归、`nox l0`、`validation_module_registry_l0`；无broker/scheduler/startup migration/LIVE路径；production DML/restart/activation均为noop | verified | - |
+
+Batch 0A-3 merge gate：上表全部转为`verified`，F2 validator、targeted calculator/rebuild/0A-2回归、changed-file lint/compile、scratch PostgreSQL materialization、`nox l0`、`validation_module_registry_l0`、`git diff --check`全部通过后，才可提交PR。0A-3合入仍不代表Phase 0A完成。
+
+Batch 0A-3 local verification receipt：targeted `32 passed`，sync/reconciliation与0A-3组合回归`62 passed`，event-loop/reconcile-after-submit周边`8 passed`；整个`backend/tests/qmt_strategy_ledger`为`173 passed, 1 failed`，唯一失败`test_execution_plan_order_preview_uses_shared_miniqmt_bridge`已在干净`origin/main@b7e4d333`同节点复现，判定为非0A-3回归；F2 validator PASS（8个0A-3条目、总矩阵32行、0 warning）；ruff/compile/diff、`nox l0`与`validation_module_registry_l0`通过；scratch DB已清理。代码尚未commit/push/PR，生产DML、service restart、projector/rebuild activation、broker side effect与LIVE capability均为noop。
 
 ---
 
