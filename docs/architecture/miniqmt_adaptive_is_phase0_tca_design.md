@@ -1,7 +1,7 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
 - 文档日期：2026-07-11
-- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 migration/repository/projector 实现待 scoped PR 验收；Phase 0A、生产 DDL、生产配置与运行时激活均未完成
+- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 migration/repository/projector 已由 PR #1960 合入且生产 DDL 已应用验证；Phase 0A、生产配置、projector与运行时激活仍未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
@@ -1914,7 +1914,9 @@ Batch 0A-1 merge gate：上述行必须全部`implemented`，F2 validator、targ
 
 Batch 0A-2 merge gate：本矩阵全部`verified`，F2 validator、targeted matrix、changed-file lint/compile、`nox l0`、`validation_module_registry_l0`与`git diff --check`通过；生产DDL不得在本开发批次执行。
 
-批次边界（不是缺口）：生产DDL仍需实现PR合并后由用户单独授权，当前`production_ddl_gate=pending`；observation failure以savepoint loud隔离且不改变broker settlement；calculator/canonical snapshot hash归属0A-3；人工conflict resolution不属于Phase 0A；projector/EOD hook保持default-off并归属0A-4。
+批次边界（不是缺口）：observation failure以savepoint loud隔离且不改变broker settlement；calculator/canonical snapshot hash归属0A-3；人工conflict resolution不属于Phase 0A；projector/EOD hook保持default-off并归属0A-4。
+
+Batch 0A-2 closure receipt：PR #1960，merge commit `e534390246b25ceafffe5c8ecfb177d9b91b0c93`；production migration `miniqmt_execution_tca_phase0a_20260711.sql` SHA-256=`14003b7be6910233e1cc553bbf52b4db9baefe7f5e693ac32a89e8017ef351ff`。目标DB为`aistock@172.17.0.3/32:5432`；应用后11张表、3个provenance列、11个immutable triggers、2个关键CHECK均存在，缺失列COMMENT=0、TCA表cascade FK=0；既有`trade_ledger/order_ledger/reconciliation_run`行数保持`1559/611/6508`，legacy provenance非NULL行数=0。`production_ddl_gate=applied_and_verified`；production DML、service restart、projector activation、broker side effect与LIVE capability均为noop。
 
 ---
 
