@@ -1,7 +1,7 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
 - 文档日期：2026-07-11
-- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 已由 PR #1960 合入且生产 DDL 已应用验证；Batch 0A-3 calculator/marks/fees/deterministic rebuild 已实现且本地验收通过，尚未提交PR；Phase 0A、0A-4 API/EOD hook、生产配置、projector与运行时激活仍未完成
+- 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 已由 PR #1960 合入且生产 DDL 已应用验证，Batch 0A-3 已由 PR #1963 合入；Phase 0A 其余的 0A-4 API/EOD hook、生产配置、projector 与运行时激活仍未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
@@ -1937,7 +1937,7 @@ Batch 0A-2 closure receipt：PR #1960，merge commit `e534390246b25ceafffe5c8ecf
 
 Batch 0A-3 merge gate：上表全部转为`verified`，F2 validator、targeted calculator/rebuild/0A-2回归、changed-file lint/compile、scratch PostgreSQL materialization、`nox l0`、`validation_module_registry_l0`、`git diff --check`全部通过后，才可提交PR。0A-3合入仍不代表Phase 0A完成。
 
-Batch 0A-3 local verification receipt：targeted `32 passed`，sync/reconciliation与0A-3组合回归`62 passed`，event-loop/reconcile-after-submit周边`8 passed`；整个`backend/tests/qmt_strategy_ledger`为`173 passed, 1 failed`，唯一失败`test_execution_plan_order_preview_uses_shared_miniqmt_bridge`已在干净`origin/main@b7e4d333`同节点复现，判定为非0A-3回归；F2 validator PASS（8个0A-3条目、总矩阵32行、0 warning）；ruff/compile/diff、`nox l0`与`validation_module_registry_l0`通过；scratch DB已清理。代码尚未commit/push/PR，生产DML、service restart、projector/rebuild activation、broker side effect与LIVE capability均为noop。
+Batch 0A-3 closure receipt：PR #1963，squash merge commit `91b80e6090594ff6c6db9132706dc01fba8f1650`（2026-07-11）。targeted `32 passed`，sync/reconciliation与0A-3组合回归`62 passed`，event-loop/reconcile-after-submit周边`8 passed`；整个`backend/tests/qmt_strategy_ledger`为`173 passed, 1 failed`，唯一失败`test_execution_plan_order_preview_uses_shared_miniqmt_bridge`已在干净`origin/main@b7e4d333`同节点复现，判定为非0A-3回归；F2 validator PASS（8个0A-3条目、总矩阵32行、0 warning）；ruff/compile/diff、`nox l0`与`validation_module_registry_l0`通过；scratch DB已清理。PR 的静态门禁、Semgrep、CodeQL Python/JavaScript、PR Quality 和全部 7 个后端分片均通过。production DDL、production DML、service restart、projector/rebuild activation、broker side effect与LIVE capability均为noop。
 
 ---
 
