@@ -5,7 +5,7 @@
 > Phase：0A，口径冻结与数据可用性审计
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 父蓝图提交：`3e871a78`，PR `#1951`
-> 当前状态：详细设计与只读审计框架已合入；实际 target audit 尚未执行；初始 receipt 固定为 `NOT_APPROVED`，Phase 0A.1 finalizer/approval authority 与 Phase 1 均未实施
+> 当前状态：详细设计与只读审计框架已合入；实际 target audit 尚未执行；2026-07-11 取消 `NOT_APPROVED`、人工审批和 authority 转换，改为确定性 handoff readiness；现有 receipt writer 需在后续代码 PR 对齐
 > 实现边界：PR `#1958` 仅新增隔离的只读审计服务/CLI/测试；未修改数据库、策略包、HMM、调度器或运行时
 
 ## 0. 文档定位与权威边界
@@ -14,18 +14,18 @@
 
 权威优先级：
 
-1. 用户明确批准的业务决策。
+1. 用户明确确认的业务决策。
 2. 父蓝图的总体隔离、PIT、OOS、模型和阶段边界。
 3. 本文对 Phase 0A 的字段、算法、输出、验证和停止条件。
 4. 当前实际代码、数据库 schema 和不可变制品所能证明的现状事实。
 5. 较早文档中与以上内容不冲突的部分。
 
-本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已审计或批准。正式审计仍必须由用户批准 audit request 和 policy registry；现有 CLI 只生成 append-only `NOT_APPROVED` 初始 receipt。该 receipt 必须交给 Phase 1 F2 设计规定的 Phase 0A.1 finalizer，由权威 registry 形成 GLOBAL/逐 admission-scope decision chains 和 approval bundle；不存在有效 bundle 时，Phase 1 生产 capture、回填与 snapshot promotion/seal 保持阻断。
+本文的详细设计与本地实现验收已经闭合，但这不等于任何真实 target 已完成审计。正式审计由版本化 audit request 和 policy registry 配置驱动，不要求人工签署。Phase 0A 根据冻结规则直接生成 append-only `handoff_readiness_report.json`；Phase 0A.1 只做确定性 normalization，不生成 GLOBAL/逐 scope decision、approval bundle、角色或 operation authorization。合法完整输入必须自动得到 `READY` 并进入 Phase 1；不存在人工“放行”步骤。
 
 文档与证据保存规则：
 
 - 本设计保存于 `docs/architecture/`。
-- 经用户批准的人工审计结论可保存于 `docs/analysis/`。
+- 可复核的人工分析说明可保存于 `docs/analysis/`，但它不是程序运行授权。
 - 机器可复算 receipt 保存于 `tests/aistock_validation/history/advisory_phase0a/<audit_id>/`。
 - 中间查询、临时 JSON 和跨工具草稿只能进入被忽略的 scratch 路径，不得写入项目根目录。
 
@@ -240,7 +240,7 @@ canonical_signal_scope_hash = sha256(
 
 `package_id/manifest_sha256` 只取 target scope registry exact values；runtime semantics 只取现有 `selection_runtime_semantics_id`；effective config 对 receipt 中全部命名 `effective_config_hashes` 排序后整体 hash；calendar 只取 metric/label registry 且必须与 decision-clock evidence 一致。缺失、多值、名称冲突或与 asset ledger 不一致时 Phase 0A.1 scope gap，禁止默认/选首项。
 
-stable semantics/scope 排除 Program/audit/approval/binding/review/list、stage/artifact payload、source revision 和 build identity。Phase 1 `canonical_signal_id` 使用 per-signal scope；Phase 0A `signal_context_hash` 进入 observation version/lineage。改变 evidence、label/horizon 不能复制同一个市场信号样本，只能增加 version 或标签投影。
+stable semantics/scope 排除 Program/audit/binding/review/list、stage/artifact payload、source revision 和 build identity。Phase 1 `canonical_signal_id` 使用 per-signal scope；Phase 0A `signal_context_hash` 进入 observation version/lineage。改变 evidence、label/horizon 不能复制同一个市场信号样本，只能增加 version 或标签投影。
 
 `AISTOCK_CANONICAL_JSON_V1` 作为 hash serializer：UTF-8、键排序、紧凑分隔符、ISO-8601 日期/时间、禁止 NaN/Infinity。数值先转十进制字符串，score/return 使用 scale=12、price 使用 scale=6、rounding=`ROUND_HALF_EVEN`，禁止科学计数法，`-0` 归一为 `0`；仅诊断 reason code 不进入业务 content hash，改变候选成员/排除语义的 reason 必须进入。Phase 1 必须复用同一 serializer，不得另建 hash 规则。
 
@@ -255,7 +255,7 @@ Advisory Program as-of binding
   -> optional HMM adjustment
   -> risk policy
   -> tradability + industry blacklist
-  -> SUCCEEDED or authority-backed VALID_NO_CANDIDATE SelectionRun
+  -> SUCCEEDED or contract-validated VALID_NO_CANDIDATE SelectionRun
   -> immutable DailySelectionEvidence
   -> optional Advisory review lineage
 ```
@@ -560,7 +560,7 @@ reason_codes
 - 不可变 DB asset/release/activation 记录及其 hash。
 - 当时持久化 SelectionRun/evidence 中的精确 runtime/manifest/artifact identity。
 - 带不可变 snapshot id、训练信息截止和 hash 的 model/HMM 记录。
-- 可证明在 signal date 前已进入批准主线或 runtime release 的 executable semantics。
+- 可证明在 signal date 前已进入版本化 runtime release 的 executable semantics。
 
 禁止作为正式证据：
 
@@ -959,9 +959,23 @@ v1 锁定规则，不得在查看结果后切换：
 12. `audit_summary.md`
 13. `candidate_authority_stage_capability_report.json`
 14. `prior_cohort_report.json`
-15. `approval_receipt.json`
+15. `handoff_readiness_report.json`
 
-这些输出只保存区间、身份、count、hash、reason 和批准结论，不复制逐日行情或全量候选明细。受控查询的 raw/intermediate 文件只能写入被 Git 忽略的 `tmp/advisory_phase0a/<audit_id>/`，完成后在 manifest 标记 cleanup 状态；它们不作为设计验收证据，也不得出现在项目根目录。经用户批准的 durable 人工结论另存 `docs/analysis/advisory_phase0a_audit_<yyyymmdd>.md`，不得自动生成成功结论。
+这些输出只保存区间、身份、count、hash、reason 和自动 readiness 分类，不复制逐日行情或全量候选明细。受控查询的 raw/intermediate 文件只能写入被 Git 忽略的 `tmp/advisory_phase0a/<audit_id>/`，完成后在 manifest 标记 cleanup 状态；它们不作为设计验收证据，也不得出现在项目根目录。durable 人工分析可另存 `docs/analysis/advisory_phase0a_audit_<yyyymmdd>.md`，但不改变机器分类。
+
+`handoff_readiness_report.json` 固定包含：
+
+```text
+schema_version = advisory_phase0a_handoff_readiness_v1
+audit_id/audit_manifest_hash
+readiness = READY | PARTIAL | BLOCKED
+sorted admission scopes + formal_oos_status + signal_evidence_level
+stable_signal_semantics input hashes
+blocking_reason_codes[]
+handoff_readiness_hash
+```
+
+`READY` 是冻结谓词的计算结果，不是审批：所有 requested scope 身份唯一、hash 闭合、策略包资产完整、runtime/calendar/policy 一致且每个 scope 有确定 evidence classification 时必须得到 `READY`。`PARTIAL` 允许未成熟 label 或 research-only scope 进入其明确允许的数据路径；`BLOCKED` 只用于身份冲突、必需资产缺失或不可判定输入。
 
 `audit_manifest` 至少包含：
 
@@ -974,8 +988,8 @@ code commit
 all output file hashes
 started/completed timestamps
 read_only_proof
-target/global decision summary
-approval status + approver + approved_at
+target/global readiness summary
+handoff readiness hash + blocking reason summary
 ```
 
 manifest 对每个 artifact 记录 `relative_uri`、`sha256`、`size_bytes`、`row_count`、`producer`、`source_refs`、`contains_sensitive_data`、`redaction_policy`、`retention_status` 和 `cleanup_status`。密码、连接串、token、原始账户/Paper 数据不得写入任何输出。任何 registry/hash 改变都创建新 `audit_id`，禁止覆盖旧目录。
@@ -1029,7 +1043,7 @@ industry_blacklisted
 
 ## 17. Implementation Plan / 实施方案
 
-本节最初定义 Phase 0A 实施方案；当前只读审计框架已由 PR `#1958` 合入，真实 target audit 和人工批准仍按本节门禁另行执行。
+本节最初定义 Phase 0A 实施方案；当前只读审计框架已由 PR `#1958` 合入。真实 target audit 和新的 handoff readiness 输出仍需后续代码 PR 对齐，不存在人工批准步骤。
 
 1. 新增纯数据模型：audit request、target scope、availability row、asset ledger、OOS interval、policy registry 和 receipt。
 2. 新增 Program/package resolver，按 T 只读解析 as-of binding、manifest、leg/asset closure 和 lineage。
@@ -1037,7 +1051,7 @@ industry_blacklisted
 4. 新增 runtime/HMM metadata/header-only evidence resolver，禁止调用现有 generation-on-miss preflight，并禁止 dynamic latest、mtime 和 backtest-derived cutoff 晋级。
 5. 新增 canonical serializer、signal/label/policy hash 和等价 Program 去重。
 6. 新增 effective cutoff/embargo/capability OOS classifier，输出 formal、retrospective、unavailable 区间。
-7. 新增 deterministic report writer，把机器 receipt 写入 validation history；人工批准后再生成 durable analysis summary。
+7. 新增 deterministic report writer，把机器 receipt 和 handoff readiness 写入 validation history；可选 durable analysis summary 不改变机器状态。
 8. 新增只读 CLI；不新增 API/UI/scheduler，不调用产生 Selection/Advisory 写入的 service。
 9. 增加纯函数、repository contract、受控 DB read-only smoke、golden report 和 no-write oracle。
 
@@ -1123,14 +1137,35 @@ rtk git diff --cached --check
 | L1 | serializer、hash、date、cutoff、interval、OOS、metric/label/prior/multiplicity 纯函数单测 | 相同输入同 hash；边界/冲突 fail-closed；raw/CNY/yuan/storage_scale 不混用 |
 | L2 | read-only repository/DB source probe、artifact header、HMM metadata integration | DB write probe 被拒；文件系统除允许 output/scratch 外无变化；不调用 generation-on-miss |
 | L3 | fixture 到 CLI receipt 的完整业务流，多 Program/单 Alpha/原生多 Alpha/空候选 | as-of binding、候选权威、五层 capability、formal/retrospective/unavailable 与 label maturity 结论正确 |
-| L4 | Validation Center 受控真实只读 DB 多 target audit、重复运行和 receipt diff | query/config/source watermark 相同则业务 hash 相同，审批前不产生成功结论 |
+| L4 | Validation Center 受控真实只读 DB 多 target audit、重复运行和 receipt diff | query/config/source watermark 相同则业务 hash 相同；合法完整输入必须产生 `READY` |
 | L5/nightly | 长日期窗、source revision、survivorship、HMM/runtime vintage、跨包 cohort 与长期标签成熟回归 | 漂移/修订生成新 audit version；registry 事后变更只标 exploratory；不得自动激活 runtime |
 
 接口 oracle：Phase 0A 不新增 API，路由差异必须为空；CLI schema/exit code/reason code 是接口契约。DB oracle：所有 session read-only，DDL/DML/write probe fail。UI oracle：本阶段 N/A，前端 diff 必须为空。Log oracle：结构化记录 audit/target/stage/reason/query hash，禁止密钥、SQL 参数原值和逐股敏感 payload。Business oracle：人工抽取至少一个单 Alpha、一个原生多 Alpha、一个空候选日和一个历史 binding 切换日，与 DB/不可变 artifact identity 逐项核对。
 
-新增/修改 Python line coverage 目标 `>=80%`、branch coverage `>=70%`；serializer、OOS classifier、interval builder、authority resolver 和 no-write guard 的关键分支目标 100%。长窗与真实 DB 验证交由 Validation Center/CI/nightly，当前交互窗口只跑 L0/L1 和最小 L2；nightly 失败阻断 Phase 0A 审计批准，但不触发任何服务或调度器激活。
+新增/修改 Python line coverage 目标 `>=80%`、branch coverage `>=70%`；serializer、OOS classifier、interval builder、readiness resolver 和 no-write guard 的关键分支目标 100%。长窗与真实 DB 验证交由 Validation Center/CI/nightly，当前交互窗口只跑 L0/L1 和最小 L2；nightly 失败阻断对应数据制品发布，但不触发任何服务或调度器激活。
 
-不适合完全自动化的人工确认项：target/prior cohort 是否完整、manifest 结构字段是否仅用于 runtime contract、不可证明 vintage 的证据等级、embargo/benchmark/cost/label/multiple-testing registry 初次批准，以及审计 summary 与 source owner 的冲突裁决。本阶段只输出 `NOT_APPROVED approval_receipt.json`；人工 decision 必须由 Phase 0A.1 authenticated approver 写入 authority registry，自动测试不得代签。
+target/prior cohort、manifest runtime contract、vintage 证据等级、embargo/benchmark/cost/label/multiple-testing registry 都必须成为版本化配置和确定性规则。无法自动判定的冲突输出 `BLOCKED + exact reason code`，修正配置后创建新 audit version；禁止通过人工签字覆盖机器校验。
+
+### 18.6 Gate satisfiability 与正向业务链
+
+Phase 0A 不允许“所有校验都正确但仍无法进入下一状态”的死门禁。实现必须冻结并测试下表：
+
+| 检查点 | 唯一 producer | PASS 谓词 | 必须存在的正向证据 | 关键反向证据 |
+|---|---|---|---|---|
+| StrategyPackage preflight | StrategyPackage manifest/asset registry | enabled；单 Alpha 或原生多 Alpha 父包；manifest 与全部资产 hash 闭合 | 单 Alpha、原生多 Alpha 各一个真实结构 fixture 均 PASS | 归档包、缺 leg、hash drift、手工多包均拒绝 |
+| Decision/data readiness | calendar、行情和 immutable selection evidence | T/T+1、cutoff、runtime、HMM/risk 与 source available-at 一致 | 完整行情和 canonical clock fixture 得到确定 context | 缺 cutoff、future vintage、source gap 得到 exact reason |
+| Audit classification | OOS classifier/policy registry | 每个 scope 唯一得到 FORMAL、RETROSPECTIVE 或 NONE | 至少一个 FORMAL 和一个合法 research-only scope | overlap conflict、多 terminal、policy hash mismatch 拒绝 |
+| Handoff readiness | receipt writer | 身份/hash 闭合且所有 scope 可确定分类；无 approval 字段依赖 | `READY/PARTIAL -> handoff` hash 稳定且可重复 | BLOCKED 不生成可消费 handoff |
+
+状态可达性固定为：
+
+```text
+REQUESTED -> RESOLVED -> AUDITED -> READY | PARTIAL | BLOCKED
+READY | PARTIAL -> HANDOFF_EMITTED
+BLOCKED -> 新配置/新输入产生新的 audit_id，禁止原地人工放行
+```
+
+L3 必须提供单 Alpha和原生多 Alpha的完整正向 golden；L4 必须在受控真实只读数据库证明至少一个数据准确 target 可得到 `HANDOFF_EMITTED`。若没有正向 target，不得把全部 BLOCKED 解释为“门禁有效”，必须先修正生产者/消费者字段契约。
 
 ## 19. Design Acceptance Matrix / 设计验收矩阵
 
@@ -1150,11 +1185,11 @@ rtk git diff --cached --check
 | F-019 | §13.6、§16.1、§20 | evidence/status、reason code 和停止条件已定义 | design_ready | none |
 | F-022 | §16、§17、§20 | 输出 artifacts、实施顺序和 Phase 1/0B 交接已定义 | design_ready | none |
 | F-023 | §18 | 纯函数、read-only、golden、survivorship 和边界验证已定义 | design_ready | none |
-| F-024 | §17、§21、§23 | 文档阶段及未来只读审计的生产门禁已定义 | design_ready | none |
+| F-024 | §17、§18、§21、§23 | 只读审计、自动 readiness、正向可达性和零人工审批边界已定义 | design_ready | none |
 
 ### 19.1 Implementation Acceptance Matrix / 实现验收矩阵（2026-07-11）
 
-本表验收 Phase 0A 审计器代码及其本地验证，不表示任何实际 Program/package target 已被审计、获批或进入 Phase 1。真实 target audit 仍必须由用户提供并批准 `audit request`、policy registry；本阶段只生成初始 `NOT_APPROVED approval_receipt.json`，还必须经过 Phase 0A.1 handoff/approval bundle。本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
+本表记录 PR `#1958` 的既有实现证据，不表示任何实际 Program/package target 已完成审计或进入 Phase 1。2026-07-11 已确认取消 `NOT_APPROVED approval_receipt` 和后续审批链；因此旧 receipt writer 证据仅证明只读审计基础，新的 `handoff_readiness_report` 与确定性 Phase 0A.1 handoff 必须在后续代码 PR 完成后才能标记实现完成。本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1168,15 +1203,15 @@ rtk git diff --cached --check
 | F-015 | read-only repositories/probe adapters；`build_asset_ledger` | backtest `data_vintage` forbidden entry、fixed SELECT allowlist/no-write test | completed | none |
 | F-016 | `resolve_decision_clock`；`effective_cutoff`；`embargo_formal_start`；OOS classifier | T/T+1、asset closure、20 trading-day embargo、formal/retrospective/none label maturity fixture | completed | none |
 | F-019 | `policy.py` reason registry；`AuditReceipt` | no-candidate、missing source vintage、HMM latest and multi-alpha variant reason-code fixture | completed | none |
-| F-022 | `audit_service.py:receipt_artifact_payloads`；Phase 1 handoff hashes | exact 15-file receipt contract、append-only writer and unapproved exit gate test | completed | none |
+| F-022 | `audit_service.py:receipt_artifact_payloads`；Phase 1 handoff hashes | 既有 15-file receipt 和 append-only writer 已验证；`handoff_readiness_report` 替换由用户明确要求，后续实现不得保留 approval 语义 | approved_by_user_rework_required | approval receipt replacement pending code follow-up |
 | F-023 | `backend/tests/advisory_phase0a/` | 19 focused tests；new-module coverage 85%；adjacent Advisory/Selection/Multi-Alpha/Paper selection tests passed | completed | none |
-| F-024 | isolated service/CLI only；no migration/router/frontend changes | `git diff --check`；production DDL/DML/model/scheduler/program activation gates remain noop | completed | none |
+| F-024 | isolated service/CLI only；no migration/router/frontend changes | 只读隔离已验证；新增 READY 正向 golden 和 gate satisfiability E2E 为后续实现必需证据 | approved_by_user_rework_required | readiness positive-path implementation pending |
 
 ## 20. Phase 0A 退出门禁与 Phase 1 交接
 
 ### 20.1 全局退出门禁
 
-以下内容必须全部冻结并获批准，否则停止 Phase 1：
+以下内容必须全部冻结且机器校验一致，否则停止对应 Phase 1 scope：
 
 - target scope、单原生包权威链和 canonical identity。
 - `T -> E(T+1) -> S(T+2) -> X_h` 日期时钟、decision cutoff、field available-at 和 calendar policy。
@@ -1189,8 +1224,8 @@ rtk git diff --cached --check
 
 每个 `(signal_context, interval, signal_capability)` 必须得到唯一 `formal_oos_status` 及可选的 `signal_evidence_level`；每个 label projection 另有独立 maturity：
 
-- `FORMAL_OOS + AVAILABLE`：允许 Phase 0A.1 对该 admission scope 批准 formal；Phase 1 只有 `maturity_status=MATURED` 才能进入对应固定期限指标，其中 terminal 事件还必须同时满足 `outcome_event_status=TERMINAL` 且 settlement/payoff closure 完整。
-- `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE`：只有 Phase 0A.1 对对应 admission scope 明确批准 research 后，Phase 1 才可构建 research-only 数据；禁止用户可见校准/canary。
+- `FORMAL_OOS + AVAILABLE`：Phase 0A.1 自动把该 scope 标为 formal 可消费；Phase 1 只有 `maturity_status=MATURED` 才能进入对应固定期限指标，其中 terminal 事件还必须同时满足 `outcome_event_status=TERMINAL` 且 settlement/payoff closure 完整。
+- `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE`：Phase 0A.1 自动把该 scope 限定为 research-only，Phase 1 可构建内部研究数据但禁止用户可见校准/canary。
 - 无 signal evidence + `UNAVAILABLE`：阻断该 target/capability；`research_replay_eligible` 单独决定是否还能做内部研究。
 - `maturity_status=PENDING/RIGHT_CENSORED/UNAVAILABLE`：按 Phase 1 policy 阻断相应 fixed-horizon projection 或只允许 survival 分析；`MATURED + outcome_event_status=TERMINAL` 按 settlement policy 消费，不降级已经正式的 signal evidence。
 
@@ -1198,7 +1233,7 @@ rtk git diff --cached --check
 
 ### 20.3 Phase 1 handoff payload
 
-下列 payload 是 Phase 0A.1 finalizer 的输入，不是 Phase 1 mutation 的直接授权：
+下列 payload 是 Phase 0A.1 deterministic normalizer 的输入，不是审批或运行授权：
 
 ```text
 audit_id/audit_manifest_hash
@@ -1212,18 +1247,18 @@ metric/label/benchmark/cost policy hashes
 prior and multiple-testing registry hashes
 candidate authority/stage capability report hash
 prior cohort report hash
-initial NOT_APPROVED approval receipt hash
+handoff readiness report hash
 ```
 
-Phase 0A.1 必须据此生成 `advisory_phase0a_handoff_bundle_v2`、GLOBAL/逐 admission-scope decision chains 和 `advisory_phase0a_approval_bundle_v2`。Phase 1 只消费 exact handoff/approval bundle hashes，并在每个 admission scope 和每类 mutation 上另行验证 action authorization。任一 Phase 0A hash 变化均创建新的 audit/handoff/approval version，不能原地覆盖旧 receipt；scope revoke 只阻断对应 scope，global revoke 阻断整个 bundle。
+Phase 0A.1 必须据此确定性生成 `advisory_phase0a_handoff_bundle_v2` 和 sorted admission scope set。Phase 1 只消费 exact audit/handoff/readiness hashes，并按每个 scope 的自动 evidence classification 选择 formal、research-only 或 blocked 路径。任一 Phase 0A hash 变化均创建新的 audit/handoff version，不能原地覆盖旧 receipt。不存在 GLOBAL/scope decision、approval bundle、revoke 或 action authorization。
 
 ## 21. Rollout / Rollback / 发布与回滚
 
 - 当前设计 PR 只发布文档，不执行审计。
-- 未来 Phase 0A 代码先以 fixture/golden 运行，再执行受控 read-only DB smoke，最后由用户批准正式 audit request。
+- 未来 Phase 0A 代码先以 fixture/golden 运行，再执行受控 read-only DB smoke；版本化 audit request 配置可直接执行。
 - 审计输出 append-only；新 policy 或 source watermark 产生新 audit id。
-- Phase 0A.1 是独立的后续 control-plane 阶段；其 authority DDL、decision/revoke 写入和 operation authorization 不属于本 Phase 0A 只读实现。
-- 回滚停止审计入口并恢复上一批准 policy/receipt 引用，不删除历史证据。
+- Phase 0A.1 是独立的确定性 normalization 阶段；不创建 authority DDL、角色、decision/revoke 或 operation authorization。
+- 回滚停止审计入口并恢复上一版本 policy/receipt 引用，不删除历史证据。
 - Phase 0A 不改变线上荐股，因此没有 Program、Selection、Paper、HMM 或数据回滚动作。
 
 ## 22. Risks / Failure Modes / 风险与失败模式
@@ -1247,22 +1282,17 @@ Phase 0A.1 必须据此生成 `advisory_phase0a_handoff_bundle_v2`、GLOBAL/逐 
 | 先看结果再加 horizon/metric | 多重检验虚假冠军 | registry 预登记 + forward confirmation |
 | daily barrier 猜事件顺序 | 收益/止损标签偏乐观 | ORDER_AMBIGUOUS 或分钟保守顺序 |
 | 审计器调用正式 run | 创建 DB/Selection 副作用 | read-only architecture + no-write test |
-| 所有包必须 formal 才放行 | 无必要阻塞平台数据建设 | 全局门禁与 target 门禁分离 |
+| 所有包必须 formal 才继续 | 无必要阻塞平台数据建设 | 逐 scope 自动 readiness；READY/PARTIAL 可走对应路径，BLOCKED 只阻断自身 |
 
 ## 23. Production Gates / 生产门禁
 
-本详细设计文档交付：
+本阶段只涉及父蓝图 8 类自动门禁中的 `G-DEV-01`、`G-RUN-01` 和 `G-RUN-02`：
 
-- `production_ddl_gate=noop`
-- `production_backfill_dml_gate=noop`
-- `production_shadow_prediction_write_gate=noop`
-- `production_dataset_snapshot_store_gate=noop`
-- `production_model_artifact_store_gate=noop`
-- `production_training_scheduler_activation_gate=noop`
-- `production_program_model_activation_gate=noop`
-- `production_frontend_dependency_gate=noop`
-- `production_backend_dependency_gate=noop`
-- `production_runtime_activation=not_performed`
-- `production_service_restart=not_performed`
+- `G-DEV-01`：设计/实现必须通过 F1 workflow、只读测试和 no-write oracle。
+- `G-RUN-01`：策略包 preflight 只读解析 manifest/asset closure；合法单 Alpha和原生多 Alpha父包必须可通过。
+- `G-RUN-02`：行情、calendar、runtime/HMM/policy 输入只读分类；完整数据必须产生 READY/PARTIAL handoff readiness。
+- `G-DEV-02/G-DEV-03/G-RUN-03/G-RUN-04/G-RUN-05`：本 Phase 0A 只读阶段不执行。
 
-已合入的 Phase 0A 实现及其未来变更都必须保持 read-only；任何 DDL、DML、训练、调度或 runtime activation 都超出本阶段设计，必须停止并重新分级审批。
+本设计文档变更本身不触发 DDL、DML、依赖、调度、runtime activation 或 service restart。
+
+已合入的 Phase 0A 实现及其未来变更都必须保持 read-only；任何 DDL、DML、训练、调度或 runtime activation 都超出本阶段设计，必须停止并重新进行 Feature 分级和设计确认。
