@@ -1,0 +1,74 @@
+{
+  "schema_version": "advisory_phase0a_policy_registry_v1",
+  "policy_registry_id": "advisory_phase0a",
+  "policy_version": "v1",
+  "serializer_version": "advisory_phase0a_canonical_v1",
+  "frozen_at": "2026-07-11T00:00:00+00:00",
+  "effective_from_trade_date": "2026-07-13",
+  "effective_to_trade_date": null,
+  "benchmark_policy": {
+    "policy_id": "PIT_ELIGIBLE_UNIVERSE_EQ_WEIGHT_TOTAL_RETURN_V1",
+    "policy_hash": "23c8b2aca9240a868841def761140da32aaad6d0e22ac1022dc4ded484eb4586",
+    "universe_layer": "tradability_industry_universe",
+    "entry_basis": "target_open",
+    "effective_range": "2026-07-13/"
+  },
+  "cost_policy": {
+    "policy_id": "A_SHARE_TOTAL_RETURN_COST_V1",
+    "policy_hash": "6fcb2b4e16722cecacca9e23b830caf79a48aac989ca951dc25c24bdf0d260d6",
+    "commission_buy_rate": 0.0003,
+    "commission_sell_rate": 0.0003,
+    "minimum_commission": 5.0,
+    "stamp_duty_sell_rate": 0.0005,
+    "transfer_fee_rate": 0.0,
+    "slippage_bps": 5.0,
+    "lot_size": 100,
+    "reference_notional": 100000.0,
+    "effective_range": "2026-07-13/"
+  },
+  "label_policy": {
+    "policy_id": "ADVISORY_FORWARD_RETURN_LABEL_V1",
+    "policy_hash": "6e2a54d0397bdd9a8886b584c862f23e4785947cedc288f4b6d809435005896f",
+    "horizons": [1, 5, 20],
+    "entry_basis": "target_open",
+    "barrier_event_order_policy_id": "BARRIER_EVENT_ORDER_V1",
+    "barrier_event_order_policy_hash": "486704c1f25b7af3bb3e5bd50135471ac8b43125e24b3c3c7d544559eb6c9be3",
+    "terminal_return_rule": "MARK_TO_MARKET_AT_HORIZON_CLOSE_V1",
+    "censor_rule": "SUSPENSION_OR_DELISTING_CENSOR_V1",
+    "projection_policy": "NO_LOOKAHEAD_PER_HORIZON_V1"
+  },
+  "universe_policy": {
+    "policy_id": "PIT_ELIGIBLE_A_SHARE_UNIVERSE_V1",
+    "policy_hash": "efa5a409164f820b51f9272507f8f3b496be2a1634bfd052442b6cf8173cbabb",
+    "effective_range": "2026-07-13/",
+    "calendar_snapshot_required": true
+  },
+  "embargo_policy": {
+    "policy_id": "ADVISORY_RESEARCH_EMBARGO_V1",
+    "policy_version": "v1",
+    "policy_hash": "2abbc8fa2e3f332e93ea5aab4229c6570a4bff145ba0cefba6411b4cf01718c4",
+    "minimum_trading_day_gap": 20,
+    "cutoff_timestamp_normalization": "ASIA_SHANGHAI_AVAILABLE_TRADE_DATE_V1",
+    "training_label_information_end_rule": "MAX_INFORMATION_CONSUMED",
+    "calendar_snapshot_required": true
+  },
+  "prior_policy": {
+    "registry_id": "ADVISORY_PHASE0A_PRIOR_V1",
+    "registry_hash": "eb91f82af06ceee137b971c051ed7dbb5a3b322ba387e0cbb33dc920dddc5107",
+    "frozen_at": "2026-07-11T00:00:00+00:00",
+    "entries": []
+  },
+  "multiple_testing_policy": {
+    "registry_id": "ADVISORY_PHASE0A_MULTIPLE_TESTING_V1",
+    "registry_hash": "c1be8f256ecacf3ac648aa97a07447c3265a515b0cbc9649cc7e0eaea842b71d",
+    "frozen_at": "2026-07-11T00:00:00+00:00",
+    "entries": []
+  },
+  "style_assignment_policy": {
+    "policy_id": "ADVISORY_PACKAGE_DECLARED_STYLE_V1",
+    "policy_hash": "eae6d1768e3fcb1096faa11fa28faebcba7115db5e1d7c5b361f242ace265e4e",
+    "effective_range": "2026-07-13/",
+    "assignment_method": "package_declared_style_family"
+  },
+  "registry_content_hash": "68538d81784294f9b6a6d09c46df274438fb1f34ce0ff5d6da68cb3dbdf86d64"
+}

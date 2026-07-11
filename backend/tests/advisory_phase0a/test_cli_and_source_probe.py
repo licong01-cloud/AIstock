@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import date
 import json
+from types import SimpleNamespace
 
 import scripts.advisory_phase0a_audit as cli
 
@@ -84,7 +85,9 @@ def test_cli_validates_request_without_opening_database(tmp_path, capsys) -> Non
         json.dumps(
             {
                 "audit_id": "audit_validation_only",
-                "audit_policy_version": "policy_v1",
+                "policy_registry_id": "advisory_phase0a",
+                "audit_policy_version": "v1",
+                "policy_registry_content_hash": "68538d81784294f9b6a6d09c46df274438fb1f34ce0ff5d6da68cb3dbdf86d64",
                 "targets": [
                     {
                         "audit_target_id": "target_1",
@@ -96,7 +99,7 @@ def test_cli_validates_request_without_opening_database(tmp_path, capsys) -> Non
                         "decision_dates": ["2026-02-05"],
                         "selection_evidence_ids_by_decision_date": {"2026-02-05": "dse_1"},
                         "style_family": "SHORT_REBOUND",
-                        "audit_policy_version": "policy_v1",
+                        "audit_policy_version": "v1",
                     }
                 ],
             }
@@ -107,3 +110,66 @@ def test_cli_validates_request_without_opening_database(tmp_path, capsys) -> Non
     assert cli.main(["--request", str(request_path)]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "validated_only"
+
+
+def test_cli_validates_repo_tracked_policy_registry(capsys) -> None:
+    assert cli.main(
+        [
+            "validate-policy-registry",
+            "--policy-registry-id",
+            "advisory_phase0a",
+            "--policy-version",
+            "v1",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "policy_registry_validated"
+    assert payload["registry_content_hash"] == "68538d81784294f9b6a6d09c46df274438fb1f34ce0ff5d6da68cb3dbdf86d64"
+
+
+def test_cli_execute_uses_versioned_request_without_approval_reference(monkeypatch, tmp_path, capsys) -> None:
+    request_path = tmp_path / "request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "audit_id": "audit_execute_without_approval",
+                "policy_registry_id": "advisory_phase0a",
+                "audit_policy_version": "v1",
+                "policy_registry_content_hash": "68538d81784294f9b6a6d09c46df274438fb1f34ce0ff5d6da68cb3dbdf86d64",
+                "targets": [
+                    {
+                        "audit_target_id": "target_1",
+                        "program_id": "program_1",
+                        "package_id": "package_1",
+                        "manifest_sha256": "a" * 64,
+                        "expected_alpha_mode": "single_alpha",
+                        "decision_date_range": {"start_date": "2026-02-05", "end_date": "2026-02-05"},
+                        "decision_dates": ["2026-02-05"],
+                        "selection_evidence_ids_by_decision_date": {"2026-02-05": "dse_1"},
+                        "style_family": "SHORT_REBOUND",
+                        "audit_policy_version": "v1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    class _Service:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def audit(self, request: object) -> object:
+            return SimpleNamespace(
+                audit_id=getattr(request, "audit_id"),
+                audit_manifest_hash="b" * 64,
+            )
+
+    monkeypatch.setattr(cli, "_readers_from_env", lambda **_kwargs: object())
+    monkeypatch.setattr(cli, "AdvisoryPhase0AAuditService", _Service)
+    monkeypatch.setattr(cli, "write_receipt_artifacts", lambda **_kwargs: tmp_path / "receipt")
+
+    assert cli.main(["--request", str(request_path), "--execute-readonly"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "read_only_audit"
+    assert payload["audit_id"] == "audit_execute_without_approval"

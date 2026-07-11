@@ -5,6 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .handoff import (
+    AUDIT_RECEIPT_SCHEMA_VERSION,
+    Phase0AHandoffNormalizer,
+    audit_manifest_base,
+    audit_request_identity_payload,
+    target_scope_registry_payload,
+)
 from .models import (
     AuditReceipt,
     AuditRequest,
@@ -27,6 +34,10 @@ from .policy import (
     missing_embargo_policy_reason_codes,
     missing_policy_reason_codes,
     normalized_reason_codes,
+    REASON_POLICY_REGISTRY_EFFECTIVE_RANGE_INVALID,
+    REASON_POLICY_REGISTRY_HASH_MISMATCH,
+    REASON_POLICY_REGISTRY_IDENTITY_MISMATCH,
+    REASON_POLICY_REGISTRY_NOT_FROZEN,
 )
 from .resolvers import (
     AuditReaders,
@@ -45,7 +56,7 @@ from .resolvers import (
 REASON_POLICY_VERSION_MISMATCH = "ADVISORY_PHASE0A_POLICY_VERSION_MISMATCH"
 REASON_SURVIVORSHIP_PIT_MISSING = "ADVISORY_PHASE0A_SURVIVORSHIP_PIT_UNIVERSE_MISSING"
 REASON_LABEL_SOURCE_UNAVAILABLE = "ADVISORY_PHASE0A_LABEL_SOURCE_UNAVAILABLE"
-RECEIPT_SCHEMA_VERSION = "advisory_phase0a_receipt_v1"
+RECEIPT_SCHEMA_VERSION = AUDIT_RECEIPT_SCHEMA_VERSION
 
 
 class AdvisoryPhase0AAuditService:
@@ -56,36 +67,47 @@ class AdvisoryPhase0AAuditService:
         self._policy = policy
 
     def audit(self, request: AuditRequest) -> AuditReceipt:
+        if not self._policy.is_frozen:
+            raise Phase0AAuditError(f"{REASON_POLICY_REGISTRY_NOT_FROZEN}: formal audit requires a frozen policy registry")
         if request.audit_policy_version != self._policy.policy_version:
             raise Phase0AAuditError(
                 f"{REASON_POLICY_VERSION_MISMATCH}: request={request.audit_policy_version} policy={self._policy.policy_version}"
             )
+        if request.policy_registry_id != self._policy.policy_registry_id:
+            raise Phase0AAuditError(
+                f"{REASON_POLICY_REGISTRY_IDENTITY_MISMATCH}: "
+                f"request={request.policy_registry_id} policy={self._policy.policy_registry_id}"
+            )
+        if request.policy_registry_content_hash != self._policy.registry_content_hash:
+            raise Phase0AAuditError(
+                f"{REASON_POLICY_REGISTRY_HASH_MISMATCH}: "
+                f"request={request.policy_registry_content_hash} policy={self._policy.registry_content_hash}"
+            )
+        if self._policy.effective_from_trade_date is None:
+            raise Phase0AAuditError(f"{REASON_POLICY_REGISTRY_EFFECTIVE_RANGE_INVALID}: effective_from_trade_date is required")
+        for target in request.targets:
+            for decision_date in target.decision_dates:
+                if decision_date < self._policy.effective_from_trade_date or (
+                    self._policy.effective_to_trade_date is not None
+                    and decision_date > self._policy.effective_to_trade_date
+                ):
+                    raise Phase0AAuditError(
+                        f"{REASON_POLICY_REGISTRY_EFFECTIVE_RANGE_INVALID}: "
+                        f"decision_date={decision_date.isoformat()} is outside the policy effective range"
+                    )
         results = [self._audit_target(target) for target in sorted(request.targets, key=lambda item: item.audit_target_id)]
-        request_payload = {
-            "schema_version": "advisory_phase0a_request_identity_v1",
-            "audit_id": request.audit_id,
-            "audit_policy_version": request.audit_policy_version,
-            "targets": [target.model_dump(mode="python") for target in sorted(request.targets, key=lambda item: item.audit_target_id)],
-        }
-        request_hash = canonical_json_sha256(request_payload)
-        policy_hash = canonical_json_sha256(self._policy)
+        request_hash = canonical_json_sha256(audit_request_identity_payload(request))
         result_payload = [result.model_dump(mode="python") for result in results]
         result_hash = canonical_json_sha256(result_payload)
-        handoff_hashes = _phase1_handoff_hashes(results=results, policy=self._policy)
-        audit_manifest_base = {
-            "schema_version": RECEIPT_SCHEMA_VERSION,
-            "audit_id": request.audit_id,
-            "request_hash": request_hash,
-            "audit_policy_version": request.audit_policy_version,
-            "policy_hash": policy_hash,
-            "serializer_version": self._policy.serializer_version,
-            "result_hash": result_hash,
-            "phase1_handoff_hashes": handoff_hashes,
-            "read_only": True,
-            "raw_intermediate_location": f"tmp/advisory_phase0a/{request.audit_id}",
-            "raw_intermediate_cleanup_status": "NOT_CREATED",
-        }
-        audit_manifest_hash = canonical_json_sha256(audit_manifest_base)
+        manifest_base = audit_manifest_base(
+            audit_id=request.audit_id,
+            audit_policy_version=request.audit_policy_version,
+            request_hash=request_hash,
+            result_hash=result_hash,
+            results=results,
+            policy=self._policy,
+        )
+        audit_manifest_hash = canonical_json_sha256(manifest_base)
         phase0a_reasons = normalized_reason_codes(
             [code for result in results for code in result.phase0a_reason_codes]
         )
@@ -398,25 +420,7 @@ def receipt_artifact_payloads(
 
     results = receipt.results
     policy_payload = policy.model_dump(mode="python")
-    target_scope = {
-        "schema_version": "advisory_phase0a_target_scope_registry_v1",
-        "audit_id": receipt.audit_id,
-        "request_hash": receipt.request_hash,
-        "targets": [
-            {
-                "audit_target_id": target.audit_target_id,
-                "program_id": target.program_id,
-                "package_id": target.package_id,
-                "manifest_sha256": target.manifest_sha256,
-                "expected_alpha_mode": target.expected_alpha_mode.value,
-                "decision_date_range": target.decision_date_range.model_dump(mode="json"),
-                "decision_dates": [item.isoformat() for item in target.decision_dates],
-                "style_family": target.style_family,
-                "requested_capabilities": target.requested_capabilities,
-            }
-            for target in sorted(request.targets, key=lambda item: item.audit_target_id)
-        ],
-    }
+    target_scope = target_scope_registry_payload(receipt=receipt, request=request)
     asset_ledger = {
         "schema_version": "advisory_phase0a_asset_vintage_ledger_v1",
         "audit_id": receipt.audit_id,
@@ -510,29 +514,25 @@ def receipt_artifact_payloads(
         "status": "NOT_REGISTERED",
         "reason_codes": ["ADVISORY_PHASE0A_PRIOR_COHORT_UNAVAILABLE"],
     }
-    approval = {
-        "schema_version": "advisory_phase0a_approval_receipt_v1",
-        "audit_id": receipt.audit_id,
-        "approval_status": "NOT_APPROVED",
-        "approved_request_reference": request.approved_request_reference,
-        "automatic_approval": False,
-        "phase1_exit_gate_status": "BLOCKED_PENDING_MANUAL_APPROVAL",
+    readiness_report, handoff_bundle = Phase0AHandoffNormalizer(policy=policy).normalize(
+        receipt=receipt,
+        request=request,
+    )
+    manifest_base = audit_manifest_base(
+        audit_id=receipt.audit_id,
+        audit_policy_version=receipt.audit_policy_version,
+        request_hash=receipt.request_hash,
+        result_hash=receipt.result_hash,
+        results=results,
+        policy=policy,
+    )
+    manifest = {
+        **manifest_base,
+        "audit_manifest_hash": receipt.audit_manifest_hash,
+        # This pointer is excluded from audit_manifest_hash to avoid a report/manifest hash cycle.
+        "handoff_readiness_report_hash": readiness_report.handoff_readiness_hash,
     }
-    manifest_base = {
-        "schema_version": RECEIPT_SCHEMA_VERSION,
-        "audit_id": receipt.audit_id,
-        "request_hash": receipt.request_hash,
-        "audit_policy_version": receipt.audit_policy_version,
-        "policy_hash": canonical_json_sha256(policy_payload),
-        "serializer_version": policy.serializer_version,
-        "result_hash": receipt.result_hash,
-        "phase1_handoff_hashes": _phase1_handoff_hashes(results=results, policy=policy),
-        "read_only": True,
-        "raw_intermediate_location": f"tmp/advisory_phase0a/{receipt.audit_id}",
-        "raw_intermediate_cleanup_status": "NOT_CREATED",
-    }
-    manifest = {**manifest_base, "audit_manifest_hash": receipt.audit_manifest_hash}
-    summary = _summary_markdown(receipt)
+    summary = _summary_markdown(receipt, readiness_report=readiness_report)
     payloads: dict[str, Any] = {
         "target_scope_registry.json": target_scope,
         "package_asset_vintage_ledger.json": asset_ledger,
@@ -548,8 +548,10 @@ def receipt_artifact_payloads(
         "audit_summary.md": summary,
         "candidate_authority_stage_capability_report.json": capability,
         "prior_cohort_report.json": prior_cohort,
-        "approval_receipt.json": approval,
+        "handoff_readiness_report.json": readiness_report.model_dump(mode="python"),
     }
+    if handoff_bundle is not None:
+        payloads["phase1_handoff_bundle.json"] = handoff_bundle.model_dump(mode="python")
     return payloads
 
 
@@ -580,7 +582,7 @@ def write_receipt_artifacts(
     return destination
 
 
-def _summary_markdown(receipt: AuditReceipt) -> str:
+def _summary_markdown(receipt: AuditReceipt, *, readiness_report: Any) -> str:
     lines = [
         "# Advisory Phase 0A Audit",
         "",
@@ -589,7 +591,8 @@ def _summary_markdown(receipt: AuditReceipt) -> str:
         f"- Request hash: `{receipt.request_hash}`",
         f"- Manifest hash: `{receipt.audit_manifest_hash}`",
         f"- Result hash: `{receipt.result_hash}`",
-        "- Approval status: `NOT_APPROVED`",
+        f"- Handoff readiness: `{readiness_report.readiness.value}`",
+        f"- Handoff readiness hash: `{readiness_report.handoff_readiness_hash}`",
         "",
         "| Target | Formal OOS | Retrospective | None |",
         "|---|---:|---:|---:|",
@@ -603,44 +606,3 @@ def _summary_markdown(receipt: AuditReceipt) -> str:
             f"{counts['RETROSPECTIVE_RESEARCH_ONLY']} | {counts['NONE']} |"
         )
     return "\n".join(lines) + "\n"
-
-
-def _phase1_handoff_hashes(*, results: list[TargetAuditResult], policy: Phase0APolicyRegistry) -> dict[str, str]:
-    """Freeze Phase 1 input identities without asserting that Phase 1 is approved."""
-
-    return {
-        "source_availability_matrix_hash": canonical_json_sha256(
-            [entry.model_dump(mode="python") for result in results for entry in result.source_availability]
-        ),
-        "universe_survivorship_hash": canonical_json_sha256(
-            [entry.model_dump(mode="python") for result in results for entry in result.universe_survivorship]
-        ),
-        "asset_runtime_hmm_ledger_hash": canonical_json_sha256(
-            {
-                "assets": [entry.model_dump(mode="python") for result in results for entry in result.asset_ledger],
-                "runtime": [entry.model_dump(mode="python") for result in results for entry in result.runtime_semantics],
-                "hmm": [entry.model_dump(mode="python") for result in results for entry in result.hmm_vintages],
-            }
-        ),
-        "oos_interval_report_hash": canonical_json_sha256(
-            [entry.model_dump(mode="python") for result in results for entry in result.oos_intervals]
-        ),
-        "candidate_authority_stage_capability_hash": canonical_json_sha256(
-            [entry.model_dump(mode="python") for result in results for entry in result.candidate_authority]
-        ),
-        "metric_label_policy_hash": canonical_json_sha256(
-            {
-                "benchmark": policy.benchmark_policy,
-                "cost": policy.cost_policy,
-                "label": policy.label_policy,
-                "embargo": {
-                    "policy_id": policy.embargo_policy_id,
-                    "policy_version": policy.embargo_policy_version,
-                    "policy_hash": policy.embargo_policy_hash,
-                },
-            }
-        ),
-        "prior_registry_hash": canonical_json_sha256(policy.prior_policy),
-        "multiple_testing_registry_hash": canonical_json_sha256(policy.multiple_testing_policy),
-        "policy_registry_hash": canonical_json_sha256(policy),
-    }

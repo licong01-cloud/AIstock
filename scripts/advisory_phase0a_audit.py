@@ -1,4 +1,4 @@
-"""Execute a user-approved Advisory Phase 0A audit with read-only database sessions."""
+"""Execute a versioned Advisory Phase 0A audit with read-only database sessions."""
 
 from __future__ import annotations
 
@@ -12,9 +12,17 @@ from typing import Any, Iterator
 
 import psycopg2
 
+if __package__ in {None, ""}:  # Support direct ``python scripts/...`` execution from the repository root.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from backend.services.advisory_phase0a.audit_service import AdvisoryPhase0AAuditService, write_receipt_artifacts
 from backend.services.advisory_phase0a.models import AuditRequest, Phase0AAuditError, Phase0APolicyRegistry
-from backend.services.advisory_phase0a.policy import canonical_json_sha256, default_policy_registry
+from backend.services.advisory_phase0a.policy import (
+    POLICY_REGISTRY_ROOT,
+    PolicyRegistryValidationError,
+    canonical_json_sha256,
+    load_frozen_policy_registry,
+)
 from backend.services.advisory_phase0a.resolvers import AuditReaders, PostgresReadOnlySourceProbe
 from backend.services.advisory_program import AdvisoryProgramPGRepository
 from backend.services.selection_center.repository import SelectionCenterRepository
@@ -120,13 +128,18 @@ def _read_request(path: Path) -> AuditRequest:
         raise AdvisoryPhase0ACommandError(f"invalid audit request: {exc}") from exc
 
 
-def _read_policy(path: Path | None, *, policy_version: str) -> Phase0APolicyRegistry:
-    if path is None:
-        return default_policy_registry(policy_version=policy_version)
-    try:
-        return Phase0APolicyRegistry.model_validate(_read_json(path))
-    except ValueError as exc:
-        raise AdvisoryPhase0ACommandError(f"invalid Phase 0A policy registry: {exc}") from exc
+def _load_policy_for_request(*, request: AuditRequest, registry_root: Path | None) -> Phase0APolicyRegistry:
+    policy = load_frozen_policy_registry(
+        policy_registry_id=request.policy_registry_id,
+        policy_version=request.audit_policy_version,
+        registry_root=registry_root,
+    )
+    if policy.registry_content_hash != request.policy_registry_content_hash:
+        raise AdvisoryPhase0ACommandError(
+            "ADVISORY_PHASE0A_POLICY_REGISTRY_HASH_MISMATCH: "
+            f"request={request.policy_registry_content_hash} policy={policy.registry_content_hash}"
+        )
+    return policy
 
 
 def _readers_from_env(*, env_file: Path | None, target_db: str) -> AuditReaders:
@@ -147,8 +160,16 @@ def _readers_from_env(*, env_file: Path | None, target_db: str) -> AuditReaders:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a read-only Advisory Phase 0A evidence audit.")
-    parser.add_argument("--request", required=True, type=Path, help="Approved audit request JSON")
-    parser.add_argument("--policy", type=Path, help="Pre-registered policy JSON")
+    parser.add_argument("command", nargs="?", choices=("validate-policy-registry",))
+    parser.add_argument("--request", type=Path, help="Versioned audit request JSON")
+    parser.add_argument("--policy-registry-id", help="Policy registry id for validation mode")
+    parser.add_argument("--policy-version", help="Policy version for validation mode")
+    parser.add_argument(
+        "--policy-registry-root",
+        type=Path,
+        default=POLICY_REGISTRY_ROOT,
+        help="Read-only root containing repo-tracked frozen policy registry JSON files",
+    )
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--env-file", type=Path, default=Path(os.environ.get("AISTOCK_ENV_FILE", ".env")))
     parser.add_argument("--target-db", choices=(TARGET_PROD, TARGET_DEV), default=TARGET_PROD)
@@ -163,8 +184,39 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "validate-policy-registry":
+            if not args.policy_registry_id or not args.policy_version:
+                raise AdvisoryPhase0ACommandError(
+                    "validate-policy-registry requires --policy-registry-id and --policy-version"
+                )
+            policy = load_frozen_policy_registry(
+                policy_registry_id=args.policy_registry_id,
+                policy_version=args.policy_version,
+                registry_root=args.policy_registry_root,
+            )
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "mode": "policy_registry_validated",
+                        "policy_registry_id": policy.policy_registry_id,
+                        "policy_version": policy.policy_version,
+                        "registry_content_hash": policy.registry_content_hash,
+                        "effective_from_trade_date": policy.effective_from_trade_date.isoformat(),
+                        "effective_to_trade_date": (
+                            policy.effective_to_trade_date.isoformat()
+                            if policy.effective_to_trade_date is not None
+                            else None
+                        ),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.request is None:
+            raise AdvisoryPhase0ACommandError("--request is required for an audit")
         request = _read_request(args.request)
-        policy = _read_policy(args.policy, policy_version=request.audit_policy_version)
+        policy = _load_policy_for_request(request=request, registry_root=args.policy_registry_root)
         if policy.policy_version != request.audit_policy_version:
             raise AdvisoryPhase0ACommandError(
                 f"policy version mismatch: request={request.audit_policy_version} policy={policy.policy_version}"
@@ -182,12 +234,6 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.policy is None:
-            raise AdvisoryPhase0ACommandError("--policy is required with --execute-readonly")
-        if not request.approved_request_reference:
-            raise AdvisoryPhase0ACommandError(
-                "approved_request_reference is required with --execute-readonly; no controlled audit may run without scope approval"
-            )
         service = AdvisoryPhase0AAuditService(readers=_readers_from_env(env_file=args.env_file, target_db=args.target_db), policy=policy)
         receipt = service.audit(request)
         destination = write_receipt_artifacts(
@@ -209,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
-    except (AdvisoryPhase0ACommandError, Phase0AAuditError) as exc:
+    except (AdvisoryPhase0ACommandError, Phase0AAuditError, PolicyRegistryValidationError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, sort_keys=True), file=sys.stderr)
         return 2
 

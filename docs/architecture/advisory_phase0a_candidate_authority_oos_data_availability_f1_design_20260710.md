@@ -1209,7 +1209,7 @@ L3 必须提供单 Alpha、原生多 Alpha和 daily multi-Program runner 的完�
 
 ### 19.1 Implementation Acceptance Matrix / 实现验收矩阵（2026-07-11）
 
-本表记录 PR `#1958` 的既有实现证据，不表示任何实际 Program/package target 已完成审计或进入 Phase 1。2026-07-11 已确认取消 `NOT_APPROVED approval_receipt` 和后续审批链；因此旧 receipt writer 证据仅证明只读审计基础，新的 `handoff_readiness_report` 与确定性 Phase 0A.1 handoff 必须在后续代码 PR 完成后才能标记实现完成。本阶段没有生成用户可见模型结论、训练、调度或运行时激活。
+本表记录 PR `#1958` 的既有只读审计基础及本功能分支的 Phase 0A.1 实现证据，不表示任何实际 Program/package target 已完成审计或进入 Phase 1。2026-07-11 已确认取消 `NOT_APPROVED approval_receipt` 和后续审批链；当前实现以确定性 `handoff_readiness_report` 和可选 `phase1_handoff_bundle` 替代该占位物。本阶段没有生成用户可见模型结论、训练、调度、生产 DML 或运行时激活。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1223,9 +1223,9 @@ L3 必须提供单 Alpha、原生多 Alpha和 daily multi-Program runner 的完�
 | F-015 | read-only repositories/probe adapters；`build_asset_ledger` | backtest `data_vintage` forbidden entry、fixed SELECT allowlist/no-write test | completed | none |
 | F-016 | `resolve_decision_clock`；`effective_cutoff`；`embargo_formal_start`；OOS classifier | T/T+1、asset closure、20 trading-day embargo、formal/retrospective/none label maturity fixture | completed | none |
 | F-019 | `policy.py` reason registry；`AuditReceipt` | no-candidate、missing source vintage、HMM latest and multi-alpha variant reason-code fixture | completed | none |
-| F-022 | `audit_service.py:receipt_artifact_payloads`；Phase 1 handoff hashes | 既有 15-file receipt 和 append-only writer 已验证；`handoff_readiness_report` 替换由用户明确要求，后续实现不得保留 approval 语义 | approved_by_user_rework_required | approval receipt replacement pending code follow-up |
-| F-023 | `backend/tests/advisory_phase0a/` | 19 focused tests；new-module coverage 85%；adjacent Advisory/Selection/Multi-Alpha/Paper selection tests passed | completed | none |
-| F-024 | isolated service/CLI only；no migration/router/frontend changes | 只读隔离已验证；新增 READY 正向 golden 和 gate satisfiability E2E 为后续实现必需证据 | approved_by_user_rework_required | readiness positive-path implementation pending |
+| F-022 | `handoff.py:Phase0AHandoffNormalizer`；`audit_service.py:receipt_artifact_payloads`；`scripts/advisory_phase0a_audit.py` | deterministic readiness/bundle hash、approval artifact absence、tampered receipt fail-closed 和 CLI no-approval-reference tests | completed | none |
+| F-023 | `backend/tests/advisory_phase0a/` | 23 focused tests；new-module coverage 85%；adjacent Advisory/Selection/Multi-Alpha/Paper selection tests deferred to CI/nightly | completed | none |
+| F-024 | isolated service/CLI only；no migration/router/frontend changes | formal READY、research-only PARTIAL、no-candidate BLOCKED、single/multi-alpha golden 和 Phase 1 bundle emission tests；无 DB 写入、DDL、调度或运行时激活 | completed | none |
 
 ## 20. Phase 0A 退出门禁与 Phase 1 交接
 
