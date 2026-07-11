@@ -143,7 +143,7 @@ const selectStyle: React.CSSProperties = {
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const BASE = `${API}/quantevolver/evolution`;
 const OFFICIAL_CACHE_DEFAULT_START = "2018-08-01";
-const OFFICIAL_CACHE_DEFAULT_END = "2026-04-30";
+const OFFICIAL_CACHE_DEFAULT_END = "2026-06-30";
 
 function isIsoDate(value?: string | null): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -634,7 +634,7 @@ export default function ComputePanel({
         <strong>计算模式说明：</strong>
         相关性计算只使用 <strong>rdagent_assets/factor_values/single</strong> official factor-value parquet cache，
         与官方独立指标和 QE 回测共用同一份因子值缓存；默认展示全量数据集
-        <strong>2018-08-01 ~ 2026-04-30</strong>，缺缓存的因子不会回退到非官方缓存或旧快照。
+        <strong>2018-08-01 ~ 2026-06-30</strong>，缺缓存的因子不会回退到非官方缓存或旧快照。
         如需补齐因子值，请在因子库提交官方全量因子计算后再重新计算相关性。
       </div>
 

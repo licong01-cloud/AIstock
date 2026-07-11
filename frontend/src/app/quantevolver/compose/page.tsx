@@ -20,8 +20,8 @@ const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveC
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const MULTI_ALPHA_DISTRIBUTED_ENABLED =
   process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
-const QE_DEFAULT_SIGNAL_END = "2026-04-28";
-const QE_DEFAULT_BACKTEST_END = "2026-04-27";
+const QE_DEFAULT_SIGNAL_END = "2026-06-30";
+const QE_DEFAULT_BACKTEST_END = "2026-06-29";
 const DEFAULT_QE_DATA_SPLIT = {
   train_start: "2018-08-01",
   train_end: "2022-12-31",

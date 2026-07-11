@@ -348,10 +348,10 @@ def _qe_experiment_dir(experiment_name: str) -> Path:
 #
 # `test_end` is the last day used by the data handler/signals.  Qlib daily
 # portfolio simulation needs one following calendar row, so the default
-# portfolio backtest stops at 2026-04-27 while the provider still contains
-# 2026-04-28 for signal/price lookups.
-QE_DEFAULT_SIGNAL_END = "2026-04-28"
-QE_DEFAULT_BACKTEST_END = "2026-04-27"
+# portfolio backtest stops at 2026-06-29 while the provider still contains
+# 2026-06-30 for signal/price lookups.
+QE_DEFAULT_SIGNAL_END = "2026-06-30"
+QE_DEFAULT_BACKTEST_END = "2026-06-29"
 
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
@@ -364,10 +364,11 @@ RDAGENT_DEFAULT_DATA_SPLIT = {
 }
 
 _LEGACY_QE_DEFAULT_SPLIT_MARKERS = (
-    # Old QE UI/system defaults before the 2026-04-28 data refresh.  When a
+    # Old QE UI/system defaults before the 2026-06-30 data refresh.  When a
     # caller sends this exact default split without an intentional override,
     # upgrade it so new single/evolution/strategy/custom runs do not require
     # manual date edits.
+    {"test_end": "2026-04-28", "backtest_end": "2026-04-27"},
     {"test_end": "2026-03-10", "backtest_end": None},
     {"test_end": "2026-03-10", "backtest_end": "2026-03-09"},
     {"test_end": "2025-12-01", "backtest_end": None},
@@ -482,8 +483,8 @@ class ConfigComposer:
         """Ensure every QE path has a safe portfolio backtest end.
 
         Qlib daily backtest reads calendar[index+1].  With the official data
-        currently ending on 2026-04-28, the safe default portfolio end is
-        2026-04-27.  Data/signal coverage still uses `test_end`.
+        currently ending on 2026-06-30, the safe default portfolio end is
+        2026-06-29.  Data/signal coverage still uses `test_end`.
         """
         if not data_split.get("test_end"):
             return
