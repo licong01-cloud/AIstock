@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -541,6 +542,90 @@ def test_event_loop_submit_no_child_order_fails_loudly_without_silent_batch() ->
     assert context["failed_intents"] == 1
     assert context["missing_parent_intent_ids"] == [intent.intent_id]
     assert qmt_client.place_order_calls == []
+
+
+def test_event_loop_first_tick_capture_is_sidecar_only_and_keeps_request_identity() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+    policy = _event_loop_policy(
+        algo_config={
+            "tca": {
+                "benchmark_policy": {
+                    "benchmark_max_age_ms": 10_000,
+                    "arrival_forward_window_ms": 2_000,
+                    "clock_skew_tolerance_ms": 1_000,
+                    "benchmark_max_transport_latency_ms": 3_000,
+                    "policy_version": "phase0a_test_v1",
+                }
+            }
+        }
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=policy,
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_tca",
+        runtime_id="mqrt_event_loop_tca",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+        child_context_factory=lambda parent, _index: {
+            "execution_plan_id": "plan_tca",
+            "execution_plan_hash": "hash_tca",
+            "execution_plan_intent_id": parent.intent_id,
+        },
+    )
+
+    batch = qmt_repo.get_order_batch(result.batch_id or "")
+    assert batch is not None
+    sidecar = batch.metadata["tca_observation_v1"]
+    assert intent.intent_id in sidecar["arrival_capture_by_parent"]
+    assert intent.intent_id in sidecar["managed_preflight_eligibility_by_parent"]
+    assert "tca_observation_v1" not in batch.request_json["orders"][0]["metadata"]
+
+    rewritten = qmt_repo.upsert_order_batch(replace(batch, metadata={"fresh_runtime_metadata": True}))
+    assert rewritten.metadata["tca_observation_v1"] == sidecar
+
+def test_event_loop_tca_policy_missing_is_loud_but_does_not_block_b0() -> None:
+    repo, qmt_repo, qmt_client, intent = _event_loop_client_fixture()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=repo,
+        strategy_ledger_repository=qmt_repo,
+        runtime_kind="event_loop",
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[intent],
+        policy_context=_event_loop_policy(),
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_tca_missing",
+        runtime_id="mqrt_event_loop_tca_missing",
+        strategy_slot_id="slot_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+        child_context_factory=lambda parent, _index: {
+            "execution_plan_id": "plan_tca_missing",
+            "execution_plan_hash": "hash_tca_missing",
+            "execution_plan_intent_id": parent.intent_id,
+        },
+    )
+
+    batch = qmt_repo.get_order_batch(result.batch_id or "")
+    assert batch is not None
+    error = batch.metadata["tca_observation_v1"]["capture_errors"][intent.intent_id]
+    assert error["reason_code"] == "ADAPTIVE_IS_TCA_BENCHMARK_POLICY_MISSING"
+    assert result.batch_status == batch.batch_status.value
 
 
 def test_dependent_buy_released_by_sell_trade_event_after_ledger_cash_sufficient() -> None:

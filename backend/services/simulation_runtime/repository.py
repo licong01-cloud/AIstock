@@ -8,6 +8,13 @@ from typing import Any, Callable, Iterable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
+from backend.services.trading_core.tca_sidecar import (
+    TCA_OBSERVATION_KEY,
+    CaptureMergeOutcome,
+    merge_parent_first_write,
+    new_run_tca_sidecar,
+    preserve_tca_sidecar,
+)
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
@@ -550,6 +557,7 @@ class SimulationRuntimeRepository:
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        merged_payload = preserve_tca_sidecar(current.run_payload_json, merged_payload)
         for key in payload_unset or ():
             merged_payload.pop(str(key), None)
         updated = current.model_copy(
@@ -587,6 +595,108 @@ class SimulationRuntimeRepository:
                     ),
                 )
         return self.get_simulation_daily_run(run_id)
+
+    def merge_run_tca_capture_sidecar(
+        self,
+        *,
+        run_id: str,
+        expected_plan_id: str,
+        expected_plan_hash: str,
+        parent_intent_id: str,
+        decision_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+        capture_batch_id: str | None = None,
+    ) -> CaptureMergeOutcome:
+        """CAS-merge one TCA parent observation without touching run state.
+
+        The generic update path intentionally cannot replace this namespace.
+        This is the sole PostgreSQL writer that obtains a row lock and applies
+        the first-write/hash comparison contract for run-side evidence.
+        """
+
+        if sum(value is not None for value in (decision_capture, capture_error, capture_batch_id)) != 1:
+            raise ValueError("exactly one run TCA capture mutation is required")
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT execution_plan_id, execution_plan_hash, run_payload_json
+                        FROM paper_v2.simulation_daily_run
+                        WHERE run_id = %s
+                        FOR UPDATE
+                        """,
+                        (run_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        conn.rollback()
+                        return CaptureMergeOutcome.NOT_FOUND
+                    if row.get("execution_plan_id") != expected_plan_id or row.get("execution_plan_hash") != expected_plan_hash:
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    payload = dict(row.get("run_payload_json") or {})
+                    existing = payload.get(TCA_OBSERVATION_KEY)
+                    if existing is None:
+                        sidecar = new_run_tca_sidecar(
+                            execution_plan_id=expected_plan_id,
+                            execution_plan_hash=expected_plan_hash,
+                        )
+                    elif not isinstance(existing, dict):
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    else:
+                        sidecar = dict(existing)
+                        if (
+                            sidecar.get("execution_plan_id") != expected_plan_id
+                            or sidecar.get("execution_plan_hash") != expected_plan_hash
+                        ):
+                            conn.rollback()
+                            return CaptureMergeOutcome.IDENTITY_DRIFT
+                    if decision_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="decision_capture_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=decision_capture,
+                        )
+                    elif capture_error is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_errors",
+                            parent_intent_id=parent_intent_id,
+                            value=capture_error,
+                        )
+                    else:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_batch_id_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=str(capture_batch_id),
+                        )
+                    if outcome == CaptureMergeOutcome.CONFLICT:
+                        conn.rollback()
+                        return outcome
+                    payload[TCA_OBSERVATION_KEY] = sidecar
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_daily_run
+                        SET run_payload_json = %s, updated_at = now()
+                        WHERE run_id = %s
+                        """,
+                        (psycopg2.extras.Json(payload), run_id),
+                    )
+                conn.commit()
+                return outcome
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
 
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
@@ -1058,6 +1168,7 @@ class InMemorySimulationRuntimeRepository:
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        merged_payload = preserve_tca_sidecar(current.run_payload_json, merged_payload)
         for key in payload_unset or ():
             merged_payload.pop(str(key), None)
         updated = current.model_copy(
@@ -1072,3 +1183,61 @@ class InMemorySimulationRuntimeRepository:
         )
         self.daily_runs[run_id] = updated
         return updated
+
+    def merge_run_tca_capture_sidecar(
+        self,
+        *,
+        run_id: str,
+        expected_plan_id: str,
+        expected_plan_hash: str,
+        parent_intent_id: str,
+        decision_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+        capture_batch_id: str | None = None,
+    ) -> CaptureMergeOutcome:
+        if sum(value is not None for value in (decision_capture, capture_error, capture_batch_id)) != 1:
+            raise ValueError("exactly one run TCA capture mutation is required")
+        current = self.daily_runs.get(run_id)
+        if current is None:
+            return CaptureMergeOutcome.NOT_FOUND
+        if current.execution_plan_id != expected_plan_id or current.execution_plan_hash != expected_plan_hash:
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        payload = dict(current.run_payload_json or {})
+        existing = payload.get(TCA_OBSERVATION_KEY)
+        if existing is None:
+            sidecar = new_run_tca_sidecar(
+                execution_plan_id=expected_plan_id,
+                execution_plan_hash=expected_plan_hash,
+            )
+        elif not isinstance(existing, dict):
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        else:
+            sidecar = dict(existing)
+            if sidecar.get("execution_plan_id") != expected_plan_id or sidecar.get("execution_plan_hash") != expected_plan_hash:
+                return CaptureMergeOutcome.IDENTITY_DRIFT
+        if decision_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="decision_capture_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=decision_capture,
+            )
+        elif capture_error is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_errors",
+                parent_intent_id=parent_intent_id,
+                value=capture_error,
+            )
+        else:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_batch_id_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=str(capture_batch_id),
+            )
+        if outcome == CaptureMergeOutcome.CONFLICT:
+            return outcome
+        payload[TCA_OBSERVATION_KEY] = sidecar
+        self.daily_runs[run_id] = current.model_copy(update={"run_payload_json": payload})
+        return outcome

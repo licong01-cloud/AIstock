@@ -18,6 +18,13 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.tca_sidecar import (
+    TCA_OBSERVATION_KEY,
+    CaptureMergeOutcome,
+    merge_parent_first_write,
+    new_batch_tca_sidecar,
+    preserve_tca_sidecar,
+)
 
 from .models import (
     BUY_ORDER_TYPE,
@@ -492,7 +499,16 @@ class QmtStrategyLedgerRepository:
                         requested_by = EXCLUDED.requested_by,
                         request_json = EXCLUDED.request_json,
                         result_json = EXCLUDED.result_json,
-                        metadata = EXCLUDED.metadata,
+                        metadata = CASE
+                            WHEN qmt_strategy.order_batch.metadata ? 'tca_observation_v1'
+                            THEN jsonb_set(
+                                EXCLUDED.metadata,
+                                ARRAY['tca_observation_v1'],
+                                qmt_strategy.order_batch.metadata -> 'tca_observation_v1',
+                                TRUE
+                            )
+                            ELSE EXCLUDED.metadata
+                        END,
                         submitted_at = EXCLUDED.submitted_at,
                         completed_at = EXCLUDED.completed_at
                     """,
@@ -512,6 +528,90 @@ class QmtStrategyLedgerRepository:
                     ),
                 )
         return batch
+
+    def merge_order_batch_tca_capture_sidecar(
+        self,
+        *,
+        batch_id: str,
+        logical_tca_scope_hash: str,
+        parent_intent_id: str,
+        arrival_capture: dict[str, Any] | None = None,
+        eligibility_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+    ) -> CaptureMergeOutcome:
+        """CAS-merge one batch-side TCA observation without changing batch state."""
+
+        if sum(value is not None for value in (arrival_capture, eligibility_capture, capture_error)) != 1:
+            raise ValueError("exactly one order-batch TCA capture mutation is required")
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT metadata FROM qmt_strategy.order_batch WHERE batch_id = %s FOR UPDATE",
+                        (batch_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        conn.rollback()
+                        return CaptureMergeOutcome.NOT_FOUND
+                    metadata = dict(row.get("metadata") or {})
+                    existing = metadata.get(TCA_OBSERVATION_KEY)
+                    if existing is None:
+                        sidecar = new_batch_tca_sidecar(
+                            batch_id=batch_id,
+                            logical_tca_scope_hash=logical_tca_scope_hash,
+                        )
+                    elif not isinstance(existing, dict):
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    else:
+                        sidecar = dict(existing)
+                        if (
+                            sidecar.get("capture_batch_id") != batch_id
+                            or sidecar.get("logical_tca_scope_hash") != logical_tca_scope_hash
+                        ):
+                            conn.rollback()
+                            return CaptureMergeOutcome.IDENTITY_DRIFT
+                    if arrival_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="arrival_capture_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=arrival_capture,
+                        )
+                    elif eligibility_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="managed_preflight_eligibility_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=eligibility_capture,
+                        )
+                    else:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_errors",
+                            parent_intent_id=parent_intent_id,
+                            value=capture_error or {},
+                        )
+                    if outcome == CaptureMergeOutcome.CONFLICT:
+                        conn.rollback()
+                        return outcome
+                    metadata[TCA_OBSERVATION_KEY] = sidecar
+                    cur.execute(
+                        "UPDATE qmt_strategy.order_batch SET metadata = %s WHERE batch_id = %s",
+                        (_json(metadata), batch_id),
+                    )
+                conn.commit()
+                return outcome
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
 
     def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
         with self._conn_factory() as conn:
@@ -1623,8 +1723,66 @@ class InMemoryQmtStrategyLedgerRepository:
 
     def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
         _validate_order_batch(batch)
+        existing = self._order_batches.get(batch.batch_id)
+        if existing is not None:
+            batch = replace(
+                batch,
+                metadata=preserve_tca_sidecar(existing.metadata or {}, batch.metadata or {}),
+            )
         self._order_batches[batch.batch_id] = batch
         return batch
+
+    def merge_order_batch_tca_capture_sidecar(
+        self,
+        *,
+        batch_id: str,
+        logical_tca_scope_hash: str,
+        parent_intent_id: str,
+        arrival_capture: dict[str, Any] | None = None,
+        eligibility_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+    ) -> CaptureMergeOutcome:
+        if sum(value is not None for value in (arrival_capture, eligibility_capture, capture_error)) != 1:
+            raise ValueError("exactly one order-batch TCA capture mutation is required")
+        batch = self._order_batches.get(batch_id)
+        if batch is None:
+            return CaptureMergeOutcome.NOT_FOUND
+        metadata = dict(batch.metadata or {})
+        existing = metadata.get(TCA_OBSERVATION_KEY)
+        if existing is None:
+            sidecar = new_batch_tca_sidecar(batch_id=batch_id, logical_tca_scope_hash=logical_tca_scope_hash)
+        elif not isinstance(existing, dict):
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        else:
+            sidecar = dict(existing)
+            if sidecar.get("capture_batch_id") != batch_id or sidecar.get("logical_tca_scope_hash") != logical_tca_scope_hash:
+                return CaptureMergeOutcome.IDENTITY_DRIFT
+        if arrival_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="arrival_capture_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=arrival_capture,
+            )
+        elif eligibility_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="managed_preflight_eligibility_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=eligibility_capture,
+            )
+        else:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_errors",
+                parent_intent_id=parent_intent_id,
+                value=capture_error or {},
+            )
+        if outcome == CaptureMergeOutcome.CONFLICT:
+            return outcome
+        metadata[TCA_OBSERVATION_KEY] = sidecar
+        self._order_batches[batch_id] = replace(batch, metadata=metadata)
+        return outcome
 
     def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
         return self._order_batches.get(batch_id)
