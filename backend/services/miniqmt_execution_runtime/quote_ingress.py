@@ -29,7 +29,18 @@ from backend.infra.realtime_quote_subscriber import (
     RealtimeQuoteSubscriber,
 )
 from backend.miniqmt_quote_contract_config import QuoteIngressRuntimeConfig
-from backend.services.miniqmt_execution_runtime.quote_normalizer import RawQuoteFrame, capture_raw_quote_frame
+from backend.services.miniqmt_execution_runtime.quote_eligibility import (
+    BoundedNormalizedQuoteStore,
+    NormalizedQuoteObservation,
+    QuoteEvaluationContextStore,
+    QuoteOrderingTracker,
+    deterministic_market_data_id,
+)
+from backend.services.miniqmt_execution_runtime.quote_normalizer import (
+    RawQuoteFrame,
+    capture_raw_quote_frame,
+    normalize_raw_quote_frame,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -235,6 +246,150 @@ class PhaseOneRawQuoteSnapshotStore:
     def snapshot(self) -> dict[str, RawQuoteFrame]:
         with self._lock:
             return dict(self._latest_by_symbol)
+
+
+class PhaseOneQuoteProjectionSink:
+    """P1-C same-writer raw-to-normalized projection; never calls providers or a broker."""
+
+    def __init__(
+        self,
+        *,
+        raw_store: PhaseOneRawQuoteSnapshotStore,
+        normalized_store: BoundedNormalizedQuoteStore,
+        context_store: QuoteEvaluationContextStore,
+        loud_sink: Callable[[QuoteContractError], None] | None = None,
+    ) -> None:
+        self._raw_store = raw_store
+        self._normalized_store = normalized_store
+        self._context_store = context_store
+        self._ordering = QuoteOrderingTracker()
+        self._loud_sink = loud_sink
+        self._lock = threading.RLock()
+        self._last_error_by_symbol: dict[str, dict[str, Any]] = {}
+        self._accepted_count = 0
+        self._rejected_count = 0
+
+    @property
+    def normalized_store(self) -> BoundedNormalizedQuoteStore:
+        return self._normalized_store
+
+    def replace_admitted(self, symbols: tuple[str, ...]) -> None:
+        self._raw_store.replace_admitted(symbols)
+        self._normalized_store.replace_admitted(symbols)
+
+    def on_generation_published(self, generation: int) -> None:
+        self._ordering.activate_generation(generation)
+
+    def project(self, frame: RawQuoteFrame) -> None:
+        """Run inside the existing writer. Expected quote failures are loud, not fatal."""
+
+        try:
+            self._raw_store.update(frame)
+            context = self._context_store.snapshot()
+            if context is None:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
+                    "quote projection has no scheduler-published evaluation context",
+                    context={"symbol": frame.symbol, "ingress_generation": frame.ingress_generation},
+                )
+            symbol_context = context.symbol_context(frame.symbol)
+            if symbol_context is None:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                    "quote projection has no preloaded symbol authority context",
+                    context={"symbol": frame.symbol, "context_id": context.context_id},
+                )
+            if symbol_context.tradability is None:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                    "quote projection cannot normalize without tradability authority",
+                    context={"symbol": frame.symbol, "context_id": context.context_id},
+                )
+            quote = normalize_raw_quote_frame(
+                frame,
+                clock_trade_date=context.clock.clock_trade_date,
+                board=symbol_context.board,
+                depth_quantity_unit=symbol_context.depth_quantity_unit,
+                unit_evidence_version=symbol_context.unit_evidence_version,
+                tradability=symbol_context.tradability,
+            )
+            decision = self._ordering.decide(frame=frame, quote=quote)
+            if not decision.accepted:
+                self._record_ordering_rejection(frame=frame, disposition=decision.disposition.value)
+                return
+            observation = NormalizedQuoteObservation(
+                frame=frame,
+                quote=quote,
+                tradability=symbol_context.tradability,
+                context_id=context.context_id,
+                market_data_id=deterministic_market_data_id(
+                    frame=frame,
+                    quote=quote,
+                    tradability=symbol_context.tradability,
+                    calendar_snapshot_set=context.calendar_snapshot_set,
+                    policy=context.policy,
+                ),
+                ordering_disposition=decision.disposition,
+            )
+            self._normalized_store.accept(observation)
+            with self._lock:
+                self._accepted_count += 1
+                self._last_error_by_symbol.pop(frame.symbol, None)
+        except QuoteContractError as error:
+            self._record_loud(frame=frame, error=error)
+
+    def health(self) -> dict[str, Any]:
+        with self._lock:
+            errors = {symbol: dict(payload) for symbol, payload in self._last_error_by_symbol.items()}
+            accepted_count = self._accepted_count
+            rejected_count = self._rejected_count
+        return {
+            "projection": {
+                "accepted_count": accepted_count,
+                "rejected_count": rejected_count,
+                "last_error_by_symbol": errors,
+                "ordering": self._ordering.health(),
+                "normalized_store": self._normalized_store.health(),
+                "context": self._context_store.health(),
+            }
+        }
+
+    def _record_ordering_rejection(self, *, frame: RawQuoteFrame, disposition: str) -> None:
+        error = quote_contract_error(
+            QuoteContractReasonCode.ORDERING_REJECTED,
+            "normalized quote projection rejected ordering input",
+            context={
+                "symbol": frame.symbol,
+                "ingress_generation": frame.ingress_generation,
+                "ingress_sequence": frame.ingress_sequence,
+                "event": disposition,
+            },
+        )
+        self._record_loud(frame=frame, error=error)
+
+    def _record_loud(self, *, frame: RawQuoteFrame, error: QuoteContractError) -> None:
+        payload = error.as_loud_payload()
+        with self._lock:
+            self._rejected_count += 1
+            self._last_error_by_symbol[frame.symbol] = payload
+        logger.error(
+            "Phase 1 quote projection loud failure: symbol=%s generation=%s sequence=%s payload=%s",
+            frame.symbol,
+            frame.ingress_generation,
+            frame.ingress_sequence,
+            payload,
+        )
+        if self._loud_sink is None:
+            return
+        try:
+            self._loud_sink(error)
+        except Exception as exc:  # noqa: BLE001 - reporting cannot alter projection state.
+            logger.error(
+                "Phase 1 quote projection loud sink failed: symbol=%s exception_type=%s",
+                frame.symbol,
+                type(exc).__name__,
+                exc_info=True,
+            )
 
 
 @dataclass(frozen=True)
@@ -706,6 +861,8 @@ class QuoteIngressSupervisor:
         owner: str,
         bootstrap_fetcher: Callable[[list[str]], Mapping[str, Mapping[str, Any]]],
         snapshot_store: PhaseOneRawQuoteSnapshotStore | None = None,
+        normalized_store: BoundedNormalizedQuoteStore | None = None,
+        context_store: QuoteEvaluationContextStore | None = None,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
     ) -> None:
         if not config.enabled:
@@ -725,21 +882,37 @@ class QuoteIngressSupervisor:
         self._owner = owner
         self._bootstrap_fetcher = bootstrap_fetcher
         self._snapshot_store = snapshot_store or PhaseOneRawQuoteSnapshotStore(max_symbols=config.max_symbols)
+        self._normalized_store = normalized_store or BoundedNormalizedQuoteStore(max_symbols=config.max_symbols)
+        self._context_store = context_store or QuoteEvaluationContextStore()
         self._loud_sink = loud_sink
         self._lock = threading.RLock()
         self._consumers: dict[str, QuoteIngressConsumer] = {}
         self._source_session_id = f"phase1-{hashlib.sha256(data_session_key.encode('utf-8')).hexdigest()[:24]}"
         self._clock_domain_id = "miniqmt_quote_ingress_monotonic_v1"
+        self._projection_sink = PhaseOneQuoteProjectionSink(
+            raw_store=self._snapshot_store,
+            normalized_store=self._normalized_store,
+            context_store=self._context_store,
+            loud_sink=loud_sink,
+        )
         self._worker = QuoteIngressWorker(
             consumer_id=f"{data_session_key}:single-writer",
             config=config,
-            frame_sink=self._snapshot_store.update,
+            frame_sink=self._projection_sink.project,
             loud_sink=loud_sink,
         )
 
     @property
     def snapshot_store(self) -> PhaseOneRawQuoteSnapshotStore:
         return self._snapshot_store
+
+    @property
+    def normalized_store(self) -> BoundedNormalizedQuoteStore:
+        return self._normalized_store
+
+    @property
+    def context_store(self) -> QuoteEvaluationContextStore:
+        return self._context_store
 
     def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> PhaseOneQuoteLease:
         with self._lock:
@@ -758,7 +931,7 @@ class QuoteIngressSupervisor:
                 symbols=normalized,
             )
             self._worker.replace_admitted_symbols(candidate_symbols)
-            self._snapshot_store.replace_admitted(candidate_symbols)
+            self._projection_sink.replace_admitted(candidate_symbols)
             try:
                 lease = self._subscriber.acquire_phase_one_lease(
                     data_session_key=self._data_session_key,
@@ -771,12 +944,12 @@ class QuoteIngressSupervisor:
                 )
             except QuoteContractError as error:
                 self._worker.replace_admitted_symbols(previous_symbols)
-                self._snapshot_store.replace_admitted(previous_symbols)
+                self._projection_sink.replace_admitted(previous_symbols)
                 self._worker.record_loud_failure(error)
                 raise
             except Exception as exc:  # noqa: BLE001 - only a typed failure may cross the scheduler boundary
                 self._worker.replace_admitted_symbols(previous_symbols)
-                self._snapshot_store.replace_admitted(previous_symbols)
+                self._projection_sink.replace_admitted(previous_symbols)
                 error = quote_contract_error(
                     QuoteContractReasonCode.LEASE_REBUILD_FAILED,
                     "Phase 1 quote consumer acquisition raised unexpectedly",
@@ -807,7 +980,7 @@ class QuoteIngressSupervisor:
             self._consumers.pop(consumer_id, None)
             admitted = self._union_consumer_symbols((*self._consumers.values(),))
             self._worker.replace_admitted_symbols(admitted)
-            self._snapshot_store.replace_admitted(admitted)
+            self._projection_sink.replace_admitted(admitted)
         return released
 
     def watchdog_tick(self) -> dict[str, Any]:
@@ -854,6 +1027,7 @@ class QuoteIngressSupervisor:
             "owner": self._owner,
             "subscription": self._subscriber.phase_one_health(data_session_key=self._data_session_key),
             "writer": self._worker.health(),
+            **self._projection_sink.health(),
             "consumers": consumers,
         }
 
@@ -862,7 +1036,7 @@ class QuoteIngressSupervisor:
             self._consumers.clear()
         self._subscriber.shutdown_phase_one_leases(data_session_key=self._data_session_key)
         self._worker.replace_admitted_symbols(())
-        self._snapshot_store.replace_admitted(())
+        self._projection_sink.replace_admitted(())
         self._worker.shutdown()
 
     def _callbacks(self) -> PhaseOneLeaseCallbacks:
@@ -882,6 +1056,7 @@ class QuoteIngressSupervisor:
         )
 
     def _publish_generation(self, data_session_key: str, generation: int) -> None:
+        self._projection_sink.on_generation_published(generation)
         if not self._worker.on_generation_published(data_session_key, generation):
             raise RuntimeError("single quote writer rejected a committed generation")
 
@@ -902,6 +1077,7 @@ class QuoteIngressSupervisor:
 
 __all__ = [
     "PhaseOneRawQuoteSnapshotStore",
+    "PhaseOneQuoteProjectionSink",
     "QuoteIngressConsumer",
     "QuoteIngressRestartRequest",
     "QuoteIngressSupervisor",

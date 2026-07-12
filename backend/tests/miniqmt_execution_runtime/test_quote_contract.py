@@ -348,6 +348,7 @@ def test_calendar_clock_and_batch_mappings_are_deeply_immutable() -> None:
         clock_trade_date=date(2026, 7, 12),
         calendar_snapshot_set_id=calendar_set.snapshot_set_id,
         phase_by_market={market: MarketPhase.CONTINUOUS for market in MarketCode},
+        phase_schedule_version="A_SHARE_EQUITY_PHASE_SCHEDULE_V1_20260706",
         source="calendar-clock-v1",
         observed_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
     )

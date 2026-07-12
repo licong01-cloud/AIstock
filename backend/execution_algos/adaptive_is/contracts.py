@@ -749,11 +749,19 @@ class ExecutionClockEvent:
     clock_trade_date: date
     calendar_snapshot_set_id: str
     phase_by_market: Mapping[MarketCode, MarketPhase]
+    phase_schedule_version: str
     source: str
     observed_at_utc: datetime
 
     def __post_init__(self) -> None:
-        if self.clock_monotonic_ns < 0 or not self.clock_event_id.strip() or not self.clock_domain_id.strip() or not self.calendar_snapshot_set_id.strip() or not self.source.strip():
+        if (
+            self.clock_monotonic_ns < 0
+            or not self.clock_event_id.strip()
+            or not self.clock_domain_id.strip()
+            or not self.calendar_snapshot_set_id.strip()
+            or not self.phase_schedule_version.strip()
+            or not self.source.strip()
+        ):
             raise quote_contract_error(QuoteContractReasonCode.CLOCK_CALENDAR_INVALID, "clock identity and monotonic time are required")
         phases = {
             _enum_or_error(MarketCode, market, field_name="clock.market"): _enum_or_error(MarketPhase, phase, field_name="clock.market_phase")
@@ -805,12 +813,12 @@ class ActionQuoteEligibility:
         if self.state != EligibilityState.READY and self.reason_code is None:
             raise quote_contract_error(QuoteContractReasonCode.ACTION_QUOTE_INELIGIBLE, "non-READY eligibility requires a registered reason")
         if self.reason_code is not None:
-            expected_stage = failure_definition(self.reason_code).stage.value
-            if self.stage != expected_stage:
+            allowed_stages = {item.value for item in failure_definition(self.reason_code).allowed_stages}
+            if self.stage not in allowed_stages:
                 raise quote_contract_error(
                     QuoteContractReasonCode.ACTION_QUOTE_INELIGIBLE,
-                    "eligibility reason must use the registered failure stage",
-                    context={"reason_code": self.reason_code.value, "stage": self.stage, "expected_stage": expected_stage},
+                    "eligibility reason must use a registered failure stage",
+                    context={"reason_code": self.reason_code.value, "stage": self.stage, "allowed_stages": sorted(allowed_stages)},
                 )
         elif self.stage is not None:
             raise quote_contract_error(QuoteContractReasonCode.ACTION_QUOTE_INELIGIBLE, "eligibility stage requires a registered reason")

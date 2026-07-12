@@ -5693,6 +5693,35 @@ def test_background_scheduler_skips_non_trading_day_before_lifecycle_execution(
     assert background.status()["last_result"]["reason"] == "non_trading_day"
 
 
+def test_quote_context_health_does_not_change_pending_run_or_non_trading_day_status() -> None:
+    class ReadOnlyQuoteContext:
+        def __init__(self) -> None:
+            self.refresh_calls = 0
+
+        def health(self) -> dict[str, object]:
+            return {"status": "INVALID", "reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID", "stage": "CLOCK"}
+
+        def refresh_lifecycle(self, **_kwargs: object) -> None:
+            self.refresh_calls += 1
+            raise RuntimeError("authority unavailable")
+
+    adapter = ReadOnlyQuoteContext()
+    scheduler = SimulationLifecycleScheduler(
+        repository=InMemorySimulationRuntimeRepository(),
+        miniqmt_quote_context_adapter=adapter,
+    )
+
+    before = scheduler.status()
+    scheduler._refresh_miniqmt_quote_context_lifecycle()
+    after = scheduler.status()
+
+    assert before["miniqmt_quote_context"]["status"] == "INVALID"
+    assert after["miniqmt_quote_context"] == before["miniqmt_quote_context"]
+    assert adapter.refresh_calls == 1
+    # No run is created or transitioned merely because quote context health is invalid.
+    assert scheduler.repository.list_simulation_daily_runs(limit=10) == []
+
+
 def test_lifecycle_scheduler_blocks_non_trading_day_before_roll_forward_or_selection() -> None:
     release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None

@@ -65,6 +65,7 @@ class QuoteContractReasonCode(str, Enum):
     UNIT_UNPROVEN = "ADAPTIVE_IS_QUOTE_UNIT_UNPROVEN"
     ORDERING_REJECTED = "ADAPTIVE_IS_QUOTE_ORDERING_REJECTED"
     CLOCK_CALENDAR_INVALID = "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID"
+    MARKET_PHASE_MISMATCH = "ADAPTIVE_IS_MARKET_PHASE_MISMATCH"
     MARKET_NOT_TRADABLE = "ADAPTIVE_IS_QUOTE_MARKET_NOT_TRADABLE"
     TRADABILITY_DATA_INVALID = "ADAPTIVE_IS_TRADABILITY_DATA_INVALID"
     ACTION_QUOTE_INELIGIBLE = "ADAPTIVE_IS_ACTION_QUOTE_INELIGIBLE"
@@ -163,6 +164,11 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             QuoteContractReasonCode.CLOCK_CALENDAR_INVALID,
             QuoteContractStage.CLOCK,
             allowed_stages=frozenset({QuoteContractStage.CLOCK, QuoteContractStage.CALENDAR}),
+        ),
+        QuoteContractReasonCode.MARKET_PHASE_MISMATCH: _definition(
+            QuoteContractReasonCode.MARKET_PHASE_MISMATCH,
+            QuoteContractStage.CALENDAR,
+            severity=QuoteFailureSeverity.WARNING,
         ),
         QuoteContractReasonCode.MARKET_NOT_TRADABLE: _definition(
             QuoteContractReasonCode.MARKET_NOT_TRADABLE,

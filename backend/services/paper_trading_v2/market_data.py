@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from enum import Enum
+import hashlib
+import json
 from typing import Any, Callable, Iterator, Protocol
 
 import requests
@@ -181,6 +183,31 @@ class DailyStStatus:
     end_date: date | None = None
 
 
+@dataclass(frozen=True)
+class EquityInstrumentMetadata:
+    """Exact-symbol stock-basic authority for Phase 1 quote context preload."""
+
+    symbol: str
+    market: str
+    exchange: str
+    list_status: str
+    list_date: date | None
+    delist_date: date | None
+    product_type: str
+    source: str
+    source_version: str
+
+    @property
+    def is_listed_a_share_equity(self) -> bool:
+        expected_exchange = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}.get(self.symbol.rsplit(".", 1)[-1])
+        return (
+            self.product_type == "EQUITY"
+            and self.list_status == "L"
+            and expected_exchange is not None
+            and self.exchange == expected_exchange
+        )
+
+
 class SuspendStatusProvider(Protocol):
     """Provider boundary for daily suspension status."""
 
@@ -206,6 +233,13 @@ class LimitPriceProvider(Protocol):
     """Provider boundary for daily limit prices."""
 
     def get_limit_price(self, symbol: str, trade_date: date) -> DailyLimitPrice:
+        ...
+
+
+class EquityInstrumentMetadataProvider(Protocol):
+    """Read exact stock_basic authority; callers must not infer a product type."""
+
+    def get_equity_metadata(self, symbol: str, trade_date: date) -> EquityInstrumentMetadata:
         ...
 
 
@@ -249,6 +283,91 @@ class DbSuspendStatusProvider:
             is_suspended=True,
             suspend_type=str(row[0]) if row[0] is not None else "S",
             suspend_timing=str(row[1]) if row[1] is not None else None,
+        )
+
+
+class DbEquityInstrumentMetadataProvider:
+    """Read ``market.stock_basic`` once during scheduler-owned context preload."""
+
+    def __init__(self, conn_factory: ConnFactory | None = None) -> None:
+        self.conn_factory = conn_factory or get_conn
+
+    def get_equity_metadata(self, symbol: str, trade_date: date) -> EquityInstrumentMetadata:
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            raise DataUnavailableError(
+                "symbol is required for stock-basic metadata lookup",
+                context={"trade_date": trade_date.isoformat(), "table": "market.stock_basic"},
+            )
+        try:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT ts_code, market, exchange, list_status, list_date, delist_date
+                        FROM market.stock_basic
+                        WHERE ts_code = %s
+                        LIMIT 1
+                        """,
+                        (normalized_symbol,),
+                    )
+                    row = cur.fetchone()
+        except Exception as exc:
+            raise DataUnavailableError(
+                "stock-basic metadata query failed",
+                context={
+                    "symbol": normalized_symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "table": "market.stock_basic",
+                },
+            ) from exc
+        if row is None:
+            raise DataUnavailableError(
+                "stock-basic metadata row is missing for exact symbol",
+                context={
+                    "symbol": normalized_symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "table": "market.stock_basic",
+                },
+            )
+        if isinstance(row, dict):
+            values = (
+                row.get("ts_code"),
+                row.get("market"),
+                row.get("exchange"),
+                row.get("list_status"),
+                row.get("list_date"),
+                row.get("delist_date"),
+            )
+        else:
+            values = tuple(row)
+        if len(values) != 6 or values[0] is None or values[1] is None or values[2] is None or values[3] is None:
+            raise DataUnavailableError(
+                "stock-basic metadata row is incomplete",
+                context={"symbol": normalized_symbol, "trade_date": trade_date.isoformat(), "table": "market.stock_basic"},
+            )
+        resolved_symbol, market, exchange, list_status, list_date, delist_date = values
+        source_payload = {
+            "symbol": str(resolved_symbol).strip().upper(),
+            "market": str(market).strip(),
+            "exchange": str(exchange).strip().upper(),
+            "list_status": str(list_status).strip().upper(),
+            "list_date": list_date.isoformat() if isinstance(list_date, date) else None,
+            "delist_date": delist_date.isoformat() if isinstance(delist_date, date) else None,
+        }
+        source_version = hashlib.sha256(
+            json.dumps(source_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        return EquityInstrumentMetadata(
+            symbol=source_payload["symbol"],
+            market=source_payload["market"],
+            exchange=source_payload["exchange"],
+            list_status=source_payload["list_status"],
+            list_date=list_date if isinstance(list_date, date) else None,
+            delist_date=delist_date if isinstance(delist_date, date) else None,
+            product_type="EQUITY",
+            source="market.stock_basic",
+            source_version=f"market.stock_basic:{source_version}",
         )
 
 

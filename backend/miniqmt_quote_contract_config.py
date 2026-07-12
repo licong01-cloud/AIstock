@@ -100,6 +100,7 @@ class QuoteContractPolicy:
     max_source_lag_ms: int
     max_exchange_age_ms: int
     max_negative_skew_ms: int
+    max_clock_age_divergence_ms: int
     max_dependency_group_skew_ms: int
     auction_mode: str
     policy_sha256: str = field(init=False)
@@ -117,6 +118,7 @@ class QuoteContractPolicy:
             "max_source_lag_ms",
             "max_exchange_age_ms",
             "max_negative_skew_ms",
+            "max_clock_age_divergence_ms",
             "max_dependency_group_skew_ms",
             "auction_mode",
         }
@@ -153,6 +155,9 @@ class QuoteContractPolicy:
             max_source_lag_ms=_positive_int(raw["max_source_lag_ms"], key="max_source_lag_ms"),
             max_exchange_age_ms=_positive_int(raw["max_exchange_age_ms"], key="max_exchange_age_ms"),
             max_negative_skew_ms=_non_negative_int(raw["max_negative_skew_ms"], key="max_negative_skew_ms"),
+            max_clock_age_divergence_ms=_positive_int(
+                raw["max_clock_age_divergence_ms"], key="max_clock_age_divergence_ms"
+            ),
             max_dependency_group_skew_ms=_positive_int(raw["max_dependency_group_skew_ms"], key="max_dependency_group_skew_ms"),
             auction_mode=str(raw["auction_mode"]),
         )
@@ -181,6 +186,11 @@ class QuoteContractPolicy:
         object.__setattr__(self, "max_negative_skew_ms", _non_negative_int(self.max_negative_skew_ms, key="max_negative_skew_ms"))
         object.__setattr__(
             self,
+            "max_clock_age_divergence_ms",
+            _positive_int(self.max_clock_age_divergence_ms, key="max_clock_age_divergence_ms"),
+        )
+        object.__setattr__(
+            self,
             "max_dependency_group_skew_ms",
             _positive_int(self.max_dependency_group_skew_ms, key="max_dependency_group_skew_ms"),
         )
@@ -195,6 +205,7 @@ class QuoteContractPolicy:
             "max_source_lag_ms": self.max_source_lag_ms,
             "max_exchange_age_ms": self.max_exchange_age_ms,
             "max_negative_skew_ms": self.max_negative_skew_ms,
+            "max_clock_age_divergence_ms": self.max_clock_age_divergence_ms,
             "max_dependency_group_skew_ms": self.max_dependency_group_skew_ms,
             "auction_mode": self.auction_mode,
         }
