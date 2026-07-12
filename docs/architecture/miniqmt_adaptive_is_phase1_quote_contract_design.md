@@ -6,6 +6,8 @@
 >
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
+> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入；P1-C 已完成实现级设计收口、尚未开发；P1-D/P1-E 尚未开始。
+>
 > 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
 
 ---
@@ -62,15 +64,15 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 
 ### 1.2 当前代码事实
 
-截至本文设计冻结时，精准定位得到以下事实：
+截至 P1-C 实现级设计收口时，知识图谱定向定位并以当前 `main` 源代码复核得到以下事实：
 
 - `backend/infra/qmt_client.py` 已将 `get_full_tick()` 暴露为 broker 行情读取接口，并在需要 freshness 时先走 whole-quote 订阅；`SimulatorQMTClient` 对这类真实行情请求 loud 拒绝，而不是伪造行情。
-- `backend/infra/realtime_quote_subscriber.py` 已调用 `xtdata.subscribe_whole_quote(code_list=..., callback=...)`，但回调线程直接逐个调用消费者，尚无按标的合并、背压、时钟或五档强类型校验。
-- `backend/services/miniqmt_execution_runtime/runtime.py` 目前把 broker payload 转为 `VnpyTick`；该 DTO 显式只有 `bid/ask_price_1` 和 `bid/ask_volume_1`，缺 timestamp 时还会使用当前时间。它不能成为 B0_QUOTE_V2 或 Adaptive IS 的五档输入契约。
-- `backend/services/miniqmt_execution_runtime/client.py` 已强制 event-loop broker quote source 为 `MINIQMT_REALTIME.broker_quote`，并拒绝非 broker source。这条 B0 来源不变式必须保留。
-- 已合入的 B0 可靠性基线包括：真实 event-loop 路径、`SUBMITTING + pending` 持续 tick 驱动、marketable-limit/保护带/尾盘 protected reprice 与 loud residual。Phase 1 不改变这些语义。
-
-当前 `RealtimeQuoteSubscriber` 的 callback registry 还以订阅号和 symbol list 管理消费者；一份订阅的取消会删除该 symbol 的 callbacks。Phase 1 若直接在该结构上叠加执行消费者，可能使一个观测消费者影响既有 B0 订阅。因此必须先把订阅 ownership 改为可独立释放的 lease，不能以“强制重订阅”替代隔离。
+- P1-B 已在 `backend/infra/realtime_quote_subscriber.py` 与 `backend/services/miniqmt_execution_runtime/quote_ingress.py` 实现独立 logical lease、generation/bootstrap、reserved mailbox、单 writer、heartbeat/restart 和有界 raw snapshot；LEGACY_B0 的三张原 registry map 与执行 identity 未改变。
+- P1-A 已在 `backend/execution_algos/adaptive_is/contracts.py` 和 `quote_normalizer.py` 实现 `CalendarSnapshotSet`、`ExecutionClockEvent`、`TradabilitySnapshot`、`ActionQuoteEligibility`、`RawQuoteFrame -> FiveLevelQuote` 契约，但当前还没有 P1-C ordering/freshness/tradability/eligibility evaluator，也没有 normalized snapshot store。
+- `backend/services/trading_calendar_status.py:TradingCalendarStatusService` 是交易日 authority：DB 为事实源、月度文件缓存为正常读取路径、缺行 fail loud，禁止周末/工作日推断；simulation scheduler 已复用该 service。`xtdata.get_trading_calendar()` 不作为第二套 scheduler authority。
+- `backend/services/paper_trading_v2/market_data.py` 已有 `DbSuspendStatusProvider`、`StkLimitPriceProvider`、previous-close/ST 等只读 authority；simulation scheduler 已通过注入方式复用 `PreTradeTradabilityProvider`。P1-C 必须复用这些 authority protocol/adapter，不得在 quote callback 或 MiniQMT evaluator 中复制 SQL。
+- `quote_normalizer.py` 只复制/规范化 `stockStatus/openint`；它们是 per-symbol 交叉证据，不是交易日或市场时段 authority。缺失、未知或冲突必须保留为 capability/data evidence，不能被解释成可交易。
+- `backend/services/miniqmt_execution_runtime/runtime.py` 的既有 `VnpyTick` 仍仅服务 LEGACY_B0；P1-C 不替换它、不把 normalized quote 送入 broker，也不改变 event-loop quote source、pending tick driver、marketable-limit、保护带或尾盘策略。
 
 ### 1.3 迅投/xtquant 能力边界
 
@@ -110,9 +112,11 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 |---|---|---|
 | 原始 xtdata 订阅 lease 与回调入口 | `backend/infra/realtime_quote_subscriber.py` | 保留公共订阅能力；改为 consumer lease，不让一个 consumer 取消另一个 consumer |
 | broker client capability 与 health | `backend/infra/qmt_client.py` | 声明 full-tick/whole-quote capability；不在这里写策略动作 |
-| 算法中立 DTO/protocol | `backend/execution_algos/adaptive_is/contracts.py`（新） | 纯类型与 protocol；不得依赖 MiniQMT/FastAPI/DB |
-| MiniQMT normalizer、clock/tradability adapter | `backend/services/miniqmt_execution_runtime/quote_normalizer.py`（新） | xtdata payload 转换；不得改变 core/B0 policy |
-| 单写者 mailbox、snapshot store、telemetry | `backend/services/miniqmt_execution_runtime/quote_ingress.py`（新） | callback 不写 DB、不调 broker；按 runtime/consumer 只读分发 |
+| 算法中立 DTO/protocol | `backend/execution_algos/adaptive_is/contracts.py` | 纯类型与 protocol；不得依赖 MiniQMT/FastAPI/DB |
+| MiniQMT raw normalizer | `backend/services/miniqmt_execution_runtime/quote_normalizer.py` | xtdata payload 转换；不得改变 core/B0 policy |
+| P1-C clock/ordering/freshness/eligibility | `backend/services/miniqmt_execution_runtime/quote_eligibility.py`（P1-C 新） | 纯 evaluator 与 bounded state；不得导入 DB/Paper/scheduler/broker submit |
+| 单写者 mailbox、raw/normalized snapshot、telemetry | `backend/services/miniqmt_execution_runtime/quote_ingress.py` | callback 不写 DB、不调 broker；每 data session 一个共享 writer，logical consumers 保留独立 lease |
+| authority context preload | `backend/services/simulation_runtime/miniqmt_quote_context.py`（P1-C 新） | scheduler 线程注入 calendar/suspend/limit/metadata authority；不得在 callback/writer 查询 DB |
 | durable market-data evidence/markout | `backend/services/miniqmt_execution_runtime/quote_evidence.py`（新） | 单写者消费端追加 evidence；不得在 callback 写 DB |
 | event-loop adapter | `backend/services/miniqmt_execution_runtime/gateway.py` | 仅把已验证 snapshot 提供给未来 core；保留现有 `on_tick` |
 | runtime integration | `backend/services/miniqmt_execution_runtime/runtime.py` | 新 B0_QUOTE_V2 adapter 与 evidence；LEGACY_B0 `VnpyTick` 语义不变 |
@@ -211,6 +215,8 @@ compute desired symbol union
 ```
 
 新 subscription、bootstrap capture 或 generation prepare 失败时，旧 physical feed/leases 保持有效；不得先删旧订阅。unsubscribe 失败时新 generation 仍可运行，旧 closure 被 fencing；错误必须 loud。logical release 导致 symbol union 缩小时同样遵守该两阶段规则，禁止“先 pop lease、再尝试 replacement”的半提交。
+
+这里的 physical publication 与 P1-C `WAITING_FIRST_QUOTE` 不冲突：P1-B bootstrap 对 candidate feed 是 all-or-nothing，任一目标 symbol 无法 immutable capture 时 candidate 不发布并保留旧 feed；`WAITING_FIRST_QUOTE` 仅用于已经发布的 feed 在 clock/calendar/context continuity generation 切换后，某 symbol 尚无符合新 context 的 normalized accepted quote。禁止用“部分 bootstrap publication”制造同一 physical generation 内一半 ACTIVE、一半未 capture 的状态。
 
 LEGACY_B0 使用原 key/health。Phase 1 consumer 使用独立 key 和 health，不覆盖 LEGACY_B0。B0_QUOTE_V2 读取 Phase 1 SnapshotStore，但不取得 subscription ownership。
 
@@ -376,6 +382,28 @@ calendar 是 session authority；`openint` 是交叉证据。二者不一致输�
 
 clock 倒退、clock domain 变化或 calendar hash 变化都会创建新 clock continuity generation。新 generation 自动等待合法 quote/bootstrap，不需要人工恢复。
 
+#### 5.5.1 P1-C calendar/clock authority 与版本化 phase schedule
+
+P1-C 不建立第二套交易日服务。`TradingCalendarStatusService` 的 DB+checksum cache 结果是 `clock_trade_date/is_trading_day` 唯一 authority；`CalendarSnapshot.source_version` 必须包含 calendar cache checksum 与 phase schedule version。DB/cache 缺行、checksum 缺失或 SH/SZ/BJ 任一 snapshot 无法构造时，整个 snapshot set 不发布，所有 P1-C symbols 为 `CLOCK_INVALID`，不得用 `datetime.weekday()`、xtdata calendar、上一交易日或 quote 日期补齐。
+
+股票竞价 phase 使用 `A_SHARE_EQUITY_PHASE_SCHEDULE_V1_20260706`。依据[上交所 2026 年现行交易规则](https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml)、[深交所交易规则](https://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217564423808793.pdf)和[北交所交易规则（试行）](https://www.bse.cn/jygl_list/200010919.html)，三个市场的股票竞价时段统一投影如下；区间均按 Asia/Shanghai 本地时间，除明确的上午收盘边界外采用左闭右开：
+
+| 本地时间 | `MarketPhase` | B0_QUOTE_V2 action eligibility |
+|---|---|---|
+| `[09:15,09:25)` | `PRE_OPEN` | `WRONG_SESSION`；仅观察，不释放 child |
+| `[09:25,09:30)` | `CLOSED` | `WRONG_SESSION` |
+| `[09:30,11:30]` | `CONTINUOUS` | 继续后续 freshness/tradability 判定 |
+| `(11:30,13:00)` | `CLOSED` | `WRONG_SESSION` |
+| `[13:00,14:57)` | `CONTINUOUS` | 继续后续 freshness/tradability 判定 |
+| `[14:57,15:00)` | `CLOSING_AUCTION` | P1-C/P1-E 为 `OBSERVE_ONLY`，action=`WRONG_SESSION` |
+| 其他时间（含 `>=15:00`） | `CLOSED` | `WRONG_SESSION`；15:00 auction result 可留作 evidence，不触发 action |
+
+该 schedule 只适用于 A 股股票竞价，不外推到 ETF、债券、大宗交易或盘后固定价格交易。symbol 产品类型不能证明为股票时为 `CAPABILITY_MISSING`，不得套用本表。交易所公告调整交易时间时必须新增 schedule version 和 hash，禁止原地修改 V1。
+
+`ExecutionClockEvent` 由 scheduler lifecycle 每 tick/phase boundary 构造，使用同一对 `datetime.now(UTC)` 与 `time.monotonic_ns()` 采样；callback 不创建 clock。clock continuity identity 为 `(clock_domain_id, calendar_snapshot_set_id, phase_schedule_version)`：wall clock 倒退超过 `max_negative_skew_ms`、monotonic 倒退、domain 变化或 calendar/schedule hash 变化时，旧 continuity generation 立即失效，下一 generation 自动等待合法 quote。
+
+`openint` 仅作交叉证据：只有 normalizer version 中注册的 exact value 才可映射到 phase/status；已注册值与 calendar phase 冲突时为 `ADAPTIVE_IS_MARKET_PHASE_MISMATCH`。缺失或未注册值不得覆盖 calendar，记录为 `TRADABILITY` capability/data 缺失；不得凭模糊字符串或 truthy 值推断 OPEN。
+
 ### 5.6 freshness、duplicate 与乱序
 
 ```text
@@ -389,6 +417,43 @@ monotonic_receive_age_ms =
 wall 与 monotonic receive age 必须在 policy tolerance 内一致。任何负值保留原符号并按 `max_negative_skew_ms` 校验；禁止先取 abs 或 clamp 后声称 fresh。
 
 duplicate identity 为 `(source_session_id,generation,symbol,source_timestamp_raw,source_payload_sha256)`。exact duplicate 不刷新 receive time。相同 source time 但 hash 不同是新 observation；exchange time 早于最新 accepted quote 为 OUT_OF_ORDER。source time 缺失时只能记录 ingress ordering，不能进入 B0_QUOTE_V2。
+
+#### 5.6.1 单写者 ordering state 与 normalized snapshot
+
+P1-C 在 `quote_ingress.py` 的唯一 writer sink 后增加 `PhaseOneQuoteProjectionSink`，并新增 `quote_eligibility.py` 中的纯函数 evaluator。不得另起第二个可更新行情状态的 worker：
+
+```text
+RawQuoteFrame
+ -> PhaseOneQuoteProjectionSink (same QuoteIngress writer thread)
+ -> normalize_raw_quote_frame using preloaded immutable context
+ -> QuoteOrderingTracker
+ -> BoundedNormalizedQuoteStore latest accepted quote per admitted symbol
+```
+
+`QuoteEvaluationContextStore` 由 scheduler lifecycle 原子替换，只保存已预加载的 `CalendarSnapshotSet`、per-symbol `TradabilitySnapshot`、board/unit evidence 和 policy hash；加载 DB/provider 发生在 scheduler 线程，不在 callback/writer。context 缺失或版本不匹配时 projection loud 且不覆盖 normalized latest；RawQuoteFrame 仍保留为观测事实。
+
+P1-C 为每个 accepted normalized observation 生成确定性的 in-memory `market_data_id = "md_" + sha256(source_session_id, ingress_generation, symbol, source_timestamp_raw, source_payload_sha256, normalized_quote_sha256, tradability.evidence_sha256, calendar.set_sha256, policy_sha256)`。它不是 durable-success 声明；P1-D 必须持久化并 readback 同一 ID。exact duplicate 复用原 ID，correction 因 payload/normalized hash 变化产生新 ID，DB sequence/当前时间/随机 UUID 均不得参与 identity。
+
+ordering decision 固定为：
+
+1. `ingress_generation` 小于 active generation：`STALE_GENERATION`，拒绝；
+2. duplicate identity 完全相同：`EXACT_DUPLICATE`，拒绝且不更新 receive/exchange time、不生成新 `market_data_id`、不触发 action；
+3. source exchange time 小于 latest accepted：`OUT_OF_ORDER`，拒绝且不覆盖；
+4. source time 相同而 payload hash 不同：`ACCEPTED_CORRECTION`，以更高 ingress sequence 接纳并保留 correction telemetry；
+5. source time 缺失：仅 raw ingress accepted，normalized state=`CAPABILITY_MISSING`，不得成为 B0_QUOTE_V2 action input；
+6. 其余合法新 observation：`ACCEPTED`。
+
+duplicate/out-of-order event 本身不能释放 child；scheduler 后续独立 tick 可以在 latest accepted quote 仍满足 freshness 时继续使用原 `market_data_id`。这既保证 duplicate 不刷新寿命，也避免一次重复推送把此前合法 quote 永久改写为 invalid。Normalized store 与 raw store 使用相同 admitted-symbol union，release 必须同步清除 revoked symbol，内存上限均不超过 `max_symbols`。
+
+freshness 计算除现有四个阈值外，必须在 immutable policy 增加无默认值的 `max_clock_age_divergence_ms`：
+
+```text
+wall_receive_age_ms = clock_at_utc - received_at_utc
+monotonic_receive_age_ms = (clock_monotonic_ns - received_monotonic_ns) / 1_000_000
+clock_age_divergence_ms = abs(wall_receive_age_ms - monotonic_receive_age_ms)
+```
+
+任何 age/lag 原始负值先按 `max_negative_skew_ms` 判定，禁止 clamp/abs；仅 `clock_age_divergence_ms` 按定义取绝对差。domain 不同、divergence 超限、receive/source/exchange age 任一超限均不得 READY。
 
 ### 5.7 `ActionQuoteEligibility` 与观测 batch
 
@@ -412,6 +477,47 @@ QuoteSnapshotBatch
 ```
 
 B0_QUOTE_V2 每个 symbol 独立判定 READY。一个 symbol 的 STALE/SUSPENDED/INVALID 不得阻塞无 dependency 的 symbol。只有显式 dependency group 才要求组内 `max(received_at)-min(received_at) <= max_group_skew_ms`；失败只影响该组。aggregate state 只用于 health/TCA coverage，禁止作为全 runtime 下单开关。
+
+#### 5.7.1 唯一 eligibility precedence
+
+evaluation request 的 runtime/parent/algo identity、symbol/side、policy/config/hash 或 schema 本身不合法时，evaluator 不构造伪造的 `ActionQuoteEligibility`，而是抛出 registry 中的 typed `QuoteContractError` 并把对应 health 标为 invalid。只有 request identity 合法时才进入下表；同一次 evaluation 只输出一个主 `state/reason_code/stage`，全部命中原因按原顺序写入 diagnostics，但主状态严格使用下列优先级，禁止由调用方自行重排：
+
+| 优先级 | 条件 | 主状态 | 主 reason/stage |
+|---:|---|---|---|
+| 1 | calendar 缺失/非交易日、clock rollback/domain/hash/trade-date/phase cross-check 冲突 | `CLOCK_INVALID` | `CLOCK_CALENDAR_INVALID` 或 `MARKET_PHASE_MISMATCH`；registry-allowed `CLOCK/CALENDAR` |
+| 2 | 当前 market phase 非 `CONTINUOUS` | `WRONG_SESSION` | `ACTION_QUOTE_INELIGIBLE`；`ELIGIBILITY` |
+| 3 | admitted symbol 尚无 normalized accepted quote | `WAITING_FIRST_QUOTE` | `BOOTSTRAP_INCOMPLETE`；`BOOTSTRAP` |
+| 4 | normalized quote schema/price basis/depth prefix/hash 不合法 | `INVALID` | `DEPTH_SCHEMA_INVALID/PAYLOAD_INVALID`；registered stage |
+| 5 | required capability、exchange timestamp、unit/tradability authority 缺失 | `CAPABILITY_MISSING` | 对应 capability/unit/tradability reason |
+| 6 | negative skew、clock divergence、receive/source/exchange age 超 policy | `STALE` | `ACTION_QUOTE_INELIGIBLE`；`ELIGIBILITY` |
+| 7 | tradability authority 为 `DATA_INVALID/STATUS_UNKNOWN` | `INVALID` | `TRADABILITY_DATA_INVALID`；`TRADABILITY` |
+| 8 | authority 证明停牌或盘中临停 | `SUSPENDED` | `MARKET_NOT_TRADABLE`；`TRADABILITY` |
+| 9 | BUY 触及涨停封板或 SELL 触及跌停封板 | `LIMIT_BLOCKED` | `MARKET_NOT_TRADABLE`；`TRADABILITY` |
+| 10 | 对手一档缺失或对手累计深度为零 | `NO_OPPOSITE_DEPTH` | `ACTION_QUOTE_INELIGIBLE`；`ELIGIBILITY` |
+| 11 | 所属 dependency group 超 `max_dependency_group_skew_ms` 或成员非 READY | 对该组成员派生非 READY（保持成员原更高优先级；原 READY 成员变 `STALE`） | `ACTION_QUOTE_INELIGIBLE`；`ELIGIBILITY` |
+| 12 | 以上均不命中 | `READY` | 无 reason/stage |
+
+P1-C 必须修正 `ActionQuoteEligibility` 的 reason/stage validation：stage 只要属于 `failure_definition(reason).allowed_stages` 即合法，不能强制等于 registry default stage；输出仍必须选择本次实际失败所在的 exact stage。`MARKET_PHASE_MISMATCH` 在 P1-C 加入统一 registry，canonical/allowed stage 为 `CALENDAR`，不得只写文档字符串而不注册。
+
+`TradabilitySnapshot` 本身保持 side-neutral：builder 只产生 `TRADABLE/SUSPENDED/INTRADAY_HALT/STATUS_UNKNOWN/DATA_INVALID`。涨跌停 side-specific 状态由 evaluator 根据 `side + limit_up/down + opposite depth` 派生；不得把同一 snapshot 固化成 BUY 或 SELL 专属事实。`lot_size` 在 P1-C 仅是 depth unit conversion evidence，不替代 `execution_algos.board_lot` 的下单最小数量/增量规则，因而不会改变 BUG-614 数量。
+
+#### 5.7.2 dependency group、batch 与 health 边界
+
+`dependency_group_id` 只能来自 frozen parent/execution-plan metadata，由 scheduler adapter 显式传入；禁止按 symbol、同 run、同 alpha 或同批次自动分组。未声明 group 的 symbol 永远独立。group watermark 只使用成员 latest accepted quote 的 `received_monotonic_ns` 且要求相同 `clock_domain_id`；任一成员无 quote/非 READY 时只影响该 group。
+
+P1-C 只新增内部只读 health projection，不新增外部 REST/UI：`QuoteIngressSupervisor.health()` 增加 normalized-store/order/freshness/per-symbol eligibility 摘要，查询不得触发 provider、订阅、rebuild 或 action。版本化 REST diagnostics、metrics/alerts presentation 与 durable evidence 属于 P1-D；P1-C 测试只证明内部 health 可读且不改变 scheduler/run status。
+
+#### 5.7.3 P1-C ownership 与依赖方向
+
+| 责任 | 实现位置 | 强制边界 |
+|---|---|---|
+| deterministic phase/clock/ordering/freshness/tradability/eligibility | `backend/services/miniqmt_execution_runtime/quote_eligibility.py`（新） | 纯函数/有界内存；不导入 DB、FastAPI、broker submit、Paper service 或 scheduler |
+| same-writer normalization + bounded normalized store | `backend/services/miniqmt_execution_runtime/quote_ingress.py` | 复用 P1-B writer；不得增加第二 writer/queue；无 DB/provider call |
+| authority adapter/context preload | `backend/services/simulation_runtime/miniqmt_quote_context.py`（新） | 注入 `TradingCalendarStatusService` 与既有 suspend/limit/previous-close/equity-metadata authority；不得复制 SQL；失败 loud，不改 scheduler status |
+| equity instrument metadata authority | `backend/services/paper_trading_v2/market_data.py` 的 provider protocol/adapter（扩展） | `market.stock_basic` exact symbol/list-status/market/product-type/source-version；只读且由 scheduler 注入，不进入 MiniQMT evaluator |
+| algorithm-neutral DTO/reasons | `backend/execution_algos/adaptive_is/contracts.py`、`reasons.py` | 只补 P1-C 必需 contract/reason；不得依赖 runtime/service |
+| policy schema | `backend/miniqmt_quote_contract_config.py` | 增加 required `max_clock_age_divergence_ms` 并纳入 canonical policy hash；无默认/旧值推断 |
+| scheduler lifecycle seam | `backend/services/simulation_runtime/scheduler.py` | 仅 preload context、更新 clock、读 health；不修改 `non_trading_day`、run status、pending tick driver 或 submit/cancel |
 
 ### 5.8 `ClosingAuctionSnapshot`
 
@@ -509,13 +615,14 @@ Phase 1 不新增提交 API、交易按钮、审批界面或角色模型。只�
     "max_source_lag_ms": "<explicit>",
     "max_exchange_age_ms": "<explicit>",
     "max_negative_skew_ms": "<explicit>",
+    "max_clock_age_divergence_ms": "<explicit>",
     "max_dependency_group_skew_ms": "<explicit>",
     "auction_mode": "OBSERVE_ONLY"
   }
 }
 ```
 
-action 阈值没有全局默认值，也不得从环境变量、LEGACY_B0 或 300 秒旧 freshness 默认推断。B0_QUOTE_V2 binding 必须显式携带全部阈值和 canonical `policy_sha256`；合法范围由 schema validator 验证。Phase 1 observation 先统计实际 cadence/age/skew，P1-E 的 pilot policy 使用预注册显式值，Phase 0B 再据实冻结正式 baseline revision。
+action 阈值没有全局默认值，也不得从环境变量、LEGACY_B0 或 300 秒旧 freshness 默认推断。`max_clock_age_divergence_ms` 与其他五个阈值一样是 required positive integer，必须进入 canonical `policy_sha256`；旧 P1-A policy payload 缺该字段时显式 schema invalid，不得自动补值。B0_QUOTE_V2 binding 必须显式携带全部阈值和 canonical `policy_sha256`；合法范围由 schema validator 验证。Phase 1 observation 先统计实际 cadence/age/skew，P1-E 的 pilot policy 使用预注册显式值，Phase 0B 再据实冻结正式 baseline revision。
 
 process switch=false 时 LEGACY_B0 不变；选择 B0_QUOTE_V2 而 ingress 未启用属于明确配置错误，不得自动退回 LEGACY_B0。
 
@@ -585,13 +692,15 @@ stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK
 | 第二 scheduler owner | `ADAPTIVE_IS_QUOTE_OWNER_CONFLICT` | `OWNER` | 拒绝第二 ingress；自动保持唯一 owner | LEGACY_B0 不变；不重复订阅/下单 |
 | xtdata 不可用/订阅号非正 | `ADAPTIVE_IS_QUOTE_SUBSCRIPTION_UNAVAILABLE` | `SUBSCRIBE` | consumer UNAVAILABLE，自动重试 | LEGACY_B0 不变；B0_QUOTE_V2 等待 |
 | replacement/lease 重建失败 | `ADAPTIVE_IS_QUOTE_LEASE_REBUILD_FAILED` | `SUBSCRIBE` | 保留旧 feed/其他 leases | 不取消旧订阅 |
-| bootstrap 缺 symbol/失败 | `ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE` | `BOOTSTRAP` | per-symbol WAITING_FIRST_QUOTE | 其他 READY symbols 继续 |
+| candidate physical feed bootstrap 缺 symbol/capture 失败 | `ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE` | `BOOTSTRAP` | candidate 不发布、旧 feed/leases 全量保留 | 不产生半发布；旧 generation 的 READY symbols 继续 |
+| 已发布 feed 在新 clock/context continuity 下尚无 normalized quote | `ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE` | `BOOTSTRAP` | 仅该 symbol `WAITING_FIRST_QUOTE`，下一合法 projection 自动恢复 | 其他 symbol/group 不受影响 |
 | active-set 超 capacity | `ADAPTIVE_IS_QUOTE_CAPACITY_EXCEEDED` | `INGRESS` | 新 symbols 不 admission；已有 symbols 继续 | 不丢已有 active quote |
 | raw payload/symbol 非法 | `ADAPTIVE_IS_QUOTE_PAYLOAD_INVALID` | `INGRESS` | reject frame/evidence | 不调 broker |
 | array 长度/连续前缀/排序错误 | `ADAPTIVE_IS_QUOTE_DEPTH_SCHEMA_INVALID` | `NORMALIZE` | 不覆盖 latest valid；当前 symbol INVALID | 仅该 symbol 不释放新 child |
 | 单位/price basis 未证明 | `ADAPTIVE_IS_QUOTE_UNIT_UNPROVEN` | `UNIT` | capability missing | 禁止深度 sizing |
 | duplicate/out-of-order/stale generation | `ADAPTIVE_IS_QUOTE_ORDERING_REJECTED` | `NORMALIZE` | 不刷新 receive time/不覆盖 latest | 无 |
-| clock/domain/calendar/phase 冲突 | `ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID` | `CLOCK/CALENDAR` | 仅对应 market/symbol invalid，自动等新 generation | 不改 scheduler run status |
+| clock/domain/calendar/trade-date 冲突 | `ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID` | `CLOCK/CALENDAR` | 仅对应 market/symbol invalid，自动等新 generation | 不改 scheduler run status |
+| registered openint 与 calendar phase 冲突 | `ADAPTIVE_IS_MARKET_PHASE_MISMATCH`（P1-C 新增 registry reason） | `CALENDAR` | 仅该 symbol `CLOCK_INVALID`；保留两份 evidence | calendar 仍为 authority；不改 scheduler run status |
 | suspend/halt/limit/zero depth | `ADAPTIVE_IS_QUOTE_MARKET_NOT_TRADABLE` | `TRADABILITY` | 显式 WAIT/NO_FILL | 不归类为程序成功或数据错误 |
 | 必填 tradability 字段缺失 | `ADAPTIVE_IS_TRADABILITY_DATA_INVALID` | `TRADABILITY` | data failure | 禁止默认 pre-close/limit/tick/lot |
 | action quote stale/capability missing | `ADAPTIVE_IS_ACTION_QUOTE_INELIGIBLE` | `ELIGIBILITY` | 写 action reject evidence；等待下一 tick | 不切换 LEGACY_B0 |
@@ -638,9 +747,24 @@ stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK
 
 ### 8.3 P1-C：clock/calendar、tradability 与 per-symbol eligibility
 
-**范围**：实现 UTC/monotonic clock、CalendarSnapshotSet、SH/SZ/BJ phase、openint cross-check、TradabilitySnapshot、freshness/ordering 和 ActionQuoteEligibility；batch 只作观测/group watermark。
+**实现范围与顺序**：
 
-**退出条件**：fresh/stale/negative skew/duplicate/out-of-order/generation/clock rollback/multi-market/停牌/临停/涨跌停/zero depth 全覆盖；一个 symbol/依赖组失败不阻塞无关 symbol；scheduler `non_trading_day` 与 BUG-604 pending run 不变。
+1. 在 `quote_eligibility.py` 实现版本化 phase schedule、clock continuity、ordering tracker、freshness math、side-neutral tradability builder、唯一 precedence evaluator 与 dependency-group overlay；全部为确定性纯逻辑。
+2. 在 `miniqmt_quote_context.py` 实现 scheduler-owned authority adapter：一次 lifecycle context preload 读取 `TradingCalendarStatusService` 与既有 suspend/limit/previous-close provider，生成 immutable context 后原子发布；callback/writer 不访问 DB。
+3. 扩展 P1-B `PhaseOneQuoteProjectionSink` 和 bounded normalized store；raw/normalized admission 同步，exact duplicate/out-of-order 不覆盖、不刷新寿命、不生成新 action trigger。
+4. policy schema 增加 required `max_clock_age_divergence_ms` 并更新 canonical hash/config tests；禁止默认补值。
+5. scheduler 只接 context/clock/health seam，不把 eligibility 作为全 runtime gate，不改变 `non_trading_day`、run status、pending tick driver、LEGACY_B0 或 broker side effect。
+6. 新增 `test_quote_eligibility.py`、context adapter tests，并扩展 ingress/config/scheduler 定向回归；完成后把 §13.3 从 `design_ready_not_implemented` 更新为真实 implementation refs 与结果。
+
+**退出条件**：
+
+- fresh/stale/negative skew/wall-monotonic divergence/duplicate/correction/out-of-order/generation/clock rollback/domain change/multi-market 全覆盖；
+- PRE_OPEN、午休、CONTINUOUS、CLOSING_AUCTION、CLOSED 边界及 SH/SZ/BJ schedule/hash 全覆盖；
+- 停牌、临停、涨跌停、status/openint unknown、zero opposite depth 与 data/capability failure 按 §5.7.1 唯一 precedence 输出；
+- 一个 symbol 或显式 dependency group 失败不阻塞无关 symbol，batch aggregate 不能成为 runtime submit gate；
+- authority/provider failure loud 且不使用旧 context 伪装当前成功；callback/writer 无 DB/broker；
+- scheduler `non_trading_day` 与 BUG-604 pending run 不变，LEGACY_B0 action/import tests 无变化；
+- P1-C 直接测试、P1-A/P1-B 回归、changed-file lint/coverage、`nox l0`、module registry、F2 validator 全绿。P1-C 完成仍不表示 P1-D durable evidence、P1-E B0_QUOTE_V2 或真实 SIM 已完成。
 
 ### 8.4 P1-D：durable evidence、markout、auction、metrics 与 runbook
 
@@ -700,6 +824,30 @@ stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK
 | config | process/policy 分层、ConfigManager round-trip、unknown/illegal schema loud |
 | migration | 旧/new event types 与 sources、constraint preflight、idempotent apply、rollback、production readback |
 
+#### 9.1.1 P1-C 必须存在的直接测试
+
+下列 nodeid 是实现命名契约，不是当前已通过声明；P1-C PR 不得删除、合并成单个 happy-path 或以 mock-only scheduler 替代：
+
+```text
+test_quote_eligibility.py::test_calendar_snapshot_uses_authoritative_checksum_and_all_markets
+test_quote_eligibility.py::test_phase_schedule_boundaries_cover_open_break_continuous_auction_closed
+test_quote_eligibility.py::test_clock_continuity_rejects_wall_rollback_domain_change_and_age_divergence
+test_quote_eligibility.py::test_exact_duplicate_does_not_refresh_receive_time_or_market_data_identity
+test_quote_eligibility.py::test_same_exchange_time_changed_payload_is_audited_correction
+test_quote_eligibility.py::test_out_of_order_and_stale_generation_never_overwrite_latest_accepted
+test_quote_eligibility.py::test_eligibility_precedence_is_total_and_deterministic
+test_quote_eligibility.py::test_tradability_distinguishes_data_invalid_suspend_halt_limit_and_zero_depth
+test_quote_eligibility.py::test_dependency_group_failure_does_not_block_unrelated_symbols
+test_quote_eligibility.py::test_batch_aggregate_is_observation_only_not_runtime_gate
+test_miniqmt_quote_context.py::test_context_preload_reuses_authority_providers_without_callback_db_io
+test_miniqmt_quote_context.py::test_provider_failure_is_loud_and_does_not_publish_partial_context
+test_quote_ingress.py::test_projection_sink_is_single_writer_and_bounded_with_raw_normalized_admission_parity
+test_config_manager_quote_ingress_roundtrip.py::test_clock_age_divergence_is_required_and_hashed_without_default
+test_lifecycle_scheduler.py::test_quote_context_health_does_not_change_pending_run_or_non_trading_day_status
+```
+
+属性测试至少生成 threshold 边界前后 1 ms、所有 precedence 条件的两两组合、SH/SZ/BJ symbol 与 phase 组合、BUY/SELL opposite-depth/limit 组合，以及输入 permutation；主 state/reason/stage 必须不随 mapping/list 顺序变化。
+
 ### 9.2 回归与集成测试
 
 实施阶段至少新增/扩展以下定向测试文件：
@@ -708,6 +856,7 @@ stage registry 固定为 `OWNER/SUBSCRIBE/BOOTSTRAP/INGRESS/NORMALIZE/UNIT/CLOCK
 backend/tests/miniqmt_execution_runtime/test_quote_contract.py
 backend/tests/miniqmt_execution_runtime/test_quote_ingress.py
 backend/tests/miniqmt_execution_runtime/test_quote_eligibility.py
+backend/tests/simulation_runtime/test_miniqmt_quote_context.py
 backend/tests/miniqmt_execution_runtime/test_quote_evidence.py
 backend/tests/miniqmt_execution_runtime/test_closing_auction_contract.py
 backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_parity.py
@@ -751,13 +900,14 @@ miniqmt_quote_writer_heartbeat_age_ms
 miniqmt_quote_valid_depth_ratio
 miniqmt_quote_action_ready_ratio
 miniqmt_quote_age_ms{quantile}
+miniqmt_quote_clock_age_divergence_ms{quantile}
 miniqmt_quote_market_data_persist_failures_total
 miniqmt_quote_evidence_outbox_backlog
 miniqmt_quote_markout_coverage_ratio
 miniqmt_b0_quote_v2_parity_violations_total
 ```
 
-alerts 至少覆盖 owner conflict、bootstrap coverage 不完整、heartbeat 超时、持续 capability/unit 缺失、persist failure、markout coverage 下降和任何 parity violation。告警不得暂停 LEGACY_B0 或无关 binding。
+alerts 至少覆盖 owner conflict、bootstrap coverage 不完整、heartbeat 超时、clock age divergence/negative skew 超限、持续 capability/unit 缺失、persist failure、markout coverage 下降和任何 parity violation。告警不得暂停 LEGACY_B0 或无关 binding。
 
 runbook 固定顺序为：只读 health -> owner/generation -> bootstrap coverage -> per-symbol eligibility -> evidence persist/readback -> broker order/trade reconcile。恢复由合法配置/行情和 worker lifecycle 自动完成；runbook 不包含人工 approval/acknowledge。需要配置变更、重启、DDL 或 binding 变更时只报告给用户，由用户授权相应操作。
 
@@ -911,6 +1061,23 @@ normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏
 
 ---
 
+### 13.3 P1-C implementation design closure record（2026-07-12）
+
+本记录证明 P1-C 已达到实现级 `design_ready`，不证明任何 P1-C 代码已经存在。实施必须完整实现下表，并在开发 PR 中将 `planned refs/tests` 替换为真实 symbol/nodeid/coverage；任何一行仍为 partial、placeholder 或 mock-only 时不得请求合入。
+
+| P1-C design item | planned implementation refs | required test/evidence | status | explicit boundary |
+|---|---|---|---|---|
+| authoritative calendar、versioned SH/SZ/BJ equity phase 与 clock continuity | `quote_eligibility.py`；`miniqmt_quote_context.py`；`TradingCalendarStatusService` 注入 | calendar checksum/all-market、phase boundary、non-trading/missing-row、wall/monotonic/domain/hash property tests | design_ready_not_implemented | 不建立第二套 calendar；不改 scheduler `non_trading_day` |
+| single-writer normalization、ordering 与 bounded normalized store | `PhaseOneQuoteProjectionSink`、`QuoteOrderingTracker`、`BoundedNormalizedQuoteStore` | duplicate/correction/out-of-order/stale-generation、raw/normalized admission parity、release purge、无第二 writer/DB import | design_ready_not_implemented | 不把 quote 送入 strategy/broker；不替换 LEGACY_B0 `VnpyTick` |
+| immutable context preload 与 tradability authority adapter | `miniqmt_quote_context.py` 注入 calendar/suspend/limit/previous-close/board-unit authority | provider failure/partial context loud、callback no DB、side-neutral tradability、status/openint conflict tests | design_ready_not_implemented | 不复制 SQL；不以 quote status 代替 authority |
+| freshness math 与 required policy hash | `quote_eligibility.py`；`miniqmt_quote_contract_config.py` | receive/source/exchange age、negative skew、age divergence、missing required field/config round-trip/hash tests | design_ready_not_implemented | 无阈值默认值；不从 LEGACY_B0/环境推断 |
+| total eligibility precedence 与 dependency-group isolation | `ActionQuoteEvaluator`、`QuoteSnapshotBatchBuilder` | 全状态两两组合、BUY/SELL limit/depth、显式 group watermark、unrelated symbol isolation、aggregate observation-only | design_ready_not_implemented | 不成为全 runtime gate；不改变 parent/run status |
+| BUG-599/600/604/614 与 P1-A/P1-B 不变式 | import boundary、scheduler health seam、现有 ingress/contracts | 直接 regression + `nox l0`/module registry/F2；callback 无 DB/broker，pending tick 持续，B0 action unchanged | design_ready_not_implemented | P1-C 无 broker side effect、DDL、durable evidence、binding 或 LIVE 能力 |
+
+P1-C 设计收口同时修正两处旧歧义：candidate physical bootstrap 仍为 P1-B all-or-nothing，`WAITING_FIRST_QUOTE` 只属于已发布 feed 的新 clock/context continuity；文档退出语句不再把下一步错误写成 P1-A。P1-C 实施完成后新增独立 implementation acceptance receipt，不能覆盖或改写 P1-A/P1-B 历史回执。
+
+---
+
 ## 14. Exit Criteria / 设计退出条件
 
 本文可标记 `design_ready` 的条件：
@@ -923,7 +1090,7 @@ normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏
 - 不得把静态、占位、简化或 mock-only 产物写成已完成。
 - 不存在人工审批/RBAC/permit/confirm-run/ack；所有技术条件可自动正向满足且只影响对应 symbol/revision。
 
-用户确认后，后续工作从 P1-A 开始。P1-A 完成前不得宣称 contracts 已实现；P1-D 完成前不得宣称 Phase 0A handoff/观测 evidence 已闭合；P1-E 完成前不得宣称 Phase 1/B0_QUOTE_V2 已实现。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1 或 B1 可下单。
+P1-A/P1-B 已完成实现与合入，后续开发从 P1-C 开始并严格使用 §13.3 的实现级契约。P1-C 完成前不得宣称 clock/calendar/tradability/eligibility runtime ready；P1-D 完成且真实 evidence readback 前不得宣称 Phase 0A handoff/观测 evidence 已闭合；P1-E 完成前不得宣称 Phase 1/B0_QUOTE_V2 已实现。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1 或 B1 可下单。
 
 ---
 
@@ -935,3 +1102,6 @@ normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏
 - 迅投知识库：[行情相关常见问题：全推、五档与行情源能力](https://dict.thinktrader.net/innerApi/question_answer.html)
 - 迅投知识库：[订阅全推数据接口与 callback shape](https://dict.thinktrader.net/VBA/check_sheet.html)
 - 迅投知识库：[行情订阅和回调示例](https://dict.thinktrader.net/nativeApi/code_examples.html?id=7zqjlm)
+- 上海证券交易所：[上海证券交易所交易规则（2026 年修订，2026-07-06 起施行）](https://www.sse.com.cn/lawandrules/sselawsrules2025/trade/universal/c/c_20260424_10816492.shtml)
+- 深圳证券交易所：[深圳证券交易所交易规则](https://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217564423808793.pdf)
+- 北京证券交易所：[北京证券交易所交易规则（试行）](https://www.bse.cn/jygl_list/200010919.html)
