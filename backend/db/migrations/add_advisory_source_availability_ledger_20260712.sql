@@ -256,3 +256,207 @@ COMMENT ON TABLE app.advisory_source_revision_set IS
     'Immutable set of exact source members for an Advisory capture, label or dataset build. Runtime database snapshots and current source-table watermarks are intentionally excluded from its stable hash.';
 COMMENT ON TABLE app.advisory_source_revision_member IS
     'Append-only exact source member. Formal members reference a matching immutable availability event; event-free members are explicitly research-only and cannot satisfy a decision-cutoff requirement with WATERMARK_ONLY evidence.';
+
+CREATE TABLE IF NOT EXISTS app.advisory_selection_stage_trace_outbox (
+    trace_outbox_id TEXT PRIMARY KEY,
+    control_binding_event_hash TEXT NOT NULL,
+    selection_run_id TEXT NOT NULL,
+    package_id TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    decision_as_of_trade_date DATE NOT NULL,
+    handoff_readiness_hash TEXT NOT NULL,
+    admission_scope_id TEXT NOT NULL,
+    admission_scope_hash TEXT NOT NULL,
+    capture_batch_id TEXT NOT NULL,
+    capture_fencing_token BIGINT NOT NULL CHECK (capture_fencing_token >= 1),
+    trace_schema_version TEXT NOT NULL CHECK (trace_schema_version = 'advisory_phase1_stage_trace_v1'),
+    capture_policy_hash TEXT NOT NULL,
+    trace_content_jsonb JSONB NOT NULL,
+    trace_content_hash TEXT NOT NULL UNIQUE,
+    candidate_count INTEGER NOT NULL CHECK (candidate_count >= 0),
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (selection_run_id, package_id, manifest_sha256, decision_as_of_trade_date, capture_policy_hash)
+);
+
+ALTER TABLE app.advisory_selection_stage_trace_outbox
+    ADD COLUMN IF NOT EXISTS control_binding_event_hash TEXT;
+ALTER TABLE app.advisory_selection_stage_trace_outbox
+    ALTER COLUMN control_binding_event_hash SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_advisory_stage_trace_outbox_selection
+    ON app.advisory_selection_stage_trace_outbox(selection_run_id, package_id, decision_as_of_trade_date);
+
+CREATE TABLE IF NOT EXISTS app.advisory_selection_stage_trace_delivery_event (
+    delivery_event_id TEXT PRIMARY KEY,
+    trace_outbox_id TEXT NOT NULL REFERENCES app.advisory_selection_stage_trace_outbox(trace_outbox_id),
+    delivery_event_no INTEGER NOT NULL CHECK (delivery_event_no >= 1),
+    predecessor_event_hash TEXT REFERENCES app.advisory_selection_stage_trace_delivery_event(delivery_event_hash),
+    event_type TEXT NOT NULL CHECK (event_type IN ('OBSERVATION_WRITTEN', 'OBSERVATION_WRITE_FAILED')),
+    writer_attempt_no INTEGER NOT NULL CHECK (writer_attempt_no >= 1),
+    event_at TIMESTAMPTZ NOT NULL,
+    reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb,
+    payload_jsonb JSONB NOT NULL DEFAULT '{}'::jsonb,
+    delivery_request_hash TEXT NOT NULL UNIQUE,
+    delivery_event_hash TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (delivery_event_hash <> predecessor_event_hash),
+    CHECK (
+        (delivery_event_no = 1 AND predecessor_event_hash IS NULL)
+        OR (delivery_event_no > 1 AND predecessor_event_hash IS NOT NULL)
+    ),
+    UNIQUE (trace_outbox_id, delivery_event_no)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_advisory_stage_trace_delivery_one_successor
+    ON app.advisory_selection_stage_trace_delivery_event(predecessor_event_hash)
+    WHERE predecessor_event_hash IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION app.verify_advisory_stage_trace_delivery_event()
+RETURNS TRIGGER AS $$
+DECLARE
+    predecessor app.advisory_selection_stage_trace_delivery_event%ROWTYPE;
+    observed_now TIMESTAMPTZ := clock_timestamp();
+BEGIN
+    IF NEW.event_at < observed_now - INTERVAL '5 seconds'
+       OR NEW.event_at > observed_now + INTERVAL '5 seconds' THEN
+        RAISE EXCEPTION 'ADVISORY_PHASE1_TRACE_DELIVERY_TIME_INVALID';
+    END IF;
+    NEW.created_at := observed_now;
+    IF NEW.delivery_event_no = 1 THEN
+        RETURN NEW;
+    END IF;
+    SELECT * INTO predecessor
+    FROM app.advisory_selection_stage_trace_delivery_event
+    WHERE delivery_event_hash = NEW.predecessor_event_hash
+    FOR KEY SHARE;
+    IF NOT FOUND
+       OR predecessor.trace_outbox_id <> NEW.trace_outbox_id
+       OR predecessor.delivery_event_no <> NEW.delivery_event_no - 1
+       OR predecessor.event_type = 'OBSERVATION_WRITTEN' THEN
+        RAISE EXCEPTION 'ADVISORY_PHASE1_TRACE_DELIVERY_CHAIN_INVALID';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_verify_advisory_stage_trace_delivery_event
+    ON app.advisory_selection_stage_trace_delivery_event;
+CREATE TRIGGER trg_verify_advisory_stage_trace_delivery_event
+    BEFORE INSERT ON app.advisory_selection_stage_trace_delivery_event
+    FOR EACH ROW EXECUTE FUNCTION app.verify_advisory_stage_trace_delivery_event();
+
+CREATE OR REPLACE FUNCTION app.reject_advisory_stage_trace_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'ADVISORY_PHASE1_TRACE_IMMUTABLE';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_reject_advisory_stage_trace_outbox_mutation
+    ON app.advisory_selection_stage_trace_outbox;
+CREATE TRIGGER trg_reject_advisory_stage_trace_outbox_mutation
+    BEFORE UPDATE OR DELETE ON app.advisory_selection_stage_trace_outbox
+    FOR EACH ROW EXECUTE FUNCTION app.reject_advisory_stage_trace_mutation();
+
+DROP TRIGGER IF EXISTS trg_reject_advisory_stage_trace_delivery_mutation
+    ON app.advisory_selection_stage_trace_delivery_event;
+CREATE TRIGGER trg_reject_advisory_stage_trace_delivery_mutation
+    BEFORE UPDATE OR DELETE ON app.advisory_selection_stage_trace_delivery_event
+    FOR EACH ROW EXECUTE FUNCTION app.reject_advisory_stage_trace_mutation();
+
+COMMENT ON TABLE app.advisory_selection_stage_trace_outbox IS
+    'Append-only Phase 1 trace envelope outbox. It is written only after a completed historical Advisory selection and never modifies Selection, Advisory, simulation, Paper or market-source rows.';
+COMMENT ON TABLE app.advisory_selection_stage_trace_delivery_event IS
+    'Append-only Phase 1 trace delivery chain. OBSERVATION_WRITTEN is terminal; retries append after OBSERVATION_WRITE_FAILED without rerunning Selection.';
+
+CREATE TABLE IF NOT EXISTS app.advisory_phase1_control_binding_event (
+    binding_event_id TEXT PRIMARY KEY,
+    append_request_hash TEXT NOT NULL UNIQUE,
+    control_type TEXT NOT NULL CHECK (control_type IN ('TRACE_CAPTURE', 'SOURCE_LEDGER_OBSERVER', 'DATASET_STORE', 'SCHEDULER')),
+    environment TEXT NOT NULL,
+    admission_scope_set_hash TEXT,
+    governance_scope_hash TEXT,
+    config_source TEXT NOT NULL,
+    config_payload_jsonb JSONB NOT NULL,
+    config_or_store_backend_hash TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL,
+    binding_chain_key TEXT NOT NULL,
+    binding_event_revision_no INTEGER NOT NULL CHECK (binding_event_revision_no >= 1),
+    predecessor_binding_event_hash TEXT REFERENCES app.advisory_phase1_control_binding_event(binding_event_hash),
+    bound_at TIMESTAMPTZ NOT NULL,
+    binding_event_hash TEXT NOT NULL UNIQUE,
+    created_by_service_principal TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (binding_event_hash <> predecessor_binding_event_hash),
+    CHECK (
+        (binding_event_revision_no = 1 AND predecessor_binding_event_hash IS NULL)
+        OR (binding_event_revision_no > 1 AND predecessor_binding_event_hash IS NOT NULL)
+    ),
+    UNIQUE (binding_chain_key, binding_event_revision_no)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_advisory_control_binding_one_successor
+    ON app.advisory_phase1_control_binding_event(predecessor_binding_event_hash)
+    WHERE predecessor_binding_event_hash IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION app.verify_advisory_control_binding_event()
+RETURNS TRIGGER AS $$
+DECLARE
+    predecessor app.advisory_phase1_control_binding_event%ROWTYPE;
+    observed_now TIMESTAMPTZ := clock_timestamp();
+BEGIN
+    IF NEW.bound_at < observed_now - INTERVAL '5 seconds'
+       OR NEW.bound_at > observed_now + INTERVAL '5 seconds' THEN
+        RAISE EXCEPTION 'ADVISORY_PHASE1_CONTROL_BINDING_TIME_INVALID';
+    END IF;
+    NEW.created_at := observed_now;
+    IF NEW.binding_event_revision_no = 1 THEN
+        RETURN NEW;
+    END IF;
+    SELECT * INTO predecessor
+    FROM app.advisory_phase1_control_binding_event
+    WHERE binding_event_hash = NEW.predecessor_binding_event_hash
+    FOR KEY SHARE;
+    IF NOT FOUND
+       OR predecessor.binding_chain_key <> NEW.binding_chain_key
+       OR predecessor.binding_event_revision_no <> NEW.binding_event_revision_no - 1
+       OR (
+            predecessor.config_or_store_backend_hash = NEW.config_or_store_backend_hash
+            AND predecessor.enabled = NEW.enabled
+            AND predecessor.config_source = NEW.config_source
+          ) THEN
+        RAISE EXCEPTION 'ADVISORY_PHASE1_CONTROL_BINDING_CHAIN_INVALID';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_verify_advisory_control_binding_event
+    ON app.advisory_phase1_control_binding_event;
+CREATE TRIGGER trg_verify_advisory_control_binding_event
+    BEFORE INSERT ON app.advisory_phase1_control_binding_event
+    FOR EACH ROW EXECUTE FUNCTION app.verify_advisory_control_binding_event();
+
+CREATE OR REPLACE FUNCTION app.reject_advisory_control_binding_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'ADVISORY_PHASE1_CONTROL_BINDING_IMMUTABLE';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_reject_advisory_control_binding_mutation
+    ON app.advisory_phase1_control_binding_event;
+CREATE TRIGGER trg_reject_advisory_control_binding_mutation
+    BEFORE UPDATE OR DELETE ON app.advisory_phase1_control_binding_event
+    FOR EACH ROW EXECUTE FUNCTION app.reject_advisory_control_binding_mutation();
+
+ALTER TABLE app.advisory_selection_stage_trace_outbox
+    DROP CONSTRAINT IF EXISTS fk_advisory_stage_trace_outbox_control_binding;
+ALTER TABLE app.advisory_selection_stage_trace_outbox
+    ADD CONSTRAINT fk_advisory_stage_trace_outbox_control_binding
+    FOREIGN KEY (control_binding_event_hash)
+    REFERENCES app.advisory_phase1_control_binding_event(binding_event_hash);
+
+COMMENT ON TABLE app.advisory_phase1_control_binding_event IS
+    'Append-only versioned control configuration for Phase 1 sidecars. It is not an approval, authorization or role record; disabled is an explicit configuration event.';

@@ -15,6 +15,7 @@ from backend.services.strategy_package.live_inference import (
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.multi_alpha_live import (
     LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE,
+    MULTI_ALPHA_LIVE_PROVIDER_VERSION,
     REASON_COMPONENT_COVERAGE_LOW,
     REASON_DEADLINE_EXCEEDED,
     REASON_LABEL_WINDOW_INSUFFICIENT,
@@ -299,6 +300,8 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     assert first.metadata["component_artifacts"][A1_LEG]["child_package_id"] is None
     assert first.metadata["seed_run_ids"] == {A1_LEG: [A1_SEED], FUND_LEG: [FUND_SEED]}
     assert first.metadata["normalization_method"] == "zscore"
+    assert first.metadata["provider_version"] == "multi_alpha_live_selection_provider_v2"
+    assert MULTI_ALPHA_LIVE_PROVIDER_VERSION == "multi_alpha_live_selection_provider_v2"
     assert first.metadata["final_topk"] == 25
     assert first.metadata["component_candidate_universe_size"] == 60
     assert first.metadata["coverage_threshold"] == 25
@@ -320,6 +323,29 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     )
     assert snapshot.candidates[0].rank == 1
     assert snapshot.candidates[0].component_scores[A1_LEG]["weight"] > snapshot.candidates[0].component_scores[FUND_LEG]["weight"]
+
+
+def test_component_leg_rank_uses_full_leg_universe_before_inner_alignment() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=True)
+    runtime_config = _runtime_config(
+        extra_artifact={
+            "component_coverage_threshold": 2,
+            "multi_alpha_weight_history": _live_weight_history(),
+        }
+    )
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        {
+            A1_LEG: _score_rows(count=26),
+            FUND_LEG: _score_rows(count=26)[1:],
+        },
+    )
+
+    artifact = _generate(service, parent, runtime_config)
+    row_by_symbol = {row["symbol"]: row for row in artifact.scores_json}
+
+    assert row_by_symbol["000002.SZ"]["component_scores"][A1_LEG]["leg_rank"] == 2
+    assert row_by_symbol["000002.SZ"]["component_scores"][FUND_LEG]["leg_rank"] == 1
 
 
 def test_multi_alpha_runtime_rejects_non_authoritative_artifact() -> None:

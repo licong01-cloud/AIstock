@@ -48,7 +48,7 @@ from backend.services.trading_core.errors import (
 
 
 LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE = "live_multi_alpha_inference_v1"
-MULTI_ALPHA_LIVE_PROVIDER_VERSION = "multi_alpha_live_selection_provider_v1"
+MULTI_ALPHA_LIVE_PROVIDER_VERSION = "multi_alpha_live_selection_provider_v2"
 
 REASON_RUNTIME_NOT_ENABLED = "multi_alpha_runtime_not_enabled"
 REASON_LEG_MISSING = "multi_alpha_leg_missing"
@@ -459,7 +459,7 @@ class MultiAlphaLivePredictionProvider:
                     method=normalization_method,
                 )
                 leg_frames[leg_slice.leg_id] = normalized
-                component_sha = _frame_sha256(normalized, score_column="normalized_score")
+                component_sha = _frame_sha256(normalized, score_column="normalized_score", include_rank=True)
                 component_metadata[leg_slice.leg_id] = {
                     "component_score_artifact_id": f"macs_{component_sha[:24]}",
                     "component_score_artifact_sha256": component_sha,
@@ -871,7 +871,22 @@ class MultiAlphaLivePredictionProvider:
         trade_date: date,
         include_reference_price: bool,
     ) -> list[dict[str, Any]]:
-        selected = combined.sort_values(["combined_score", "instrument"], ascending=[False, True]).reset_index(drop=True)
+        ranked = combined.copy()
+        if ranked["instrument"].duplicated().any():
+            _raise(
+                "MULTI_ALPHA combined universe has duplicate instruments",
+                REASON_COMPONENT_COVERAGE_LOW,
+                duplicate_count=int(ranked["instrument"].duplicated().sum()),
+            )
+        for leg_id in leg_ids:
+            rank_column = f"rank__{leg_id}"
+            if rank_column not in ranked:
+                _raise(
+                    "MULTI_ALPHA combined universe is missing component-universe ranks",
+                    REASON_COMPONENT_COVERAGE_LOW,
+                    leg_id=leg_id,
+                )
+        selected = ranked.sort_values(["combined_score", "instrument"], ascending=[False, True]).reset_index(drop=True)
         selected["rank"] = selected.index + 1
         selected = selected.head(topk).copy()
         symbols = selected["instrument"].astype(str).tolist()
@@ -888,6 +903,7 @@ class MultiAlphaLivePredictionProvider:
                 leg_id: {
                     "raw_score": float(item[f"raw__{leg_id}"]),
                     "normalized_score": float(item[f"norm__{leg_id}"]),
+                    "leg_rank": int(item[f"rank__{leg_id}"]),
                     "weight": float(weights[leg_id]),
                 }
                 for leg_id in leg_ids
@@ -1537,7 +1553,14 @@ def _normalize_leg_frame(
         data["normalized_score"] = data.groupby("trade_date")["raw_score"].transform(_rank_score)
     else:
         _raise("unsupported MULTI_ALPHA normalization method", REASON_COMPONENT_COVERAGE_LOW, leg_id=leg_id, method=method)
-    return data[["trade_date", "instrument", "raw_score", "normalized_score"]]
+    data["leg_rank"] = (
+        data.sort_values(["trade_date", "normalized_score", "instrument"], ascending=[True, False, True])
+        .groupby("trade_date")
+        .cumcount()
+        .add(1)
+        .sort_index()
+    )
+    return data[["trade_date", "instrument", "raw_score", "normalized_score", "leg_rank"]]
 
 
 def _align_component_frames(
@@ -1547,15 +1570,19 @@ def _align_component_frames(
 ) -> pd.DataFrame:
     merged: pd.DataFrame | None = None
     for leg_id, frame in frames.items():
-        selected = frame[["trade_date", "instrument", "raw_score", "normalized_score"]].rename(
-            columns={"raw_score": f"raw__{leg_id}", "normalized_score": f"norm__{leg_id}"}
+        selected = frame[["trade_date", "instrument", "raw_score", "normalized_score", "leg_rank"]].rename(
+            columns={
+                "raw_score": f"raw__{leg_id}",
+                "normalized_score": f"norm__{leg_id}",
+                "leg_rank": f"rank__{leg_id}",
+            }
         )
         merged = selected if merged is None else merged.merge(selected, on=["trade_date", "instrument"], how="inner")
     if merged is None or merged.empty:
         if allow_empty:
             columns = ["trade_date", "instrument"]
             for leg_id in frames:
-                columns.extend([f"raw__{leg_id}", f"norm__{leg_id}"])
+                columns.extend([f"raw__{leg_id}", f"norm__{leg_id}", f"rank__{leg_id}"])
             return pd.DataFrame(columns=columns)
         _raise("MULTI_ALPHA legs have no common candidates", REASON_COMPONENT_COVERAGE_LOW)
     return merged.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
@@ -1830,8 +1857,11 @@ def _shift_trading_days(trading_days: Sequence[date], anchor: date, offset: int)
     return ordered[target]
 
 
-def _frame_sha256(frame: pd.DataFrame, *, score_column: str) -> str:
-    selected = frame[["trade_date", "instrument", score_column]].copy()
+def _frame_sha256(frame: pd.DataFrame, *, score_column: str, include_rank: bool = False) -> str:
+    columns = ["trade_date", "instrument", score_column]
+    if include_rank:
+        columns.append("leg_rank")
+    selected = frame[columns].copy()
     selected["trade_date"] = selected["trade_date"].astype(str)
     selected = selected.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
     return _canonical_sha256(selected.to_dict(orient="records"))

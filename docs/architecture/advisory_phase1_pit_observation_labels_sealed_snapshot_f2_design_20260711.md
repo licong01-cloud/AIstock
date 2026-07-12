@@ -646,9 +646,9 @@ capture_state:
 - sink 只能接收深拷贝/冻结 candidate projection，不持有或修改业务排序对象。
 - 模拟盘、Paper、QMT、普通 Selection 不配置 sink。
 - callback/finalize 的普通异常不得传播进入 Selection/Advisory；捕获层把异常转换为稳定 reason code 和 capture receipt。
-- `max_candidates/max_bytes/max_capture_ms` 必须冻结在 capture policy；超限立即标记 PARTIAL/FAILED，不无界分配内存或阻塞业务线程。
+- `max_candidates/max_bytes/max_capture_ms` 必须冻结在 capture policy；输入先做流式 candidate/byte 预检，完整 envelope 仍须复验最终 canonical byte size。非 Null capture 在有界 worker 中执行，业务线程只等待 `max_capture_ms`；超时任务不得形成无界排队。
 - sink 内禁止数据库、网络、broker、HMM generation 和任何业务 DML。
-- Advisory 业务结果成功后，在业务事务外把 canonical trace envelope 写入 Phase 1 专属 append-only outbox；不修改现有 Selection DSE schema。raw score 必须复制进 immutable payload，不能只引用会被覆盖的 `selection_score_artifact` 当前行。
+- Advisory 业务结果成功后，在业务事务外通过有界非阻塞 dispatcher 把 canonical trace envelope 写入 Phase 1 专属 append-only outbox；同步 PostgreSQL repository 禁止直接注入 Selection。raw score 必须复制进 immutable payload，不能只引用会被覆盖的 `selection_score_artifact` 当前行。
 - 非 Null trace 由版本化 `TRACE_CAPTURE` config binding 显式启用；binding 只定义 capture policy，不允许 sink 在线写 DB。outbox/capture writer 按配置、batch、lease/fencing 和内容 hash 自动校验，失败时只标记 capture unavailable，不影响业务结果。
 - outbox/writer 按 `trace_content_hash` 幂等重试，不重新运行 Selection；writer 成功后才允许生成 COMPLETE observation version。
 - capture/outbox/writer 失败只产生 gap 或 PARTIAL version，不回滚、不改写已完成的 Selection/Advisory 结果。进程崩溃且无 durable envelope 时必须明确 `TRACE_CAPTURE_LOST`，不得从后续可变 artifact 伪造。
@@ -674,7 +674,7 @@ app.advisory_selection_stage_trace_delivery_event
   writer_attempt_no/event_at/reason_codes/payload_hash
 ```
 
-两表 append-only。outbox insert 以 `trace_content_hash` 幂等，并在 insert/commit 前按 §6.3 校验 handoff readiness、admission scope、RUNNING capture batch、lease/fencing 和大小预算。delivery 使用 `(trace_outbox_id,delivery_event_no)` 唯一递增，predecessor 只能有一个后继，DB/repository 拒绝 fork/cycle。reconciliation 以 SelectionRun/Advisory review 与 outbox identity 对账；业务成功但没有 outbox 时追加 capture gap `TRACE_CAPTURE_LOST`，不回放 Selection。
+两表 append-only。outbox insert 以 `trace_content_hash` 幂等；exact retry 先返回既有 immutable row，不要求已经完成的 capture batch 继续 RUNNING。新 insert 的 admission validator 必须复用 repository transaction 并持有 handoff readiness、admission scope、RUNNING capture batch、lease/fencing 的必要行锁直到 commit，禁止事务外 check-then-insert。delivery 使用 `(trace_outbox_id,delivery_event_no)` 唯一递增，predecessor 只能有一个后继，DB/repository 拒绝 fork/cycle。reconciliation 以 SelectionRun/Advisory review 的冻结 identity 与 outbox natural identity 对账；只有业务成功但没有 durable outbox 时追加 capture gap `TRACE_CAPTURE_LOST`，普通异步 writer 失败使用 `TRACE_WRITE_FAILED`，两者不得混同，也不回放 Selection。
 
 ### 9.5 历史补采
 
@@ -2023,6 +2023,32 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 - 冻结 `multi_alpha_component_evidence_v1` 与 parent combine parity。
 - 默认 Null sink。
 - capture 开/关及 callback/finalize/writer 故障下 Selection/模拟盘/Paper golden parity 全通过后才允许 Advisory opt-in。
+
+#### 22.5.1 已完成基础设施交付：bounded trace、control binding 与 outbox
+
+2026-07-12 已交付下列独立、默认不激活的 Phase 1B 基础设施：
+
+- `backend/services/advisory_phase1/stage_trace.py`：`NullSelectionStageTraceSink` 为默认值；非 Null sink 在单独且有并发上限的 worker 中接收 stage 深拷贝 JSON projection，输入流式预检与最终 envelope byte size 双重校验，业务线程等待不超过冻结的 `max_capture_ms`。callback、component 构建和 dispatch 普通异常全部转换为稳定 receipt/reason code，绝不改变 Selection 的候选、排序、事务或异常语义。
+- `multi_alpha_component_evidence_v1`：原生多 Alpha 父包只保留 parent authority；`leg_rank` 在每个 leg 的完整 component universe 上、inner alignment 之前生成，并与 normalized score 一同进入 component artifact hash。provider 升级为 `multi_alpha_live_selection_provider_v2`，旧缓存不会与新 provenance 契约共用 runtime identity。缺 leg、权重、rank、variant 或 parity 时只输出 `PARTIAL/UNAVAILABLE` capability，不补零、不猜权重、不重排 parent candidate。
+- `app.advisory_phase1_control_binding_event`：`TRACE_CAPTURE` 等 control 的版本化 append-only 配置单链。它不是审批、角色或授权记录；same content retry 幂等，scope/config/predecessor fork 或 cycle fail-closed，停用只能由新的 `enabled=false` event 表达。
+- `app.advisory_selection_stage_trace_outbox` 与 `...delivery_event`：envelope 复制 raw score payload，不引用可变 latest row；trace identity 的决策日只能来自冻结 `decision_clock_seed.decision_as_of_trade_date`，不得使用 target trade date。`trace_content_hash` 精确幂等，exact retry 在 lease 结束后仍返回既有 row；新 insert 的 admission validator 与 INSERT 共用事务。delivery event 单链且 `OBSERVATION_WRITTEN` 终态不可续写，全部 row 禁止 update/delete。
+- Selection 只接受 `BoundedTraceOutboxDispatcher` 一类显式 `non_blocking` writer；dispatcher 队列有固定上限，普通写失败产生 `TRACE_WRITE_FAILED`。`TraceCaptureReconciler` 使用冻结 Selection identity 对账 durable outbox，只有确实缺失时才交给 durable gap handler 记录 `TRACE_CAPTURE_LOST`。
+- outbox append 在没有 persisted control-binding 和 RUNNING capture-batch/lease/fencing validator 时默认返回 `ADVISORY_PHASE1_TRACE_ADMISSION_UNAVAILABLE`，不会以内存 binding、伪造 batch 或静默 bypass 写入。Phase 1C 实现 capture batch state machine 后才可提供真实 validator；因此本切片不启用 Advisory trace capture，也不产生 observation version。
+- 验证包含 component FULL/PARTIAL/UNAVAILABLE、order/weight/parity、candidate/byte/time budget、callback/writer fault isolation、outbox/delivery retry/fork/terminal、控制配置单链、默认 Selection runtime 回归，以及 `AISTOCK_DEV_DB_E2E=1` 下 DEV DB migration/reapply、FK、immutable trigger 与 rollback-no-residue L4。
+
+本交付不启动 observer，不创建 capture batch、observation、label、build 或 snapshot，不扫描或改写 market 表，也不对模拟盘、Paper、QMT 或实时/交易路径注入 sink。这是设计分期中的 Phase 1B 基础设施边界，不是以静默 fallback、内存伪 validator 或同步数据库写入替代 Phase 1C；后续 Phase 1C 必须实现可验证的 capture-batch/lease/fencing 和 durable gap handler 后，才允许 Advisory 真正启用 dispatcher。
+
+Phase 1B 实施验收表：
+
+| acceptance_id | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| P1B-DATE-001 | `simulation_runtime/selection.py::_prospective_decision_as_of_trade_date` | 决策日与 target date 分离、缺失 fail-closed、disabled no-op 反例 | verified | none |
+| P1B-MULTIALPHA-001 | `multi_alpha_live.py::_normalize_leg_frame/_artifact_rows`、provider v2 | 不同 leg universe 下 full-universe rank 与 provider-version 回归 | verified | none |
+| P1B-BOUND-001 | `stage_trace.py::BoundedSelectionStageTraceSink` | candidate/input byte/final envelope byte/真实 wall-time timeout 反例 | verified | none |
+| P1B-DISPATCH-001 | `trace_outbox.py::BoundedTraceOutboxDispatcher` | blocking writer 拒绝、bounded queue、async failure reason 隔离 | verified | none |
+| P1B-OUTBOX-001 | `trace_outbox.py::PostgresTraceOutboxRepository.append` | transaction-bound validator、lease 结束后 exact retry、DEV DB L4 | verified | none |
+| P1B-RECON-001 | `trace_outbox.py::TraceCaptureReconciler` | durable row 存在/缺失双向 oracle，WRITE_FAILED 与 CAPTURE_LOST 分离 | verified | durable gap handler 由 Phase 1C 按设计提供，当前不得启用 Advisory dispatcher |
+| P1B-PARITY-001 | 默认 `NullSelectionStageTraceSink` 和显式 enablement | Selection/Phase 1/Prospective/MULTI_ALPHA 相关矩阵 | verified | MiniQMT lifecycle 两项失败已在 `origin/main` 同 nodeid 复现，不属于本变更 |
 
 ### 22.6 Phase 1C：Fixture source revision/capture/label/snapshot
 
