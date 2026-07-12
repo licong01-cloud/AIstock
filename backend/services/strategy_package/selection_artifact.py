@@ -106,6 +106,18 @@ def _canonical_json_sha256(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _jsonb_default(value: Any) -> str:
+    """Serialize explicit temporal evidence fields without broad string fallback."""
+
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable for selection artifact persistence")
+
+
+def _jsonb_dumps(payload: Any) -> str:
+    return json.dumps(payload, default=_jsonb_default, ensure_ascii=False, separators=(",", ":"))
+
+
 def _required_v2_hash(value: Any, *, field_name: str) -> str:
     normalized = str(value or "").strip().lower()
     if not _is_sha256_hex(normalized):
@@ -720,8 +732,8 @@ class StrategyPackageSelectionArtifactRepository:
                         artifact.universe_count,
                         artifact.top_score_symbol,
                         artifact.status.value,
-                        psycopg2.extras.Json(artifact.error_json) if artifact.error_json else None,
-                        psycopg2.extras.Json(artifact.metadata),
+                        psycopg2.extras.Json(artifact.error_json, dumps=_jsonb_dumps) if artifact.error_json else None,
+                        psycopg2.extras.Json(artifact.metadata, dumps=_jsonb_dumps),
                         artifact.created_at,
                     ),
                 )
@@ -812,8 +824,8 @@ class StrategyPackageSelectionArtifactRepository:
             artifact.universe_count,
             artifact.top_score_symbol,
             artifact.status.value,
-            psycopg2.extras.Json(artifact.error_json) if artifact.error_json else None,
-            psycopg2.extras.Json(artifact.metadata),
+            psycopg2.extras.Json(artifact.error_json, dumps=_jsonb_dumps) if artifact.error_json else None,
+            psycopg2.extras.Json(artifact.metadata, dumps=_jsonb_dumps),
             artifact.artifact_contract_version,
             artifact.artifact_payload_sha256,
             artifact.artifact_input_context_hash,
