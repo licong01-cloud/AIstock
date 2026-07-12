@@ -2,7 +2,7 @@
 
 > 日期：2026-07-10
 > 文档类型：F2 顶层架构蓝图，`docs-fast-new` 交付
-> 当前状态：蓝图已形成；Phase 0A 详细设计与只读审计框架已合入；2026-07-11 根据单用户、非实盘交易边界统一取消人工审批、角色和运行时 DDL，并把生产控制收敛为 8 类自动技术门禁；首次真实 L4 只读审计已执行并因历史证据生产缺口 `BLOCKED`，后续只读复查确认现有 single current manifest 尚无 DSE、旧 manifest evidence 不可继承且系统没有实际 daily runner；Phase 0A.2 已统一纳入修复
+> 当前状态：蓝图已形成；Phase 0A 历史研究 runner 与只读审计框架已合入；根据单用户、学术研究、无实盘交易边界取消人工审批、角色和运行时 DDL。当前能力固定为显式历史日期、DB_HISTORICAL、手工多 Program 和 execution prohibited；不存在 Advisory daily scheduler、实时荐股或交易执行路径
 > 适用模块：Advisory 荐股、Selection Center 结果消费、StrategyPackage 只读语义、行业 HMM、行情数据、模型训练、荐股页面
 > 最终决策者：用户人工决定是否买入；系统不下单、不记录人工实际买入结果
 
@@ -70,8 +70,8 @@
 - 当前 `candidate.rank` 同时参与进入、保持和退出判断，不能直接被影子模型覆盖。
 - HMM 已经调整过分数，若在下游再次固定乘权会重复计算行业影响。
 - 长期趋势目标没有候选池召回率、分层收益目标、趋势生存和捕获率评价。
-- 当前启用单 Alpha Program 已绑定真实包，但 current manifest 尚无 DSE；其 67 条历史 DSE 均属于旧 manifest，不能直接成为新 identity 的前瞻证据。
-- `review_schedule` 只是 Program metadata；目前没有在行情就绪后按交易日枚举所有启用 Program、独立执行并输出持久化回执的 daily runner。
+- 当前启用单 Alpha Program 已绑定真实包，但 current manifest 尚无 DSE；其 67 条历史 DSE 均属于旧 manifest，不能继承为 current identity 的研究证据。
+- `review_schedule` 只是 legacy Program metadata；历史研究模块明确不实现 daily runner。
 
 ### 1.3 前序设计承接
 
@@ -185,7 +185,7 @@
 ### 6.1 总体流程
 
 ```text
-Advisory daily runner 为每个 ENABLED Program 独立触发现有正式 Selection pipeline
+用户手工历史研究请求为每个显式 Program 独立解析已有 Selection evidence
   -> StrategyPackage 独立生成 Alpha 原始候选
   -> [hmm.enabled=true 时] 现有 HMM 行业分数调整
   -> risk policy 的 can_buy/score multiplier/delta/rank penalty 与重排
@@ -197,8 +197,8 @@ Advisory daily runner 为每个 ENABLED Program 独立触发现有正式 Selecti
   -> Top5 质量、行业和相关性约束
   -> 收益分布、信号存活、MFE/MAE、成交概率模型
   -> 原始价格区间决策层
-  -> Advisory list version 与页面影子/正式展示
-  -> 人工决定是否买入
+  -> research list version 与页面学术研究展示
+  -> 不产生投资建议、订单、仓位或执行动作
 ```
 
 ### 6.2 模块边界
@@ -230,7 +230,7 @@ SelectionRun 已完成
 
 ### 6.3 权威候选运行与观察深度
 
-- 每个 Program/target trade date 的候选必须来自 Advisory 自有的权威单包 `SelectionRun`，并继续通过现有正式 StrategyPackage/Selection artifact 路径生成；legacy preview、历史 aggregate 诊断或跨包合成结果不能作为候选源。
+- 每个 Program/decision trade date 的候选必须来自 identity/hash 匹配的既有单包 `SelectionRun` artifact/DSE；研究请求不得现场调用 Selection 重算，legacy preview、aggregate 诊断或跨包合成结果不能作为候选源。
 - Advisory 可以在自己的 effective runtime profile 中请求更深的 `selection.top_k`，用于模型候选召回和生命周期退出观察，但不得修改普通 Selection Center 或 Paper v2 的默认运行配置。单 Alpha 仍受 Selection v1 上限 50 约束；原生多 Alpha 父包只能使用 frozen manifest 已声明的 `topk/topk_variants/secondary_topk`，否则现有 runtime 会 `TOPK_RUNTIME_MISMATCH`。缺少所需深度变体时，必须发布经正常验证的新父包版本或另立 Advisory 深池契约，不能临时覆盖。
 - 每次运行必须持久化 `requested_top_k`、manifest top-k variant、Alpha 总评分数量、HMM/risk policy 前后候选数量、硬过滤前后数量、eligible universe 标识及 hash、effective runtime config、SelectionRun id 和 artifact hash。
 - 候选截断必须同时满足模型特征深度与 `rank_exit_threshold` 观察深度；前者不足使用 `ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT`，后者不足继续使用现有 `ADVISORY_EXIT_OBSERVATION_DEPTH_INSUFFICIENT`，两者不得混用。
@@ -244,13 +244,13 @@ SelectionRun 已完成
 - 原生多 Alpha 父包的各 leg 分数、权重、一致度和分歧度可以作为输入，但父包仍是唯一包身份。
 - 不提供跨包总榜、交叉替换或自动择包。
 
-### 6.5 每日执行、正式 T0 与历史边界
+### 6.5 手工历史研究执行与日期边界
 
-- `review_schedule` 只描述期望频率，不能作为“调度已运行”的证据。Phase 0A.2 提供独立 daily runner，在 `T` 收盘输入达到冻结水位后计算下一交易日 target，并对一致快照中的全部 `ENABLED` Program 稳定排序后逐个运行。
-- 正式唯一业务键是 `(program_id,target_trade_date,RUN)`；binding、manifest、policy、effective config 和 decision/source watermarks 是不可变冲突谓词。现有 review/list Program-date unique index是数据库权威。
-- 一个 Program 的 WAITING/FAILED/恢复不会回滚或跳过其他 Program；run/list/episode/decision 必须单 Program 原子提交或按同一 deterministic identity 恢复，并输出逐 Program 与 batch receipt。
-- 当前单 Alpha package 先对 current manifest 执行无业务写入 cold-start smoke；通过即复用现有 package/Program，仅在真实 preflight 失败时发布新 package identity。旧 manifest DSE 不继承。
-- 正式 `T0` 是 Phase 0A.2 代码、policy、current-manifest smoke、dated successor binding、daily runner 和输入全部就绪后的首个未处理决策交易日；target 为下一交易日。历史 DSE 只读分析可立即进行，但 PREVIEW/REPLAY、current-semantics 重算和集中回补永远不能升级为 formal OOS。
+- `review_schedule` 仅是 legacy Program metadata，研究模块不读取它、不注册 scheduler。请求必须显式指定一个已完成交易日和一个或多个 Program。
+- 唯一业务键是 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)`；binding、manifest、policy、effective config、artifact/DSE 和 source revision hashes 是不可变冲突谓词。
+- 一个 Program 的 WAITING/FAILED/恢复不会回滚或跳过其他 Program；research run 必须单 Program 原子提交或按同一 deterministic identity 恢复，并输出逐 Program 与 batch receipt。
+- 单 Alpha current manifest 与原生多 Alpha parent 只执行无业务写入 research preflight；旧 manifest DSE 不继承，研究路径不发布 package 或创建 binding。
+- 当前设计没有正式 `T0`、daily runner、PUBLISHED list 或实时荐股。PREVIEW、REPLAY、current-semantics 重算和集中回补永久保持独立 retrospective lineage。
 
 ## 7. 策略风格画像与专家路由
 
@@ -626,9 +626,9 @@ ST/风险状态历史复算以现有 `market.stock_universe_pit_spans` 为权威
 
 - 候选只使用当时可得数据和时间对应的策略包/模型版本。
 - 先计算 `effective_strategy_package_oos_cutoff = max(所有 Alpha leg、model asset、预处理/特征资产的 training/selection/research/freeze cutoff，父包 freeze/promotion_at，实际 Selection runtime/adapter/query semantics freeze_at，以及 hmm.enabled=true 时实际 HMM snapshot 的 training/selection/freeze cutoff)`。正式 OOS 起点必须晚于 `effective_strategy_package_oos_cutoff + embargo`，且对应父包、全部组件/model/HMM/runtime semantics 当时已经存在；这里只读取冻结/决策时间元数据，不读取回测结果。
-- 原生多 Alpha 父包不能只取父包字段、首个 leg 或主模型 cutoff；任一实际引用组件缺少可验证 cutoff/vintage 时，该区间为 `FORMAL_OOS_UNAVAILABLE`。
+- 原生多 Alpha 父包不能只取父包字段、首个 leg 或主模型 cutoff；任一实际引用组件缺少可验证 cutoff/vintage 时，该区间为 `RESEARCH_EVIDENCE_UNAVAILABLE`。
 - 历史观察优先引用当时已持久化的权威 SelectionRun。使用后来代码重建时，必须证明同一 executable semantics/version 在 signal date 前已冻结；否则即使行情 PIT 正确也只能标记 `RETROSPECTIVE_RESEARCH_ONLY`。
-- 仅满足训练截止日而不满足上述最晚决策时点的回放标记为 `RETROSPECTIVE_RESEARCH_ONLY`；缺少合法 vintage 时标记 `FORMAL_OOS_UNAVAILABLE`，不能进入包级校准或正式晋级。
+- 仅满足训练截止日而不满足上述最晚决策时点的回放标记为 `RETROSPECTIVE_RESEARCH_ONLY`；缺少合法 vintage 时标记 `RESEARCH_EVIDENCE_UNAVAILABLE`，不能进入包级校准。
 - 权威深池中的所有候选都生成固定期限 outcome label；不得只给 ENTER/人工最终选择的股票打标签，以免产生选择偏差。
 - 为计算 `strategy_recall@K`，Phase 1/0B 另构建 PIT eligible universe 的轻量 outcome denominator；它不进入正式候选或荐股列表，只用于召回审计。
 - 所有标签按交易日历成熟，并记录 censor、停牌、涨跌停、成本、benchmark 和数据缺失状态。
@@ -722,7 +722,7 @@ created_at and code commit
 校准层级、不可变 bundle 和 Program 级部署状态分开：
 
 ```text
-evidence_level: RETROSPECTIVE_RESEARCH_ONLY, FORMAL_OOS
+evidence_level: RETROSPECTIVE_RESEARCH_ONLY
 calibration_level: NONE, GLOBAL_PRIOR, STYLE_PRIOR, PACKAGE_CALIBRATED
 deployment_state: DRAFT, SHADOW, CHALLENGER, CHAMPION, DISABLED, REJECTED
 ```
@@ -749,11 +749,11 @@ LONG_TREND_READY
 - `PRICE_RANGE_READY(style)`：必须精确依赖兼容的 `RETURN_HORIZON_READY(style)` bundle version/hash，再包含 price path、fill/`IntradayExecutionEventOrderModel`、raw/CNY/yuan 转换、硬风险 policy、校准和分钟覆盖报告；没有 Outcome 依赖时只能显示执行可行性，不能声明价格区间 READY。
 - `LONG_TREND_READY`：必须联合包含 `RERANK_READY(LONG_TREND)` 和 `RETURN_HORIZON_READY(LONG_TREND)`，其中单一 competing-risk hazard 负责 ordered barrier、time-to-hit、trend-stage survival 与 competing event；再加 capture label、校准和长期 OOS 报告。展示价格区间时还必须包含 `PRICE_RANGE_READY(LONG_TREND)`。
 
-## 16. 每日推理与荐股生命周期
+## 16. 历史逐日推演与研究列表生命周期
 
 ### 16.1 有界活跃列表
 
-每日复评不能把历史候选与当日候选简单并集。正确语义：
+按连续历史交易日研究时，不能把上一研究日候选与当前研究日候选简单并集。正确语义：
 
 ```text
 previous active episodes
@@ -767,7 +767,7 @@ previous active episodes
 - 稳态下 `active_count <= program.target_count`，允许因质量不足低于目标数量。
 - 退出项保留在当日 list version 和历史中，但不计入 active pool。
 - 替换必须有明确退出和进入配对，不得无界累加。
-- 每日替换预算、确认天数和 time stop 按策略风格配置。
+- 每个历史研究日的替换预算、确认天数和 time stop 按策略风格配置。
 
 Top5 展示与 active list 迁移规则：
 
@@ -894,7 +894,7 @@ ADVISORY_PREDICTION_UNCALIBRATED
 ADVISORY_MODEL_SHADOW_ONLY
 ADVISORY_MODEL_FEATURE_DEPTH_INSUFFICIENT
 ADVISORY_MODEL_STYLE_DRIFT
-ADVISORY_FORMAL_OOS_UNAVAILABLE
+ADVISORY_RESEARCH_EVIDENCE_UNAVAILABLE
 ```
 
 ## 18. Design Acceptance Index / 设计验收索引
@@ -933,16 +933,16 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 | F-028 | 原生多 Alpha 父包具有版本化 component/weight/combine provenance，禁止手工跨包融合 |
 | F-029 | outcome 时间轴、成本、benchmark、terminal/censor、universe raw outcome 和计算证据可复算 |
 | F-030 | append-only source revision、attempt fencing、程序化 generation termination、durable CAS、base/invalidation/blob refs/GC cancel 闭合 |
-| F-031 | 当前单 Alpha target 按 current manifest 冷启动并与旧 manifest evidence 隔离；仅在 preflight 失败时发布新 identity，归档包不被复活 |
-| F-032 | 现有原生多 Alpha 父包通过新的 dated binding 开始前瞻证据，并与其他 Program 独立执行 |
+| F-031 | 当前单 Alpha target 按 current manifest 执行只读 research preflight 并与旧 manifest evidence 隔离；归档包不被复活 |
+| F-032 | 现有原生多 Alpha 父包按历史日期解析已有 dated binding，并与其他 Program 独立执行；研究路径不创建 binding |
 | F-033 | 所有新 binding 使用显式、无重叠的 `[effective_from_trade_date,effective_to_trade_date)`，legacy null 区间不被反推 |
 | F-034 | 正式 Phase 0A policy registry 在首次 signal 前冻结 hash/effective range，且不含审批、角色或授权字段 |
-| F-035 | Selection producer 前瞻保存 decision clock、effective config、runtime/HMM、PIT universe、risk、asset/source 和完整 lineage |
+| F-035 | Selection evidence producer 保存 decision clock、effective config、runtime/HMM、PIT universe、risk、asset/source 和完整 lineage，供历史研究只读消费 |
 | F-036 | 合法空候选具有不可变权威 evidence；真实 L4 等待自然样本，不人为制造候选结果 |
 | F-037 | Phase 0A.2 复用 Phase 1 source ledger；历史修复只接受 exact source，缺证据保持 retrospective/unavailable |
-| F-038 | 正确双轨输入先自动达到 `PARTIAL -> HANDOFF_EMITTED`，source ledger/embargo 成熟后再达到 `READY`，且不影响 Selection/模拟盘/Paper |
-| F-039 | 每日 runner 按权威交易日对全部启用 Program 独立运行，正式 Program/date key 唯一、持久化可恢复、失败隔离且回执确定 |
-| F-040 | 正式 `T0` 只能位于代码/策略/dated binding/runner 就绪后的首个未处理交易日；历史读取、集中回补和 replay 永久保持 retrospective |
+| F-038 | 正确历史输入先自动达到 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 后达到 `RESEARCH_READY`，且不影响 Selection/模拟盘/Paper |
+| F-039 | 手工历史 runner 对显式 Program/date 独立运行，Program/date/research-scope key 唯一、持久化可恢复、失败隔离且回执确定 |
+| F-040 | 历史锚点只能是显式已完成交易日；DB_HISTORICAL、manual origin、research scope 与 PREVIEW/REPLAY/PUBLISHED/实时/交易语义永久隔离 |
 
 ## 19. Implementation Plan / 分阶段实施方案
 
@@ -953,7 +953,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 目标：在计算任何表现指标前锁定候选权威源、五层 rank、全部 Alpha leg/model/HMM vintage、Selection runtime/adapter/query semantics、effective package OOS cutoff、决策时钟、embargo、benchmark、成本、价格单位、标签/barrier 优先级和数据可用时间。
 - 进入条件：本蓝图获用户确认；当前 StrategyPackage、Selection 和 Advisory 契约可核对。
 - 交付物：指标/标签口径字典、候选深度与 eligible universe 规则、数据可用性审计、研究与正式 OOS 分类规则。
-- 退出门禁：每个目标包都能判定合法历史起点；未知 vintage/决策时点有明确 `RETROSPECTIVE_RESEARCH_ONLY` 或 `FORMAL_OOS_UNAVAILABLE` 处置。
+- 退出门禁：每个目标包都能判定合法历史起点；未知 vintage/决策时点有明确 `RETROSPECTIVE_RESEARCH_ONLY` 或 `RESEARCH_EVIDENCE_UNAVAILABLE` 处置。
 - 发布/回滚：只读分析，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：F1。
 - 已形成详细设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`；只读审计框架已由 PR `#1958` 合入。2026-07-11 已对当前原生多 Alpha target 执行真实生产 DB 只读审计，结果因 policy、dated binding、clock/runtime/source evidence 缺失为 `BLOCKED`；该结果不能通过放宽规则提升。
@@ -967,17 +967,17 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 发布/回滚：纯函数和不可变 handoff 制品，无 DDL、DML 或 runtime 变化。
 - 详细设计等级：纳入 Phase 1 F2 详细设计 §6、§18、§22.2；实现候选尚未合入主线或激活生产运行。
 
-### Phase 0A.2：前瞻证据就绪、每日多 Program 执行与真实双轨验证
+### Phase 0A.2：历史研究证据就绪与手工多 Program 验证
 
-- 目标：补齐 policy、dated binding、正式 Selection evidence 和 daily runner 的唯一 producer，为现有单 Alpha current manifest 和现有原生多 Alpha 父包建立独立、同体验、可自然积累的真实验证路径。
+- 目标：补齐 policy、历史 binding 只读解析、不可变 Selection evidence 和 manual historical runner，为单 Alpha current manifest 和原生多 Alpha父包建立独立、同体验、可复算的历史研究路径。
 - 进入条件：Phase 0A.1 deterministic readiness/handoff 契约稳定；StrategyPackage、Advisory Program 和 Selection evidence producer 可按现状核对。
-- 交付物：官方 immutable policy registry、统一 `[from,to)` binding 生命周期、prospective decision/runtime/HMM/PIT/source/stage evidence、合法空候选契约、daily runner exactly-once/失败隔离/恢复回执和双轨 L4 计划。
+- 交付物：官方 immutable policy registry、统一 `[from,to)` binding 生命周期、decision/runtime/HMM/PIT/source/stage evidence、合法空候选契约、manual historical runner exactly-once/失败隔离/恢复回执和双轨 L4 计划。
 - 当前 single：先做 current-manifest smoke；通过即复用现有 package/Program，失败时才标准发布新 identity。旧 manifest DSE 不继承。
 - 历史边界：不复活两个归档单 Alpha 包，不回填猜测 binding/manifest/available-at；双轨近期仅一个精确共同 cutoff，不把 replay 或集中回补变成 formal。
-- 退出门禁：正确单 Alpha和原生多 Alpha输入均至少达到 `PARTIAL -> HANDOFF_EMITTED`；Phase 1 source ledger 和 20 个交易日 embargo 自然成熟后才能复验 `READY`。空候选和 binding switch 的真实样本等待自然发生，不作为正常非空日的永久阻塞。
-- 发布/回滚：代码、生产程序化 DML、只读 L4 和运行激活分离；不新增审批、角色或运行时 DDL，不影响 Selection、模拟盘和 Paper 结果。
+- 退出门禁：正确单 Alpha和原生多 Alpha历史输入均至少达到 `PARTIAL -> HANDOFF_EMITTED`；exact source/label closure 后复验 `RESEARCH_READY`。空候选和 binding switch 不作为其他合法研究日期的永久阻塞。
+- 发布/回滚：代码、DEV migration、只读 L4 和生产 DDL 分离；不新增审批、角色、scheduler 或运行时 DDL，不影响 Selection、模拟盘和 Paper 结果。
 - 详细设计等级：F2。
-- 已形成详细设计：`docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；当前仅 `design_ready`，未执行 current-manifest smoke、dated successor binding、daily runner 激活或生产 evidence。
+- 已形成详细设计：`docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`；manual historical runner 已实现，未创建 scheduler、实时荐股或生产 research batch。
 
 ### Phase 1：最小 PIT 数据底座与不可变快照
 
@@ -998,7 +998,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 进入条件：Phase 1 数据最小闭环通过；目标包存在合法 OOS，或已明确只能做 retrospective research。
 - 交付物：基线审计报告、strategy/conditional Recall 分母与报告、模型价值判断、建议候选深度和目标期限。
 - 关键对照：`alpha_raw`、`hmm_adjusted`、`risk_policy_adjusted`、`selection_effective`、候选等权、候选内随机 5、HMM/risk overlay 启停和行业黑名单消融。
-- 退出门禁：明确哪些包值得重排，以及每种风格的候选深度；每个包给出 `FORMAL_OOS_AVAILABLE` 或 `FORMAL_OOS_UNAVAILABLE` 结论。
+- 退出门禁：明确哪些包值得重排，以及每种风格的候选深度；每个包给出 `RESEARCH_EVIDENCE_AVAILABLE` 或 `RESEARCH_EVIDENCE_UNAVAILABLE` 结论。
 - 停止条件：没有合法 vintage/OOS 或兼容合法 prior 的包只能保留研究报告和 `RETROSPECTIVE_RESEARCH_ONLY + SHADOW` bootstrap，停止该包 Phase 2 之后的用户可见数字预测、包级校准和 canary 路线。
 - 发布/回滚：只读分析，无 runtime 变化。
 - 详细设计等级：F1 数据分析设计。
@@ -1072,7 +1072,7 @@ ADVISORY_FORMAL_OOS_UNAVAILABLE
 - 交付物：长期候选 Recall@K、`RERANK_READY(LONG_TREND)`、`RETURN_HORIZON_READY(LONG_TREND)`、按覆盖率决定的 `PRICE_RANGE_READY(LONG_TREND)`、分层目标、趋势失效、HMM 持续性、长期生命周期和 `LONG_TREND_READY` 详细设计。
 - 数据要求：优先比较 5/7/10 年严格 PIT 窗口；最新标签允许右删失。
 - 退出门禁：详细设计预设的数值阈值、最小 OOS 有效样本/regime/置信区间，以及 Recall@20/50（仅在独立深池契约完成后才含 @100）、barrier AUCPR/Brier、time-to-hit、趋势捕获率、回撤和假退出率全部通过，否则停止。
-- 发布/回滚：用户可见 shadow 只允许兼容合法 `STYLE_PRIOR`；research bootstrap 仅内部可见。合法包级 OOS 达标后可在 shadow 中标记 `PACKAGE_CALIBRATED`，但 Phase 8 不得直接影响正式列表；任何长期趋势 bundle 仍必须返回并完整通过共同 Phase 7 canary/champion 门禁。
+- 发布/回滚：用户可见 shadow 只允许兼容合法 `STYLE_PRIOR`；research bootstrap 仅内部可见。合法 walk-forward 研究达标后可在研究页标记 `PACKAGE_CALIBRATED`，但不得产生实时建议、正式交易列表或执行输入。
 - 详细设计等级：F2。
 
 ### Phase 9：ModelOps 与持续治理
@@ -1091,7 +1091,7 @@ Phase 8 在 Phase 2 后可以并行准备，但不得绕过数据、OOS、影子
 建议按以下顺序新建，每份文档必须声明依赖的蓝图编号、Feature tier、验收索引、验证矩阵和生产门禁：
 
 1. 候选权威源、决策时钟、OOS/vintage、benchmark/cost 和数据可用性口径设计：已形成 `advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`。
-2. 前瞻 policy、dated binding、daily multi-Program runner、正式 Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
+2. research policy、历史 dated binding、manual multi-Program runner、immutable Selection evidence 和单/多 Alpha双轨验证设计：已形成 `advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`。
 3. Advisory PIT 历史观察、全候选标签和原子 SEALED Parquet 快照设计：已与原第 3 项统一形成 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。
 4. Advisory 模型数据表、DDL、保留周期、回填和迁移设计：Phase 1 observation/label/snapshot 部分已并入第 3 项；模型表与部署表仍由 Phase 2 专项设计闭合。
 5. 荐股候选质量、HMM 消融和长期赢家双口径 Recall@K 基线审计设计。
@@ -1209,30 +1209,30 @@ peak-before-stop path correctness
 | F-028 | §6.4、Phase 1 F2 §9.1-9.3 | 原生父包权威、component evidence、weight/variant/combine parity 已定义 | design_ready | none |
 | F-029 | §11-14、Phase 1 F2 §10/§11 | 可执行时间轴、cashflow、benchmark、terminal、raw denominator 和复算 evidence 已定义 | design_ready | none |
 | F-030 | §14.3、Phase 1 F2 §12-§16/§20 | source revision、attempt fencing、程序化 generation termination、durable CAS、base/invalidation/blob-ref/GC cancel 已定义 | design_ready | none |
-| F-031 | Phase 0A.2 §1.2-1.4/§6.1/§11 | current-manifest smoke、旧 manifest evidence 隔离、条件式新 identity 和归档包不复活已定义 | design_ready | none |
-| F-032 | Phase 0A.2 §5.2/§6.2-6.3 | 现有 native parent、dated successor 和多 Program 独立路径已定义 | design_ready | none |
+| F-031 | Phase 0A.2 §1.2-1.4/§6.1/§11 | current-manifest research preflight、旧 manifest evidence 隔离和归档包不复活已定义 | design_ready | none |
+| F-032 | Phase 0A.2 §5.2/§6.2-6.3 | 现有 native parent、历史 dated binding 只读解析和多 Program 独立路径已定义 | design_ready | none |
 | F-033 | Phase 0A.2 §7/§12/§16 | `[from,to)`、未来有效日、expected version 和 legacy null 处置已定义 | design_ready | none |
 | F-034 | Phase 0A.2 §8/§14/§15.1 | immutable policy registry、hash/effective range 和零审批字段已定义 | design_ready | none |
-| F-035 | Phase 0A.2 §9/§12/§15.3 | prospective clock/config/runtime/HMM/universe/risk/asset/source/stage producer 已定义 | design_ready | none |
+| F-035 | Phase 0A.2 §9/§12/§15.3 | immutable clock/config/runtime/HMM/universe/risk/asset/source/stage evidence producer 已定义 | design_ready | none |
 | F-036 | Phase 0A.2 §10/§16 | 合法空候选 authority、自然样本和 fixture/L4 边界已定义 | design_ready | none |
 | F-037 | Phase 0A.2 §5.3/§9.6/§11 | Phase 1 ledger 复用、exact remediation 和 no-guess 历史边界已定义 | design_ready | none |
-| F-038 | Phase 0A.2 §14-17/§19 | 双轨 PARTIAL/HANDOFF 到 READY、8 类门禁正向可达和业务隔离已定义 | design_ready | none |
-| F-039 | §6.5、Phase 0A.2 §6.4/§12-16 | daily runner、唯一正式 key、事务/恢复、失败隔离和 batch receipt 已定义 | design_ready | none |
-| F-040 | §6.5、Phase 0A.2 §1.3/§7.2/§11.3 | 正式 T0、现有历史窗口与 replay/formal 隔离已定义 | design_ready | none |
+| F-038 | Phase 0A.2 §14-17/§19 | 双轨 PARTIAL/HANDOFF 到 RESEARCH_READY、8 类门禁正向可达和业务隔离已定义 | design_ready | none |
+| F-039 | §6.5、Phase 0A.2 §6.4/§12-16 | manual historical runner、唯一 research key、事务/恢复、失败隔离和 batch receipt 已定义 | design_ready | none |
+| F-040 | §6.5、Phase 0A.2 §1.3/§7.2/§11.3 | 显式历史锚点、DB_HISTORICAL、manual/research scope 与 replay/实时/交易隔离已定义 | design_ready | none |
 
 ## 23. Rollout / Rollback / 发布与回滚
 
 ### 23.1 发布顺序
 
-1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、prospective evidence 与 daily runner 代码；尚不激活生产 runner。
-2. 对现有 single current manifest 和 native multi parent 执行隔离 smoke，创建 future-effective successor bindings，冻结配置并确定正式 `T0`；随后独立激活 daily runner。
+1. 合入并部署 Phase 0A.1/0A.2 policy、dated binding、immutable evidence 与 manual historical runner 代码；不创建 scheduler。
+2. 对现有 single current manifest 和 native multi parent 执行只读 research preflight；手工选择已有历史 binding 可解析的 Program/date，不创建 successor binding 或正式 `T0`。
 3. 在开发/发布流程完成 Phase 1 migration 验证并部署 schema；运行任务不执行 DDL。
-4. 启动 source observer、程序化 retrospective research 构建、制品提升和离线训练；参数、事务、行数与磁盘边界由代码自动校验，replay 不改变 formal `T0`。
+4. 按版本化配置启用只记录数据库 ingestion completion 的 source observer，并执行 retrospective research 构建、制品提升和离线训练；observer 不触发荐股，replay 不改变 research scope。
 5. 配置启用 shadow prediction writer；无需审批事件或授权角色。
 6. 再按 capability 发布 UI 影子展示。
 7. Phase 9A 最小 ModelOps、告警、手动停用、灾备读取和回滚演练通过。
 8. 完成规定的 OOS 和 shadow 观察并通过冻结指标后，配置 Program 级 canary。
-9. 最后才允许该 Program 的 champion deployment binding 影响 Advisory shortlist/正式列表；切换使用 expected row version 和自动回滚检查，不使用审批链。
+9. champion deployment binding 只影响指定 Program 的学术研究 shortlist 展示；不得产生实时建议、正式交易列表或执行输入。切换使用 expected row version 和自动回滚检查，不使用审批链。
 
 每一步都可独立停止。自动训练不得自动晋级 champion。
 
@@ -1265,9 +1265,9 @@ peak-before-stop path correctness
 | 数据库频繁细粒度读取 | 训练 I/O 成为瓶颈 | 一次导出不可变 Parquet，训练只读文件 |
 | 新包没有正式 OOS | 包级预测被误报为已校准 | 合法 prior 才能 `STYLE_PRIOR + SHADOW`；否则 `MODEL_UNAVAILABLE` |
 | current single manifest 继承旧 manifest DSE | 两个 signal identity 被错误合并 | current-manifest smoke 与 manifest-scoped evidence；旧 DSE 仅 retrospective |
-| `review_schedule` 被误当成实际调度 | 荐股没有逐日更新 | daily runner health、batch receipt 和逐 Program run/list readback |
+| `review_schedule` 被误当成实际调度 | 历史研究被错误实时化 | 不实现 Advisory scheduler；只接受显式 manual historical batch receipt |
 | 一个 Program 失败中断批次 | 多策略包独立性失效 | 稳定 Program 快照、逐 Program 事务/恢复和失败隔离 |
-| replay 或集中回补冒充前瞻 | OOS 时间穿越 | 正式 T0、RUN/REPLAY/PUBLISHED/source-event 强隔离 |
+| replay 或集中回补冒充手工历史研究 | 研究证据混淆 | MANUAL_HISTORICAL_RESEARCH 与 REPLAY/PREVIEW/PUBLISHED 强隔离 |
 | 模型和数据版本错配 | 不可复现或错误预测 | 版本/hash 校验和 fail-closed |
 | 模型区间被理解为保证 | 用户决策风险 | 概率、区间、置信度和明确风险说明 |
 | 每日列表简单并集 | active list 膨胀 | 显式 ENTER/HOLD/EXIT 和有界 active count |
@@ -1308,12 +1308,12 @@ peak-before-stop path correctness
 enabled StrategyPackage
   -> G-RUN-01 package preflight PASS
   -> G-RUN-02 market/input readiness PASS
-  -> G-RUN-03 idempotent run acquisition PASS
-  -> daily runner executes each ENABLED Program independently
-  -> Selection/Advisory inference with no candidates bypass
-  -> G-RUN-04 atomic list-version persistence PASS
+  -> G-RUN-03 idempotent manual research acquisition PASS
+  -> historical runner executes each explicitly requested Program independently
+  -> read-only persisted Selection evidence resolution with no candidates bypass
+  -> G-RUN-04 atomic research-result persistence PASS
   -> per-Program result + batch receipt
-  -> recommendation list available
+  -> historical research list available
 ```
 
 在策略包合法、资产完整、行情准确且配置匹配时，上述路径必须通过。模型、训练数据或 snapshot 子系统不可阻塞现有荐股基线；其不可用只能关闭对应模型能力并输出 reason code。
