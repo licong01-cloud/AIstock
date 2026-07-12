@@ -49,6 +49,12 @@ QUOTE_INGRESS_ENV_METADATA: dict[str, dict[str, Any]] = {
         "required": False,
         "type": "text",
     },
+    "MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS": {
+        "value": "3",
+        "description": "MiniQMT quote ingress 单个 lifecycle epoch 的自动重启上限",
+        "required": False,
+        "type": "text",
+    },
     "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": {
         "value": "30",
         "description": "MiniQMT quote ingress 同类 loud 事件最小输出间隔秒数",
@@ -116,6 +122,10 @@ def parse_quote_ingress_env_values(values: Mapping[str, Any]) -> dict[str, Any]:
         "restart_max_backoff_ms": _positive_int(
             merged["MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS"],
             key="MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS",
+        ),
+        "restart_max_attempts": _positive_int(
+            merged["MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS"],
+            key="MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS",
         ),
         "loud_interval_seconds": _positive_int(
             merged["MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS"],

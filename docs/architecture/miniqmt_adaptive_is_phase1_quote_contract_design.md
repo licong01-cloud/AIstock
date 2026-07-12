@@ -192,7 +192,8 @@ QuoteSnapshotBatch 是观测集合，不是全局交易门。每个 symbol 独�
 1. **physical feed**：每个 backend scheduler-owner process、每个 `data_session_key` 最多一个活动 physical subscription。
 2. **logical lease**：每个 consumer 有 `lease_id/owner/symbols/generation/callback/status`；释放 lease 只影响该 consumer。
 3. **generation callback closure**：callback closure 固化 generation；新 generation 激活后，旧 callback 即使仍到达也只能记 `STALE_GENERATION`。
-4. **bootstrap**：正 subscription id 返回后，对 desired active symbols 调用一次 `get_full_tick`。bootstrap frame 使用同 generation；若 callback 已产生更新的 exchange time/sequence，bootstrap 不得覆盖。
+4. **bootstrap 与同步 capture ack**：正 subscription id 返回后，对 desired active symbols 调用一次 `get_full_tick`。bootstrap frame 使用同 generation；若 callback 已产生更新的 ingress sequence，bootstrap 不得覆盖。只有每个目标 symbol 的 immutable `RawQuoteFrame` capture 都显式返回成功 ack，才计入 coverage 并允许 generation 进入 prepared；mapping 中存在 symbol 但 payload capture 失败不得伪报 `coverage=1.0`。
+5. **同 session 生命周期事务**：同一 `data_session_key` 的 acquire/rebuild/release/shutdown 以 session-scoped operation lock 串行化；quote callback 不持有该锁。logical release 先在旧 feed 不变的前提下准备缩容 successor，successor 发布成功后才提交删除；准备失败时 lease、symbol union 和旧 feed 均保持原状。
 
 重建顺序固定为：
 
@@ -201,13 +202,15 @@ compute desired symbol union
 -> verify desired_count <= process max_symbols
 -> create new physical subscription with generation-bound callback
 -> require positive subscription id
--> get_full_tick bootstrap and record per-symbol coverage
+-> get_full_tick bootstrap, immutable capture and require per-symbol ack
+-> require every logical consumer generation-prepared ack
 -> atomically publish new generation
+-> notify generation-published; failed consumer 标记 FAILED/DEGRADED 并由 watchdog 自动恢复
 -> fence old generation
 -> unsubscribe old physical subscription
 ```
 
-新 subscription 或 bootstrap 失败时，旧 physical feed/leases 保持有效；不得先删旧订阅。unsubscribe 失败时新 generation 仍可运行，旧 closure 被 fencing；错误必须 loud。
+新 subscription、bootstrap capture 或 generation prepare 失败时，旧 physical feed/leases 保持有效；不得先删旧订阅。unsubscribe 失败时新 generation 仍可运行，旧 closure 被 fencing；错误必须 loud。logical release 导致 symbol union 缩小时同样遵守该两阶段规则，禁止“先 pop lease、再尝试 replacement”的半提交。
 
 LEGACY_B0 使用原 key/health。Phase 1 consumer 使用独立 key 和 health，不覆盖 LEGACY_B0。B0_QUOTE_V2 读取 Phase 1 SnapshotStore，但不取得 subscription ownership。
 
@@ -230,7 +233,7 @@ mailbox 的行为固定如下：
 | payload 不是 mapping | 不进入 queue | `ADAPTIVE_IS_QUOTE_PAYLOAD_INVALID` |
 | writer/consumer 异常 | consumer health=FAILED；自动有界重启 | `ADAPTIVE_IS_QUOTE_CONSUMER_FAILURE`；不抛回 xtdata callback |
 
-QuoteIngress single writer 是唯一可以构造 DTO、更新 SnapshotStore、生成 evidence candidate 和更新 ingress metrics 的线程；它不等待 DB。它必须暴露 `thread_alive/last_drain_at/backlog/admitted_symbols/restart_count/last_failure`。watchdog 只重启 quote consumer，不重启服务、scheduler 或 broker；每次重启创建新 generation。达到自动重试上限后 health=FAILED，合法后续 lifecycle tick 可再次自动拉起，不需要人工 acknowledge。
+QuoteIngress single writer 是同一 supervisor/data session 内唯一可以更新 SnapshotStore、生成 evidence candidate 和更新 ingress metrics 的线程；多个 logical consumers 共享该 writer，但保留独立 lease identity。SnapshotStore 与 mailbox 使用同一有界 admitted-symbol union；release/replacement 必须原子替换 admission 并清除 revoked symbol，历史 symbol churn 不得使内存无界增长。writer 不等待 DB，并暴露 `thread_alive/last_drain_at/backlog/admitted_symbols/restart_count/last_failure`。watchdog 只重启 quote consumer，不重启服务、scheduler 或 broker；每次重启创建新 generation。writer heartbeat 超时或 `CONSUMER_FAILURE` 时立即 fence generation 与 writer epoch；旧 epoch 即使线程尚存活也不得再调用 frame sink，且在旧线程退出前禁止并行 writer。达到自动重试上限后 health=FAILED，合法后续 lifecycle tick 可再次自动拉起，不需要人工 acknowledge。
 
 `QuoteEvidenceAppender` 是独立 durable writer：action input/reject、child receipt、protection trigger 和 markout 使用不可丢的高优先级 outbox；cadence aggregate 使用可合并低优先级 slot。B0_QUOTE_V2 新 child 必须在对应 action-input/reject evidence 获得 durable ack 后才可提交；persist failure 停止该 symbol 新 child。order/trade/reconcile event 通道仍独立且优先，不受 quote/cadence backlog 阻塞。
 
@@ -478,13 +481,14 @@ Phase 1 不新增提交 API、交易按钮、审批界面或角色模型。只�
   "MINIQMT_QUOTE_INGRESS_HEARTBEAT_TIMEOUT_MS": 10000,
   "MINIQMT_QUOTE_INGRESS_RESTART_BACKOFF_MS": 1000,
   "MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS": 30000,
+  "MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS": 3,
   "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": 30,
   "MINIQMT_QUOTE_EVIDENCE_OUTBOX_MAX_EVENTS": 4096,
   "MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE": 128
 }
 ```
 
-这些字段管理进程容量/lifecycle，不能放进 per-binding execution policy。所有键必须注册到 `ConfigManager.default_config/write_env` 或改为无损保留 unknown keys，并添加 round-trip 测试，确保配置页面保存不会删除 TCA/quote 配置。
+这些字段管理进程容量/lifecycle，不能放进 per-binding execution policy。`RESTART_MAX_ATTEMPTS` 明确限定同一 lifecycle epoch 内的自动 writer 重建次数；达到上限后 health=`FAILED`，后续合法 scheduler lifecycle tick 自动开启新 epoch，不需要人工 acknowledge。所有键必须注册到 `ConfigManager.default_config/write_env` 或改为无损保留 unknown keys，并添加 round-trip 测试，确保配置页面保存不会删除 TCA/quote 配置。
 
 **immutable execution policy**：
 
@@ -882,6 +886,28 @@ normalizer 不依赖 xtdata、DB、broker 或 HTTP。任何后续切片若破坏
 - `pytest -q backend/tests/test_bug435_runtime_paths.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py -p no:cacheprovider`：`14 passed`；
 - `nox -s paper_v2_backend`：`877 passed, 1 skipped, 2 xfailed`，LEGACY_B0、Paper v2、Selection Center 与 Strategy Package 广泛回归无新增失败；
 - `nox -s l0`、`nox -s validation_module_registry_l0` 与 F2 feature workflow validator：通过。
+
+---
+
+### 13.2 P1-B implementation acceptance record（2026-07-12）
+
+本记录只证明 §8.2 的 quote-ingress 基础设施切片已经实现并完成隔离 callback fixture 验证。它不提前声明 P1-C 的 ordering/freshness/clock/eligibility、P1-D 的 durable evidence/DDL、P1-E 的 `B0_QUOTE_V2` binding、真实 SIM observation、任何 broker order side effect 或 `ADAPTIVE_IS_L1` 已实现或已启用。
+
+| P1-B implementation item | implementation refs | test_or_evidence | status | explicit phase boundary |
+|---|---|---|---|---|
+| process/session 唯一 physical feed、独立 logical lease 与 owner conflict | `backend/infra/realtime_quote_subscriber.py` 的 session-scoped operation lock、`acquire/release/rebuild_phase_one_lease(s)`、process weak-owner registry | 两 consumer 独立 release；acquire/release 与 bootstrap/shutdown barrier 并发测试无 lease resurrection；第二 instance/owner conflict 可从 process health 查询；LEGACY_B0 三张原 registry map 不变 | implemented_verified | scheduler-owned supervisor 由后续 runtime lifecycle 明确构造；只读 API 不会启动 feed |
+| generation-bound callback、capture/prepare ack、atomic publish、fence/unsubscribe 的替换顺序 | `RealtimeQuoteSubscriber._replace_phase_one_feed`、`_bootstrap_phase_one_states`、`_safe_generation_prepared`、`_on_phase_one_quote` | mapping 存在但 raw capture 拒绝时 coverage 保持 0 且不 publish；prepare 拒绝与 replacement bootstrap failure 均保留旧 feed；old closure `STALE_GENERATION`；callback sequence 胜出 | implemented_verified | 不作 freshness/duplicate/exchange-time business eligibility；该完整 evaluator 属于 P1-C |
+| immutable raw callback boundary、reserved per-symbol mailbox 与原子 release | `ReservedSymbolMailbox.replace_admitted`、`PhaseOneRawQuoteSnapshotStore.replace_admitted`、`RealtimeQuoteSubscriber.release_phase_one_lease` | release 缩容 replacement 失败时 lease/symbol union/旧 feed 全保留；capacity-only-new-admission、unexpected symbol loud、revoked snapshot 清除与历史 churn 有界均有定向测试 | implemented_verified | raw frame 只入 bounded in-memory snapshot，不送 strategy/action/DB/broker；normalization/projector 属于 P1-C/P1-E |
+| supervisor/data-session 单 writer、health、watchdog、bounded restart 与 epoch fencing | `QuoteIngressWorker`、`QuoteIngressSupervisor` | 多 logical consumers 共享一个 writer；`CONSUMER_FAILURE` 和 alive-but-stale heartbeat 均 fence generation/writer epoch 并请求 rebuild；旧线程退出前禁止 parallel writer；同 lifecycle epoch `RESTART_MAX_ATTEMPTS` 有界 | implemented_verified | 没有重启服务、scheduler 或 broker；runtime scheduler 的实际 lifecycle wiring 与 B0 revision assignment 仍属于 P1-E |
+| loud registry、failure first/last/count 与 ingress telemetry/config | `reasons.py`、`miniqmt_quote_contract_env.py`、`miniqmt_quote_contract_config.py`、subscriber/worker health | `UNEXPECTED_SYMBOL` 注册；error health 保留 first/last/occurrence count；loud interval 不丢计数；health 提供 owner/generation/bootstrap coverage/callback/coalesce/capacity/restart/heartbeat metrics | implemented_verified | Prometheus/API presentation、durable aggregate/evidence/alert routing 仍属于 P1-D；未增加 approval/RBAC/permit/ack |
+
+本切片的本地验证回执如下（均在 P1-B task worktree，未持久化配置、未启动或重启任何服务）：
+
+- `pytest -q backend/tests/miniqmt_execution_runtime/test_quote_contract.py backend/tests/miniqmt_execution_runtime/test_quote_normalizer.py backend/tests/miniqmt_execution_runtime/test_quote_ingress.py backend/tests/infra/test_realtime_quote_subscriber_leases.py backend/tests/test_config_manager_quote_ingress_roundtrip.py backend/tests/paper_trading_v2/test_minqmtsim_backend.py::test_xtquant_get_full_tick_subscribes_and_self_heals_stale_cache backend/tests/test_bug435_runtime_paths.py backend/tests/miniqmt_execution_runtime/test_miniqmt_vnpy_algo_import_boundary.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase1_gateway_event_source.py backend/tests/miniqmt_execution_runtime/test_miniqmt_execution_runtime_event_loop.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children -p no:cacheprovider`：`119 passed`；覆盖 P1-A contract/normalizer/config、P1-B capture/prepare ack、lease transaction/replacement/bootstrap race、atomic release、single-writer/mailbox/store、owner/health/restart，以及既有 LEGACY_B0 quote self-heal、event-loop source/callback 与 BUG-604 pending tick-driver；
+- ingress/lease 定向矩阵：`25 passed`；`quote_ingress.py` line+branch coverage `88%`，包含 invalid bootstrap、publication prepare failure、release rollback、并发 shutdown、consumer failure rebuild 和 stale-alive writer epoch fencing 反例；`realtime_quote_subscriber.py` 报告的 `65%` 是包含全部 legacy subscriber 路径的文件级覆盖，不冒充 changed-line coverage；
+- changed-file `ruff check`、`git diff --check`：通过；
+- `nox -s l0`、`nox -s validation_module_registry_l0`：通过；
+- `python scripts/aistock_feature_workflow.py validate --design docs/architecture/miniqmt_adaptive_is_phase1_quote_contract_design.md --tier F2`：`PASS`（9 design items、9 matrix rows、0 warnings）。
 
 ---
 

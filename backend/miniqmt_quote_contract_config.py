@@ -64,6 +64,7 @@ class QuoteIngressRuntimeConfig:
     loud_interval_seconds: int
     evidence_outbox_max_events: int
     evidence_flush_batch_size: int
+    restart_max_attempts: int = 3
 
     def __post_init__(self) -> None:
         values = {
@@ -74,6 +75,7 @@ class QuoteIngressRuntimeConfig:
             "MINIQMT_QUOTE_INGRESS_HEARTBEAT_TIMEOUT_MS": self.heartbeat_timeout_ms,
             "MINIQMT_QUOTE_INGRESS_RESTART_BACKOFF_MS": self.restart_backoff_ms,
             "MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS": self.restart_max_backoff_ms,
+            "MINIQMT_QUOTE_INGRESS_RESTART_MAX_ATTEMPTS": self.restart_max_attempts,
             "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": self.loud_interval_seconds,
             "MINIQMT_QUOTE_EVIDENCE_OUTBOX_MAX_EVENTS": self.evidence_outbox_max_events,
             "MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE": self.evidence_flush_batch_size,
