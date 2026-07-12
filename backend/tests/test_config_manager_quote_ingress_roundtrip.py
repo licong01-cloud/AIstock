@@ -186,6 +186,7 @@ def test_process_config_uses_documented_defaults_but_rejects_invalid_lifecycle_v
     assert config.enabled is False
     assert config.owner_mode == "simulation_scheduler"
     assert config.max_symbols == 128
+    assert config.restart_max_attempts == 3
 
     with pytest.raises(QuoteContractError) as exc_info:
         QuoteIngressRuntimeConfig.from_mapping({"MINIQMT_QUOTE_INGRESS_RESTART_MAX_BACKOFF_MS": "1"})

@@ -55,6 +55,7 @@ class QuoteContractReasonCode(str, Enum):
     LEASE_REBUILD_FAILED = "ADAPTIVE_IS_QUOTE_LEASE_REBUILD_FAILED"
     BOOTSTRAP_INCOMPLETE = "ADAPTIVE_IS_QUOTE_BOOTSTRAP_INCOMPLETE"
     CAPACITY_EXCEEDED = "ADAPTIVE_IS_QUOTE_CAPACITY_EXCEEDED"
+    UNEXPECTED_SYMBOL = "ADAPTIVE_IS_QUOTE_UNEXPECTED_SYMBOL"
     PAYLOAD_INVALID = "ADAPTIVE_IS_QUOTE_PAYLOAD_INVALID"
     SYMBOL_INVALID = "ADAPTIVE_IS_QUOTE_SYMBOL_INVALID"
     ALIAS_CONFLICT = "ADAPTIVE_IS_QUOTE_ALIAS_CONFLICT"
@@ -137,6 +138,11 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             severity=QuoteFailureSeverity.WARNING,
         ),
         QuoteContractReasonCode.CAPACITY_EXCEEDED: _definition(QuoteContractReasonCode.CAPACITY_EXCEEDED, QuoteContractStage.INGRESS),
+        QuoteContractReasonCode.UNEXPECTED_SYMBOL: _definition(
+            QuoteContractReasonCode.UNEXPECTED_SYMBOL,
+            QuoteContractStage.INGRESS,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
         QuoteContractReasonCode.PAYLOAD_INVALID: _definition(QuoteContractReasonCode.PAYLOAD_INVALID, QuoteContractStage.INGRESS),
         QuoteContractReasonCode.SYMBOL_INVALID: _definition(QuoteContractReasonCode.SYMBOL_INVALID, QuoteContractStage.NORMALIZE),
         QuoteContractReasonCode.ALIAS_CONFLICT: _definition(QuoteContractReasonCode.ALIAS_CONFLICT, QuoteContractStage.NORMALIZE),
