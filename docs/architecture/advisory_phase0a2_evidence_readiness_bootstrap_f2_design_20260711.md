@@ -1,22 +1,22 @@
-# AIstock 荐股 Phase 0A.2 前瞻证据就绪、每日多 Program 执行与真实双轨验证 F2 详细设计
+# AIstock 荐股 Phase 0A.2 历史研究证据就绪与手工多 Program 执行 F2 详细设计
 
 > 日期：2026-07-11
 > Feature Tier：F2
 > Task Tier：T3 设计驱动
 > Module：Advisory / StrategyPackage / Selection evidence / Daily Program runner / Phase 0A audit / Phase 1 handoff
-> Risk Level：高；涉及跨模块证据生产契约、Program binding 生命周期、每日执行幂等性和后续生产 DML
+> Risk Level：高；涉及跨模块历史证据契约、Program binding 历史解析、手工批次幂等性和研究数据可复算性
 > Phase：0A.2，位于 Phase 0A.1 deterministic handoff 与 Phase 1 数据底座之间
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 后继设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
-> 当前状态：`design_ready`；F-033 dated binding lifecycle、F-034 policy registry、F-035 prospective evidence producer、F-036 natural no-candidate contract 与 F-039/F-040 manual historical research runner 已完成。F-033/F-035/F-036/F-039/F-040 均已通过本机 DEV-DB rollback-only PostgreSQL readback gate；F-031/F-032/F-037/F-038 仍仅为设计。未创建生产策略包或 Program/binding 业务记录、生产 DML 或 Phase 1 source ledger
+> 当前状态：`design_ready`；F-033 dated binding lifecycle、F-034 policy registry、F-035 immutable evidence producer、F-036 natural no-candidate contract 与 F-039/F-040 manual historical research runner 已完成。Phase 1 source-availability/revision-set 基础设施已实现并通过 DEV-DB rollback-only gate，但 observer/capture/build 未启用；F-031/F-032/F-038 及 F-037 后续消费路径仍未完成。未创建生产策略包或 Program/binding 业务记录、生产 DML、scheduler 或实时荐股路径
 > 生产影响：F-033 的 comment-only migration、F-035 的 additive v2 artifact migration 与 F-039/F-040 的 Advisory historical-research migration 已应用到 `127.0.0.1:5433/aistock_dev` 并通过 rollback-only readback；生产 migration 尚未应用。未执行依赖安装、服务重启、调度启用、生产 API/UI 发布或运行时操作
 
 ## 0. 文档定位与权威边界
 
 本文解决 2026-07-11 首次真实 L4 只读审计暴露的阶段断点：Phase 0A.1 已能对输入进行确定性 readiness/handoff 归一化，但现有生产记录没有足够的历史 binding、冻结 policy、决策时钟、runtime/HMM、PIT universe 和 source available-at 证据，因此合法策略包也无法从旧记录直接得到可消费 handoff。
 
-Phase 0A.2 不降低 Phase 0A 判定标准，也不通过人工批准绕过阻塞。它补齐唯一上游 producer 和每日多 Program 执行器，使未来正确运行自然产生 Phase 0A 所要求的证据；同时为当前启用的单 Alpha 包和原生多 Alpha 父包建立相同体验、相互独立的真实验证路径。
+Phase 0A.2 不降低 Phase 0A 判定标准，也不通过人工批准绕过阻塞。它补齐历史证据 producer 和手工多 Program 研究 runner，使显式历史日期能够从 `DB_HISTORICAL` 得到可复算、相互隔离的研究结果；它不创建 daily scheduler、实时荐股、投资建议、正式交易信号或执行能力。
 
 权威优先级：
 
@@ -64,7 +64,7 @@ L4 调查时的生产事实如下；这些 ID 只作为现状证据，执行时�
 | 类型 | Program/package | 当前证据结论 |
 |---|---|---|
 | 启用单 Alpha | `advp_ac2885f728a84409a263d30f06664196` / `pkg_378eb9c91e104c64935404e257e932ee` | Program 已启用；包当前 manifest 为 `2aae3560563bd669e5f1951c40ae939744f82a67be5b7479f239b9f910270300`，StrategyPackage selection readiness 返回 `ok=true` 且无 blocker，可作为 current-manifest 冷启动 target；其历史 evidence 不得自动继承 |
-| 启用原生多 Alpha | `advp_1f537362f2f447e3882c3a7459c5726a` / `pkg_ma_8ec5e389fa2c5e484a1ac7e9` | 当前 manifest `f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016` 与选择证据一致，可作为前瞻验证父包；旧 null-date binding 不能作为正式历史 |
+| 启用原生多 Alpha | `advp_1f537362f2f447e3882c3a7459c5726a` / `pkg_ma_8ec5e389fa2c5e484a1ac7e9` | 当前 manifest `f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016` 与选择证据一致，可用于 research preflight；旧 null-date binding 不能证明历史日期语义 |
 | 已归档单 Alpha 1 | `pkg_a2f53f3f2f3e4095a910b939464c35e6` | 当前 manifest 与历史选择 evidence manifest 不一致，且包已退役；不得恢复为 Phase 0A.2 正向 target |
 | 已归档单 Alpha 2 | `pkg_09750b4944ca434db03efd399ccf2144` | 当前 manifest 与历史选择 evidence manifest 不一致，且包已退役；不得恢复为 Phase 0A.2 正向 target |
 
@@ -72,13 +72,13 @@ L4 调查时的生产事实如下；这些 ID 只作为现状证据，执行时�
 
 单 Alpha 包当前 manifest 有 58 个受保护资产记录且已观察 hash 均存在，并有 7 个绑定当前 manifest 的 runtime release；最近 release 日期为 2026-07-10、状态为 `SIM_VALIDATING`。但当前 manifest 尚无 `DailySelectionEvidence`。已观察的 67 条历史 DSE 全部引用旧 manifest `8f6d8b0235459a0b657a3c0bb3a00e9a63707578e0bd7de978add42855d31ebf`，因此只能作为旧 signal identity 的 retrospective evidence，不能证明当前 manifest 已完成荐股冷启动。
 
-两个当前 target 的 package asset metadata 均未提供可证明历史时点的 `available_at/data_cutoff`；正式 policy registry 和 Phase 1 source availability ledger 也尚未建立。这些缺口必须从正式 `T0` 前瞻记录，禁止用当前存在性反推过去。
+两个当前 target 的 package asset metadata 均未提供可证明历史时点的 `available_at/data_cutoff`。这些缺口不能用当前存在性反推过去；只有数据库时钟记录的首次观察及后续 exact source event 可供新的研究窗口使用，旧日期保持 retrospective/unavailable。
 
 ### 1.3 历史窗口与调度事实
 
 截至 2026-07-11 的只读快照中，单 Alpha 最近可见 DSE cutoff 为 `2026-06-15/16/17/18/22/23/24/25/26/29`，原生多 Alpha 最近可见 DSE cutoff 为 `2026-06-29、2026-07-02/03/06/07/08/09`。两条轨道在用户提出的两至三周观察窗口内只有 `2026-06-29` 一个精确共同 cutoff，不存在连续的双轨历史日序列。
 
-现有多 Alpha 的 `2026-07-07` 至 `2026-07-10` review 记录均在 2026-07-10 晚间集中创建，说明它们是人工触发或回补记录，不是逐日 `daily_after_close` 前瞻执行证据。现有 replay 可以重算日期区间，但会写入 replay/review/list/Selection 相关记录，并按当前代码、当前 manifest 和当前配置解释历史；它只能标记为 `RETROSPECTIVE_RESEARCH_ONLY`，不能替代正式日调度或生成 formal OOS。
+现有多 Alpha 的 `2026-07-07` 至 `2026-07-10` review 记录均在 2026-07-10 晚间集中创建，说明它们是人工触发或回补记录，不能证明逐日真实运行。现有 replay 按当前代码、manifest 和配置解释历史，只能标记为 `RETROSPECTIVE_RESEARCH_ONLY`；手工历史研究 runner 也不得把这些记录升级为 formal OOS。
 
 ### 1.4 设计结论
 
@@ -88,26 +88,26 @@ L4 调查时的生产事实如下；这些 ID 只作为现状证据，执行时�
 - 把 `created_at`、当前 manifest、文件 mtime 或当前 runtime hash 写成历史 available-at。
 - 把已归档包当前 manifest 写回历史选择 evidence。
 - 从回测、Paper、模拟盘收益或人工买入结果提取 cutoff、标签或 prior。
-- 用人工确认、角色、审批记录或 bypass 把 `BLOCKED` 改成 `READY`。
+- 用人工确认、角色、审批记录或 bypass 把 `BLOCKED` 改成 `RESEARCH_READY`。
 
-正确路径是前瞻积累：先对当前单 Alpha manifest 和原生多 Alpha父包执行无业务写入的 current-manifest cold-start smoke；在首次 signal 之前冻结 policy、显式 dated binding、每日执行契约和 runtime/source evidence contract；之后每个交易日由正式 runner 调用 Selection producer 生成不可变证据。初期允许得到可消费的 `PARTIAL -> HANDOFF_EMITTED`，但只有满足 Phase 1 source ledger 和 Phase 0A embargo 后才升级为 `FORMAL_OOS + READY`。
+正确路径是历史研究证据闭合：对单 Alpha manifest 和原生多 Alpha父包执行无业务写入的 research preflight；手工请求显式指定已完成交易日，runner 按历史有效 binding、冻结 policy/runtime 和 exact source revision 独立处理每个 Program。证据不足时保持 `PARTIAL/RETROSPECTIVE_RESEARCH_ONLY`，证据闭合后只升级为 `RESEARCH_READY`，永不升级为实时荐股、`FORMAL_OOS` 或交易信号。
 
 ## 2. Scope / 范围
 
 ### 2.1 In Scope
 
 - 定义当前启用单 Alpha StrategyPackage 的 current-manifest 冷启动与证据隔离规则；只有当前包不再满足标准 preflight 时才通过标准发布流程创建新 identity。
-- 复用当前启用的原生多 Alpha 父包，以新的显式 dated binding 开始前瞻证据区间。
+- 复用当前启用的原生多 Alpha 父包，按显式历史日期解析当日有效 binding；缺失时 fail-closed，不创建或反推历史 binding。
 - 为两个包各建或保留独立 Advisory Program；允许将来继续增加更多独立 Program。
-- 新增按权威交易日、行情就绪水位和稳定业务键运行全部启用 Program 的每日执行契约，并定义单 Program 失败隔离、重试、恢复和批次回执。
+- 新增由用户显式选择多个 Program 和已完成交易日的手工历史研究契约，并定义单 Program 失败隔离、重试、恢复和批次回执。
 - 冻结正式 Phase 0A policy registry 的文件、hash、effective range 和加载规则。
 - 统一新建、更新、克隆、缺失绑定补建和显式 apply 的 binding 生效区间算法。
 - 扩展正式 Selection evidence producer，使其保存 Phase 0A 所需 decision clock、runtime/config、HMM、PIT universe、risk、asset/source 和 stage lineage。
 - 定义 `VALID_NO_CANDIDATE` 权威证据，不要求生产中人为制造空候选。
 - 明确 Phase 0A.2 与 Phase 1 `advisory_source_availability_event` 的衔接，消除 Phase 0A/1 循环依赖。
-- 定义只允许 exact-source 的历史修复规则、前瞻验证顺序、自动门禁和正向可达性。
-- 冻结正式 `T0`、现存历史证据读取和 current-semantics replay 的分类边界。
-- 给出未来代码、测试、生产程序化 DML 和 L4 复验的分阶段实施计划。
+- 定义只允许 exact-source 的历史研究规则、自动门禁和正向可达性。
+- 冻结显式历史锚点、现存历史证据读取和 current-semantics replay 的分类边界。
+- 给出未来代码、测试、DEV-DB migration 和 L4 复验的分阶段实施计划。
 
 ### 2.2 影响面
 
@@ -116,7 +116,7 @@ L4 调查时的生产事实如下；这些 ID 只作为现状证据，执行时�
 ```text
 backend/services/advisory_phase0a/
 backend/services/advisory_program.py
-backend/services/advisory_daily_runner.py
+backend/services/advisory_phase0a/historical_research.py
 backend/services/selection_center/
 backend/services/simulation_runtime/selection.py
 backend/services/strategy_package/selection_artifact.py
@@ -142,21 +142,21 @@ scripts/advisory_phase0a_audit.py
 - 不读取回测结果、QE archive、Paper/模拟盘账户、订单、持仓或收益作为荐股训练/审计证据。
 - 不建设 Phase 1 observation/label/snapshot 全量数据底座，不训练模型、不预测收益/持股周期/价格区间。
 - 不新增审批、RBAC、authority decision、approval bundle、action authorization 或运行时 DDL。
-- 不保证实施当天即可得到 formal OOS；embargo 和未来 source evidence 必须按交易日自然成熟。
-- 不把两至三周前的 replay 日期设置为正式 `T0`，也不把集中回补记录解释为逐日前瞻运行。
+- 不产生或宣称 formal OOS、正式 `T0`、实时荐股或 prospective daily evidence。
+- 不把 replay 或集中回补记录解释为当时真实运行；它们永久保持 current-semantics retrospective research。
 
 ## 4. Design Acceptance Index / 设计验收索引
 
 | ID | Phase 0A.2 设计验收项 |
 |---|---|
-| F-031 | 当前单 Alpha target 按 current manifest 冷启动并与旧 manifest evidence 隔离；仅在 preflight 不通过时发布新 identity，归档包不被复活 |
-| F-032 | 现有原生多 Alpha 父包可直接复用，并通过新的 dated binding 与其他 Program 独立执行 |
+| F-031 | 当前单 Alpha target 按 current manifest 执行只读 research preflight 并与旧 manifest evidence 隔离；仅在标准包研发流程中形成新 identity，归档包不被复活 |
+| F-032 | 现有原生多 Alpha 父包可直接复用，按历史日期解析已有 dated binding，并与其他 Program 独立执行；研究路径不创建 binding |
 | F-033 | 所有新 binding 使用显式、无重叠的 `[effective_from_trade_date,effective_to_trade_date)`；legacy null 区间不被反推 |
 | F-034 | 正式 Phase 0A policy registry 在首次 signal 前自动校验并冻结 hash/effective range，不含审批或角色字段 |
-| F-035 | Selection producer 前瞻保存 decision clock、effective config、runtime/HMM、PIT universe、risk、asset/source 和完整 lineage |
+| F-035 | Selection evidence producer 保存 decision clock、effective config、runtime/HMM、PIT universe、risk、asset/source 和完整 lineage，供历史研究只读消费 |
 | F-036 | 合法空候选具有不可变权威 header/artifact/evidence；真实验证等待自然事件，不伪造生产样本 |
 | F-037 | Phase 0A.2 复用 Phase 1 source ledger；历史修复只接受 exact source，缺证据保持 retrospective/unavailable |
-| F-038 | 正确数据存在自动可达的双轨正向路径：先 `PARTIAL -> HANDOFF_EMITTED`，满足 source ledger/embargo 后再 `READY`，且不影响 Selection/模拟盘/Paper |
+| F-038 | 正确历史数据存在自动可达的双轨正向路径：先 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 满足后达到 `RESEARCH_READY`，且不影响 Selection/模拟盘/Paper |
 | F-039 | 手工历史研究 runner 对显式选定 Program 独立执行，只读 `DB_HISTORICAL`、使用唯一 Program/date 业务键、原子或可恢复持久化、失败隔离和确定性批次回执；不调度、不接入实时数据、不执行交易 |
 | F-040 | 历史研究锚点只能是显式指定的已完成交易日；历史读取与 current-semantics replay 永久保持 retrospective，不产生实时荐股、投资建议或交易指令 |
 
@@ -167,7 +167,7 @@ scripts/advisory_phase0a_audit.py
 ```text
 Phase 0A read-only audit
   -> Phase 0A.1 deterministic readiness/handoff normalization
-  -> Phase 0A.2 policy + dated binding + prospective evidence producers
+  -> Phase 0A.2 research policy + historical binding resolver + immutable evidence producer
   -> Phase 1 source ledger + observation/label/snapshot
   -> Phase 0B baseline audit
 ```
@@ -178,28 +178,29 @@ Phase 0A.2 不是新的数据仓库。它只补齐“正式业务运行如何产
 
 ```text
 Track S: existing single-alpha package at current manifest
-  -> existing dedicated Advisory Program S
-  -> current-manifest cold-start smoke
-  -> explicit successor binding S_v2 [T0, infinity)
-  -> independent daily Selection evidence
+  -> explicitly requested Advisory Program S
+  -> read-only research preflight
+  -> historical dated binding resolution
+  -> persisted Selection evidence read-only consumption
 
 Track M: existing native multi-alpha parent package
-  -> existing Advisory Program M
-  -> new explicit successor binding M_v2 [T0, infinity)
-  -> independent daily Selection evidence with per-leg provenance
+  -> explicitly requested Advisory Program M
+  -> read-only parent/leg provenance preflight
+  -> historical dated binding resolution
+  -> persisted multi-alpha evidence read-only consumption
 ```
 
 两条轨道可以在同一 audit request 中批量审计，但不共享 Program/binding lineage，不融合候选，也不把一条轨道的成功作为另一条轨道的 fallback。等价经济 signal 的训练样本去重仍由 Phase 0A.1 stable signal identity 处理。
 
 ### 5.3 循环依赖消除
 
-Phase 1 source ledger 尚未启用时，正确且完整的包、binding、policy、clock、runtime 和 candidate authority 可以得到 `PARTIAL` handoff。该 handoff 允许 Phase 1 建立 prospective source availability/capture，不宣称 formal OOS。
+Phase 1 source ledger 尚未启用时，正确且完整的包、binding、policy、clock、runtime 和 candidate authority 可以得到 `PARTIAL` handoff。该 handoff 允许 Phase 1 建立研究用 source availability/capture，不宣称 formal OOS。
 
-Phase 1 observer 开始追加真实 `advisory_source_availability_event` 后，新 audit version 才能逐步形成 source-complete interval。达到 effective cutoff 后 20 个完整交易日 embargo，并满足全部 mandatory closure 时，scope 才从 `PARTIAL` 变为 `READY`。
+Phase 1 observer 开始追加真实 `advisory_source_availability_event` 后，新 audit version 才能形成可证明的 source interval。满足 feature/source/label-as-of 全部 mandatory closure 时，scope 才从 `PARTIAL` 变为 `RESEARCH_READY`；历史缺口不回填。
 
 因此 Phase 1 的进入条件调整为：
 
-- 至少一个合法 `READY` 或 `PARTIAL` admission scope 已 `HANDOFF_EMITTED`。
+- 至少一个合法 `RESEARCH_READY` 或 `PARTIAL` admission scope 已 `HANDOFF_EMITTED`。
 - `PARTIAL` scope 只能执行与缺失 capability 对应的 source/capture 建设，不能进入 formal Phase 0B 指标。
 - `BLOCKED` scope 不进入 Phase 1；修复 producer 后创建新 audit/handoff version。
 
@@ -207,7 +208,7 @@ Phase 1 observer 开始追加真实 `advisory_source_availability_event` 后，�
 
 ### 6.1 当前单 Alpha package 的 current-manifest 冷启动
 
-真实 L4 单 Alpha 正向验证优先使用当前已启用 Program/package，而不是无条件再发布一个 package。正式 `T0` 前必须对 package `pkg_378eb9c91e104c64935404e257e932ee` 的当前 manifest 执行无生产业务写入的 preflight 与隔离 Selection smoke，并满足：
+真实 L4 单 Alpha 正向验证优先使用当前已启用 Program/package。对 package `pkg_378eb9c91e104c64935404e257e932ee` 的当前 manifest 执行无生产业务写入的 research preflight，并满足：
 
 ```text
 program_id = advp_ac2885f728a84409a263d30f06664196
@@ -226,7 +227,7 @@ isolated current-manifest Selection smoke PASS
 
 current-manifest smoke 只能证明从 smoke observed-at 开始具备可执行性，不能把该时间回填为资产的历史 available-at。旧 manifest `8f6d8b0235459a0b657a3c0bb3a00e9a63707578e0bd7de978add42855d31ebf` 的 67 条 DSE 保留原 identity 和 retrospective 分类，不得被当前 manifest 继承。
 
-smoke 通过时复用现有 package 和独立 `single_package` Program，只创建从正式 `T0` 生效的 dated successor binding。smoke 若证明当前 manifest/资产闭包不可执行，才通过标准研发、发布和 StrategyPackage preflight 形成新的 package identity；不得原地复活两个已归档包，也不得继承旧包 OOS 身份。
+preflight 通过时复用现有 package 和独立 `single_package` Program；研究路径不创建 binding。preflight 若证明当前 manifest/资产闭包不可执行，只返回失败并停止该 Program；新 package identity 只能由独立标准研发流程形成，不得原地复活归档包或继承旧证据身份。
 
 Program 的 target count、review policy、HMM/risk runtime 和 style assignment 在首个 signal 前冻结；style 不根据未来收益回改。
 
@@ -240,7 +241,7 @@ Program 的 target count、review policy、HMM/risk runtime 和 style assignment
 - 每个 leg 的 score direction、weight、variant 和 combine order 可由 parent manifest 唯一确定。
 - preflight 不使用单 Alpha fallback，也不展开为多个 Program。
 
-不重新发布父包、不修改其 manifest。对现有 Program 创建新的 successor binding，并从未来的明确决策交易日开始采集证据。
+不重新发布父包、不修改其 manifest、不创建 successor binding。历史日期无法解析唯一已有 binding 时，该 Program 返回 `WAITING_INPUT/UNAVAILABLE`。
 
 ### 6.3 多 Program 独立性
 
@@ -250,29 +251,27 @@ Program 的 target count、review policy、HMM/risk runtime 和 style assignment
 - 页面可同时展示多个 Program，但不提供跨 Program 候选融合或随机权重配置。
 - Phase 0A audit 可批量执行，readiness、reason codes 和 handoff 按 scope 独立。
 
-### 6.4 每日多 Program 执行器
+### 6.4 手工历史研究多 Program 执行器
 
-现有 `review_schedule` 只是配置 metadata，不是执行器。Phase 0A.2 必须提供一个确定性的 Advisory daily runner；它只编排现有正式单包 Selection/Advisory 路径，不在 runner 内实现第二套选股算法。
+`review_schedule` 只是 Program metadata，研究模块不读取它、不注册 scheduler，也不按当前日期自动运行。用户每次请求必须显式给出一个已完成交易日和一个或多个 Program；runner 只编排历史研究路径，不在内部实现第二套选股算法。
 
-每日流程固定为：
+历史研究流程固定为：
 
-1. 在权威交易日 `T` 收盘数据及必要 ingestion/HMM/risk 输入达到冻结水位后，按交易日历计算 `target_trade_date=E(T+1)`。
-2. 在一个一致读快照中获取全部 `ENABLED` Program id，按 `program_id` 稳定排序；快照之后新启用的 Program 从下一交易日开始。
-3. 每个 Program 独立解析 `T` 生效的唯一 dated binding、当前 package/manifest、policy、runtime 和 source watermark；禁止使用 null-date binding、latest fallback 或手工 candidates。
-4. 每个 Program 调用正式 `run_review_from_selection` 路径，持久化 Selection artifact/DSE、review/list 和 Phase 0A evidence；一个 Program 失败不回滚已成功 Program，也不阻止后续 Program。
-5. 输出一个 batch receipt，逐 Program 保存 `SUCCEEDED/ALREADY_SUCCEEDED/WAITING_INPUT/FAILED`、业务键、binding/manifest/config hashes、Selection/review/list ids、reason codes、开始/结束时间和重试分类。
+1. 校验 `decision_trade_date` 早于服务端当前日期，且为权威交易日历中的已完成交易日。
+2. 对请求中的 Program id 去重并稳定排序；只处理显式请求的 Program，不隐式扩展为全部 `ENABLED` Program。
+3. 每个 Program 独立解析历史日期生效的唯一 dated binding、package/manifest、policy、runtime 和 exact source watermark；禁止 null-date、latest fallback、当前配置替代历史配置或手工 candidates。
+4. 只读消费已有 Selection artifact/DSE；缺失返回 `WAITING_INPUT`，内容冲突或无效证据返回 `FAILED`，不得调用 Selection、模拟盘、Paper、QMT、broker 或实时 provider 重算。
+5. 每个 Program 使用独立事务保存研究结果；一个 Program 失败不回滚或阻止其他 Program。批次回执稳定保存 `COMPLETE/WAITING_INPUT/FAILED`、业务键、binding/manifest/config/source hashes、reason codes 和重试分类。
 
-正式 daily run 的唯一业务键与现有数据库约束保持一致：
+唯一业务键为：
 
 ```text
-daily_run_key = (program_id, target_trade_date, RUN)
+historical_research_key = (program_id, decision_trade_date, HISTORICAL_RESEARCH_ONLY)
 ```
 
-`binding_version_id`、`decision_as_of_trade_date=T`、manifest、policy 和 effective config hashes 是该 key 的不可变 payload/conflict predicate，而不是允许同一 Program/date 产生第二个正式列表的额外维度。现有 `ux_advisory_review_run_one_run_per_program_date` 与 `ux_advisory_list_version_one_published_per_program_date` 是最终数据库幂等权威；人工正式触发与 scheduler 使用同一 key，先成功者产生结果，后到者返回 `ALREADY_SUCCEEDED`。
+binding、manifest、policy、effective config、artifact/DSE 和 source revision hashes 是同一 key 的不可变冲突谓词。相同 request/hash 重试返回原结果；同 key 异 payload 必须返回 `ADVISORY_PHASE0A2D_RESEARCH_RUN_CONFLICT`，不能覆盖或生成第二份研究名单。
 
-run acquisition 与 review/list/item/episode/decision 持久化必须在单 Program 事务中原子提交，或使用同一确定性 run id 的可恢复状态机完成；不得保留“review run 已写但 published list 永远无法重试”的半成品。输入尚未就绪时只写 runner receipt 并重试，不抢占正式 `RUN` key；已抢占后的进程崩溃必须按相同 key 恢复，不能另建第二条正式 run。
-
-`REPLAY`、`PREVIEW` 与正式 `RUN` 分离。Replay 可有独立 request hash 和多次 attempt，但不能写 `PUBLISHED` list、不能占用 daily key，也不能被 source observer 识别为 prospective event。
+研究结果不写 `PUBLISHED` list，不占用正式 review/list key，不触发 episode、position、order 或交易状态。`REPLAY/PREVIEW` 只能作为独立诊断 lineage，不能伪装为该手工历史研究结果。
 
 ## 7. Binding 生命周期契约
 
@@ -298,7 +297,7 @@ effective_from_trade_date = first trading date
 
 如果同一交易日的正式 run key 已被获取，即使业务结果失败，新 binding 也不能追溯占用该日。页面只展示服务返回的默认日期；后端仍是唯一校验权威。任何显式请求早于该日期均返回稳定 reason code，不自动改成 latest/current date。
 
-正式 `T0` 是同时满足以下条件后的首个未处理决策交易日 `T`：代码 release 已部署且 health 通过；policy version 已生效；目标 current manifest cold-start smoke 通过；Program successor binding 明确从 `T` 生效；daily runner 已启用；`T` 的输入可按冻结 cutoff 证明 available。`T0` 对应的荐股 target 为下一交易日 `E(T0+1)`。任何两至三周前的日期、当前日之前的历史 cutoff 或集中回补日期都不能被指定为正式 `T0`。
+历史研究路径没有正式 `T0`。请求日期只决定历史 as-of 解析；日期缺少唯一 binding、policy/runtime vintage 或 exact source evidence 时保持 `WAITING_INPUT/RETROSPECTIVE_RESEARCH_ONLY`，不得创建 successor binding、改用 current/latest 配置或把请求日期升级为 prospective 起点。
 
 ### 7.3 创建、更新、克隆与补建
 
@@ -440,7 +439,7 @@ producer 保存本次 signal 使用的 source role、dataset/partition、query t
 
 Phase 1 observer 尚未启用时，这些字段可以使 identity/clock/candidate authority 闭合并产生 `PARTIAL`，但不得单独宣称历史 formal available-at。observer 启用后，evidence 必须引用匹配的 append-only availability event，才能升级对应 source capability。
 
-当前 package asset 未记录历史 `available_at/data_cutoff` 时，current-manifest smoke 只追加 `first_observed_at` 和完整 asset/hash closure，并从 `T0` 起作为 prospective identity evidence；不得补写资产在旧 DSE cutoff 前已可用。正式 source observer 同样只从首次真实观察开始追加 event。
+当前 package asset 未记录历史 `available_at/data_cutoff` 时，research preflight 只能记录由数据库时钟生成的首次观察和完整 asset/hash closure；不得补写资产在旧 DSE cutoff 前已可用。source observer 同样只从首次真实观察开始追加 event，且不触发荐股。
 
 ## 10. VALID_NO_CANDIDATE 契约
 
@@ -496,13 +495,13 @@ evidence_payload.decision/runtime/universe/policy closure complete
 
 无法 exact 修复的记录原样保留，并按 Phase 0A 输出 `RETROSPECTIVE_RESEARCH_ONLY`、`NONE` 或对应 gap reason code。
 
-### 11.3 历史读取、区间 replay 与正式前瞻的隔离
+### 11.3 历史读取、区间 replay 与手工研究结果的隔离
 
 - 只读历史分析可直接消费已存在、identity/hash 匹配的 DSE；两条当前轨道若要求同日横向比较，现阶段仅 `2026-06-29` 是已观察的精确共同 cutoff。
 - 每个 Program 可按自己的真实 DSE 日期独立观察列表变化，不要求伪造连续共同窗口。
 - 使用当前 manifest/runtime/code 重算过去区间必须标记 `run_type=REPLAY`、`evidence_scope=RETROSPECTIVE_RESEARCH_ONLY` 和 current-semantics hashes；它回答“当前算法若作用于过去数据会怎样”，不回答“当时真实会荐出什么”。
 - 现有 replay 会产生数据库写入，只有在用户另行明确授权生产 DML 后才能执行；文档、只读 audit 或模型训练准备不得隐式触发。
-- 正式 `RUN`、`PUBLISHED` list、prospective source event 和 formal OOS 只接受 `T0` 及之后的 daily runner 证据。
+- 手工历史研究只接受 `DB_HISTORICAL + MANUAL_HISTORICAL_RESEARCH + HISTORICAL_RESEARCH_ONLY + execution_prohibited=true`；结果永远不升级为 `PUBLISHED`、formal OOS、实时荐股或交易指令。
 
 ## 12. Contracts / API、DB、UI 与 CLI 契约
 
@@ -519,7 +518,7 @@ program_version
 binding_payload_hash
 ```
 
-`runtime_profile id/version/hash` 由 F-035 prospective evidence producer 在其实现时加入正式 response/evidence contract；当前 `runtime_config_json` 不是该字段的替代品，也不得据此把 F-035 视为完成。
+`runtime_profile id/version/hash` 由 F-035 evidence producer 写入不可变 evidence contract；当前 `runtime_config_json` 不是历史 runtime vintage 的替代品。
 
 过期 expected version、日期回溯、区间重叠或 package/preflight 失败返回稳定 reason code。API 不新增 approve/reject/revoke/authorize endpoint。
 
@@ -529,12 +528,12 @@ Phase 0A.2 复用现有表和 JSON evidence，不新增表、列、约束或索�
 
 - `app.advisory_strategy_binding_version` 保存 dated intervals。
 - `strategy_pkg.selection_score_artifact` 保存 candidate artifact/empty declaration。
-- `selection.daily_selection_evidence` 保存 prospective evidence payload 和 immutable hash。
+- `selection.daily_selection_evidence` 保存 evidence payload 和 immutable hash；历史研究只读消费，不在请求内生成或改写。
 - `selection.run/package_result/excluded_result` 保存现有 Selection lineage。
 
-`app.advisory_review_run.run_payload_json` 保存 daily run key、execution origin、decision/target dates、binding/manifest/policy/config hashes、source watermarks、attempt/resume 信息和 runner batch id。正式 `RUN` 继续使用现有 Program/date partial unique index；`REPLAY/PREVIEW` 不得规避正式唯一性生成 published list。
+`app.advisory_research_batch/program_run/batch_receipt` 保存手工历史研究 request、Program/date key、binding/manifest/policy/config/source hashes、research candidates 和确定性回执。它们与正式 review/list/episode/decision 表隔离，不生成 published list。
 
-binding 并发使用 §7.3 固定的 Program row lock、expected version 和事务内 overlap query，不依赖新 exclusion constraint。正式 RUN 获取相同 Program lock 并在写入前验证 decision-date binding。daily runner 复用现有 review/list unique index，并按 §6.4 补齐事务或可恢复状态机。Phase 0A.2 的 DEV-DB `G-DEV-02` 已应用并验证上述 comment migration，生产 `G-DEV-02=required_pending`；Phase 1 source tables仍由 Phase 1 dataset foundation migration 唯一创建。
+binding 生命周期仍使用 §7.3 的 Program row lock、expected version 和事务内 overlap query；历史研究 resolver 只读解析指定日期，不获取 binding writer lock、不修复区间。Phase 1 source tables 由 Phase 1 dataset foundation migration 唯一创建。
 
 ### 12.3 UI
 
@@ -551,7 +550,7 @@ binding 并发使用 §7.3 固定的 Program row lock、expected version 和事�
 ```text
 validate-policy-registry
 plan-dated-binding
-run-daily-programs
+run-historical-research-batch
 verify-prospective-evidence
 inspect-historical-evidence
 replay-program-range
@@ -618,29 +617,28 @@ G-RUN-05 artifact_publish_cleanup
 | Binding | AdvisoryProgram service/repository | 唯一 `[from,to)`；from 为未来未处理交易日；expected version 匹配 | S_v2/M_v2 各得到唯一 interval | 事务回滚并返回 exact reason |
 | Clock/input | calendar/ingestion/runtime producers | T/E、cutoff、timezone、available-at、runtime/HMM/PIT 一致 | 正常交易日 evidence 完整 | scope PARTIAL/BLOCKED，不伪造值 |
 | Candidate authority | Selection artifact + DSE producer | manifest/run/artifact/evidence/stage hash 闭合 | 非空或合法空候选均有权威 header | evidence capture 失败显式记录 |
-| Daily orchestration | Advisory daily runner + review/list unique index | 全部 ENABLED Program 快照、每 Program/date 唯一 RUN、payload 无冲突、事务或恢复闭合 | 同日两个 Program 独立成功；重复触发返回同结果 | WAITING_INPUT 重试；单 Program FAILED 不阻断其他 Program |
-| Handoff | Phase 0A/0A.1 | 每 scope 唯一 READY/PARTIAL/BLOCKED；hash 稳定 | 正确前瞻输入至少 PARTIAL/HANDOFF | BLOCKED 新输入新 audit，不原地放行 |
-| Source maturity | Phase 1 source ledger | availability event/revision 与 signal source refs 一致 | observer 启用后的交易日逐步转 formal | 保持 PARTIAL，不回填猜测 |
-| Embargo | Phase 0A policy/calendar | effective cutoff 后 20 个完整交易日 | 到期后重新审计形成 READY | `EMBARGO_MATURING`，不提前升级 |
-| Replay boundary | run type + evidence classifier | REPLAY/PREVIEW 与 RUN/PUBLISHED/source event 严格分离 | 历史诊断可运行且始终 research-only | payload 冲突或越权发布 fail-closed |
+| Historical orchestration | manual historical runner + research key | 显式 Program/date、每 Program/date 唯一 research run、payload 无冲突、事务或恢复闭合 | 同一批次多个 Program 独立成功；重复请求返回原结果 | WAITING_INPUT 重试；单 Program FAILED 不阻断其他 Program |
+| Handoff | Phase 0A/0A.1 | 每 scope 唯一 RESEARCH_READY/PARTIAL/BLOCKED；hash 稳定 | 正确历史输入至少 PARTIAL/HANDOFF | BLOCKED 新输入新 audit，不原地放行 |
+| Source maturity | Phase 1 source ledger | availability event/revision 与研究 source refs 一致 | exact source closure 后转 RESEARCH_READY | 保持 PARTIAL，不回填猜测 |
+| Research window | frozen policy/calendar | requested cutoff、label as-of 和 source closure 完整 | walk-forward/history window 自动闭合 | 未闭合保持 PARTIAL，不冒充 formal OOS |
+| Replay boundary | origin + evidence classifier | MANUAL_HISTORICAL_RESEARCH 与 REPLAY/PREVIEW/PUBLISHED 严格分离 | 历史诊断和研究均显式分类 | payload 冲突或越权发布 fail-closed |
 
 ### 14.3 双轨状态可达性
 
 ```text
 PACKAGE_READY
-  -> CURRENT_MANIFEST_SMOKE_PASSED
+  -> RESEARCH_PREFLIGHT_PASSED
   -> POLICY_FROZEN
-  -> DATED_BINDING_ACTIVE
-  -> DAILY_RUN_ACQUIRED
-  -> PROSPECTIVE_EVIDENCE_CAPTURED
+  -> HISTORICAL_BINDING_RESOLVED
+  -> MANUAL_RESEARCH_RUN_ACQUIRED
+  -> HISTORICAL_EVIDENCE_RESOLVED
   -> AUDITED_PARTIAL
   -> HANDOFF_EMITTED
-  -> SOURCE_LEDGER_ACCUMULATING
-  -> EMBARGO_MATURING
-  -> AUDITED_READY
+  -> EXACT_SOURCE_REVISION_CLOSED
+  -> RESEARCH_READY
 ```
 
-单 Alpha和原生多 Alpha必须各有完整正向 fixture。真实 L4 至少先证明两条轨道都可由同一 daily batch 独立达到 `HANDOFF_EMITTED`；`READY` 只能在真实 source/embargo 成熟后验证。空候选和 binding switch 的真实样本按自然发生独立补证，不得成为所有非空正常日的永久阻塞门禁。
+单 Alpha和原生多 Alpha必须各有完整正向 fixture。真实 L4 至少证明两条轨道可在同一手工历史批次中独立达到 `HANDOFF_EMITTED/RESEARCH_READY`；任何状态都不得表达实时荐股或 formal OOS。空候选和 binding switch 样本独立补证，不得成为所有非空研究日期的永久阻塞门禁。
 
 ## 15. Implementation Plan / 实施方案
 
@@ -659,7 +657,7 @@ PACKAGE_READY
 - 前端使用后端 trading defaults，不再发送 null 或已处理日期。
 - 保持多个 Program 独立，不恢复多包融合。
 
-### 15.3 Phase 0A.2C：Prospective evidence producer
+### 15.3 Phase 0A.2C：不可变 Selection evidence producer
 
 字段级 schema、producer 插入点、artifact/DSE 不可变写入、自然 `VALID_NO_CANDIDATE`、兼容与 L0-L5 验收以 `docs/architecture/advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md` 为准。F-035/F-036 的代码、shared-consumer parity、CI 与 DEV-DB rollback-only readback 已完成；详细设计的 `design_ready` 矩阵仍只表示设计闭合，且没有由此生成生产业务 evidence。
 
@@ -679,30 +677,27 @@ PACKAGE_READY
 
 - 单 Alpha与原生多 Alpha fixture 覆盖 package -> binding -> selection -> audit -> handoff。
 - 覆盖多个 Program、binding rollover、HMM enabled/disabled、risk/universe、非空/空候选。
-- 覆盖同日重复调度、人工与调度竞态、一个 Program失败、WAITING_INPUT 重试、commit 崩溃恢复和 replay 隔离。
-- 验证合法输入达到 `PARTIAL/HANDOFF_EMITTED`，缺 source ledger 不被误判为身份 BLOCKED。
+- 覆盖同日重复手工请求、一个 Program失败、WAITING_INPUT 重试、commit 崩溃恢复和 replay 隔离。
+- 验证合法输入达到 `PARTIAL/HANDOFF_EMITTED/RESEARCH_READY`，缺 source ledger 不被误判为身份冲突。
 - 运行 Feature Workflow、focused tests、changed-file lint/compile、diff check；广泛业务回归交给 CI/Validation Center。
 
-### 15.6 Phase 0A.2F：生产双轨 onboarding
+### 15.6 Phase 0A.2F：历史研究双轨验收
 
-该阶段只在用户后续明确下达生产 DML 执行指令后启动；这是开发工具的生产安全边界，业务程序本身不创建审批或授权记录：
+该阶段不创建生产 Program/binding，不发布新 package identity，也不启动 scheduler：
 
-1. 对现有单 Alpha current manifest 和现有原生多 Alpha parent 执行无业务写入 preflight/隔离 smoke；single 只有在失败时才按标准流程发布新 identity。
-2. 首次 signal 前冻结 policy/runtime/style 配置、runner config 和 request hashes。
-3. 对现有单 Alpha Program S 创建 dated successor binding S_v2，对现有多 Alpha Program M 创建 dated successor binding M_v2。
-4. 按 §7.2 计算正式 `T0`；不能选取历史日期或已存在 run 的日期。
-5. 启用 daily runner，从 `T0` 的正常收盘数据开始独立执行所有 ENABLED Program，不人为生成候选或空候选。
-6. 使用只读 audit 对 S/M 批量复验，期望至少 `PARTIAL -> HANDOFF_EMITTED`。
+1. 对现有单 Alpha current manifest 和原生多 Alpha parent 执行无业务写入 research preflight；失败时返回 exact reason，不自动发布替代包。
+2. 冻结 research policy/runtime/style、query registry 和 request hashes。
+3. 用户显式选择历史已有 binding 可解析的 Program 和已完成交易日；resolver 不创建、补写或修改 binding。
+4. 同一批次独立运行两个或更多 Program，验证 exact retry、失败隔离和候选互不融合。
+5. 使用只读 audit 验证 `PARTIAL/HANDOFF_EMITTED/RESEARCH_READY`；结果保持 historical research only。
 
-每笔 DML 都使用 dry-run plan、expected version、事务、row count/hash receipt 和 readback。执行失败不自动回滚另一个已成功 Program，也不删除旧 binding。
-
-### 15.7 Phase 0A.2G：Phase 1 source/embargo 成熟
+### 15.7 Phase 0A.2G：Phase 1 exact source 与研究闭合
 
 - 按 Phase 1 设计部署 source availability observer 和 append-only ledger。
-- 继续积累新交易日 signal/source evidence。
-- 20 个完整交易日 embargo 到期后创建新 audit version。
-- 对 mandatory closure 完整的 scope 验证 `FORMAL_OOS + READY`；未完整 scope 继续 PARTIAL/blocked-by-reason。
-- 自然出现空候选和后续真实 binding switch 时追加 L4 evidence，不追溯造样本。
+- source observer 只记录数据库 ingestion completion，不触发荐股或候选计算。
+- 对历史研究使用的 feature/outcome/calendar/policy 冻结 exact revision set 和 label as-of。
+- mandatory closure 完整的 scope 达到 `RESEARCH_READY`；未完整 scope 继续 PARTIAL/blocked-by-reason。
+- 不追溯伪造 first-observed、binding、candidate 或 source event。
 
 ## 16. Verification Plan / 验证方案
 
@@ -720,7 +715,7 @@ PACKAGE_READY
 - 单 Alpha package/program 正向 E2E。
 - 原生多 Alpha parent/per-leg provenance 正向 E2E。
 - 两个 Program 同日运行且 lineage/状态互不污染。
-- daily runner 对 `(program_id,target_trade_date,RUN)` exactly-once、payload conflict、人工/调度竞态、WAITING_INPUT、crash/resume 和 batch receipt 的正向/反向 E2E。
+- historical runner 对 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)` exactly-once、payload conflict、重复手工请求、WAITING_INPUT、crash/resume 和 batch receipt 的正向/反向 E2E。
 - capture enabled/disabled/failure 的 Selection、模拟盘和 Paper candidate/result parity。
 - 非空候选和合法空候选的 artifact/DSE/audit/handoff golden。
 - legacy null binding、manifest mismatch、dynamic HMM latest、future leakage、guessed available-at 和 replay 尝试发布必须拒绝。
@@ -729,12 +724,12 @@ PACKAGE_READY
 
 生产 DML onboarding 完成后，以 read-only session 执行：
 
-1. 验证现有 single current manifest 与 native multi parent 的 smoke receipt、正式 `T0` 和 dated bindings。
-2. 同一 daily batch 对两个 Program 执行；一个失败时另一个仍能完成并产生独立 receipt。
+1. 验证现有 single current manifest 与 native multi parent 的只读 preflight receipt 和历史 dated binding resolution。
+2. 同一 manual historical batch 对两个 Program 执行；一个失败时另一个仍能完成并产生独立 receipt。
 3. 相同 Program/date 重触发返回同一正式 run/list identity；不同 payload 返回冲突，不生成第二个 published list。
 4. 相同 request/source watermark 重跑只读 audit，业务 hash 必须相同。
 5. 两条 scope 至少达到 `PARTIAL/HANDOFF_EMITTED`，否则回到 producer contract 修复，不能解释为“门禁正常”。
-6. Phase 1 source/embargo 成熟后复验 `READY`。
+6. exact source/label closure 后复验 `RESEARCH_READY`。
 7. 空候选和 binding switch 只在真实自然样本存在时核验。
 
 L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HMM generation-on-miss。
@@ -745,7 +740,7 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 - [x] 归档包、null binding、manifest mismatch 和历史 available-at 均禁止猜测修复。
 - [x] policy、binding、evidence producer、source ledger 与 embargo 的先后关系闭合。
 - [x] 手工历史研究多 Program runner、唯一业务键、事务/恢复、失败隔离和 replay 边界闭合。
-- [x] 正确数据具有 `PARTIAL/HANDOFF -> READY` 正向可达路径。
+- [x] 正确历史数据具有 `PARTIAL/HANDOFF -> RESEARCH_READY` 正向可达路径。
 - [x] 空候选 fixture 与真实自然样本边界明确。
 - [x] Selection、StrategyPackage、模拟盘和 Paper 隔离及 parity oracle 明确。
 - [x] 零审批、零角色、零运行时 DDL和 8 类自动技术门禁保持不变。
@@ -758,10 +753,10 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 1. 合入 policy/binding/evidence producer 代码和测试；不执行生产 DML。
 2. 在发布阶段应用并核验 comment-only migration，随后部署代码并验证 release health；运行时不执行 DDL。
 3. 对现有 single current manifest 和 native multi parent 执行隔离 smoke；仅在 single 失败时另行发布新 identity。
-4. 使用程序化 request 创建两个 Program 的 future-effective successor binding，冻结 runner/policy/config，并确定正式 `T0`。
-5. 激活 daily runner；观察正常业务日证据并执行只读 L4 audit/handoff。
-6. Phase 1 source observer 单独发布并积累 evidence。
-7. embargo 到期后复验 READY；不自动开始 Phase 0B 或模型训练。
+4. 对已有 Program 执行只读历史 binding/preflight 验证，不创建 successor binding。
+5. 通过手工请求执行显式历史日期的多 Program research batch。
+6. Phase 1 source observer 如后续启用，只追加数据库 ingestion evidence，不触发荐股。
+7. exact source/label closure 后复验 RESEARCH_READY；不自动开始训练、发布或交易。
 
 ### 17.2 Rollback
 
@@ -770,7 +765,7 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 - evidence：不 UPDATE/DELETE immutable artifact/DSE；错误证据追加 invalidation/gap，并由新 run/version替代。
 - package：默认复用的当前单 Alpha 包如需停止可按现有生命周期处置；若后来发布替代包，也不复活旧归档包或继承其 OOS identity。
 - Program：可独立 disable，不影响其他 Program、Selection、模拟盘或 Paper。
-- runner：可独立停用新批次；已成功 Program/date 保持只读，未完成 key 按相同 deterministic identity 恢复。
+- research runner：无 scheduler；停止手工请求即可停止新批次，未完成 key 按相同 deterministic identity 恢复。
 - source observer：可独立停用；已写 append-only event 保留。
 
 ## 18. Risks / Failure Modes / 风险与失败模式
@@ -810,11 +805,11 @@ production_runtime_gate = noop
 
 - 代码是否合入及本地 main/origin main 是否同步。
 - F-033 comment-only migration 是否已在发布阶段应用并 readback；Phase 1 migration 必须另行报告，不能混入本阶段运行命令。
-- current-manifest smoke、两个 dated successor binding 和正式 `T0` 是否已由程序化流程产生并 readback。
-- daily runner 是否实际激活、最新 batch/Program receipt、是否存在未恢复 key；`review_schedule` metadata 不作为激活证据。
+- research preflight 是否只读通过，历史 Program/date 是否解析到唯一 binding/evidence。
+- 最新手工 batch/Program receipt、是否存在未恢复 research key；`review_schedule` metadata 不作为运行证据。
 - source observer 是否启用、当前积累到哪个 trade date。
-- L4 是 `PARTIAL/HANDOFF_EMITTED` 还是 `READY`，以及具体未成熟 reason code。
-- 服务/调度是否实际激活；代码合入不等于运行激活。
+- L4 是 `PARTIAL/HANDOFF_EMITTED` 还是 `RESEARCH_READY`，以及具体未成熟 reason code。
+- 服务运行时、source observer 和生产 DDL 分别报告；不存在 Advisory scheduler 激活步骤。
 
 ## 20. Design Acceptance Matrix / 设计验收矩阵
 
@@ -823,13 +818,13 @@ production_runtime_gate = noop
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-031 | §1.2-1.4、§6.1、§11、§15.6 | current-manifest smoke、旧 manifest evidence 隔离、条件式新 identity 和归档包不复活已定义 | design_ready | none |
-| F-032 | §5.2、§6.2-6.3、§15.6 | 现有 native parent 复用、dated successor 和多 Program 独立路径已定义 | design_ready | none |
+| F-032 | §5.2、§6.2-6.3、§15.6 | 现有 native parent 复用、历史 dated binding 只读解析和多 Program 独立路径已定义 | design_ready | none |
 | F-033 | §7、§12.1-12.2、§16 | `[from,to)`、未来有效日、expected version、legacy null 与原子验证已定义 | design_ready | none |
 | F-034 | §8、§14、§15.1 | immutable policy schema、hash/effective range、自动 loader 和零审批字段已定义 | design_ready | none |
 | F-035 | §9、§12、§15.3、§16 | clock/config/runtime/HMM/universe/risk/asset/source/stage producer 与验证已定义 | design_ready | none |
 | F-036 | §10、§13、§16 | 合法空候选 artifact/DSE/header、自然样本和 fixture/L4 边界已定义 | design_ready | none |
 | F-037 | §5.3、§9.6、§11、§15.7 | Phase 1 ledger 复用、exact remediation 和 historical no-guess 边界已定义 | design_ready | none |
-| F-038 | §5、§14-17、§19 | 双轨 PARTIAL/HANDOFF 到 READY、8 类门禁正向可达、隔离、发布与回滚已定义 | design_ready | none |
+| F-038 | §5、§14-17、§19 | 双轨 PARTIAL/HANDOFF 到 RESEARCH_READY、8 类门禁正向可达、隔离、发布与回滚已定义 | design_ready | none |
 | F-039 | §1.3、§6.4、§12-16 | historical-research runner、唯一键、事务/恢复、失败隔离、批次回执和只读运行证据已定义 | design_ready | none |
 | F-040 | §1.3-1.4、§7.2、§11.3、§16-17 | 显式历史锚点、共同历史窗口、current-semantics replay 和实时/交易隔离已定义 | design_ready | none |
 
@@ -857,4 +852,4 @@ production_runtime_gate = noop
 - Phase 1 文档允许 `PARTIAL/HANDOFF_EMITTED` scope 建设 source capability，并禁止其进入 formal Phase 0B。
 - `git diff --check` 通过。
 
-用户确认设计后已进入 Phase 0A.2 实现；当前 F-033/F-034/F-035/F-036/F-039/F-040 已完成，且已完成相应 DEV-DB rollback-only gate。真实业务验收仍需后续 F-031/F-032 current-manifest smoke、双轨 dated successor binding、F-037/F-038 source-ledger 与 handoff 路径，以及 source/embargo 成熟后的 `READY` receipt；这些后续工作不得把手工历史研究 runner 提升为实时荐股、交易或模拟盘运行能力。
+当前 F-033/F-034/F-035/F-036/F-039/F-040 已完成并通过相应 DEV-DB rollback-only gate。后续仍需 F-031/F-032 research preflight、F-037/F-038 source-ledger 消费与 handoff 路径，以及 exact source/label closure 后的 `RESEARCH_READY` receipt；任何后续工作都不得把手工历史研究 runner 提升为实时荐股、交易或模拟盘运行能力。

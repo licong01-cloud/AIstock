@@ -10,11 +10,11 @@
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 前置桥接设计：`docs/architecture/advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md`
 > 前置实现：PR `#1958`，merge commit `6669e00208e6e10c28901d5ba34539d851630b3e`
-> 当前状态：`design_ready`；2026-07-11 已按单用户、非实盘交易边界取消人工审批、角色和运行时 DDL，生产控制收敛为 8 类自动技术门禁；首次真实 Phase 0A L4 只读审计已执行并因历史 producer evidence 缺口 `BLOCKED`；Phase 0A.1/0A.2 新契约、Phase 1 代码、DDL、回填、快照和调度均未合入或实施
+> 当前状态：`design_ready`；当前边界固定为手工历史研究、`DB_HISTORICAL` 和 `execution_prohibited=true`。Phase 0A.1/0A.2 历史研究实现已独立合入；Phase 1A source-availability event 与 exact source-revision-set 基础设施已在 DEV DB 通过 rollback-only L4。未实现 observer、capture/build/snapshot 或训练；不存在 daily Advisory scheduler、实时荐股、正式 `T0`、投资建议或交易执行路径
 > 实现处置：PR `#1965` 的 authority/approval/authorization 方向已被本次设计取代，不得按原方案合入；后续实现必须基于 deterministic handoff/readiness 和 8 类自动门禁重新开始
 > 设计合并说明：统一闭合父蓝图后续文档清单第 2、3 项，避免 observation/label/snapshot 与 DDL/迁移形成竞争契约
 > 复查修订范围：原位删除 approval/authorization/RBAC，统一 deterministic handoff、source availability、canonical version、label、build attempt、CAS、invalidation、GC 和 gate satisfiability 契约；不存在仅在文末追加的勘误
-> 生产影响：本设计 PR 为文档-only；DDL、DML、dataset store、依赖、调度、API、UI 和运行时门禁均为 `noop`
+> 生产影响：source-ledger additive migration 已在 `127.0.0.1:5433/aistock_dev` 应用并 readback；生产 DDL 仍为 `pending`。生产 DML、dataset store、依赖、调度、API、UI 和运行时门禁均为 `noop`
 > 主要验证链：F2 Feature Workflow -> Design Acceptance Matrix -> DESIGN-COMPLIANCE-001 -> `git diff --check` -> PR CI
 
 ## 0. 文档定位与权威边界
@@ -105,7 +105,7 @@ Phase 1 必须先生成可审计的 observation、label 和 immutable snapshot�
 固定规则：
 
 - 当前 watermark 或当前 `refreshed_at` 只能作为构建时 source freeze，不能倒推历史 available-at。
-- `FORMAL_OOS` 必须来自 Phase 0A 冻结规则验证通过的 source availability/OOS evidence。
+- 历史研究不得自行声明 `FORMAL_OOS`；现有 legacy formal 字段只允许审计读取，当前路径统一输出 research-only evidence scope。
 - 缺少历史可用证据的 replay 只能是 `RETROSPECTIVE_RESEARCH_ONLY`。
 - Phase 1 不通过猜测、默认收盘后可用或当前库已存在来提升证据等级。
 - Phase 1 必须新增 Advisory 专属 append-only `source_availability_event`。未来每次数据刷新程序成功完成并通过内容校验后记录 first-seen、provider/job、业务分区、schema/content/revision hash 和纠正/失效事件；不得修改行情业务表，也不得改变 StrategyPackage、Selection 或 Paper 的读取语义。
@@ -259,13 +259,13 @@ existing Selection / StrategyPackage / Advisory / Paper
 | A1-019 | candidate 与 universe 共用确定性现金流、cost、benchmark、corporate-action 和 outcome engine；winner 由版本化定义派生 |
 | A1-020 | build attempt 使用 lease/fencing；generation 终止、base、invalidation、blob refs、durable publish 和 GC cancel/new epoch 采用 fail-closed 状态机 |
 | A1-021 | trace 与 multi-alpha provenance 使用有界、no-throw、版本化 immutable envelope；缺失只降低对应 capability |
-| A1-022 | prospective source/observation 只消费正式 `T0` 后 daily runner 的唯一 `RUN`；历史读取、PREVIEW、REPLAY 和集中回补永久隔离 |
+| A1-022 | Phase 1 observation 只消费手工历史研究 runner 的唯一 Program/date receipt 与 exact source revision；PREVIEW、REPLAY、PUBLISHED 和交易语义永久隔离 |
 
 ## 6. Phase 0A Handoff Readiness
 
 ### 6.1 Phase 0A.1 deterministic handoff bundle
 
-Phase 0A CLI 生成 `advisory_phase0a_handoff_readiness_v1`。Phase 0A.1 只校验同一 audit version 的确定性输入；Phase 0A.2 负责让正式业务运行前瞻产生这些输入，不修改 handoff 判定器：
+Phase 0A CLI 生成 `advisory_phase0a_handoff_readiness_v1`。Phase 0A.1 只校验同一 audit version 的确定性输入；Phase 0A.2 由手工历史研究 request/receipt 与只读 evidence resolver 提供这些输入，不修改 handoff 判定器：
 
 ```text
 audit_id/audit_manifest_hash
@@ -300,8 +300,8 @@ sorted_target_handoffs[]:
     oos_interval_id/hash
     capability_hash
     date_start/date_end
-    evidence_scope = FORMAL_OOS | RETROSPECTIVE_RESEARCH_ONLY | GAP_ONLY
-    readiness = READY | PARTIAL | BLOCKED
+    evidence_scope = RETROSPECTIVE_RESEARCH_ONLY | GAP_ONLY
+    readiness = RESEARCH_READY | PARTIAL | BLOCKED
     blocking_reason_codes[]
   target_handoff_hash
 admission_scope_set_hash
@@ -318,18 +318,18 @@ created_at
 
 | Phase 0A 结论 | readiness | Phase 1 行为 |
 |---|---|---|
-| `FORMAL_OOS + AVAILABLE` | READY | 可生成 formal lineage；label lifecycle 另判 |
-| `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE` | PARTIAL | 可生成 research-only lineage，禁止用户可见校准 |
+| `RETROSPECTIVE_RESEARCH_ONLY + AVAILABLE` | RESEARCH_READY | 可生成 research-only lineage；label lifecycle 另判 |
+| `RETROSPECTIVE_RESEARCH_ONLY + UNAVAILABLE` | PARTIAL | 可生成缺口明确的 research-only lineage，禁止伪装闭合 |
 | `NONE + UNAVAILABLE` 且 replay eligible | PARTIAL | 只生成 research replay 或 gap，不伪装权威 signal |
 | `NONE + UNAVAILABLE` 且 replay 不合法 | BLOCKED | 只记录 gap，不生成候选 |
 | identity/hash/policy 冲突 | BLOCKED | 只阻断该 scope；同 target 其他 READY/PARTIAL scope 可继续 |
-| package/binding/policy/clock/candidate identity 已闭合，仅 Phase 1 source ledger 或 embargo 尚未成熟 | PARTIAL | 允许建立 prospective source/capture 和 research-only observation；禁止 formal Phase 0B |
+| package/binding/policy/clock/candidate identity 已闭合，仅 Phase 1 exact source/label closure 尚未完成 | PARTIAL | 允许建立 research-only source/capture；禁止宣称 RESEARCH_READY |
 
 `PENDING/RIGHT_CENSORED/UNAVAILABLE` 按 projection 阻断或限制消费；`MATURED + outcome_event_status=TERMINAL` 在 settlement 闭合时可按冻结 policy 消费，不降级已经合法的 signal evidence。
 
-`PARTIAL` 必须由可枚举的未成熟项产生，例如 `SOURCE_LEDGER_PENDING` 或 `EMBARGO_MATURING`；identity conflict、manifest mismatch、历史 binding 歧义和伪造 available-at 仍为 `BLOCKED`。Phase 0A.2 双轨正向验证先证明 `PARTIAL -> HANDOFF_EMITTED`，Phase 1 observer/embargo 自然成熟后再由新 audit version 提升为 `READY`。
+`PARTIAL` 必须由可枚举的未成熟项产生，例如 `SOURCE_LEDGER_PENDING` 或 `LABEL_SOURCE_PENDING`；identity conflict、manifest mismatch、历史 binding 歧义和伪造 available-at 仍为 `BLOCKED`。双轨正向验证先证明 `PARTIAL -> HANDOFF_EMITTED`，exact source/label closure 后由新 audit version 提升为 `RESEARCH_READY`。
 
-Phase 1 prospective observer 只接受 Phase 0A.2 daily runner 在正式 `T0` 之后产生的 `run_type=RUN`、`PUBLISHED` list 和完整 daily run payload；唯一业务键为 `(program_id,target_trade_date,RUN)`，binding/manifest/policy/config hashes 必须与 payload 一致。`PREVIEW`、`REPLAY`、集中回补 review、旧 manifest DSE 和 current-semantics 历史重算只能进入 research/gap lineage，不能创建 prospective availability event 或 formal observation。
+Phase 1 source observer 只观察数据库 ingestion completion，使用数据库时钟生成首次观察时间；它不触发候选计算或荐股。Observation 只接受 `MANUAL_HISTORICAL_RESEARCH` receipt、`HISTORICAL_RESEARCH_ONLY` scope 和 exact source revision set；唯一业务键为 `(program_id,decision_trade_date,HISTORICAL_RESEARCH_ONLY)`。`PREVIEW`、`REPLAY`、`PUBLISHED`、旧 manifest 猜测和 current/latest fallback 均不能进入 research-ready observation。
 
 ### 6.3 Programmatic mutation safety
 
@@ -530,7 +530,7 @@ Label as-of terminal resolution：
 | `stable_signal_semantics_hash/canonical_signal_scope_hash` | interval semantics 与 per-signal stable identity |
 | `phase0a_signal_context_hash` | exact evidence-rich context |
 | `oos_interval_id/hash` | target interval |
-| `evidence_scope` | `FORMAL_OOS|RETROSPECTIVE_RESEARCH_ONLY|GAP_ONLY` |
+| `evidence_scope` | `RETROSPECTIVE_RESEARCH_ONLY|GAP_ONLY` |
 | `signal_evidence_level/effective_cutoff_date` | formal evidence metadata |
 | `program_id/binding_version_id` | Program lineage |
 | `lineage_source_type` | `PHASE0A_AUDIT|ONLINE_REVIEW|ONLINE_LIST|HISTORICAL_REPLAY` |
@@ -916,7 +916,7 @@ audit_target_id
 canonical_signal_scope_hash
 phase0a_signal_context_hash
 oos_interval_id/hash
-evidence_scope = FORMAL_OOS | RETROSPECTIVE_RESEARCH_ONLY
+evidence_scope = RETROSPECTIVE_RESEARCH_ONLY
 universe_layer
 universe_evidence_level
 available_at_status
@@ -966,7 +966,7 @@ event_type = INGESTED | CORRECTED | INVALIDATED | REVALIDATED
 predecessor_event_hash nullable
 provider_job_id/refresh_job_id
 provider_published_at nullable
-first_observed_at
+first_observed_at  # repository 从数据库 clock_timestamp() 生成，请求不得传入
 formal_available_at
 schema_fingerprint/row_count
 partition_content_hash
@@ -977,8 +977,8 @@ created_by_service_principal/created_at
 
 规则：
 
-- `formal_available_at = max(可证明的 provider_published_at, first_observed_at)`；provider 时间无权威证据时只使用 first-observed，禁止回填更早时间。
-- 同一 partition chain 使用 `(partition_chain_key,event_revision_no)` 唯一递增序号；非首事件必须引用同 chain、revision 恰好小 1 的 predecessor，且 predecessor hash 只能被一个后继引用。DB constraint/repository 同时拒绝 fork、cycle 和跨分区链接。
+- `first_observed_at` 由 repository 在同一事务内读取数据库 `clock_timestamp()` 生成；append request 不含该字段，DB trigger 只接受数据库时钟容差内的 repository 观测值并拒绝历史回填或未来时间。`formal_available_at = max(可证明的 provider_published_at, first_observed_at)`。
+- `partition_chain_key` 由 `(dataset_name,source_role,partition_key_hash)` 确定性派生，请求不得传入；DB 对自然 partition/revision 和 chain/revision 同时唯一。同一 chain 只允许递增序号、精确 predecessor 和单后继，repository/DB 同时拒绝 alternate chain、fork、cycle 和跨分区链接。
 - 纠正或失效必须追加 event；`INVALIDATED` terminal 不能进入 revision set。恢复必须由程序在新 revision/content hash 完整且 predecessor 精确匹配时追加 `REVALIDATED`，不得重新选旧 event。禁止 UPDATE/DELETE。
 - as-of selector 只选择 `formal_available_at <= requested cutoff` 的唯一 terminal event；多个合法 terminal、chain fork 或最新 terminal=INVALIDATED 时 fail-closed。
 - observer 只在生产 gate 启用后积累未来 evidence。启用前的历史数据不补造事件，仍按 Phase 0A 归为 retrospective 或 unavailable。
@@ -1006,7 +1006,7 @@ member:
                   DURABLE_DB_SNAPSHOT | WATERMARK_ONLY
   revision_id
   availability_event_hash nullable only for non-ledger research member
-  availability_requirement = DECISION_CUTOFF | LABEL_AS_OF | POLICY_PREAPPROVED
+  availability_requirement = DECISION_CUTOFF | LABEL_AS_OF | POLICY_FROZEN
   business_min/max_date
   available_at_min/max
   enforced_cutoff_predicate_hash
@@ -1016,7 +1016,7 @@ member:
 
 - `WATERMARK_ONLY` 不能支持 formal signal 或 MATURED outcome，只能 retrospective/coverage diagnostic。
 - `FEATURE_T/UNIVERSE_T` 及参与 T 日 identity 的 calendar/runtime member 使用 `DECISION_CUTOFF`：正式 signal 必须精确绑定 availability event，且 `formal_available_at <= decision_cutoff_ts`；没有 ledger event 只能 retrospective。
-- `OUTCOME/CORPORATE_ACTION/TRADABILITY/BENCHMARK` 使用 `LABEL_AS_OF`：这些未来结果不得要求在 T 时已知。已存在 member 必须具有 immutable revision/partition content hash、event-time 合法性和 outcome source evidence，且实际 available-at `<= label_as_of_ts`；MATURED 另要求 `source_closed_at <= label_as_of_ts`。UNAVAILABLE 可没有 source_closed_at，但必须以 `failure_observed_at <= label_as_of_ts + missing_source_receipt_hash` 证明截至 as-of 无法闭合。历史 observer 启用前数据可用 PARTITION_CONTENT_HASH + immutable evidence 成熟标签，不会降级原 signal 的 FORMAL_OOS 身份。
+- `OUTCOME/CORPORATE_ACTION/TRADABILITY/BENCHMARK` 使用 `LABEL_AS_OF`：这些未来结果不得要求在 T 时已知。已存在 member 必须具有 immutable revision/partition content hash、event-time 合法性和 outcome source evidence，且实际 available-at `<= label_as_of_ts`；MATURED 另要求 `source_closed_at <= label_as_of_ts`。UNAVAILABLE 可没有 source_closed_at，但必须以 `failure_observed_at <= label_as_of_ts + missing_source_receipt_hash` 证明截至 as-of 无法闭合。历史 observer 启用前数据可用 PARTITION_CONTENT_HASH + immutable evidence 成熟研究标签，但不会把 signal 升级为非研究 scope。
 - `COST`、label/calendar policy assets 使用 `POLICY_FROZEN`：必须匹配 Phase 0A.1 handoff 中的 policy hash/effective range；数据成员的可用时间仍按其实际用途选择 DECISION_CUTOFF 或 LABEL_AS_OF。
 - 任一绑定 availability event 的 member，其 revision kind/id/content/available-at 必须与 event 逐字段相等。
 - 对没有可靠 ingestion revision 的源，materialize 必须在一致读取窗口内计算并持久化 canonical partition content hash；只记录 watermark/count 不足以复用。
@@ -1374,7 +1374,7 @@ v1 quarantine 仅是持久化逻辑状态，不移动、不改名 CAS blob，因
 - lineage：`(program_id,decision_as_of_trade_date)`、binding、audit target；lineage 表冗余 decision date 只用于分区/索引并受 FK/trigger 一致性校验。
 - stage candidate、outcome label 和 lineage 使用 PostgreSQL native RANGE 月分区，分区键为冗余 `decision_as_of_trade_date`；不在实施时临时改选 Timescale。
 - stage candidate：`(observation_version_id,stage_evidence_id,rank,symbol)`；label：`(canonical_signal_id,symbol,horizon,projection)`、`label_key_hash/revision_no`、maturity/event/source available-at。
-- source availability：`(dataset_name,partition_key_hash,first_observed_at)`；revision member：`(source_revision_set_id,dataset_name,partition_key_hash)` 唯一。
+- source availability：`(dataset_name,source_role,partition_key_hash,event_revision_no)` 与 `(partition_chain_key,event_revision_no)` 唯一；revision member：`(source_revision_set_id,member_key)` 唯一，其中 `member_key` 固定 source role、dataset、query/bound parameter、partition 与 availability requirement，允许同一物理 partition 以不同且可审计的消费角色进入同一 revision set。
 - capture：status/date/scope；build：lifecycle/checkpoint/logical key/generation；attempt：build/state/lease expiry/fencing；snapshot：content/manifest/sealed_at；invalidation：snapshot/date。
 - 分区预创建只由开发/发布 migration 完成；retention 由 maintenance CLI 处理既有分区内的数据/制品。缺目标 partition 时 fail-closed，运行时不得创建分区或执行任何隐式 DDL。
 - 所有大索引在开发/发布 migration 阶段创建；未来已有大表加索引必须 `CONCURRENTLY` 并经过 migration smoke，运行任务禁止发起 DDL。
@@ -1562,7 +1562,7 @@ manifest 必须声明：
 
 ```text
 BASELINE_AUDIT_READY
-FORMAL_OOS_PRESENT
+RESEARCH_SCOPE_CLOSED
 RETROSPECTIVE_RESEARCH_PRESENT
 SOURCE_AVAILABILITY_LEDGER_PRESENT
 UNIQUE_OBSERVATION_VERSION_SELECTION_READY
@@ -1712,7 +1712,7 @@ ADVISORY_PHASE1_PHASE0A_HASH_MISMATCH
 ADVISORY_PHASE0A_HANDOFF_READINESS_BLOCKED
 ADVISORY_PHASE0A_HANDOFF_SCOPE_MISMATCH
 ADVISORY_PHASE1_TARGET_NOT_ADMITTED
-ADVISORY_PHASE1_FORMAL_OOS_EVIDENCE_MISSING
+ADVISORY_PHASE1_RESEARCH_EVIDENCE_MISSING
 ADVISORY_PHASE1_RESEARCH_ONLY
 ADVISORY_PHASE1_IDENTITY_CONTENT_CONFLICT
 ADVISORY_PHASE1_STABLE_SIGNAL_SEMANTICS_MISMATCH
@@ -1992,13 +1992,13 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 - 完成单 Alpha、原生多 Alpha正向 golden、scope/hash conflict 反向测试和状态可达性测试。
 - 不新增 migration、审批表、角色、decision chain、approval bundle 或 operation authorization。
 
-### 22.3 Phase 0A.2：Prospective evidence readiness bootstrap
+### 22.3 Phase 0A.2：Historical research evidence readiness
 
-- 按独立 F2 设计冻结正式 policy registry、dated binding `[from,to)` 和 prospective Selection evidence producer。
-- 现有单 Alpha current manifest 通过 cold-start smoke 后与现有原生多 Alpha parent/Program 走两条独立轨道；single 仅在真实 preflight 失败时发布新 identity，不复活归档包或融合候选。
-- 实现每日多 Program runner：按权威交易日和输入水位执行全部 ENABLED Program，使用唯一正式 Program/date key、单 Program 原子/可恢复持久化、失败隔离和 batch receipt。
-- 正式 `T0` 是代码、policy、current-manifest smoke、dated successor binding、runner 和输入全部就绪后的首个未处理决策交易日；历史读取/replay 永久为 retrospective。
-- 正确双轨输入先达到 `PARTIAL/HANDOFF_EMITTED`；source ledger/embargo 未成熟不得伪装 READY。
+- 按独立 F2 设计冻结 research policy registry、历史 dated binding 只读解析和不可变 Selection evidence contract。
+- 单 Alpha current manifest 与原生多 Alpha parent/Program 走两条独立研究轨道；不复活归档包、不融合候选、不由研究路径发布 package 或创建 binding。
+- 手工多 Program runner 只接受显式已完成交易日和 `DB_HISTORICAL`，使用唯一 Program/date/research-scope key、单 Program 原子/可恢复持久化、失败隔离和 batch receipt。
+- 当前路径没有正式 `T0`、daily scheduler 或 PUBLISHED list；历史读取/replay 永久为 retrospective research。
+- 正确双轨输入先达到 `PARTIAL/HANDOFF_EMITTED`；exact source/label closure 未完成不得伪装 RESEARCH_READY。
 - Phase 1 不复制 Phase 0A.2 policy/binding/evidence schema；只消费 exact hashes 和 producer refs。
 
 ### 22.4 Phase 1A：Identity/source/capture/build DDL 与 repository（默认无激活）
@@ -2006,6 +2006,16 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 - 新增单一 dataset foundation migration、append-only repositories、native partitions、capture/build/attempt/final snapshot/invalidation/blob-ref state machines；不新增审批角色。
 - 完成 stable signal/version selector、label revision chain、lease/fencing、expected row version、CAS 和事务一致性 contract。
 - migration 只在开发/测试库和发布 migration runner 验证；运行 CLI 无 DDL 命令。不回填、不配置 store、不修改 runtime。
+
+#### 22.4.1 已完成基础切片：source availability 与 exact revision set
+
+2026-07-12 已交付下列独立、默认不激活的 Phase 1A 基础设施：
+
+- `app.advisory_source_availability_event` 与 `backend/services/advisory_phase1/source_ledger.py`：只允许 ingestion completion 后追加 `INGESTED/CORRECTED/INVALIDATED/REVALIDATED` 事件；首次观察时间由数据库时钟生成，chain identity 由自然 partition 派生。`formal_available_at`、自然 revision 唯一、前驱、单后继、alternate chain、失效后重验和不可变触发器由 repository 与 DB 同时验证。
+- `app.advisory_source_revision_set/member` 与 `source_revision.py`：每个成员固定 query/parameter/partition/revision/content/hash 与 available-at；`DECISION_CUTOFF` member 必须绑定精确 availability event，event 字段不匹配、质量非 `PASS`、失效或 decision/label cutoff 未满足时 fail-closed。event-free member 只能用于显式 `research_only` 的 `LABEL_AS_OF/POLICY_FROZEN` 历史证据，`WATERMARK_ONLY` 不可用于 decision cutoff。exact retry 必须逐字段比较完整 persisted member set，不能只比较 header 或 member count。
+- 验证包含纯函数链/时间/cutoff/研究边界反例，以及 `AISTOCK_DEV_DB_E2E=1` 下 `127.0.0.1:5433/aistock_dev` 的 schema、append/readback、exact retry、DB immutable trigger 与 rollback-no-residue L4。
+
+本切片不启动 observer，不扫描或改写 market 表，不创建 capture/build/label/snapshot，只消费手工历史研究 evidence，也不改变 Selection、模拟盘、Paper、QMT 或任何交易执行路径。因此它**不标记** F-030、F-037、F-038 或完整 Phase 1 为已完成；后续阶段必须在该不可变 ledger 上实现 observer、capture/build state machine 与 research readiness 消费。
 
 ### 22.5 Phase 1B：Stage trace、多 Alpha provenance 与 parity
 
@@ -2017,7 +2027,7 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 ### 22.6 Phase 1C：Fixture source revision/capture/label/snapshot
 
 - 只运行 fixture/local store。
-- 完成 readiness、formal/research/gap、source revision、version selector、T/E/S/X_h、terminal/cost/benchmark、build attempt、durable CAS 和 DB/Parquet 正向 golden。
+- 完成 research readiness/gap、source revision、version selector、T/E/S/X_h、terminal/cost/benchmark、build attempt、durable CAS 和 DB/Parquet 正向 golden。
 
 ### 22.7 Phase 1D：Source availability observer 与容量计划
 
@@ -2027,10 +2037,10 @@ Selection Center 只允许为 pure stage engine/optional sink 做最小接线；
 
 ### 22.8 Phase 1E：Phase 0A 双轨复验、readiness 与执行计划
 
-- 首次真实单 target audit 已于 2026-07-11 执行并 `BLOCKED`；同日只读复查确认 single current manifest 尚无 DSE、旧 manifest DSE 不可继承、双轨近期仅 `2026-06-29` 有精确共同 cutoff，且当前没有实际 daily runner。
-- Phase 0A.2 producer/runner/onboarding 后，使用版本化 target/date/evidence scope 对正式 `T0` 之后的单 Alpha和原生多 Alpha daily batch 执行批量只读复验；历史 replay 只进入 research scope。
+- 首次真实单 target audit 已于 2026-07-11 执行并 `BLOCKED`；只读复查确认旧 manifest DSE 不可继承，现有集中创建记录不能证明逐日真实运行。
+- 使用版本化 target/date/evidence scope 对显式历史日期的单 Alpha和原生多 Alpha手工 batch 执行批量只读复验；replay 与 manual historical receipt 独立分类。
 - Phase 0A.1 自动形成 handoff/scope set；随后冻结 source/capture/label/store 计划、行数/字节预算和 request hashes。
-- 任一 BLOCKED scope 只阻断自身；合法 READY/PARTIAL scope 必须可继续。PARTIAL source/embargo scope 只能执行获准建设，不能进入 formal Phase 0B。
+- 任一 BLOCKED scope 只阻断自身；合法 RESEARCH_READY/PARTIAL scope 必须可继续。PARTIAL source/label scope 只能执行研究数据建设，不能被解释为实时或正式交易能力。
 
 ### 22.9 Phase 1F：Release schema verification
 
@@ -2174,8 +2184,8 @@ G-RUN-05 artifact_publish_cleanup
 
 1. 设计确认后，Phase 0A.1/Phase 1 实现 PR 通过 F2、正向 golden、状态可达性和隔离测试。
 2. 在开发/发布流程应用 dataset foundation migration；运行进程只验证 schema version，不能执行 DDL。
-3. 消费 Phase 0A.2 正式 policy、current-manifest smoke、dated binding 和 daily runner prospective evidence，执行单/多 Alpha双轨只读复验；Phase 0A.1 自动生成 handoff/readiness/scope set。
-4. 版本化配置 trace capture、source observer、dataset store 和 Phase 1 scheduler；默认 disabled，不生成审批事件。Advisory daily runner 已由 Phase 0A.2 独立启用，不由 Phase 1 scheduler 替代。
+3. 消费 Phase 0A.2 research policy、历史 dated binding、手工 historical runner receipt 和 exact source evidence，执行单/多 Alpha双轨只读复验；Phase 0A.1 自动生成 handoff/readiness/scope set。
+4. 版本化配置 trace capture、source observer 和 dataset store；默认 disabled，不生成审批事件。当前设计不提供 Advisory daily scheduler。
 5. source revision、capture 和 label 由强类型 request、事务、行数/字节预算、幂等键和 receipt 自动控制。
 6. BUILD_CREATE 登记 exact identities；materialize 生成 attempt-scoped staging。坏 checkpoint 只有在 terminate-build CAS 全部前置条件满足后转 ABORTED，才能创建 next generation。
 7. verify/publish/seal 依次自动校验固定 file set、manifest、durability、selected versions 和 DB refs；seal 后才产生 final SEALED snapshot。
@@ -2210,8 +2220,10 @@ G-RUN-05 artifact_publish_cleanup
 | F-028 | §3、§9.1-9.3、§21.2、§22.5 | 原生父包 alpha_raw 语义、component v1、权重/variant/顺序 parity 已定义 | design_ready | none |
 | F-029 | §10、§11、§15、§21 | 时间轴、cashflow、benchmark、terminal、raw denominator 和 calculation evidence 已定义 | design_ready | none |
 | F-030 | §12-16、§20-21、§25 | source revision、attempt fencing、程序化 generation termination、durable publish、base/invalidation/blob-ref/GC cancel 状态机已定义 | design_ready | none |
-| F-039 | §6.2、§22.3、§22.8、§26 | Phase 1 只消费 daily runner 正式唯一 RUN，Program 独立、幂等和失败隔离边界已定义 | design_ready | none |
-| F-040 | §6.2、§22.3、§22.8 | 正式 T0 与历史 DSE/PREVIEW/REPLAY/集中回补的 research-only 隔离已定义 | design_ready | none |
+| F-037 | §6.2、§12、§17、§22.4、§22.7 | Phase 0A.2 复用 append-only exact source ledger；历史缺口不补造 event，缺少精确 source 时保持 retrospective/unavailable 已定义 | design_ready | none |
+| F-038 | §6.1-6.4、§17、§18、§21.7、§22.2、§22.8 | 正确双轨历史输入自动形成 PARTIAL/HANDOFF，exact source/label closure 后达到 RESEARCH_READY，且不影响 Selection/模拟盘/Paper | design_ready | none |
+| F-039 | §6.2、§22.3、§22.8、§26 | Phase 1 只消费手工历史 runner 的唯一 Program/date/research-scope receipt，Program 独立、幂等和失败隔离 | design_ready | none |
+| F-040 | §6.2、§22.3、§22.8 | 显式已完成历史日期、DB_HISTORICAL、research-only 与 PREVIEW/REPLAY/PUBLISHED/实时/交易语义隔离 | design_ready | none |
 
 ## 28. DESIGN-COMPLIANCE-001 交付前检查
 
@@ -2219,8 +2231,8 @@ G-RUN-05 artifact_publish_cleanup
 - [x] 未把当前实现子集、POC、mock 或 fixture 声明为完整能力。
 - [x] 未引入静默 fallback、零成本、零 benchmark、默认价格或未来数据。
 - [x] 单 Alpha、原生多 Alpha、多 Program、空候选和 historical binding 均有契约。
-- [x] Phase 0A.1 deterministic handoff、逐 scope READY/PARTIAL/BLOCKED、formal/research/gap 和无审批边界明确。
-- [x] Phase 0A.2 current-manifest smoke、policy、dated binding、daily runner、prospective evidence、正式 T0/replay 隔离、双轨 PARTIAL/HANDOFF 和 source/embargo 到 READY 的桥接边界明确。
+- [x] Phase 0A.1 deterministic handoff、逐 scope RESEARCH_READY/PARTIAL/BLOCKED、research/gap 和无审批边界明确。
+- [x] Phase 0A.2 research preflight、policy、历史 dated binding、手工 historical runner、replay 隔离、双轨 PARTIAL/HANDOFF 和 exact source 到 RESEARCH_READY 的桥接边界明确。
 - [x] stable signal/version、lineage、label revision、selected version 和防重复样本规则明确。
 - [x] T/E/S/X_h、可执行 path、cost/benchmark、terminal/censor、universe raw outcome 和复算证据明确。
 - [x] source availability/revision、capture/build/attempt/final snapshot、hash、lease/fencing、base/invalidation/GC 明确。

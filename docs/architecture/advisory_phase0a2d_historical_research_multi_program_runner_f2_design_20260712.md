@@ -3,14 +3,14 @@
 > 文档状态：`design_ready`  
 > Feature tier：`F2`  
 > 父设计：[Phase 0A.2 evidence readiness bootstrap](advisory_phase0a2_evidence_readiness_bootstrap_f2_design_20260711.md)  
-> 前置实现：[Phase 0A.2C prospective evidence producer](advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md)  
+> 前置实现：[Phase 0A.2C immutable evidence producer](advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md)  
 > 范围：荐股历史研究；不修改模拟盘、Paper、QMT、MiniQMT 或 broker 功能。
 
 ## Background
 
-Phase 0A.2D follows the prospective evidence producer and provides the first
+Phase 0A.2D follows the immutable evidence producer and provides the
 multi-Program orchestration boundary for Advisory research. The parent design
-previously described a daily runner; this detailed design deliberately narrows
+defines this authoritative historical research runner; this detailed design fixes
 that capability to manually requested, historical-data research only.
 
 ## Scope

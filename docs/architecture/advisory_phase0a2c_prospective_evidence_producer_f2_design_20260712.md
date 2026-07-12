@@ -16,7 +16,7 @@
 1. StrategyPackage 仍是 Alpha 与原生多 Alpha 组合语义的唯一权威；Advisory 不改 manifest、Alpha 权重或模型资产。
 2. Selection Center、模拟盘和 Paper 继续共享 `StrategyPackageSelectionService` 的候选结果；证据采集不得改变候选计算。
 3. Phase 0A audit 继续只读、fail-closed，不在审计时生成 HMM、重跑 Selection 或补写历史证据。
-4. Phase 1 `advisory_source_availability_event` 和 source revision ledger 是历史 available-at 的唯一权威；本文只生产其前瞻输入，不新建第二套 source ledger。
+4. Phase 1 `advisory_source_availability_event` 和 source revision ledger 是历史 available-at 的唯一权威；本文只生产可供手工历史研究只读消费的不可变输入，不新建第二套 source ledger。
 5. 当前 dated binding 和 policy registry 保持不变。
 6. 系统为单用户研究与荐股工具，不设计审批、角色、授权、签名或人工修改数据库流程。
 
@@ -42,7 +42,7 @@ SelectionCenterService.run_packages
   -> SelectionRun complete
 ```
 
-当前实现已经能够生成正式候选、HMM 调整结果、risk/tradability 排除结果和 DSE v1，但不能满足 Phase 0A prospective authority：
+当前实现已经能够生成候选、HMM 调整结果、risk/tradability 排除结果和 DSE v1，但不能满足 Phase 0A v2 不可变 evidence authority：
 
 - `SelectionScoreArtifact.artifact_sha256` 只覆盖 `scores_json`，不覆盖决策时钟、source、asset closure 或权威 header。
 - PostgreSQL artifact repository 使用 `ON CONFLICT DO UPDATE`，相同业务键可覆盖 `artifact_id`、scores、metadata 和时间，无法作为不可变正式证据。
@@ -73,7 +73,7 @@ SelectionCenterService.run_packages
 
 Phase 0A.2C 完成后：
 
-1. 新 authoritative inference 统一生成可共享的 `SelectionScoreArtifact v2`；显式 prospective context 驱动 `DailySelectionEvidence v2`。
+1. 新 authoritative inference 统一生成可共享的 `SelectionScoreArtifact v2`；显式 immutable capture context 驱动 `DailySelectionEvidence v2`。
 2. 一次候选计算在内存中形成 Alpha raw、HMM、risk 和 selection effective 四层 trace，不二次运行策略。
 3. DSE v2 冻结 canonical decision clock、effective config chain、runtime/HMM、PIT universe、risk/tradability、package/asset、source 和 run/artifact lineage。
 4. 新 v2 artifact 与 DSE 都是内容寻址或内容校验的不可变记录；相同业务键不同内容必须 fail loud。
@@ -85,7 +85,7 @@ Phase 0A.2C 完成后：
 
 - `SelectionScoreArtifact v2` canonical header、payload hash、repository 不可变语义和 additive migration/bootstrap。
 - `DailySelectionEvidence v2` JSON contract 和 Pydantic validation。
-- prospective context、stage/source/HMM/risk/universe typed receipts。
+- immutable research context、stage/source/HMM/risk/universe typed receipts。
 - Selection Center 预分配 run id 向下传递。
 - 单 Alpha 与原生多 Alpha 父包 lineage。
 - 自然 `VALID_NO_CANDIDATE`。
@@ -107,13 +107,13 @@ and every non-research origin before model inference. Paper/LocalSim may consume
 the resulting records only when independently started as a historical simulator;
 the advisory path never invokes them.
 
-- 不实现 Phase 0A.2D daily runner、Program batch receipt、crash resume 或正式 `T0` 激活。
+- 不实现 scheduler、Program batch receipt 或任何正式 `T0`；Phase 0A.2D 仅实现手工历史研究 runner。
 - 不执行生产 package onboarding 或 dated successor binding DML。
 - 不创建 Phase 1 observation/label/source availability 表。
 - 不训练荐股模型，不预测收益、持股周期或买卖价格。
 - 不修改 StrategyPackage manifest、模型、因子、Alpha leg 或多 Alpha 权重。
 - 不改变 Advisory 淘汰、替换、止盈止损等业务算法。
-- 不把 historical replay、PREVIEW 或后来重建的 current semantics 提升为 formal OOS。
+- 不把 historical replay、PREVIEW 或后来重建的 current semantics 提升为非研究 evidence scope。
 - 不要求历史 v1 artifact/DSE 回填 v2 字段；历史未知保持未知。
 
 ## 3. 影响面、所有权与写入范围
@@ -225,7 +225,7 @@ evidence_capture_receipt:
 
 每个 package/run 只返回一个 operational evidence ref：capture COMPLETE 时为 v2，NOT_REQUESTED 或 FAILED 时为 v1。capture receipt 是运行摘要，不是第二份 DSE，也不建立平行 evidence authority。
 
-`capture_status=COMPLETE` 只表示 producer 已准确记录该时点实际存在的全部 mandatory receipt，并不等于 Phase 1 source maturity 或 formal OOS。明确记录为 `PROSPECTIVE_FIRST_OBSERVED`、`PHASE1_EVENT_PENDING` 或 `NOT_APPLICABLE` 的事实可以结构完整；缺字段、猜测值或未知状态不能 COMPLETE。
+`capture_status=COMPLETE` 只表示 producer 已准确记录该时点实际存在的全部 mandatory receipt，并不等于 Phase 1 source maturity 或 RESEARCH_READY。`PROSPECTIVE_FIRST_OBSERVED` 是保留的 schema token，只表示首次观察事实，不表示实时荐股；缺字段、猜测值或未知状态不能 COMPLETE。
 
 parity oracle 为 capture 前后的 canonical ordered candidate hash 完全相同，不只是数量相等。
 
@@ -332,7 +332,7 @@ PostgreSQL 使用同一事务内的 `INSERT ... ON CONFLICT DO NOTHING` 后 read
 
 v2 artifact key 使用 `selection_artifact_runtime_hash_v2`：在现有候选语义 hash 输入上固定加入 `artifact_contract_version=selection_score_artifact_v2`。它不包含 capture 开关或 Program context，但与历史 v1 hash 分离，因此旧 v1 行不会阻塞同日 v2 生成。C2 之后 authoritative auto-generation 和 lookup 均优先 v2；legacy v1 只供旧记录读取或显式 diagnostic replay，prospective DSE 不得引用 v1。
 
-`force_regenerate=true` 不得覆盖 prospective v2 artifact；只能用于明确的 PREVIEW/REPLAY diagnostic key，并且不具备 formal eligibility。
+`force_regenerate=true` 不得覆盖 immutable v2 artifact；只能用于明确的 PREVIEW/REPLAY diagnostic key，并且不具备 historical-research eligibility。
 
 v1 读取保持兼容，但 Phase 0A formal resolver 必须把缺 `artifact_contract_version/artifact_payload_sha256` 的行分类为 legacy/retrospective，而不是猜测 v2 header。
 
@@ -383,7 +383,7 @@ captured_at
 reason_codes = []
 ```
 
-只有 `capture_mode=PROSPECTIVE`、`capture_status=COMPLETE`、`execution_origin=ADVISORY_RUN` 且后续历史研究 runner 满足 T0/date/business-key 条件时，才可能成为 formal historical-research evidence；它永远不是实时荐股、投资建议或交易指令。Phase 0A.2C 自身不宣称某条记录已经 formal OOS。
+`capture_mode=PROSPECTIVE` 是现有 schema 的兼容 token，在当前边界下只表示完整不可变 capture。只有 `capture_status=COMPLETE`、`execution_origin=ADVISORY_RUN`、`research_scope=HISTORICAL_RESEARCH_ONLY` 且手工历史 runner 的 date/business-key 校验通过时，记录才可作为历史研究 evidence；它永远不是实时荐股、投资建议、formal OOS 或交易指令。
 
 DSE v2 的 `artifact_hash/evidence_id` 由完整 payload 计算，因此 payload 内禁止包含自身 evidence id/hash。DSE identity 只存在于表列、Pydantic 外层对象和持久化后的 response；任何内部自引用都会造成不可解的循环 hash。
 
@@ -436,7 +436,7 @@ final_effective_config_hash
 chain_hash
 ```
 
-`selection_normalized_config` 必须与 DSE 顶层 `runtime_profile` canonical hash 一致。generated/default/preview profile 可产生 operational record，但 `prospective_eligible=false`。
+`selection_normalized_config` 必须与 DSE 顶层 `runtime_profile` canonical hash 一致。generated/default/preview profile 可产生 operational record，但 `prospective_eligible=false`；该 legacy 字段在当前模块中仅表示“可被历史研究 resolver 进一步校验”，不表示实时或 formal eligibility。
 
 ### 8.5 HMM receipt
 
@@ -547,7 +547,7 @@ package_id/manifest_sha256
 runtime_profile_version_id/hash
 ```
 
-`selection_run_id` 可以进入 DSE，因为 Selection Center 在候选计算前已创建 RUNNING run；它不能进入可跨 run 复用的 raw SelectionScoreArtifact header。若 DSE 已写而 SelectionRun 最终失败，该 DSE 不具备 succeeded-run closure，不能被 formal audit 接受；重试可以复用完全相同的 raw artifact，并以新 run lineage 生成新 DSE。
+`selection_run_id` 可以进入 DSE，因为 Selection Center 在候选计算前已创建 RUNNING run；它不能进入可跨 run 复用的 raw SelectionScoreArtifact header。若 DSE 已写而 SelectionRun 最终失败，该 DSE 不具备 succeeded-run closure，不能被历史研究 resolver 接受；重试可以复用完全相同的 raw artifact，并以新 run lineage 生成新 DSE。
 
 四层 stage：
 
@@ -568,7 +568,7 @@ selection_effective
 
 - 把 `run.run_id` 和 execution origin 作为独立 context 传入。
 - `complete_run` 前核对 DSE lineage 的 run id、package ids、manifest 和 candidate hash。
-- capture receipt FAILED 时仍可保存既有 Selection 业务状态，但不得设置 prospective evidence complete；未来 Advisory RUN 由上层阻止 publish。
+- capture receipt FAILED 时仍可保存既有 Selection 业务状态，但不得设置 v2 evidence complete；手工历史研究 resolver 必须拒绝该 DSE。
 
 ### 9.2 Artifact provider
 
@@ -627,13 +627,13 @@ candidate_outcome = VALID_NO_CANDIDATE
 
 ### 10.2 明确禁止
 
-- `runtime_config.valid_no_candidate` 或 `no_candidate_reason` 不能驱动 prospective 正式状态。
+- `runtime_config.valid_no_candidate` 或 `no_candidate_reason` 不能驱动历史研究 COMPLETE 状态。
 - 数据缺失、provider 异常、HMM 缺 artifact、calendar 缺失或 source receipt 不完整不能转成合法空候选。
 - 不允许注入空 scores、删除候选、提高阈值或手工修改包制造 L4 样本。
 - 不沿用上一交易日名单作为当天新候选。
 - 不创建占位 symbol、空白 item 或虚假 exclusion。
 
-legacy diagnostic flag 若暂时保留，只能用于 PREVIEW/REPLAY，并输出 `prospective_eligible=false` 与明确 reason code；不能写 v2 COMPLETE。
+legacy diagnostic flag 若暂时保留，只能用于 PREVIEW/REPLAY，并输出 `prospective_eligible=false` 与明确 reason code；不能写可供历史研究消费的 v2 COMPLETE。
 
 ### 10.3 持久化
 
@@ -750,7 +750,7 @@ ADVISORY_PHASE0A_VALID_NO_CANDIDATE_EVIDENCE_INCOMPLETE
 ADVISORY_PHASE0A_VALID_NO_CANDIDATE_DECLARATION_FORBIDDEN
 ```
 
-reason code 必须区分 identity conflict、暂时 source 不完整、HMM 不完整、自然空候选和数据/运行失败。不得把可继续前瞻积累的 source pending 报成包损坏。
+reason code 必须区分 identity conflict、暂时 source 不完整、HMM 不完整、自然空候选和数据/运行失败。不得把可继续补齐的 source pending 报成包损坏。
 
 ## 14. 自动门禁与正向可达性
 
@@ -782,7 +782,7 @@ reason code 必须区分 identity conflict、暂时 source 不完整、HMM 不�
 - 单 Alpha provider 输出真实 universe/source/asset receipt，并对所有新 authoritative inference 使用固定 v2 artifact key。
 - 多 Alpha provider输出 leg/weight/component/parity receipt。
 - repository 改为 v2 insert-or-compare。
-- 退役 prospective path 的覆盖写和 `universe_count=len(scores)` 近似。
+- 退役 v2 evidence path 的覆盖写和 `universe_count=len(scores)` 近似。
 
 ### 15.3 C3：stage trace
 
@@ -794,7 +794,7 @@ reason code 必须区分 identity conflict、暂时 source 不完整、HMM 不�
 
 - Selection Center 传入预分配 run id。
 - assembler 构造/验证 DSE v2 并持久化。
-- Phase 0A resolver严格识别 v1/v2、COMPLETE/FAILED 和 prospective eligibility。
+- Phase 0A historical resolver严格识别 v1/v2、COMPLETE/FAILED、research scope 和 legacy `prospective_eligible` token。
 - API 增加兼容 capture summary。
 
 ### 15.5 C5：VALID_NO_CANDIDATE
@@ -907,15 +907,15 @@ candidate/excluded counts
 4. 生产发布 additive migration；依赖和服务重启分别报告。
 5. 默认 `capture_mode=DISABLED`，确认 Selection/Paper 基线。
 6. Phase 0A.2D 合入后，只有 Advisory formal runner 为选定 Program 传 `PROSPECTIVE` context。
-7. 从正式 T0 开始积累，不追溯补写历史 v2。
+7. v2 evidence 只按真实 producer 首次观察时间积累，不追溯补写历史 available-at。
 
 ### 18.2 Rollback
 
-- 代码回滚：关闭 prospective context，shared selection继续走现有 operational path。
+- 代码回滚：关闭 v2 capture context，shared selection继续走现有 operational path。
 - migration 回滚：新增 nullable 列/index 可以保留，不阻断旧代码；不急于 DROP。
 - producer 回滚不删除已生成 v2 artifact/DSE；不可变证据保留供审计。
 - capture failure 不触发策略包、HMM snapshot、Program binding 或 Paper 状态回滚。
-- 若发现候选 parity 变化，立即停用 prospective context 并阻止 runner publish，保留证据用于 RCA。
+- 若发现候选 parity 变化，立即停用 v2 capture context并阻止历史 runner 消费，保留证据用于 RCA。
 
 ## 19. 风险与失败模式复查
 
@@ -927,7 +927,7 @@ candidate/excluded counts
 | 再跑一次策略取 evidence | 候选与证据不一致 | 单次计算 typed trace |
 | `universe_count=len(scores)` | 无法证明筛选 lift/空候选 | provider 实际 input receipt |
 | HMM component_scores 反推 | 丢 snapshot/source/input identity | HMM typed receipt |
-| config flag 声明空候选 | 可伪造成功 | prospective 路径禁止 declaration |
+| config flag 声明空候选 | 可伪造成功 | v2 evidence 路径禁止 declaration |
 | 全量过滤仍抛错 | 自然空候选不可表达 | complete filter receipt 驱动 filtered-empty |
 | capture failure 改候选 | 影响 Selection/Paper | parity hash、result 分离、formal publish gate |
 | v1 自动升级 | 伪造历史 formal | v1 永久 legacy classification |
@@ -948,7 +948,7 @@ production_dml_gate = noop
 production_runtime_gate = noop
 ```
 
-未来代码 PR 预期有 additive DDL，必须单独报告 `production_ddl_gate=pending/applied_and_verified`。Phase 0A.2C 不创建生产业务 evidence；正式 evidence 由后续 runner 从 T0 前瞻产生。
+未来代码 PR 预期有 additive DDL，必须单独报告 `production_ddl_gate=pending/applied_and_verified`。Phase 0A.2C 不创建生产研究 batch；后续手工历史 runner 只读消费符合历史日期和 research scope 的既有 v2 evidence。
 
 ## 21. Design Acceptance Matrix / 设计验收矩阵
 
@@ -965,7 +965,7 @@ production_runtime_gate = noop
 - [x] artifact/DSE 不可变、hash、幂等和并发冲突语义闭合。
 - [x] decision clock、runtime/config、HMM、PIT universe、risk、asset/source、stage evidence 字段级闭合。
 - [x] 合法空候选可由正确数据自动通过，不依赖人工声明或伪造样本。
-- [x] v1/v2 与 replay/prospective 边界明确，不回填猜测。
+- [x] v1/v2 与 replay/manual historical research 边界明确，不回填猜测。
 - [x] API/DB/UI/log/business oracle、L0-L5、覆盖率、DEV-DB 和 L4 方案完整。
 - [x] 发布、回滚、生产门禁和后继 runner 边界明确。
 - [x] 未引入审批、角色、授权或运行时 DDL。
@@ -980,4 +980,4 @@ production_runtime_gate = noop
 - 复查确认 mandatory receipts 对正确 fixture 均有 producer，COMPLETE 正向路径可达。
 - 文档提交并按 AIstock 文档流程进入 Main。
 
-代码实现完成的条件不同于文档交付：C1-C5、F-035/F-036、DEV-DB E2E、shared consumer parity 和 CI 全部完成后，才能在父设计实现验收记录中标记 completed。之后才能开始 Phase 0A.2D daily multi-Program runner；不得跳过 runner 直接把手工 Selection 或 replay 当作正式 T0。
+代码实现完成的条件不同于文档交付：C1-C5、F-035/F-036、DEV-DB E2E、shared consumer parity 和 CI 全部完成后，才能在父设计实现验收记录中标记 completed。之后 Phase 0A.2D 只能实现手工 historical multi-Program runner；不得把 Selection、replay 或 review 回补当作实时或非研究 evidence。
