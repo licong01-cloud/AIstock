@@ -28,6 +28,7 @@ from backend.services.strategy_package.selection_artifact import (
     InMemorySelectionScoreArtifactRepository,
     SelectionScoreArtifact,
     StrategyPackageSelectionArtifactService,
+    _jsonb_dumps,
     build_selection_artifact_v2_provenance,
     selection_artifact_runtime_hash,
     selection_artifact_runtime_hash_v2,
@@ -82,6 +83,14 @@ def test_v2_artifact_retry_ignores_diagnostic_metadata() -> None:
 
     assert stored.artifact_id == first.artifact_id
     assert stored.artifact_payload_sha256 == first.artifact_payload_sha256
+
+
+def test_v2_jsonb_serializer_preserves_receipt_observation_time() -> None:
+    observed_at = datetime(2026, 7, 10, 14, 30, tzinfo=UTC)
+
+    serialized = _jsonb_dumps({"source_read_receipts": [{"first_observed_at": observed_at}]})
+
+    assert "2026-07-10T14:30:00+00:00" in serialized
 
 
 def test_v2_artifact_rejects_same_business_key_with_different_payload() -> None:

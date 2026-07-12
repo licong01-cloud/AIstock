@@ -9,8 +9,8 @@
 > 父蓝图：`docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md`
 > 前置设计：`docs/architecture/advisory_phase0a_candidate_authority_oos_data_availability_f1_design_20260710.md`
 > 后继设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
-> 当前状态：`design_ready`；F-033 dated binding lifecycle 与 F-034 policy registry 已完成；F-033 已通过本机 DEV-DB rollback-only PostgreSQL readback gate；F-031/F-032/F-035 至 F-040 仍仅为设计；未创建持久化策略包或 Program/binding 业务记录、生产 DML 或 Phase 1 source ledger
-> 生产影响：本次新增 F-033 源码和 comment-only migration；Trading Core v2、荐股生命周期及 comment migration 仅应用到 `127.0.0.1:5433/aistock_dev`，生产 migration 尚未应用；未执行依赖安装、服务重启、调度启用、生产 API/UI 发布或运行时操作
+> 当前状态：`design_ready`；F-033 dated binding lifecycle、F-034 policy registry、F-035 prospective evidence producer 与 F-036 natural no-candidate contract 已完成。F-033/F-035/F-036 均已通过本机 DEV-DB rollback-only PostgreSQL readback gate；F-031/F-032/F-037 至 F-040 仍仅为设计。未创建持久化策略包或 Program/binding 业务记录、生产 DML 或 Phase 1 source ledger
+> 生产影响：F-033 的 comment-only migration 与 F-035 的 additive v2 artifact migration 已应用到 `127.0.0.1:5433/aistock_dev` 并通过 rollback-only readback；生产 migration 尚未应用。未执行依赖安装、服务重启、调度启用、生产 API/UI 发布或运行时操作
 
 ## 0. 文档定位与权威边界
 
@@ -661,7 +661,7 @@ PACKAGE_READY
 
 ### 15.3 Phase 0A.2C：Prospective evidence producer
 
-字段级 schema、producer 插入点、artifact/DSE 不可变写入、自然 `VALID_NO_CANDIDATE`、兼容与 L0-L5 验收以 `docs/architecture/advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md` 为准。该详细设计已完成并复查，当前仍是 `design_ready`，不表示 F-035/F-036 代码或生产 evidence 已完成。
+字段级 schema、producer 插入点、artifact/DSE 不可变写入、自然 `VALID_NO_CANDIDATE`、兼容与 L0-L5 验收以 `docs/architecture/advisory_phase0a2c_prospective_evidence_producer_f2_design_20260712.md` 为准。F-035/F-036 的代码、shared-consumer parity、CI 与 DEV-DB rollback-only readback 已完成；详细设计的 `design_ready` 矩阵仍只表示设计闭合，且没有由此生成生产业务 evidence。
 
 - 扩展 SelectionScoreArtifact/DailySelectionEvidence payload，保存 §9 全部 mandatory evidence。
 - 复用当前 candidate 计算结果，旁路生成 canonical hashes；不二次运行策略。
@@ -841,6 +841,8 @@ production_runtime_gate = noop
 |---|---|---|---|---|
 | F-033 | `backend/services/advisory_program.py` dated interval、事务内 RUN/date 复核、payload 同步、runtime 继承、expected version、原子 create/replace、legacy repair；`backend/routers/advisory.py` binding defaults/repair 和 create/update/clone/apply 返回契约；`frontend/src/lib/api/advisory.ts`、`frontend/src/app/paper-v2/advisory/page.tsx` 后端默认日期/版本令牌调用；`advisory_binding_interval_comments_20260712.sql` comment 语义统一 | `test_advisory_binding_lifecycle.py` payload/runtime/legacy/并发锁序；`test_advisory_api.py` API contract；`paper-v2-advisory-ui.spec.ts` 9 passed；`test_advisory_binding_lifecycle_devdb.py` 在 `127.0.0.1:5433/aistock_dev` 以 `AISTOCK_DEV_DB_E2E=1` 执行，1 passed，事务回滚；focused backend suite 43 passed，完整 Advisory backend suite 59 passed；TypeScript/Ruff/compile/diff check passed | completed | none |
 | F-034 | `backend/services/advisory_phase0a/policy.py` registry loader/hash validator；`models.py` typed request/registry contract；`audit_service.py` frozen id/hash/effective-range enforcement；`scripts/advisory_phase0a_audit.py validate-policy-registry` | `test_policy_registry.py` valid/tampered/missing/effective-range/prohibited-field/scratch-root cases；`test_audit_service.py` scratch/hash mismatch cases；focused suite 33 passed；Ruff passed；direct CLI registry validation passed | completed | none |
+| F-035 | `backend/services/selection_center/prospective_evidence.py`、`prospective_evidence_assembler.py` typed contract/assembler；`backend/services/strategy_package/selection_artifact.py` immutable v2 artifact、explicit JSONB temporal receipt serializer；`backend/services/simulation_runtime/repository.py` v2 DSE insert-or-compare；`add_selection_score_artifact_v2_evidence_20260712.sql` additive schema | prospective contract/lineage/parity tests、CI backend suite 892 passed/1 skipped/1 deselected；`test_prospective_selection_evidence_dev_db.py` 在 `127.0.0.1:5433/aistock_dev` 通过 migration schema、artifact/DSE repository readback/hash、idempotency/conflict-original-row 和 rollback-no-residue 验证，1 passed；focused suite 19 passed；Ruff/compile/diff check passed。production additive DDL remains a separate activation gate and no production business evidence was created | completed | none |
+| F-036 | `backend/services/selection_center/prospective_evidence.py` natural raw-empty/filtered-empty receipt state machine；`prospective_evidence_assembler.py` complete DSE contract；`backend/services/strategy_package/selection_artifact.py` immutable raw artifact persistence | `test_prospective_selection_evidence.py` raw-empty、filtered-empty、declaration forbidden、缺失 receipt fail-closed 和无虚假 item 覆盖；同一 DEV-DB rollback-only E2E 覆盖 v2 evidence 持久化边界。真实自然空候选样本保持 `NOT_OBSERVED`，不伪造，后继 F-039/F-040 只负责其历史研究运行观察 | completed | none |
 
 ## 21. Exit Criteria / 设计退出条件
 
