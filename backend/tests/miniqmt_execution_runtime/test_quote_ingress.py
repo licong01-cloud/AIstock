@@ -2,18 +2,37 @@ from __future__ import annotations
 
 import ast
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time as local_time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 
 import pytest
 
 import backend.infra.realtime_quote_subscriber as subscriber_module
-from backend.execution_algos.adaptive_is.contracts import QuoteSourceMethod
+from backend.execution_algos.adaptive_is.contracts import (
+    CalendarSnapshot,
+    CalendarSnapshotSet,
+    DepthQuantityUnit,
+    MarketCode,
+    PriceBasis,
+    QuoteSourceMethod,
+    SessionSegment,
+    TradabilitySnapshot,
+    TradabilityState,
+)
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError, QuoteContractReasonCode, QuoteContractStage
 from backend.infra.realtime_quote_subscriber import PhaseOneQuoteDelivery, RealtimeQuoteSubscriber
-from backend.miniqmt_quote_contract_config import QuoteIngressRuntimeConfig
+from backend.miniqmt_quote_contract_config import QuoteContractPolicy, QuoteIngressRuntimeConfig
+from backend.services.miniqmt_execution_runtime.quote_eligibility import (
+    BoundedNormalizedQuoteStore,
+    QuoteEvaluationContext,
+    QuoteEvaluationContextStore,
+    QuoteSymbolContext,
+    build_execution_clock_event,
+)
 from backend.services.miniqmt_execution_runtime.quote_ingress import (
+    PhaseOneQuoteProjectionSink,
     PhaseOneRawQuoteSnapshotStore,
     QuoteIngressSupervisor,
     QuoteIngressWorker,
@@ -105,6 +124,80 @@ def _wait_until(predicate, *, timeout_seconds: float = 1.0) -> None:
             return
         time.sleep(0.01)
     raise AssertionError("timed out waiting for quote ingress worker")
+
+
+def _projection_context() -> QuoteEvaluationContext:
+    policy = QuoteContractPolicy.from_execution_policy(
+        {
+            "quote_contract": {
+                "schema_version": "miniqmt_quote_contract_policy_v2",
+                "control_revision": "B0_QUOTE_V2",
+                "required_capabilities": ["CALENDAR", "DEPTH_UNIT_SHARES", "EXCHANGE_TIMESTAMP", "FIVE_LEVEL_DEPTH", "RAW_PRICE_BASIS", "TRADABILITY"],
+                "max_receive_age_ms": 1000,
+                "max_source_lag_ms": 1000,
+                "max_exchange_age_ms": 1000,
+                "max_negative_skew_ms": 10,
+                "max_clock_age_divergence_ms": 10,
+                "max_dependency_group_skew_ms": 100,
+                "auction_mode": "OBSERVE_ONLY",
+            }
+        }
+    )
+    trade_date = date(2026, 7, 12)
+    segments = (SessionSegment(local_time(9, 30), local_time(11, 30)),)
+    calendar_set = CalendarSnapshotSet(
+        snapshot_set_id="ingress-calendar-set",
+        snapshot_by_market={
+            market: CalendarSnapshot(
+                calendar_id=f"ingress-{market.value}", market=market, trade_date=trade_date, timezone="Asia/Shanghai",
+                session_segments=segments, effective_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), source_version="checksum-v1:schedule-v1",
+            )
+            for market in MarketCode
+        },
+    )
+    clock = build_execution_clock_event(
+        calendar_snapshot_set=calendar_set, clock_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=2_000_000_000, clock_domain_id="test-clock", source="test",
+    )
+    tradability = TradabilitySnapshot(
+        schema_version="adaptive_is_tradability_snapshot_v1", tradability_id="ingress-tradability", symbol="000001.SZ", market=MarketCode.SZ,
+        board="MAIN", trade_date=trade_date, price_basis=PriceBasis.RAW_CNY_PER_SHARE, pre_close=Decimal("10"),
+        limit_up=Decimal("11"), limit_down=Decimal("9"), price_tick=Decimal("0.01"), lot_size=100,
+        is_suspended=False, suspension_source="market.suspend_d", security_status="LISTED", openint_status=None,
+        observed_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), source="authority", source_version="authority-v1", state=TradabilityState.TRADABLE,
+    )
+    return QuoteEvaluationContext(
+        calendar_snapshot_set=calendar_set, clock=clock, continuity_generation=1, continuity_valid=True, policy=policy,
+        symbols={"000001.SZ": QuoteSymbolContext(symbol="000001.SZ", board="MAIN", depth_quantity_unit=DepthQuantityUnit.SHARES, unit_evidence_version="unit-v1", tradability=tradability, product_type="EQUITY", product_type_proven_equity=True, authority_source_version="authority-v1")},
+    )
+
+
+def test_projection_sink_is_single_writer_and_bounded_with_raw_normalized_admission_parity() -> None:
+    context_store = QuoteEvaluationContextStore()
+    context = _projection_context()
+    context_store.publish(context)
+    raw = PhaseOneRawQuoteSnapshotStore(max_symbols=1)
+    normalized = BoundedNormalizedQuoteStore(max_symbols=1)
+    sink = PhaseOneQuoteProjectionSink(raw_store=raw, normalized_store=normalized, context_store=context_store)
+    sink.replace_admitted(("000001.SZ",))
+    sink.on_generation_published(2)
+    frame = capture_raw_quote_frame(
+        {
+            "time": "09300000", "lastPrice": "10.00", "preClose": "10.00", "openint": "OPEN",
+            "bidPrice": ["9.99", "9.98", None, None, None], "bidVol": [100, 100, 0, 0, 0],
+            "askPrice": ["10.01", "10.02", None, None, None], "askVol": [100, 100, 0, 0, 0],
+        },
+        callback_symbol="000001.SZ", source_session_id="projection-session", ingress_generation=2, ingress_sequence=1,
+        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), received_monotonic_ns=1_999_500_000,
+        clock_domain_id="test-clock", source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+    )
+    sink.project(frame)
+
+    assert raw.get("000001.SZ") == frame
+    assert normalized.get("000001.SZ", context_id=context.context_id) is not None
+    assert raw.snapshot().keys() == normalized.snapshot().keys()
+    sink.replace_admitted(())
+    assert raw.snapshot() == {} and normalized.snapshot() == {}
 
 
 def test_reserved_symbol_mailbox_coalesces_per_symbol_without_dropping_admitted_symbols() -> None:

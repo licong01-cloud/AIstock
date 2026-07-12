@@ -34,10 +34,24 @@ def _explicit_quote_policy() -> dict[str, object]:
             "max_source_lag_ms": 1500,
             "max_exchange_age_ms": 2000,
             "max_negative_skew_ms": 100,
+            "max_clock_age_divergence_ms": 25,
             "max_dependency_group_skew_ms": 250,
             "auction_mode": "OBSERVE_ONLY",
         }
     }
+
+
+def test_clock_age_divergence_is_required_and_hashed_without_default() -> None:
+    policy = QuoteContractPolicy.from_execution_policy(_explicit_quote_policy())
+    assert policy.canonical_payload()["max_clock_age_divergence_ms"] == 25
+    changed = _explicit_quote_policy()
+    changed["quote_contract"]["max_clock_age_divergence_ms"] = 26  # type: ignore[index]
+    assert QuoteContractPolicy.from_execution_policy(changed).policy_sha256 != policy.policy_sha256
+    missing = _explicit_quote_policy()
+    missing["quote_contract"].pop("max_clock_age_divergence_ms")  # type: ignore[index]
+    with pytest.raises(QuoteContractError) as exc_info:
+        QuoteContractPolicy.from_execution_policy(missing)
+    assert exc_info.value.reason_code == QuoteContractReasonCode.POLICY_SCHEMA_INVALID
 
 
 def test_config_manager_registers_and_roundtrips_every_quote_ingress_key_without_dropping_unknown_config(tmp_path) -> None:
@@ -269,6 +283,7 @@ def test_immutable_quote_policy_constructor_cannot_bypass_schema(override: dict[
         "max_source_lag_ms": valid.max_source_lag_ms,
         "max_exchange_age_ms": valid.max_exchange_age_ms,
         "max_negative_skew_ms": valid.max_negative_skew_ms,
+        "max_clock_age_divergence_ms": valid.max_clock_age_divergence_ms,
         "max_dependency_group_skew_ms": valid.max_dependency_group_skew_ms,
         "auction_mode": valid.auction_mode,
     }
@@ -320,6 +335,7 @@ def test_config_manager_rejects_new_unknown_keys_but_preserves_existing_unknown_
         lambda policy: policy["quote_contract"].update({"control_revision": "LEGACY_B0"}),
         lambda policy: policy["quote_contract"].update({"auction_mode": "ACTION"}),
         lambda policy: policy["quote_contract"].update({"max_negative_skew_ms": -1}),
+        lambda policy: policy["quote_contract"].pop("max_clock_age_divergence_ms"),
     ],
 )
 def test_immutable_quote_policy_rejects_unknown_or_implicit_semantics(mutate) -> None:

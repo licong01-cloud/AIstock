@@ -24,6 +24,7 @@ from typing import Any, Mapping, Protocol
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
+from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.services.paper_trading_v2.broker.base import BrokerBackend
 from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
@@ -2096,6 +2097,7 @@ class SimulationLifecycleScheduler:
         context_provider: SimulationRunContextProvider | None = None,
         performance_service: StrategyPerformanceProjectionService | None = None,
         trading_calendar_service: Any | None = None,
+        miniqmt_quote_context_adapter: Any | None = None,
         selection_inference_timeout_seconds: float | None = None,
         selection_inference_max_workers: int | None = None,
     ) -> None:
@@ -2131,6 +2133,7 @@ class SimulationLifecycleScheduler:
             self.trading_calendar_service = None
         else:
             self.trading_calendar_service = TradingCalendarStatusService()
+        self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter
 
     def status(self) -> dict[str, Any]:
         provider_status = _context_provider_status(self.context_provider)
@@ -2161,6 +2164,7 @@ class SimulationLifecycleScheduler:
                 "compiler_route_retired": True,
                 "live_forbidden": True,
             },
+            "miniqmt_quote_context": self._miniqmt_quote_context_health(),
             "binding_watchdog": {
                 "timeout_env_var": SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
                 "timeout_seconds": self._timeout_seconds_from_env(
@@ -2185,6 +2189,76 @@ class SimulationLifecycleScheduler:
             },
             "selection_inference": self._selection_inference_status(),
         }
+
+    def refresh_miniqmt_quote_context(self, **kwargs: Any) -> Any:
+        """Scheduler-only P1-C context seam; it never changes run/submit state."""
+
+        adapter = self._miniqmt_quote_context_adapter
+        preload = getattr(adapter, "preload", None)
+        if not callable(preload):
+            raise DataUnavailableError(
+                "MiniQMT quote context adapter is not configured for this scheduler",
+                context={"reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID", "stage": "CLOCK"},
+            )
+        return preload(**kwargs)
+
+    def _refresh_miniqmt_quote_context_lifecycle(self) -> None:
+        """Refresh read-only quote context without changing lifecycle or submit state."""
+
+        adapter = self._miniqmt_quote_context_adapter
+        refresh = getattr(adapter, "refresh_lifecycle", None)
+        if not callable(refresh):
+            return
+        clock_at_utc = datetime.now(UTC)
+        clock_monotonic_ns = monotonic_time.monotonic_ns()
+        try:
+            refresh(clock_at_utc=clock_at_utc, clock_monotonic_ns=clock_monotonic_ns)
+        except QuoteContractError as exc:
+            logger.error("MiniQMT quote context lifecycle refresh failed loudly: %s", exc.as_loud_payload())
+        except Exception as exc:  # The adapter fault is loud but never rewrites run status.
+            logger.error(
+                "MiniQMT quote context lifecycle refresh raised unexpectedly: exception_type=%s",
+                type(exc).__name__,
+                exc_info=True,
+            )
+
+    def _miniqmt_quote_context_health(self) -> dict[str, Any]:
+        adapter = self._miniqmt_quote_context_adapter
+        if adapter is None:
+            return {
+                "status": "UNCONFIGURED",
+                "scope": "P1-C read-only context seam; no runtime submit gate",
+            }
+        health = getattr(adapter, "health", None)
+        if not callable(health):
+            return {
+                "status": "INVALID",
+                "reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID",
+                "stage": "CLOCK",
+                "message": "configured MiniQMT quote context adapter has no read-only health method",
+            }
+        try:
+            result = health()
+        except Exception as exc:  # Health presentation cannot rewrite lifecycle state.
+            logger.error(
+                "MiniQMT quote context health lookup failed: exception_type=%s",
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return {
+                "status": "INVALID",
+                "reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID",
+                "stage": "CLOCK",
+                "exception_type": type(exc).__name__,
+            }
+        if not isinstance(result, dict):
+            return {
+                "status": "INVALID",
+                "reason_code": "ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID",
+                "stage": "CLOCK",
+                "message": "configured MiniQMT quote context health is not a mapping",
+            }
+        return dict(result)
 
     def shutdown_selection_inference(self, *, wait: bool = True) -> None:
         self._selection_inference_executor.shutdown(wait=wait, cancel_futures=not wait)
@@ -2328,6 +2402,7 @@ class SimulationLifecycleScheduler:
             raise ValueError("limit must be positive")
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
+        self._refresh_miniqmt_quote_context_lifecycle()
         stale_run_results = self._terminalize_stale_miniqmt_active_runs(
             trade_date=trade_date,
             broker_backend=broker_backend,
