@@ -238,12 +238,14 @@ class SimulationLifecycleOrchestrator:
         rebalance_service: RebalanceIntentService | None = None,
         plan_compiler: ExecutionPlanCompiler | None = None,
         local_bridge: LocalSimExecutionBridge | None = None,
+        b0_quote_v2_controller_factory: Any | None = None,
     ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
         self.target_service = target_service or TargetPositionService()
         self.rebalance_service = rebalance_service or RebalanceIntentService()
         self.plan_compiler = plan_compiler or ExecutionPlanCompiler()
         self.local_bridge = local_bridge or LocalSimExecutionBridge()
+        self.b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
 
     def build_execution_plan(
         self,
@@ -651,7 +653,10 @@ class SimulationLifecycleOrchestrator:
                     "MiniQMT execution requires QmtManagedOrderService",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
-            bridge = MiniQMTExecutionBridge(managed_order_service=managed_order_service)
+            bridge = MiniQMTExecutionBridge(
+                managed_order_service=managed_order_service,
+                b0_quote_v2_controller_factory=self.b0_quote_v2_controller_factory,
+            )
             runtime_kind = _normalize_miniqmt_runtime_kind(miniqmt_runtime_kind)
             submit_stage = "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
             try:

@@ -38,7 +38,9 @@ from .models import (
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH = _PROJECT_ROOT / "tmp" / "miniqmt_execution_runtime" / "runtime-state.json"
+DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_PATH = (
+    _PROJECT_ROOT / "tmp" / "miniqmt_execution_runtime" / "runtime-state.json"
+)
 MINIQMT_EXECUTION_RUNTIME_STORE_PATH_ENV = "MINIQMT_EXECUTION_RUNTIME_STORE_PATH"
 MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV = "MINIQMT_EXECUTION_RUNTIME_REPOSITORY"
 MINIQMT_EXECUTION_RUNTIME_JSONFILE_TEST_ONLY_ENV = "AISTOCK_MINIQMT_RUNTIME_JSONFILE_TEST_ONLY"
@@ -47,9 +49,15 @@ MINIQMT_EXECUTION_RUNTIME_COMPACT_EVERY_WRITES_ENV = "MINIQMT_EXECUTION_RUNTIME_
 MINIQMT_EXECUTION_RUNTIME_MAX_EVENTS_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_MAX_EVENTS_PER_RUNTIME"
 MINIQMT_EXECUTION_RUNTIME_RETAIN_EVENTS_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_RETAIN_EVENTS_PER_RUNTIME"
 MINIQMT_EXECUTION_RUNTIME_MAX_CHILD_ORDERS_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_MAX_CHILD_ORDERS_PER_RUNTIME"
-MINIQMT_EXECUTION_RUNTIME_RETAIN_CHILD_ORDERS_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_RETAIN_CHILD_ORDERS_PER_RUNTIME"
-MINIQMT_EXECUTION_RUNTIME_MAX_ALGO_INSTANCES_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_MAX_ALGO_INSTANCES_PER_RUNTIME"
-MINIQMT_EXECUTION_RUNTIME_RETAIN_ALGO_INSTANCES_PER_RUNTIME_ENV = "MINIQMT_EXECUTION_RUNTIME_RETAIN_ALGO_INSTANCES_PER_RUNTIME"
+MINIQMT_EXECUTION_RUNTIME_RETAIN_CHILD_ORDERS_PER_RUNTIME_ENV = (
+    "MINIQMT_EXECUTION_RUNTIME_RETAIN_CHILD_ORDERS_PER_RUNTIME"
+)
+MINIQMT_EXECUTION_RUNTIME_MAX_ALGO_INSTANCES_PER_RUNTIME_ENV = (
+    "MINIQMT_EXECUTION_RUNTIME_MAX_ALGO_INSTANCES_PER_RUNTIME"
+)
+MINIQMT_EXECUTION_RUNTIME_RETAIN_ALGO_INSTANCES_PER_RUNTIME_ENV = (
+    "MINIQMT_EXECUTION_RUNTIME_RETAIN_ALGO_INSTANCES_PER_RUNTIME"
+)
 DEFAULT_MINIQMT_EXECUTION_RUNTIME_STORE_MAX_BYTES = 32 * 1024 * 1024
 DEFAULT_MINIQMT_EXECUTION_RUNTIME_COMPACT_EVERY_WRITES = 1000
 DEFAULT_MINIQMT_EXECUTION_RUNTIME_MAX_EVENTS_PER_RUNTIME = 3000
@@ -157,23 +165,17 @@ class DurableEvidenceReceipt:
 
 
 class MiniQMTExecutionRuntimeRepository(Protocol):
-    def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord:
-        ...
+    def upsert_runtime(self, runtime: MiniQMTExecutionRuntimeRecord) -> MiniQMTExecutionRuntimeRecord: ...
 
-    def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None:
-        ...
+    def get_runtime(self, runtime_id: str) -> MiniQMTExecutionRuntimeRecord | None: ...
 
-    def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]:
-        ...
+    def list_runtimes(self) -> list[MiniQMTExecutionRuntimeRecord]: ...
 
-    def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
-        ...
+    def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent: ...
 
-    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
-        ...
+    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt: ...
 
-    def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
-        ...
+    def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]: ...
 
     def list_evidence_receipts(
         self,
@@ -185,8 +187,7 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         after_sequence: int = 0,
         after_event_id: str = "",
         limit: int = 501,
-    ) -> list[DurableEvidenceReceipt]:
-        ...
+    ) -> list[DurableEvidenceReceipt]: ...
 
     def list_quote_events_page(
         self,
@@ -196,8 +197,7 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         after_sequence: int,
         after_event_id: str,
         limit: int,
-    ) -> list[MiniQMTExecutionEvent]:
-        ...
+    ) -> list[MiniQMTExecutionEvent]: ...
 
     def list_events_by_ids(
         self,
@@ -205,14 +205,11 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         *,
         event_ids: tuple[str, ...],
         include_archived: bool = False,
-    ) -> list[MiniQMTExecutionEvent]:
-        ...
+    ) -> list[MiniQMTExecutionEvent]: ...
 
-    def quote_diagnostics_summary(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]:
-        ...
+    def quote_diagnostics_summary(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]: ...
 
-    def quote_event_schema_gate(self) -> str:
-        ...
+    def quote_event_schema_gate(self) -> str: ...
 
     def existing_evidence_ids(
         self,
@@ -220,33 +217,35 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
         *,
         evidence_ids: tuple[str, ...],
         include_archived: bool = False,
-    ) -> set[str]:
-        ...
+    ) -> set[str]: ...
 
-    def next_event_sequence(self, runtime_id: str) -> int:
-        ...
+    def next_event_sequence(self, runtime_id: str) -> int: ...
 
-    def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
-        ...
+    def read_quote_control_snapshot(
+        self,
+        *,
+        cursor: Any,
+        runtime_ids: tuple[str, ...],
+        include_archived: bool = True,
+    ) -> tuple[list[MiniQMTExecutionRuntimeRecord], list[MiniQMTExecutionEvent]]: ...
+
+    def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance: ...
 
     def list_algo_instances(
         self,
         runtime_id: str,
         *,
         active_only: bool = False,
-    ) -> list[MiniQMTExecutionAlgoInstance]:
-        ...
+    ) -> list[MiniQMTExecutionAlgoInstance]: ...
 
-    def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder:
-        ...
+    def upsert_child_order(self, order: MiniQMTChildOrder) -> MiniQMTChildOrder: ...
 
     def list_child_orders(
         self,
         runtime_id: str,
         *,
         active_only: bool = False,
-    ) -> list[MiniQMTChildOrder]:
-        ...
+    ) -> list[MiniQMTChildOrder]: ...
 
 
 class InMemoryMiniQMTExecutionRuntimeRepository:
@@ -431,8 +430,7 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
         return {
             str(evidence["evidence_id"])
             for event in self._events.get(runtime_id, ())
-            if isinstance((evidence := event.payload.get("evidence")), dict)
-            and evidence.get("evidence_id") in wanted
+            if isinstance((evidence := event.payload.get("evidence")), dict) and evidence.get("evidence_id") in wanted
         }
 
     def next_event_sequence(self, runtime_id: str) -> int:
@@ -441,6 +439,21 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
             return int(runtime.last_event_sequence) + 1
         events = self._events.get(runtime_id, ())
         return (int(events[-1].sequence) if events else 0) + 1
+
+    def read_quote_control_snapshot(
+        self,
+        *,
+        cursor: Any,  # noqa: ARG002 - in-memory repository has no DB cursor
+        runtime_ids: tuple[str, ...],
+        include_archived: bool = True,  # noqa: ARG002 - in-memory rows are not archived
+    ) -> tuple[list[MiniQMTExecutionRuntimeRecord], list[MiniQMTExecutionEvent]]:
+        requested = set(runtime_ids)
+        runtimes = [runtime for runtime_id, runtime in self._runtimes.items() if runtime_id in requested]
+        events = [event for runtime_id in sorted(requested) for event in self._events.get(runtime_id, ())]
+        return (
+            sorted(runtimes, key=lambda item: item.runtime_id),
+            sorted(events, key=lambda item: (item.runtime_id, item.sequence, item.event_id)),
+        )
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
         stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
@@ -545,7 +558,11 @@ class PostgresMiniQMTExecutionRuntimeRepository:
         receipt = self._with_runtime_db_error(
             "append_evidence_event",
             "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_PERSIST_FAILED",
-            {"runtime_id": candidate.runtime_id, "event_id": candidate.event_id, "evidence_sha256": candidate.evidence_sha256},
+            {
+                "runtime_id": candidate.runtime_id,
+                "event_id": candidate.event_id,
+                "evidence_sha256": candidate.evidence_sha256,
+            },
             lambda: self._append_evidence_event_row(candidate),
         )
         if not receipt.durable_ack or not receipt.readback_verified:
@@ -700,6 +717,44 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             )
             + 1
         )
+
+    def read_quote_control_snapshot(
+        self,
+        *,
+        cursor: Any,
+        runtime_ids: tuple[str, ...],
+        include_archived: bool = True,
+    ) -> tuple[list[MiniQMTExecutionRuntimeRecord], list[MiniQMTExecutionEvent]]:
+        if cursor is None:
+            raise ValueError("quote-control export requires the TCA-owned external read cursor")
+        normalized_ids = tuple(
+            sorted({str(runtime_id or "").strip() for runtime_id in runtime_ids if str(runtime_id or "").strip()})
+        )
+        if not normalized_ids:
+            return [], []
+        cursor.execute(
+            """
+            SELECT *
+            FROM qmt_strategy.execution_runtime
+            WHERE runtime_id = ANY(%s)
+            ORDER BY runtime_id
+            """,
+            (list(normalized_ids),),
+        )
+        runtimes = [_row_to_runtime(row) for row in cursor.fetchall()]
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
+        cursor.execute(
+            f"""
+            SELECT *
+            FROM qmt_strategy.execution_runtime_event
+            WHERE runtime_id = ANY(%s)
+              {archived_clause}
+            ORDER BY runtime_id, sequence, event_id
+            """,
+            (list(normalized_ids),),
+        )
+        events = [_row_to_event(row) for row in cursor.fetchall()]
+        return runtimes, events
 
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
         stored = instance.model_copy(update={"updated_at": datetime.now(UTC)})
@@ -929,7 +984,9 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                 if existing is not None:
                     event = _row_to_event(existing)
                     if not _evidence_event_matches_candidate(event, candidate):
-                        raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
+                        raise QuoteEvidenceIdempotencyConflict(
+                            f"quote evidence event id conflicts: {candidate.event_id}"
+                        )
                     persisted_at = existing["created_at"]
                 else:
                     sequence = int(runtime["last_event_sequence"] or 0) + 1
@@ -1187,7 +1244,11 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     GROUP BY payload -> 'evidence' ->> 'symbol'
                     ORDER BY symbol
                     """,
-                    (runtime_id, [item.value for item in MiniQMTExecutionEventType if item.value.startswith("QUOTE_")], *symbol_params),
+                    (
+                        runtime_id,
+                        [item.value for item in MiniQMTExecutionEventType if item.value.startswith("QUOTE_")],
+                        *symbol_params,
+                    ),
                 )
                 per_symbol = [dict(row) for row in cur.fetchall()]
                 cur.execute(
@@ -1323,7 +1384,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     f"""
                     SELECT *
                     FROM qmt_strategy.execution_algo_instance
-                    WHERE {' AND '.join(filters)}
+                    WHERE {" AND ".join(filters)}
                     ORDER BY created_at, algo_instance_id
                     """,
                     tuple(params),
@@ -1388,7 +1449,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     f"""
                     SELECT *
                     FROM qmt_strategy.execution_child_order
-                    WHERE {' AND '.join(filters)}
+                    WHERE {" AND ".join(filters)}
                     ORDER BY updated_at, child_order_id
                     """,
                     tuple(params),
@@ -1401,7 +1462,9 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             with conn.cursor() as cur:
                 pruned_counts = {
                     "events": self._archive_events_for_runtime(cur, runtime_id=runtime_id, reason=reason),
-                    "algo_instances": self._archive_algo_instances_for_runtime(cur, runtime_id=runtime_id, reason=reason),
+                    "algo_instances": self._archive_algo_instances_for_runtime(
+                        cur, runtime_id=runtime_id, reason=reason
+                    ),
                     "child_orders": self._archive_child_orders_for_runtime(cur, runtime_id=runtime_id, reason=reason),
                 }
         return {
@@ -1764,7 +1827,9 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
     def _write_snapshot(self, *, reason: str) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(
-            json.dumps(self._snapshot_payload(reason=reason), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            json.dumps(
+                self._snapshot_payload(reason=reason), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
             encoding="utf-8",
         )
         if self._oplog_path.exists():
@@ -1919,11 +1984,16 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
                 continue
             ordered = sorted(events, key=lambda item: item.sequence)
             dropped = ordered[: max(0, len(ordered) - retain_events)]
-            self._events[current_runtime_id] = ordered[len(dropped):]
+            self._events[current_runtime_id] = ordered[len(dropped) :]
             runtime = self._runtimes.get(current_runtime_id)
             trade_date = runtime.trade_date.isoformat() if runtime is not None else None
             pruned.extend(
-                {"kind": "event", "runtime_id": current_runtime_id, "trade_date": trade_date, "item": item.model_dump(mode="json")}
+                {
+                    "kind": "event",
+                    "runtime_id": current_runtime_id,
+                    "trade_date": trade_date,
+                    "item": item.model_dump(mode="json"),
+                }
                 for item in dropped
             )
         return pruned
@@ -1946,14 +2016,22 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
             if len(items) <= max_items:
                 continue
             active = [item for item in items if item.status == MiniQMTAlgoInstanceStatus.ACTIVE]
-            terminal = sorted((item for item in items if item.status != MiniQMTAlgoInstanceStatus.ACTIVE), key=lambda item: item.updated_at)
+            terminal = sorted(
+                (item for item in items if item.status != MiniQMTAlgoInstanceStatus.ACTIVE),
+                key=lambda item: item.updated_at,
+            )
             dropped = terminal[: max(0, len(terminal) - max(0, retain_items - len(active)))]
             for item in dropped:
                 self._algo_instances.pop(item.algo_instance_id, None)
             runtime = self._runtimes.get(current_runtime_id)
             trade_date = runtime.trade_date.isoformat() if runtime is not None else None
             pruned.extend(
-                {"kind": "algo_instance", "runtime_id": current_runtime_id, "trade_date": trade_date, "item": item.model_dump(mode="json")}
+                {
+                    "kind": "algo_instance",
+                    "runtime_id": current_runtime_id,
+                    "trade_date": trade_date,
+                    "item": item.model_dump(mode="json"),
+                }
                 for item in dropped
             )
         return pruned
@@ -1981,14 +2059,21 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
             if len(items) <= max_items:
                 continue
             active = [item for item in items if item.status not in terminal_statuses]
-            terminal = sorted((item for item in items if item.status in terminal_statuses), key=lambda item: item.updated_at)
+            terminal = sorted(
+                (item for item in items if item.status in terminal_statuses), key=lambda item: item.updated_at
+            )
             dropped = terminal[: max(0, len(terminal) - max(0, retain_items - len(active)))]
             for item in dropped:
                 self._child_orders.pop(item.child_order_id, None)
             runtime = self._runtimes.get(current_runtime_id)
             trade_date = runtime.trade_date.isoformat() if runtime is not None else None
             pruned.extend(
-                {"kind": "child_order", "runtime_id": current_runtime_id, "trade_date": trade_date, "item": item.model_dump(mode="json")}
+                {
+                    "kind": "child_order",
+                    "runtime_id": current_runtime_id,
+                    "trade_date": trade_date,
+                    "item": item.model_dump(mode="json"),
+                }
                 for item in dropped
             )
         return pruned
@@ -2066,8 +2151,7 @@ def _supports_conn_factory_kw(factory: Any, parameter_name: str) -> bool:
     except (TypeError, ValueError):
         return False
     return parameter_name in signature.parameters or any(
-        parameter.kind == inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
     )
 
 
@@ -2213,6 +2297,8 @@ def _quote_diagnostics_summary_from_events(events: list[MiniQMTExecutionEvent]) 
         "markout": markout,
         "health": health,
     }
+
+
 def _row_to_algo_instance(row: Any) -> MiniQMTExecutionAlgoInstance:
     data = _row_dict(row)
     return MiniQMTExecutionAlgoInstance(
@@ -2286,10 +2372,11 @@ def default_miniqmt_execution_runtime_repository_path() -> Path:
 def default_miniqmt_execution_runtime_repository() -> MiniQMTExecutionRuntimeRepository:
     """Build the default durable repository for product runtime clients."""
 
-    requested = str(
-        os.getenv(MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV)
-        or DEFAULT_MINIQMT_EXECUTION_RUNTIME_REPOSITORY
-    ).strip().lower()
+    requested = (
+        str(os.getenv(MINIQMT_EXECUTION_RUNTIME_REPOSITORY_ENV) or DEFAULT_MINIQMT_EXECUTION_RUNTIME_REPOSITORY)
+        .strip()
+        .lower()
+    )
     if requested in {"", "postgres", "pg", "db"}:
         return PostgresMiniQMTExecutionRuntimeRepository()
     if requested in {"json", "jsonfile", "file"}:

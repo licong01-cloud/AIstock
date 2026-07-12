@@ -932,11 +932,22 @@ markout 单查询重建契约，不直接读取 subscriber 内存。
     "max_clock_age_divergence_ms": "<explicit>",
     "max_dependency_group_skew_ms": "<explicit>",
     "auction_mode": "OBSERVE_ONLY"
+  },
+  "quote_evidence": {
+    "schema_version": "miniqmt_quote_evidence_policy_v1",
+    "benchmark_policy_version": "<explicit>",
+    "mark_policy_version": "<explicit>",
+    "markout_max_lag_ms": "<explicit non-negative integer>"
   }
 }
 ```
 
 action 阈值没有全局默认值，也不得从环境变量、LEGACY_B0 或 300 秒旧 freshness 默认推断。`max_clock_age_divergence_ms` 与其他五个阈值一样是 required positive integer，必须进入 canonical `policy_sha256`；旧 P1-A policy payload 缺该字段时显式 schema invalid，不得自动补值。B0_QUOTE_V2 execution plan 必须从 immutable execution policy 显式携带全部阈值和 canonical `policy_sha256`；binding 只选择 control revision，不复制 policy 字段。合法范围由 schema validator 验证。Phase 1 observation 先统计实际 cadence/age/skew，P1-E 的 pilot policy 使用预注册显式值，Phase 0B 再据实冻结正式 baseline revision。
+
+`execution_policy.quote_evidence` 的 allowed fields 严格固定为 `schema_version`、
+`benchmark_policy_version`、`mark_policy_version`、`markout_max_lag_ms`；缺失、unknown、bool/
+string lag 或从 Phase 0A 示例、环境、LEGACY 推断都为 `POLICY_SCHEMA_INVALID`。该对象与
+`quote_contract` 一起进入 immutable execution policy hash，但不复制到 binding。
 
 process switch=false 时 LEGACY_B0 不变；选择 B0_QUOTE_V2 而 ingress 未启用属于明确配置错误，不得自动退回 LEGACY_B0。
 
@@ -1743,14 +1754,20 @@ repository/diagnostics 的 PostgreSQL transaction、recursive link、pagination�
 
 | P1-E implementation item | required implementation refs | required test/evidence | design-time status | explicit boundary |
 |---|---|---|---|---|
-| exact binding/revision/parent assignment | `simulation_runtime/models.py`、plan builder、`b0_quote_v2.py` | §9.1.3 binding/hash/readback/conflict nodeids | required_for_p1e_pr | 不复制 execution policy，不读取 approval state，不改旧 binding hash |
-| scheduler-owned controller/lifecycle/drain | `scheduler.py`、`quote_ingress.py`、controller registry | owner/lease isolation、switch false drain、read-only no-start tests | required_for_p1e_pr | 不创建第二 scheduler/feed/gateway；服务重启用户所有 |
-| strict normalized-to-B0 adapter | `b0_quote_v2.py`、`runtime.py`、`client.py`、`bridges.py` | exact tick map、timer submit、per-symbol fail/recovery tests | required_for_p1e_pr | 不调用 LEGACY fallback helper，不改 core/price/quantity/protection/tail |
-| action durable-before-submit 与 child receipt | controller、`QuoteEvidenceCoordinator`、runtime repository | real repository sequence/readback、gateway call-count zero/one、link closure | required_for_p1e_pr | broker fact 不因 receipt 失败回滚；persist failure 无新 child |
-| restart/reconcile/no duplicate | pending action rebuild、deterministic child/order remark、broker sync | before/after action receipt、child、timeout unknown outcome restart matrix | required_for_p1e_pr | 不盲重试 submit、不取消既有 order、不切 revision |
-| LEGACY parity 与预注册安全差异 | existing vn.py cores + strict projection/parity oracle | SNIPER/BEST_LIMIT/TWAP_LITE BUY/SELL、BUG-604/614 regressions | required_for_p1e_pr | 无双跑 broker；只比较注册 business fields，排除清单有 schema test |
-| Phase 0B export v2 | `tca_read_api.py`、runtime repository read methods、ops/runbook | v1 byte stability、single snapshot、coverage/link/conflict completeness tests | required_for_p1e_pr | 只读、bounded runtime IDs、无全表 JSONB scan或自动 repair |
-| quality/metrics/F2 evidence | tests、coverage、metrics、design implementation record | line>=80%、branch>=70%、ruff/diff/L0/module registry/F2 validator | required_for_p1e_pr | 无简化、silent fallback、RBAC/approval/ack；真实 SIM 单独报告 |
+| exact binding/revision/parent assignment | `simulation_runtime/models.py::assert_binding_payload_boundary`、`decision.py::ExecutionPlanCompiler.compile_plan`、`b0_quote_v2.py::{QuoteControlBindingV1,B0QuoteV2RevisionV1,ParentQuoteControlAssignmentV1}` | `test_b0_quote_v2_binding.py` 5 个 direct nodeids：exact schema/hash/readback/conflict，并证明历史缺 quote-control binding 的 plan payload/hash 不变 | implemented_verified | 不复制 execution policy，不读取 approval state；显式 LEGACY/B0 assignment 均冻结，历史 binding identity 不变 |
+| scheduler-owned controller/lifecycle/drain | `scheduler.py`/`lifecycle.py`/`bridges.py` 的唯一 factory 注入；`B0QuoteV2ControllerFactory` registry；`PhaseOneQuoteProjectionSink` 多 consumer isolation | `test_b0_quote_v2_lifecycle.py`：single construction、共享 physical feed/独立 coordinator、switch=false 仅 durable active `DRAINING`；factory/lease failure cleanup 反例 | implemented_verified | 不创建第二 scheduler/feed/gateway；不由 read API 构造；服务重启和 process config 仍由用户所有 |
+| strict normalized-to-B0 adapter | `b0_quote_v2.py::project_vnpy_tick`、controller lifecycle；`runtime.py::{bind_b0_quote_v2_controller,dispatch_b0_quote_v2_tick}`；`client.py::_b0_quote_v2_assignments` | `test_b0_quote_v2_adapter.py` 7 项 exact tick/timer/reject/chain/anchor；contract failure 12 项；LEGACY/B0 quote-source direct regression | implemented_verified | 不调用 LEGACY quote provider/on_tick；不改三个 vn.py core、price/quantity/protection/tail business fields；source 不可切换 |
+| action durable-before-submit 与 child receipt | `B0QuoteV2Controller.handle_submit_action/_resume_pending/_persist_child_receipt`、`QuoteEvidenceCoordinator`、`MiniQMTExecutionRuntime.submit_b0_quote_v2_child` | pending event < durable ACTION_INPUT < child < CHILD_RECEIPT；transient persist 时 gateway=0；Postgres repository external-cursor bounded readback；bidirectional market-data chain direct tests | implemented_verified | broker fact 不因 receipt 失败回滚；persist failure 保持 pending 且无新 child；无内存/JSON 假 durable success |
+| restart/reconcile/no duplicate | immutable `action_evidence_candidate` recovery、durable receipt lookup、deterministic child/hash conflict、existing child receipt repair | `test_b0_quote_v2_restart.py` 3 项 + tampered recovery/unknown child event 反例；crash-before-ack、durable-before-child、child-exists 均保持最多一次 gateway submit | implemented_verified | 不盲重试 submit、不取消既有 order、不切 revision；unknown broker outcome 先 reconcile |
+| LEGACY parity 与预注册安全差异 | existing `SNIPER/BEST_LIMIT/TWAP_LITE` cores、`canonical_parity_payload/assert_b0_quote_v2_parity`、factory revision invalidation | `test_b0_quote_v2_parity.py`：三类 core BUY/SELL、TWAP timer/tail/protection、排除字段 exact schema、业务字段 diff invalidates revision；BUG-604/614 direct regressions | implemented_verified | 无双跑 broker；unknown 字段默认参与比较；parity violation 不回退 LEGACY、不接纳该 revision 新 parent |
+| Phase 0B export v2 | `tca_read_api.py::_export_quote_control_evidence_v2`、`repository.py::read_quote_control_snapshot`、P1-E runbook | v1 deterministic、v2 one read snapshot、bounded runtime IDs/external cursor、depth/age/cadence/action/child/trade/60-300-900 markout closure；missing/duplicate/hash/revision conflict incomplete | implemented_verified | 只读、无全表 JSONB scan、无自动 repair/broker；`quote_control_complete` 不代表 runtime activation |
+| quality/metrics/F2 evidence | bounded metric registry/factory health、P1-E direct tests、本 §13.5 与 runbook | P1-E direct `41 passed`；P1-A～E contract matrix `184 passed`；changed-source line `86.40%`、branch `70.33%`；ruff/compile/diff、guardrail changed-only、L0、module registry、F2 validator 全通过 | implemented_verified | `no_simplified_delivery/no_silent_error/no_business_semantic_drift/no_unrequested_gate_or_approval` 均逐项通过；未执行 DDL/config/restart/broker/真实 SIM |
+
+本地扩大回归为 `389 passed, 7 failed, 1 skipped`；同 7 个失败已在未修改的最新
+`origin/main` 独立复现，分别是既有 operator 测试缺 PostgreSQL password、BEST_LIMIT/TWAP
+active-instance 旧断言、event-loop no-child 旧断言、两个 deferred-buy scheduler 旧断言和 retired
+compiler-route 旧异常类型断言，不是 P1-E 分支新增回归。本记录不把基线失败写成绿色，也不以修复
+任务外既有行为来换取假成功。
 
 ---
 

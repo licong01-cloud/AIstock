@@ -9,6 +9,8 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from backend.execution_algos.board_lot import board_lot_rule
+from backend.execution_algos.adaptive_is.contracts import ControlRevision, canonical_sha256
+from backend.execution_algos.adaptive_is.reasons import QuoteContractReasonCode, quote_contract_error
 from backend.execution_algos.vnpy_style import (
     VnpyAction,
     VnpyActionType,
@@ -108,6 +110,7 @@ class MiniQMTExecutionRuntime:
         self._kill_switch_active = False
         self._vnpy_cores: dict[str, VnpyAlgoTemplate] = {}
         self._vnpy_random_volume_providers: dict[str, Callable[[int, int], float]] = {}
+        self._b0_quote_v2_controller: Any | None = None
         event_sink_binder = getattr(gateway, "bind_event_sink", None)
         if callable(event_sink_binder):
             event_sink_binder(self)
@@ -235,7 +238,9 @@ class MiniQMTExecutionRuntime:
             metadata=dict(metadata or {}),
         )
         instance = self.oms.record_algo_instance(instance)
-        self.repository.upsert_runtime(runtime.model_copy(update={"event_loop_state": MiniQMTExecutionRuntimeState.RUNNING}))
+        self.repository.upsert_runtime(
+            runtime.model_copy(update={"event_loop_state": MiniQMTExecutionRuntimeState.RUNNING})
+        )
         self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.ALGO_INSTANCE_CREATED,
@@ -325,6 +330,12 @@ class MiniQMTExecutionRuntime:
 
     def on_tick(self, *, symbol: str, price: float, payload: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        if self._b0_quote_v2_controller is not None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_TICK_PROJECTION_INVALID,
+                "B0_QUOTE_V2 runtime refuses the LEGACY gateway tick path",
+                context={"runtime_id": runtime.runtime_id, "symbol": symbol},
+            )
         tick_payload = {"symbol": symbol, "price": price, **dict(payload or {})}
         event = self.events.append(
             runtime_id=runtime.runtime_id,
@@ -337,6 +348,42 @@ class MiniQMTExecutionRuntime:
         self._dispatch_tick_to_vnpy_algos(runtime.runtime_id, tick_payload=tick_payload)
         return event
 
+    def bind_b0_quote_v2_controller(self, controller: Any) -> None:
+        if self._b0_quote_v2_controller is not None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "MiniQMT runtime can bind the B0_QUOTE_V2 controller only once",
+                context={"runtime_id": self.config.runtime_id},
+            )
+        if str(getattr(controller, "runtime_id", "")) != self.config.runtime_id:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 controller runtime identity conflicts with its runtime",
+                context={
+                    "runtime_id": self.config.runtime_id,
+                    "controller_runtime_id": getattr(controller, "runtime_id", None),
+                },
+            )
+        self._b0_quote_v2_controller = controller
+
+    def dispatch_b0_quote_v2_tick(
+        self,
+        *,
+        instance: MiniQMTExecutionAlgoInstance,
+        tick: VnpyTick,
+    ) -> None:
+        if self._b0_quote_v2_controller is None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "strict B0_QUOTE_V2 tick dispatch requires a bound controller",
+                context={"runtime_id": self.config.runtime_id},
+            )
+        latest = self._require_algo_instance(self.config.runtime_id, instance.algo_instance_id)
+        core = self._ensure_vnpy_core(latest)
+        actions = core.update_tick(tick)
+        latest = self._persist_vnpy_core_state(latest, core)
+        self._handle_vnpy_actions(latest, actions)
+
     def submit_child_order(
         self,
         *,
@@ -346,22 +393,119 @@ class MiniQMTExecutionRuntime:
         price_type: int = 11,
         metadata: dict[str, Any] | None = None,
     ) -> MiniQMTChildOrder:
+        child, _ = self._submit_child_order(
+            algo_instance_id=algo_instance_id,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            metadata=metadata,
+            child_order_id=None,
+        )
+        return child
+
+    def submit_b0_quote_v2_child(
+        self,
+        *,
+        instance: MiniQMTExecutionAlgoInstance,
+        action: VnpyAction,
+        child_order_id: str,
+        metadata: dict[str, Any],
+    ) -> tuple[MiniQMTChildOrder, MiniQMTExecutionEvent]:
+        if self._b0_quote_v2_controller is None:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "deterministic B0_QUOTE_V2 child requires a bound controller",
+            )
+        quantity = int(action.volume or 0)
+        price = float(action.price or 0)
+        child_metadata = self._child_metadata_for_vnpy_action(instance, action, extra=metadata)
+        price_type = _child_price_type_from_metadata(child_metadata)
+        business_payload = {
+            "runtime_id": self.config.runtime_id,
+            "algo_instance_id": instance.algo_instance_id,
+            "parent_intent_id": instance.parent_intent_id,
+            "symbol": instance.symbol,
+            "side": instance.side.value,
+            "quantity": quantity,
+            "price": price,
+            "price_type": price_type,
+            "assignment_id": metadata.get("quote_control_assignment", {}).get("assignment_id"),
+            "action_id": metadata.get("b0_quote_v2_action", {}).get("action_id"),
+        }
+        business_sha256 = canonical_sha256(business_payload)
+        existing = next(
+            (
+                child
+                for child in self.repository.list_child_orders(self.config.runtime_id, active_only=False)
+                if child.child_order_id == child_order_id
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.metadata.get("b0_quote_v2_child_business_sha256") != business_sha256:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT,
+                    "deterministic child identity conflicts with different business fields",
+                    context={"runtime_id": self.config.runtime_id, "child_order_id": child_order_id},
+                )
+            event = next(
+                (
+                    item
+                    for item in reversed(self.repository.list_events(self.config.runtime_id, include_archived=True))
+                    if item.event_type
+                    in {
+                        MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+                        MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+                    }
+                    and item.payload.get("child_order_id") == child_order_id
+                ),
+                None,
+            )
+            if event is None:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT,
+                    "deterministic child has an unknown broker outcome and must reconcile before reuse",
+                    context={"runtime_id": self.config.runtime_id, "child_order_id": child_order_id},
+                )
+            return existing, event
+        return self._submit_child_order(
+            algo_instance_id=instance.algo_instance_id,
+            quantity=quantity,
+            price=price,
+            price_type=price_type,
+            metadata={**child_metadata, "b0_quote_v2_child_business_sha256": business_sha256},
+            child_order_id=child_order_id,
+        )
+
+    def _submit_child_order(
+        self,
+        *,
+        algo_instance_id: str,
+        quantity: int,
+        price: float,
+        price_type: int,
+        metadata: dict[str, Any] | None,
+        child_order_id: str | None,
+    ) -> tuple[MiniQMTChildOrder, MiniQMTExecutionEvent]:
         runtime = self._require_runtime()
         self._raise_if_kill_switch_blocks_submit(runtime, algo_instance_id)
         instance = self._require_algo_instance(runtime.runtime_id, algo_instance_id)
         self._raise_if_kill_switch_active(runtime.runtime_id, instance)
-        order = MiniQMTChildOrder(
-            runtime_id=runtime.runtime_id,
-            algo_instance_id=instance.algo_instance_id,
-            parent_intent_id=instance.parent_intent_id,
-            strategy_slot_id=instance.strategy_slot_id,
-            symbol=instance.symbol,
-            side=instance.side,
-            quantity=quantity,
-            price=price,
-            price_type=price_type,
-            metadata=dict(metadata or {}),
-        )
+        order_fields = {
+            "runtime_id": runtime.runtime_id,
+            "algo_instance_id": instance.algo_instance_id,
+            "parent_intent_id": instance.parent_intent_id,
+            "strategy_slot_id": instance.strategy_slot_id,
+            "symbol": instance.symbol,
+            "side": instance.side,
+            "quantity": quantity,
+            "price": price,
+            "price_type": price_type,
+            "metadata": dict(metadata or {}),
+        }
+        if child_order_id is not None:
+            order_fields["child_order_id"] = child_order_id
+        order = MiniQMTChildOrder(**order_fields)
         pre_submit_decision = self._evaluate_risk_before_submit(runtime, order)
         if pre_submit_decision.action == MiniQMTRiskDecisionAction.KILL_SWITCH:
             raise RuntimeError(
@@ -388,7 +532,7 @@ class MiniQMTExecutionRuntime:
                 }
             )
         )
-        self.events.append(
+        child_event = self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=(
                 MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED
@@ -402,9 +546,22 @@ class MiniQMTExecutionRuntime:
                 "broker_order_id": submitted.broker_order_id,
                 "accepted": ack.accepted,
                 "message": ack.message,
+                **(
+                    {
+                        "parent_intent_id": submitted.parent_intent_id,
+                        "action_id": submitted.metadata.get("b0_quote_v2_action", {}).get("action_id"),
+                        "assignment_id": submitted.metadata.get("quote_control_assignment", {}).get("assignment_id"),
+                        "action_evidence_id": submitted.metadata.get("action_evidence_id"),
+                        "action_market_data_id": submitted.metadata.get("action_market_data_id"),
+                        "evaluation_id": submitted.metadata.get("evaluation_id"),
+                        "control_revision": ControlRevision.B0_QUOTE_V2.value,
+                    }
+                    if isinstance(submitted.metadata.get("b0_quote_v2_action"), dict)
+                    else {}
+                ),
             },
         )
-        return submitted
+        return submitted, child_event
 
     def record_external_child_order(
         self,
@@ -568,6 +725,7 @@ class MiniQMTExecutionRuntime:
         payload: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
         event = self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.ORDER_EVENT,
@@ -639,14 +797,48 @@ class MiniQMTExecutionRuntime:
         payload: dict[str, Any] | None = None,
     ) -> MiniQMTExecutionEvent:
         runtime = self._require_runtime()
+        child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
+        anchor_payload: dict[str, Any] | None = None
+        anchor_error: Exception | None = None
+        if (
+            self._b0_quote_v2_controller is not None
+            and child is not None
+            and isinstance(child.metadata.get("b0_quote_v2_action"), dict)
+        ):
+            try:
+                anchor_payload = self._b0_quote_v2_controller.build_trade_anchor_payload(
+                    child=child,
+                    quantity=quantity,
+                    price=price,
+                    payload=dict(payload or {}),
+                )
+            except Exception as exc:  # Trade fact remains authoritative; failure is persisted and re-raised.
+                anchor_error = exc
         event = self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.TRADE_EVENT,
             source="gateway",
-            payload={"broker_order_id": broker_order_id, "quantity": quantity, "price": price, **dict(payload or {})},
+            payload={
+                "broker_order_id": broker_order_id,
+                "quantity": quantity,
+                "price": price,
+                **dict(payload or {}),
+                **({"quote_evidence_markout_anchor_v1": anchor_payload} if anchor_payload is not None else {}),
+                **(
+                    {
+                        "quote_evidence_anchor_failure": {
+                            "reason_code": getattr(getattr(anchor_error, "reason_code", None), "value", None)
+                            or "ADAPTIVE_IS_MARKOUT_HISTORY_UNAVAILABLE",
+                            "stage": "MARKOUT",
+                            "exception_type": type(anchor_error).__name__,
+                        }
+                    }
+                    if anchor_error is not None
+                    else {}
+                ),
+            },
         )
         risk_triggered = False
-        child = self._find_child_order(runtime.runtime_id, broker_order_id=broker_order_id)
         if child is not None:
             cumulative_quantity = int(
                 (payload or {}).get("cumulative_quantity") or (payload or {}).get("filled_quantity") or quantity
@@ -728,6 +920,13 @@ class MiniQMTExecutionRuntime:
                 )
         else:
             self._evaluate_risk_after_event(runtime.runtime_id, event_type=event.event_type, payload=event.payload)
+        if anchor_payload is not None:
+            try:
+                self._b0_quote_v2_controller.schedule_trade_event(event)
+            except Exception as exc:
+                anchor_error = anchor_error or exc
+        if anchor_error is not None:
+            raise anchor_error
         return event
 
     def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent:
@@ -831,7 +1030,9 @@ class MiniQMTExecutionRuntime:
 
     def reconcile(self) -> MiniQMTRuntimeRecoverySnapshot:
         runtime = self._require_runtime()
-        self.repository.upsert_runtime(runtime.model_copy(update={"event_loop_state": MiniQMTExecutionRuntimeState.RECONCILING}))
+        self.repository.upsert_runtime(
+            runtime.model_copy(update={"event_loop_state": MiniQMTExecutionRuntimeState.RECONCILING})
+        )
         self.events.append(
             runtime_id=runtime.runtime_id,
             event_type=MiniQMTExecutionEventType.RECONCILE_STARTED,
@@ -1035,7 +1236,9 @@ class MiniQMTExecutionRuntime:
             "broker_trade_count": len(broker_trades),
             "broker_position_count": len(broker_positions),
             "broker_order_ids": [_broker_order_id(order) for order in broker_orders if _broker_order_id(order)],
-            "broker_open_order_ids": [_broker_order_id(order) for order in open_broker_orders if _broker_order_id(order)],
+            "broker_open_order_ids": [
+                _broker_order_id(order) for order in open_broker_orders if _broker_order_id(order)
+            ],
             "excluded_stale_order_ids": [
                 _broker_order_id(order) for order in excluded_stale_broker_orders if _broker_order_id(order)
             ],
@@ -1374,8 +1577,12 @@ class MiniQMTExecutionRuntime:
     ) -> None:
         self._raise_if_kill_switch_blocks_submit(runtime_id, instance.algo_instance_id)
 
-    def _raise_if_kill_switch_blocks_submit(self, runtime: MiniQMTExecutionRuntimeRecord | str, algo_instance_id: str) -> None:
-        runtime_record = runtime if isinstance(runtime, MiniQMTExecutionRuntimeRecord) else self.repository.get_runtime(runtime)
+    def _raise_if_kill_switch_blocks_submit(
+        self, runtime: MiniQMTExecutionRuntimeRecord | str, algo_instance_id: str
+    ) -> None:
+        runtime_record = (
+            runtime if isinstance(runtime, MiniQMTExecutionRuntimeRecord) else self.repository.get_runtime(runtime)
+        )
         runtime_id = runtime_record.runtime_id if runtime_record is not None else str(runtime)
         metadata = dict(runtime_record.metadata) if runtime_record is not None else {}
         active = self._kill_switch_active or bool(metadata.get("kill_switch_active"))
@@ -1414,14 +1621,18 @@ class MiniQMTExecutionRuntime:
             instance.model_copy(
                 update={
                     "status": terminal_status,
-                    "remaining_quantity": 0 if terminal_status == MiniQMTAlgoInstanceStatus.COMPLETED else instance.remaining_quantity,
+                    "remaining_quantity": 0
+                    if terminal_status == MiniQMTAlgoInstanceStatus.COMPLETED
+                    else instance.remaining_quantity,
                     "metadata": {
                         **dict(instance.metadata),
                         "terminalized_by_runtime": True,
                         "terminalized_reason": reason,
                         "terminal_child_order_statuses": sorted({child.status.value for child in children}),
                         "terminal_vnpy_active_order_ids": vnpy_active_order_ids,
-                        "terminal_vnpy_active_orders_ignored": bool(ignore_vnpy_active_orders and vnpy_active_order_ids),
+                        "terminal_vnpy_active_orders_ignored": bool(
+                            ignore_vnpy_active_orders and vnpy_active_order_ids
+                        ),
                         **({"operator_command_id": command_id} if command_id else {}),
                     },
                 }
@@ -1524,7 +1735,9 @@ class MiniQMTExecutionRuntime:
         imported: list[MiniQMTChildOrder] = []
         for broker_order in self.gateway.sync_orders(runtime_id=runtime_id):
             broker_order_id = _broker_order_id(broker_order)
-            broker_slot_id = _position_strategy_slot_id(broker_order) or _optional_text(broker_order.get("strategy_name"))
+            broker_slot_id = _position_strategy_slot_id(broker_order) or _optional_text(
+                broker_order.get("strategy_name")
+            )
             if not broker_order_id or broker_order_id in known_broker_ids:
                 continue
             if strategy_slot_id is not None and broker_slot_id != strategy_slot_id:
@@ -1714,7 +1927,8 @@ class MiniQMTExecutionRuntime:
             cancelled_child_order_ids=list(cancel_result.cancelled_child_order_ids),
             submitted_child_order_ids=submitted_child_order_ids,
             affected_algo_instance_ids=_unique(
-                item.algo_instance_id for item in self.repository.list_algo_instances(runtime.runtime_id, active_only=False)
+                item.algo_instance_id
+                for item in self.repository.list_algo_instances(runtime.runtime_id, active_only=False)
             ),
             broker_packets=broker_packets,
             errors=errors,
@@ -1774,7 +1988,9 @@ class MiniQMTExecutionRuntime:
                     }
                 )
             )
-        status = MiniQMTOperatorCommandStatus.EXECUTED if not cancel_result.errors else MiniQMTOperatorCommandStatus.REJECTED
+        status = (
+            MiniQMTOperatorCommandStatus.EXECUTED if not cancel_result.errors else MiniQMTOperatorCommandStatus.REJECTED
+        )
         return self._operator_result(
             command_id=command_id,
             command_type=command_type,
@@ -1976,9 +2192,8 @@ class MiniQMTExecutionRuntime:
         return None
 
     def _is_vnpy_instance(self, instance: MiniQMTExecutionAlgoInstance) -> bool:
-        return (
-            str(instance.metadata.get("runtime_algo_family") or "") == "vnpy_style"
-            and is_vnpy_style_algo(instance.algo_code)
+        return str(instance.metadata.get("runtime_algo_family") or "") == "vnpy_style" and is_vnpy_style_algo(
+            instance.algo_code
         )
 
     def _ensure_vnpy_core(self, instance: MiniQMTExecutionAlgoInstance) -> VnpyAlgoTemplate:
@@ -2033,11 +2248,7 @@ class MiniQMTExecutionRuntime:
         core: VnpyAlgoTemplate,
     ) -> MiniQMTExecutionAlgoInstance:
         snapshot = core.get_data()
-        status = (
-            MiniQMTAlgoInstanceStatus.COMPLETED
-            if snapshot.status == "finished"
-            else instance.status
-        )
+        status = MiniQMTAlgoInstanceStatus.COMPLETED if snapshot.status == "finished" else instance.status
         updated = instance.model_copy(
             update={
                 "remaining_quantity": max(0, int(snapshot.left)),
@@ -2076,6 +2287,9 @@ class MiniQMTExecutionRuntime:
         for action in actions:
             if action.action_type == VnpyActionType.SUBMIT:
                 if self._defer_dependent_buy_action_if_needed(instance, action):
+                    continue
+                if self._b0_quote_v2_controller is not None:
+                    self._b0_quote_v2_controller.handle_submit_action(instance=instance, action=action)
                     continue
                 child_metadata = self._child_metadata_for_vnpy_action(instance, action)
                 child = self.submit_child_order(
@@ -2314,7 +2528,10 @@ class MiniQMTExecutionRuntime:
                     instance,
                     status=_DEPENDENT_BUY_STATUS_BLOCKED,
                     reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_CONTRACT_INVALID"),
-                    context={"error": f"{type(exc).__name__}: {exc}", "sell_child": _child_dependency_payload(sell_child)},
+                    context={
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "sell_child": _child_dependency_payload(sell_child),
+                    },
                     terminal=True,
                 )
                 continue
@@ -2492,7 +2709,10 @@ class MiniQMTExecutionRuntime:
                     instance,
                     status=_DEPENDENT_BUY_STATUS_BLOCKED,
                     reason_code=_reason_code_from_exception(exc, "MINIQMT_DEPENDENT_BUY_CONTRACT_INVALID"),
-                    context={"error": f"{type(exc).__name__}: {exc}", "sell_child": _child_dependency_payload(sell_child)},
+                    context={
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "sell_child": _child_dependency_payload(sell_child),
+                    },
                     terminal=True,
                 )
                 continue
@@ -3233,7 +3453,16 @@ def _position_sellable_quantity(position: dict[str, Any]) -> int:
 
 
 def _position_price(position: dict[str, Any]) -> float:
-    for key in ("price", "last_price", "current_price", "market_price", "avg_price", "avg_cost", "cost_price", "open_price"):
+    for key in (
+        "price",
+        "last_price",
+        "current_price",
+        "market_price",
+        "avg_price",
+        "avg_cost",
+        "cost_price",
+        "open_price",
+    ):
         if position.get(key) in (None, ""):
             continue
         try:

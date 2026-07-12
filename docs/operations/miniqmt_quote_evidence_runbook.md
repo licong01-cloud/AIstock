@@ -1,10 +1,10 @@
 # MiniQMT quote evidence operator runbook
 
-本文只覆盖 P1-D 的 durable quote evidence、markout、auction observation、metrics 和只读诊断。它不创建或绑定 `B0_QUOTE_V2` parent，不启用 ingress，不调用 broker，不修改 `LEGACY_B0`，也不构成 LIVE 或 `ADAPTIVE_IS_L1` 操作手册。
+本文覆盖 P1-D 的 durable quote evidence、markout、auction observation、metrics、只读诊断，以及 P1-E 的 `B0_QUOTE_V2` assignment/action/child/markout readback。它不创建或修改 binding/config，不启用 ingress，不调用或重放 broker，不修改 `LEGACY_B0`，也不构成 LIVE 或 `ADAPTIVE_IS_L1` 操作手册。
 
 ## 当前自动边界
 
-- `MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED=false` 是默认状态；P1-D 合入不改变它。
+- `MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED=false` 是默认状态；P1-D/P1-E 代码合入不改变它。switch=false 时只允许已有 durable active `B0_QUOTE_V2` runtime 自动恢复为 `DRAINING`，不得接纳新 assignment。
 - `production_ddl_gate=pending` 前，不能启用 quote ingress；代码合入、单元测试通过或本地 SQL 文件存在都不是 production DDL 已应用的证据。
 - P1-D 没有审批、RBAC、人工 acknowledge、confirm-run 或“手工恢复成功”状态。数据、连接或生命周期条件恢复后，下一个合法 lifecycle tick 自动再次尝试；历史 evidence 永不原地修改。
 - durable ack 只在 repository 事务提交并 post-commit readback 核对 `event_id/type/source/hash/created_at` 后成立。日志、outbox 入队、metrics 或 API `ok=true` 都不能替代它。
@@ -63,3 +63,18 @@ rollback 只在 exact target schema 且五个新 event type 和 `quote_ingress` 
 P1-D 提供 evidence contract、repository/readback、migration、markout selector、auction manifest、metrics、只读 diagnostics 和本 runbook。它不接通 action submit/cancel 或 broker/reconcile，也不激活真实 SIM ingress。
 
 P1-E 才负责冻结并显式绑定 `B0_QUOTE_V2`、真实 SIM parity、action durable-ack-before-submit 的运行接线与 Phase 0B production evidence。BUG-599/600/604/614 与 `LEGACY_B0` 的既有业务路径不属于 P1-D 改动范围。
+
+## P1-E 只读核验
+
+按 binding/date 生成 Phase 0B v2 export 时，只允许显式版本 `miniqmt_execution_tca_evidence_v2`。查询必须在一个 TCA-owned read snapshot 内先解析有限 parent/runtime IDs，再读取对应 runtime journal；不得全库 JSONB 扫描。v1 默认输出保持不变。
+
+核验顺序固定如下：
+
+1. `TCA_PARENT.lineage` 的 `binding_id/binding_hash/runtime_id` 与 `PARENT_ASSIGNMENT` 一一对应，且同 parent 只有一个 `control_revision/revision_id/assignment_id`。
+2. `CONTROL_REVISION` 的 policy/adapter/code/schema hashes 与 assignment、`ACTION_INPUT`、`CHILD_RECEIPT`、markout 完全一致；任一 hash set 不唯一即 `quote_control_complete=false`。
+3. `ACTION_EVENT.action_evidence_id/action_market_data_id` 必须命中 durable `ACTION_INPUT`；它之后只能出现同 deterministic action 对应的一个 `CHILD_EVENT`。
+4. `CHILD_RECEIPT.source_child_event_id` 反向命中 child event，并保留 action evidence、anchor market data 和 receipt 自身 market data；append-only child event 不回填 receipt ID。
+5. 每个 authoritative trade anchor 必须有 60/300/900 秒 terminal markout；captured 与 unavailable 都是明确结果，缺 horizon 不是零收益或成功。
+6. 查看 manifest 的 `missing_link_count/duplicate_child_count/revision_conflict_count/hash_conflict_count/identity_conflict_count`、五档/age/cadence/markout coverage；`quote_control_complete=true` 才表示该 export 的链路完整，不表示 ingress 已启用或真实 SIM 已运行。
+
+pending action 自动恢复只读取原 `action_evidence_candidate`、durable receipt、deterministic child 与 broker/reconcile fact。诊断或 runbook 不调用 submit/cancel、不重放 action、不修改 runtime event。parity violation 使对应 revision 停止接纳新 parent且不切回 LEGACY；assignment/persistence fault 只影响对应 runtime/symbol，均不需要人工 acknowledge、approval 或 RBAC。

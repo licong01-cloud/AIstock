@@ -12,6 +12,14 @@ from datetime import date
 from typing import Any
 
 from backend.execution_algos.board_lot import board_lot_rule, round_to_board_lot
+from backend.execution_algos.adaptive_is.contracts import ControlRevision
+from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
+    B0QuoteV2RevisionV1,
+    ParentQuoteControlAssignmentV1,
+    QuoteControlBindingV1,
+    quote_evidence_policy,
+    source_build_manifest,
+)
 from backend.services.selection_center.models import SignalSnapshot, TargetPosition
 from backend.services.strategy_package.models import StrategyPackageManifest
 from backend.services.strategy_package.runtime import TargetPositionEngine
@@ -422,9 +430,40 @@ class ExecutionPlanCompiler:
         if not isinstance(schedule_window, dict):
             schedule_window = {"mode": "full_day", "source": runtime_release.execution_policy_version_id}
         risk_context = execution_policy.get("risk_context") if isinstance(execution_policy.get("risk_context"), dict) else {}
+        quote_control = QuoteControlBindingV1.from_binding_config(binding.binding_config_json)
+        quote_revision: B0QuoteV2RevisionV1 | None = None
+        if quote_control.control_revision == ControlRevision.B0_QUOTE_V2:
+            benchmark_policy_version, mark_policy_version, markout_max_lag_ms = quote_evidence_policy(execution_policy)
+            manifest = source_build_manifest()
+            quote_revision = B0QuoteV2RevisionV1.build(
+                execution_policy=execution_policy,
+                execution_policy_version_id=runtime_release.execution_policy_version_id,
+                execution_policy_sha256=runtime_release.execution_policy_sha256,
+                adapter_version=manifest.adapter_version,
+                adapter_sha256=manifest.adapter_sha256,
+                code_revision=manifest.code_revision,
+                code_sha256=manifest.code_sha256,
+                evidence_schema_version=manifest.evidence_schema_version,
+                evidence_schema_sha256=manifest.evidence_schema_sha256,
+                benchmark_policy_version=benchmark_policy_version,
+                mark_policy_version=mark_policy_version,
+                markout_max_lag_ms=markout_max_lag_ms,
+            )
 
         seed_intents: list[dict[str, Any]] = []
+        quote_assignments: list[dict[str, Any]] = []
         for intent in order_intents:
+            quote_assignment = None
+            if quote_control.explicitly_configured:
+                quote_assignment = ParentQuoteControlAssignmentV1.build(
+                    binding_id=binding.binding_id,
+                    binding_hash=binding.binding_hash or "",
+                    trade_date=selection_evidence.target_trade_date,
+                    parent_intent_id=intent.intent_id,
+                    control_revision=quote_control.control_revision,
+                    revision=quote_revision,
+                )
+                quote_assignments.append(quote_assignment.canonical_payload())
             price_policy = {
                 "order_type": intent.order_type.value,
                 "limit_price": intent.limit_price,
@@ -449,10 +488,18 @@ class ExecutionPlanCompiler:
                     "schedule_window": schedule_window,
                     "price_policy": price_policy,
                     "risk_context": risk_context,
-                    "metadata": {"source_order_intent_id": intent.intent_id},
+                    "metadata": {
+                        "source_order_intent_id": intent.intent_id,
+                        **(
+                            {"quote_control_assignment": quote_assignment.canonical_payload()}
+                            if quote_assignment is not None
+                            else {}
+                        ),
+                    },
                 }
             )
         seed_intents.sort(key=lambda item: (item["symbol"], item["side"], item["intent_id"]))
+        quote_assignments.sort(key=lambda item: str(item["parent_intent_id"]))
         payload = {
             "schema_version": "execution_plan_v1",
             "strategy_id": binding.strategy_id,
@@ -486,6 +533,12 @@ class ExecutionPlanCompiler:
                 for decision in sorted(trading_rule_decisions, key=lambda item: item.decision_id)
             ],
         }
+        if quote_control.explicitly_configured:
+            payload["quote_control"] = {
+                "binding": quote_control.canonical_payload(),
+                "revision": quote_revision.canonical_payload() if quote_revision else None,
+                "assignments": quote_assignments,
+            }
         plan_hash = canonical_json_sha256(payload)
         plan_id = f"plan_{plan_hash[:16]}"
         plan_intents = [
