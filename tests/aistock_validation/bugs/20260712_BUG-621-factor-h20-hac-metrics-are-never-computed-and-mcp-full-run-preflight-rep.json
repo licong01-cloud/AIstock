@@ -1,6 +1,11 @@
 {
   "actual": "The official qe_eval_v2 metric engine does not produce the persisted h20/T21T1 HAC companion fields, so a full factor recompute leaves all new h20 columns null. Factor metrics/correlation MCP plan and validate-inputs also report a capped 100-factor preview as if it were the eligible count and do not expose official cache snapshot/integrity/moneyflow-contract blockers before an expensive full run. Implement actual h20 metrics and honest read-only preflight readiness without changing legacy 1d results.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/services/quantevolver/factor_compute_preflight.py",
+    "backend/routers/factor_metrics.py",
+    "backend/routers/factor_correlation.py",
+    "backend/tests/test_factor_metrics_h20_contract.py",
     "tests/aistock_validation/bugs/20260712_BUG-621-factor-h20-hac-metrics-are-never-computed-and-mcp-full-run-preflight-rep.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260712-64456fe36e88",
       "timestamp": "2026-07-12T08:53:39.780608Z"
+    },
+    {
+      "action": "scope_expansion_for_bug_621_implementation",
+      "actor": "codex",
+      "note": "Expanded the exact implementation scope to the qe_eval_v2 h20 engine, compact official-cache preflight service, factor metrics/correlation facades, and their targeted contract test.",
+      "timestamp": "2026-07-12T09:03:20Z"
     }
   ],
   "evidence_uris": [],
@@ -152,5 +163,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }

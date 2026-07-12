@@ -11,6 +11,8 @@ from psycopg2.extras import RealDictCursor
 from backend.db.pg_pool import get_conn
 from backend.services.mcp_payload_budget import artifact_ref, clamp_limit, clamp_offset, strip_forbidden_fields, summary_envelope
 from backend.services.quantevolver.factor_metrics_scheduler import factor_metrics_scheduler
+from backend.services.quantevolver.factor_metrics_scheduler import OFFICIAL_FACTOR_WINDOW_END
+from backend.services.quantevolver.factor_compute_preflight import build_official_cache_preflight
 
 router = APIRouter(prefix="/factor-metrics", tags=["factor-metrics"])
 SUBMIT_FACTOR_METRICS_CONFIRM = "SUBMIT_FACTOR_METRICS"
@@ -56,16 +58,33 @@ def plan_metrics(req: FactorMetricsPlanRequest) -> dict[str, Any]:
     names = [str(name).strip() for name in (req.factor_names or []) if str(name).strip()]
     if names:
         found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE factor_name = ANY(%s) ORDER BY factor_name", (names,))
+        eligible_count = sum(bool(row.get("is_available")) for row in found)
     else:
-        found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE is_available = TRUE ORDER BY factor_name LIMIT 100")
+        found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE is_available = TRUE ORDER BY factor_name LIMIT 20")
+        count_row = _one("SELECT COUNT(*) AS total FROM aistock_factor_catalog WHERE is_available = TRUE") or {}
+        eligible_count = int(count_row.get("total") or 0)
+    target_end = str(
+        req.options.get("end_date")
+        or req.options.get("window_backtest_end")
+        or req.options.get("data_date")
+        or OFFICIAL_FACTOR_WINDOW_END
+    )
+    cache_preflight = build_official_cache_preflight(
+        target_end=target_end,
+        eligible_factor_count=eligible_count,
+    )
     return {
         "ok": True,
         "domain": "factor_metrics",
         "plan_type": "submit_factor_metrics",
         "dataset": req.dataset,
-        "requested_factor_count": len(names) if names else "all_available_capped_preview",
+        "requested_factor_count": len(names) if names else "all_available",
+        "eligible_factor_count": eligible_count,
         "eligible_preview": strip_forbidden_fields(found[:20]),
-        "eligible_preview_count": len(found),
+        "eligible_preview_count": min(len(found), 20),
+        "target_end": target_end,
+        "cache_preflight": cache_preflight,
+        "cache_rebuild_required": not cache_preflight["ok"],
         "required_confirmation": SUBMIT_FACTOR_METRICS_CONFIRM,
         "async_job": True,
         "submit_tool": "aistock-factor-metrics/factor_metrics_submit_confirmed",
@@ -79,7 +98,13 @@ def validate_inputs(req: FactorMetricsPlanRequest) -> dict[str, Any]:
     blockers: list[str] = []
     if req.factor_names is not None and not plan["eligible_preview"]:
         blockers.append("no_requested_factors_found")
-    return {"ok": not blockers, "domain": "factor_metrics", "blockers": blockers, "plan": plan}
+    return {
+        "ok": not blockers,
+        "domain": "factor_metrics",
+        "blockers": blockers,
+        "warnings": list(plan["cache_preflight"].get("blockers") or []),
+        "plan": plan,
+    }
 
 
 @router.post("/submit-confirmed")

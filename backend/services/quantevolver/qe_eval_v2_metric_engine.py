@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_RETURN_HORIZON = 2
 N_GROUPS = 5
 ANNUALIZE_FACTOR = 252
+H20_RETURN_HORIZON = "T21T1"
+H20_HAC_LAG = 19
 
 # AT+1shift(-N)/shift(-1)-1  N-1
 # 1d=shift(-2)/shift(-1)-1, 5d=shift(-6)/shift(-1)-1, etc.
@@ -64,6 +66,91 @@ def _pearson_ic_from_matrices(f_arr: np.ndarray, r_arr: np.ndarray, min_obs: int
     den = np.sqrt(np.maximum((n * sff - sf**2) * (n * srr - sr**2), 1e-30))
 
     return np.where(n >= min_obs, num / den, np.nan)
+
+
+def _newey_west_long_run_variance(values: np.ndarray, lag: int) -> float | None:
+    """Return Bartlett-kernel long-run variance for an ordered IC series."""
+    if lag < 0:
+        raise ValueError("lag must be non-negative")
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < max(20, lag + 1):
+        return None
+
+    centered = arr - arr.mean()
+    if np.allclose(centered, 0.0):
+        return None
+
+    n_obs = centered.size
+    lrv = float(np.dot(centered, centered) / n_obs)
+    for offset in range(1, lag + 1):
+        covariance = float(np.dot(centered[offset:], centered[:-offset]) / n_obs)
+        weight = 1.0 - offset / (lag + 1.0)
+        lrv += 2.0 * weight * covariance
+    if not np.isfinite(lrv) or lrv <= 0:
+        return None
+    return lrv
+
+
+def _hac_icir(values: np.ndarray, lag: int) -> float | None:
+    arr = np.asarray(values, dtype=np.float64)
+    arr = arr[np.isfinite(arr)]
+    lrv = _newey_west_long_run_variance(arr, lag)
+    if lrv is None:
+        return None
+    return float(arr.mean() / np.sqrt(lrv))
+
+
+def _compute_h20_companion_metrics(
+    f_arr: np.ndarray,
+    h20_return_arr: np.ndarray,
+    sample_mask: np.ndarray,
+) -> dict[str, Any]:
+    """Compute the nullable T+1 to T+21 companion metric contract."""
+    if f_arr.shape != h20_return_arr.shape or f_arr.shape != sample_mask.shape:
+        raise ValueError("h20 factor, return, and sample masks must have identical shapes")
+
+    f_h20 = np.where(sample_mask, f_arr, np.nan)
+    r_h20 = np.where(sample_mask, h20_return_arr, np.nan)
+    ic_values = _pearson_ic_from_matrices(
+        _robust_zscore_matrix(f_h20),
+        _robust_zscore_matrix(r_h20),
+    )
+    rank_ic_values = _pearson_ic_from_matrices(
+        _rank_matrix(f_h20),
+        _rank_matrix(r_h20),
+    )
+    ic_clean = ic_values[np.isfinite(ic_values)]
+    rank_ic_clean = rank_ic_values[np.isfinite(rank_ic_values)]
+
+    ic_mean = float(ic_clean.mean()) if ic_clean.size else None
+    ic_std = float(ic_clean.std(ddof=0)) if ic_clean.size else None
+    rank_ic_mean = float(rank_ic_clean.mean()) if rank_ic_clean.size else None
+    rank_ic_std = float(rank_ic_clean.std(ddof=0)) if rank_ic_clean.size else None
+    return {
+        "h20_return_horizon": H20_RETURN_HORIZON,
+        "h20_ic_mean": ic_mean,
+        "h20_ic_std": ic_std,
+        "h20_rank_ic_mean": rank_ic_mean,
+        "h20_rank_ic_std": rank_ic_std,
+        "h20_icir": (
+            float(ic_mean / ic_std)
+            if ic_mean is not None and ic_std is not None and ic_std > 0
+            else None
+        ),
+        "h20_rank_icir": (
+            float(rank_ic_mean / rank_ic_std)
+            if rank_ic_mean is not None and rank_ic_std is not None and rank_ic_std > 0
+            else None
+        ),
+        "h20_icir_hac": _hac_icir(ic_clean, H20_HAC_LAG),
+        "h20_rank_icir_hac": _hac_icir(rank_ic_clean, H20_HAC_LAG),
+        "h20_ic_positive_ratio": (
+            float((ic_clean > 0).mean()) if ic_clean.size else None
+        ),
+        "h20_n_obs": int(ic_clean.size),
+        "h20_hac_lag": H20_HAC_LAG,
+    }
 
 
 def _aggregate_monthly_ic(
@@ -488,6 +575,9 @@ def _compute_factor_metrics_impl(
     factor_reports = []
     universe_metadata = universe_metadata or {}
     close_arr = close_unstacked.values
+    h20_return_arr = fwd_arrs.get("20d")
+    if h20_return_arr is None:
+        raise ValueError("20d forward-return matrix is required for h20 metrics")
     market_valid_full = np.isfinite(close_arr) & np.isfinite(fwd_arr)
     suspended_full = suspended_mask if suspended_mask is not None else np.zeros_like(f_arr_full, dtype=bool)
     eligible_full = eligible_mask if eligible_mask is not None else np.ones_like(f_arr_full, dtype=bool)
@@ -566,6 +656,18 @@ def _compute_factor_metrics_impl(
                 "icir_annualized": float(ic_mean / ic_std * np.sqrt(ANNUALIZE_FACTOR)) if ic_mean and ic_std and ic_std > 0 else None,
                 "rank_icir_annualized": float(ric_mean / ric_std * np.sqrt(ANNUALIZE_FACTOR)) if ric_mean and ric_std and ric_std > 0 else None,
             }
+            h20_sample_mask = (
+                eligible_full[mask]
+                & ~suspended_full[mask]
+                & np.isfinite(h20_return_arr[mask])
+            )
+            result.update(
+                _compute_h20_companion_metrics(
+                    f_arr_full[mask],
+                    h20_return_arr[mask],
+                    h20_sample_mask,
+                )
+            )
 
             lo = _long_only_from_group_arr(grp_full, mask)
             result.update(lo)
