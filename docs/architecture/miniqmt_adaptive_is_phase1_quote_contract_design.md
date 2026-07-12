@@ -6,7 +6,7 @@
 >
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
-> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`）；下一阶段为 P1-D，P1-E 尚未开始。
+> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`）；P1-D 的权威实现与验收 PR 为 #2011，其合入状态以 GitHub 为准；P1-D 合入后的下一开发阶段为 P1-E。
 >
 > 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
 
@@ -1339,7 +1339,7 @@ P1-C 保持 P1-B candidate physical bootstrap 的 all-or-nothing 语义；`WAITI
 
 ### 13.4 P1-D implementation acceptance record（2026-07-12）
 
-本记录证明 §8.4 的 durable evidence/observation 切片已按设计实现并完成定向及
+本记录对应权威实现 PR #2011，证明 §8.4 的 durable evidence/observation 切片已按设计实现并完成定向及
 disposable dev-DB 验证。它不表示生产 CHECK DDL 已执行、SIM ingress 已激活、
 `B0_QUOTE_V2` 已绑定或任何 broker side effect 已发生；这些状态继续分别受
 §10.3、§11 与 P1-E 约束。
@@ -1375,7 +1375,7 @@ repository/diagnostics 的 PostgreSQL transaction、recursive link、pagination�
 - 不得把静态、占位、简化或 mock-only 产物写成已完成。
 - 不存在人工审批/RBAC/permit/confirm-run/ack；所有技术条件可自动正向满足且只影响对应 symbol/revision。
 
-P1-A/P1-B/P1-C 已完成实现与合入，P1-C 的权威实现记录为 §13.3（PR #2005 / merge `47817a63`）；下一阶段开发从 P1-D 开始并严格使用 §4.4、§5.8–§5.10、§8.4、§9.1.2、§9.4 与 §10.3 的实施级契约。P1-D 代码、migration、direct tests 和真实 durable readback 完成前不得宣称 Phase 0A handoff/观测 evidence 已闭合；生产 DDL 未获授权时必须单独报告 pending。P1-E 完成前不得宣称 Phase 1/B0_QUOTE_V2 已实现或已绑定。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1、B1 可下单、LEGACY_B0 已改变或 BUG-599/600/604/614 已被本阶段重写。
+P1-A/P1-B/P1-C 已完成实现与合入；P1-D 的权威实现记录为 §13.4 / PR #2011，合入状态以 GitHub 为准。P1-D 合入后下一阶段从 P1-E 开始；生产 CHECK DDL 未获授权或未完成 production readback 时必须单独报告 `production_ddl_gate=pending`，不得激活 ingress。P1-E 完成前不得宣称 Phase 1/B0_QUOTE_V2 已实现或已绑定。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1、B1 可下单、LEGACY_B0 已改变或 BUG-599/600/604/614 已被本阶段重写。
 
 ---
 
