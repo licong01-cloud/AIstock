@@ -4,11 +4,13 @@ from pathlib import Path
 import re
 from typing import Any
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from backend.mcp.modules import factor_library as factor_library_mcp
 from backend.mcp.modules import factor_metrics as factor_metrics_mcp
-from backend.routers import factor_library, factor_metrics
+from backend.routers import factor_correlation, factor_library, factor_metrics
 from backend.services import rdagent_factor_metrics_sync
 from backend.services.factor_metrics_contract import (
     H20_CONTRACT_PRESENT_PARAM,
@@ -16,6 +18,8 @@ from backend.services.factor_metrics_contract import (
     with_h20_metric_defaults,
 )
 from backend.services.quantevolver import factor_official_evaluation_service as official_service
+from backend.services.quantevolver import factor_compute_preflight
+from backend.services.quantevolver import qe_eval_v2_metric_engine as metric_engine
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -345,3 +349,155 @@ def test_mcp_metric_tools_advertise_and_pass_through_h20_companion_output() -> N
     assert "nullable h20/HAC companion fields" in (compare_tool.__doc__ or "")
     for payload in (library_tool("alpha_h20"), result_tool("alpha_h20"), compare_tool("alpha_h20")):
         assert payload["items"][0].keys() >= set(H20_FIELDS)
+
+
+def test_qe_eval_v2_computes_h20_hac_companion_without_changing_1d_contract() -> None:
+    rng = np.random.default_rng(621)
+    n_dates = 140
+    n_instruments = 12
+    dates = pd.bdate_range("2024-07-01", periods=n_dates)
+    instruments = [f"{index:06d}.SZ" for index in range(n_instruments)]
+    factor_values = rng.normal(size=(n_dates, n_instruments))
+    one_day_returns = rng.normal(scale=0.02, size=factor_values.shape)
+    time_loading = 0.15 + 0.10 * np.sin(np.arange(n_dates) / 7.0)
+    h20_returns = (
+        factor_values * time_loading[:, None]
+        + rng.normal(scale=0.8, size=factor_values.shape)
+    )
+    close = pd.DataFrame(
+        100.0 + np.cumsum(rng.normal(scale=0.5, size=factor_values.shape), axis=0),
+        index=dates,
+        columns=instruments,
+    )
+
+    metrics, reports = metric_engine._compute_factor_metrics_impl(
+        fname="alpha_h20",
+        f_arr_full=factor_values,
+        dates=dates,
+        fwd_arr=one_day_returns,
+        fwd_arrs={
+            "1d": one_day_returns,
+            "5d": rng.normal(size=factor_values.shape),
+            "10d": rng.normal(size=factor_values.shape),
+            "20d": h20_returns,
+        },
+        close_unstacked=close,
+        data_start=str(dates[0].date()),
+        data_end=str(dates[-1].date()),
+        calc_batch_id="batch-621",
+        suspended_mask=np.zeros_like(factor_values, dtype=bool),
+        eligible_mask=np.ones_like(factor_values, dtype=bool),
+    )
+
+    full = next(row for row in metrics if row["eval_window"] == "full")
+    assert full["return_horizon"] == "1d"
+    assert full["h20_return_horizon"] == "T21T1"
+    assert full["h20_hac_lag"] == 19
+    assert full["h20_n_obs"] == n_dates
+    assert np.isfinite(full["h20_ic_mean"])
+    assert np.isfinite(full["h20_rank_ic_mean"])
+    assert np.isfinite(full["h20_icir_hac"])
+    assert np.isfinite(full["h20_rank_icir_hac"])
+    assert all(row["status"] == "ok" for row in reports)
+
+
+def test_h20_hac_is_nullable_for_insufficient_or_degenerate_ic_series() -> None:
+    assert metric_engine._hac_icir(np.asarray([0.1] * 19), lag=19) is None
+    assert metric_engine._hac_icir(np.asarray([0.1] * 25), lag=19) is None
+    values = np.asarray([0.01 + (index % 5) * 0.002 for index in range(40)])
+    assert np.isfinite(metric_engine._hac_icir(values, lag=19))
+
+
+def test_factor_mcp_plans_report_full_count_and_cache_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview = [
+        {"factor_name": f"factor_{index}", "source": "manual", "is_available": True}
+        for index in range(20)
+    ]
+    stale_cache = {
+        "ok": False,
+        "blockers": ["official_cache_snapshot_mismatch"],
+    }
+    for module in (factor_metrics, factor_correlation):
+        monkeypatch.setattr(module, "_rows", lambda *args, **kwargs: preview)
+        monkeypatch.setattr(module, "_one", lambda *args, **kwargs: {"total": 585})
+        monkeypatch.setattr(
+            module,
+            "build_official_cache_preflight",
+            lambda **kwargs: {**stale_cache, **kwargs},
+        )
+
+    metrics_plan = factor_metrics.plan_metrics(
+        factor_metrics.FactorMetricsPlanRequest(options={"end_date": "2026-06-30"})
+    )
+    assert metrics_plan["requested_factor_count"] == "all_available"
+    assert metrics_plan["eligible_factor_count"] == 585
+    assert metrics_plan["eligible_preview_count"] == 20
+    assert metrics_plan["cache_rebuild_required"] is True
+    metrics_validation = factor_metrics.validate_inputs(
+        factor_metrics.FactorMetricsPlanRequest(options={"end_date": "2026-06-30"})
+    )
+    assert metrics_validation["ok"] is True
+    assert metrics_validation["warnings"] == ["official_cache_snapshot_mismatch"]
+
+    correlation_plan = factor_correlation.plan_correlation(
+        factor_correlation.FactorCorrelationPlanRequest(
+            options={"as_of_date": "2026-06-30"}
+        )
+    )
+    assert correlation_plan["eligible_factor_count"] == 585
+    assert correlation_plan["eligible_factor_count_preview"] == 20
+    assert correlation_plan["estimated_pair_count"] == 170820
+    correlation_validation = factor_correlation.validate_inputs(
+        factor_correlation.FactorCorrelationPlanRequest(
+            options={"as_of_date": "2026-06-30"}
+        )
+    )
+    assert correlation_validation["ok"] is False
+    assert correlation_validation["blockers"] == [
+        "official_cache_snapshot_mismatch"
+    ]
+
+
+def test_official_cache_preflight_reports_compact_full_run_blockers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        factor_compute_preflight,
+        "get_correlation_factor_cache_status",
+        lambda: {
+            "cached_count": 580,
+            "as_of_date": "2026-04-28",
+            "window_backtest_end": "2026-04-28",
+            "generated_at": "2026-07-11T08:40:07Z",
+            "cache_source": "offline_research_backtest_factor_values",
+            "cache_root": "/mnt/f/Dev/AIstock/rdagent_assets/factor_values",
+            "integrity_ok": False,
+            "moneyflow_unit_contract_version": None,
+            "integrity": {
+                "as_of_date_distribution": {
+                    "2026-04-30": 575,
+                    "2026-04-28": 5,
+                }
+            },
+        },
+    )
+
+    result = factor_compute_preflight.build_official_cache_preflight(
+        target_end="2026-06-30",
+        eligible_factor_count=585,
+    )
+
+    assert result["ok"] is False
+    assert result["cached_factor_count"] == 580
+    assert result["as_of_date_distribution"] == {
+        "2026-04-30": 575,
+        "2026-04-28": 5,
+    }
+    assert result["blockers"] == [
+        "official_cache_integrity_failed",
+        "official_cache_snapshot_mismatch",
+        "official_cache_moneyflow_contract_mismatch",
+        "official_cache_factor_coverage_incomplete",
+    ]
