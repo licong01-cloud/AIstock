@@ -536,6 +536,19 @@ def test_factor_list_metric_buttons_submit_official_cache_compute():
     assert "activeSnapshot" not in task_metrics
 
 
+def test_factor_list_exposes_selected_or_full_compute_without_duplicate_force_action():
+    source = Path("frontend/src/app/quantevolver/components/FactorList.tsx").read_text(encoding="utf-8")
+
+    assert "全量计算独立指标并刷新官方缓存" in source
+    assert "计算选中因子 (" in source
+    assert "生成/更新官方共用缓存" not in source
+    assert "强制重算官方缓存" not in source
+    assert "triggerCacheCompute(undefined, true)" not in source
+    assert "`${API}/factor-metrics/plan`" in source
+    assert "确认提交正式计算任务？" in source
+    assert "不会先清空整个缓存" in source
+
+
 def test_factor_list_shows_single_official_cache_timestamp_column():
     source = Path("frontend/src/app/quantevolver/components/FactorList.tsx").read_text(encoding="utf-8")
 

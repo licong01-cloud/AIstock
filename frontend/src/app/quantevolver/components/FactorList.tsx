@@ -615,7 +615,6 @@ export default function FactorList({
 
   const submitOfficialFullCompute = useCallback(async (
     factorNames?: string[],
-    force = false,
   ) => {
     if (!cacheStartDate || !cacheEndDate) {
       throw new Error("请先选择官方缓存窗口开始/结束日期");
@@ -627,7 +626,6 @@ export default function FactorList({
     const body: any = {
       workers: cacheWorkers,
       timeout_per_factor: 1800,
-      force,
       start_date: cacheStartDate,
       end_date: cacheEndDate,
       include_disabled: includeDisabled,
@@ -645,14 +643,43 @@ export default function FactorList({
 
   const triggerCacheCompute = useCallback(async (
     factorNames?: string[],
-    force = false,
   ) => {
     setCacheBusy(true);
     try {
-      const d = await submitOfficialFullCompute(factorNames, force);
+      const requestedNames = factorNames && factorNames.length > 0 ? factorNames : undefined;
+      const planRes = await fetch(`${API}/factor-metrics/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          factor_names: requestedNames,
+          dataset: "factor_metrics_compute",
+          options: { end_date: cacheEndDate, window_backtest_end: cacheEndDate },
+        }),
+      });
+      const plan = await planRes.json();
+      if (!planRes.ok || plan.ok === false) {
+        throw new Error(plan.detail || plan.error || "官方因子计算计划检查失败");
+      }
+      const isSelectedScope = Boolean(requestedNames);
+      const factorCount = isSelectedScope ? requestedNames!.length : Number(plan.eligible_factor_count || 0);
+      const actionLabel = isSelectedScope
+        ? `计算选中的 ${factorCount} 个因子`
+        : `全量计算 ${factorCount} 个可用因子`;
+      const cacheWarnings = Array.isArray(plan.cache_preflight?.blockers)
+        ? plan.cache_preflight.blockers.length
+        : 0;
+      const confirmed = confirm(
+        `${actionLabel}\n` +
+        `官方窗口：${cacheStartDate} ~ ${cacheEndDate}\n` +
+        `${isSelectedScope ? "仅替换选中因子的缓存和独立指标，其他因子不变。" : "逐因子替换官方缓存并更新独立指标，不会先清空整个缓存。"}\n` +
+        `${cacheWarnings > 0 ? `当前缓存有 ${cacheWarnings} 项待刷新提示，本次计算用于修复。\n` : ""}` +
+        "确认提交正式计算任务？",
+      );
+      if (!confirmed) return;
+      const d = await submitOfficialFullCompute(requestedNames);
       alert(`官方共用因子缓存任务已提交 (task_id: ${d.task_id})`);
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
-  }, [submitOfficialFullCompute]);
+  }, [cacheStartDate, cacheEndDate, submitOfficialFullCompute]);
 
   const triggerRemoteSync = useCallback(async (factorNames?: string[]) => {
     setRemoteSyncBusy(true);
@@ -1098,7 +1125,7 @@ export default function FactorList({
           setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
           continue;
         }
-        const data = await submitOfficialFullCompute(factorNames, false);
+        const data = await submitOfficialFullCompute(factorNames);
         setTaskResults(prev => ({
           ...prev,
           [tid]: {
@@ -1166,7 +1193,7 @@ export default function FactorList({
     setMetricsLoading(true);
     setMetricsResult(null);
     try {
-      const data = await submitOfficialFullCompute(factorNames, false);
+      const data = await submitOfficialFullCompute(factorNames);
       setMetricsResult({ ...data, ok: data.ok !== false, success: data.ok !== false });
       loadData();
       loadIndSummary();
@@ -1921,11 +1948,7 @@ export default function FactorList({
               </select>
               <button onClick={() => triggerCacheCompute()} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                {cacheBusy ? "提交中..." : "生成/更新官方共用缓存"}
-              </button>
-              <button onClick={() => triggerCacheCompute(undefined, true)} disabled={cacheBusy}
-                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                强制重算官方缓存
+                {cacheBusy ? "提交中..." : "全量计算独立指标并刷新官方缓存"}
               </button>
               {actualSelectedFactors.size > 0 && (
                 <button onClick={() => triggerCacheCompute(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={cacheBusy}
@@ -1995,7 +2018,7 @@ export default function FactorList({
                     </div>
                   )}
                   <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-                    官方路径仅通过 WSL/计算节点 dispatch 执行；旧手工 backfill/resume 不再作为业务入口。失败因子请重新提交选中因子或强制重算官方缓存。
+                    官方路径仅通过 WSL/计算节点 dispatch 执行；旧手工 backfill/resume 不再作为业务入口。失败因子请重新提交选中因子，窗口整体变化时执行全量计算。
                   </div>
                   {selectedCacheTask.task_state && (
                     <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
