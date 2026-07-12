@@ -516,6 +516,47 @@ def sync_model_task(task_id: str, req: SyncModelTaskRequest = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_CACHE_STATUS_SORT_SCORE = {
+    "no_cache": 0,
+    "error": 0,
+    "missing_meta_reconcile_required": 1,
+    "hash_mismatch": 1,
+    "partial": 2,
+    "covered": 3,
+    "ok": 3,
+}
+
+
+def _sort_factor_cache_rows(rows: list[Dict[str, Any]], *, sort_field: str, sort_order: str) -> list[Dict[str, Any]]:
+    """Sort cache fields with one comparable type per field and nulls always last."""
+    def _value(row: Dict[str, Any]) -> Any:
+        if sort_field == "cache_status":
+            status = str(row.get("cache_coverage_status") or row.get("cache_status") or "no_cache")
+            return _CACHE_STATUS_SORT_SCORE.get(status, 0)
+        if sort_field == "cache_size_mb":
+            raw_value = row.get("cache_size_mb")
+            if raw_value is None:
+                return None
+            try:
+                return float(raw_value)
+            except (TypeError, ValueError):
+                return None
+        raw_value = row.get(sort_field)
+        return str(raw_value) if raw_value is not None else None
+
+    present: list[tuple[Any, str, Dict[str, Any]]] = []
+    missing: list[Dict[str, Any]] = []
+    for row in rows:
+        value = _value(row)
+        if value is None:
+            missing.append(row)
+        else:
+            present.append((value, str(row.get("factor_name") or ""), row))
+    present.sort(key=lambda item: (item[0], item[1]), reverse=(sort_order == "desc"))
+    missing.sort(key=lambda row: str(row.get("factor_name") or ""))
+    return [row for _value, _name, row in present] + missing
+
+
 @router.get("/factors")
 def list_factors(
     source: Optional[str] = Query(None, description="过滤source"),
@@ -874,22 +915,7 @@ def list_factors(
                 rows = [r for r in rows if r.get("cache_status") == "missing_meta_reconcile_required"]
 
             if sort_field in cache_sort_fields:
-                status_score = {"no_cache": 0, "error": 0, "missing_meta_reconcile_required": 1, "hash_mismatch": 1, "partial": 2, "covered": 3, "ok": 3}
-
-                def _cache_sort_value(row: Dict[str, Any]) -> Any:
-                    if sort_field == "cache_status":
-                        return status_score.get(str(row.get("cache_coverage_status") or row.get("cache_status") or "no_cache"), 0)
-                    if sort_field == "cache_size_mb":
-                        return row.get("cache_size_mb")
-                    return row.get(sort_field)
-
-                def _cache_sort_key(row: Dict[str, Any]) -> Tuple[Any, Any]:
-                    value = _cache_sort_value(row)
-                    if sort_order == "desc":
-                        return (value is not None, value or "")
-                    return (value is None, value or "")
-
-                rows.sort(key=_cache_sort_key, reverse=(sort_order == "desc"))
+                rows = _sort_factor_cache_rows(rows, sort_field=sort_field, sort_order=sort_order)
 
             total = len(rows)
             rows = rows[offset: offset + limit]
@@ -3643,6 +3669,11 @@ def _load_factor_cache_dispatch_task_detail(task_id: str, *, sync_remote: bool =
         except Exception as e:
             dispatch_sync_error = str(e)
 
+    live_progress = _load_official_factor_live_progress(mapped)
+    if live_progress:
+        mapped["live_progress"] = live_progress
+        mapped["last_progress_at"] = live_progress.get("updated_at")
+
     recent_log = ""
     try:
         logs = svc.get_task_logs_full(task_id, offset=0, limit=5000)
@@ -3692,6 +3723,19 @@ def _load_official_factor_checkpoint(task_detail: Mapping[str, Any]) -> Dict[str
         return {}
     checkpoint_path = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "checkpoints" / f"{worker_task_id}.json"
     return _load_json_file(checkpoint_path)
+
+
+def _load_official_factor_live_progress(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    """Load the worker-written factor-level progress receipt; never infer it from cache coverage."""
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    worker_task_id = str(payload.get("task_id") or "").strip()
+    if not worker_task_id:
+        return {}
+    progress_path = FACTOR_CACHE_ROOT / "checkpoints" / f"{worker_task_id}.progress.json"
+    progress = _load_json_file(progress_path)
+    if not progress or str(progress.get("task_id") or "") != worker_task_id:
+        return {}
+    return progress
 
 
 def _retry_factor_names_from_terminal_task(task_detail: Mapping[str, Any]) -> tuple[list[str], str]:
@@ -4500,10 +4544,31 @@ def factor_cache_sync_to_node(req: FactorCacheRemoteSyncRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _assert_official_factor_cache_not_computing() -> None:
+    """Fail closed: cache deletion must never race an official compute task."""
+    tasks, dispatch_error = _list_factor_cache_dispatch_tasks()
+    if dispatch_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"unable to verify official factor-cache task state; cache deletion refused: {dispatch_error}",
+        )
+    active = [
+        str(task.get("task_id"))
+        for task in tasks
+        if str(task.get("status") or "").lower() in _FACTOR_CACHE_RUNNING_STATUSES
+    ]
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"official factor-cache compute is active; cache deletion refused: {', '.join(active)}",
+        )
+
+
 @router.delete("/factor-cache/all", summary="一键清空所有因子值缓存")
 def factor_cache_clear_all():
     """删除 single/*.parquet + 重置 _meta.json。"""
     try:
+        _assert_official_factor_cache_not_computing()
         if not FACTOR_CACHE_SINGLE_DIR.exists():
             return {"ok": True, "deleted": 0}
         deleted = 0
@@ -4521,6 +4586,8 @@ def factor_cache_clear_all():
             )
         _invalidate_cache_meta()
         return {"ok": True, "deleted": deleted}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("清空缓存失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4529,6 +4596,7 @@ def factor_cache_clear_all():
 @router.delete("/factor-cache/{factor_name}", summary="清除单个因子缓存")
 def factor_cache_clear_one(factor_name: str):
     try:
+        _assert_official_factor_cache_not_computing()
         parquet_path = FACTOR_CACHE_SINGLE_DIR / f"{factor_name}.parquet"
         deleted = False
         if parquet_path.exists():
@@ -4545,6 +4613,8 @@ def factor_cache_clear_one(factor_name: str):
             )
             _invalidate_cache_meta()
         return {"ok": True, "deleted": deleted, "factor_name": factor_name}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"清除缓存失败 {factor_name}")
         raise HTTPException(status_code=500, detail=str(e))

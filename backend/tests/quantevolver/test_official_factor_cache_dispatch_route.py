@@ -6,10 +6,57 @@ import sys
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.background import BackgroundTasks
 
 from backend.routers import quantevolver as router
+
+
+def test_cache_status_sort_keeps_numeric_scores_comparable():
+    rows = [
+        {"factor_name": "missing", "cache_status": "no_cache"},
+        {"factor_name": "covered", "cache_status": "ok", "cache_coverage_status": "covered"},
+        {"factor_name": "partial", "cache_status": "partial", "cache_coverage_status": "partial"},
+    ]
+
+    sorted_rows = router._sort_factor_cache_rows(rows, sort_field="cache_status", sort_order="desc")
+
+    assert [row["factor_name"] for row in sorted_rows] == ["covered", "partial", "missing"]
+
+
+def test_factor_cache_delete_refuses_while_dispatch_task_is_running(monkeypatch):
+    monkeypatch.setattr(
+        router,
+        "_list_factor_cache_dispatch_tasks",
+        lambda: ([{"task_id": "active-task", "status": "running"}], None),
+    )
+
+    with pytest.raises(HTTPException, match="cache deletion refused") as exc_info:
+        router.factor_cache_clear_all()
+
+    assert exc_info.value.status_code == 409
+
+
+def test_factor_cache_status_reads_worker_progress_receipt(monkeypatch, tmp_path):
+    monkeypatch.setattr(router, "FACTOR_CACHE_ROOT", tmp_path)
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / "worker-task.progress.json").write_text(
+        json.dumps({
+            "schema_version": "official_factor_compute_progress_v1",
+            "task_id": "worker-task",
+            "total_factors": 10,
+            "completed_count": 4,
+            "success_count": 4,
+            "failed_count": 0,
+        }),
+        encoding="utf-8",
+    )
+
+    progress = router._load_official_factor_live_progress({"dispatch_payload": {"task_id": "worker-task"}})
+
+    assert progress["completed_count"] == 4
 
 
 class _FactorCodeConn:
