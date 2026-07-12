@@ -58,6 +58,73 @@ FACTOR_TIMEOUT = "factor_timeout"
 FactorResultHandler = Callable[[str, FactorExecutionResult], None]
 
 
+class OfficialFactorComputeProgressReceipt:
+    """Persist restart-safe, factor-level progress without changing the official snapshot."""
+
+    def __init__(self, task_id: str) -> None:
+        self._task_id = task_id
+        self._path = OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR / f"{task_id}.progress.json"
+        self._total = 0
+        self._value_ready: set[str] = set()
+        self._completed: dict[str, bool] = {}
+        self._active: set[str] = set()
+        self._status = "running"
+
+    def observe(self, event: dict[str, Any]) -> None:
+        event_type = str(event.get("type") or "")
+        if event_type == "factor_plan_ready":
+            self._total = int(event.get("eligible_count") or 0)
+        elif event_type == "factor_started":
+            name = str(event.get("factor_name") or "").strip()
+            if name:
+                self._active.add(name)
+        elif event_type == "factor_done":
+            name = str(event.get("factor_name") or "").strip()
+            if name:
+                self._value_ready.add(name)
+        elif event_type == "factor_failed":
+            name = str(event.get("factor_name") or "").strip()
+            if name:
+                self._active.discard(name)
+                self._completed[name] = False
+        elif event_type == "metric_done":
+            name = str(event.get("factor_name") or "").strip()
+            if name:
+                self._active.discard(name)
+                self._completed[name] = bool(event.get("ok"))
+        elif event_type in {"success", "failed"}:
+            self._status = "success" if event_type == "success" else "failed"
+            result = event.get("result")
+            if isinstance(result, dict):
+                runtime_validation = result.get("runtime_validation")
+                factor_results = runtime_validation.get("factor_results", []) if isinstance(runtime_validation, dict) else []
+                for item in factor_results:
+                    if isinstance(item, dict) and item.get("name"):
+                        self._completed[str(item["name"])] = bool(item.get("success"))
+        self._write(event_type)
+
+    def _write(self, event_type: str) -> None:
+        OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        success_count = sum(1 for ok in self._completed.values() if ok)
+        failed_count = sum(1 for ok in self._completed.values() if not ok)
+        payload = {
+            "schema_version": "official_factor_compute_progress_v1",
+            "task_id": self._task_id,
+            "status": self._status,
+            "total_factors": self._total,
+            "value_ready_count": len(self._value_ready),
+            "completed_count": len(self._completed),
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "active_factor_names": sorted(self._active),
+            "last_event": event_type,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = self._path.with_suffix(".progress.json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self._path)
+
+
 @dataclass(frozen=True)
 class ResourceSnapshot:
     rss_mb: float
@@ -129,6 +196,7 @@ class OfficialFactorBatchComputeService:
         assert_wsl_runtime("official_factor_full_compute")
         self._assert_official_cache_root()
         task_id = cfg.task_id or f"official_factor_full_{int(time.time() * 1000)}"
+        self._progress_receipt = OfficialFactorComputeProgressReceipt(task_id)
         started = time.time()
         start_date = _normalize_date(cfg.start_date)
         end_date = _normalize_date(cfg.end_date)
@@ -144,7 +212,15 @@ class OfficialFactorBatchComputeService:
         requested = list(cfg.factor_names or [row["factor_name"] for row in eligible])
         eligible_names = [row["factor_name"] for row in eligible]
         skipped = sorted(set(requested) - set(eligible_names)) if cfg.factor_names else []
+        self._emit(
+            "factor_plan_ready",
+            task_id=task_id,
+            requested_count=len(requested),
+            eligible_count=len(eligible_names),
+            skipped_count=len(skipped),
+        )
         if not eligible:
+            self._emit("failed", task_id=task_id, result={"success": False, "eligible_factors": []})
             return {
                 "success": False,
                 "status": "failed",
@@ -331,6 +407,7 @@ class OfficialFactorBatchComputeService:
                     calc_batch_id=calc_batch_id,
                     end_date=end_date,
                     factor_ids=factor_ids,
+                    task_id=task_id,
                     batch_id=batch_id,
                 )
                 pending_success_frames.clear()
@@ -349,6 +426,7 @@ class OfficialFactorBatchComputeService:
                         "error": "unexpected_execution_result",
                         "error_type": "unexpected_execution_result",
                     })
+                    self._emit("factor_failed", task_id=task_id, batch_id=batch_id, factor_name=name, error="unexpected_execution_result")
                     return
                 spill_error = getattr(exec_result, "worker_dataframe_spill_error", None)
                 if spill_error:
@@ -397,6 +475,7 @@ class OfficialFactorBatchComputeService:
                         "error": err,
                         "error_type": exec_result.error_type or "unknown",
                     })
+                    self._emit("factor_failed", task_id=task_id, batch_id=batch_id, factor_name=name, error=err)
                     if resource_gate_failed:
                         self._record_resource_deferred_meta(name, row.get("code_text"), err)
                     else:
@@ -729,6 +808,7 @@ class OfficialFactorBatchComputeService:
         calc_batch_id: str,
         end_date: str,
         factor_ids: dict[str, int],
+        task_id: str,
         batch_id: str,
     ) -> int:
         parent_metric_results = self._compute_parent_metrics_for_frames(
@@ -757,7 +837,10 @@ class OfficialFactorBatchComputeService:
                 )
             if metric_result is not None:
                 db_result["metric_precomputed"] += 1
+            metric_ok = False
+            metric_error: str | None = None
             if metric_result is None and (metrics_error or metrics_ctx is None or compute_single_factor_metrics is None):
+                metric_error = metrics_error or "metrics context missing"
                 db_result["errors"].append(f"{name}: {metrics_error or 'metrics context missing'}")
                 db_result["save_failures"].append(name)
             else:
@@ -765,6 +848,7 @@ class OfficialFactorBatchComputeService:
                     if metric_result is None:
                         metric_result = parent_metric_results.get(name)
                     if metric_result is None:
+                        metric_error = "metrics_parent_missing"
                         if name not in set(db_result.get("save_failures") or []):
                             db_result["errors"].append(f"{name}: metrics_parent_missing")
                             db_result["save_failures"].append(name)
@@ -786,15 +870,29 @@ class OfficialFactorBatchComputeService:
                             db_result["skipped"] += int(save_result.get("skipped") or 0)
                             if save_result.get("errors"):
                                 db_result["errors"].extend(save_result["errors"])
+                                metric_error = "; ".join(str(item) for item in save_result["errors"][:3])
+                            else:
+                                metric_ok = True
                             full_metrics = metrics_by_window.get("full", {})
                             monthly_series = full_metrics.get("monthly_ic_series")
                             if monthly_series:
                                 self._metric_writer()._save_monthly_ic(name, end_date, monthly_series)
                         else:
+                            metric_error = "metrics_empty"
                             db_result["errors"].append(f"{name}: metrics_empty")
                 except Exception as exc:
+                    metric_error = f"{type(exc).__name__}: {exc}"
                     db_result["errors"].append(f"{name}: {type(exc).__name__}: {exc}")
                     db_result["save_failures"].append(name)
+
+            self._emit(
+                "metric_done",
+                task_id=task_id,
+                batch_id=batch_id,
+                factor_name=name,
+                ok=metric_ok,
+                error=metric_error,
+            )
 
             results.append({
                 "name": name,
@@ -1780,6 +1878,12 @@ class OfficialFactorBatchComputeService:
 
     def _emit(self, event_type: str, **payload: Any) -> None:
         event = {"type": event_type, "ts": datetime.now(timezone.utc).isoformat(), **payload}
+        progress_receipt = getattr(self, "_progress_receipt", None)
+        if progress_receipt is not None:
+            try:
+                progress_receipt.observe(event)
+            except Exception as exc:  # progress must not alter factor compute semantics
+                logger.warning("official factor progress receipt write failed: %s", exc)
         emitter = getattr(self, "_event_emitter", None)
         if emitter is not None:
             emitter(event)

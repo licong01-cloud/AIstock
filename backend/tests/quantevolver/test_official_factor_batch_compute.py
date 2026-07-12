@@ -24,6 +24,25 @@ from backend.services.quantevolver.official_factor_batch_compute_service import 
 from backend.services.quantevolver.official_factor_batch_compute_service import ResourceSnapshot
 
 
+def test_factor_progress_receipt_tracks_metric_completion(monkeypatch, tmp_path):
+    monkeypatch.setattr(official_batch_svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", tmp_path)
+    receipt = official_batch_svc.OfficialFactorComputeProgressReceipt("task-1")
+
+    receipt.observe({"type": "factor_plan_ready", "eligible_count": 3})
+    receipt.observe({"type": "factor_started", "factor_name": "factor_a"})
+    receipt.observe({"type": "factor_done", "factor_name": "factor_a"})
+    receipt.observe({"type": "metric_done", "factor_name": "factor_a", "ok": True})
+    receipt.observe({"type": "factor_failed", "factor_name": "factor_b"})
+
+    payload = json.loads((tmp_path / "task-1.progress.json").read_text(encoding="utf-8"))
+    assert payload["total_factors"] == 3
+    assert payload["value_ready_count"] == 1
+    assert payload["completed_count"] == 2
+    assert payload["success_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["active_factor_names"] == []
+
+
 def _base_df():
     idx = pd.MultiIndex.from_product(
         [[pd.Timestamp("2018-08-01"), pd.Timestamp("2018-08-02")], ["000001.SZ", "000002.SZ"]],

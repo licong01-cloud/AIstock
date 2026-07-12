@@ -465,6 +465,18 @@ export default function FactorList({
     failed_tail?: any[];
     dispatch_sync_error?: string | null;
     remote_progress_status?: string | null;
+    live_progress?: {
+      status?: string;
+      total_factors?: number;
+      value_ready_count?: number;
+      completed_count?: number;
+      success_count?: number;
+      failed_count?: number;
+      active_factor_names?: string[];
+      last_event?: string;
+      updated_at?: string;
+    } | null;
+    last_progress_at?: string | null;
     resumed_from_task_id?: string | null;
     checkpoint?: { retry_factor_count?: number; status?: string } | null;
   };
@@ -527,6 +539,7 @@ export default function FactorList({
   }, [cacheContext?.trainStart, cacheContext?.backtestEnd]);
 
   const isSelection = mode === "selection";
+  const hasActiveCacheCompute = cacheTasks.some(task => task.status === "running" || task.status === "queued" || task.status === "paused");
   const isAlphaSourceFilter = sourceFilter === "alpha158" || sourceFilter === "alpha360";
   const shouldExcludeAlphaSources = !showAlpha && !isAlphaSourceFilter;
 
@@ -593,6 +606,10 @@ export default function FactorList({
       setSelectedCacheTask(d);
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (selectedCacheTaskId) void fetchCacheTaskDetail(selectedCacheTaskId);
+  }, [selectedCacheTaskId, fetchCacheTaskDetail]);
 
   useEffect(() => {
     if (!isSelection) {
@@ -1088,6 +1105,26 @@ export default function FactorList({
 
   useEffect(() => { loadData(); loadIndSummary(); loadRatingRules(); loadRatingRuns(); }, [loadData, loadIndSummary, loadRatingRules, loadRatingRuns]);
   useEffect(() => { if (selectedRatingVersion) { loadRatingRuleDetail(selectedRatingVersion); loadRatingResultsPreview(selectedRatingVersion); } }, [selectedRatingVersion, loadRatingRuleDetail, loadRatingResultsPreview]);
+
+  const refreshCacheDisplay = useCallback(async () => {
+    await Promise.all([
+      fetchCacheStats(),
+      fetchRemoteStats(),
+      fetchCacheTasks(),
+      selectedCacheTaskId ? fetchCacheTaskDetail(selectedCacheTaskId) : Promise.resolve(),
+      loadData(),
+      loadIndSummary(),
+    ]);
+  }, [fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail, selectedCacheTaskId, loadData, loadIndSummary]);
+
+  useEffect(() => {
+    if (isSelection || !hasActiveCacheCompute) return;
+    const timer = setInterval(() => {
+      void loadData();
+      void loadIndSummary();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [isSelection, hasActiveCacheCompute, loadData, loadIndSummary]);
 
   // 加载 source tasks 列表
   const loadSourceTasks = useCallback(async () => {
@@ -1993,11 +2030,11 @@ export default function FactorList({
                   同步选中
                 </button>
               ) : null}
-              <button onClick={clearAllCache}
-                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
+              <button onClick={clearAllCache} disabled={hasActiveCacheCompute} title={hasActiveCacheCompute ? "存在运行或排队的官方因子计算，禁止清空缓存" : "清空所有因子值缓存"}
+                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: hasActiveCacheCompute ? "not-allowed" : "pointer", opacity: hasActiveCacheCompute ? 0.5 : 1 }}>
                 清空缓存
               </button>
-              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
+              <button onClick={() => void refreshCacheDisplay()} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
             </div>
           </div>
           <div style={{ marginTop: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
@@ -2038,6 +2075,24 @@ export default function FactorList({
                   <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
                     official cache | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
                   </div>
+                  {selectedCacheTask.live_progress ? (() => {
+                    const progress = selectedCacheTask.live_progress;
+                    const total = progress.total_factors || 0;
+                    const completed = progress.completed_count || 0;
+                    const percent = total > 0 ? Math.min(100, Math.round(completed / total * 1000) / 10) : null;
+                    return (
+                      <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", fontSize: 12, lineHeight: 1.6 }}>
+                        <div><strong>独立指标进度：</strong>{completed}/{total || "-"}{percent != null ? ` (${percent}%)` : ""}；成功 {progress.success_count || 0}，失败 {progress.failed_count || 0}，因子值已写入 {progress.value_ready_count || 0}</div>
+                        {progress.active_factor_names?.length ? <div>当前因子：{progress.active_factor_names.join(", ")}</div> : null}
+                        <div style={{ color: "#64748b" }}>最近更新：{progress.updated_at || selectedCacheTask.last_progress_at || "-"}；事件：{progress.last_event || "-"}</div>
+                        {total > 0 && <div style={{ width: "100%", height: 6, background: "#dbeafe", borderRadius: 4, overflow: "hidden", marginTop: 4 }}><div style={{ width: `${Math.min(100, completed / total * 100)}%`, height: "100%", background: "#2563eb", transition: "width 0.3s" }} /></div>}
+                      </div>
+                    );
+                  })() : selectedCacheTask.status === "running" ? (
+                    <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 6, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", fontSize: 12 }}>
+                      当前任务尚未提供因子级 progress receipt；请以最近日志判断活动状态。远端 loop 级 0% 不能解释为未执行。
+                    </div>
+                  ) : null}
                   {selectedCacheTask.dispatch_sync_error && (
                     <div style={{ fontSize: 12, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
                       dispatch/WSL 状态同步异常: {selectedCacheTask.dispatch_sync_error}
@@ -2878,14 +2933,14 @@ export default function FactorList({
                         )}
                         {!isSelection && f.has_cache && (
                           <span
-                            onClick={(e) => { e.stopPropagation(); clearOneCache(f.factor_name); }}
-                            title="删除该因子缓存"
+                            onClick={(e) => { if (!hasActiveCacheCompute) { e.stopPropagation(); clearOneCache(f.factor_name); } }}
+                            title={hasActiveCacheCompute ? "存在运行或排队的官方因子计算，禁止删除缓存" : "删除该因子缓存"}
                             style={{
-                              color: "#b45309", cursor: "pointer", fontSize: 10,
-                              opacity: 0.7, userSelect: "none",
+                              color: "#b45309", cursor: hasActiveCacheCompute ? "not-allowed" : "pointer", fontSize: 10,
+                              opacity: hasActiveCacheCompute ? 0.5 : 0.7, userSelect: "none",
                             }}
-                            onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-                            onMouseLeave={e => (e.currentTarget.style.opacity = "0.7")}
+                            onMouseEnter={e => { if (!hasActiveCacheCompute) e.currentTarget.style.opacity = "1"; }}
+                            onMouseLeave={e => { if (!hasActiveCacheCompute) e.currentTarget.style.opacity = "0.7"; }}
                           >清缓存</span>
                         )}
                         {!isSelection && (
