@@ -27,6 +27,11 @@ from backend.services.qmt_strategy_ledger.tca_read_service import (
     TcaReadRuntimeConfig,
     TCA_READ_SCHEMA_VERSION,
 )
+from backend.services.miniqmt_execution_runtime.models import MiniQMTExecutionEventType
+from backend.services.miniqmt_execution_runtime.repository import (
+    MiniQMTExecutionRuntimeRepository,
+    PostgresMiniQMTExecutionRuntimeRepository,
+)
 
 
 _PARENT_LINEAGE_FIELDS = (
@@ -220,6 +225,9 @@ _BLOCKED_MAPPING_KEY_TOKENS = (
 _ACCOUNT_MAPPING_KEYS = frozenset({"account_id", "trade_account_id"})
 TCA_EVIDENCE_EXPORT_VERSION = "miniqmt_execution_tca_evidence_v1"
 TCA_EVIDENCE_MANIFEST_SCHEMA_VERSION = "miniqmt_execution_tca_evidence_manifest_v1"
+TCA_EVIDENCE_EXPORT_VERSION_V2 = "miniqmt_execution_tca_evidence_v2"
+TCA_EVIDENCE_MANIFEST_SCHEMA_VERSION_V2 = "miniqmt_execution_tca_evidence_manifest_v2"
+TCA_EVIDENCE_RECORD_SCHEMA_VERSION_V2 = "miniqmt_execution_tca_evidence_record_v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,9 +246,11 @@ class ExecutionTcaReadService:
         *,
         repository: ExecutionTcaReadRepository | None = None,
         config_provider: Callable[[], TcaReadRuntimeConfig] | None = None,
+        runtime_repository: MiniQMTExecutionRuntimeRepository | None = None,
     ) -> None:
         self._repository = repository or ExecutionTcaReadRepository()
         self._config_provider = config_provider or TcaReadRuntimeConfig.from_environ
+        self._runtime_repository = runtime_repository or PostgresMiniQMTExecutionRuntimeRepository()
 
     def get_execution_parent(
         self, *, parent_intent_id: str, parent_revision: int | str | None = None
@@ -373,6 +383,8 @@ class ExecutionTcaReadService:
         evidence that the read service permits.
         """
 
+        if evidence_version == TCA_EVIDENCE_EXPORT_VERSION_V2:
+            return self._export_quote_control_evidence_v2(binding_id=binding_id, trade_date=trade_date)
         if evidence_version != TCA_EVIDENCE_EXPORT_VERSION:
             raise TcaReadError(
                 "ADAPTIVE_IS_TCA_EVIDENCE_VERSION_UNSUPPORTED",
@@ -443,6 +455,357 @@ class ExecutionTcaReadService:
         manifest = {**manifest_base, "manifest_sha256": canonical_json_sha256(manifest_base)}
         return ExecutionTcaEvidenceExport(manifest=manifest, records=ordered_records)
 
+    def _export_quote_control_evidence_v2(
+        self,
+        *,
+        binding_id: str,
+        trade_date: date | str,
+    ) -> ExecutionTcaEvidenceExport:
+        binding = _required_text(binding_id, "binding_id")
+        parsed_trade_date = _parse_trade_date(trade_date)
+        config = self._runtime_config()
+        pseudonymizer = config.require_pseudonymizer()
+        active_version = config.require_active_read_version()
+        records: list[dict[str, Any]] = []
+        runtime_ids: set[str] = set()
+        binding_hashes: set[str] = set()
+        parent_ids: set[str] = set()
+        after_key: tuple[date, str, int] | None = None
+        with self._repository.read_snapshot() as cursor:
+            while True:
+                page = self._repository.list_parents(
+                    binding_id=binding,
+                    trade_date=parsed_trade_date,
+                    limit=200,
+                    after_key=after_key,
+                    active_version=None,
+                    cursor=cursor,
+                )
+                for parent in page.parents:
+                    projected_parent = _project_parent(parent, pseudonymizer)
+                    parent_id = str(projected_parent["parent_intent_id"])
+                    parent_ids.add(parent_id)
+                    lineage = projected_parent.get("lineage")
+                    if not isinstance(lineage, Mapping):
+                        raise TcaReadError(
+                            "ADAPTIVE_IS_TCA_EVIDENCE_LINEAGE_MISSING",
+                            "Phase 0B parent projection is missing its bounded lineage object",
+                            http_status=409,
+                            stage="TCA_EXPORT",
+                            context={"parent_intent_id": parent_id},
+                        )
+                    runtime_id = str(lineage.get("runtime_id") or "").strip()
+                    if runtime_id:
+                        runtime_ids.add(runtime_id)
+                    binding_hash = str(lineage.get("binding_hash") or "").strip()
+                    if binding_hash:
+                        binding_hashes.add(binding_hash)
+                    records.append(
+                        _v2_record(
+                            record_kind="TCA_PARENT",
+                            runtime_id=runtime_id,
+                            sequence=0,
+                            event_id="",
+                            parent_intent_id=parent_id,
+                            payload=projected_parent,
+                        )
+                    )
+                    for snapshot_kind in ("DEADLINE", "RECONCILED_FINAL"):
+                        try:
+                            detail = self._repository.get_tca_detail(
+                                parent_intent_id=parent_id,
+                                parent_revision=int(parent["parent_revision"]),
+                                snapshot_kind=snapshot_kind,
+                                active_version=active_version,
+                                cursor=cursor,
+                            )
+                        except TcaReadError as exc:
+                            if exc.reason_code != "ADAPTIVE_IS_TCA_RESULT_NOT_FOUND":
+                                raise
+                            continue
+                        projected = _project_tca_detail(detail, pseudonymizer)
+                        records.append(
+                            _v2_record(
+                                record_kind="TCA_RESULT",
+                                runtime_id=runtime_id,
+                                sequence=0,
+                                event_id=str(projected["result"].get("tca_result_id") or ""),
+                                parent_intent_id=parent_id,
+                                payload={"snapshot_kind": snapshot_kind, **projected["result"]},
+                            )
+                        )
+                        for mark in projected["marks"]:
+                            records.append(
+                                _v2_record(
+                                    record_kind="TCA_MARK",
+                                    runtime_id=runtime_id,
+                                    sequence=0,
+                                    event_id=str(mark.get("mark_id") or ""),
+                                    parent_intent_id=parent_id,
+                                    payload=mark,
+                                )
+                            )
+                        for trade in projected["trade_observations"]:
+                            records.append(
+                                _v2_record(
+                                    record_kind="TCA_TRADE",
+                                    runtime_id=runtime_id,
+                                    sequence=0,
+                                    event_id=str(trade.get("trade_observation_id") or ""),
+                                    parent_intent_id=parent_id,
+                                    payload=trade,
+                                )
+                            )
+                if page.next_key is None:
+                    break
+                after_key = page.next_key
+            runtime_rows, runtime_events = self._runtime_repository.read_quote_control_snapshot(
+                cursor=cursor,
+                runtime_ids=tuple(sorted(runtime_ids)),
+                include_archived=True,
+            )
+        revision_ids: set[str] = set()
+        assignments_by_parent: dict[str, list[Mapping[str, Any]]] = {}
+        hash_sets = {name: set() for name in ("policy", "config", "adapter", "code", "schema")}
+        for runtime in runtime_rows:
+            quote_control = runtime.metadata.get("quote_control") if isinstance(runtime.metadata, dict) else None
+            if not isinstance(quote_control, Mapping):
+                continue
+            revision = quote_control.get("revision")
+            if isinstance(revision, Mapping):
+                revision_id = str(revision.get("revision_id") or "")
+                if revision_id:
+                    revision_ids.add(revision_id)
+                records.append(
+                    _v2_record(
+                        record_kind="CONTROL_REVISION",
+                        runtime_id=runtime.runtime_id,
+                        sequence=0,
+                        event_id=revision_id,
+                        parent_intent_id="",
+                        payload=dict(revision),
+                    )
+                )
+            assignments = quote_control.get("assignments")
+            if isinstance(assignments, list):
+                for assignment in assignments:
+                    if not isinstance(assignment, Mapping):
+                        continue
+                    parent_id = str(assignment.get("parent_intent_id") or "")
+                    assignments_by_parent.setdefault(parent_id, []).append(assignment)
+                    records.append(
+                        _v2_record(
+                            record_kind="PARENT_ASSIGNMENT",
+                            runtime_id=runtime.runtime_id,
+                            sequence=0,
+                            event_id=str(assignment.get("assignment_id") or ""),
+                            parent_intent_id=parent_id,
+                            payload=dict(assignment),
+                        )
+                    )
+                    for key, field_name in (
+                        ("policy", "quote_policy_sha256"),
+                        ("adapter", "adapter_sha256"),
+                        ("code", "code_sha256"),
+                        ("schema", "evidence_schema_sha256"),
+                    ):
+                        value = str(assignment.get(field_name) or "")
+                        if value:
+                            hash_sets[key].add(value)
+        child_events: list[Mapping[str, Any]] = []
+        receipt_events: list[Mapping[str, Any]] = []
+        trade_anchors: list[Mapping[str, Any]] = []
+        action_events: list[Mapping[str, Any]] = []
+        action_input_events: list[Mapping[str, Any]] = []
+        markout_by_trade: dict[str, set[int]] = {}
+        capture_counts: dict[str, int] = {}
+        for event in runtime_events:
+            evidence = event.payload.get("evidence") if isinstance(event.payload, dict) else None
+            record_kind = None
+            payload: Mapping[str, Any] | None = None
+            parent_id = ""
+            if isinstance(evidence, Mapping):
+                capture_type = str(evidence.get("capture_type") or "")
+                record_kind = {
+                    "ACTION_INPUT": "ACTION_INPUT",
+                    "ACTION_REJECT": "ACTION_REJECT",
+                    "CHILD_RECEIPT": "CHILD_RECEIPT",
+                    "MARKOUT_60S": "MARKOUT",
+                    "MARKOUT_300S": "MARKOUT",
+                    "MARKOUT_900S": "MARKOUT",
+                    "CADENCE_AGGREGATE": "CADENCE_AGGREGATE",
+                }.get(capture_type)
+                payload = evidence
+                parent_id = str(evidence.get("parent_intent_id") or "")
+                capture_counts[capture_type] = capture_counts.get(capture_type, 0) + 1
+                for key, field_name in (
+                    ("policy", "policy_sha256"),
+                    ("config", "config_sha256"),
+                    ("adapter", "adapter_sha256"),
+                    ("code", "code_sha256"),
+                    ("schema", "schema_sha256"),
+                ):
+                    value = str(evidence.get(field_name) or "")
+                    if value:
+                        hash_sets[key].add(value)
+                if capture_type == "CHILD_RECEIPT":
+                    receipt_events.append(evidence)
+                if capture_type == "ACTION_INPUT":
+                    action_input_events.append(evidence)
+                if capture_type.startswith("MARKOUT_"):
+                    trade_id = str(evidence.get("trade_id") or "")
+                    horizon = evidence.get("horizon_seconds")
+                    if trade_id and isinstance(horizon, int):
+                        markout_by_trade.setdefault(trade_id, set()).add(horizon)
+            elif event.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH:
+                record_kind = "INGRESS_HEALTH"
+                payload = event.payload
+            elif event.event_type in {
+                MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED,
+                MiniQMTExecutionEventType.CHILD_ORDER_REJECTED,
+            }:
+                child_events.append(event.payload)
+                record_kind = "CHILD_EVENT"
+                payload = event.payload
+                parent_id = str(event.payload.get("parent_intent_id") or "")
+            elif event.event_type == MiniQMTExecutionEventType.TRADE_EVENT:
+                anchor = event.payload.get("quote_evidence_markout_anchor_v1")
+                if isinstance(anchor, Mapping):
+                    trade_anchors.append(anchor)
+                    record_kind = "TRADE_ANCHOR"
+                    payload = anchor
+                    parent_id = str(anchor.get("parent_intent_id") or "")
+            elif event.event_type == MiniQMTExecutionEventType.ALGO_ACTION_EMITTED:
+                action = event.payload.get("b0_quote_v2_action")
+                if isinstance(action, Mapping):
+                    action_events.append(action)
+                    record_kind = "ACTION_EVENT"
+                    payload = action
+                    parent_id = str(action.get("parent_intent_id") or "")
+            if record_kind is not None and payload is not None:
+                records.append(
+                    _v2_record(
+                        record_kind=record_kind,
+                        runtime_id=event.runtime_id,
+                        sequence=event.sequence,
+                        event_id=event.event_id,
+                        parent_intent_id=parent_id,
+                        payload=payload,
+                    )
+                )
+        assignment_missing = sum(len(assignments_by_parent.get(parent_id, ())) != 1 for parent_id in parent_ids)
+        revision_conflict_count = sum(
+            len({str(item.get("revision_id") or "") for item in items}) > 1 for items in assignments_by_parent.values()
+        )
+        action_by_id = {str(item.get("action_id") or ""): item for item in action_events}
+        action_input_by_id = {str(item.get("evidence_id") or ""): item for item in action_input_events}
+        receipt_child_ids = {str(item.get("child_order_id") or "") for item in receipt_events}
+        missing_action_links = sum(
+            not action.get("action_evidence_id")
+            or str(action.get("action_evidence_id") or "") not in action_input_by_id
+            or not action.get("action_market_data_id")
+            or str(action.get("parent_intent_id") or "") not in parent_ids
+            for action in action_events
+        )
+        missing_child_links = sum(
+            not payload.get("action_evidence_id")
+            or not payload.get("action_market_data_id")
+            or str(payload.get("action_id") or "") not in action_by_id
+            or str(payload.get("child_order_id") or "") not in receipt_child_ids
+            for payload in child_events
+        )
+        children_by_action: dict[str, set[str]] = {}
+        for payload in child_events:
+            action_id = str(payload.get("action_id") or "")
+            child_id = str(payload.get("child_order_id") or "")
+            if action_id:
+                children_by_action.setdefault(action_id, set()).add(child_id)
+        duplicate_child_count = sum(max(0, len(children) - 1) for children in children_by_action.values())
+        missing_trade_marks = sum(
+            markout_by_trade.get(str(anchor.get("trade_id") or ""), set()) != {60, 300, 900} for anchor in trade_anchors
+        )
+        hash_conflict_count = sum(len(values) != 1 for values in hash_sets.values())
+        identity_conflict_count = (
+            int(len(binding_hashes) != 1)
+            + int(len(revision_ids) != 1)
+            + int(bool(action_events) and len(action_input_events) != len(action_events))
+        )
+        missing_link_count = assignment_missing + missing_action_links + missing_child_links + missing_trade_marks
+        ordered_records = tuple(
+            sorted(
+                records,
+                key=lambda item: (
+                    str(item["record_kind"]),
+                    str(item["runtime_id"]),
+                    int(item["sequence"]),
+                    str(item["event_id"]),
+                    str(item["parent_intent_id"]),
+                ),
+            )
+        )
+        record_counts: dict[str, int] = {}
+        for record in ordered_records:
+            kind = str(record["record_kind"])
+            record_counts[kind] = record_counts.get(kind, 0) + 1
+        quote_control_complete = bool(parent_ids) and not any(
+            (
+                missing_link_count,
+                duplicate_child_count,
+                revision_conflict_count,
+                hash_conflict_count,
+                identity_conflict_count,
+            )
+        )
+        five_level_action_count = sum(_has_complete_five_level_depth(evidence) for evidence in action_input_events)
+        manifest_base = {
+            "manifest_schema_version": TCA_EVIDENCE_MANIFEST_SCHEMA_VERSION_V2,
+            "evidence_version": TCA_EVIDENCE_EXPORT_VERSION_V2,
+            "read_schema_version": TCA_READ_SCHEMA_VERSION,
+            "scope": {"environment": "SIM", "binding_id": binding, "trade_date": parsed_trade_date.isoformat()},
+            "binding_hash": next(iter(binding_hashes)) if len(binding_hashes) == 1 else None,
+            "trade_date": parsed_trade_date.isoformat(),
+            "control_revision": "B0_QUOTE_V2" if assignments_by_parent else None,
+            "revision_ids": sorted(revision_ids),
+            "policy_sha256_set": sorted(hash_sets["policy"]),
+            "config_sha256_set": sorted(hash_sets["config"]),
+            "adapter_sha256_set": sorted(hash_sets["adapter"]),
+            "code_sha256_set": sorted(hash_sets["code"]),
+            "schema_sha256_set": sorted(hash_sets["schema"]),
+            "record_counts": record_counts,
+            "action_ready_count": capture_counts.get("ACTION_INPUT", 0),
+            "action_reject_count": capture_counts.get("ACTION_REJECT", 0),
+            "five_level_coverage": _coverage(five_level_action_count, capture_counts.get("ACTION_INPUT", 0)),
+            "age_coverage": _coverage(
+                sum(
+                    bool(record.get("payload", {}).get("quote_age_ms") is not None)
+                    for record in ordered_records
+                    if record["record_kind"] in {"ACTION_INPUT", "ACTION_REJECT"}
+                ),
+                capture_counts.get("ACTION_INPUT", 0) + capture_counts.get("ACTION_REJECT", 0),
+            ),
+            "cadence_aggregate_count": capture_counts.get("CADENCE_AGGREGATE", 0),
+            "markout_coverage": {
+                str(horizon): _coverage(capture_counts.get(f"MARKOUT_{horizon}S", 0), len(trade_anchors))
+                for horizon in (60, 300, 900)
+            },
+            "missing_link_count": missing_link_count,
+            "assignment_missing_count": assignment_missing,
+            "missing_action_link_count": missing_action_links,
+            "missing_child_link_count": missing_child_links,
+            "missing_trade_mark_count": missing_trade_marks,
+            "duplicate_child_count": duplicate_child_count,
+            "revision_conflict_count": revision_conflict_count,
+            "hash_conflict_count": hash_conflict_count,
+            "identity_conflict_count": identity_conflict_count,
+            "quote_control_complete": quote_control_complete,
+            "active_read_version": _version_payload(active_version),
+            "account_pseudonym_key_version": pseudonymizer.key_version,
+            "record_count": len(ordered_records),
+            "records_sha256": canonical_json_sha256(ordered_records),
+        }
+        manifest = {**manifest_base, "manifest_sha256": canonical_json_sha256(manifest_base)}
+        return ExecutionTcaEvidenceExport(manifest=manifest, records=ordered_records)
+
     def _runtime_config(self) -> TcaReadRuntimeConfig:
         try:
             return self._config_provider()
@@ -480,6 +843,41 @@ def _project_parent(parent: Mapping[str, Any], pseudonymizer: AccountPseudonymiz
         payload["latest_tca_result_id"] = _json_value(parent.get("latest_tca_result_id"))
         payload["latest_tca_snapshot_kind"] = _json_value(parent.get("latest_tca_snapshot_kind"))
     return payload
+
+
+def _v2_record(
+    *,
+    record_kind: str,
+    runtime_id: str,
+    sequence: int,
+    event_id: str,
+    parent_intent_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    base = {
+        "schema_version": TCA_EVIDENCE_RECORD_SCHEMA_VERSION_V2,
+        "record_kind": record_kind,
+        "runtime_id": runtime_id,
+        "sequence": int(sequence),
+        "event_id": event_id,
+        "parent_intent_id": parent_intent_id,
+        "payload": dict(payload),
+    }
+    return {**base, "record_sha256": canonical_json_sha256(base)}
+
+
+def _coverage(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+def _has_complete_five_level_depth(evidence: Mapping[str, Any]) -> bool:
+    for field_name in ("bid_prices", "bid_quantities", "ask_prices", "ask_quantities"):
+        values = evidence.get(field_name)
+        if not isinstance(values, list) or len(values) != 5:
+            return False
+    return True
 
 
 def _project_tca_detail(detail: ExecutionTcaDetail, pseudonymizer: AccountPseudonymizer) -> dict[str, Any]:

@@ -2098,12 +2098,21 @@ class SimulationLifecycleScheduler:
         performance_service: StrategyPerformanceProjectionService | None = None,
         trading_calendar_service: Any | None = None,
         miniqmt_quote_context_adapter: Any | None = None,
+        b0_quote_v2_controller_factory: Any | None = None,
         selection_inference_timeout_seconds: float | None = None,
         selection_inference_max_workers: int | None = None,
     ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
-        self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(repository=self.repository)
+        self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
+            repository=self.repository,
+            b0_quote_v2_controller_factory=b0_quote_v2_controller_factory,
+        )
+        if orchestrator is not None and b0_quote_v2_controller_factory is not None:
+            existing_factory = getattr(orchestrator, "b0_quote_v2_controller_factory", None)
+            if existing_factory is not None and existing_factory is not b0_quote_v2_controller_factory:
+                raise ValueError("scheduler and orchestrator B0_QUOTE_V2 controller factories conflict")
+            orchestrator.b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
         self.context_provider = context_provider or FailFastSimulationRunContextProvider()
         self.performance_service = performance_service or StrategyPerformanceProjectionService()
         self._selection_inference_timeout_seconds = (
@@ -2134,6 +2143,7 @@ class SimulationLifecycleScheduler:
         else:
             self.trading_calendar_service = TradingCalendarStatusService()
         self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter
+        self._b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
 
     def status(self) -> dict[str, Any]:
         provider_status = _context_provider_status(self.context_provider)
@@ -2165,6 +2175,11 @@ class SimulationLifecycleScheduler:
                 "live_forbidden": True,
             },
             "miniqmt_quote_context": self._miniqmt_quote_context_health(),
+            "b0_quote_v2_controllers": (
+                self._b0_quote_v2_controller_factory.health()
+                if self._b0_quote_v2_controller_factory is not None
+                else {"status": "DISABLED", "controller_count": 0}
+            ),
             "binding_watchdog": {
                 "timeout_env_var": SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
                 "timeout_seconds": self._timeout_seconds_from_env(
@@ -6804,7 +6819,10 @@ class SimulationLifecycleScheduler:
                     "binding_id": binding.binding_id,
                 },
             )
-        bridge = MiniQMTExecutionBridge(managed_order_service=context.managed_order_service)
+        bridge = MiniQMTExecutionBridge(
+            managed_order_service=context.managed_order_service,
+            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
+        )
         return bridge.drive_event_loop_ticks(
             plan=plan,
             binding=binding,

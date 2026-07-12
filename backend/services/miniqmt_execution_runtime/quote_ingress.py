@@ -70,7 +70,9 @@ class ReservedSymbolMailbox:
     def admit(self, symbols: tuple[str, ...]) -> None:
         normalized = tuple(dict.fromkeys(str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()))
         if not normalized:
-            raise quote_contract_error(QuoteContractReasonCode.SYMBOL_INVALID, "mailbox admission requires non-empty symbols")
+            raise quote_contract_error(
+                QuoteContractReasonCode.SYMBOL_INVALID, "mailbox admission requires non-empty symbols"
+            )
         with self._condition:
             candidate = self._admitted | set(normalized)
             if len(candidate) > self._max_symbols:
@@ -265,7 +267,9 @@ class PhaseOneQuoteProjectionSink:
         self._context_store = context_store
         self._ordering = QuoteOrderingTracker()
         self._loud_sink = loud_sink
-        self._observation_sink = observation_sink
+        self._observation_sinks: dict[str, Callable[[NormalizedQuoteObservation], None]] = {}
+        if observation_sink is not None:
+            self._observation_sinks["initial"] = observation_sink
         self._lock = threading.RLock()
         self._last_error_by_symbol: dict[str, dict[str, Any]] = {}
         self._accepted_count = 0
@@ -278,6 +282,31 @@ class PhaseOneQuoteProjectionSink:
     def replace_admitted(self, symbols: tuple[str, ...]) -> None:
         self._raw_store.replace_admitted(symbols)
         self._normalized_store.replace_admitted(symbols)
+
+    def register_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        sink: Callable[[NormalizedQuoteObservation], None],
+    ) -> None:
+        normalized_id = str(consumer_id or "").strip()
+        if not normalized_id or not callable(sink):
+            raise quote_contract_error(
+                QuoteContractReasonCode.PAYLOAD_INVALID,
+                "observation sink registration requires consumer identity and callable sink",
+            )
+        with self._lock:
+            if normalized_id in self._observation_sinks:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                    "observation sink consumer id is already registered",
+                    context={"consumer_id": normalized_id},
+                )
+            self._observation_sinks[normalized_id] = sink
+
+    def unregister_observation_sink(self, *, consumer_id: str) -> bool:
+        with self._lock:
+            return self._observation_sinks.pop(str(consumer_id or "").strip(), None) is not None
 
     def on_generation_published(self, generation: int) -> None:
         self._ordering.activate_generation(generation)
@@ -335,9 +364,11 @@ class PhaseOneQuoteProjectionSink:
             )
             self._normalized_store.accept(observation)
             observation_sink_failed = False
-            if self._observation_sink is not None:
+            with self._lock:
+                observation_sinks = tuple(self._observation_sinks.items())
+            for consumer_id, observation_sink in observation_sinks:
                 try:
-                    self._observation_sink(observation)
+                    observation_sink(observation)
                 except QuoteContractError as error:
                     observation_sink_failed = True
                     self._record_loud(frame=frame, error=error)
@@ -348,7 +379,11 @@ class PhaseOneQuoteProjectionSink:
                         error=quote_contract_error(
                             QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
                             "quote observation sink raised unexpectedly",
-                            context={"symbol": frame.symbol, "exception_type": type(exc).__name__},
+                            context={
+                                "symbol": frame.symbol,
+                                "consumer_id": consumer_id,
+                                "exception_type": type(exc).__name__,
+                            },
                         ),
                     )
             with self._lock:
@@ -472,7 +507,9 @@ class QuoteIngressWorker:
                 else:
                     self._pending_by_generation.pop(generation, None)
 
-    def capture_delivery(self, delivery: PhaseOneQuoteDelivery, *, source_session_id: str, clock_domain_id: str) -> bool:
+    def capture_delivery(
+        self, delivery: PhaseOneQuoteDelivery, *, source_session_id: str, clock_domain_id: str
+    ) -> bool:
         """Capture exactly at the callback boundary and never throw to xtdata."""
 
         try:
@@ -637,8 +674,12 @@ class QuoteIngressWorker:
         with self._lock:
             generation = self._active_generation
             thread_alive = self._writer_thread is not None and self._writer_thread.is_alive()
-            heartbeat_age_ns = None if self._last_heartbeat_monotonic_ns is None else now - self._last_heartbeat_monotonic_ns
-            heartbeat_stale = heartbeat_age_ns is not None and heartbeat_age_ns > self._config.heartbeat_timeout_ms * 1_000_000
+            heartbeat_age_ns = (
+                None if self._last_heartbeat_monotonic_ns is None else now - self._last_heartbeat_monotonic_ns
+            )
+            heartbeat_stale = (
+                heartbeat_age_ns is not None and heartbeat_age_ns > self._config.heartbeat_timeout_ms * 1_000_000
+            )
             if generation is None or self._status in {"IDLE", "FENCED", "STOPPED"}:
                 return None
             if self._restart_attempts_in_epoch >= self._config.restart_max_attempts:
@@ -817,8 +858,7 @@ class QuoteIngressWorker:
         payload = error.as_loud_payload()
         context = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
         sample_key = ":".join(
-            str(value)
-            for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
+            str(value) for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
         )
         now = datetime.now(UTC).isoformat()
         sample = self._failure_samples.get(sample_key)
@@ -834,8 +874,7 @@ class QuoteIngressWorker:
         payload = error.as_loud_payload()
         context = payload.get("context") if isinstance(payload.get("context"), Mapping) else {}
         sample_key = ":".join(
-            str(value)
-            for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
+            str(value) for value in (payload["reason_code"], context.get("symbol", ""), context.get("generation", ""))
         )
         now_monotonic_ns = time.monotonic_ns()
         with self._lock:
@@ -936,6 +975,17 @@ class QuoteIngressSupervisor:
     def context_store(self) -> QuoteEvaluationContextStore:
         return self._context_store
 
+    def register_observation_sink(
+        self,
+        *,
+        consumer_id: str,
+        sink: Callable[[NormalizedQuoteObservation], None],
+    ) -> None:
+        self._projection_sink.register_observation_sink(consumer_id=consumer_id, sink=sink)
+
+    def unregister_observation_sink(self, *, consumer_id: str) -> bool:
+        return self._projection_sink.unregister_observation_sink(consumer_id=consumer_id)
+
     def acquire_consumer(self, *, consumer_id: str, symbols: list[str]) -> PhaseOneQuoteLease:
         with self._lock:
             if consumer_id in self._consumers:
@@ -944,7 +994,9 @@ class QuoteIngressSupervisor:
                     "a Phase 1 quote consumer id cannot acquire a second lease",
                     context={"consumer_id": consumer_id, "data_session_key": self._data_session_key},
                 )
-            normalized = tuple(dict.fromkeys(str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip()))
+            normalized = tuple(
+                dict.fromkeys(str(symbol or "").strip() for symbol in symbols if str(symbol or "").strip())
+            )
             candidate_symbols = self._union_consumer_symbols((*self._consumers.values(),), additional=normalized)
             previous_symbols = self._union_consumer_symbols((*self._consumers.values(),))
             consumer = QuoteIngressConsumer(

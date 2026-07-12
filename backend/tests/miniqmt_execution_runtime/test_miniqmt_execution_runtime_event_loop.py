@@ -14,6 +14,7 @@ from backend.services.miniqmt_execution_runtime import (
     MiniQMTOmsState,
 )
 from backend.services.trading_core.models import OrderSide
+from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
 
 
 def _runtime() -> tuple[MiniQMTExecutionRuntime, InMemoryMiniQMTExecutionRuntimeRepository, FakeMiniQMTGateway]:
@@ -84,3 +85,15 @@ def test_runtime_event_loop_persists_tick_timer_algo_order_trade_and_reconcile_e
     assert updated.gateway_state == MiniQMTGatewayState.CONNECTED
     assert updated.oms_state == MiniQMTOmsState.RECONCILED
     assert updated.event_loop_state == MiniQMTExecutionRuntimeState.READY
+
+
+def test_b0_quote_v2_pending_tick_driver_continues_without_duplicate_child() -> None:
+    controller, _runtime_record, gateway, repository = _runtime_controller()
+
+    controller.lifecycle_tick(now_utc=CLOCK_AT)
+    controller.lifecycle_tick(now_utc=CLOCK_AT)
+
+    children = repository.list_child_orders("runtime-p1e", active_only=False)
+    assert len(children) == 1
+    assert len(gateway.submitted_orders) == 1
+    assert controller.health()["pending_action_count"] == 0

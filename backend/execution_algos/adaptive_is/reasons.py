@@ -81,6 +81,9 @@ class QuoteContractReasonCode(str, Enum):
     MARKOUT_MARKET_SESSION_ENDED = "ADAPTIVE_IS_MARKOUT_MARKET_SESSION_ENDED"
     MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE = "ADAPTIVE_IS_MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE"
     MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE = "ADAPTIVE_IS_MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE"
+    B0_QUOTE_V2_ASSIGNMENT_CONFLICT = "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT"
+    B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT = "ADAPTIVE_IS_B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT"
+    B0_QUOTE_V2_TICK_PROJECTION_INVALID = "ADAPTIVE_IS_B0_QUOTE_V2_TICK_PROJECTION_INVALID"
     PARITY_VIOLATION = "ADAPTIVE_IS_B0_QUOTE_V2_PARITY_VIOLATION"
     CONSUMER_FAILURE = "ADAPTIVE_IS_QUOTE_CONSUMER_FAILURE"
 
@@ -250,6 +253,24 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             QuoteContractReasonCode.MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE,
             QuoteContractStage.MARKOUT,
             severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT: _definition(
+            QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+            QuoteContractStage.ADAPTER,
+            severity=QuoteFailureSeverity.CRITICAL,
+            retry_class=QuoteFailureRetryClass.NON_RETRYABLE,
+        ),
+        QuoteContractReasonCode.B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT: _definition(
+            QuoteContractReasonCode.B0_QUOTE_V2_ACTION_RECOVERY_CONFLICT,
+            QuoteContractStage.ADAPTER,
+            severity=QuoteFailureSeverity.CRITICAL,
+            retry_class=QuoteFailureRetryClass.NON_RETRYABLE,
+        ),
+        QuoteContractReasonCode.B0_QUOTE_V2_TICK_PROJECTION_INVALID: _definition(
+            QuoteContractReasonCode.B0_QUOTE_V2_TICK_PROJECTION_INVALID,
+            QuoteContractStage.ADAPTER,
+            severity=QuoteFailureSeverity.CRITICAL,
+            retry_class=QuoteFailureRetryClass.NON_RETRYABLE,
         ),
         QuoteContractReasonCode.PARITY_VIOLATION: _definition(
             QuoteContractReasonCode.PARITY_VIOLATION,
