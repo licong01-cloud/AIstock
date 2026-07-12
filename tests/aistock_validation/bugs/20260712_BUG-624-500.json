@@ -2,7 +2,12 @@
   "actual": "缓存状态排序将整数分值与空字符串混合，触发 HTTP 500；官方全量因子缓存/独立指标任务仅暴露 loop 级 0% 进度，UI 未显示因子级已完成/成功/失败与最近更新时间，缓存区刷新也未刷新因子列表/独立指标摘要。修复必须不影响当前运行任务，不得将清空缓存作为进度处理；运行中缓存删除需 fail-closed。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260712_BUG-624-500.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/quantevolver.py",
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-624",
@@ -40,7 +45,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
