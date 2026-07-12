@@ -1892,16 +1892,22 @@ class InferenceEngine:
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
 
-        calendar_payload = {
+        calendar_identity_payload = {
             "dataset_id": "market.trading_calendar",
             "effective_trade_date": actual_date.date().isoformat(),
+            "calendar_version": "market.trading_calendar.v1",
+            "calendar_source": "market.trading_calendar",
+        }
+        calendar_identity_hash = _inference_receipt_sha256(calendar_identity_payload)
+        calendar_payload = {
+            "calendar_identity_hash": calendar_identity_hash,
             "window_start_date": start_date.date().isoformat(),
             "required_window": required_window,
             "window_resolution": start_date_source,
         }
         calendar_hash = _inference_receipt_sha256(calendar_payload)
         self.last_inference_receipt = {
-            "contract_version": "strategy_package_live_inference_receipt_v1",
+            "contract_version": "strategy_package_live_inference_receipt_v2",
             "universe_count": int(len(universe)),
             "source_read_receipts": [
                 {
@@ -1980,8 +1986,13 @@ class InferenceEngine:
                 "score_trade_date": actual_date.date().isoformat(),
                 "pit_mode": "stock_universe_pit_v1",
                 "calendar_version": "market.trading_calendar.v1",
+                "calendar_identity_hash": calendar_identity_hash,
                 "calendar_hash": calendar_hash,
                 "calendar_source": "market.trading_calendar",
+                "window_start_date": start_date.date().isoformat(),
+                "required_window": required_window,
+                "window_resolution": start_date_source,
+                "window_lineage_hash": calendar_hash,
                 "universe_input_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
                 "strict_feature_filter": dict(LAST_STRICT_FEATURE_FILTER or {}),
                 "scored_row_count": int(len(df_scores)),
