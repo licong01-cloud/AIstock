@@ -20,10 +20,10 @@ from backend.services.strategy_package.multi_alpha_live import (
     REASON_LABEL_WINDOW_INSUFFICIENT,
     REASON_PARENT_ALPHA158_SCHEMA_MISSING,
     REASON_PARENT_LEG_FACTOR_REFS_MISSING,
-    REASON_PARENT_LEG_INFERENCE_EMPTY,
     REASON_PARENT_LEG_MODEL_ASSET_MISSING,
     REASON_PREDICTION_NOT_AUTHORITATIVE,
     REASON_RUNTIME_NOT_ENABLED,
+    REASON_SEED_PREDICTION_MISSING,
     REASON_TOPK_RUNTIME_MISMATCH,
     REASON_WEIGHT_ALL_NON_POSITIVE,
     REASON_WEIGHT_UNAVAILABLE,
@@ -85,16 +85,68 @@ class FakeResolver:
 class FakeProvider:
     backend_name = "fake_live"
 
-    def __init__(self, scores_by_leg: dict[str, list[dict]]) -> None:
+    def __init__(
+        self,
+        scores_by_leg: dict[str, list[dict]],
+        *,
+        universe_count_by_leg: dict[str, int] | None = None,
+        universe_input_hash_by_leg: dict[str, str] | None = None,
+    ) -> None:
         self.scores_by_leg = scores_by_leg
+        self.universe_count_by_leg = universe_count_by_leg or {}
+        self.universe_input_hash_by_leg = universe_input_hash_by_leg or {}
         self.calls: list[dict] = []
 
     def run(self, **kwargs):  # noqa: ANN001, ANN201
         self.calls.append(kwargs)
         leg_id = kwargs["workspace"].leg_id
+        trade_date = kwargs["cutoff_date"] or kwargs["trade_date"]
+        observed_at = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
+        scores = deepcopy(self.scores_by_leg.get(leg_id, []))
         return LiveInferenceResult(
-            scores=deepcopy(self.scores_by_leg.get(leg_id, [])),
+            scores=scores,
             metadata={"leg_id": leg_id, "seed_run_id": kwargs["workspace"].seed_run_id},
+            universe_count=self.universe_count_by_leg.get(leg_id, max(80, len(scores))),
+            source_read_receipts=[
+                {
+                    "source_role": "pit_universe",
+                    "dataset_id": "market.stock_universe_pit",
+                    "row_count": 80,
+                    "content_hash": "1" * 64,
+                    "first_observed_at": observed_at,
+                },
+                {
+                    "source_role": "market_history",
+                    "dataset_id": "market.kline_daily_raw",
+                    "row_count": 1600,
+                    "content_hash": "2" * 64,
+                    "first_observed_at": observed_at,
+                },
+                {
+                    "source_role": "fundamental_moneyflow",
+                    "dataset_id": "timescaledb.fundamental_moneyflow",
+                    "row_count": 1600,
+                    "content_hash": "3" * 64,
+                    "first_observed_at": observed_at,
+                },
+                {
+                    "source_role": "trading_calendar",
+                    "dataset_id": "market.trading_calendar",
+                    "row_count": 2,
+                    "content_hash": "4" * 64,
+                    "first_observed_at": observed_at,
+                },
+            ],
+            input_context={
+                "requested_trade_date": trade_date.isoformat(),
+                "effective_trade_date": trade_date.isoformat(),
+                "score_trade_date": trade_date.isoformat(),
+                "pit_mode": "stock_universe_pit_v1",
+                "calendar_version": "market.trading_calendar.v1",
+                "calendar_hash": "4" * 64,
+                "calendar_source": "market.trading_calendar",
+                "universe_input_hash": self.universe_input_hash_by_leg.get(leg_id, "5" * 64),
+            },
         )
 
 
@@ -180,7 +232,13 @@ def _make_parent(*, live_weight_policy: bool = True):
     return package_repo, live_parent
 
 
-def _artifact_service(package_repo, provider_scores: dict[str, list[dict]] | None = None):  # noqa: ANN001
+def _artifact_service(
+    package_repo,
+    provider_scores: dict[str, list[dict]] | None = None,
+    *,
+    universe_count_by_leg: dict[str, int] | None = None,
+    universe_input_hash_by_leg: dict[str, str] | None = None,
+):  # noqa: ANN001
     artifact_repo = InMemorySelectionScoreArtifactRepository()
     resolver = FakeResolver()
     provider = FakeProvider(
@@ -188,7 +246,9 @@ def _artifact_service(package_repo, provider_scores: dict[str, list[dict]] | Non
         or {
             A1_LEG: _score_rows(reverse=False),
             FUND_LEG: _score_rows(reverse=True),
-        }
+        },
+        universe_count_by_leg=universe_count_by_leg,
+        universe_input_hash_by_leg=universe_input_hash_by_leg,
     )
     service = StrategyPackageSelectionArtifactService(
         package_repository=package_repo,
@@ -231,6 +291,11 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     assert first.metadata["model_params_origin"] == "package_asset"
     assert first.metadata["component_artifacts"][A1_LEG]["runtime_source"] == "parent_package_asset"
     assert first.metadata["component_artifacts"][FUND_LEG]["model_params_origin"] == "package_asset"
+    assert first.artifact_contract_version == "selection_score_artifact_v2"
+    assert first.universe_count == 80
+    assert first.universe_count > first.score_count
+    assert first.metadata["multi_alpha_parent_parity_hash"]
+    assert {item["leg_id"] for item in first.metadata["source_read_receipts"] if item.get("leg_id")} == {A1_LEG, FUND_LEG}
     assert first.metadata["component_artifacts"][A1_LEG]["child_package_id"] is None
     assert first.metadata["seed_run_ids"] == {A1_LEG: [A1_SEED], FUND_LEG: [FUND_SEED]}
     assert first.metadata["normalization_method"] == "zscore"
@@ -329,15 +394,70 @@ def test_multi_alpha_live_selection_negative_manifest_and_coverage(mutator, expe
     assert _reason(excinfo.value) == expected_reason
 
 
-def test_multi_alpha_live_selection_fails_loud_when_leg_scores_missing() -> None:
+def test_multi_alpha_live_selection_records_natural_raw_empty_when_a_leg_has_no_scores() -> None:
     package_repo, parent = _make_parent(live_weight_policy=False)
     runtime_config = _runtime_config()
-    service, _artifact_repo, _resolver, _provider = _artifact_service(package_repo, provider_scores={A1_LEG: _score_rows()})
+    service, artifact_repo, _resolver, _provider = _artifact_service(package_repo, provider_scores={A1_LEG: _score_rows()})
+
+    artifact = _generate(service, parent, runtime_config)
+
+    assert artifact.status.value == "SUCCEEDED"
+    assert artifact.scores_json == []
+    assert artifact.score_count == 0
+    assert artifact.universe_count == 80
+    assert artifact.metadata["candidate_outcome"] == "VALID_NO_CANDIDATE"
+    assert artifact.metadata["empty_stage"] == "alpha_raw"
+    snapshot = StrategyPackageRuntime(artifact_repository=artifact_repo).build_signal_snapshot(
+        manifest=parent.current_manifest(),
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        runtime_config=runtime_config,
+    )
+    assert snapshot.valid_no_candidate is True
+    assert snapshot.candidates == []
+
+
+def test_multi_alpha_live_selection_fails_loud_when_empty_leg_has_no_input_universe() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        provider_scores={A1_LEG: _score_rows()},
+        universe_count_by_leg={FUND_LEG: 0},
+    )
 
     with pytest.raises(DataUnavailableError) as excinfo:
         _generate(service, parent, runtime_config)
 
-    assert _reason(excinfo.value) == REASON_PARENT_LEG_INFERENCE_EMPTY
+    assert _reason(excinfo.value) == REASON_SEED_PREDICTION_MISSING
+
+
+def test_multi_alpha_live_selection_fails_loud_when_leg_input_universes_differ() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        universe_count_by_leg={A1_LEG: 80, FUND_LEG: 79},
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        _generate(service, parent, runtime_config)
+
+    assert _reason(excinfo.value) == "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH"
+
+
+def test_multi_alpha_live_selection_fails_loud_when_leg_input_universe_hashes_differ() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        universe_input_hash_by_leg={A1_LEG: "5" * 64, FUND_LEG: "6" * 64},
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        _generate(service, parent, runtime_config)
+
+    assert _reason(excinfo.value) == "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH"
 
 
 @pytest.mark.parametrize(

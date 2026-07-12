@@ -27,16 +27,20 @@ from backend.services.strategy_package.runtime import (
     StrategyPackageRuntime,
     TargetPositionEngine,
     _candidate_selection_artifact_runtime_hashes,
+    _candidate_selection_artifact_runtime_hashes_v2,
     apply_runtime_variant_to_manifest,
 )
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
+    selection_artifact_runtime_hash_for_manifest,
+    selection_artifact_runtime_hash_v2_for_manifest,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
 )
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
@@ -906,7 +910,14 @@ class PaperTradingDayRunner:
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
-            for runtime_hash in _candidate_selection_artifact_runtime_hashes(runtime_config):
+            for runtime_hash in dict.fromkeys(
+                [
+                    selection_artifact_runtime_hash_v2_for_manifest(manifest, runtime_config),
+                    *_candidate_selection_artifact_runtime_hashes_v2(runtime_config),
+                    selection_artifact_runtime_hash_for_manifest(manifest, runtime_config),
+                    *_candidate_selection_artifact_runtime_hashes(runtime_config),
+                ]
+            ):
                 try:
                     artifact = artifact_repository.get(
                         package_id=manifest.package_id,
@@ -916,10 +927,15 @@ class PaperTradingDayRunner:
                         runtime_config_hash=runtime_hash,
                     )
                     metadata = artifact.metadata or {}
+                    expected_source_type = (
+                        LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                        if getattr(getattr(manifest, "alpha_mode", None), "value", None) == "multi_alpha"
+                        else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                    )
                     if (
                         artifact.status.value == "SUCCEEDED"
                         and artifact.scores_json
-                        and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                        and metadata.get("source_type") == expected_source_type
                         and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
                     ):
                         return

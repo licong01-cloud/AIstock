@@ -41,6 +41,8 @@ from backend.services.advisory_program import (
 )
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
 from backend.services.selection_center.models import SelectionCandidate
+from backend.services.selection_center.prospective_evidence import canonical_evidence_json_sha256
+from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
@@ -57,6 +59,10 @@ from backend.services.strategy_package.models import (
 from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from backend.services.strategy_package.repository import StrategyPackageRecord
 from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact
+from backend.tests.strategy_package.test_prospective_selection_evidence import (
+    _prospective_capture_fixture,
+    _v2_artifact_with_payload,
+)
 
 
 @dataclass(frozen=True)
@@ -566,9 +572,9 @@ def test_audit_builds_formal_receipt_and_only_uses_reader_methods(tmp_path) -> N
     receipt = service.audit(_request())
 
     result = receipt.results[0]
-    assert result.candidate_authority[0].status == CandidateAuthorityStatus.FORMAL
+    assert result.candidate_authority[0].status == CandidateAuthorityStatus.RETROSPECTIVE
     assert result.candidate_authority[0].signal_context_hash
-    assert result.oos_classifications[0].formal_oos_status == FormalOOSStatus.FORMAL_OOS
+    assert result.oos_classifications[0].formal_oos_status == FormalOOSStatus.RETROSPECTIVE_RESEARCH_ONLY
     assert result.oos_classifications[0].label_maturity_status == LabelMaturityStatus.PENDING
     assert result.oos_intervals[0].start_date == date(2026, 2, 5)
     assert all(getattr(fake, "calls") for fake in fakes)
@@ -604,7 +610,7 @@ def test_audit_builds_formal_receipt_and_only_uses_reader_methods(tmp_path) -> N
     readiness = json.loads((destination / "handoff_readiness_report.json").read_text(encoding="utf-8"))
     bundle = json.loads((destination / "phase1_handoff_bundle.json").read_text(encoding="utf-8"))
     assert readiness["schema_version"] == "advisory_phase0a_handoff_readiness_v1"
-    assert readiness["readiness"] == "READY"
+    assert readiness["readiness"] == "PARTIAL"
     assert readiness["handoff_readiness_hash"] == handoff_readiness_hash
     assert bundle["schema_version"] == "advisory_phase0a_handoff_bundle_v2"
     assert bundle["handoff_readiness_report_hash"] == handoff_readiness_hash
@@ -634,6 +640,159 @@ def test_no_candidate_never_becomes_formal_authority_or_consumable_handoff(tmp_p
     assert not (destination / "phase1_handoff_bundle.json").exists()
 
 
+def test_complete_prospective_v2_evidence_can_be_formal_candidate_authority() -> None:
+    context, manifest, artifact, trace, runtime_config, selected = _prospective_capture_fixture()
+    manifest = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "backtest_context": {"daily_strategy": {"topk": 1, "topk_variants": [1]}},
+                "manifest_sha256": None,
+            }
+        )
+    )
+    runtime_config = {
+        **runtime_config,
+        "selection_artifact_config": {
+            **runtime_config["selection_artifact_config"],
+            "display_top_n": 1,
+            "effective_selection_top_k": 1,
+        },
+    }
+    effective_config_seed = dict(context.effective_config_seed)
+    effective_config_seed["package_effective_config"] = runtime_config
+    effective_config_seed["package_effective_config_hash"] = canonical_evidence_json_sha256(runtime_config)
+    effective_config_seed["final_effective_config_hash"] = canonical_evidence_json_sha256(runtime_config)
+    context = context.model_copy(update={"effective_config_seed": effective_config_seed})
+    asset_closure = [dict(item) for item in artifact.metadata["asset_closure"]]
+    asset_closure[0]["sha256"] = manifest.manifest_sha256
+    artifact = _v2_artifact_with_payload(
+        {
+            **artifact.model_dump(mode="python"),
+            "manifest_sha256": manifest.manifest_sha256,
+            "metadata": {
+                **artifact.metadata,
+                "asset_closure": asset_closure,
+                "top_k": 1,
+                "effective_top_k": 1,
+            },
+            "asset_closure_hash": canonical_evidence_json_sha256(
+                [{key: value for key, value in item.items() if key != "first_observed_at"} for item in asset_closure]
+            ),
+        }
+    )
+    evidence = ProspectiveSelectionEvidenceAssembler().assemble(
+        context=context,
+        manifest=manifest,
+        selection_run_id="sel_prospective",
+        artifact=artifact,
+        stage_trace=trace,
+        runtime_config=runtime_config,
+        selected=selected,
+        excluded=[],
+        created_by="test",
+    )
+    record = _record(manifest)
+    assets = [
+        StrategyPackageAssetRecord(
+            package_id=manifest.package_id,
+            asset_type=StrategyPackageAssetType.MODEL_WEIGHT,
+            asset_ref="cas://model_unit",
+            asset_sha256="a" * 64,
+            metadata={"available_at": "2026-07-01T00:00:00+08:00", "data_cutoff": "2026-07-09"},
+        ),
+        StrategyPackageAssetRecord(
+            package_id=manifest.package_id,
+            asset_type=StrategyPackageAssetType.FACTOR_CODE,
+            asset_ref="cas://factor_unit",
+            asset_sha256="f" * 64,
+            metadata={"available_at": "2026-07-01T00:00:00+08:00", "data_cutoff": "2026-07-09"},
+        ),
+    ]
+    program, binding = _program_and_binding()
+    program = replace(
+        program,
+        program_id="adv_phase0a_v2",
+        package_ids=[manifest.package_id],
+        package_weights={manifest.package_id: 1.0},
+        target_count=1,
+    )
+    binding = replace(
+        binding,
+        program_id=program.program_id,
+        package_ids=[manifest.package_id],
+        package_weights={manifest.package_id: 1.0},
+    )
+    run = SelectionRun(
+        run_id="sel_prospective",
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=evidence.target_trade_date,
+        data_source="DB_HISTORICAL",
+        package_ids=[manifest.package_id],
+        status=SelectionRunStatus.SUCCEEDED,
+        package_results={manifest.package_id: selected},
+        aggregate_results=selected,
+        manifest_sha256_by_package={manifest.package_id: str(manifest.manifest_sha256)},
+    )
+
+    class Calendar:
+        def list_trading_days(self, *, start_date: date, end_date: date) -> list[date]:
+            rows: list[date] = []
+            current = start_date
+            while current <= end_date:
+                if current.weekday() < 5:
+                    rows.append(current)
+                current += timedelta(days=1)
+            return rows
+
+    readers = AuditReaders(
+        advisory=_AdvisoryReader(program, binding),
+        package=_PackageReader(record, assets),
+        evidence=_EvidenceReader(evidence),
+        score_artifact=_ScoreReader(artifact),
+        selection_run=_RunReader(run),
+        calendar=Calendar(),
+    )
+    target = AuditTarget(
+        audit_target_id="target_phase0a_v2",
+        program_id=program.program_id,
+        package_id=manifest.package_id,
+        manifest_sha256=str(manifest.manifest_sha256),
+        expected_alpha_mode=ExpectedAlphaMode.SINGLE_ALPHA,
+        decision_date_range=AuditDateRange(start_date=artifact.trade_date, end_date=artifact.trade_date),
+        decision_dates=[artifact.trade_date],
+        selection_evidence_ids_by_decision_date={artifact.trade_date: evidence.evidence_id},
+        style_family="mean_reversion",
+        audit_policy_version="phase0a_policy_v1",
+    )
+    request = AuditRequest(
+        audit_id="audit_phase0a_v2",
+        policy_registry_id="phase0a_test_registry",
+        audit_policy_version="phase0a_policy_v1",
+        policy_registry_content_hash="e" * 64,
+        targets=[target],
+    )
+
+    receipt = AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(request)
+
+    assert receipt.results[0].candidate_authority[0].status == CandidateAuthorityStatus.FORMAL
+    assert receipt.results[0].candidate_authority[0].phase0a_reason_codes == []
+
+    readers.evidence.evidence = evidence.model_copy(update={"artifact_hash": "0" * 64})
+    tampered = AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(request)
+    report = tampered.results[0].candidate_authority[0]
+    assert report.status == CandidateAuthorityStatus.RETROSPECTIVE
+    assert "ADVISORY_PHASE0A_SELECTION_EVIDENCE_MISMATCH" in report.phase0a_reason_codes
+
+    readers.evidence.evidence = evidence
+    readers.score_artifact.artifact = artifact.model_copy(
+        update={"metadata": {**artifact.metadata, "provider_semantics_id": "tampered_provider"}}
+    )
+    tampered_artifact = AdvisoryPhase0AAuditService(readers=readers, policy=_policy()).audit(request)
+    report = tampered_artifact.results[0].candidate_authority[0]
+    assert report.status == CandidateAuthorityStatus.RETROSPECTIVE
+    assert "ADVISORY_PHASE0A_SELECTION_SCORE_ARTIFACT_MISMATCH" in report.phase0a_reason_codes
+
+
 def _receipt_with_results(*, receipt, request: AuditRequest, policy: Phase0APolicyRegistry, results):
     result_hash = canonical_json_sha256([result.model_dump(mode="python") for result in results])
     refreshed = receipt.model_copy(update={"results": results, "result_hash": result_hash})
@@ -657,8 +816,8 @@ def test_native_multi_alpha_parent_uses_one_program_binding_and_formal_source_ty
     )
 
     result = receipt.results[0]
-    assert result.candidate_authority[0].status == CandidateAuthorityStatus.FORMAL
-    assert result.oos_classifications[0].formal_oos_status == FormalOOSStatus.FORMAL_OOS
+    assert result.candidate_authority[0].status == CandidateAuthorityStatus.RETROSPECTIVE
+    assert result.oos_classifications[0].formal_oos_status == FormalOOSStatus.RETROSPECTIVE_RESEARCH_ONLY
     assert len(result.asset_ledger) == 8
     destination = write_receipt_artifacts(
         receipt=receipt,
@@ -888,7 +1047,7 @@ def test_explicit_hmm_snapshot_metadata_can_be_formal_without_generation() -> No
 
     hmm = receipt.results[0].hmm_vintages[0]
     assert hmm.status == "FORMAL"
-    assert receipt.results[0].oos_classifications[0].formal_oos_status == FormalOOSStatus.FORMAL_OOS
+    assert receipt.results[0].oos_classifications[0].formal_oos_status == FormalOOSStatus.RETROSPECTIVE_RESEARCH_ONLY
 
 
 def test_multi_alpha_topk_outside_frozen_variants_is_not_formal() -> None:

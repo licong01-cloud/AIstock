@@ -23,13 +23,15 @@ from backend.services.strategy_package.runtime import StrategyPackageRuntime, ap
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
-    selection_artifact_runtime_hash,
+    selection_artifact_runtime_hash_for_manifest,
+    selection_artifact_runtime_hash_v2_for_manifest,
 )
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
     LiveInferencePreflightResult,
 )
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.service import StrategyPackageService
 from backend.services import watchlist_service
 from backend.services.trading_core.errors import (
@@ -45,6 +47,7 @@ from backend.services.trading_core.errors import (
 from .models import SelectionCandidate, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
 from .package_health import SelectionPackageHealthService
 from .price_guidance import attach_price_guidance
+from .prospective_evidence import EvidenceCaptureMode, ProspectiveSelectionContext
 from .repository import SelectionCenterRepository
 from .result_enrichment import SelectionResultEnrichmentService
 from .risk_policy import StockRiskPolicyService
@@ -153,6 +156,7 @@ class SelectionCenterService:
         trade_date: date,
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
+        prospective_context: ProspectiveSelectionContext | None = None,
     ) -> SelectionRun:
         return self.run_packages(
             package_ids=[package_id],
@@ -160,6 +164,7 @@ class SelectionCenterService:
             trade_date=trade_date,
             data_source=data_source,
             runtime_config=runtime_config or {},
+            prospective_context=prospective_context,
         )
 
     def run_packages(
@@ -170,6 +175,7 @@ class SelectionCenterService:
         trade_date: date,
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
+        prospective_context: ProspectiveSelectionContext | None = None,
     ) -> SelectionRun:
         run = SelectionRun(
             mode=mode,
@@ -179,6 +185,10 @@ class SelectionCenterService:
             runtime_config=dict(runtime_config or {}),
         )
         self.repository.create_run(run)
+        capture_context = self._bind_prospective_context_to_run(
+            prospective_context=prospective_context,
+            selection_run_id=run.run_id,
+        )
         try:
             selection = self.strategy_selection_service.run_selection(
                 package_ids=package_ids,
@@ -187,6 +197,7 @@ class SelectionCenterService:
                 data_source=data_source,
                 runtime_config=runtime_config or {},
                 created_by="selection_center",
+                prospective_context=capture_context,
             )
             package_results = {
                 package_id: attach_price_guidance(
@@ -228,6 +239,24 @@ class SelectionCenterService:
             error = {"error_code": "SELECTION_CENTER_ERROR", "message": str(exc), "context": {"run_id": run.run_id}}
             self.repository.fail_run(run, error)
             raise
+
+    @staticmethod
+    def _bind_prospective_context_to_run(
+        *,
+        prospective_context: ProspectiveSelectionContext | None,
+        selection_run_id: str,
+    ) -> ProspectiveSelectionContext | None:
+        if prospective_context is None:
+            return None
+        if prospective_context.capture_mode != EvidenceCaptureMode.PROSPECTIVE:
+            return prospective_context
+        existing = str(prospective_context.selection_run_id or "").strip()
+        if existing and existing != selection_run_id:
+            raise RuntimeConfigInvalidError(
+                "prospective context selection_run_id conflicts with preallocated SelectionRun",
+                context={"context_selection_run_id": existing, "selection_run_id": selection_run_id},
+            )
+        return prospective_context.model_copy(update={"selection_run_id": selection_run_id})
 
     def _require_data_ready(self, *, trade_date: date, runtime_config: dict[str, Any]) -> None:
         if parse_selection_runtime_profile(runtime_config).tradability.exclude_suspended:
@@ -460,29 +489,38 @@ class SelectionCenterService:
             return
 
         manifest = record.current_manifest()
-        runtime_hash = selection_artifact_runtime_hash(runtime_config)
+        runtime_hashes = [
+            selection_artifact_runtime_hash_v2_for_manifest(manifest, runtime_config),
+            selection_artifact_runtime_hash_for_manifest(manifest, runtime_config),
+        ]
         cutoff_date = self._parse_selection_cutoff_date(artifact_config, trade_date=trade_date, strict_before=True)
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
-            try:
-                artifact = artifact_repository.get(
-                    package_id=record.package_id,
-                    manifest_sha256=manifest.manifest_sha256 or record.manifest_sha256,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    runtime_config_hash=runtime_hash,
-                )
-                metadata = artifact.metadata or {}
-                if (
-                    artifact.status.value == "SUCCEEDED"
-                    and artifact.scores_json
-                    and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
-                    and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
-                ):
-                    return
-            except DataUnavailableError:
-                pass
+            for runtime_hash in dict.fromkeys(runtime_hashes):
+                try:
+                    artifact = artifact_repository.get(
+                        package_id=record.package_id,
+                        manifest_sha256=manifest.manifest_sha256 or record.manifest_sha256,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        runtime_config_hash=runtime_hash,
+                    )
+                    metadata = artifact.metadata or {}
+                    expected_source_type = (
+                        LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                        if getattr(getattr(manifest, "alpha_mode", None), "value", None) == "multi_alpha"
+                        else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                    )
+                    if (
+                        artifact.status.value == "SUCCEEDED"
+                        and artifact.scores_json
+                        and metadata.get("source_type") == expected_source_type
+                        and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
+                    ):
+                        return
+                except DataUnavailableError:
+                    continue
 
         # Cold-start preflight (P0-F / Codex doc P0-4): fail fast on missing
         # QE source / node / conf.yaml / factors / model params BEFORE

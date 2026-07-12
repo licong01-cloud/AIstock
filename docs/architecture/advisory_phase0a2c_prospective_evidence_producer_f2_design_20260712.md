@@ -95,6 +95,18 @@ Phase 0A.2C 完成后：
 
 ### 2.3 Non-Goals
 
+#### Research-only operating boundary
+
+`ADVISORY_RUN` is a historical-data research event: it may create candidate and
+evidence records for academic analysis and historical simulation only. It is
+not a real-time recommendation, investment advice, order, target-position, or
+execution instruction. Prospective capture accepts only `DB_HISTORICAL` and
+must persist `research_scope=HISTORICAL_RESEARCH_ONLY` together with
+`execution_prohibited=true`. It must reject broker, QMT/MiniQMT, real-time data
+and every non-research origin before model inference. Paper/LocalSim may consume
+the resulting records only when independently started as a historical simulator;
+the advisory path never invokes them.
+
 - 不实现 Phase 0A.2D daily runner、Program batch receipt、crash resume 或正式 `T0` 激活。
 - 不执行生产 package onboarding 或 dated successor binding DML。
 - 不创建 Phase 1 observation/label/source availability 表。
@@ -152,7 +164,7 @@ backend/tests/e2e/
 ProspectiveSelectionContext
   capture_mode = DISABLED | PROSPECTIVE
   selection_run_id
-  execution_origin = SELECTION_CENTER | ADVISORY_RUN | PAPER | SIMULATION | REPLAY | PREVIEW
+  execution_origin = ADVISORY_RUN (historical research only)
   decision_clock_seed
   effective_config_seed
   policy_registry_ref
@@ -169,7 +181,7 @@ ProspectiveSelectionContext
 
 - `capture_mode=DISABLED`：保持现有 operational DSE 行为，不宣称 Phase 0A v2。
 - `capture_mode=PROSPECTIVE`：要求 context 完整并生成 v2；任何 mandatory receipt 缺失时输出明确 capture failure，不写 v2 DSE。
-- `REPLAY/PREVIEW` 可生成 v2-shaped diagnostic receipt，但 `prospective_eligible=false`，永远不能成为正式 evidence。
+- `REPLAY/PREVIEW` 只能生成独立 diagnostic receipt，不能写入 v2 DSE，也不能成为历史研究 evidence。
 - `ADVISORY_RUN` 的 context 由 Phase 0A.2D runner 提供；Phase 0A.2C 先完成模型、接口和隔离测试。
 
 ### 5.2 单次计算、旁路 trace
@@ -354,6 +366,11 @@ excluded_candidates
 
 ### 8.2 evidence_contract
 
+Every v2 evidence contract is explicitly research-only: `execution_origin` is
+`ADVISORY_RUN`, `research_scope=HISTORICAL_RESEARCH_ONLY`,
+`market_data_scope=DB_HISTORICAL`, and `execution_prohibited=true`. These fields
+are part of the canonical payload and therefore cannot be changed after capture.
+
 ```text
 contract_version
 capture_mode
@@ -366,7 +383,7 @@ captured_at
 reason_codes = []
 ```
 
-只有 `capture_mode=PROSPECTIVE`、`capture_status=COMPLETE`、`execution_origin=ADVISORY_RUN` 且后续 runner 满足 T0/date/business-key 条件时，才可能成为 formal evidence。Phase 0A.2C 自身不宣称某条记录已经 formal OOS。
+只有 `capture_mode=PROSPECTIVE`、`capture_status=COMPLETE`、`execution_origin=ADVISORY_RUN` 且后续历史研究 runner 满足 T0/date/business-key 条件时，才可能成为 formal historical-research evidence；它永远不是实时荐股、投资建议或交易指令。Phase 0A.2C 自身不宣称某条记录已经 formal OOS。
 
 DSE v2 的 `artifact_hash/evidence_id` 由完整 payload 计算，因此 payload 内禁止包含自身 evidence id/hash。DSE identity 只存在于表列、Pydantic 外层对象和持久化后的 response；任何内部自引用都会造成不可解的循环 hash。
 

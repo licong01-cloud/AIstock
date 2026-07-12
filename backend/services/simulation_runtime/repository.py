@@ -34,6 +34,17 @@ from .models import (
 ConnFactory = Callable[[], Iterator[Any]]
 
 
+def _is_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> bool:
+    return (evidence.evidence_payload_json or {}).get("schema_version") == "daily_selection_evidence_v2"
+
+
+def _validate_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> None:
+    """Validate the typed payload at the persistence boundary as well."""
+    from backend.services.selection_center.prospective_evidence import DailySelectionEvidenceV2Payload
+
+    DailySelectionEvidenceV2Payload.model_validate(evidence.evidence_payload_json)
+
+
 class SimulationRuntimeRepository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or get_conn
@@ -286,6 +297,9 @@ class SimulationRuntimeRepository:
         return [self._binding_from_row(row) for row in rows]
 
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        if _is_daily_selection_evidence_v2(evidence):
+            _validate_daily_selection_evidence_v2(evidence)
+            return self._save_daily_selection_evidence_v2(evidence)
         existing_by_hash = self.get_daily_selection_evidence_by_hash(evidence.artifact_hash)
         if existing_by_hash is not None:
             return existing_by_hash
@@ -327,8 +341,92 @@ class SimulationRuntimeRepository:
                     raise InvalidStateTransitionError(
                         "daily selection evidence conflicts with an existing immutable evidence row",
                         context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
-                    ) from exc
+                ) from exc
         return evidence
+
+    def _save_daily_selection_evidence_v2(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        """Insert-or-compare for the v2 content-addressed prospective contract."""
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO selection.daily_selection_evidence (
+                        evidence_id, target_trade_date, cutoff_date, package_id, manifest_sha256,
+                        release_id, release_hash, runtime_profile_version_id, runtime_profile_hash,
+                        source_type, data_source, candidate_count, excluded_count, artifact_hash,
+                        evidence_payload_json, created_at, created_by
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    self._daily_selection_evidence_insert_params(evidence),
+                )
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM selection.daily_selection_evidence
+                    WHERE evidence_id = %s OR artifact_hash = %s
+                    ORDER BY evidence_id
+                    """,
+                    (evidence.evidence_id, evidence.artifact_hash),
+                )
+                rows = cur.fetchall()
+        if len(rows) != 1:
+            raise InvalidStateTransitionError(
+                "daily selection evidence v2 conflicts with an immutable identity",
+                context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
+            )
+        stored = self._evidence_from_row(dict(rows[0]))
+        self._assert_same_v2_evidence(stored, evidence)
+        return stored
+
+    @staticmethod
+    def _daily_selection_evidence_insert_params(evidence: DailySelectionEvidence) -> tuple[Any, ...]:
+        return (
+            evidence.evidence_id,
+            evidence.target_trade_date,
+            evidence.cutoff_date,
+            evidence.package_id,
+            evidence.manifest_sha256,
+            evidence.release_id,
+            evidence.release_hash,
+            evidence.runtime_profile_version_id,
+            evidence.runtime_profile_hash,
+            evidence.source_type,
+            evidence.data_source,
+            evidence.candidate_count,
+            evidence.excluded_count,
+            evidence.artifact_hash,
+            psycopg2.extras.Json(evidence.evidence_payload_json),
+            evidence.created_at,
+            evidence.created_by,
+        )
+
+    @staticmethod
+    def _assert_same_v2_evidence(stored: DailySelectionEvidence, requested: DailySelectionEvidence) -> None:
+        fields = (
+            "evidence_id",
+            "target_trade_date",
+            "cutoff_date",
+            "package_id",
+            "manifest_sha256",
+            "release_id",
+            "release_hash",
+            "runtime_profile_version_id",
+            "runtime_profile_hash",
+            "source_type",
+            "data_source",
+            "candidate_count",
+            "excluded_count",
+            "artifact_hash",
+            "evidence_payload_json",
+        )
+        if any(getattr(stored, field) != getattr(requested, field) for field in fields):
+            raise InvalidStateTransitionError(
+                "daily selection evidence v2 conflicts with immutable content",
+                context={"evidence_id": requested.evidence_id, "artifact_hash": requested.artifact_hash},
+            )
 
     def get_daily_selection_evidence(self, evidence_id: str) -> DailySelectionEvidence:
         rows = self._fetch_rows(
@@ -1046,8 +1144,22 @@ class InMemorySimulationRuntimeRepository:
         return ordered[:limit]
 
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        if _is_daily_selection_evidence_v2(evidence):
+            _validate_daily_selection_evidence_v2(evidence)
         if evidence.artifact_hash in self.daily_selection_hash_index:
-            return self.daily_selection_evidences[self.daily_selection_hash_index[evidence.artifact_hash]]
+            existing = self.daily_selection_evidences[self.daily_selection_hash_index[evidence.artifact_hash]]
+            if _is_daily_selection_evidence_v2(evidence):
+                SimulationRuntimeRepository._assert_same_v2_evidence(existing, evidence)
+            return existing
+        existing_by_id = self.daily_selection_evidences.get(evidence.evidence_id)
+        if existing_by_id is not None:
+            if _is_daily_selection_evidence_v2(evidence):
+                SimulationRuntimeRepository._assert_same_v2_evidence(existing_by_id, evidence)
+                return existing_by_id
+            raise InvalidStateTransitionError(
+                "daily selection evidence conflicts with an existing immutable evidence id",
+                context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
+            )
         self.daily_selection_evidences[evidence.evidence_id] = evidence
         self.daily_selection_hash_index[evidence.artifact_hash] = evidence.evidence_id
         return evidence
