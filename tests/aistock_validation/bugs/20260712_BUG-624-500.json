@@ -31,8 +31,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-12T14:05:18.541322Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "99939dfe22821a475d00932b7ffa5ea6a23daa9e",
+  "fixed_at": "2026-07-12T14:29:46.137101Z",
   "github_issue_number": 2007,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2007",
   "last_seen_at": "2026-07-12T14:05:18.541322Z",
@@ -40,6 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2008",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -84,6 +85,12 @@
     "ui_routes": [],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "ruff check + py_compile -> passed",
+    "4 targeted official-factor cache/progress pytest cases -> 4 passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
