@@ -165,6 +165,7 @@ POST 只接受上述请求模型。返回对象固定带 `research_scope`、`exe
 | `ADVISORY_PHASE0A2D_MANUAL_ORIGIN_REQUIRED` | origin 不是手工历史研究。 |
 | `ADVISORY_PHASE0A2D_RESEARCH_RUN_CONFLICT` | 同一 Program/date 业务键的 payload 不一致。 |
 | `ADVISORY_PHASE0A2D_PROGRAM_INPUT_UNAVAILABLE` | 必需历史数据、binding 或 evidence 缺失。 |
+| `ADVISORY_PHASE0A2D_PROGRAM_EVIDENCE_INVALID` | 已存在的 binding、artifact、DSE、决策时钟或 source receipt 与历史研究契约不一致。 |
 | `ADVISORY_PHASE0A2D_FORBIDDEN_EXECUTION_DEPENDENCY` | runner 发现模拟盘、broker、QMT 或实时依赖。 |
 
 ## 9. 验证方案

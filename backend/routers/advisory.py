@@ -8,6 +8,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from backend.services.advisory_phase0a.historical_research import (
+    HistoricalAdvisoryResearchRunner,
+    HistoricalResearchBatchRequest,
+    historical_research_batch_to_dict,
+    historical_research_program_run_to_dict,
+    historical_research_receipt_to_dict,
+)
+from backend.services.advisory_phase0a.historical_research_postgres import (
+    PersistedHistoricalSelectionEvidenceAdapter,
+    PostgresHistoricalResearchProgramResolver,
+    PostgresHistoricalResearchRepository,
+    PostgresHistoricalResearchTradingDateResolver,
+)
 from backend.services.advisory_program import (
     AdvisoryProgramService,
     PRICE_BASIS_NEXT_OPEN,
@@ -119,6 +132,15 @@ def get_advisory_program_service() -> AdvisoryProgramService:
     return AdvisoryProgramService()
 
 
+def get_historical_research_runner() -> HistoricalAdvisoryResearchRunner:
+    return HistoricalAdvisoryResearchRunner(
+        repository=PostgresHistoricalResearchRepository(),
+        trading_date_resolver=PostgresHistoricalResearchTradingDateResolver(),
+        program_resolver=PostgresHistoricalResearchProgramResolver(),
+        evidence_adapter=PersistedHistoricalSelectionEvidenceAdapter(),
+    )
+
+
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
@@ -126,6 +148,75 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+def _raise_historical_research_http(exc: TradingCoreError) -> None:
+    status_code = 409 if exc.to_dict().get("reason_code") == "ADVISORY_PHASE0A2D_RESEARCH_RUN_CONFLICT" else 400
+    if isinstance(exc, DataUnavailableError):
+        status_code = 404
+    raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+@router.post("/research-batches")
+def create_historical_research_batch(
+    req: HistoricalResearchBatchRequest,
+    runner: HistoricalAdvisoryResearchRunner = Depends(get_historical_research_runner),
+) -> dict[str, Any]:
+    try:
+        receipt = runner.run(req)
+        batch = runner.get_batch(receipt.batch_id)
+        return {
+            "ok": True,
+            "batch": historical_research_batch_to_dict(batch),
+            "receipt": historical_research_receipt_to_dict(receipt),
+        }
+    except TradingCoreError as exc:
+        _raise_historical_research_http(exc)
+
+
+@router.get("/research-batches/{batch_id}")
+def get_historical_research_batch(
+    batch_id: str,
+    runner: HistoricalAdvisoryResearchRunner = Depends(get_historical_research_runner),
+) -> dict[str, Any]:
+    try:
+        batch = runner.get_batch(batch_id)
+        receipt = runner.get_batch_receipt(batch_id)
+        return {
+            "ok": True,
+            "batch": historical_research_batch_to_dict(batch),
+            "receipt": historical_research_receipt_to_dict(receipt) if receipt is not None else None,
+        }
+    except TradingCoreError as exc:
+        _raise_historical_research_http(exc)
+
+
+@router.get("/research-batches/{batch_id}/programs/{program_id}")
+def get_historical_research_program(
+    batch_id: str,
+    program_id: str,
+    runner: HistoricalAdvisoryResearchRunner = Depends(get_historical_research_runner),
+) -> dict[str, Any]:
+    try:
+        batch = runner.get_batch(batch_id)
+        if program_id not in batch.program_ids:
+            raise DataUnavailableError(
+                "historical research Program is not part of this batch",
+                context={"batch_id": batch_id, "program_id": program_id},
+            )
+        program_run = runner.get_program_run(program_id=program_id, decision_trade_date=batch.decision_trade_date)
+        if program_run is None:
+            raise DataUnavailableError(
+                "historical research Program run does not exist",
+                context={"batch_id": batch_id, "program_id": program_id},
+            )
+        return {
+            "ok": True,
+            "batch_id": batch_id,
+            "program_run": historical_research_program_run_to_dict(program_run),
+        }
+    except TradingCoreError as exc:
+        _raise_historical_research_http(exc)
 
 
 @router.get("/programs")
