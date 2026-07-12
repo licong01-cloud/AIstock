@@ -4,6 +4,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import logging
 import multiprocessing
 import os
 import queue
@@ -29,6 +30,8 @@ from .factor_value_loader import FactorValueLoader
 from .offline_code_text_factor_executor import FactorExecutionResult
 from .offline_code_text_factor_executor import OfflineCodeTextFactorExecutor
 from .wsl_runtime_guard import assert_wsl_runtime
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OFFICIAL_FACTOR_CACHE_ROOT = REPO_ROOT / "rdagent_assets" / "factor_values"
