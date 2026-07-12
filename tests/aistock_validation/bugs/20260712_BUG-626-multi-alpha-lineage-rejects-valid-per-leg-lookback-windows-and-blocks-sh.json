@@ -2,7 +2,10 @@
   "actual": "PR #1993 moved Advisory Phase 0A2C prospective evidence validation into the shared inference/selection path. Multi-alpha lineage aggregation currently treats per-leg historical input window identities as cross-leg invariants, so valid LSTM and fundamental legs with different lookback/window provenance fail before Selection Center, Paper v2, Simulation Runtime, or Advisory consumption. Preserve strict common PIT date/calendar/universe/source validation while allowing each leg to retain its own valid lookback/window lineage. Add regression coverage for shared selection consumers and fail closed on true common-PIT mismatches.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260712_BUG-626-multi-alpha-lineage-rejects-valid-per-leg-lookback-windows-and-blocks-sh.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/inference_engine.py",
+    "backend/services/strategy_package/multi_alpha_live.py",
+    "backend/tests/strategy_package/test_multi_alpha_live_selection.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-626",
@@ -159,5 +162,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
