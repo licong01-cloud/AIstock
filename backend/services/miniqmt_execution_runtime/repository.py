@@ -7,7 +7,9 @@ import inspect
 import json
 import os
 import threading
+from collections import Counter
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol
@@ -16,6 +18,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
+from backend.execution_algos.adaptive_is.contracts import MarketDataEvidenceV1, canonical_sha256
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide
 
@@ -65,6 +68,92 @@ _TERMINAL_CHILD_ORDER_STATUSES = frozenset(
         MiniQMTChildOrderStatus.REJECTED.value,
     }
 )
+_QUOTE_EVIDENCE_EVENT_TYPES = frozenset(
+    {
+        MiniQMTExecutionEventType.QUOTE_OBSERVED,
+        MiniQMTExecutionEventType.QUOTE_REJECTED,
+        MiniQMTExecutionEventType.QUOTE_ELIGIBILITY_EVALUATED,
+        MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+        MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH,
+    }
+)
+
+
+class QuoteEvidenceIdempotencyConflict(ValueError):
+    """A deterministic evidence event id was reused with different contents."""
+
+
+@dataclass(frozen=True)
+class QuoteEvidenceEventCandidate:
+    """Sequence-free evidence append request; the repository owns ordering."""
+
+    event_id: str
+    runtime_id: str
+    event_type: MiniQMTExecutionEventType
+    event_time: datetime
+    payload: dict[str, Any]
+    evidence_sha256: str
+    evidence_contract: MarketDataEvidenceV1 | None = None
+
+    def __post_init__(self) -> None:
+        if not self.event_id or not self.runtime_id or not self.evidence_sha256:
+            raise ValueError("quote evidence candidate requires event_id, runtime_id, and evidence_sha256")
+        if self.event_type not in _QUOTE_EVIDENCE_EVENT_TYPES:
+            raise ValueError(f"event type is not a quote-evidence carrier: {self.event_type}")
+        if self.event_time.tzinfo is None or self.event_time.utcoffset() is None:
+            raise ValueError("quote evidence candidate event_time must be timezone-aware")
+        if not isinstance(self.payload, dict):
+            raise ValueError("quote evidence candidate payload must be a dict")
+        if self.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH:
+            health = self.payload.get("health_or_aggregate")
+            if (
+                self.payload.get("schema_version") != "miniqmt_quote_ingress_health_payload_v1"
+                or not isinstance(health, dict)
+                or str(health.get("health_sha256") or "") != self.evidence_sha256
+            ):
+                raise ValueError("quote ingress health candidate payload is invalid")
+            return
+        if not isinstance(self.evidence_contract, MarketDataEvidenceV1):
+            raise ValueError("quote evidence candidate requires its validated MarketDataEvidenceV1 contract")
+        if self.payload.get("schema_version") != "miniqmt_quote_runtime_event_payload_v1":
+            raise ValueError("quote evidence candidate payload schema is invalid")
+        evidence = self.payload.get("evidence")
+        if not isinstance(evidence, dict):
+            raise ValueError("quote evidence candidate requires a typed evidence payload")
+        if str(evidence.get("evidence_sha256") or "") != self.evidence_sha256:
+            raise ValueError("quote evidence candidate evidence hash does not match payload")
+        capture_type = str(evidence.get("capture_type") or "")
+        expected_event_type = {
+            "ACTION_INPUT": MiniQMTExecutionEventType.QUOTE_ELIGIBILITY_EVALUATED,
+            "ACTION_REJECT": MiniQMTExecutionEventType.QUOTE_REJECTED,
+            "CHILD_RECEIPT": MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+            "PROTECTION_BAND_TRIGGER": MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+            "MARKOUT_60S": MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+            "MARKOUT_300S": MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+            "MARKOUT_900S": MiniQMTExecutionEventType.QUOTE_MARK_CAPTURED,
+            "CADENCE_AGGREGATE": MiniQMTExecutionEventType.QUOTE_OBSERVED,
+        }.get(capture_type)
+        if expected_event_type is None or self.event_type != expected_event_type:
+            raise ValueError("quote evidence capture type and runtime event type do not match the registered mapping")
+        expected_event_id = "mqrtevt_" + canonical_sha256(
+            {"schema": "miniqmt_quote_event_v1", "evidence_id": self.evidence_contract.evidence_id}
+        )
+        if (
+            self.event_id != expected_event_id
+            or self.runtime_id != self.evidence_contract.runtime_id
+            or self.event_time != self.evidence_contract.event_time_utc
+            or self.evidence_sha256 != self.evidence_contract.evidence_sha256
+            or self.payload != self.evidence_contract.runtime_payload()
+        ):
+            raise ValueError("quote evidence candidate does not exactly match its validated evidence contract")
+
+
+@dataclass(frozen=True)
+class DurableEvidenceReceipt:
+    event: MiniQMTExecutionEvent
+    persisted_at_utc: datetime
+    durable_ack: bool
+    readback_verified: bool
 
 
 class MiniQMTExecutionRuntimeRepository(Protocol):
@@ -80,7 +169,58 @@ class MiniQMTExecutionRuntimeRepository(Protocol):
     def append_event(self, event: MiniQMTExecutionEvent) -> MiniQMTExecutionEvent:
         ...
 
-    def list_events(self, runtime_id: str) -> list[MiniQMTExecutionEvent]:
+    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
+        ...
+
+    def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
+        ...
+
+    def list_evidence_receipts(
+        self,
+        runtime_id: str,
+        *,
+        market_data_id: str | None = None,
+        evidence_id: str | None = None,
+        include_archived: bool = False,
+        after_sequence: int = 0,
+        after_event_id: str = "",
+        limit: int = 501,
+    ) -> list[DurableEvidenceReceipt]:
+        ...
+
+    def list_quote_events_page(
+        self,
+        runtime_id: str,
+        *,
+        symbol: str | None,
+        after_sequence: int,
+        after_event_id: str,
+        limit: int,
+    ) -> list[MiniQMTExecutionEvent]:
+        ...
+
+    def list_events_by_ids(
+        self,
+        runtime_id: str,
+        *,
+        event_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> list[MiniQMTExecutionEvent]:
+        ...
+
+    def quote_diagnostics_summary(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]:
+        ...
+
+    def quote_event_schema_gate(self) -> str:
+        ...
+
+    def existing_evidence_ids(
+        self,
+        runtime_id: str,
+        *,
+        evidence_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> set[str]:
         ...
 
     def next_event_sequence(self, runtime_id: str) -> int:
@@ -115,6 +255,7 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
     def __init__(self) -> None:
         self._runtimes: dict[str, MiniQMTExecutionRuntimeRecord] = {}
         self._events: dict[str, list[MiniQMTExecutionEvent]] = {}
+        self._evidence_receipts: dict[str, DurableEvidenceReceipt] = {}
         self._algo_instances: dict[str, MiniQMTExecutionAlgoInstance] = {}
         self._child_orders: dict[str, MiniQMTChildOrder] = {}
 
@@ -161,8 +302,138 @@ class InMemoryMiniQMTExecutionRuntimeRepository:
             )
         return event
 
-    def list_events(self, runtime_id: str) -> list[MiniQMTExecutionEvent]:
+    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
+        existing = self._evidence_receipts.get(candidate.event_id)
+        if existing is not None:
+            event = existing.event
+            if not _evidence_event_matches_candidate(event, candidate):
+                raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
+            return existing
+        runtime = self._runtimes.get(candidate.runtime_id)
+        if runtime is None:
+            raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
+        sequence = int(runtime.last_event_sequence or 0) + 1
+        event = MiniQMTExecutionEvent(
+            event_id=candidate.event_id,
+            runtime_id=candidate.runtime_id,
+            sequence=sequence,
+            event_type=candidate.event_type,
+            event_time=candidate.event_time,
+            source="quote_ingress",
+            payload=dict(candidate.payload),
+        )
+        self._events.setdefault(event.runtime_id, []).append(event)
+        self._runtimes[event.runtime_id] = runtime.model_copy(
+            update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
+        )
+        receipt = DurableEvidenceReceipt(
+            event=event,
+            persisted_at_utc=datetime.now(UTC),
+            durable_ack=True,
+            readback_verified=True,
+        )
+        self._evidence_receipts[candidate.event_id] = receipt
+        return receipt
+
+    def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
         return list(self._events.get(runtime_id, ()))
+
+    def list_evidence_receipts(
+        self,
+        runtime_id: str,
+        *,
+        market_data_id: str | None = None,
+        evidence_id: str | None = None,
+        include_archived: bool = False,
+        after_sequence: int = 0,
+        after_event_id: str = "",
+        limit: int = 501,
+    ) -> list[DurableEvidenceReceipt]:
+        if (market_data_id is None) == (evidence_id is None):
+            raise ValueError("exactly one of market_data_id or evidence_id is required")
+        if limit < 1 or limit > 501:
+            raise ValueError("evidence receipt limit must be between 1 and 501")
+        receipts = [
+            receipt
+            for receipt in self._evidence_receipts.values()
+            if receipt.event.runtime_id == runtime_id and isinstance(receipt.event.payload.get("evidence"), dict)
+        ]
+        connected: set[str] = {market_data_id or evidence_id or ""}
+        selected: dict[str, DurableEvidenceReceipt] = {}
+        changed = True
+        while changed:
+            changed = False
+            for receipt in receipts:
+                evidence = receipt.event.payload["evidence"]
+                tokens = _evidence_link_tokens(evidence, event_id=receipt.event.event_id)
+                if connected.intersection(tokens) and receipt.event.event_id not in selected:
+                    selected[receipt.event.event_id] = receipt
+                    connected.update(tokens)
+                    changed = True
+        return [
+            receipt
+            for receipt in sorted(selected.values(), key=lambda item: (item.event.sequence, item.event.event_id))
+            if (receipt.event.sequence, receipt.event.event_id) > (after_sequence, after_event_id)
+        ][:limit]
+
+    def list_quote_events_page(
+        self,
+        runtime_id: str,
+        *,
+        symbol: str | None,
+        after_sequence: int,
+        after_event_id: str,
+        limit: int,
+    ) -> list[MiniQMTExecutionEvent]:
+        quote_events = [
+            event
+            for event in self._events.get(runtime_id, ())
+            if event.event_type.value.startswith("QUOTE_")
+            and (symbol is None or (event.payload.get("evidence") or {}).get("symbol") == symbol)
+            and (event.sequence, event.event_id) > (after_sequence, after_event_id)
+        ]
+        return sorted(quote_events, key=lambda item: (item.sequence, item.event_id))[:limit]
+
+    def list_events_by_ids(
+        self,
+        runtime_id: str,
+        *,
+        event_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> list[MiniQMTExecutionEvent]:
+        wanted = set(event_ids)
+        return [event for event in self._events.get(runtime_id, ()) if event.event_id in wanted]
+
+    def quote_diagnostics_summary(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]:
+        quote_events = [
+            event
+            for event in self._events.get(runtime_id, ())
+            if event.event_type.value.startswith("QUOTE_")
+            and (
+                symbol is None
+                or event.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH
+                or (event.payload.get("evidence") or {}).get("symbol") == symbol
+            )
+        ]
+        return _quote_diagnostics_summary_from_events(quote_events)
+
+    def quote_event_schema_gate(self) -> str:
+        return "test_only_unverified"
+
+    def existing_evidence_ids(
+        self,
+        runtime_id: str,
+        *,
+        evidence_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> set[str]:
+        wanted = set(evidence_ids)
+        return {
+            str(evidence["evidence_id"])
+            for event in self._events.get(runtime_id, ())
+            if isinstance((evidence := event.payload.get("evidence")), dict)
+            and evidence.get("evidence_id") in wanted
+        }
 
     def next_event_sequence(self, runtime_id: str) -> int:
         runtime = self._runtimes.get(runtime_id)
@@ -270,13 +541,151 @@ class PostgresMiniQMTExecutionRuntimeRepository:
         self._prune_runtime_if_due(runtime_id=event.runtime_id, reason="append_event")
         return event
 
-    def list_events(self, runtime_id: str) -> list[MiniQMTExecutionEvent]:
+    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
+        receipt = self._with_runtime_db_error(
+            "append_evidence_event",
+            "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_PERSIST_FAILED",
+            {"runtime_id": candidate.runtime_id, "event_id": candidate.event_id, "evidence_sha256": candidate.evidence_sha256},
+            lambda: self._append_evidence_event_row(candidate),
+        )
+        if not receipt.durable_ack or not receipt.readback_verified:
+            raise RuntimeConfigInvalidError(
+                "quote evidence persistence did not produce a durable verified receipt",
+                context={
+                    "reason_code": "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_PERSIST_FAILED",
+                    "stage": "PERSIST",
+                    "runtime_id": candidate.runtime_id,
+                    "event_id": candidate.event_id,
+                    "durable_ack": receipt.durable_ack,
+                    "readback_verified": receipt.readback_verified,
+                },
+            )
+        self._prune_runtime_if_due(runtime_id=candidate.runtime_id, reason="append_quote_evidence")
+        return receipt
+
+    def list_events(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
         return self._with_runtime_db_error(
             "list_events",
             "MINIQMT_RUNTIME_DB_LIST_EVENTS_FAILED",
-            {"runtime_id": runtime_id},
-            lambda: self._list_event_rows(runtime_id),
+            {"runtime_id": runtime_id, "include_archived": include_archived},
+            lambda: self._list_event_rows(runtime_id, include_archived=include_archived),
         )
+
+    def list_evidence_receipts(
+        self,
+        runtime_id: str,
+        *,
+        market_data_id: str | None = None,
+        evidence_id: str | None = None,
+        include_archived: bool = False,
+        after_sequence: int = 0,
+        after_event_id: str = "",
+        limit: int = 501,
+    ) -> list[DurableEvidenceReceipt]:
+        if (market_data_id is None) == (evidence_id is None):
+            raise ValueError("exactly one of market_data_id or evidence_id is required")
+        return self._with_runtime_db_error(
+            "list_evidence_receipts",
+            "MINIQMT_RUNTIME_DB_LIST_EVIDENCE_RECEIPTS_FAILED",
+            {
+                "runtime_id": runtime_id,
+                "market_data_id": market_data_id,
+                "evidence_id": evidence_id,
+                "include_archived": include_archived,
+                "after_sequence": after_sequence,
+                "after_event_id": after_event_id,
+                "limit": limit,
+            },
+            lambda: self._list_evidence_receipt_rows(
+                runtime_id,
+                market_data_id=market_data_id,
+                evidence_id=evidence_id,
+                include_archived=include_archived,
+                after_sequence=after_sequence,
+                after_event_id=after_event_id,
+                limit=limit,
+            ),
+        )
+
+    def list_quote_events_page(
+        self,
+        runtime_id: str,
+        *,
+        symbol: str | None,
+        after_sequence: int,
+        after_event_id: str,
+        limit: int,
+    ) -> list[MiniQMTExecutionEvent]:
+        return self._with_runtime_db_error(
+            "list_quote_events_page",
+            "MINIQMT_RUNTIME_DB_LIST_QUOTE_EVENTS_FAILED",
+            {"runtime_id": runtime_id, "symbol": symbol, "limit": limit},
+            lambda: self._list_quote_event_rows(
+                runtime_id,
+                symbol=symbol,
+                after_sequence=after_sequence,
+                after_event_id=after_event_id,
+                limit=limit,
+            ),
+        )
+
+    def list_events_by_ids(
+        self,
+        runtime_id: str,
+        *,
+        event_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> list[MiniQMTExecutionEvent]:
+        if not event_ids:
+            return []
+        return self._with_runtime_db_error(
+            "list_events_by_ids",
+            "MINIQMT_RUNTIME_DB_LIST_LINKED_EVENTS_FAILED",
+            {"runtime_id": runtime_id, "event_count": len(event_ids), "include_archived": include_archived},
+            lambda: self._list_event_rows_by_ids(runtime_id, event_ids=event_ids, include_archived=include_archived),
+        )
+
+    def quote_diagnostics_summary(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]:
+        return self._with_runtime_db_error(
+            "quote_diagnostics_summary",
+            "MINIQMT_RUNTIME_DB_QUOTE_DIAGNOSTICS_SUMMARY_FAILED",
+            {"runtime_id": runtime_id, "symbol": symbol},
+            lambda: self._quote_diagnostics_summary_rows(runtime_id, symbol=symbol),
+        )
+
+    def quote_event_schema_gate(self) -> str:
+        from .quote_event_schema import read_quote_event_schema
+
+        return self._with_runtime_db_error(
+            "quote_event_schema_gate",
+            "MINIQMT_RUNTIME_DB_QUOTE_EVENT_SCHEMA_READBACK_FAILED",
+            {},
+            lambda: self._read_quote_event_schema_gate(read_quote_event_schema),
+        )
+
+    def existing_evidence_ids(
+        self,
+        runtime_id: str,
+        *,
+        evidence_ids: tuple[str, ...],
+        include_archived: bool = False,
+    ) -> set[str]:
+        if not evidence_ids:
+            return set()
+        return self._with_runtime_db_error(
+            "existing_evidence_ids",
+            "MINIQMT_RUNTIME_DB_LIST_LINKED_EVIDENCE_FAILED",
+            {"runtime_id": runtime_id, "evidence_count": len(evidence_ids), "include_archived": include_archived},
+            lambda: self._existing_evidence_id_rows(
+                runtime_id,
+                evidence_ids=evidence_ids,
+                include_archived=include_archived,
+            ),
+        )
+
+    def _read_quote_event_schema_gate(self, reader: Callable[[Any], Any]) -> str:
+        with self._conn() as conn:
+            return str(reader(conn).production_ddl_gate)
 
     def next_event_sequence(self, runtime_id: str) -> int:
         runtime = self.get_runtime(runtime_id)
@@ -493,20 +902,360 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     (event.sequence, event.event_time, event.runtime_id),
                 )
 
-    def _list_event_rows(self, runtime_id: str) -> list[MiniQMTExecutionEvent]:
+    def _append_evidence_event_row(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
+        with self._conn(manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT runtime_id, last_event_sequence
+                    FROM qmt_strategy.execution_runtime
+                    WHERE runtime_id = %s
+                    FOR UPDATE
+                    """,
+                    (candidate.runtime_id,),
+                )
+                runtime = cur.fetchone()
+                if runtime is None:
+                    raise ValueError(f"quote evidence runtime does not exist: {candidate.runtime_id}")
+                cur.execute(
+                    """
+                    SELECT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE event_id = %s
+                    """,
+                    (candidate.event_id,),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    event = _row_to_event(existing)
+                    if not _evidence_event_matches_candidate(event, candidate):
+                        raise QuoteEvidenceIdempotencyConflict(f"quote evidence event id conflicts: {candidate.event_id}")
+                    persisted_at = existing["created_at"]
+                else:
+                    sequence = int(runtime["last_event_sequence"] or 0) + 1
+                    cur.execute(
+                        """
+                        INSERT INTO qmt_strategy.execution_runtime_event (
+                            event_id, runtime_id, sequence, event_type, event_time, source, payload
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING created_at
+                        """,
+                        (
+                            candidate.event_id,
+                            candidate.runtime_id,
+                            sequence,
+                            candidate.event_type.value,
+                            candidate.event_time,
+                            "quote_ingress",
+                            _json(candidate.payload),
+                        ),
+                    )
+                    inserted = cur.fetchone()
+                    if inserted is None:
+                        raise RuntimeError("quote evidence insert did not return created_at")
+                    persisted_at = inserted["created_at"]
+                    cur.execute(
+                        """
+                        UPDATE qmt_strategy.execution_runtime
+                        SET last_event_sequence = %s,
+                            updated_at = %s
+                        WHERE runtime_id = %s
+                        """,
+                        (sequence, candidate.event_time, candidate.runtime_id),
+                    )
+                    if cur.rowcount != 1:
+                        raise RuntimeError("quote evidence runtime sequence update did not affect exactly one row")
+                    event = MiniQMTExecutionEvent(
+                        event_id=candidate.event_id,
+                        runtime_id=candidate.runtime_id,
+                        sequence=sequence,
+                        event_type=candidate.event_type,
+                        event_time=candidate.event_time,
+                        source="quote_ingress",
+                        payload=dict(candidate.payload),
+                    )
+        readback_event, readback_persisted_at = self._read_evidence_event(candidate.event_id)
+        if (
+            not _evidence_event_matches_candidate(readback_event, candidate)
+            or readback_event.sequence != event.sequence
+            or readback_persisted_at != persisted_at
+        ):
+            raise RuntimeError(f"quote evidence post-commit readback mismatch: {candidate.event_id}")
+        return DurableEvidenceReceipt(
+            event=readback_event,
+            persisted_at_utc=readback_persisted_at,
+            durable_ack=True,
+            readback_verified=True,
+        )
+
+    def _read_evidence_event(self, event_id: str) -> tuple[MiniQMTExecutionEvent, datetime]:
         with self._conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
+                    SELECT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE event_id = %s
+                    """,
+                    (event_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RuntimeError(f"quote evidence post-commit readback is missing: {event_id}")
+        return _row_to_event(row), row["created_at"]
+
+    def _list_event_rows(self, runtime_id: str, *, include_archived: bool = False) -> list[MiniQMTExecutionEvent]:
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                archive_clause = "" if include_archived else "AND archived_at IS NULL"
+                cur.execute(
+                    f"""
                     SELECT *
                     FROM qmt_strategy.execution_runtime_event
-                    WHERE runtime_id = %s AND archived_at IS NULL
+                    WHERE runtime_id = %s {archive_clause}
                     ORDER BY sequence, event_time, event_id
                     """,
                     (runtime_id,),
                 )
                 rows = cur.fetchall()
         return [_row_to_event(row) for row in rows]
+
+    def _list_evidence_receipt_rows(
+        self,
+        runtime_id: str,
+        *,
+        market_data_id: str | None,
+        evidence_id: str | None,
+        include_archived: bool,
+        after_sequence: int,
+        after_event_id: str,
+        limit: int,
+    ) -> list[DurableEvidenceReceipt]:
+        if limit < 1 or limit > 501:
+            raise ValueError("evidence receipt limit must be between 1 and 501")
+        archive_clause = "" if include_archived else "AND archived_at IS NULL"
+        expected = market_data_id if market_data_id is not None else evidence_id
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH RECURSIVE evidence_rows AS (
+                        SELECT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at,
+                               array_remove(ARRAY[
+                                   event_id,
+                                   payload -> 'evidence' ->> 'evidence_id',
+                                   payload -> 'evidence' ->> 'market_data_id',
+                                   payload -> 'evidence' ->> 'anchor_market_data_id',
+                                   payload -> 'evidence' ->> 'action_evidence_id',
+                                   payload -> 'evidence' ->> 'child_receipt_evidence_id',
+                                   payload -> 'evidence' ->> 'supersedes_evidence_id',
+                                   payload -> 'evidence' ->> 'source_child_event_id',
+                                   payload -> 'evidence' ->> 'anchor_trade_event_id',
+                                   payload -> 'evidence' ->> 'action_id',
+                                   payload -> 'evidence' ->> 'child_order_id',
+                                   payload -> 'evidence' ->> 'broker_order_id',
+                                   payload -> 'evidence' ->> 'trade_id',
+                                   payload -> 'evidence' ->> 'mark_series_key'
+                               ], NULL) AS link_tokens
+                        FROM qmt_strategy.execution_runtime_event
+                        WHERE runtime_id = %s
+                          {archive_clause}
+                          AND source = 'quote_ingress'
+                          AND jsonb_typeof(payload -> 'evidence') = 'object'
+                    ), chain AS (
+                        SELECT * FROM evidence_rows WHERE %s = ANY(link_tokens)
+                        UNION
+                        SELECT candidate.*
+                        FROM evidence_rows AS candidate
+                        JOIN chain AS linked ON candidate.link_tokens && linked.link_tokens
+                    )
+                    SELECT DISTINCT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at
+                    FROM chain
+                    WHERE (sequence, event_id) > (%s, %s)
+                    ORDER BY sequence, event_id
+                    LIMIT %s
+                    """,
+                    (runtime_id, expected, after_sequence, after_event_id, limit),
+                )
+                rows = cur.fetchall()
+        receipts: list[DurableEvidenceReceipt] = []
+        for row in rows:
+            event = _row_to_event(row)
+            evidence = event.payload.get("evidence") if isinstance(event.payload, dict) else None
+            if event.source != "quote_ingress" or not isinstance(evidence, dict) or not evidence.get("evidence_sha256"):
+                raise RuntimeError(f"quote evidence readback row is structurally invalid: {event.event_id}")
+            receipts.append(
+                DurableEvidenceReceipt(
+                    event=event,
+                    persisted_at_utc=row["created_at"],
+                    durable_ack=True,
+                    readback_verified=True,
+                )
+            )
+        return receipts
+
+    def _list_quote_event_rows(
+        self,
+        runtime_id: str,
+        *,
+        symbol: str | None,
+        after_sequence: int,
+        after_event_id: str,
+        limit: int,
+    ) -> list[MiniQMTExecutionEvent]:
+        if limit < 1 or limit > 501:
+            raise ValueError("quote event page limit must be between 1 and 501")
+        quote_types = [item.value for item in MiniQMTExecutionEventType if item.value.startswith("QUOTE_")]
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s
+                      AND archived_at IS NULL
+                      AND event_type = ANY(%s)
+                      AND (%s IS NULL OR payload -> 'evidence' ->> 'symbol' = %s)
+                      AND (sequence, event_id) > (%s, %s)
+                    ORDER BY sequence, event_id
+                    LIMIT %s
+                    """,
+                    (runtime_id, quote_types, symbol, symbol, after_sequence, after_event_id, limit),
+                )
+                rows = cur.fetchall()
+        return [_row_to_event(row) for row in rows]
+
+    def _list_event_rows_by_ids(
+        self,
+        runtime_id: str,
+        *,
+        event_ids: tuple[str, ...],
+        include_archived: bool,
+    ) -> list[MiniQMTExecutionEvent]:
+        archive_clause = "" if include_archived else "AND archived_at IS NULL"
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT event_id, runtime_id, sequence, event_type, event_time, source, payload, created_at
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s {archive_clause} AND event_id = ANY(%s)
+                    ORDER BY sequence, event_id
+                    """,
+                    (runtime_id, list(event_ids)),
+                )
+                rows = cur.fetchall()
+        return [_row_to_event(row) for row in rows]
+
+    def _existing_evidence_id_rows(
+        self,
+        runtime_id: str,
+        *,
+        evidence_ids: tuple[str, ...],
+        include_archived: bool,
+    ) -> set[str]:
+        archive_clause = "" if include_archived else "AND archived_at IS NULL"
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload -> 'evidence' ->> 'evidence_id'
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s {archive_clause}
+                      AND payload -> 'evidence' ->> 'evidence_id' = ANY(%s)
+                    """,
+                    (runtime_id, list(evidence_ids)),
+                )
+                rows = cur.fetchall()
+        return {str(row[0]) for row in rows}
+
+    def _quote_diagnostics_summary_rows(self, runtime_id: str, *, symbol: str | None) -> dict[str, Any]:
+        symbol_clause = "" if symbol is None else "AND payload -> 'evidence' ->> 'symbol' = %s"
+        symbol_params: tuple[Any, ...] = () if symbol is None else (symbol,)
+        with self._conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT payload -> 'evidence' ->> 'symbol' AS symbol,
+                           COUNT(*) AS capture_count,
+                           MAX(event_time) AS last_event_time
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s AND archived_at IS NULL
+                      AND event_type = ANY(%s)
+                      AND jsonb_typeof(payload -> 'evidence') = 'object'
+                      {symbol_clause}
+                    GROUP BY payload -> 'evidence' ->> 'symbol'
+                    ORDER BY symbol
+                    """,
+                    (runtime_id, [item.value for item in MiniQMTExecutionEventType if item.value.startswith("QUOTE_")], *symbol_params),
+                )
+                per_symbol = [dict(row) for row in cur.fetchall()]
+                cur.execute(
+                    f"""
+                    SELECT COALESCE(payload -> 'evidence' ->> 'quality_reason_code',
+                                    payload -> 'evidence' ->> 'unavailable_reason') AS reason_code,
+                           COUNT(*) AS occurrence_count
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s AND archived_at IS NULL
+                      AND jsonb_typeof(payload -> 'evidence') = 'object'
+                      {symbol_clause}
+                      AND COALESCE(payload -> 'evidence' ->> 'quality_reason_code',
+                                   payload -> 'evidence' ->> 'unavailable_reason') IS NOT NULL
+                    GROUP BY reason_code
+                    ORDER BY reason_code
+                    """,
+                    (runtime_id, *symbol_params),
+                )
+                reason_counts = {str(row["reason_code"]): int(row["occurrence_count"]) for row in cur.fetchall()}
+                cur.execute(
+                    f"""
+                    SELECT COALESCE(payload -> 'evidence' ->> 'quality_reason_code',
+                                    payload -> 'evidence' ->> 'unavailable_reason') AS reason_code,
+                           payload -> 'evidence' ->> 'stage' AS stage,
+                           event_id, event_time
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s AND archived_at IS NULL
+                      AND jsonb_typeof(payload -> 'evidence') = 'object'
+                      {symbol_clause}
+                      AND COALESCE(payload -> 'evidence' ->> 'quality_reason_code',
+                                   payload -> 'evidence' ->> 'unavailable_reason') IS NOT NULL
+                    ORDER BY sequence DESC, event_id DESC
+                    LIMIT 1
+                    """,
+                    (runtime_id, *symbol_params),
+                )
+                last_reason = cur.fetchone()
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*) AS terminal_due_count,
+                           COUNT(*) FILTER (WHERE payload -> 'evidence' ->> 'mark_status' = 'CAPTURED') AS captured_count,
+                           COUNT(*) FILTER (WHERE payload -> 'evidence' ->> 'mark_status' = 'UNAVAILABLE') AS unavailable_count
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s AND archived_at IS NULL
+                      AND payload -> 'evidence' ->> 'capture_type' LIKE 'MARKOUT_%%'
+                      {symbol_clause}
+                    """,
+                    (runtime_id, *symbol_params),
+                )
+                markout = dict(cur.fetchone())
+                cur.execute(
+                    """
+                    SELECT payload -> 'health_or_aggregate' AS health
+                    FROM qmt_strategy.execution_runtime_event
+                    WHERE runtime_id = %s AND archived_at IS NULL AND event_type = 'QUOTE_INGRESS_HEALTH'
+                    ORDER BY sequence DESC, event_id DESC
+                    LIMIT 1
+                    """,
+                    (runtime_id,),
+                )
+                health_row = cur.fetchone()
+        return {
+            "per_symbol": per_symbol,
+            "reason_counts": reason_counts,
+            "last_reason": dict(last_reason) if last_reason else None,
+            "markout": markout,
+            "health": dict(health_row["health"]) if health_row and isinstance(health_row["health"], dict) else None,
+        }
 
     def _last_event_sequence(self, runtime_id: str) -> int:
         with self._conn() as conn:
@@ -678,21 +1427,66 @@ class PostgresMiniQMTExecutionRuntimeRepository:
         )
         cur.execute(
             """
-            WITH ranked AS (
-                SELECT event_id,
-                       row_number() OVER (ORDER BY sequence DESC, event_time DESC, event_id DESC) AS rn
+            WITH active AS (
+                SELECT event_id, event_type, event_time, sequence, payload
                 FROM qmt_strategy.execution_runtime_event
                 WHERE runtime_id = %s AND archived_at IS NULL
+            ), ordinary AS (
+                SELECT event_id,
+                       row_number() OVER (ORDER BY sequence DESC, event_time DESC, event_id DESC) AS rn,
+                       COUNT(*) OVER () AS ordinary_count
+                FROM active
+                WHERE event_type NOT IN (
+                    'QUOTE_OBSERVED', 'QUOTE_INGRESS_HEALTH', 'QUOTE_REJECTED',
+                    'QUOTE_ELIGIBILITY_EVALUATED', 'QUOTE_MARK_CAPTURED', 'TRADE_EVENT',
+                    'CHILD_ORDER_SUBMITTED', 'CHILD_ORDER_REJECTED', 'CHILD_ORDER_CANCEL_REQUESTED'
+                )
+            ), eligible AS (
+                SELECT event_id FROM active
+                WHERE event_type IN ('QUOTE_OBSERVED', 'QUOTE_INGRESS_HEALTH')
+                  AND event_time < NOW() - INTERVAL '14 days'
+                UNION
+                SELECT candidate.event_id
+                FROM active AS candidate
+                WHERE candidate.event_type IN (
+                    'QUOTE_REJECTED', 'QUOTE_ELIGIBILITY_EVALUATED', 'QUOTE_MARK_CAPTURED',
+                    'TRADE_EVENT', 'CHILD_ORDER_SUBMITTED', 'CHILD_ORDER_REJECTED',
+                    'CHILD_ORDER_CANCEL_REQUESTED'
+                )
+                  AND candidate.event_time < NOW() - INTERVAL '90 days'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM active AS trade
+                      WHERE trade.event_type = 'TRADE_EVENT'
+                        AND (
+                            trade.event_id = candidate.event_id
+                            OR trade.payload -> 'quote_evidence_markout_anchor_v1' ->> 'action_evidence_id'
+                               = candidate.payload -> 'evidence' ->> 'evidence_id'
+                            OR trade.payload -> 'quote_evidence_markout_anchor_v1' ->> 'child_order_id'
+                               = COALESCE(
+                                   candidate.payload -> 'evidence' ->> 'child_order_id',
+                                   candidate.payload ->> 'child_order_id'
+                               )
+                        )
+                        AND (
+                            SELECT COUNT(DISTINCT mark.payload -> 'evidence' ->> 'horizon_seconds')
+                            FROM active AS mark
+                            WHERE mark.event_type = 'QUOTE_MARK_CAPTURED'
+                              AND mark.payload -> 'evidence' ->> 'trade_id'
+                                  = trade.payload -> 'quote_evidence_markout_anchor_v1' ->> 'trade_id'
+                              AND mark.payload -> 'evidence' ->> 'mark_status' IN ('CAPTURED', 'UNAVAILABLE')
+                        ) < 3
+                  )
+                UNION
+                SELECT event_id FROM ordinary WHERE rn > %s AND ordinary_count > %s
             )
             UPDATE qmt_strategy.execution_runtime_event AS event
             SET archived_at = NOW(),
                 archive_reason = %s
-            FROM ranked
-            WHERE event.event_id = ranked.event_id
-              AND ranked.rn > %s
-              AND (SELECT COUNT(*) FROM ranked) > %s
+            FROM eligible
+            WHERE event.event_id = eligible.event_id
             """,
-            (runtime_id, reason, retain_events, max_events),
+            (runtime_id, retain_events, max_events, reason),
         )
         return int(cur.rowcount or 0)
 
@@ -811,7 +1605,16 @@ class PostgresMiniQMTExecutionRuntimeRepository:
             return func()
         except RuntimeConfigInvalidError:
             raise
+        except QuoteEvidenceIdempotencyConflict:
+            # This is an invariant violation with its own registered reason;
+            # callers must never collapse it into a retryable DB outage.
+            raise
         except psycopg2.Error as exc:
+            schema_gate_context = (
+                {"ddl_required": True, "production_ddl_gate": "pending"}
+                if getattr(exc, "pgcode", None) in {"42P01", "42703", "42704", "23514"}
+                else {}
+            )
             raise RuntimeConfigInvalidError(
                 "MiniQMT runtime Postgres repository operation failed loudly",
                 context={
@@ -821,8 +1624,7 @@ class PostgresMiniQMTExecutionRuntimeRepository:
                     "error_type": type(exc).__name__,
                     "pgcode": getattr(exc, "pgcode", None),
                     "message": str(exc),
-                    "ddl_required": True,
-                    "production_ddl_gate": "pending",
+                    **schema_gate_context,
                 },
             ) from exc
         except Exception as exc:
@@ -867,6 +1669,23 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
         self._after_incremental_write(runtime_id=stored.runtime_id, reason="append_event")
         return stored
 
+    def append_evidence_event_idempotent(self, candidate: QuoteEvidenceEventCandidate) -> DurableEvidenceReceipt:
+        existing = self._evidence_receipts.get(candidate.event_id)
+        receipt = super().append_evidence_event_idempotent(candidate)
+        if existing is not None:
+            return receipt
+        self._append_operation(
+            "append_evidence_event",
+            {
+                "event": receipt.event.model_dump(mode="json"),
+                "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
+                "durable_ack": receipt.durable_ack,
+                "readback_verified": receipt.readback_verified,
+            },
+        )
+        self._after_incremental_write(runtime_id=receipt.event.runtime_id, reason="append_evidence_event")
+        return receipt
+
     def upsert_algo_instance(self, instance: MiniQMTExecutionAlgoInstance) -> MiniQMTExecutionAlgoInstance:
         stored = super().upsert_algo_instance(instance)
         self._append_operation("upsert_algo_instance", stored.model_dump(mode="json"))
@@ -885,6 +1704,7 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
         archived = self._archive_existing_store(reason=reason)
         self._runtimes = {}
         self._events = {}
+        self._evidence_receipts = {}
         self._algo_instances = {}
         self._child_orders = {}
         self._writes_since_compaction = 0
@@ -962,6 +1782,15 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
                 runtime_id: [event.model_dump(mode="json") for event in events]
                 for runtime_id, events in self._events.items()
             },
+            "evidence_receipts": [
+                {
+                    "event": receipt.event.model_dump(mode="json"),
+                    "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
+                    "durable_ack": receipt.durable_ack,
+                    "readback_verified": receipt.readback_verified,
+                }
+                for receipt in self._evidence_receipts.values()
+            ],
             "algo_instances": [item.model_dump(mode="json") for item in self._algo_instances.values()],
             "child_orders": [item.model_dump(mode="json") for item in self._child_orders.values()],
         }
@@ -979,6 +1808,10 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
                 str(runtime_id): [MiniQMTExecutionEvent.model_validate(item) for item in events]
                 for runtime_id, events in (payload.get("events") or {}).items()
             }
+            self._evidence_receipts = {}
+            for item in payload.get("evidence_receipts", []):
+                receipt = _durable_receipt_from_json(item)
+                self._evidence_receipts[receipt.event.event_id] = receipt
             self._algo_instances = {
                 item["algo_instance_id"]: MiniQMTExecutionAlgoInstance.model_validate(item)
                 for item in payload.get("algo_instances", [])
@@ -1012,6 +1845,19 @@ class JsonFileMiniQMTExecutionRuntimeRepository(InMemoryMiniQMTExecutionRuntimeR
             events = self._events.setdefault(event.runtime_id, [])
             if not any(existing.event_id == event.event_id for existing in events):
                 events.append(event)
+            runtime = self._runtimes.get(event.runtime_id)
+            if runtime is not None and event.sequence > runtime.last_event_sequence:
+                self._runtimes[event.runtime_id] = runtime.model_copy(
+                    update={"last_event_sequence": event.sequence, "updated_at": event.event_time}
+                )
+            return
+        if operation == "append_evidence_event":
+            receipt = _durable_receipt_from_json(item)
+            event = receipt.event
+            events = self._events.setdefault(event.runtime_id, [])
+            if not any(existing.event_id == event.event_id for existing in events):
+                events.append(event)
+            self._evidence_receipts[event.event_id] = receipt
             runtime = self._runtimes.get(event.runtime_id)
             if runtime is not None and event.sequence > runtime.last_event_sequence:
                 self._runtimes[event.runtime_id] = runtime.model_copy(
@@ -1270,6 +2116,103 @@ def _row_to_event(row: Any) -> MiniQMTExecutionEvent:
     )
 
 
+def _evidence_event_matches_candidate(event: MiniQMTExecutionEvent, candidate: QuoteEvidenceEventCandidate) -> bool:
+    evidence = event.payload.get("evidence") if isinstance(event.payload, dict) else None
+    health = event.payload.get("health_or_aggregate") if isinstance(event.payload, dict) else None
+    content_hash = (
+        str(health.get("health_sha256") or "")
+        if candidate.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH and isinstance(health, dict)
+        else str(evidence.get("evidence_sha256") or "")
+        if isinstance(evidence, dict)
+        else ""
+    )
+    return (
+        event.event_id == candidate.event_id
+        and event.runtime_id == candidate.runtime_id
+        and event.event_type == candidate.event_type
+        and event.source == "quote_ingress"
+        and event.event_time == candidate.event_time
+        and event.payload == candidate.payload
+        and content_hash == candidate.evidence_sha256
+    )
+
+
+def _evidence_link_tokens(evidence: dict[str, Any], *, event_id: str) -> set[str]:
+    link_fields = (
+        "evidence_id",
+        "market_data_id",
+        "anchor_market_data_id",
+        "action_evidence_id",
+        "child_receipt_evidence_id",
+        "supersedes_evidence_id",
+        "source_child_event_id",
+        "anchor_trade_event_id",
+        "action_id",
+        "child_order_id",
+        "broker_order_id",
+        "trade_id",
+        "mark_series_key",
+    )
+    return {event_id, *(str(evidence[field]) for field in link_fields if evidence.get(field))}
+
+
+def _durable_receipt_from_json(item: dict[str, Any]) -> DurableEvidenceReceipt:
+    event = MiniQMTExecutionEvent.model_validate(item.get("event"))
+    persisted_at = datetime.fromisoformat(str(item.get("persisted_at_utc")))
+    if persisted_at.tzinfo is None or persisted_at.utcoffset() is None:
+        raise ValueError("JSON evidence receipt persisted_at_utc must be timezone-aware")
+    durable_ack = item.get("durable_ack")
+    readback_verified = item.get("readback_verified")
+    if durable_ack is not True or readback_verified is not True:
+        raise ValueError("JSON evidence receipt cannot replay an unverified durable success")
+    return DurableEvidenceReceipt(
+        event=event,
+        persisted_at_utc=persisted_at.astimezone(UTC),
+        durable_ack=True,
+        readback_verified=True,
+    )
+
+
+def _quote_diagnostics_summary_from_events(events: list[MiniQMTExecutionEvent]) -> dict[str, Any]:
+    per_symbol: dict[str, dict[str, Any]] = {}
+    reason_counts: Counter[str] = Counter()
+    last_reason: dict[str, Any] | None = None
+    markout = {"terminal_due_count": 0, "captured_count": 0, "unavailable_count": 0}
+    health: dict[str, Any] | None = None
+    for event in sorted(events, key=lambda item: (item.sequence, item.event_id)):
+        if event.event_type == MiniQMTExecutionEventType.QUOTE_INGRESS_HEALTH:
+            payload = event.payload.get("health_or_aggregate")
+            health = dict(payload) if isinstance(payload, dict) else None
+        evidence = event.payload.get("evidence")
+        if not isinstance(evidence, dict):
+            continue
+        symbol = str(evidence.get("symbol") or "")
+        if symbol:
+            entry = per_symbol.setdefault(symbol, {"symbol": symbol, "capture_count": 0, "last_event_time": None})
+            entry["capture_count"] += 1
+            entry["last_event_time"] = event.event_time
+        reason = evidence.get("quality_reason_code") or evidence.get("unavailable_reason")
+        if reason:
+            reason_counts[str(reason)] += 1
+            last_reason = {
+                "reason_code": str(reason),
+                "stage": evidence.get("stage"),
+                "event_id": event.event_id,
+                "event_time": event.event_time,
+            }
+        if str(evidence.get("capture_type") or "").startswith("MARKOUT_"):
+            markout["terminal_due_count"] += 1
+            if evidence.get("mark_status") == "CAPTURED":
+                markout["captured_count"] += 1
+            elif evidence.get("mark_status") == "UNAVAILABLE":
+                markout["unavailable_count"] += 1
+    return {
+        "per_symbol": list(per_symbol.values()),
+        "reason_counts": dict(reason_counts),
+        "last_reason": last_reason,
+        "markout": markout,
+        "health": health,
+    }
 def _row_to_algo_instance(row: Any) -> MiniQMTExecutionAlgoInstance:
     data = _row_dict(row)
     return MiniQMTExecutionAlgoInstance(

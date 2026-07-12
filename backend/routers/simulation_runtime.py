@@ -304,6 +304,70 @@ def list_miniqmt_runtime_events(
         _raise_http(exc)
 
 
+@router.get("/miniqmt/quote-diagnostics")
+def list_miniqmt_quote_diagnostics(
+    runtime_id: str | None = None,
+    symbol: str | None = None,
+    cursor: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    """Strictly read-only P1-D quote evidence diagnostics."""
+
+    try:
+        payload = service.list_miniqmt_quote_diagnostics(
+            runtime_repository=runtime_repository,
+            runtime_id=_required_query_text(runtime_id, "runtime_id"),
+            symbol=_required_query_text(symbol, "symbol") if symbol is not None else None,
+            cursor=cursor,
+            limit=limit,
+        )
+        return {"ok": True, **payload}
+    except HTTPException:
+        raise
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/miniqmt/quote-evidence")
+def list_miniqmt_quote_evidence(
+    runtime_id: str | None = None,
+    market_data_id: str | None = None,
+    evidence_id: str | None = None,
+    include_archived: bool = False,
+    cursor: str | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    service: SimulationRuntimeOpsService = Depends(get_simulation_runtime_ops_service),
+    runtime_repository: Any = Depends(get_miniqmt_runtime_repository),
+) -> dict[str, Any]:
+    """Strictly read-only durable evidence envelope and link readback."""
+
+    if (market_data_id is None) == (evidence_id is None):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "MINIQMT_QUOTE_EVIDENCE_QUERY_INVALID",
+                "message": "exactly one of market_data_id or evidence_id is required",
+            },
+        )
+    try:
+        payload = service.list_miniqmt_quote_evidence(
+            runtime_repository=runtime_repository,
+            runtime_id=_required_query_text(runtime_id, "runtime_id"),
+            market_data_id=_required_query_text(market_data_id, "market_data_id") if market_data_id is not None else None,
+            evidence_id=_required_query_text(evidence_id, "evidence_id") if evidence_id is not None else None,
+            include_archived=include_archived,
+            cursor=cursor,
+            limit=limit,
+        )
+        return {"ok": True, **payload}
+    except HTTPException:
+        raise
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.post("/miniqmt/operator-commands")
 def execute_miniqmt_operator_command(
     payload: dict[str, Any] = Body(...),

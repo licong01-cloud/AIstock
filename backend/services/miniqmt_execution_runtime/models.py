@@ -69,6 +69,16 @@ class MiniQMTExecutionEventType(str, Enum):
     OPERATOR_COMMAND_EXECUTED = "OPERATOR_COMMAND_EXECUTED"
     OPERATOR_COMMAND_REJECTED = "OPERATOR_COMMAND_REJECTED"
     RUNTIME_STOPPED = "RUNTIME_STOPPED"
+    QUOTE_OBSERVED = "QUOTE_OBSERVED"
+    QUOTE_REJECTED = "QUOTE_REJECTED"
+    QUOTE_ELIGIBILITY_EVALUATED = "QUOTE_ELIGIBILITY_EVALUATED"
+    QUOTE_MARK_CAPTURED = "QUOTE_MARK_CAPTURED"
+    QUOTE_INGRESS_HEALTH = "QUOTE_INGRESS_HEALTH"
+
+
+MINIQMT_EXECUTION_EVENT_SOURCES = frozenset(
+    {"runtime", "gateway", "oms", "algo", "operator", "recovery", "quote_ingress"}
+)
 
 
 class MiniQMTAlgoInstanceStatus(str, Enum):
@@ -155,7 +165,7 @@ class MiniQMTExecutionEvent(BaseModel):
     sequence: int = Field(ge=1)
     event_type: MiniQMTExecutionEventType
     event_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery"]
+    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery", "quote_ingress"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("event_id", "runtime_id", "source")

@@ -258,12 +258,14 @@ class PhaseOneQuoteProjectionSink:
         normalized_store: BoundedNormalizedQuoteStore,
         context_store: QuoteEvaluationContextStore,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
+        observation_sink: Callable[[NormalizedQuoteObservation], None] | None = None,
     ) -> None:
         self._raw_store = raw_store
         self._normalized_store = normalized_store
         self._context_store = context_store
         self._ordering = QuoteOrderingTracker()
         self._loud_sink = loud_sink
+        self._observation_sink = observation_sink
         self._lock = threading.RLock()
         self._last_error_by_symbol: dict[str, dict[str, Any]] = {}
         self._accepted_count = 0
@@ -332,9 +334,27 @@ class PhaseOneQuoteProjectionSink:
                 ordering_disposition=decision.disposition,
             )
             self._normalized_store.accept(observation)
+            observation_sink_failed = False
+            if self._observation_sink is not None:
+                try:
+                    self._observation_sink(observation)
+                except QuoteContractError as error:
+                    observation_sink_failed = True
+                    self._record_loud(frame=frame, error=error)
+                except Exception as exc:  # noqa: BLE001 - observation reporting must not rewrite quote state.
+                    observation_sink_failed = True
+                    self._record_loud(
+                        frame=frame,
+                        error=quote_contract_error(
+                            QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+                            "quote observation sink raised unexpectedly",
+                            context={"symbol": frame.symbol, "exception_type": type(exc).__name__},
+                        ),
+                    )
             with self._lock:
                 self._accepted_count += 1
-                self._last_error_by_symbol.pop(frame.symbol, None)
+                if not observation_sink_failed:
+                    self._last_error_by_symbol.pop(frame.symbol, None)
         except QuoteContractError as error:
             self._record_loud(frame=frame, error=error)
 
@@ -864,6 +884,7 @@ class QuoteIngressSupervisor:
         normalized_store: BoundedNormalizedQuoteStore | None = None,
         context_store: QuoteEvaluationContextStore | None = None,
         loud_sink: Callable[[QuoteContractError], None] | None = None,
+        observation_sink: Callable[[NormalizedQuoteObservation], None] | None = None,
     ) -> None:
         if not config.enabled:
             raise quote_contract_error(
@@ -894,6 +915,7 @@ class QuoteIngressSupervisor:
             normalized_store=self._normalized_store,
             context_store=self._context_store,
             loud_sink=loud_sink,
+            observation_sink=observation_sink,
         )
         self._worker = QuoteIngressWorker(
             consumer_id=f"{data_session_key}:single-writer",

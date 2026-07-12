@@ -73,6 +73,48 @@ QUOTE_INGRESS_ENV_METADATA: dict[str, dict[str, Any]] = {
         "required": False,
         "type": "text",
     },
+    "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_ATTEMPTS": {
+        "value": "5",
+        "description": "MiniQMT market-data evidence transient persistence 最大重试次数",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_EVIDENCE_RETRY_INITIAL_BACKOFF_MS": {
+        "value": "100",
+        "description": "MiniQMT market-data evidence transient persistence 初始退避毫秒数",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_BACKOFF_MS": {
+        "value": "5000",
+        "description": "MiniQMT market-data evidence transient persistence 最大退避毫秒数",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_EVIDENCE_CADENCE_SECONDS": {
+        "value": "30",
+        "description": "MiniQMT market-data evidence cadence aggregate 窗口秒数",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_MARK_HISTORY_MAX_SAMPLES": {
+        "value": "65536",
+        "description": "MiniQMT markout first-quote selector 全进程历史样本上限",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_EVIDENCE_RECEIPT_RESERVE_EVENTS": {
+        "value": "256",
+        "description": "MiniQMT 已发生 broker receipt evidence 的独立保留槽容量",
+        "required": False,
+        "type": "text",
+    },
+    "MINIQMT_QUOTE_MARK_HISTORY_MAX_LAG_MS": {
+        "value": "10000",
+        "description": "MiniQMT markout history 支持的显式最大 selector lag 毫秒数",
+        "required": False,
+        "type": "text",
+    },
 }
 
 QUOTE_INGRESS_ENV_DEFAULTS = {key: str(value["value"]) for key, value in QUOTE_INGRESS_ENV_METADATA.items()}
@@ -139,11 +181,41 @@ def parse_quote_ingress_env_values(values: Mapping[str, Any]) -> dict[str, Any]:
             merged["MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE"],
             key="MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE",
         ),
+        "evidence_retry_max_attempts": _positive_int(
+            merged["MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_ATTEMPTS"],
+            key="MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_ATTEMPTS",
+        ),
+        "evidence_retry_initial_backoff_ms": _positive_int(
+            merged["MINIQMT_QUOTE_EVIDENCE_RETRY_INITIAL_BACKOFF_MS"],
+            key="MINIQMT_QUOTE_EVIDENCE_RETRY_INITIAL_BACKOFF_MS",
+        ),
+        "evidence_retry_max_backoff_ms": _positive_int(
+            merged["MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_BACKOFF_MS"],
+            key="MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_BACKOFF_MS",
+        ),
+        "evidence_cadence_seconds": _positive_int(
+            merged["MINIQMT_QUOTE_EVIDENCE_CADENCE_SECONDS"],
+            key="MINIQMT_QUOTE_EVIDENCE_CADENCE_SECONDS",
+        ),
+        "mark_history_max_samples": _positive_int(
+            merged["MINIQMT_QUOTE_MARK_HISTORY_MAX_SAMPLES"],
+            key="MINIQMT_QUOTE_MARK_HISTORY_MAX_SAMPLES",
+        ),
+        "evidence_receipt_reserve_events": _positive_int(
+            merged["MINIQMT_QUOTE_EVIDENCE_RECEIPT_RESERVE_EVENTS"],
+            key="MINIQMT_QUOTE_EVIDENCE_RECEIPT_RESERVE_EVENTS",
+        ),
+        "mark_history_max_lag_ms": _positive_int(
+            merged["MINIQMT_QUOTE_MARK_HISTORY_MAX_LAG_MS"],
+            key="MINIQMT_QUOTE_MARK_HISTORY_MAX_LAG_MS",
+        ),
     }
     if parsed["restart_max_backoff_ms"] < parsed["restart_backoff_ms"]:
         raise QuoteIngressEnvValidationError("restart max backoff cannot be smaller than restart backoff")
     if parsed["evidence_flush_batch_size"] > parsed["evidence_outbox_max_events"]:
         raise QuoteIngressEnvValidationError("evidence flush batch cannot exceed evidence outbox capacity")
+    if parsed["evidence_retry_max_backoff_ms"] < parsed["evidence_retry_initial_backoff_ms"]:
+        raise QuoteIngressEnvValidationError("evidence retry max backoff cannot be smaller than initial backoff")
     return parsed
 
 

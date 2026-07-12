@@ -414,6 +414,7 @@ def test_market_data_evidence_is_complete_typed_and_hash_stable() -> None:
         adapter_sha256=_sha("d"),
         code_sha256=_sha("e"),
         schema_sha256=_sha("f"),
+        calendar_sha256=_sha("a"),
         captured_at_utc=datetime(2026, 7, 12, 1, 30, 2, tzinfo=UTC),
         persisted_at_utc=datetime(2026, 7, 12, 1, 30, 3, tzinfo=UTC),
         quote_age_ms=2000,
@@ -421,13 +422,16 @@ def test_market_data_evidence_is_complete_typed_and_hash_stable() -> None:
         transport_lag_ms=1000,
         benchmark_policy_version="arrival-v1",
         mark_policy_version="markout-v1",
-        source_input_sha256=_sha("1"),
+        source_input_sha256=None,
+        algo_instance_id="algo-1",
+        side="BUY",
+        eligibility_state=EligibilityState.READY,
     )
     payload = evidence.canonical_payload()
     assert payload["mid_price"] == Decimal("10.00")
     assert payload["bid_prices"] == quote.bid_prices
     assert payload["benchmark_policy_version"] == "arrival-v1"
-    assert payload["source_input_sha256"] == _sha("1")
+    assert len(payload["source_input_sha256"]) == 64
     assert len(evidence.evidence_sha256) == 64
 
 
@@ -463,6 +467,7 @@ def test_market_data_evidence_rejects_invalid_contract_fields(override: dict[str
         "adapter_sha256": _sha("d"),
         "code_sha256": _sha("e"),
         "schema_sha256": _sha("f"),
+        "calendar_sha256": _sha("a"),
         "captured_at_utc": datetime(2026, 7, 12, 1, 30, 2, tzinfo=UTC),
         "persisted_at_utc": None,
         "quote_age_ms": None,
@@ -470,7 +475,16 @@ def test_market_data_evidence_rejects_invalid_contract_fields(override: dict[str
         "transport_lag_ms": None,
         "benchmark_policy_version": "arrival-v1",
         "mark_policy_version": "markout-v1",
-        "source_input_sha256": _sha("1"),
+        "source_input_sha256": None,
+        "algo_instance_id": "algo-1",
+        "side": "BUY",
+        "eligibility_state": EligibilityState.STALE,
+        "source_session_id": "session-reject",
+        "ingress_generation": 1,
+        "ingress_sequence": 1,
+        "quote_source": QuoteSource.MINIQMT_REALTIME_BROKER_QUOTE,
+        "source_method": QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+        "source_payload_sha256": _sha("a"),
     }
     fields.update(override)
     with pytest.raises(QuoteContractError):

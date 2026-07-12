@@ -1337,6 +1337,32 @@ P1-C 保持 P1-B candidate physical bootstrap 的 all-or-nothing 语义；`WAITI
 
 ---
 
+### 13.4 P1-D implementation acceptance record（2026-07-12）
+
+本记录证明 §8.4 的 durable evidence/observation 切片已按设计实现并完成定向及
+disposable dev-DB 验证。它不表示生产 CHECK DDL 已执行、SIM ingress 已激活、
+`B0_QUOTE_V2` 已绑定或任何 broker side effect 已发生；这些状态继续分别受
+§10.3、§11 与 P1-E 约束。
+
+| P1-D implementation item | implementation refs | test/evidence | status | explicit boundary |
+|---|---|---|---|---|
+| capture-type 强 schema、required/null matrix、canonical source/evidence identity | `contracts.py::MarketDataEvidenceV1`、`_validate_evidence_null_matrix`、`_evidence_source_input_payload`；`repository.py::QuoteEvidenceEventCandidate` | `test_market_data_evidence_v1_required_fields_by_capture_type`、`test_market_data_evidence_is_complete_typed_and_hash_stable`、非法跨 capture 字段与伪造 source hash 反例 | implemented_verified | 只接受 `B0_QUOTE_V2` evidence identity；不创建或绑定 parent revision |
+| runtime event registry 与 exact CHECK migration/rollback/readback | `models.py::MiniQMTExecutionEventType`、`quote_event_schema.py`、`miniqmt_quote_ingress_event_types_20260712.sql/.rollback.sql` | exact old/target、expression drift、validated flags、apply/second apply、rollback/second rollback、row-exists refusal、DB identity/query time readback；disposable PostgreSQL 16 实测 | implemented_verified | migration 只改变两个 CHECK；生产 DDL 仍为 `pending`，不由 startup 执行 |
+| transaction-owned sequence、idempotency、post-commit readback、retry/outbox isolation | `repository.py::append_evidence_event_idempotent`、`QuoteEvidenceCoordinator`、receipt reserve/per-symbol gate | disposable dev-DB transaction/sequence/idempotency/readback `3 passed`；outbox dedup、registered retry、terminal failure、unrelated-symbol continuity、JSON restart durability direct tests | implemented_verified | callback 不写 DB；无 JSON/内存生产 fallback；无 broker submit/cancel |
+| action/reject/child/trade/mark identity 闭包、retention 与只读分页 diagnostics | `repository.py::list_evidence_receipts` recursive identity closure、`list_quote_events_page`、`existing_evidence_ids`、`_archive_events_for_runtime`；`ops.py::_missing_required_evidence_links` | action market-data 查询重建不同 receipt market-data 的 child evidence；source child/trade event 精确 readback；诊断 spy 禁止 `list_events` 全量读取；14/90 天及 pending mark retention SQL 在 dev DB 执行 | implemented_verified | API 只读，不启动/修复 subscriber、scheduler 或 gateway；identity/symbol 不进入 metrics label |
+| authoritative fill 60/300/900 markout、late fill、restart 与 durable terminal | `quote_evidence.py::MarkoutAnchor`、`rebuild_pending_markouts`、`drain_markouts`、bounded time/sample history | normal、late fill、restart-before/after-target、generation gap、午休/收盘/跨日、history gap、durable-ack-before-terminal、bool/string recovery input 反例 | implemented_verified | 不查询补行情、不跨 session/day、不选择更有利 quote；不可证明时写 stable `UNAVAILABLE` |
+| closing auction raw capability OBSERVE_ONLY | `quote_auction.py::ClosingAuctionCapabilityProbe`、`contracts.py::ClosingAuctionSnapshot` | versioned manifest AVAILABLE；provider 未声明 UNAVAILABLE；已声明但字段缺失/非法 INVALID；last/pre-close/depth/limit 合成反例拒绝 | implemented_verified | auction snapshot 不进入 action adapter，不释放 child |
+| cadence、health、metrics/alerts 与 operator runbook | generation-aware cadence slot、独立 low-priority health slot、`quote_metrics.py`、`docs/operations/miniqmt_quote_evidence_runbook.md` | 30 秒 aggregate merge/different-generation isolation；metrics 缺字段/假零值 loud reject；bounded labels；alerts 无 ack/RBAC/approval | implemented_verified | observation-only；生产配置未写，ingress switch 保持 false |
+| P1-E/LEGACY_B0/BUG 边界 | P1-D diff 未修改 runtime binding、gateway submit/cancel、LEGACY_B0 policy、scheduler pending tick-driver | direct matrix `72 passed`；dev-DB matrix `3 passed`；changed-file ruff/compile/diff、L0/module registry/F2 validator 作为本 PR gate | implemented_verified | P1-E 才负责 binding、真实 SIM parity 与 broker/reconcile 运行证据；BUG-599/600/604/614 行为不在本切片改写 |
+
+覆盖率回执：`contracts.py` 82%、`quote_evidence.py` 81%、`quote_auction.py` 96%、
+`quote_event_schema.py` 83%、`quote_metrics.py` 81%（均启用 branch coverage）；
+repository/diagnostics 的 PostgreSQL transaction、recursive link、pagination、summary、retention
+路径由 disposable dev-DB 直接执行，不以 mock-only 结果替代。生产数据库、broker、服务进程和
+持久化运行配置均未触碰。
+
+---
+
 ## 14. Exit Criteria / 设计退出条件
 
 本文可标记 `design_ready` 的条件：
