@@ -5,7 +5,7 @@ import importlib
 import json
 import pickle
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -453,8 +453,54 @@ def test_selection_artifact_service_passes_frozen_manifest_to_source_loader(tmp_
     class Provider:
         backend_name = "fake_live"
 
-        def run(self, **_kwargs: Any) -> LiveInferenceResult:
-            return LiveInferenceResult(scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}], metadata={})
+        def run(self, **kwargs: Any) -> LiveInferenceResult:
+            observed_at = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
+            effective_trade_date = kwargs["cutoff_date"] or kwargs["trade_date"]
+            return LiveInferenceResult(
+                scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
+                metadata={},
+                universe_count=5,
+                source_read_receipts=[
+                    {
+                        "source_role": "pit_universe",
+                        "dataset_id": "market.stock_universe_pit",
+                        "row_count": 5,
+                        "content_hash": "1" * 64,
+                        "first_observed_at": observed_at,
+                    },
+                    {
+                        "source_role": "market_history",
+                        "dataset_id": "market.kline_daily_raw",
+                        "row_count": 50,
+                        "content_hash": "2" * 64,
+                        "first_observed_at": observed_at,
+                    },
+                    {
+                        "source_role": "fundamental_moneyflow",
+                        "dataset_id": "timescaledb.fundamental_moneyflow",
+                        "row_count": 50,
+                        "content_hash": "3" * 64,
+                        "first_observed_at": observed_at,
+                    },
+                    {
+                        "source_role": "trading_calendar",
+                        "dataset_id": "market.trading_calendar",
+                        "row_count": 2,
+                        "content_hash": "4" * 64,
+                        "first_observed_at": observed_at,
+                    },
+                ],
+                input_context={
+                    "requested_trade_date": kwargs["trade_date"].isoformat(),
+                    "effective_trade_date": effective_trade_date.isoformat(),
+                    "score_trade_date": effective_trade_date.isoformat(),
+                    "pit_mode": "stock_universe_pit_v1",
+                    "calendar_version": "market.trading_calendar.v1",
+                    "calendar_hash": "4" * 64,
+                    "calendar_source": "market.trading_calendar",
+                    "universe_input_hash": "5" * 64,
+                },
+            )
 
     resolver = ResolverSpy()
     service = StrategyPackageSelectionArtifactService(

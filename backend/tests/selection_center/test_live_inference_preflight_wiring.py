@@ -39,6 +39,7 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.tests.selection_center.test_runtime_selection import (
     FakeSuspendLookup,
     NoopRefreshAudit,
+    _live_inference_result,
     versioned_selection_runtime_config,
 )
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
@@ -156,11 +157,13 @@ class _SpyLiveInferenceProvider:
 
     def run(self, **kwargs: Any) -> LiveInferenceResult:
         self.calls.append(kwargs)
-        return LiveInferenceResult(
-            scores=[
+        return _live_inference_result(
+            [
                 {"symbol": "000001.SZ", "score": 0.7, "rank": 1, "reference_price": 10.0},
             ],
             metadata={"provider": "spy"},
+            requested_trade_date=kwargs["trade_date"],
+            effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
         )
 
 

@@ -13,6 +13,10 @@ from backend.services.advisory_program import (
     AdvisoryProgram,
     AdvisoryStrategyBindingVersion,
 )
+from backend.services.selection_center.prospective_evidence import (
+    DailySelectionEvidenceV2Payload,
+    canonical_evidence_json_sha256,
+)
 from backend.services.selection_center.models import SelectionRun, SelectionRunStatus
 from backend.services.simulation_runtime.models import DailySelectionEvidence
 from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord
@@ -85,6 +89,9 @@ REASON_MULTI_ALPHA_TOPK_MISMATCH = "multi_alpha_topk_runtime_mismatch"
 REASON_UNIVERSE_EVIDENCE_MISSING = "ADVISORY_PHASE0A_PIT_UNIVERSE_EVIDENCE_MISSING"
 REASON_COHORT_SURVIVORSHIP_RISK = "ADVISORY_PHASE0A_PACKAGE_COHORT_SURVIVORSHIP_RISK"
 REASON_RISK_EVIDENCE_PARTIAL = "ADVISORY_PHASE0A_RISK_POLICY_EVIDENCE_PARTIAL"
+REASON_PROSPECTIVE_DSE_V2_REQUIRED = "ADVISORY_PHASE0A2C_ARTIFACT_V2_REQUIRED"
+REASON_PROSPECTIVE_DSE_V2_INVALID = "ADVISORY_PHASE0A2C_STAGE_RECEIPT_INCOMPLETE"
+REASON_PROSPECTIVE_CAPTURE_INELIGIBLE = "ADVISORY_PHASE0A2C_CONTEXT_MISSING"
 
 SINGLE_ALPHA_SOURCE_TYPE = "live_qe_model_inference_v1"
 MULTI_ALPHA_SOURCE_TYPE = "live_multi_alpha_inference_v1"
@@ -740,18 +747,24 @@ def resolve_decision_clock(resolved: ResolvedAuditDay) -> DecisionClockEvidence:
     payload = payload or {}
     point_in_time = payload.get("point_in_time_context")
     point_in_time = point_in_time if isinstance(point_in_time, dict) else {}
-    decision_cutoff_raw = point_in_time.get("decision_cutoff_ts") or payload.get("decision_cutoff_ts")
-    data_available_raw = point_in_time.get("data_available_at") or payload.get("data_available_at")
-    generated_raw = point_in_time.get("decision_generated_at") or payload.get("decision_generated_at")
-    selection_as_of = _coerce_date(point_in_time.get("selection_as_of_trade_date") or point_in_time.get("cutoff_date"))
-    effective_cutoff = _coerce_date(point_in_time.get("cutoff_date") or (resolved.evidence.cutoff_date if resolved.evidence else None))
-    target_trade_date = resolved.evidence.target_trade_date if resolved.evidence is not None else None
-    score_trade_date = _coerce_date(point_in_time.get("score_trade_date") or effective_cutoff)
-    reference_price_trade_date = _coerce_date(point_in_time.get("reference_price_trade_date") or effective_cutoff)
-    requested_selection_as_of = _coerce_date(point_in_time.get("requested_selection_as_of_trade_date"))
-    immediate_value = point_in_time.get("is_immediately_previous_trade_date")
+    v2_clock = payload.get("decision_clock") if payload.get("schema_version") == "daily_selection_evidence_v2" else None
+    clock_source = v2_clock if isinstance(v2_clock, dict) else point_in_time
+    decision_cutoff_raw = clock_source.get("decision_cutoff_ts") or payload.get("decision_cutoff_ts")
+    data_available_raw = clock_source.get("data_available_at") or payload.get("data_available_at")
+    generated_raw = clock_source.get("decision_generated_at") or payload.get("decision_generated_at")
+    selection_as_of = _coerce_date(
+        clock_source.get("selection_as_of_trade_date") or clock_source.get("decision_as_of_trade_date") or clock_source.get("cutoff_date")
+    )
+    effective_cutoff = _coerce_date(
+        clock_source.get("effective_cutoff_date") or clock_source.get("cutoff_date") or (resolved.evidence.cutoff_date if resolved.evidence else None)
+    )
+    target_trade_date = _coerce_date(clock_source.get("target_trade_date")) or (resolved.evidence.target_trade_date if resolved.evidence is not None else None)
+    score_trade_date = _coerce_date(clock_source.get("score_trade_date") or effective_cutoff)
+    reference_price_trade_date = _coerce_date(clock_source.get("reference_price_trade_date") or effective_cutoff)
+    requested_selection_as_of = _coerce_date(clock_source.get("requested_selection_as_of_trade_date"))
+    immediate_value = clock_source.get("is_immediately_previous_trade_date")
     immediate = immediate_value if isinstance(immediate_value, bool) else None
-    timezone_name = str(point_in_time.get("timezone") or "").strip() or "Asia/Shanghai"
+    timezone_name = str(clock_source.get("timezone") or "").strip() or "Asia/Shanghai"
     decision_cutoff = _coerce_datetime(decision_cutoff_raw)
     data_available = _coerce_datetime(data_available_raw)
     decision_generated = _coerce_datetime(generated_raw)
@@ -789,8 +802,8 @@ def resolve_decision_clock(resolved: ResolvedAuditDay) -> DecisionClockEvidence:
         data_available_at=data_available,
         decision_generated_at=decision_generated,
         timezone=timezone_name,
-        calendar_version=str(point_in_time.get("calendar_version") or "").strip() or None,
-        calendar_hash=str(point_in_time.get("calendar_hash") or "").strip() or None,
+        calendar_version=str(clock_source.get("calendar_version") or "").strip() or None,
+        calendar_hash=str(clock_source.get("calendar_hash") or "").strip() or None,
         is_immediately_previous_trade_date=immediate,
         is_formal_canonical_clock=formal,
         reason_codes=normalized_reason_codes(reasons),
@@ -926,7 +939,7 @@ def resolve_universe_survivorship(resolved: ResolvedAuditDay) -> UniverseSurvivo
             item.get("input_count"),
             item.get("output_count"),
             item.get("excluded_count"),
-            item.get("symbol_set_hash"),
+            item.get("output_symbol_set_hash") or item.get("symbol_set_hash"),
             available_at,
             policy_available_at,
         )
@@ -952,7 +965,7 @@ def resolve_universe_survivorship(resolved: ResolvedAuditDay) -> UniverseSurvivo
                 output_count=_coerce_int(item.get("output_count")),
                 excluded_count=_coerce_int(item.get("excluded_count")),
                 exclusion_reason_counts={str(key): int(value) for key, value in (item.get("exclusion_reason_counts") or {}).items()},
-                symbol_set_hash=str(item.get("symbol_set_hash") or "").strip() or None,
+                symbol_set_hash=str(item.get("output_symbol_set_hash") or item.get("symbol_set_hash") or "").strip() or None,
                 available_at=available_at,
                 policy_available_at=policy_available_at,
                 reason_codes=normalized_reason_codes(item_reasons),
@@ -1307,7 +1320,11 @@ def _stage_capabilities(
             input_count=_coerce_int(hmm_payload.get("input_count")),
             output_count=_coerce_int(hmm_payload.get("output_count")),
             excluded_count=_coerce_int(hmm_payload.get("excluded_count")),
-            semantic_payload={"hmm": hmm.model_snapshot_id, "coefficient": hmm.coefficient_sha256, "payload": hmm_payload.get("semantic")},
+            semantic_payload={
+                "hmm": hmm.model_snapshot_id,
+                "coefficient": hmm.coefficient_sha256,
+                "payload": hmm_payload.get("semantic_payload", hmm_payload.get("semantic")),
+            },
             reason_codes=[] if hmm_rows is not None else [REASON_STAGE_EVIDENCE_PARTIAL],
         )
     risk_payload = stage_evidence.get(CandidateStage.RISK_POLICY_ADJUSTED.value)
@@ -1336,7 +1353,10 @@ def _stage_capabilities(
             input_count=_coerce_int(risk_payload.get("input_count")),
             output_count=_coerce_int(risk_payload.get("output_count")),
             excluded_count=_coerce_int(risk_payload.get("excluded_count")),
-            semantic_payload={"risk_policy_hash": risk.risk_policy_hash, "payload": risk_payload.get("semantic")},
+            semantic_payload={
+                "risk_policy_hash": risk.risk_policy_hash,
+                "payload": risk_payload.get("semantic_payload", risk_payload.get("semantic")),
+            },
             reason_codes=[] if risk_rows is not None else [REASON_STAGE_EVIDENCE_PARTIAL],
         )
     selected_rows = _stage_rows(payload.get("selected_candidates"))
@@ -1405,6 +1425,27 @@ def _same_stage_content(left: list[dict[str, Any]] | None, right: list[dict[str,
     return left is not None and right is not None and _stage_content_payload(left) == _stage_content_payload(right)
 
 
+def _validated_prospective_dse_v2(evidence: DailySelectionEvidence) -> DailySelectionEvidenceV2Payload | None:
+    payload = evidence.evidence_payload_json or {}
+    if payload.get("schema_version") != "daily_selection_evidence_v2":
+        return None
+    try:
+        return DailySelectionEvidenceV2Payload.model_validate(payload)
+    except Exception:
+        return None
+
+
+def _artifact_v2_hashes_match(artifact: SelectionScoreArtifact) -> bool:
+    """Recompute the immutable raw identities before granting formal authority."""
+
+    try:
+        score_hash = canonical_evidence_json_sha256(artifact.scores_json)
+        payload_hash = canonical_evidence_json_sha256(artifact.canonical_v2_header(score_hash=score_hash))
+    except Exception:
+        return False
+    return artifact.artifact_sha256 == score_hash and artifact.artifact_payload_sha256 == payload_hash
+
+
 def resolve_candidate_authority(
     *,
     readers: AuditReaders,
@@ -1434,6 +1475,15 @@ def resolve_candidate_authority(
         )
     reasons: list[str] = list(resolved.phase0a_reason_codes)
     upstream: list[str] = []
+    prospective_payload = _validated_prospective_dse_v2(evidence)
+    if prospective_payload is None:
+        reasons.append(
+            REASON_PROSPECTIVE_DSE_V2_REQUIRED
+            if (evidence.evidence_payload_json or {}).get("schema_version") != "daily_selection_evidence_v2"
+            else REASON_PROSPECTIVE_DSE_V2_INVALID
+        )
+    elif evidence.artifact_hash != canonical_evidence_json_sha256(evidence.evidence_payload_json or {}):
+        reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
     if evidence.package_id != package.package_id or evidence.manifest_sha256 != package.manifest_sha256:
         reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
     if evidence.candidate_count == 0:
@@ -1504,8 +1554,22 @@ def resolve_candidate_authority(
         or artifact.status.value != "SUCCEEDED"
         or artifact.metadata.get("source_type") != expected_source
         or artifact.metadata.get("authority_scope") != AUTHORITATIVE_SELECTION_SCOPE
+        or artifact.artifact_contract_version != "selection_score_artifact_v2"
+        or not artifact.artifact_payload_sha256
     ):
         reasons.append(REASON_SCORE_ARTIFACT_MISMATCH)
+    elif prospective_payload is not None:
+        if not _artifact_v2_hashes_match(artifact):
+            reasons.append(REASON_SCORE_ARTIFACT_MISMATCH)
+        lineage_payload_hash = str(
+            prospective_payload.phase0a_candidate_lineage.get("selection_score_artifact_payload_sha256") or ""
+        ).strip()
+        if lineage_payload_hash != str(artifact.artifact_payload_sha256 or ""):
+            reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
+        if prospective_payload.phase0a_candidate_lineage.get("selection_score_artifact_id") != artifact.artifact_id:
+            reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
+        if prospective_payload.phase0a_candidate_lineage.get("selection_score_artifact_sha256") != artifact.artifact_sha256:
+            reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
     if evidence.cutoff_date != resolved.decision_date or evidence.target_trade_date <= resolved.decision_date:
         reasons.append(REASON_SELECTION_EVIDENCE_MISMATCH)
     depth = resolve_depth_evidence(resolved=resolved, artifact=artifact)
@@ -1530,7 +1594,12 @@ def resolve_candidate_authority(
     if run is not None and not _same_stage_content(selected_rows, run_rows):
         reasons.append(REASON_SELECTION_RUN_MISMATCH)
     stages = _stage_capabilities(evidence=evidence, artifact=artifact, hmm=hmm, risk=risk)
-    formal = not reasons and run is not None and artifact is not None
+    prospective_eligible = bool(
+        prospective_payload is not None and prospective_payload.evidence_contract.prospective_eligible
+    )
+    if prospective_payload is not None and not prospective_eligible:
+        reasons.append(REASON_PROSPECTIVE_CAPTURE_INELIGIBLE)
+    formal = not reasons and run is not None and artifact is not None and prospective_eligible
     status = CandidateAuthorityStatus.FORMAL if formal else CandidateAuthorityStatus.RETROSPECTIVE
     if not formal:
         reasons.append(REASON_CANDIDATE_AUTHORITY_MISSING)

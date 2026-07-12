@@ -7,6 +7,7 @@ and the requirements in 模型权重文件定位方案_v2.md.
 """
 
 import inspect
+import hashlib
 import json
 import logging
 import math
@@ -16,7 +17,7 @@ import tempfile
 import shutil
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -164,6 +165,25 @@ def _build_score_frame_for_scored_features(scored_features: pd.DataFrame, scores
     df_scores = pd.DataFrame(index=scored_features.index)
     df_scores["score"] = score_values
     return df_scores
+
+
+def _inference_receipt_sha256(payload: Any) -> str:
+    """Hash a small, canonical provenance payload without persisting raw source rows."""
+
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _frame_receipt_sha256(frame: pd.DataFrame) -> str:
+    """Return a deterministic content fingerprint for one already-read source frame."""
+
+    normalized = frame.sort_index().copy()
+    normalized = normalized.reindex(sorted(normalized.columns, key=str), axis=1)
+    digest = hashlib.sha256()
+    digest.update(json.dumps([str(item) for item in normalized.index.names], ensure_ascii=False).encode("utf-8"))
+    digest.update(json.dumps([str(item) for item in normalized.columns], ensure_ascii=False).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(normalized, index=True).values.tobytes())
+    return digest.hexdigest()
 
 
 def _safe_get_datetime_level(df_or_index) -> pd.Index:
@@ -536,6 +556,10 @@ class InferenceEngine:
         self.initialized = False
         self.validator = factor_validator or FactorValidator()
         self.assets_root = (Path(__file__).resolve().parents[1] / "rdagent_assets" / "rdagent_tasks").resolve()
+        # Populated only after a successful run. Callers that need provenance
+        # read this from the same engine instance; existing score consumers keep
+        # the original DataFrame return contract.
+        self.last_inference_receipt: dict[str, Any] | None = None
 
     def _get_latest_available_trade_date(self, target_date: datetime) -> datetime:
         """从数据库查询小于等于 target_date 的最近一个交易日"""
@@ -1279,6 +1303,8 @@ class InferenceEngine:
         1. TASK runtime mode: use task_run_id + loop_id, load from rdagent_assets
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
+        self.last_inference_receipt = None
+        observed_at = datetime.now(timezone.utc)
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
             target_date = cutoff_date
@@ -1865,6 +1891,102 @@ class InferenceEngine:
         scores = predict_scores(model, inner_model, model_kind, X)
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
+
+        calendar_payload = {
+            "dataset_id": "market.trading_calendar",
+            "effective_trade_date": actual_date.date().isoformat(),
+            "window_start_date": start_date.date().isoformat(),
+            "required_window": required_window,
+            "window_resolution": start_date_source,
+        }
+        calendar_hash = _inference_receipt_sha256(calendar_payload)
+        self.last_inference_receipt = {
+            "contract_version": "strategy_package_live_inference_receipt_v1",
+            "universe_count": int(len(universe)),
+            "source_read_receipts": [
+                {
+                    "source_role": "pit_universe",
+                    "dataset_id": "market.stock_universe_pit",
+                    "partition_ref": actual_date.date().isoformat(),
+                    "query_template_id": "StockUniversePitService.get_eligible_codes",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {"trade_date": actual_date.date().isoformat(), "ensure": True}
+                    ),
+                    "row_count": int(len(universe)),
+                    "content_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "market_history",
+                    "dataset_id": "market.kline_daily_raw",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "get_history_window",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "start": start_date.date().isoformat(),
+                            "end": actual_date.date().isoformat(),
+                            "universe_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                            "fields": ["open", "high", "low", "close", "volume", "amount", "factor"],
+                        }
+                    ),
+                    "row_count": int(len(df_history)),
+                    "content_hash": _frame_receipt_sha256(df_history),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "fundamental_moneyflow",
+                    "dataset_id": "timescaledb.fundamental_moneyflow",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "timescaledb_adapter.fetch_fundamental_data_ts",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "start_date": start_date.date().isoformat(),
+                            "end_date": actual_date.date().isoformat(),
+                            "universe_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                        }
+                    ),
+                    "row_count": int(len(df_fund_raw)),
+                    "content_hash": _frame_receipt_sha256(df_fund_raw),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "trading_calendar",
+                    "dataset_id": "market.trading_calendar",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "InferenceEngine.trade_date_and_window_resolution",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "target_trade_date": target_date.date().isoformat(),
+                            "required_window": required_window,
+                            "buffer_days": 5,
+                        }
+                    ),
+                    "row_count": 2,
+                    "content_hash": calendar_hash,
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+            ],
+            "input_context": {
+                "requested_trade_date": requested_trade_date.date().isoformat(),
+                "effective_trade_date": actual_date.date().isoformat(),
+                "score_trade_date": actual_date.date().isoformat(),
+                "pit_mode": "stock_universe_pit_v1",
+                "calendar_version": "market.trading_calendar.v1",
+                "calendar_hash": calendar_hash,
+                "calendar_source": "market.trading_calendar",
+                "universe_input_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                "strict_feature_filter": dict(LAST_STRICT_FEATURE_FILTER or {}),
+                "scored_row_count": int(len(df_scores)),
+            },
+        }
 
         # 保存信号到数据库（使用提取的模块级函数）
         save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)

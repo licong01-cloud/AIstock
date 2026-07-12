@@ -136,6 +136,12 @@ class PreparedInferenceWorkspace:
 class LiveInferenceResult:
     scores: list[dict[str, Any]]
     metadata: dict[str, Any]
+    # These are produced by the same inference invocation as ``scores``. They
+    # are intentionally separate from diagnostic metadata so artifact v2 can
+    # validate factual source and input provenance without changing score logic.
+    universe_count: int | None = None
+    source_read_receipts: list[dict[str, Any]] | None = None
+    input_context: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -2756,7 +2762,8 @@ class LocalStrategyPackageInferenceProvider:
         old_strict = os.environ.get("AISTOCK_STRICT_INFERENCE")
         os.environ["AISTOCK_STRICT_INFERENCE"] = "1"
         try:
-            df_scores = InferenceEngine().run_inference(
+            engine = InferenceEngine()
+            df_scores = engine.run_inference(
                 strategy_id="",
                 version_tag="strategy_package_live",
                 trade_date=_date_to_datetime(trade_date),
@@ -2774,9 +2781,18 @@ class LocalStrategyPackageInferenceProvider:
                 os.environ.pop("AISTOCK_STRICT_INFERENCE", None)
             else:
                 os.environ["AISTOCK_STRICT_INFERENCE"] = old_strict
+        receipt = engine.last_inference_receipt
+        if not isinstance(receipt, dict):
+            raise DataUnavailableError(
+                "local live inference did not return an execution receipt",
+                context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"},
+            )
         return LiveInferenceResult(
             scores=_score_rows_from_frame(df_scores, cutoff_date or trade_date),
             metadata={"inference_backend": "local"},
+            universe_count=_required_receipt_universe_count(receipt),
+            source_read_receipts=_required_receipt_rows(receipt, "source_read_receipts"),
+            input_context=_required_receipt_object(receipt, "input_context"),
         )
 
 
@@ -2894,7 +2910,13 @@ class WslStrategyPackageInferenceProvider:
             )
         metadata = dict(payload.get("metadata") or {})
         metadata.update({"inference_backend": "wsl", "wsl_distro": self.distro, "wsl_conda_env": self.conda_env})
-        return LiveInferenceResult(scores=scores, metadata=metadata)
+        return LiveInferenceResult(
+            scores=scores,
+            metadata=metadata,
+            universe_count=_required_receipt_universe_count(payload),
+            source_read_receipts=_required_receipt_rows(payload, "source_read_receipts"),
+            input_context=_required_receipt_object(payload, "input_context"),
+        )
 
     def _build_env_exports(self) -> str:
         keys = [
@@ -2915,3 +2937,42 @@ class WslStrategyPackageInferenceProvider:
     @staticmethod
     def _quote(value: str) -> str:
         return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _required_receipt_universe_count(payload: dict[str, Any]) -> int:
+    value = payload.get("universe_count")
+    if isinstance(value, bool):
+        value = None
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DataUnavailableError(
+            "live inference receipt is missing an actual universe_count",
+            context={"reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE"},
+        ) from exc
+    if count < 0:
+        raise DataUnavailableError(
+            "live inference receipt has an invalid universe_count",
+            context={"reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE", "universe_count": count},
+        )
+    return count
+
+
+def _required_receipt_rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = payload.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise DataUnavailableError(
+            "live inference receipt is missing source-read rows",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "field": key},
+        )
+    return [dict(item) for item in value]
+
+
+def _required_receipt_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise DataUnavailableError(
+            "live inference receipt is missing input context",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "field": key},
+        )
+    return dict(value)

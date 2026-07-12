@@ -177,6 +177,18 @@ def get_industry_tree_service() -> SelectionIndustryTreeService:
     return SelectionIndustryTreeService()
 
 
+def _selection_run_payload(run: Any) -> dict[str, Any]:
+    """Add compact evidence status without exposing the full DSE stage rows."""
+    payload = run.model_dump(mode="json")
+    refs = (run.runtime_config or {}).get("daily_selection_evidence")
+    refs = refs if isinstance(refs, dict) else {}
+    payload["evidence_schema_version"] = refs.get("schema_version")
+    payload["evidence_capture_status"] = refs.get("evidence_capture_status")
+    payload["evidence_ids_by_package"] = refs.get("evidence_ids_by_package", {})
+    payload["evidence_reason_codes"] = refs.get("evidence_reason_codes", [])
+    return payload
+
+
 @router.post("/runs")
 def run_selection(
     req: RunSelectionRequest,
@@ -196,7 +208,7 @@ def run_selection(
             data_source=req.data_source,
             runtime_config=req.runtime_config,
         )
-        return {"ok": True, "run": run.model_dump(mode="json")}
+        return {"ok": True, "run": _selection_run_payload(run)}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -247,11 +259,11 @@ def list_selection_runs(
             page_data = service.list_runs_page(page=page or 1, page_size=page_size or min(limit, 50))
             return {
                 "ok": True,
-                "runs": [run.model_dump(mode="json") for run in page_data["runs"]],
+                "runs": [_selection_run_payload(run) for run in page_data["runs"]],
                 "pagination": page_data["pagination"],
             }
         runs = service.list_runs(limit=limit)
-        return {"ok": True, "runs": [run.model_dump(mode="json") for run in runs]}
+        return {"ok": True, "runs": [_selection_run_payload(run) for run in runs]}
     except TradingCoreError as exc:
         _raise_http(exc)
 
@@ -283,7 +295,7 @@ def get_selection_run(
 ) -> dict[str, Any]:
     try:
         run = service.get_run(run_id)
-        return {"ok": True, "run": run.model_dump(mode="json")}
+        return {"ok": True, "run": _selection_run_payload(run)}
     except TradingCoreError as exc:
         _raise_http(exc)
 

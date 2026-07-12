@@ -29,7 +29,12 @@ from backend.services.strategy_package.models import (
 )
 from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
+    SELECTION_SCORE_ARTIFACT_CONTRACT_V2,
+    build_reference_price_source_receipt,
+    build_manifest_asset_closure,
+    build_selection_artifact_v2_provenance,
     selection_artifact_runtime_hash,
+    selection_artifact_runtime_hash_v2,
 )
 from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
@@ -91,6 +96,22 @@ class ParentLegRuntimeSlice:
     ensemble_method: str
     terminal_weight: float | None
     legacy_child_ref_ignored: bool
+
+
+@dataclass(frozen=True)
+class ParentLegLiveInferenceResult:
+    seed_frames: dict[str, pd.DataFrame]
+    live_result: Any
+    source: Any
+    prepared: Any
+
+
+@dataclass(frozen=True)
+class _CombinedLiveInferenceResult:
+    scores: list[dict[str, Any]]
+    universe_count: int
+    source_read_receipts: list[dict[str, Any]]
+    input_context: dict[str, Any]
 
 
 class MultiAlphaLiveError(RuntimeError):
@@ -402,7 +423,7 @@ class MultiAlphaLivePredictionProvider:
         topk = self._runtime_topk(manifest, config)
         coverage_threshold = self._coverage_threshold(config, topk=topk)
         normalization_method = _normalization_method(manifest)
-        runtime_hash = multi_alpha_selection_artifact_runtime_hash(manifest, config)
+        runtime_hash = multi_alpha_selection_artifact_runtime_hash_v2(manifest, config)
         leg_slices = _parent_leg_runtime_slices(manifest, evidence=evidence, package_id=package_id)
 
         artifacts: list[SelectionScoreArtifact] = []
@@ -410,8 +431,9 @@ class MultiAlphaLivePredictionProvider:
             score_trade_date = cutoff_date or current_date
             leg_frames: dict[str, pd.DataFrame] = {}
             component_metadata: dict[str, Any] = {}
+            leg_executions: dict[str, ParentLegLiveInferenceResult] = {}
             for leg_slice in leg_slices:
-                seed_frames = self._run_parent_leg_live_inference(
+                leg_execution = self._run_parent_leg_live_inference(
                     manifest=manifest,
                     leg_slice=leg_slice,
                     trade_date=current_date,
@@ -419,12 +441,15 @@ class MultiAlphaLivePredictionProvider:
                     runtime_config=config,
                     inference_backend=inference_backend,
                 )
+                seed_frames = leg_execution.seed_frames
+                leg_executions[leg_slice.leg_id] = leg_execution
                 ensemble = _ensemble_seed_frames(
                     seed_frames,
                     leg_id=leg_slice.leg_id,
                     model_id=leg_slice.model_asset.model_id,
                     package_id=package_id,
                     trade_date=score_trade_date,
+                    allow_empty=True,
                 )
                 normalized = _normalize_leg_frame(
                     ensemble,
@@ -455,11 +480,15 @@ class MultiAlphaLivePredictionProvider:
                     "seed_runtime_mode": "frozen_representative_model_replayed_for_legacy_seed_metadata",
                     "legacy_child_ref_ignored": leg_slice.legacy_child_ref_ignored,
                     "candidate_count": int(len(normalized)),
+                    "inference_universe_count": leg_execution.live_result.universe_count,
+                    "source_read_receipts": list(leg_execution.live_result.source_read_receipts or []),
+                    "input_context": dict(leg_execution.live_result.input_context or {}),
                 }
 
-            aligned = _align_component_frames(leg_frames)
+            aligned = _align_component_frames(leg_frames, allow_empty=True)
             component_candidate_universe_size = int(len(aligned))
-            if component_candidate_universe_size < coverage_threshold:
+            raw_empty = component_candidate_universe_size == 0
+            if not raw_empty and component_candidate_universe_size < coverage_threshold:
                 _raise(
                     "MULTI_ALPHA component candidate coverage is below threshold",
                     REASON_COMPONENT_COVERAGE_LOW,
@@ -477,16 +506,114 @@ class MultiAlphaLivePredictionProvider:
                 leg_ids=leg_ids,
                 runtime_config=config,
             )
-            combined = _combine_aligned(aligned, weights=weight_artifact.weights, leg_ids=leg_ids)
-            rows = self._artifact_rows(
-                combined,
-                leg_ids=leg_ids,
-                weights=weight_artifact.weights,
-                topk=topk,
-                trade_date=score_trade_date,
-                include_reference_price=include_reference_price,
+            combined = (
+                _combine_aligned(aligned, weights=weight_artifact.weights, leg_ids=leg_ids)
+                if not raw_empty
+                else pd.DataFrame(columns=[*aligned.columns, "combined_score"])
+            )
+            rows = (
+                self._artifact_rows(
+                    combined,
+                    leg_ids=leg_ids,
+                    weights=weight_artifact.weights,
+                    topk=topk,
+                    trade_date=score_trade_date,
+                    include_reference_price=include_reference_price,
+                )
+                if not raw_empty
+                else []
             )
             combined_sha = _canonical_sha256(rows)
+            aggregate_source_receipts: list[dict[str, Any]] = []
+            for leg_id, execution in sorted(leg_executions.items()):
+                for receipt in execution.live_result.source_read_receipts or []:
+                    aggregate_source_receipts.append({**dict(receipt), "leg_id": leg_id})
+            aggregate_input_context = _aggregate_parent_leg_input_context(
+                leg_executions=leg_executions,
+                requested_trade_date=current_date,
+            )
+            parent_parity_payload = {
+                "parent_package_id": package_id,
+                "parent_manifest_sha256": manifest.manifest_sha256,
+                "leg_ids": leg_ids,
+                "component_score_artifact_sha256": {
+                    leg_id: item["component_score_artifact_sha256"] for leg_id, item in component_metadata.items()
+                },
+                "weight_artifact_id": weight_artifact.artifact_id,
+                "weight_artifact_sha256": weight_artifact.artifact_sha256,
+                "combined_score_artifact_sha256": combined_sha,
+                "normalization_method": normalization_method,
+                "weights": weight_artifact.weights,
+            }
+            parent_parity_hash = _canonical_sha256(parent_parity_payload)
+            extra_asset_entries = [
+                {
+                    "asset_role": "multi_alpha_leg_runtime",
+                    "asset_id": leg_slice.leg_id,
+                    "asset_ref": leg_slice.model_asset.asset_ref,
+                    "sha256": leg_slice.model_asset.sha256,
+                    "model_id": leg_slice.model_asset.model_id,
+                    "factor_sha256": sorted(str(factor.sha256 or "") for factor in leg_slice.factor_set),
+                    "seed_run_ids": list(leg_slice.seed_run_ids),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                }
+                for leg_slice in leg_slices
+            ]
+            extra_asset_entries.append(
+                {
+                    "asset_role": "multi_alpha_weight_artifact",
+                    "asset_id": weight_artifact.artifact_id,
+                    "asset_ref": "multi_alpha_weight",
+                    "sha256": weight_artifact.artifact_sha256,
+                    "apply_date": current_date.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                }
+            )
+            asset_closure, asset_closure_status, asset_reason_codes = build_manifest_asset_closure(
+                manifest,
+                extra_entries=extra_asset_entries,
+            )
+            provider_semantics = {
+                "provider_semantics_id": "multi_alpha_live_inference_v2",
+                "provider_version": MULTI_ALPHA_LIVE_PROVIDER_VERSION,
+                "inference_backend": inference_backend,
+                "runtime_source": "parent_package_asset",
+                "normalization_method": normalization_method,
+                "combine_method": "weighted_normalized_score",
+                "weight_artifact_sha256": weight_artifact.artifact_sha256,
+                "parent_parity_hash": parent_parity_hash,
+            }
+            aggregate_result = _CombinedLiveInferenceResult(
+                scores=rows,
+                universe_count=int(aggregate_input_context["parent_input_universe_count"]),
+                source_read_receipts=aggregate_source_receipts,
+                input_context=aggregate_input_context,
+            )
+            provenance = build_selection_artifact_v2_provenance(
+                result=aggregate_result,
+                requested_trade_date=current_date,
+                cutoff_date=cutoff_date,
+                include_reference_price=include_reference_price,
+                asset_closure=asset_closure,
+                asset_closure_status=asset_closure_status,
+                asset_reason_codes=asset_reason_codes,
+                provider_semantics=provider_semantics,
+                additional_source_receipts=(
+                    [
+                        build_reference_price_source_receipt(
+                            symbols=[str(row["symbol"]) for row in rows],
+                            trade_date=score_trade_date,
+                            price_by_symbol={
+                                str(row["symbol"]): float(row["reference_price"])
+                                for row in rows
+                                if row.get("reference_price") is not None
+                            },
+                        )
+                    ]
+                    if include_reference_price
+                    else []
+                ),
+            )
             metadata = {
                 "source_type": LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE,
                 "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
@@ -500,6 +627,8 @@ class MultiAlphaLivePredictionProvider:
                 "weight_artifact_id": weight_artifact.artifact_id,
                 "weight_artifact_sha256": weight_artifact.artifact_sha256,
                 "combined_score_artifact_sha256": combined_sha,
+                "multi_alpha_parent_parity_hash": parent_parity_hash,
+                "multi_alpha_parent_parity": parent_parity_payload,
                 "component_manifest_sha256": {leg_slice.leg_id: manifest.manifest_sha256 for leg_slice in leg_slices},
                 "runtime_source": "parent_package_asset",
                 "runtime_package_id": package_id,
@@ -513,6 +642,7 @@ class MultiAlphaLivePredictionProvider:
                 "normalization_method": normalization_method,
                 "final_topk": topk,
                 "component_candidate_universe_size": component_candidate_universe_size,
+                "parent_input_universe_count": aggregate_input_context["parent_input_universe_count"],
                 "coverage_threshold": coverage_threshold,
                 "weight_policy": _weight_policy(manifest),
                 "weights": weight_artifact.weights,
@@ -525,6 +655,16 @@ class MultiAlphaLivePredictionProvider:
                 "reference_price_trade_date": score_trade_date.isoformat() if include_reference_price else None,
                 "inference_backend": inference_backend,
                 "prediction_source_policy": "live_inference_only",
+                "candidate_outcome": "VALID_NO_CANDIDATE" if raw_empty else "CANDIDATES_PRESENT",
+                "empty_stage": "alpha_raw" if raw_empty else None,
+                "provider_semantics_id": provenance.provider_semantics_id,
+                "provider_semantics_hash": provenance.provider_semantics_hash,
+                "provider_semantics": provider_semantics,
+                "artifact_input_context": provenance.artifact_input_context,
+                "source_read_receipts": provenance.source_read_receipts,
+                "asset_closure": provenance.asset_closure,
+                "asset_closure_status": provenance.asset_closure_status,
+                "capture_prerequisite_reason_codes": provenance.reason_codes,
             }
             artifact = SelectionScoreArtifact(
                 package_id=package_id,
@@ -534,10 +674,14 @@ class MultiAlphaLivePredictionProvider:
                 runtime_config_hash=runtime_hash,
                 scores_json=rows,
                 score_count=len(rows),
-                universe_count=component_candidate_universe_size,
+                universe_count=provenance.universe_count,
                 top_score_symbol=rows[0]["symbol"] if rows else None,
                 status=SelectionScoreArtifactStatus.SUCCEEDED,
                 metadata=metadata,
+                artifact_contract_version=SELECTION_SCORE_ARTIFACT_CONTRACT_V2,
+                artifact_input_context_hash=provenance.artifact_input_context_hash,
+                source_revision_set_hash=provenance.source_revision_set_hash,
+                asset_closure_hash=provenance.asset_closure_hash,
             )
             artifacts.append(self.artifact_repository.save(artifact))
         return artifacts
@@ -635,7 +779,7 @@ class MultiAlphaLivePredictionProvider:
         cutoff_date: date | None,
         runtime_config: Mapping[str, Any],
         inference_backend: str,
-    ) -> dict[str, pd.DataFrame]:
+    ) -> ParentLegLiveInferenceResult:
         if not leg_slice.seed_run_ids:
             _raise(
                 "MULTI_ALPHA leg has no seed_run_ids",
@@ -683,10 +827,10 @@ class MultiAlphaLivePredictionProvider:
             exc.context.setdefault("model_id", leg_slice.model_asset.model_id)
             exc.context.setdefault("runtime_source", "parent_package_asset")
             raise
-        if not result.scores:
+        if result.scores is None or not isinstance(result.scores, list):
             _raise(
-                "MULTI_ALPHA parent leg live inference returned no score rows",
-                REASON_PARENT_LEG_INFERENCE_EMPTY,
+                "MULTI_ALPHA parent leg live inference did not return a score payload",
+                REASON_SEED_PREDICTION_MISSING,
                 package_id=leg_slice.parent_package_id,
                 leg_id=leg_slice.leg_id,
                 model_id=leg_slice.model_asset.model_id,
@@ -699,17 +843,23 @@ class MultiAlphaLivePredictionProvider:
             model_id=leg_slice.model_asset.model_id,
             seed_run_id=representative_seed,
             trade_date=cutoff_date or trade_date,
+            allow_empty=True,
         )
-        if representative.empty:
+        if representative.empty and not _has_positive_actual_universe_count(result):
             _raise(
-                "MULTI_ALPHA parent leg live inference returned no usable scores",
-                REASON_PARENT_LEG_INFERENCE_EMPTY,
+                "empty MULTI_ALPHA parent leg inference requires a positive actual input universe",
+                REASON_SEED_PREDICTION_MISSING,
                 package_id=leg_slice.parent_package_id,
                 leg_id=leg_slice.leg_id,
                 model_id=leg_slice.model_asset.model_id,
                 trade_date=trade_date.isoformat(),
             )
-        return {seed_run_id: representative.copy() for seed_run_id in leg_slice.seed_run_ids}
+        return ParentLegLiveInferenceResult(
+            seed_frames={seed_run_id: representative.copy() for seed_run_id in leg_slice.seed_run_ids},
+            live_result=result,
+            source=source,
+            prepared=prepared,
+        )
 
     def _artifact_rows(
         self,
@@ -796,6 +946,15 @@ def multi_alpha_selection_artifact_runtime_hash(
     runtime_config: Mapping[str, Any] | None,
 ) -> str:
     return selection_artifact_runtime_hash(multi_alpha_runtime_config_for_hash(manifest, runtime_config))
+
+
+def multi_alpha_selection_artifact_runtime_hash_v2(
+    manifest: StrategyPackageManifest,
+    runtime_config: Mapping[str, Any] | None,
+) -> str:
+    """v2 parent key; keeps multi-alpha score inputs while separating legacy rows."""
+
+    return selection_artifact_runtime_hash_v2(multi_alpha_runtime_config_for_hash(manifest, runtime_config))
 
 
 def _weight_policy(manifest: StrategyPackageManifest) -> dict[str, Any]:
@@ -1288,8 +1447,11 @@ def _live_result_to_frame(
     model_id: str,
     seed_run_id: str,
     trade_date: date,
+    allow_empty: bool = False,
 ) -> pd.DataFrame:
     if not rows:
+        if allow_empty:
+            return pd.DataFrame(columns=["trade_date", "instrument", "score"])
         _raise(
             "live inference returned no score rows for required MULTI_ALPHA seed",
             REASON_SEED_PREDICTION_MISSING,
@@ -1326,12 +1488,15 @@ def _ensemble_seed_frames(
     model_id: str,
     package_id: str,
     trade_date: date,
+    allow_empty: bool = False,
 ) -> pd.DataFrame:
     merged: pd.DataFrame | None = None
     for seed_run_id, frame in seed_frames.items():
         selected = frame[["trade_date", "instrument", "score"]].rename(columns={"score": f"score__{seed_run_id}"})
         merged = selected if merged is None else merged.merge(selected, on=["trade_date", "instrument"], how="inner")
     if merged is None or merged.empty:
+        if allow_empty:
+            return pd.DataFrame(columns=["trade_date", "instrument", "score"])
         _raise(
             "MULTI_ALPHA seed score panels have no common candidates",
             REASON_SEED_PREDICTION_MISSING,
@@ -1375,7 +1540,11 @@ def _normalize_leg_frame(
     return data[["trade_date", "instrument", "raw_score", "normalized_score"]]
 
 
-def _align_component_frames(frames: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
+def _align_component_frames(
+    frames: Mapping[str, pd.DataFrame],
+    *,
+    allow_empty: bool = False,
+) -> pd.DataFrame:
     merged: pd.DataFrame | None = None
     for leg_id, frame in frames.items():
         selected = frame[["trade_date", "instrument", "raw_score", "normalized_score"]].rename(
@@ -1383,6 +1552,11 @@ def _align_component_frames(frames: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         )
         merged = selected if merged is None else merged.merge(selected, on=["trade_date", "instrument"], how="inner")
     if merged is None or merged.empty:
+        if allow_empty:
+            columns = ["trade_date", "instrument"]
+            for leg_id in frames:
+                columns.extend([f"raw__{leg_id}", f"norm__{leg_id}"])
+            return pd.DataFrame(columns=columns)
         _raise("MULTI_ALPHA legs have no common candidates", REASON_COMPONENT_COVERAGE_LOW)
     return merged.sort_values(["trade_date", "instrument"]).reset_index(drop=True)
 
@@ -1448,6 +1622,135 @@ def _artifact_config(runtime_config: Mapping[str, Any] | None) -> dict[str, Any]
             context={"selection_artifact_config_type": type(artifact).__name__},
         )
     return dict(artifact)
+
+
+def _aggregate_parent_leg_input_context(
+    *,
+    leg_executions: Mapping[str, ParentLegLiveInferenceResult],
+    requested_trade_date: date,
+) -> dict[str, Any]:
+    """Prove all parent legs were inferred against one compatible PIT context."""
+
+    required_fields = (
+        "effective_trade_date",
+        "score_trade_date",
+        "pit_mode",
+        "calendar_version",
+        "calendar_hash",
+        "calendar_source",
+    )
+    baseline: dict[str, Any] | None = None
+    baseline_universe_hash: str | None = None
+    baseline_universe_count: int | None = None
+    per_leg_universe_counts: dict[str, int] = {}
+    for leg_id, execution in sorted(leg_executions.items()):
+        result = execution.live_result
+        raw_context = getattr(result, "input_context", None)
+        if not isinstance(raw_context, Mapping):
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg inference is missing an input context",
+                context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "leg_id": leg_id},
+            )
+        missing = [name for name in required_fields if not raw_context.get(name)]
+        if missing:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg input context is incomplete",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                    "missing_fields": missing,
+                },
+            )
+        raw_count = getattr(result, "universe_count", None)
+        if isinstance(raw_count, bool):
+            raw_count = None
+        try:
+            universe_count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg inference is missing an actual input universe count",
+                context={"reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE", "leg_id": leg_id},
+            ) from exc
+        if universe_count < len(getattr(result, "scores", []) or []):
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg input universe count is smaller than its score rows",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                    "universe_count": universe_count,
+                    "score_row_count": len(getattr(result, "scores", []) or []),
+                },
+            )
+        if universe_count <= 0:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg inference input universe must be positive",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A_VALID_NO_CANDIDATE_EVIDENCE_INCOMPLETE",
+                    "leg_id": leg_id,
+                    "universe_count": universe_count,
+                },
+            )
+        universe_input_hash = raw_context.get("universe_input_hash")
+        if not isinstance(universe_input_hash, str) or len(universe_input_hash) != 64:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg input context is missing a canonical universe hash",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            )
+        candidate = {field: raw_context[field] for field in required_fields}
+        if baseline is None:
+            baseline = candidate
+        elif candidate != baseline:
+            raise DataUnavailableError(
+                "MULTI_ALPHA legs were inferred with different PIT input contexts",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH",
+                    "baseline": baseline,
+                    "leg_id": leg_id,
+                    "leg_context": candidate,
+                },
+            )
+        if baseline_universe_hash is None:
+            baseline_universe_hash = universe_input_hash
+            baseline_universe_count = universe_count
+        elif universe_input_hash != baseline_universe_hash or universe_count != baseline_universe_count:
+            raise DataUnavailableError(
+                "MULTI_ALPHA legs were inferred with different input universes",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH",
+                    "baseline_universe_hash": baseline_universe_hash,
+                    "baseline_universe_count": baseline_universe_count,
+                    "leg_id": leg_id,
+                    "leg_universe_hash": universe_input_hash,
+                    "leg_universe_count": universe_count,
+                },
+            )
+        per_leg_universe_counts[leg_id] = universe_count
+    if baseline is None or baseline_universe_hash is None or baseline_universe_count is None:
+        raise DataUnavailableError(
+            "MULTI_ALPHA parent has no leg input contexts",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"},
+        )
+    return {
+        "requested_trade_date": requested_trade_date.isoformat(),
+        **baseline,
+        "universe_input_hash": baseline_universe_hash,
+        "parent_input_universe_count": baseline_universe_count,
+        "per_leg_universe_counts": per_leg_universe_counts,
+    }
+
+
+def _has_positive_actual_universe_count(result: Any) -> bool:
+    value = getattr(result, "universe_count", None)
+    if isinstance(value, bool):
+        return False
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
 
 def _normalize_positive_weights(raw: Mapping[str, float], *, reason_code: str, context: Mapping[str, Any]) -> dict[str, float]:
     values = {str(key): float(value) for key, value in raw.items()}

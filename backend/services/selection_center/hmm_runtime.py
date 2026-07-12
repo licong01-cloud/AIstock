@@ -9,14 +9,22 @@ fallback coefficients are never fabricated when HMM is enabled.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import threading
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from backend.services.selection_center.models import SelectionCandidate
+from backend.services.selection_center.prospective_evidence import (
+    CandidateStageName,
+    HMMAdjustmentResult,
+    StageReceiptStatus,
+    build_stage_receipt,
+    canonical_evidence_json_sha256,
+)
 from backend.services.selection_center.runtime_profile import RuntimeHMMProfile
 from backend.services.strategy_package.workspace_policy import ensure_not_forbidden_worker_workspace_path
 from backend.services.trading_core.errors import ArtifactGenerationFailedError, HMMRuntimeUnavailableError
@@ -51,11 +59,71 @@ class SectorHMMRuntime:
         profile: RuntimeHMMProfile,
         package_id: str,
         manifest_sha256: str,
+        effective_trade_date: date | None = None,
     ) -> list[SelectionCandidate]:
+        return self.adjust_candidates_with_receipt(
+            candidates=candidates,
+            trade_date=trade_date,
+            profile=profile,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            effective_trade_date=effective_trade_date,
+        ).candidates
+
+    def adjust_candidates_with_receipt(
+        self,
+        *,
+        candidates: list[SelectionCandidate],
+        trade_date: date,
+        profile: RuntimeHMMProfile,
+        package_id: str,
+        manifest_sha256: str,
+        require_frozen_snapshot: bool = False,
+        effective_trade_date: date | None = None,
+    ) -> HMMAdjustmentResult:
         if not profile.enabled:
-            return candidates
+            return HMMAdjustmentResult(
+                candidates=list(candidates),
+                receipt=build_stage_receipt(
+                    stage=CandidateStageName.HMM_ADJUSTED,
+                    status=StageReceiptStatus.NOT_APPLICABLE,
+                    input_count=len(candidates),
+                    candidates=[],
+                    semantic_payload={"enabled": False, "generation_mode": "NOT_APPLICABLE"},
+                ),
+                hmm_metadata={
+                    "enabled": False,
+                    "status": "NOT_APPLICABLE",
+                    "generation_mode": "NOT_APPLICABLE",
+                },
+            )
         if not candidates:
-            return candidates
+            return HMMAdjustmentResult(
+                candidates=[],
+                receipt=build_stage_receipt(
+                    stage=CandidateStageName.HMM_ADJUSTED,
+                    status=StageReceiptStatus.NOT_APPLICABLE,
+                    input_count=0,
+                    candidates=[],
+                    semantic_payload={"enabled": True, "generation_mode": "NO_ALPHA_CANDIDATES"},
+                    reason_codes=["ADVISORY_PHASE0A2C_HMM_NO_ALPHA_CANDIDATES"],
+                ),
+                hmm_metadata={
+                    "enabled": True,
+                    "status": "NOT_APPLICABLE",
+                    "generation_mode": "NO_ALPHA_CANDIDATES",
+                },
+            )
+        if require_frozen_snapshot and profile.model_config_id and not profile.model_snapshot_id:
+            raise HMMRuntimeUnavailableError(
+                "prospective HMM capture requires an explicit model_snapshot_id; dynamic latest resolution is forbidden",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_HMM_RECEIPT_INCOMPLETE",
+                    "package_id": package_id,
+                    "model_config_id": profile.model_config_id,
+                },
+            )
+        requested_snapshot_id = profile.model_snapshot_id
         profile = self._resolve_profile_snapshot(profile)
         if not profile.model_snapshot_id:
             raise HMMRuntimeUnavailableError(
@@ -95,6 +163,7 @@ class SectorHMMRuntime:
             profile=profile,
             trade_date=trade_date,
             package_id=package_id,
+            allow_generate=not require_frozen_snapshot,
         )
         payload = artifact.payload
         day_key = trade_date.isoformat()
@@ -182,7 +251,76 @@ class SectorHMMRuntime:
             )
 
         adjusted.sort(key=lambda item: (-item.score, item.component_scores.get("raw_rank", item.rank), item.symbol))
-        return [item.model_copy(update={"rank": rank}) for rank, item in enumerate(adjusted, start=1)]
+        reranked = [item.model_copy(update={"rank": rank}) for rank, item in enumerate(adjusted, start=1)]
+        observed_at = datetime.now(timezone.utc)
+        coefficients_sha256 = _file_sha256(artifact.path)
+        model_sha256 = _file_sha256(model_path)
+        generation_mode = "EXACT_SNAPSHOT" if requested_snapshot_id else "DYNAMIC_LATEST_RESOLVED"
+        hmm_metadata = {
+            "enabled": True,
+            "status": "COMPLETE",
+            "generation_mode": generation_mode,
+            "model_snapshot_id": profile.model_snapshot_id,
+            "model_config_id": profile.model_config_id,
+            "signal_preset": profile.signal_preset,
+            "snapshot_status": snapshot.get("status"),
+            "snapshot_trained_at": _time_value(snapshot.get("trained_at")),
+            "available_at": _time_value(snapshot.get("available_at")),
+            "training_information_cutoff": _time_value(snapshot.get("training_information_cutoff")),
+            "as_of_trade_date": trade_date.isoformat(),
+            "effective_trade_date": effective_trade_date.isoformat() if effective_trade_date else None,
+            "first_observed_at": observed_at.isoformat(),
+            "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+            "model_sha256": model_sha256,
+            "model_artifact_sha256": model_sha256,
+            "coefficients_sha256": coefficients_sha256,
+            "coefficient_sha256": coefficients_sha256,
+            "coefficients_payload_sha256": canonical_evidence_json_sha256(artifact.payload),
+            "coefficient_trade_date": day_key,
+            "input_data_max_dates": snapshot.get("input_data_max_dates"),
+            "input_data_max_dates_hash": (
+                canonical_evidence_json_sha256(snapshot["input_data_max_dates"])
+                if snapshot.get("input_data_max_dates") is not None
+                else None
+            ),
+            "freshness_lag": snapshot.get("freshness_lag"),
+            # Paths are diagnostic only and intentionally omitted from receipt semantics.
+            "model_path": str(model_path),
+            "coefficients_path": str(artifact.path),
+        }
+        receipt = build_stage_receipt(
+            stage=CandidateStageName.HMM_ADJUSTED,
+            status=StageReceiptStatus.COMPLETE,
+            input_count=len(candidates),
+            candidates=reranked,
+            semantic_payload={
+                key: hmm_metadata[key]
+                for key in (
+                    "enabled",
+                    "status",
+                    "generation_mode",
+                    "model_snapshot_id",
+                    "model_config_id",
+                    "signal_preset",
+                    "snapshot_status",
+                    "snapshot_trained_at",
+                    "available_at",
+                    "training_information_cutoff",
+                    "as_of_trade_date",
+                    "effective_trade_date",
+                    "admissibility",
+                    "model_sha256",
+                    "model_artifact_sha256",
+                    "coefficients_sha256",
+                    "coefficient_sha256",
+                    "coefficients_payload_sha256",
+                    "coefficient_trade_date",
+                    "input_data_max_dates_hash",
+                    "freshness_lag",
+                )
+            },
+        )
+        return HMMAdjustmentResult(candidates=reranked, receipt=receipt, hmm_metadata=hmm_metadata)
 
     def preflight_coefficients(
         self,
@@ -406,6 +544,7 @@ class SectorHMMRuntime:
         profile: RuntimeHMMProfile,
         trade_date: date,
         package_id: str,
+        allow_generate: bool = True,
     ) -> HMMCoefficientArtifact:
         if profile.coefficients_path:
             explicit = _resolve_local_path(profile.coefficients_path, base_dir=model_path.parent)
@@ -430,9 +569,9 @@ class SectorHMMRuntime:
         )
         if found["artifact"] is not None:
             return found["artifact"]
-        if not profile.auto_compute:
+        if not profile.auto_compute or not allow_generate:
             raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact is missing and auto_compute=false",
+                "HMM coefficient artifact is missing and prospective capture cannot generate it",
                 context={
                     "package_id": package_id,
                     "snapshot_id": profile.model_snapshot_id,
@@ -440,6 +579,7 @@ class SectorHMMRuntime:
                     "model_dir": str(model_path.parent),
                     "candidate_paths": found["candidate_paths"],
                     "reason": found["reason"],
+                    "reason_code": "ADVISORY_PHASE0A2C_HMM_RECEIPT_INCOMPLETE" if not allow_generate else None,
                 },
             )
         if found["reason"] == "missing_artifact":
@@ -615,6 +755,22 @@ def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
             context={"package_id": package_id, "coefficients_path": str(path)},
         )
     return payload
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _time_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
 
 
 def _safe_key(value: str | None) -> str:

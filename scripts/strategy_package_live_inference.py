@@ -132,7 +132,8 @@ def main() -> int:
     # Redirect only that path while running inside WSL.
     _patch_windows_debug_open()
     _patch_strategy_package_data_window()
-    df_scores = InferenceEngine().run_inference(
+    engine = InferenceEngine()
+    df_scores = engine.run_inference(
         strategy_id="",
         version_tag="strategy_package_live",
         trade_date=trade_dt,
@@ -142,10 +143,25 @@ def main() -> int:
     )
     if not isinstance(df_scores, pd.DataFrame):
         raise TypeError(f"InferenceEngine returned {type(df_scores).__name__}, expected DataFrame")
+    execution_receipt = engine.last_inference_receipt
+    if not isinstance(execution_receipt, dict):
+        raise RuntimeError("live inference did not produce a source/universe execution receipt")
+    universe_count = execution_receipt.get("universe_count")
+    source_read_receipts = execution_receipt.get("source_read_receipts")
+    input_context = execution_receipt.get("input_context")
+    if isinstance(universe_count, bool) or not isinstance(universe_count, int) or universe_count < 0:
+        raise RuntimeError("live inference execution receipt has no valid universe_count")
+    if not isinstance(source_read_receipts, list) or not all(isinstance(item, dict) for item in source_read_receipts):
+        raise RuntimeError("live inference execution receipt has no valid source_read_receipts")
+    if not isinstance(input_context, dict):
+        raise RuntimeError("live inference execution receipt has no valid input_context")
     scores = _score_rows_from_frame(df_scores, expected_date)
     payload: dict[str, Any] = {
         "ok": True,
         "scores": scores,
+        "universe_count": universe_count,
+        "source_read_receipts": source_read_receipts,
+        "input_context": input_context,
         "metadata": {
             "runtime_workspace": str(runtime_workspace),
             "trade_date": trade_dt.date().isoformat(),

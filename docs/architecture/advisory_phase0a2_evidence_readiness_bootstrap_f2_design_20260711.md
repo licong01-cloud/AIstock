@@ -157,8 +157,8 @@ scripts/advisory_phase0a_audit.py
 | F-036 | 合法空候选具有不可变权威 header/artifact/evidence；真实验证等待自然事件，不伪造生产样本 |
 | F-037 | Phase 0A.2 复用 Phase 1 source ledger；历史修复只接受 exact source，缺证据保持 retrospective/unavailable |
 | F-038 | 正确数据存在自动可达的双轨正向路径：先 `PARTIAL -> HANDOFF_EMITTED`，满足 source ledger/embargo 后再 `READY`，且不影响 Selection/模拟盘/Paper |
-| F-039 | 每日 runner 对全部启用 Program 独立执行，使用一个正式 Program/date 业务键、原子或可恢复持久化、失败隔离和确定性批次回执 |
-| F-040 | 正式 `T0` 只能位于代码/策略/dated binding/runner 就绪后的首个未处理交易日；历史读取与 current-semantics replay 永久保持 retrospective |
+| F-039 | 手工历史研究 runner 对显式选定 Program 独立执行，只读 `DB_HISTORICAL`、使用唯一 Program/date 业务键、原子或可恢复持久化、失败隔离和确定性批次回执；不调度、不接入实时数据、不执行交易 |
+| F-040 | 历史研究锚点只能是显式指定的已完成交易日；历史读取与 current-semantics replay 永久保持 retrospective，不产生实时荐股、投资建议或交易指令 |
 
 ## 5. Architecture / 总体架构
 
@@ -668,12 +668,12 @@ PACKAGE_READY
 - 实现显式 `VALID_NO_CANDIDATE` authority。
 - 验证 capture 开/关和 failure 下 Selection、模拟盘、Paper 候选 parity。
 
-### 15.4 Phase 0A.2D：每日多 Program runner
+### 15.4 Phase 0A.2D：历史研究多 Program runner
 
-- 实现权威交易日/数据水位触发、ENABLED Program 稳定快照、逐 Program binding/config 解析和独立执行。
-- 正式 `RUN` 使用 `(program_id,target_trade_date,RUN)` 唯一业务键，binding/manifest/policy/config 作为冲突谓词。
-- 把 review/list/item/episode/decision 写入收敛到单 Program 原子事务或同 key 可恢复状态机；补齐 crash/resume、并发与重复触发测试。
-- 生成 batch/per-Program receipt；区分 scheduled/manual/replay origin，禁止 candidates bypass 和 replay 发布。
+- 仅接受手工请求的已完成交易日和 `DB_HISTORICAL` 数据水位，冻结显式 Program 快照，逐 Program 解析历史有效 binding/config 并独立执行；不提供 schedule 或实时触发。
+- `HISTORICAL_RESEARCH_RUN` 使用 `(program_id,decision_trade_date,HISTORICAL_RESEARCH)` 唯一业务键，binding/manifest/policy/config/source watermark 作为冲突谓词。
+- 把 research review/list/item/episode/decision 写入收敛到单 Program 原子事务或同 key 可恢复状态机；补齐 crash/resume、并发与重复请求测试；不得调用模拟盘、Paper、QMT 或 broker。
+- 生成 batch/per-Program research receipt；只允许 manual origin，禁止 candidates bypass、replay 发布和任何交易/执行语义。
 
 ### 15.5 Phase 0A.2E：本地与隔离集成验证
 
@@ -744,7 +744,7 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 - [x] 覆盖单 Alpha、原生多 Alpha和多个 Program 的完整设计，不是单包限制。
 - [x] 归档包、null binding、manifest mismatch 和历史 available-at 均禁止猜测修复。
 - [x] policy、binding、evidence producer、source ledger 与 embargo 的先后关系闭合。
-- [x] 每日多 Program runner、正式唯一业务键、事务/恢复、失败隔离和 replay 边界闭合。
+- [x] 手工历史研究多 Program runner、唯一业务键、事务/恢复、失败隔离和 replay 边界闭合。
 - [x] 正确数据具有 `PARTIAL/HANDOFF -> READY` 正向可达路径。
 - [x] 空候选 fixture 与真实自然样本边界明确。
 - [x] Selection、StrategyPackage、模拟盘和 Paper 隔离及 parity oracle 明确。
@@ -790,9 +790,9 @@ L4 始终只读；不得从 audit CLI 触发 binding/package/source 写入或 HM
 | source ledger启用即回填过去 | 虚假 formal available-at | first observed only；历史未知保持 research/unavailable |
 | embargo 被当作审批等待 | 阶段含义混乱 | 它是确定性统计时间规则，到期自动重审计，无人工放行 |
 | 一个 Program失败阻塞全部 | 多策略包支持失效 | scope/program 独立状态、事务和 reason code |
-| `review_schedule` metadata 被误认为调度器 | 实际没有每日荐股 | 独立 daily runner、运行健康和逐批 receipt |
+| `review_schedule` metadata 被误认为调度器 | 历史研究被错误实时化 | 不实现 scheduler；只接受手工历史研究请求和逐批 receipt |
 | review run 与 list 分事务留下半成品 | 唯一键阻止后续恢复 | 单 Program 原子提交或同 key 可恢复状态机 |
-| 历史 replay 冒充正式前瞻 | 泄漏且虚构 OOS | RUN/REPLAY/list/source event 强隔离；正式 T0 禁止回溯 |
+| 历史 replay 冒充手工历史研究 | 泄漏且虚构研究证据 | 只接受带完整 historical request/source watermark 的 research run；replay 不发布 list |
 
 ## 19. Production Gates / 生产门禁
 
@@ -830,8 +830,8 @@ production_runtime_gate = noop
 | F-036 | §10、§13、§16 | 合法空候选 artifact/DSE/header、自然样本和 fixture/L4 边界已定义 | design_ready | none |
 | F-037 | §5.3、§9.6、§11、§15.7 | Phase 1 ledger 复用、exact remediation 和 historical no-guess 边界已定义 | design_ready | none |
 | F-038 | §5、§14-17、§19 | 双轨 PARTIAL/HANDOFF 到 READY、8 类门禁正向可达、隔离、发布与回滚已定义 | design_ready | none |
-| F-039 | §1.3、§6.4、§12-16 | daily runner、正式唯一键、事务/恢复、失败隔离、批次回执和运行证据已定义 | design_ready | none |
-| F-040 | §1.3-1.4、§7.2、§11.3、§16-17 | 正式 T0、共同历史窗口、current-semantics replay 和 formal OOS 隔离已定义 | design_ready | none |
+| F-039 | §1.3、§6.4、§12-16 | historical-research runner、唯一键、事务/恢复、失败隔离、批次回执和只读运行证据已定义 | design_ready | none |
+| F-040 | §1.3-1.4、§7.2、§11.3、§16-17 | 显式历史锚点、共同历史窗口、current-semantics replay 和实时/交易隔离已定义 | design_ready | none |
 
 ### 20.1 实现验收记录
 

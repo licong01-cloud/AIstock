@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from math import isfinite
 from typing import Any
@@ -19,6 +20,18 @@ from backend.services.data_refresh_audit import DataRefreshAuditRepository
 from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, SelectionMode
 from backend.services.selection_center.package_health import SelectionPackageHealthService
+from backend.services.selection_center.prospective_evidence import (
+    CandidateStageName,
+    EvidenceCaptureMode,
+    EvidenceCaptureReceipt,
+    ProspectiveSelectionContext,
+    REASON_VALID_NO_CANDIDATE,
+    SelectionStageTrace,
+    StageReceiptStatus,
+    build_stage_receipt,
+    require_historical_research_data_source,
+)
+from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
 from backend.services.selection_center.risk_policy import StockRiskPolicyService
 from backend.services.selection_center.runtime_profile import (
     GENERATED_RUNTIME_PROFILE_VERSION_ID,
@@ -40,12 +53,14 @@ from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
     LiveInferencePreflightResult,
 )
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
-    selection_artifact_runtime_hash,
+    selection_artifact_runtime_hash_for_manifest,
+    selection_artifact_runtime_hash_v2_for_manifest,
 )
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
@@ -63,6 +78,9 @@ from .models import (
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class StrategyPackageSelectionResult:
     runtime_config: dict[str, Any]
@@ -73,6 +91,10 @@ class StrategyPackageSelectionResult:
     evidence_by_package: dict[str, DailySelectionEvidence]
     valid_no_candidate: bool = False
     no_candidate_reason: str | None = None
+    stage_trace_by_package: dict[str, SelectionStageTrace] = field(default_factory=dict)
+    evidence_capture_receipt: EvidenceCaptureReceipt = field(
+        default_factory=ProspectiveSelectionEvidenceAssembler.not_requested_receipt
+    )
 
 
 class DailySelectionSignalService:
@@ -97,17 +119,37 @@ class DailySelectionSignalService:
         data_source: str,
         runtime_config: dict[str, Any],
     ) -> Any:
+        return self.build_signal_snapshot_with_trace(
+            record=record,
+            trade_date=trade_date,
+            data_source=data_source,
+            runtime_config=runtime_config,
+        ).snapshot
+
+    def build_signal_snapshot_with_trace(
+        self,
+        *,
+        record: Any,
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+        require_frozen_hmm_snapshot: bool = False,
+        hmm_effective_trade_date: date | None = None,
+    ) -> Any:
         self._ensure_authoritative_selection_artifact(
             record=record,
             trade_date=trade_date,
             data_source=data_source,
             runtime_config=runtime_config,
         )
-        return self.runtime.build_signal_snapshot(
+        return self.runtime.build_signal_snapshot_with_trace(
             manifest=record.current_manifest(),
             trade_date=trade_date,
             data_source=data_source,
             runtime_config=runtime_config,
+            require_frozen_hmm_snapshot=require_frozen_hmm_snapshot,
+            hmm_effective_trade_date=hmm_effective_trade_date,
+            prohibit_no_candidate_declaration=require_frozen_hmm_snapshot,
         )
 
     def _ensure_authoritative_selection_artifact(
@@ -123,7 +165,10 @@ class DailySelectionSignalService:
             return
 
         manifest = record.current_manifest()
-        runtime_hash = selection_artifact_runtime_hash(runtime_config)
+        runtime_hashes = [
+            selection_artifact_runtime_hash_v2_for_manifest(manifest, runtime_config),
+            selection_artifact_runtime_hash_for_manifest(manifest, runtime_config),
+        ]
         cutoff_date = StrategyPackageSelectionService.parse_selection_cutoff_date(
             artifact_config,
             trade_date=trade_date,
@@ -132,24 +177,33 @@ class DailySelectionSignalService:
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
-            try:
-                artifact = artifact_repository.get(
-                    package_id=record.package_id,
-                    manifest_sha256=manifest.manifest_sha256 or record.manifest_sha256,
-                    trade_date=trade_date,
-                    data_source=data_source,
-                    runtime_config_hash=runtime_hash,
-                )
-                metadata = artifact.metadata or {}
-                if (
-                    artifact.status.value == "SUCCEEDED"
-                    and artifact.scores_json
-                    and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
-                    and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
-                ):
-                    return
-            except DataUnavailableError:
-                pass
+            for runtime_hash in dict.fromkeys(runtime_hashes):
+                try:
+                    artifact = artifact_repository.get(
+                        package_id=record.package_id,
+                        manifest_sha256=manifest.manifest_sha256 or record.manifest_sha256,
+                        trade_date=trade_date,
+                        data_source=data_source,
+                        runtime_config_hash=runtime_hash,
+                    )
+                    metadata = artifact.metadata or {}
+                    expected_source_type = (
+                        LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                        if getattr(getattr(manifest, "alpha_mode", None), "value", None) == "multi_alpha"
+                        else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                    )
+                    if (
+                        artifact.status.value == "SUCCEEDED"
+                        and (
+                            artifact.scores_json
+                            or StrategyPackageRuntime._is_natural_raw_empty_artifact(artifact)
+                        )
+                        and metadata.get("source_type") == expected_source_type
+                        and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
+                    ):
+                        return
+                except DataUnavailableError:
+                    continue
 
         self._require_live_inference_preflight(record=record, runtime_config=runtime_config)
         self.selection_artifact_service.generate_from_live_inference(
@@ -234,8 +288,13 @@ class StrategyPackageSelectionService:
         runtime_config: dict[str, Any] | None = None,
         runtime_release: StrategyRuntimeRelease | None = None,
         created_by: str | None = None,
+        prospective_context: ProspectiveSelectionContext | None = None,
     ) -> StrategyPackageSelectionResult:
         raw_config = dict(runtime_config or {})
+        require_historical_research_data_source(
+            context=prospective_context,
+            data_source=data_source,
+        )
         if runtime_release is not None:
             raw_config = self._attach_runtime_release_binding(raw_config, runtime_release, package_ids=package_ids)
         behavior_context = {
@@ -245,7 +304,12 @@ class StrategyPackageSelectionService:
             "path": "strategy_package_selection.run_selection",
         }
         assert_selection_only_payload_boundary(raw_config, context=behavior_context)
-        if is_non_trading_runtime_config(raw_config):
+        if prospective_context is not None and prospective_context.capture_mode == EvidenceCaptureMode.PROSPECTIVE:
+            raw_config = mark_non_trading_preview_runtime_config(
+                raw_config,
+                reason="historical advisory research evidence",
+            )
+        elif is_non_trading_runtime_config(raw_config):
             raw_config = mark_non_trading_preview_runtime_config(
                 raw_config,
                 reason="selection center non-trading preview",
@@ -283,20 +347,61 @@ class StrategyPackageSelectionService:
         package_results: dict[str, list[SelectionCandidate]] = {}
         excluded_results: dict[str, list[SelectionExclusion]] = {}
         manifest_sha: dict[str, str] = {}
+        stage_trace_by_package: dict[str, SelectionStageTrace] = {}
+        artifact_by_package: dict[str, Any] = {}
+        candidate_outcome_by_package: dict[str, str] = {}
         for package_id in package_ids:
             record = records_by_id[package_id]
             manifest = record.current_manifest()
             package_config = package_configs[package_id]
             package_profile = parse_selection_runtime_profile(package_config)
-            snapshot = self.signal_service.build_signal_snapshot(
+            signal_trace = self.signal_service.build_signal_snapshot_with_trace(
                 record=record,
                 trade_date=trade_date,
                 data_source=data_source,
                 runtime_config=package_config,
+                require_frozen_hmm_snapshot=bool(
+                    prospective_context and prospective_context.capture_mode == EvidenceCaptureMode.PROSPECTIVE
+                ),
+                hmm_effective_trade_date=self._prospective_hmm_effective_trade_date(prospective_context),
+            )
+            snapshot = signal_trace.snapshot
+            artifact_by_package[package_id] = signal_trace.score_artifact
+            alpha_raw_receipt = build_stage_receipt(
+                stage=CandidateStageName.ALPHA_RAW,
+                status=StageReceiptStatus.COMPLETE,
+                input_count=len(signal_trace.alpha_raw_candidates),
+                candidates=signal_trace.alpha_raw_candidates,
+                semantic_payload={
+                    "package_id": manifest.package_id,
+                    "manifest_sha256": snapshot.manifest_sha256,
+                    "artifact_id": getattr(signal_trace.score_artifact, "artifact_id", None),
+                    "artifact_sha256": getattr(signal_trace.score_artifact, "artifact_sha256", None),
+                    "artifact_payload_sha256": getattr(signal_trace.score_artifact, "artifact_payload_sha256", None),
+                    "artifact_contract_version": getattr(signal_trace.score_artifact, "artifact_contract_version", None),
+                },
             )
             if snapshot.valid_no_candidate:
                 package_results[package_id] = []
                 excluded_results[package_id] = []
+                candidate_outcome_by_package[package_id] = "VALID_NO_CANDIDATE"
+                risk_result = self.risk_policy_service.apply_to_candidates_with_receipt(
+                    candidates=[],
+                    decisions={},
+                    trade_date=trade_date,
+                    top_k=self._top_k_for_package(manifest, package_profile, global_profile, package_config),
+                    package_id=manifest.package_id,
+                    manifest_sha256=snapshot.manifest_sha256,
+                    allow_empty=True,
+                    profile=package_profile.risk_policy,
+                )
+                selection_result = self.tradability_filter.select_top_k_with_receipt(
+                    candidates=[],
+                    top_k=self._top_k_for_package(manifest, package_profile, global_profile, package_config),
+                    trade_date=trade_date,
+                    package_id=manifest.package_id,
+                    manifest_sha256=snapshot.manifest_sha256,
+                )
             else:
                 top_k = self._top_k_for_package(manifest, package_profile, global_profile, package_config)
                 risk_decisions = self.risk_policy_service.evaluate(
@@ -304,46 +409,65 @@ class StrategyPackageSelectionService:
                     trade_date=trade_date,
                     profile=package_profile.risk_policy,
                 )
-                risk_adjusted, risk_excluded = self.risk_policy_service.apply_to_candidates(
+                risk_result = self.risk_policy_service.apply_to_candidates_with_receipt(
                     candidates=snapshot.candidates,
                     decisions=risk_decisions,
                     trade_date=trade_date,
                     top_k=top_k,
                     package_id=manifest.package_id,
                     manifest_sha256=snapshot.manifest_sha256,
+                    profile=package_profile.risk_policy,
+                    allow_empty=True,
                 )
                 if not (package_profile.tradability.exclude_suspended or package_profile.industry_blacklist):
-                    package_results[package_id] = risk_adjusted[:top_k]
-                    excluded_results[package_id] = risk_excluded
-                    manifest_sha[package_id] = snapshot.manifest_sha256
-                    continue
-                tradable, excluded = self.tradability_filter.filter_candidates(
-                    candidates=risk_adjusted,
-                    trade_date=trade_date,
-                    top_k=top_k,
-                    package_id=manifest.package_id,
-                    manifest_sha256=snapshot.manifest_sha256,
-                    enabled=package_profile.tradability.exclude_suspended,
-                    industry_blacklist=package_profile.industry_blacklist,
+                    selection_result = self.tradability_filter.select_top_k_with_receipt(
+                        candidates=risk_result.candidates,
+                        top_k=top_k,
+                        trade_date=trade_date,
+                        package_id=manifest.package_id,
+                        manifest_sha256=snapshot.manifest_sha256,
+                    )
+                else:
+                    selection_result = self.tradability_filter.filter_candidates_with_receipt(
+                        candidates=risk_result.candidates,
+                        trade_date=trade_date,
+                        top_k=top_k,
+                        package_id=manifest.package_id,
+                        manifest_sha256=snapshot.manifest_sha256,
+                        enabled=package_profile.tradability.exclude_suspended,
+                        industry_blacklist=package_profile.industry_blacklist,
+                        allow_empty=True,
+                    )
+                package_results[package_id] = selection_result.candidates
+                excluded_results[package_id] = [*risk_result.exclusions, *selection_result.exclusions]
+                candidate_outcome_by_package[package_id] = (
+                    "CANDIDATES_PRESENT" if selection_result.candidates else "VALID_NO_CANDIDATE"
                 )
-                package_results[package_id] = tradable
-                excluded_results[package_id] = [*risk_excluded, *excluded]
+            stage_trace_by_package[package_id] = SelectionStageTrace(
+                alpha_raw=alpha_raw_receipt,
+                hmm_adjusted=signal_trace.hmm_result.receipt,
+                risk_policy_adjusted=risk_result.receipt,
+                selection_effective=selection_result.receipt,
+                hmm_metadata=signal_trace.hmm_result.hmm_metadata,
+                risk_metadata=risk_result.risk_metadata,
+                universe_metadata=selection_result.universe_metadata,
+            )
             manifest_sha[package_id] = snapshot.manifest_sha256
 
         aggregate = self._aggregate(mode=mode, package_results=package_results, package_weights=weights)
         valid_no_candidate = False
         no_candidate_reason = None
         if not aggregate:
-            if config.get("valid_no_candidate"):
+            if all(candidate_outcome_by_package.get(package_id) == "VALID_NO_CANDIDATE" for package_id in package_ids):
                 valid_no_candidate = True
-                no_candidate_reason = str(config.get("no_candidate_reason") or "selection aggregation has no candidates")
+                no_candidate_reason = REASON_VALID_NO_CANDIDATE
             else:
                 raise ArtifactGenerationFailedError(
                     "selection aggregation produced no candidates",
                     context={"mode": mode.value, "package_ids": package_ids},
                 )
 
-        evidence_by_package = self._build_evidence_by_package(
+        evidence_by_package, capture_receipt = self._build_operational_evidence_by_package(
             package_ids=package_ids,
             trade_date=trade_date,
             data_source=data_source,
@@ -354,8 +478,12 @@ class StrategyPackageSelectionService:
             manifest_sha256_by_package=manifest_sha,
             runtime_release=runtime_release,
             created_by=created_by,
+            prospective_context=prospective_context,
+            artifact_by_package=artifact_by_package,
+            stage_trace_by_package=stage_trace_by_package,
+            candidate_outcome_by_package=candidate_outcome_by_package,
         )
-        config = self._attach_evidence_refs(config, evidence_by_package)
+        config = self._attach_evidence_refs(config, evidence_by_package, capture_receipt=capture_receipt)
         return StrategyPackageSelectionResult(
             runtime_config=config,
             package_results=package_results,
@@ -365,7 +493,22 @@ class StrategyPackageSelectionService:
             evidence_by_package=evidence_by_package,
             valid_no_candidate=valid_no_candidate,
             no_candidate_reason=no_candidate_reason,
+            stage_trace_by_package=stage_trace_by_package,
+            evidence_capture_receipt=capture_receipt,
         )
+
+    @staticmethod
+    def _prospective_hmm_effective_trade_date(context: ProspectiveSelectionContext | None) -> date | None:
+        if context is None or context.capture_mode != EvidenceCaptureMode.PROSPECTIVE:
+            return None
+        raw = context.decision_clock_seed.get("effective_entry_trade_date")
+        if isinstance(raw, date):
+            return raw
+        try:
+            return date.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            # The assembler will return an explicit decision-clock capture failure.
+            return None
 
     @staticmethod
     def release_selection_runtime_config(runtime_release: StrategyRuntimeRelease) -> dict[str, Any]:
@@ -996,6 +1139,102 @@ class StrategyPackageSelectionService:
             evidence_by_package[package_id] = self.repository.save_daily_selection_evidence(evidence)
         return evidence_by_package
 
+    def _build_operational_evidence_by_package(
+        self,
+        *,
+        package_ids: list[str],
+        trade_date: date,
+        data_source: str,
+        runtime_config: dict[str, Any],
+        package_runtime_configs: dict[str, dict[str, Any]],
+        package_results: dict[str, list[SelectionCandidate]],
+        excluded_results: dict[str, list[SelectionExclusion]],
+        manifest_sha256_by_package: dict[str, str],
+        runtime_release: StrategyRuntimeRelease | None,
+        created_by: str | None,
+        prospective_context: ProspectiveSelectionContext | None,
+        artifact_by_package: dict[str, Any],
+        stage_trace_by_package: dict[str, SelectionStageTrace],
+        candidate_outcome_by_package: dict[str, str],
+    ) -> tuple[dict[str, DailySelectionEvidence], EvidenceCaptureReceipt]:
+        """Persist exactly one operational DSE per package without changing candidates.
+
+        A prospective assembly failure is visible in the capture receipt, while
+        the already-calculated selection remains available through the legacy
+        operational evidence for that package.
+        """
+        if prospective_context is None or prospective_context.capture_mode != EvidenceCaptureMode.PROSPECTIVE:
+            return (
+                self._build_evidence_by_package(
+                    package_ids=package_ids,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    runtime_config=runtime_config,
+                    package_runtime_configs=package_runtime_configs,
+                    package_results=package_results,
+                    excluded_results=excluded_results,
+                    manifest_sha256_by_package=manifest_sha256_by_package,
+                    runtime_release=runtime_release,
+                    created_by=created_by,
+                ),
+                ProspectiveSelectionEvidenceAssembler.not_requested_receipt(),
+            )
+
+        assembler = ProspectiveSelectionEvidenceAssembler()
+        captured: dict[str, DailySelectionEvidence] = {}
+        failures: dict[str, list[str]] = {}
+        for package_id in package_ids:
+            try:
+                record = self.package_repository.get(package_id)
+                evidence = assembler.assemble(
+                    context=prospective_context,
+                    manifest=record.current_manifest(),
+                    selection_run_id=str(prospective_context.selection_run_id or ""),
+                    artifact=artifact_by_package[package_id],
+                    stage_trace=stage_trace_by_package[package_id],
+                    runtime_config=package_runtime_configs[package_id],
+                    selected=package_results.get(package_id, []),
+                    excluded=excluded_results.get(package_id, []),
+                    created_by=created_by,
+                    candidate_outcome=candidate_outcome_by_package[package_id],
+                )
+                captured[package_id] = self.repository.save_daily_selection_evidence(evidence)
+            except Exception as exc:  # Capture must never rewrite an already-computed selection result.
+                logger.exception(
+                    "prospective selection evidence capture failed",
+                    extra={
+                        "selection_run_id": prospective_context.selection_run_id,
+                        "package_id": package_id,
+                        "manifest_sha256": manifest_sha256_by_package.get(package_id),
+                        "capture_status": "FAILED",
+                        "reason_code": ProspectiveSelectionEvidenceAssembler.failure_reason(exc),
+                    },
+                )
+                failures[package_id] = [ProspectiveSelectionEvidenceAssembler.failure_reason(exc)]
+
+        if not failures:
+            return captured, ProspectiveSelectionEvidenceAssembler.complete_receipt(
+                {package_id: evidence.evidence_id for package_id, evidence in captured.items()}
+            )
+        legacy_package_ids = [package_id for package_id in package_ids if package_id in failures]
+        legacy = self._build_evidence_by_package(
+            package_ids=legacy_package_ids,
+            trade_date=trade_date,
+            data_source=data_source,
+            runtime_config=runtime_config,
+            package_runtime_configs=package_runtime_configs,
+            package_results=package_results,
+            excluded_results=excluded_results,
+            manifest_sha256_by_package=manifest_sha256_by_package,
+            runtime_release=runtime_release,
+            created_by=created_by,
+        )
+        combined = {**legacy, **captured}
+        return (
+            {package_id: combined[package_id] for package_id in package_ids},
+            ProspectiveSelectionEvidenceAssembler.failed_receipt(failures_by_package=failures),
+        )
+
     def _build_evidence(
         self,
         *,
@@ -1118,10 +1357,12 @@ class StrategyPackageSelectionService:
     def _attach_evidence_refs(
         runtime_config: dict[str, Any],
         evidence_by_package: dict[str, DailySelectionEvidence],
+        *,
+        capture_receipt: EvidenceCaptureReceipt,
     ) -> dict[str, Any]:
         config = dict(runtime_config)
         config["daily_selection_evidence"] = {
-            "schema_version": "daily_selection_evidence_refs_v1",
+            "schema_version": "daily_selection_evidence_refs_v2",
             "source_type": AUTHORITATIVE_SELECTION_SOURCE_TYPE,
             "evidence_ids_by_package": {
                 package_id: evidence.evidence_id for package_id, evidence in evidence_by_package.items()
@@ -1129,6 +1370,13 @@ class StrategyPackageSelectionService:
             "artifact_hash_by_package": {
                 package_id: evidence.artifact_hash for package_id, evidence in evidence_by_package.items()
             },
+            "evidence_schema_version_by_package": {
+                package_id: str((evidence.evidence_payload_json or {}).get("schema_version") or "daily_selection_evidence_v1")
+                for package_id, evidence in evidence_by_package.items()
+            },
+            "evidence_capture_status": capture_receipt.status.value,
+            "evidence_capture_requested": capture_receipt.requested,
+            "evidence_reason_codes": list(capture_receipt.reason_codes),
         }
         return config
 

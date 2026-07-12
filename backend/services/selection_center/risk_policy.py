@@ -13,7 +13,14 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.db.pg_pool import get_conn
-from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
+from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, TargetPosition
+from backend.services.selection_center.prospective_evidence import (
+    CandidateStageName,
+    RiskAdjustmentResult,
+    StageReceiptStatus,
+    build_stage_receipt,
+    canonical_evidence_json_sha256,
+)
 from backend.services.selection_center.runtime_profile import RuntimeRiskPolicyProfile
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
@@ -291,6 +298,30 @@ class StockRiskPolicyService:
         top_k: int,
         allow_empty: bool = False,
     ) -> tuple[list[SelectionCandidate], list[SelectionExclusion]]:
+        result = self.apply_to_candidates_with_receipt(
+            candidates=candidates,
+            decisions=decisions,
+            trade_date=trade_date,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            top_k=top_k,
+            allow_empty=allow_empty,
+        )
+        return result.candidates, result.exclusions
+
+    def apply_to_candidates_with_receipt(
+        self,
+        *,
+        candidates: list[SelectionCandidate],
+        decisions: dict[str, RiskDecision],
+        trade_date: date,
+        package_id: str,
+        manifest_sha256: str,
+        top_k: int,
+        allow_empty: bool = False,
+        profile: RuntimeRiskPolicyProfile | None = None,
+    ) -> RiskAdjustmentResult:
+        """Apply the existing risk decisions once and retain a typed stage receipt."""
         if top_k <= 0:
             raise RuntimeConfigInvalidError(
                 "risk policy candidate filter requires positive top_k",
@@ -365,7 +396,17 @@ class StockRiskPolicyService:
         for final_rank, candidate in enumerate(adjusted, start=1):
             reranked.append(candidate.model_copy(update={"rank": final_rank}))
         if not reranked and allow_empty:
-            return [], excluded
+            return self._result_with_receipt(
+                candidates=[],
+                exclusions=excluded,
+                input_count=len(ordered),
+                decisions=decisions,
+                profile=profile,
+                trade_date=trade_date,
+                package_id=package_id,
+                manifest_sha256=manifest_sha256,
+                uses_score_overlay=uses_score_overlay,
+            )
         if not reranked:
             raise ArtifactGenerationFailedError(
                 "all ranked candidates are excluded by risk policy",
@@ -378,7 +419,63 @@ class StockRiskPolicyService:
                     "exclusion_reasons": sorted({item.reason for item in excluded}),
                 },
             )
-        return reranked, excluded
+        return self._result_with_receipt(
+            candidates=reranked,
+            exclusions=excluded,
+            input_count=len(ordered),
+            decisions=decisions,
+            profile=profile,
+            trade_date=trade_date,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            uses_score_overlay=uses_score_overlay,
+        )
+
+    @staticmethod
+    def _result_with_receipt(
+        *,
+        candidates: list[SelectionCandidate],
+        exclusions: list[SelectionExclusion],
+        input_count: int,
+        decisions: dict[str, RiskDecision],
+        profile: RuntimeRiskPolicyProfile | None,
+        trade_date: date,
+        package_id: str,
+        manifest_sha256: str,
+        uses_score_overlay: bool,
+    ) -> RiskAdjustmentResult:
+        normalized_decisions = {
+            symbol: decision.model_dump(mode="json")
+            for symbol, decision in sorted(decisions.items())
+        }
+        policy_metadata = {
+            "status": "COMPLETE",
+            "enabled": profile.enabled if profile is not None else None,
+            "policy_version": profile.policy_version if profile is not None else None,
+            "providers": list(profile.providers) if profile is not None else [],
+            "hard_actions": sorted(profile.hard_actions) if profile is not None else [],
+            "strict_data_ready": profile.strict_data_ready if profile is not None else None,
+            "decision_count": len(normalized_decisions),
+            "decision_hash": canonical_evidence_json_sha256(normalized_decisions),
+            "trade_date": trade_date.isoformat(),
+            "package_id": package_id,
+            "manifest_sha256": manifest_sha256,
+            "uses_score_overlay": uses_score_overlay,
+        }
+        receipt = build_stage_receipt(
+            stage=CandidateStageName.RISK_POLICY_ADJUSTED,
+            status=StageReceiptStatus.COMPLETE,
+            input_count=input_count,
+            candidates=candidates,
+            exclusions=exclusions,
+            semantic_payload=policy_metadata,
+        )
+        return RiskAdjustmentResult(
+            candidates=candidates,
+            exclusions=exclusions,
+            receipt=receipt,
+            risk_metadata=policy_metadata,
+        )
 
     def forced_exit_targets(
         self,
@@ -390,8 +487,6 @@ class StockRiskPolicyService:
         manifest_sha256: str,
         existing_target_symbols: set[str],
     ) -> list["TargetPosition"]:
-        from backend.services.selection_center.models import TargetPosition
-
         targets: list[TargetPosition] = []
         for symbol, position in sorted(current_positions.items()):
             decision = decisions.get(symbol)
