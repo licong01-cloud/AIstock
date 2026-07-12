@@ -321,6 +321,118 @@ def test_factor_cache_compute_blocks_legacy_resume(monkeypatch):
     assert "Extra inputs are not permitted" in str(exc.value)
 
 
+def test_factor_cache_retry_failed_submits_only_persisted_retry_subset(monkeypatch):
+    captured = {}
+
+    class _EligibilityCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params):
+            captured["eligibility_query"] = (sql, params)
+
+        def fetchall(self):
+            return [("factor_b",), ("factor_c",)]
+
+    class _EligibilityConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return _EligibilityCursor()
+
+    class _FakeDispatchService:
+        def submit(self, **kwargs):
+            captured["dispatch"] = kwargs
+            return {
+                "ok": True,
+                "status": "queued",
+                "task_id": "retry-dispatch-1",
+                "dispatch_task_id": "retry-dispatch-1",
+                "remote_task_id": "remote-retry-1",
+                "payload": {"batch_size": kwargs["batch_size"]},
+            }
+
+    failed_task = {
+        "task_id": "dispatch-failed-1",
+        "status": "failed",
+        "node_id": "wsl2-5080",
+        "dispatch_payload": {
+            "task_id": "worker-failed-1",
+            "factor_data_dir": "/home/lc999/data/factor_data",
+            "qlib_bin_path": "/home/lc999/data/qlib_bin",
+            "start_date": "2018-08-01",
+            "end_date": "2026-06-30",
+            "timeout_per_factor": 1800,
+            "include_disabled": False,
+        },
+    }
+    router._active_cache_tasks.clear()
+    monkeypatch.setattr(router, "_load_factor_cache_dispatch_task_detail", lambda *args, **kwargs: failed_task)
+    monkeypatch.setattr(
+        router,
+        "_load_official_factor_checkpoint",
+        lambda task: {"retry_factor_names": ["factor_b", "factor_c", "factor_b"]},
+    )
+    monkeypatch.setattr(router, "get_conn", lambda: _EligibilityConn())
+    monkeypatch.setattr(router, "_invalidate_cache_meta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "backend.services.quantevolver.official_factor_full_compute_dispatch_service.OfficialFactorFullComputeDispatchService",
+        lambda: _FakeDispatchService(),
+    )
+
+    result = router.factor_cache_retry_failed("dispatch-failed-1", router.FactorCacheRetryFailedRequest(workers=1))
+
+    assert result["ok"] is True
+    assert result["resumed_from_task_id"] == "dispatch-failed-1"
+    assert result["recovery_source"] == "checkpoint"
+    assert result["retry_factor_count"] == 2
+    assert captured["dispatch"]["factor_names"] == ["factor_b", "factor_c"]
+    assert captured["dispatch"]["workers"] == 1
+    assert captured["dispatch"]["force"] is False
+    assert captured["dispatch"]["resumed_from_task_id"] == "dispatch-failed-1"
+    assert captured["dispatch"]["start_date"] == "2018-08-01"
+    assert captured["dispatch"]["end_date"] == "2026-06-30"
+    assert router._active_cache_tasks["retry-dispatch-1"]["factor_count"] == 2
+
+
+def test_factor_cache_retry_failed_refuses_to_guess_failed_subset(monkeypatch):
+    failed_task = {"task_id": "dispatch-failed-2", "status": "failed", "dispatch_payload": {}}
+    monkeypatch.setattr(router, "_load_factor_cache_dispatch_task_detail", lambda *args, **kwargs: failed_task)
+    monkeypatch.setattr(router, "_retry_factor_names_from_terminal_task", lambda task: ([], "unavailable"))
+
+    with pytest.raises(router.HTTPException) as exc:
+        router.factor_cache_retry_failed("dispatch-failed-2", router.FactorCacheRetryFailedRequest())
+
+    assert exc.value.status_code == 409
+    assert "persisted retry_factor_names" in str(exc.value.detail)
+
+
+def test_factor_cache_status_removes_terminal_in_memory_task(monkeypatch):
+    router._active_cache_tasks.clear()
+    router._active_cache_tasks["dispatch-terminal-1"] = {
+        "task_id": "dispatch-terminal-1",
+        "dispatch_task_id": "dispatch-terminal-1",
+        "status": "running",
+    }
+    monkeypatch.setattr(
+        router,
+        "_load_factor_cache_dispatch_task_detail",
+        lambda *args, **kwargs: {"task_id": "dispatch-terminal-1", "status": "failed"},
+    )
+
+    result = router.factor_cache_compute_status("dispatch-terminal-1")
+
+    assert result["status"] == "failed"
+    assert "dispatch-terminal-1" not in router._active_cache_tasks
+
+
 def test_factor_cache_status_recovers_official_dispatch_after_restart(monkeypatch):
     class _FakeDispatchService:
         def __init__(self):
@@ -480,6 +592,15 @@ def test_factor_list_clears_stale_cache_task_selection():
     assert "r.status === 404" in source
     assert "setSelectedCacheTaskId(current => current === taskId ? null : current)" in source
     assert "dispatch/WSL 状态同步异常" in source
+
+
+def test_factor_list_exposes_explicit_failed_subset_resume_action():
+    source = Path("frontend/src/app/quantevolver/components/FactorList.tsx").read_text(encoding="utf-8")
+
+    assert "retryFailedCacheTask" in source
+    assert "/factor-cache/compute-status/${encodeURIComponent(task.task_id)}/retry-failed" in source
+    assert 'selectedCacheTask.status === "failed"' in source
+    assert "严格续算失败因子" in source
 
 
 def test_official_evaluation_compute_forwards_to_full_compute_without_data_snapshot(monkeypatch):

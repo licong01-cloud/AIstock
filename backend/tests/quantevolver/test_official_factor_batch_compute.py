@@ -5,6 +5,7 @@ import os
 import queue
 import threading
 import time
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -16,6 +17,7 @@ from backend.services.quantevolver.offline_code_text_factor_executor import Fact
 from backend.services.quantevolver.offline_code_text_factor_executor import OfflineCodeTextFactorExecutor
 from backend.services.quantevolver.official_factor_batch_compute_service import FACTOR_TIMEOUT
 from backend.services.quantevolver.official_factor_batch_compute_service import RESOURCE_GATE_FAILED
+from backend.services.quantevolver.official_factor_batch_compute_service import BatchComputeConfig
 from backend.services.quantevolver.official_factor_batch_compute_service import FactorResourceLimits
 from backend.services.quantevolver.official_factor_batch_compute_service import OfficialFactorBatchComputeService
 from backend.services.quantevolver.official_factor_batch_compute_service import ResourceGateDecision
@@ -461,8 +463,8 @@ def test_resource_gate_failure_does_not_drain_killed_worker_queue(monkeypatch):
     service._event_emitter = None
     service._check_resource_gate = lambda *args, **kwargs: ResourceGateDecision(
         False,
-        "available_memory_below_minimum",
-        {"reason": "available_memory_below_minimum"},
+        "hard_rss_limit_exceeded",
+        {"reason": "hard_rss_limit_exceeded"},
     )
     monkeypatch.setattr(svc.multiprocessing, "get_context", lambda method: _Context())
 
@@ -484,6 +486,109 @@ def test_resource_gate_failure_does_not_drain_killed_worker_queue(monkeypatch):
     assert fake_queue.joined is True
 
 
+def test_available_memory_pressure_reduces_concurrency_and_keeps_running_workers(monkeypatch):
+    """A transient available-memory trough is recoverable, unlike RSS/swap hard stops."""
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    events: list[dict[str, object]] = []
+    emitted: list[tuple[str, FactorExecutionResult]] = []
+
+    class _Queue:
+        def __init__(self):
+            self.release_results = False
+            self.items = [
+                ("factor_a", FactorExecutionResult(factor_name="factor_a", success=True)),
+                ("factor_b", FactorExecutionResult(factor_name="factor_b", success=True)),
+            ]
+
+        def get_nowait(self):
+            if not self.release_results or not self.items:
+                raise queue.Empty()
+            return self.items.pop(0)
+
+        def close(self):
+            return None
+
+        def join_thread(self):
+            return None
+
+    fake_queue = _Queue()
+    processes: list[object] = []
+
+    class _Process:
+        next_pid = 100
+
+        def __init__(self, *args, **kwargs):
+            self.pid = _Process.next_pid
+            _Process.next_pid += 1
+            self.terminated = False
+            processes.append(self)
+
+        def start(self):
+            return None
+
+        def is_alive(self):
+            return not self.terminated
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.terminated = True
+
+        def join(self, timeout=None):
+            return None
+
+    class _Context:
+        Process = _Process
+
+        @staticmethod
+        def Queue():
+            return fake_queue
+
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    service._event_emitter = events.append
+    service._create_worker_frame_dir = lambda **kwargs: None
+    decisions = [
+        ResourceGateDecision(
+            False,
+            "available_memory_below_minimum",
+            {"reason": "available_memory_below_minimum", "available_mb": 4096},
+        ),
+        ResourceGateDecision(True, None, {"available_mb": 16384}),
+    ]
+
+    def _resource_gate(*args, **kwargs):
+        decision = decisions.pop(0)
+        if not decision.ok:
+            fake_queue.release_results = True
+        return decision
+
+    service._check_resource_gate = _resource_gate
+    monkeypatch.setattr(svc.multiprocessing, "get_context", lambda method: _Context())
+    monkeypatch.setattr(svc, "DEFAULT_RESOURCE_POLL_SEC", 0.0)
+
+    result = service._compute_batch_frames_with_process_timeouts(
+        object(),
+        [
+            {"factor_name": "factor_a", "code_text": "result = 1"},
+            {"factor_name": "factor_b", "code_text": "result = 1"},
+        ],
+        max_workers=2,
+        timeout_sec=60,
+        task_id="task-recovery",
+        batch_id="batch-recovery",
+        swap_baseline_mb=0.0,
+        result_handler=lambda name, value: emitted.append((name, value)),
+    )
+
+    assert result == {}
+    assert [name for name, value in emitted if value.success] == ["factor_a", "factor_b"]
+    assert all(not proc.terminated for proc in processes)
+    assert any(event["type"] == "resource_concurrency_reduced" for event in events)
+    assert service._last_batch_resource_failure_detail is None
+
+
 def test_select_batch_workers_throttles_when_available_memory_headroom_is_low(monkeypatch):
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
     service._resource_limits = FactorResourceLimits(
@@ -500,7 +605,7 @@ def test_select_batch_workers_throttles_when_available_memory_headroom_is_low(mo
     assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 1
 
 
-def test_select_batch_workers_default_keeps_four_workers_with_observed_headroom(monkeypatch):
+def test_select_batch_workers_default_uses_conservative_observed_headroom(monkeypatch):
     monkeypatch.delenv("AISTOCK_OFFICIAL_FACTOR_ESTIMATED_WORKER_MB", raising=False)
     service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
     service._resource_limits = FactorResourceLimits(
@@ -510,8 +615,8 @@ def test_select_batch_workers_default_keeps_four_workers_with_observed_headroom(
         swap_growth_hard_stop_mb=10**9,
     )
 
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 20000, 90)) == 4
-    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 14173, 90)) == 2
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 60000, 90)) == 4
+    assert service._select_batch_workers(4, ResourceSnapshot(100, 80, 0, 33000, 90)) == 2
 
 
 def test_batch_compute_precomputes_metrics_in_worker_when_context_available(monkeypatch):
@@ -922,6 +1027,7 @@ def test_compute_drains_success_frames_incrementally(monkeypatch, tmp_path):
     service._compute_batch_frames = _compute_batch_frames
     service._drain_success_frames = _tracked_drain
     service._metric_writer = lambda: _MetricWriter()
+    service._promote_snapshot_if_ready = lambda **kwargs: {"status": "promoted"}
 
     result = service.compute({
         "factor_names": [item["factor_name"] for item in factors],
@@ -1011,6 +1117,7 @@ def test_compute_reuses_worker_precomputed_metrics(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "compute_single_factor_metrics", _parent_metrics)
     service._compute_batch_frames = _compute_batch_frames
     service._metric_writer = lambda: _MetricWriter()
+    service._promote_snapshot_if_ready = lambda **kwargs: {"status": "promoted"}
 
     result = service.compute({
         "factor_names": [item["factor_name"] for item in factors],
@@ -1097,6 +1204,7 @@ def test_compute_records_explicit_metric_precompute_fallback(monkeypatch, tmp_pa
     monkeypatch.setattr(engine, "compute_single_factor_metrics", _parent_metrics)
     service._compute_batch_frames = _compute_batch_frames
     service._metric_writer = lambda: _MetricWriter()
+    service._promote_snapshot_if_ready = lambda **kwargs: {"status": "promoted"}
 
     result = service.compute({
         "factor_names": ["factor_a"],
@@ -1125,6 +1233,86 @@ def _raise_empty_once_then_fail(fake_queue):
     if fake_queue.get_count == 1:
         raise svc.queue.Empty()
     raise AssertionError("resource gate failures must not drain killed worker queues")
+
+
+def test_pending_snapshot_does_not_advance_global_cache_window(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    root = tmp_path / "factor_values"
+    root.mkdir()
+    meta_path = root / "_meta.json"
+    meta_path.write_text(
+        json.dumps({"as_of_date": "2026-04-30", "data_end": "2026-04-30", "factors": {}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_ROOT", root)
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_META_PATH", meta_path)
+
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    kwargs = {
+        "data_start": "2018-08-01",
+        "data_end": "2026-06-30",
+        "factor_data_dir": "/home/lc999/data/factor_data",
+        "qlib_bin_path": "/home/lc999/data/qlib_bin",
+        "universe_meta": {"universe_key": "official"},
+        "base_cache_manifest": {"manifest": "ok"},
+        "task_id": "task-new-window",
+    }
+
+    service._update_meta_atomic({"factor_a": {"status": "ok"}}, **kwargs)
+    pending = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert pending["as_of_date"] == "2026-04-30"
+    assert pending["data_end"] == "2026-04-30"
+    assert pending["factors"]["factor_a"]["status"] == "ok"
+    assert pending["pending_snapshot"]["target_end"] == "2026-06-30"
+
+    service._update_meta_atomic({}, promote_snapshot=True, **kwargs)
+    promoted = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert promoted["as_of_date"] == "2026-06-30"
+    assert promoted["snapshot_status"] == "complete"
+    assert "pending_snapshot" not in promoted
+
+
+def test_checkpoint_persists_exact_retry_subset_atomically(monkeypatch, tmp_path):
+    from backend.services.quantevolver import official_factor_batch_compute_service as svc
+
+    checkpoint_dir = tmp_path / "checkpoints"
+    monkeypatch.setattr(svc, "OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR", checkpoint_dir)
+    service = OfficialFactorBatchComputeService.__new__(OfficialFactorBatchComputeService)
+    cfg = BatchComputeConfig(
+        factor_names=["factor_a", "factor_b"],
+        factor_data_dir="/home/lc999/data/factor_data",
+        start_date="2018-08-01",
+        end_date="2026-06-30",
+        task_id="task-checkpoint",
+        resumed_from_task_id="task-prior",
+    )
+
+    checkpoint = service._write_checkpoint_atomic(
+        task_id="task-checkpoint",
+        status="failed",
+        cfg=cfg,
+        requested=["factor_a", "factor_b"],
+        eligible_names=["factor_a", "factor_b"],
+        results=[
+            {"name": "factor_a", "success": True},
+            {"name": "factor_b", "success": False, "error_type": RESOURCE_GATE_FAILED},
+        ],
+        retry_factor_names=["factor_b"],
+        db_result={"save_failures": []},
+        runtime_validation={"resource_failures": [{"reason": "available_memory_below_minimum"}]},
+        snapshot_promotion={"status": "not_promoted", "reason": "task_not_successful"},
+        start_date="2018-08-01",
+        end_date="2026-06-30",
+    )
+
+    checkpoint_path = Path(checkpoint["path"])
+    payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint_path.exists()
+    assert not list(checkpoint_dir.glob("*.tmp"))
+    assert payload["retry_factor_names"] == ["factor_b"]
+    assert payload["completed_factor_names"] == ["factor_a"]
+    assert payload["resumed_from_task_id"] == "task-prior"
 
 
 def test_error_meta_update_does_not_blank_top_level_meta(monkeypatch, tmp_path):

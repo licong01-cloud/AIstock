@@ -3556,6 +3556,7 @@ def _dispatch_factor_cache_task(task: Mapping[str, Any]) -> Optional[Dict[str, A
         "start": start_date,
         "end": end_date,
         "cache_root": "rdagent_assets/factor_values",
+        "resumed_from_task_id": payload.get("resumed_from_task_id"),
         "dispatch_payload": payload,
         "error": task.get("error_message"),
         "status_source": "dispatch_persistent",
@@ -3664,6 +3665,52 @@ def _load_factor_cache_dispatch_task_detail(task_id: str, *, sync_remote: bool =
         mapped["dispatch_sync_error"] = dispatch_sync_error
 
     return {**mapped, "recent_log": recent_log, "result": result, "task_state": None, "failed_tail": []}
+
+
+def _extract_official_factor_compute_result(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    """Read the authoritative WSL result without guessing from factor cache state."""
+    direct = task_detail.get("result")
+    if isinstance(direct, Mapping) and isinstance(direct.get("runtime_validation"), Mapping):
+        return dict(direct)
+    recent_log = str(task_detail.get("recent_log") or "")
+    for line in reversed(recent_log.splitlines()):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if parsed.get("type") == "result" and isinstance(parsed.get("data"), Mapping):
+            data = dict(parsed["data"])
+            if isinstance(data.get("runtime_validation"), Mapping):
+                return data
+    return {}
+
+
+def _load_official_factor_checkpoint(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    worker_task_id = str(payload.get("task_id") or "").strip()
+    if not worker_task_id:
+        return {}
+    checkpoint_path = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "checkpoints" / f"{worker_task_id}.json"
+    return _load_json_file(checkpoint_path)
+
+
+def _retry_factor_names_from_terminal_task(task_detail: Mapping[str, Any]) -> tuple[list[str], str]:
+    checkpoint = _load_official_factor_checkpoint(task_detail)
+    retry_names = checkpoint.get("retry_factor_names") if isinstance(checkpoint, Mapping) else None
+    if isinstance(retry_names, list):
+        names = [str(name).strip() for name in retry_names if str(name).strip()]
+        if names:
+            return list(dict.fromkeys(names)), "checkpoint"
+    result = _extract_official_factor_compute_result(task_detail)
+    runtime_validation = result.get("runtime_validation") if isinstance(result, Mapping) else None
+    failed = runtime_validation.get("failed_factors") if isinstance(runtime_validation, Mapping) else None
+    if isinstance(failed, list):
+        names = [str(item.get("name") or "").strip() for item in failed if isinstance(item, Mapping)]
+        names.extend(str(name).strip() for name in (result.get("db_result") or {}).get("save_failures") or [])
+        names = [name for name in names if name]
+        if names:
+            return list(dict.fromkeys(names)), "legacy_terminal_result_log"
+    return [], "unavailable"
 
 
 def _list_factor_cache_dispatch_tasks(limit: int = _FACTOR_CACHE_RECENT_TASK_LIMIT) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -4125,6 +4172,13 @@ class FactorCacheComputeRequest(BaseModel):
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
 
 
+class FactorCacheRetryFailedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workers: int = Field(1, ge=1, le=10, description="失败因子续算并行度；必须由操作者显式确认")
+    timeout_per_factor: Optional[int] = Field(None, ge=1, description="空时继承原任务的单因子超时")
+
+
 class FactorCacheRemoteSyncRequest(BaseModel):
     node_id: Optional[str] = Field(None, description="远端节点 ID；空=同步所有远端节点")
     factor_names: Optional[List[str]] = Field(None, description="仅同步指定因子；空=同步全部有效本地缓存")
@@ -4241,6 +4295,109 @@ def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: Backg
     }
 
 
+@router.post("/factor-cache/compute-status/{task_id}/retry-failed", summary="Retry exactly the failed official factor compute subset")
+def factor_cache_retry_failed(task_id: str, req: FactorCacheRetryFailedRequest):
+    """Resume a terminal failed run from its persisted checkpoint/result, never from inferred cache coverage."""
+    task_detail = _load_factor_cache_dispatch_task_detail(task_id, sync_remote=False)
+    if not task_detail:
+        raise HTTPException(404, f"official factor compute task {task_id} not found")
+    if str(task_detail.get("status") or "").lower() != "failed":
+        raise HTTPException(409, "only terminal failed official factor compute tasks can be retried")
+    retry_names, recovery_source = _retry_factor_names_from_terminal_task(task_detail)
+    if not retry_names:
+        raise HTTPException(409, "failed task has no persisted retry_factor_names; manual factor selection is required")
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    start_date = str(payload.get("window_train_start") or payload.get("start_date") or "").strip()
+    end_date = str(payload.get("window_backtest_end") or payload.get("end_date") or "").strip()
+    factor_data_dir = str(payload.get("factor_data_dir") or "").strip()
+    qlib_bin_path = payload.get("qlib_bin_path")
+    if not start_date or not end_date or not factor_data_dir:
+        raise HTTPException(409, "failed task is missing its authoritative data window or factor_data_dir")
+    include_disabled = bool(payload.get("include_disabled", False))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT factor_name
+                FROM aistock_factor_catalog
+                WHERE factor_name = ANY(%s)
+                  AND code_text IS NOT NULL
+                  AND (is_available = TRUE OR %s = TRUE)
+                """,
+                (retry_names, include_disabled),
+            )
+            eligible_now = {str(row[0]) for row in cur.fetchall()}
+    unavailable = [name for name in retry_names if name not in eligible_now]
+    if unavailable:
+        raise HTTPException(
+            409,
+            {
+                "error": "retry_factor_eligibility_changed",
+                "unavailable_count": len(unavailable),
+                "unavailable_sample": unavailable[:20],
+            },
+        )
+    from ..services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
+
+    worker_task_id = f"official_factor_retry_{int(time.time() * 1000)}_{os.getpid()}"
+    timeout_per_factor = int(req.timeout_per_factor or payload.get("timeout_per_factor") or 1800)
+    dispatch_result = OfficialFactorFullComputeDispatchService().submit(
+        factor_names=retry_names,
+        factor_data_dir=factor_data_dir,
+        start_date=start_date,
+        end_date=end_date,
+        include_disabled=include_disabled,
+        batch_size=max(1, min(int(req.workers) * 4, 32)),
+        workers=int(req.workers),
+        timeout_per_factor=timeout_per_factor,
+        force=False,
+        qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
+        node_id=str(task_detail.get("node_id") or "") or None,
+        task_id=worker_task_id,
+        resumed_from_task_id=task_id,
+    )
+    dispatch_task_id = str(dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or worker_task_id)
+    _active_cache_tasks[dispatch_task_id] = {
+        "task_id": dispatch_task_id,
+        "dispatch_task_id": dispatch_task_id,
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "node_id": dispatch_result.get("node_id") or task_detail.get("node_id"),
+        "status": dispatch_result.get("status", "queued"),
+        "started_at": datetime.now().isoformat(),
+        "workers": int(req.workers),
+        "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
+        "factor_count": len(retry_names),
+        "include_disabled": include_disabled,
+        "strict_backtest_data": True,
+        "data_source_mode": "official_offline_backtest_factor_data",
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
+        "factor_data_dir": factor_data_dir,
+        "qlib_bin_path": qlib_bin_path,
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+        "cache_root": dispatch_result.get("cache_root"),
+        "dispatch_payload": dispatch_result.get("payload"),
+        "resumed_from_task_id": task_id,
+        "recovery_source": recovery_source,
+    }
+    _invalidate_cache_meta()
+    return {
+        "ok": bool(dispatch_result.get("ok", True)),
+        "task_id": dispatch_task_id,
+        "status": dispatch_result.get("status", "queued"),
+        "resumed_from_task_id": task_id,
+        "recovery_source": recovery_source,
+        "retry_factor_count": len(retry_names),
+        "retry_factor_sample": retry_names[:20],
+        "workers": int(req.workers),
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+    }
+
+
 @router.get("/factor-cache/compute-status/{task_id}", summary="Query factor cache compute task status")
 def factor_cache_compute_status(task_id: str):
     """Return official factor-cache task status from memory or persisted dispatch state."""
@@ -4254,7 +4411,12 @@ def factor_cache_compute_status(task_id: str):
             memory_task["dispatch_sync_error"] = str(e)
             return memory_task
         if dispatch_task:
-            return {**_load_factor_cache_memory_task_detail(task), **dispatch_task}
+            merged = {**_load_factor_cache_memory_task_detail(task), **dispatch_task}
+            if str(dispatch_task.get("status") or "").lower() in _FACTOR_CACHE_TERMINAL_STATUSES:
+                _active_cache_tasks.pop(task_id, None)
+            else:
+                _active_cache_tasks[task_id] = merged
+            return merged
         return _load_factor_cache_memory_task_detail(task)
 
     dispatch_task = _load_factor_cache_dispatch_task_detail(task_id)
@@ -4269,17 +4431,23 @@ def factor_cache_active_tasks():
     """Return in-memory tasks plus persisted official full-compute dispatch tasks after restart."""
     tasks_by_id: Dict[str, Dict[str, Any]] = {}
     dispatch_tasks, dispatch_error = _list_factor_cache_dispatch_tasks()
+    terminal_memory_task_ids: list[str] = []
     for task in dispatch_tasks:
         tasks_by_id[str(task["task_id"])] = task
     for task_id, task in _active_cache_tasks.items():
         task_key = str(task_id)
         persisted = tasks_by_id.get(task_key)
+        if persisted and str(persisted.get("status") or "").lower() in _FACTOR_CACHE_TERMINAL_STATUSES:
+            terminal_memory_task_ids.append(task_key)
+            continue
         tasks_by_id[task_key] = {**task, **persisted} if persisted else task
     tasks = sorted(
         tasks_by_id.values(),
         key=lambda item: str(item.get("started_at") or item.get("finished_at") or ""),
         reverse=True,
     )
+    for task_id in terminal_memory_task_ids:
+        _active_cache_tasks.pop(task_id, None)
     return {
         "ok": True,
         "tasks": tasks[:_FACTOR_CACHE_RECENT_TASK_LIMIT],
