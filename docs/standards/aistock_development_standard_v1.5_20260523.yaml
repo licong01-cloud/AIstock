@@ -501,7 +501,13 @@ manual_review_controls:
   - control_id: DESIGN-COMPLIANCE-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-design-compliance-001
     severity: P0
-    title: Completed implementation must be checked against the approved design item by item; unapproved simplified, subset, POC, placeholder, or mock-only delivery cannot be reported complete or merged.
+    title: "Completed implementation must pass four explicit checks against approved requirements and design: no simplified delivery, no silent error or fake success, no business semantic drift, and no unrequested gate or approval."
+    required_evidence:
+      - no_simplified_delivery
+      - no_silent_error
+      - no_business_semantic_drift
+      - no_unrequested_gate_or_approval
+    failure_policy: block_complete_pr_merge_and_verified_claims
   - control_id: ISSUE-GITHUB-SYNC-001
     standard_ref: docs/standards/aistock_development_standard_v1.5_20260523.md#rule-issue-github-sync-001
     severity: P1
