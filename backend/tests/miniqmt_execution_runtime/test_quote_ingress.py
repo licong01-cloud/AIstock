@@ -200,6 +200,42 @@ def test_projection_sink_is_single_writer_and_bounded_with_raw_normalized_admiss
     assert raw.snapshot() == {} and normalized.snapshot() == {}
 
 
+def test_projection_observation_failure_is_loud_without_rewriting_normalized_quote_state() -> None:
+    context_store = QuoteEvaluationContextStore()
+    context = _projection_context()
+    context_store.publish(context)
+    raw = PhaseOneRawQuoteSnapshotStore(max_symbols=1)
+    normalized = BoundedNormalizedQuoteStore(max_symbols=1)
+
+    def broken_observer(_: object) -> None:
+        raise RuntimeError("durable coordinator unavailable")
+
+    sink = PhaseOneQuoteProjectionSink(
+        raw_store=raw,
+        normalized_store=normalized,
+        context_store=context_store,
+        observation_sink=broken_observer,
+    )
+    sink.replace_admitted(("000001.SZ",))
+    sink.on_generation_published(2)
+    frame = capture_raw_quote_frame(
+        {
+            "time": "09300000", "lastPrice": "10.00", "preClose": "10.00", "openint": "OPEN",
+            "bidPrice": ["9.99", "9.98", None, None, None], "bidVol": [100, 100, 0, 0, 0],
+            "askPrice": ["10.01", "10.02", None, None, None], "askVol": [100, 100, 0, 0, 0],
+        },
+        callback_symbol="000001.SZ", source_session_id="projection-session", ingress_generation=2, ingress_sequence=1,
+        received_at_utc=datetime(2026, 7, 12, 1, 30, tzinfo=UTC), received_monotonic_ns=1_999_500_000,
+        clock_domain_id="test-clock", source_method=QuoteSourceMethod.WHOLE_QUOTE_CALLBACK,
+    )
+    sink.project(frame)
+
+    assert normalized.get("000001.SZ", context_id=context.context_id) is not None
+    assert sink.health()["projection"]["last_error_by_symbol"]["000001.SZ"]["reason_code"] == (
+        QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED.value
+    )
+
+
 def test_reserved_symbol_mailbox_coalesces_per_symbol_without_dropping_admitted_symbols() -> None:
     mailbox = ReservedSymbolMailbox(max_symbols=2)
     mailbox.admit(("000001.SZ", "000002.SZ"))

@@ -72,8 +72,15 @@ class QuoteContractReasonCode(str, Enum):
     POLICY_SCHEMA_INVALID = "ADAPTIVE_IS_QUOTE_POLICY_SCHEMA_INVALID"
     CLOSING_AUCTION_CAPABILITY_UNAVAILABLE = "ADAPTIVE_IS_CLOSING_AUCTION_CAPABILITY_UNAVAILABLE"
     EVIDENCE_OUTBOX_FULL = "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_OUTBOX_FULL"
+    EVIDENCE_OBSERVATION_FAILED = "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_OBSERVATION_FAILED"
     EVIDENCE_PERSIST_FAILED = "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_PERSIST_FAILED"
+    EVIDENCE_IDEMPOTENCY_CONFLICT = "ADAPTIVE_IS_MARKET_DATA_EVIDENCE_IDEMPOTENCY_CONFLICT"
     MARKOUT_QUOTE_UNAVAILABLE = "ADAPTIVE_IS_MARKOUT_QUOTE_UNAVAILABLE"
+    MARKOUT_HISTORY_UNAVAILABLE = "ADAPTIVE_IS_MARKOUT_HISTORY_UNAVAILABLE"
+    MARKOUT_MARK_WINDOW_EXPIRED = "ADAPTIVE_IS_MARKOUT_MARK_WINDOW_EXPIRED"
+    MARKOUT_MARKET_SESSION_ENDED = "ADAPTIVE_IS_MARKOUT_MARKET_SESSION_ENDED"
+    MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE = "ADAPTIVE_IS_MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE"
+    MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE = "ADAPTIVE_IS_MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE"
     PARITY_VIOLATION = "ADAPTIVE_IS_B0_QUOTE_V2_PARITY_VIOLATION"
     CONSUMER_FAILURE = "ADAPTIVE_IS_QUOTE_CONSUMER_FAILURE"
 
@@ -196,14 +203,51 @@ QUOTE_FAILURE_REGISTRY: Mapping[QuoteContractReasonCode, QuoteFailureDefinition]
             QuoteContractStage.PERSIST,
             retry_class=QuoteFailureRetryClass.AUTOMATIC_RETRY,
         ),
+        QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED: _definition(
+            QuoteContractReasonCode.EVIDENCE_OBSERVATION_FAILED,
+            QuoteContractStage.INGRESS,
+            severity=QuoteFailureSeverity.CRITICAL,
+            retry_class=QuoteFailureRetryClass.AUTOMATIC_RETRY,
+        ),
         QuoteContractReasonCode.EVIDENCE_PERSIST_FAILED: _definition(
             QuoteContractReasonCode.EVIDENCE_PERSIST_FAILED,
             QuoteContractStage.PERSIST,
             severity=QuoteFailureSeverity.CRITICAL,
             retry_class=QuoteFailureRetryClass.AUTOMATIC_RETRY,
         ),
+        QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT: _definition(
+            QuoteContractReasonCode.EVIDENCE_IDEMPOTENCY_CONFLICT,
+            QuoteContractStage.PERSIST,
+            severity=QuoteFailureSeverity.CRITICAL,
+            retry_class=QuoteFailureRetryClass.NON_RETRYABLE,
+        ),
         QuoteContractReasonCode.MARKOUT_QUOTE_UNAVAILABLE: _definition(
             QuoteContractReasonCode.MARKOUT_QUOTE_UNAVAILABLE,
+            QuoteContractStage.MARKOUT,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.MARKOUT_HISTORY_UNAVAILABLE: _definition(
+            QuoteContractReasonCode.MARKOUT_HISTORY_UNAVAILABLE,
+            QuoteContractStage.MARKOUT,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.MARKOUT_MARK_WINDOW_EXPIRED: _definition(
+            QuoteContractReasonCode.MARKOUT_MARK_WINDOW_EXPIRED,
+            QuoteContractStage.MARKOUT,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.MARKOUT_MARKET_SESSION_ENDED: _definition(
+            QuoteContractReasonCode.MARKOUT_MARKET_SESSION_ENDED,
+            QuoteContractStage.MARKOUT,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE: _definition(
+            QuoteContractReasonCode.MARKOUT_LATE_FILL_HISTORY_UNAVAILABLE,
+            QuoteContractStage.MARKOUT,
+            severity=QuoteFailureSeverity.WARNING,
+        ),
+        QuoteContractReasonCode.MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE: _definition(
+            QuoteContractReasonCode.MARKOUT_RECOVERY_FIRST_QUOTE_UNPROVABLE,
             QuoteContractStage.MARKOUT,
             severity=QuoteFailureSeverity.WARNING,
         ),

@@ -65,6 +65,13 @@ class QuoteIngressRuntimeConfig:
     evidence_outbox_max_events: int
     evidence_flush_batch_size: int
     restart_max_attempts: int = 3
+    evidence_retry_max_attempts: int = 5
+    evidence_retry_initial_backoff_ms: int = 100
+    evidence_retry_max_backoff_ms: int = 5000
+    evidence_cadence_seconds: int = 30
+    mark_history_max_samples: int = 65536
+    evidence_receipt_reserve_events: int = 256
+    mark_history_max_lag_ms: int = 10000
 
     def __post_init__(self) -> None:
         values = {
@@ -79,6 +86,13 @@ class QuoteIngressRuntimeConfig:
             "MINIQMT_QUOTE_INGRESS_LOUD_INTERVAL_SECONDS": self.loud_interval_seconds,
             "MINIQMT_QUOTE_EVIDENCE_OUTBOX_MAX_EVENTS": self.evidence_outbox_max_events,
             "MINIQMT_QUOTE_EVIDENCE_FLUSH_BATCH_SIZE": self.evidence_flush_batch_size,
+            "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_ATTEMPTS": self.evidence_retry_max_attempts,
+            "MINIQMT_QUOTE_EVIDENCE_RETRY_INITIAL_BACKOFF_MS": self.evidence_retry_initial_backoff_ms,
+            "MINIQMT_QUOTE_EVIDENCE_RETRY_MAX_BACKOFF_MS": self.evidence_retry_max_backoff_ms,
+            "MINIQMT_QUOTE_EVIDENCE_CADENCE_SECONDS": self.evidence_cadence_seconds,
+            "MINIQMT_QUOTE_MARK_HISTORY_MAX_SAMPLES": self.mark_history_max_samples,
+            "MINIQMT_QUOTE_EVIDENCE_RECEIPT_RESERVE_EVENTS": self.evidence_receipt_reserve_events,
+            "MINIQMT_QUOTE_MARK_HISTORY_MAX_LAG_MS": self.mark_history_max_lag_ms,
         }
         parsed = _parse_runtime_config(values)
         for field_name, value in parsed.items():

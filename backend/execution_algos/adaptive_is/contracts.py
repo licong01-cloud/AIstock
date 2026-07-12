@@ -134,6 +134,65 @@ class EvidenceCaptureType(str, Enum):
     CADENCE_AGGREGATE = "CADENCE_AGGREGATE"
 
 
+class EvidenceMarkStatus(str, Enum):
+    CAPTURED = "CAPTURED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+# This neutral-layer registry is deliberately string-valued: the runtime enum
+# imports this contract, not the other way around.  It gives every capture a
+# single legal journal carrier and prevents a caller from silently reusing TICK
+# or ALGO_ACTION_EMITTED for durable quote evidence.
+_EVIDENCE_RUNTIME_EVENT_TYPE_BY_CAPTURE_TYPE: Mapping[EvidenceCaptureType, str] = MappingProxyType(
+    {
+        EvidenceCaptureType.ACTION_INPUT: "QUOTE_ELIGIBILITY_EVALUATED",
+        EvidenceCaptureType.ACTION_REJECT: "QUOTE_REJECTED",
+        EvidenceCaptureType.CHILD_RECEIPT: "QUOTE_MARK_CAPTURED",
+        EvidenceCaptureType.PROTECTION_BAND_TRIGGER: "QUOTE_MARK_CAPTURED",
+        EvidenceCaptureType.MARKOUT_60S: "QUOTE_MARK_CAPTURED",
+        EvidenceCaptureType.MARKOUT_300S: "QUOTE_MARK_CAPTURED",
+        EvidenceCaptureType.MARKOUT_900S: "QUOTE_MARK_CAPTURED",
+        EvidenceCaptureType.CADENCE_AGGREGATE: "QUOTE_OBSERVED",
+    }
+)
+
+
+@dataclass(frozen=True)
+class AuctionFieldManifest:
+    """Raw-provider declaration required before auction data can be AVAILABLE.
+
+    The manifest deliberately carries raw field names and units.  It is never
+    inferred from normal L1-L5 quote fields.
+    """
+
+    auction_capability_id: str
+    field_map_version: str
+    source_method: QuoteSourceMethod
+    indicative_match_price_field: str
+    indicative_match_volume_field: str
+    unmatched_side_field: str
+    unmatched_quantity_field: str
+    price_basis: PriceBasis
+    volume_unit: DepthQuantityUnit
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "auction_capability_id",
+            "field_map_version",
+            "indicative_match_price_field",
+            "indicative_match_volume_field",
+            "unmatched_side_field",
+            "unmatched_quantity_field",
+        ):
+            object.__setattr__(self, field_name, require_identity(getattr(self, field_name), field_name=f"auction_manifest.{field_name}"))
+        object.__setattr__(self, "source_method", _enum_or_error(QuoteSourceMethod, self.source_method, field_name="auction_manifest.source_method"))
+        object.__setattr__(self, "price_basis", _enum_or_error(PriceBasis, self.price_basis, field_name="auction_manifest.price_basis"))
+        unit = _enum_or_error(DepthQuantityUnit, self.volume_unit, field_name="auction_manifest.volume_unit")
+        if unit == DepthQuantityUnit.UNKNOWN:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "auction manifest volume unit cannot be UNKNOWN")
+        object.__setattr__(self, "volume_unit", unit)
+
+
 class QuoteBatchAggregateState(str, Enum):
     OBSERVED = "OBSERVED"
     PARTIAL = "PARTIAL"
@@ -939,6 +998,11 @@ class ClosingAuctionSnapshot:
     indicative_match_volume: Decimal | None
     unmatched_side: str | None
     unmatched_quantity: Decimal | None
+    auction_capability_id: str | None = None
+    field_map_version: str | None = None
+    auction_field_manifest: AuctionFieldManifest | None = None
+    source_field_names: tuple[str, ...] = field(default_factory=tuple)
+    source_payload_sha256: str | None = None
     reasons: tuple[QuoteContractReasonCode, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
@@ -951,6 +1015,34 @@ class ClosingAuctionSnapshot:
             raise quote_contract_error(QuoteContractReasonCode.CLOSING_AUCTION_CAPABILITY_UNAVAILABLE, "auction snapshot requires CLOSING_AUCTION phase")
         object.__setattr__(self, "capability_state", _enum_or_error(AuctionCapabilityState, self.capability_state, field_name="auction.capability_state"))
         object.__setattr__(self, "source", _enum_or_error(QuoteSource, self.source, field_name="auction.source"))
+        if self.auction_field_manifest is not None and not isinstance(self.auction_field_manifest, AuctionFieldManifest):
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "auction_field_manifest must be a registered raw-provider manifest")
+        for field_name in ("auction_capability_id", "field_map_version"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, require_identity(value, field_name=f"auction.{field_name}"))
+        source_fields = tuple(require_identity(value, field_name="auction.source_field_name") for value in self.source_field_names)
+        if len(source_fields) != len(set(source_fields)):
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "auction source_field_names cannot contain duplicates")
+        object.__setattr__(self, "source_field_names", source_fields)
+        if self.auction_field_manifest is not None:
+            manifest = self.auction_field_manifest
+            assert manifest is not None
+            expected_fields = (
+                manifest.indicative_match_price_field,
+                manifest.indicative_match_volume_field,
+                manifest.unmatched_side_field,
+                manifest.unmatched_quantity_field,
+            )
+            if self.auction_capability_id not in {None, manifest.auction_capability_id} or self.field_map_version not in {None, manifest.field_map_version}:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "auction snapshot identity conflicts with raw-provider manifest")
+            if source_fields and source_fields != expected_fields:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "auction snapshot raw field names conflict with manifest")
+            object.__setattr__(self, "auction_capability_id", manifest.auction_capability_id)
+            object.__setattr__(self, "field_map_version", manifest.field_map_version)
+            object.__setattr__(self, "source_field_names", expected_fields)
+        if self.source_payload_sha256 is not None:
+            object.__setattr__(self, "source_payload_sha256", require_sha256(self.source_payload_sha256, field_name="auction.source_payload_sha256"))
         reasons = tuple(_enum_or_error(QuoteContractReasonCode, item, field_name="auction.reason") for item in self.reasons)
         object.__setattr__(self, "reasons", tuple(dict.fromkeys(reasons)))
         object.__setattr__(self, "received_at_utc", ensure_utc(self.received_at_utc, field_name="auction.received_at_utc"))
@@ -984,9 +1076,22 @@ class ClosingAuctionSnapshot:
                     QuoteContractReasonCode.CLOSING_AUCTION_CAPABILITY_UNAVAILABLE,
                     "unavailable auction capability requires the registered loud reason",
                 )
+            if any((self.auction_capability_id, self.field_map_version, self.auction_field_manifest, self.source_field_names, self.source_payload_sha256)):
+                raise quote_contract_error(
+                    QuoteContractReasonCode.CLOSING_AUCTION_CAPABILITY_UNAVAILABLE,
+                    "unavailable auction capability cannot claim a raw-provider manifest or payload",
+                )
         elif self.capability_state == AuctionCapabilityState.AVAILABLE:
             if self.exchange_time_utc is None or self.normalized_quote_sha256 is None or any(value is None for value in auction_fields):
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "available auction capability requires complete observed fields")
+            if (
+                self.auction_field_manifest is None
+                or not self.auction_capability_id
+                or not self.field_map_version
+                or len(self.source_field_names) != 4
+                or self.source_payload_sha256 is None
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "available auction capability requires a complete raw-provider manifest and payload hash")
             if self.reasons:
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "available auction capability cannot carry failure reasons")
         elif not self.reasons:
@@ -995,13 +1100,13 @@ class ClosingAuctionSnapshot:
 
 @dataclass(frozen=True)
 class MarketDataEvidenceV1:
-    """Complete algorithm-neutral evidence shape; P1-D owns persistence only."""
+    """Immutable, capture-type-validated Phase 1 durable-evidence contract."""
 
-    market_data_id: str
+    market_data_id: str | None
     evidence_schema_version: str
     capture_type: EvidenceCaptureType
     runtime_id: str
-    binding_id: str
+    binding_id: str | None
     trade_date: date
     parent_intent_id: str | None
     child_order_id: str | None
@@ -1017,6 +1122,7 @@ class MarketDataEvidenceV1:
     adapter_sha256: str
     code_sha256: str
     schema_sha256: str
+    calendar_sha256: str
     captured_at_utc: datetime
     persisted_at_utc: datetime | None
     quote_age_ms: int | None
@@ -1024,18 +1130,70 @@ class MarketDataEvidenceV1:
     transport_lag_ms: int | None
     benchmark_policy_version: str
     mark_policy_version: str
-    source_input_sha256: str
+    source_input_sha256: str | None
+    evidence_id: str | None = None
+    evidence_revision: int = 1
+    supersedes_evidence_id: str | None = None
+    algo_instance_id: str | None = None
+    evaluation_id: str | None = None
+    source_child_event_id: str | None = None
+    broker_order_id: str | None = None
+    trade_id: str | None = None
+    symbol: str | None = None
+    side: str | None = None
+    anchor_market_data_id: str | None = None
+    action_evidence_id: str | None = None
+    child_receipt_evidence_id: str | None = None
+    mark_series_key: str | None = None
+    horizon_seconds: int | None = None
+    target_time_utc: datetime | None = None
+    anchor_trade_event_id: str | None = None
+    mark_status: EvidenceMarkStatus | None = None
+    unavailable_reason: QuoteContractReasonCode | None = None
+    source_session_id: str | None = None
+    ingress_generation: int | None = None
+    ingress_sequence: int | None = None
+    quote_source: QuoteSource | None = None
+    source_method: QuoteSourceMethod | None = None
+    source_payload_sha256: str | None = None
+    tradability_id: str | None = None
+    eligibility_state: EligibilityState | None = None
+    exchange_age_ms: int | None = None
+    clock_age_divergence_ms: int | None = None
+    cadence_window_start_utc: datetime | None = None
+    cadence_counts: Mapping[str, int] | None = None
+    cadence_first_accepted_sha256: str | None = None
+    cadence_last_accepted_sha256: str | None = None
     evidence_sha256: str = field(init=False)
 
     def __post_init__(self) -> None:
         if self.evidence_schema_version != MARKET_DATA_EVIDENCE_SCHEMA_VERSION:
             raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "unsupported market-data evidence schema version")
-        for field_name in ("market_data_id", "runtime_id", "binding_id", "clock_event_id", "benchmark_policy_version", "mark_policy_version"):
-            object.__setattr__(self, field_name, require_identity(getattr(self, field_name), field_name=f"evidence.{field_name}"))
-        for field_name in ("parent_intent_id", "child_order_id", "action_id"):
+        object.__setattr__(self, "runtime_id", require_identity(self.runtime_id, field_name="evidence.runtime_id"))
+        for field_name in (
+            "market_data_id",
+            "binding_id",
+            "parent_intent_id",
+            "child_order_id",
+            "action_id",
+            "clock_event_id",
+            "algo_instance_id",
+            "evaluation_id",
+            "source_child_event_id",
+            "broker_order_id",
+            "trade_id",
+            "anchor_market_data_id",
+            "action_evidence_id",
+            "child_receipt_evidence_id",
+            "mark_series_key",
+            "anchor_trade_event_id",
+            "supersedes_evidence_id",
+        ):
             value = getattr(self, field_name)
             if value is not None:
                 object.__setattr__(self, field_name, require_identity(value, field_name=f"evidence.{field_name}"))
+        for field_name in ("benchmark_policy_version", "mark_policy_version"):
+            object.__setattr__(self, field_name, require_identity(getattr(self, field_name), field_name=f"evidence.{field_name}"))
         object.__setattr__(self, "capture_type", _enum_or_error(EvidenceCaptureType, self.capture_type, field_name="evidence.capture_type"))
         object.__setattr__(self, "control_revision", _enum_or_error(ControlRevision, self.control_revision, field_name="evidence.control_revision"))
         if self.control_revision != ControlRevision.B0_QUOTE_V2:
@@ -1046,7 +1204,7 @@ class MarketDataEvidenceV1:
             "adapter_sha256",
             "code_sha256",
             "schema_sha256",
-            "source_input_sha256",
+            "calendar_sha256",
         ):
             object.__setattr__(self, field_name, require_sha256(getattr(self, field_name), field_name=f"evidence.{field_name}"))
         object.__setattr__(self, "captured_at_utc", ensure_utc(self.captured_at_utc, field_name="evidence.captured_at_utc"))
@@ -1055,7 +1213,19 @@ class MarketDataEvidenceV1:
             if persisted_at < self.captured_at_utc:
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "persisted_at cannot precede captured_at")
             object.__setattr__(self, "persisted_at_utc", persisted_at)
-        for field_name in ("quote_age_ms", "source_lag_ms", "transport_lag_ms"):
+        if isinstance(self.evidence_revision, bool) or not isinstance(self.evidence_revision, int) or self.evidence_revision <= 0:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence_revision must be a positive integer")
+        if self.evidence_revision > 1 and self.supersedes_evidence_id is None:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "superseding evidence requires supersedes_evidence_id")
+        if self.evidence_revision == 1 and self.supersedes_evidence_id is not None:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "first evidence revision cannot supersede another evidence row")
+        for field_name in (
+            "quote_age_ms",
+            "source_lag_ms",
+            "transport_lag_ms",
+            "exchange_age_ms",
+            "clock_age_divergence_ms",
+        ):
             value = getattr(self, field_name)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, f"evidence {field_name} must be an integer preserving its sign")
@@ -1078,43 +1248,304 @@ class MarketDataEvidenceV1:
             raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence tradability trade date conflicts with evidence")
         if self.quote is not None and self.tradability is not None and self.quote.symbol != self.tradability.symbol:
             raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence quote and tradability symbols conflict")
+        symbol = self.quote.symbol if self.quote is not None else self.symbol
+        if symbol is None:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence symbol is required when no quote is attached")
+        object.__setattr__(self, "symbol", exact_symbol(symbol)[0])
+        if self.quote is not None and self.symbol != self.quote.symbol:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence symbol conflicts with quote")
+        if self.side is not None:
+            side = str(self.side).strip().upper()
+            if side not in {"BUY", "SELL"}:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence side must be BUY or SELL")
+            object.__setattr__(self, "side", side)
+        if self.eligibility_state is not None:
+            object.__setattr__(
+                self,
+                "eligibility_state",
+                _enum_or_error(EligibilityState, self.eligibility_state, field_name="evidence.eligibility_state"),
+            )
+        if self.tradability is not None:
+            if self.tradability_id is not None and self.tradability_id != self.tradability.tradability_id:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence tradability_id conflicts with tradability")
+            object.__setattr__(self, "tradability_id", self.tradability.tradability_id)
+        elif self.tradability_id is not None:
+            object.__setattr__(self, "tradability_id", require_identity(self.tradability_id, field_name="evidence.tradability_id"))
+        if self.quote is not None:
+            for field_name, value in (
+                ("source_session_id", self.quote.source_session_id),
+                ("ingress_generation", self.quote.ingress_generation),
+                ("ingress_sequence", self.quote.ingress_sequence),
+                ("quote_source", self.quote.source),
+                ("source_method", self.quote.source_method),
+            ):
+                received = getattr(self, field_name)
+                if received is not None and received != value:
+                    raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, f"evidence {field_name} conflicts with quote")
+                object.__setattr__(self, field_name, value)
+            if self.source_payload_sha256 is not None and self.source_payload_sha256 != self.quote.source_payload_sha256:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence source_payload_sha256 conflicts with quote")
+            object.__setattr__(self, "source_payload_sha256", self.quote.source_payload_sha256)
+        if self.source_payload_sha256 is not None:
+            object.__setattr__(
+                self,
+                "source_payload_sha256",
+                require_sha256(self.source_payload_sha256, field_name="evidence.source_payload_sha256"),
+            )
+        if self.quote_source is not None:
+            object.__setattr__(self, "quote_source", _enum_or_error(QuoteSource, self.quote_source, field_name="evidence.quote_source"))
+        if self.source_session_id is not None:
+            object.__setattr__(self, "source_session_id", require_identity(self.source_session_id, field_name="evidence.source_session_id"))
+        for field_name in ("ingress_generation", "ingress_sequence"):
+            value = getattr(self, field_name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, f"evidence {field_name} must be a non-negative integer")
+        if self.source_method is not None:
+            object.__setattr__(self, "source_method", _enum_or_error(QuoteSourceMethod, self.source_method, field_name="evidence.source_method"))
+        if self.target_time_utc is not None:
+            object.__setattr__(self, "target_time_utc", ensure_utc(self.target_time_utc, field_name="evidence.target_time_utc"))
+        if self.cadence_window_start_utc is not None:
+            object.__setattr__(self, "cadence_window_start_utc", ensure_utc(self.cadence_window_start_utc, field_name="evidence.cadence_window_start_utc"))
+        if self.horizon_seconds is not None and (isinstance(self.horizon_seconds, bool) or self.horizon_seconds not in {60, 300, 900}):
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence horizon_seconds must be one of 60, 300, 900")
+        if self.mark_status is not None:
+            object.__setattr__(self, "mark_status", _enum_or_error(EvidenceMarkStatus, self.mark_status, field_name="evidence.mark_status"))
+        if self.unavailable_reason is not None:
+            object.__setattr__(self, "unavailable_reason", _enum_or_error(QuoteContractReasonCode, self.unavailable_reason, field_name="evidence.unavailable_reason"))
+        if self.cadence_counts is not None:
+            allowed_counts = {"accepted", "rejected", "coalesced", "capacity_rejected", "coverage"}
+            if set(self.cadence_counts) != allowed_counts:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "cadence counts must contain the exact registered keys")
+            normalized_counts: dict[str, int] = {}
+            for key, value in self.cadence_counts.items():
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "cadence counts must be non-negative integers")
+                normalized_counts[key] = value
+            object.__setattr__(self, "cadence_counts", MappingProxyType(normalized_counts))
+        for field_name in ("cadence_first_accepted_sha256", "cadence_last_accepted_sha256"):
+            value = getattr(self, field_name)
+            if value is not None:
+                object.__setattr__(self, field_name, require_sha256(value, field_name=f"evidence.{field_name}"))
+        if self.evaluation_id is None and self.capture_type in {EvidenceCaptureType.ACTION_INPUT, EvidenceCaptureType.ACTION_REJECT}:
+            if not self.parent_intent_id or not self.algo_instance_id or not self.side or self.clock_event_id is None:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "action evidence requires parent/algo/side/clock identity")
+            evaluation_id = "qeval_" + canonical_sha256(
+                {
+                    "runtime_id": self.runtime_id,
+                    "parent_intent_id": self.parent_intent_id,
+                    "algo_instance_id": self.algo_instance_id,
+                    "symbol": self.symbol,
+                    "side": self.side,
+                    "clock_event_id": self.clock_event_id,
+                    "market_data_id": self.market_data_id,
+                    "source_payload_sha256": self.source_payload_sha256,
+                    "policy_sha256": self.policy_sha256,
+                }
+            )
+            object.__setattr__(self, "evaluation_id", evaluation_id)
         if self.capture_type == EvidenceCaptureType.ACTION_INPUT:
-            if self.quote is None or self.tradability is None or not self.parent_intent_id or not self.action_id:
-                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_INPUT evidence requires parent/action/quote/tradability")
+            if (
+                self.quote is None
+                or self.tradability is None
+                or not self.binding_id
+                or not self.parent_intent_id
+                or not self.algo_instance_id
+                or not self.evaluation_id
+                or not self.action_id
+                or not self.side
+                or not self.market_data_id
+                or not self.clock_event_id
+                or not self.tradability_id
+                or self.eligibility_state != EligibilityState.READY
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_INPUT evidence requires complete evaluation/action/quote/tradability identity")
             if self.quote.validation_state != QuoteValidationState.VALID or self.tradability.state != TradabilityState.TRADABLE:
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_INPUT evidence requires valid quote and tradable state")
             if self.quality_reason_code is not None:
                 raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_INPUT evidence cannot carry a rejection reason")
-        if self.capture_type == EvidenceCaptureType.ACTION_REJECT and (not self.parent_intent_id or self.quality_reason_code is None):
-            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_REJECT evidence requires parent identity and loud reason")
-        if self.capture_type == EvidenceCaptureType.CHILD_RECEIPT and not self.child_order_id:
-            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "CHILD_RECEIPT evidence requires child_order_id")
+        if self.capture_type == EvidenceCaptureType.ACTION_REJECT:
+            if (
+                not self.parent_intent_id
+                or not self.algo_instance_id
+                or not self.evaluation_id
+                or not self.side
+                or self.quality_reason_code is None
+                or self.clock_event_id is None
+                or self.eligibility_state is None
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "ACTION_REJECT evidence requires evaluation/parent/algo/clock and a loud reason")
+            if self.quote is not None and (self.market_data_id is None or self.tradability is None or self.tradability_id is None):
+                raise quote_contract_error(
+                    QuoteContractReasonCode.PAYLOAD_INVALID,
+                    "ACTION_REJECT with a normalized quote requires its current market-data/tradability links",
+                )
+            if self.quote is None:
+                if self.market_data_id is not None:
+                    raise quote_contract_error(
+                        QuoteContractReasonCode.PAYLOAD_INVALID,
+                        "quote-less ACTION_REJECT must not reuse a prior market_data_id",
+                    )
+                if (
+                    self.source_session_id is None
+                    or self.ingress_generation is None
+                    or self.ingress_sequence is None
+                    or self.quote_source is None
+                    or self.source_method is None
+                    or self.source_payload_sha256 is None
+                ):
+                    raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quote-less ACTION_REJECT requires complete raw ingress identity")
+        if self.capture_type == EvidenceCaptureType.CHILD_RECEIPT:
+            if (
+                not self.child_order_id
+                or not self.source_child_event_id
+                or not self.action_evidence_id
+                or not self.action_id
+                or not self.anchor_market_data_id
+                or not self.broker_order_id
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "CHILD_RECEIPT evidence requires child/action/source-event identity")
+            if self.quote is None and self.unavailable_reason is None:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quote-less CHILD_RECEIPT requires explicit unavailable reason")
+            if self.quote is None and self.market_data_id is not None:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quote-less CHILD_RECEIPT must not reuse action market_data_id")
+            if self.quote is not None and self.market_data_id is None:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quoted CHILD_RECEIPT requires receipt-time market_data_id")
         if self.capture_type in {
             EvidenceCaptureType.MARKOUT_60S,
             EvidenceCaptureType.MARKOUT_300S,
             EvidenceCaptureType.MARKOUT_900S,
-        } and not self.child_order_id:
-            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "markout evidence requires child_order_id")
+        }:
+            expected_horizon = int(self.capture_type.value.removeprefix("MARKOUT_").removesuffix("S"))
+            if (
+                not self.child_order_id
+                or not self.trade_id
+                or not self.anchor_trade_event_id
+                or not self.anchor_market_data_id
+                or not self.action_evidence_id
+                or not self.mark_series_key
+                or self.horizon_seconds != expected_horizon
+                or self.target_time_utc is None
+                or self.mark_status is None
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "markout evidence requires complete trade/anchor/series/horizon identity")
+            if self.mark_status == EvidenceMarkStatus.CAPTURED:
+                if self.quote is None or self.tradability is None or self.market_data_id is None or self.unavailable_reason is not None:
+                    raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "captured markout requires an observed mark quote")
+            elif self.quote is not None or self.tradability is not None or self.market_data_id is not None or self.unavailable_reason is None:
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "unavailable markout requires null market_data_id and a stable reason")
+            elif failure_definition(self.unavailable_reason).stage.value != "MARKOUT":
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "unavailable markout reason must belong to the MARKOUT stage")
+        if self.capture_type == EvidenceCaptureType.CADENCE_AGGREGATE:
+            if (
+                self.cadence_window_start_utc is None
+                or self.cadence_counts is None
+                or self.market_data_id is not None
+                or self.quote is not None
+                or self.tradability is not None
+                or any((self.parent_intent_id, self.action_id, self.child_order_id, self.trade_id))
+                or self.source_session_id is None
+                or self.ingress_generation is None
+                or self.cadence_first_accepted_sha256 is None
+                or self.cadence_last_accepted_sha256 is None
+            ):
+                raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "cadence aggregate requires a window/counts and no market_data_id")
+        if self.capture_type == EvidenceCaptureType.PROTECTION_BAND_TRIGGER and (
+            not self.child_order_id
+            or not self.action_id
+            or not self.source_child_event_id
+            or not self.action_evidence_id
+            or not self.anchor_market_data_id
+        ):
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "protection trigger requires action and child identity")
+        if self.capture_type == EvidenceCaptureType.PROTECTION_BAND_TRIGGER and self.quote is None and self.unavailable_reason is None:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quote-less protection trigger requires explicit unavailable reason")
+        if self.capture_type == EvidenceCaptureType.PROTECTION_BAND_TRIGGER and self.quote is None and self.market_data_id is not None:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "quote-less protection trigger must not reuse prior market_data_id")
+        _validate_evidence_null_matrix(self)
+        expected_source_input_sha256 = canonical_sha256(_evidence_source_input_payload(self))
+        if self.source_input_sha256 is not None:
+            supplied_source_input_sha256 = require_sha256(
+                self.source_input_sha256,
+                field_name="evidence.source_input_sha256",
+            )
+            if supplied_source_input_sha256 != expected_source_input_sha256:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.PAYLOAD_INVALID,
+                    "source_input_sha256 does not match the canonical capture input",
+                )
+        object.__setattr__(self, "source_input_sha256", expected_source_input_sha256)
+        identity_payload = {
+            "evidence_schema_version": self.evidence_schema_version,
+            "capture_type": self.capture_type,
+            "runtime_id": self.runtime_id,
+            "trade_date": self.trade_date,
+            "evaluation_id": self.evaluation_id,
+            "action_id": self.action_id,
+            "child_order_id": self.child_order_id,
+            "trade_id": self.trade_id,
+            "mark_series_key": self.mark_series_key,
+            "cadence_window_start_utc": self.cadence_window_start_utc,
+            "market_data_id": self.market_data_id,
+            "anchor_market_data_id": self.anchor_market_data_id,
+            "source_input_sha256": self.source_input_sha256,
+            "policy_sha256": self.policy_sha256,
+            "mark_policy_version": self.mark_policy_version,
+            "evidence_revision": self.evidence_revision,
+        }
+        derived_evidence_id = "mde_" + canonical_sha256(identity_payload)
+        if self.evidence_id is not None and self.evidence_id != derived_evidence_id:
+            raise quote_contract_error(QuoteContractReasonCode.PAYLOAD_INVALID, "evidence_id does not match deterministic identity")
+        object.__setattr__(self, "evidence_id", derived_evidence_id)
+        if self.capture_type == EvidenceCaptureType.CHILD_RECEIPT:
+            if self.child_receipt_evidence_id not in {None, derived_evidence_id}:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.PAYLOAD_INVALID,
+                    "CHILD_RECEIPT child_receipt_evidence_id must equal its deterministic evidence_id",
+                )
+            object.__setattr__(self, "child_receipt_evidence_id", derived_evidence_id)
         object.__setattr__(self, "evidence_sha256", canonical_sha256(self.canonical_payload()))
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "market_data_id": self.market_data_id,
             "evidence_schema_version": self.evidence_schema_version,
+            "evidence_id": self.evidence_id,
+            "evidence_revision": self.evidence_revision,
+            "supersedes_evidence_id": self.supersedes_evidence_id,
             "capture_type": self.capture_type,
             "runtime_id": self.runtime_id,
             "binding_id": self.binding_id,
             "trade_date": self.trade_date,
             "parent_intent_id": self.parent_intent_id,
+            "algo_instance_id": self.algo_instance_id,
+            "evaluation_id": self.evaluation_id,
             "child_order_id": self.child_order_id,
             "action_id": self.action_id,
+            "source_child_event_id": self.source_child_event_id,
+            "broker_order_id": self.broker_order_id,
+            "trade_id": self.trade_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "anchor_market_data_id": self.anchor_market_data_id,
+            "action_evidence_id": self.action_evidence_id,
+            "child_receipt_evidence_id": self.child_receipt_evidence_id,
+            "mark_series_key": self.mark_series_key,
+            "horizon_seconds": self.horizon_seconds,
+            "target_time_utc": self.target_time_utc,
+            "anchor_trade_event_id": self.anchor_trade_event_id,
+            "mark_status": self.mark_status,
+            "unavailable_reason": self.unavailable_reason,
             "quote": self.quote,
             "tradability": self.tradability,
             "clock_event_id": self.clock_event_id,
             "source": self.source,
+            "source_method": self.source_method,
+            "source_payload_sha256": self.source_payload_sha256,
+            "source_session_id": self.source_session_id,
+            "ingress_generation": self.ingress_generation,
+            "ingress_sequence": self.ingress_sequence,
             "source_exchange_time_utc": self.source_exchange_time_utc,
             "received_at_utc": self.received_at_utc,
-            "persisted_at_utc": self.persisted_at_utc,
             "mid_price": self.mid_price,
             "bid_price_1": self.bid_price_1,
             "ask_price_1": self.ask_price_1,
@@ -1125,10 +1556,14 @@ class MarketDataEvidenceV1:
             "ask_quantities": self.ask_quantities,
             "normalized_quote_sha256": self.normalized_quote_sha256,
             "tradability_evidence_sha256": self.tradability_evidence_sha256,
+            "tradability_id": self.tradability_id,
             "quote_age_ms": self.quote_age_ms,
             "source_lag_ms": self.source_lag_ms,
             "transport_lag_ms": self.transport_lag_ms,
+            "exchange_age_ms": self.exchange_age_ms,
+            "clock_age_divergence_ms": self.clock_age_divergence_ms,
             "quality_state": self.quote.validation_state if self.quote is not None else None,
+            "eligibility_state": self.eligibility_state,
             "quality_reason_code": self.quality_reason_code,
             "stage": self.stage,
             "benchmark_policy_version": self.benchmark_policy_version,
@@ -1139,13 +1574,38 @@ class MarketDataEvidenceV1:
             "adapter_sha256": self.adapter_sha256,
             "code_sha256": self.code_sha256,
             "schema_sha256": self.schema_sha256,
+            "calendar_sha256": self.calendar_sha256,
             "source_input_sha256": self.source_input_sha256,
             "captured_at_utc": self.captured_at_utc,
+            "cadence_window_start_utc": self.cadence_window_start_utc,
+            "cadence_counts": self.cadence_counts,
+            "cadence_first_accepted_sha256": self.cadence_first_accepted_sha256,
+            "cadence_last_accepted_sha256": self.cadence_last_accepted_sha256,
+        }
+
+    def runtime_payload(self) -> dict[str, Any]:
+        """Serialize the immutable evidence without a durable-success claim."""
+
+        return {
+            "schema_version": "miniqmt_quote_runtime_event_payload_v1",
+            "evidence": _canonical_value({**self.canonical_payload(), "evidence_sha256": self.evidence_sha256}),
         }
 
     @property
+    def runtime_event_type(self) -> str:
+        """The sole registered runtime event carrier for this capture."""
+
+        return _EVIDENCE_RUNTIME_EVENT_TYPE_BY_CAPTURE_TYPE[self.capture_type]
+
+    @property
+    def event_time_utc(self) -> datetime:
+        """Business event time; row ``created_at`` supplies persisted time."""
+
+        return self.captured_at_utc
+
+    @property
     def source(self) -> QuoteSource | None:
-        return self.quote.source if self.quote is not None else None
+        return self.quote.source if self.quote is not None else self.quote_source
 
     @property
     def source_exchange_time_utc(self) -> datetime | None:
@@ -1202,6 +1662,193 @@ class MarketDataEvidenceV1:
         return self.tradability.evidence_sha256 if self.tradability is not None else None
 
 
+def _validate_evidence_null_matrix(evidence: MarketDataEvidenceV1) -> None:
+    common_mark_fields = {
+        "mark_series_key",
+        "horizon_seconds",
+        "target_time_utc",
+        "anchor_trade_event_id",
+        "mark_status",
+    }
+    cadence_fields = {
+        "cadence_window_start_utc",
+        "cadence_counts",
+        "cadence_first_accepted_sha256",
+        "cadence_last_accepted_sha256",
+    }
+    forbidden_by_capture: dict[EvidenceCaptureType, set[str]] = {
+        EvidenceCaptureType.ACTION_INPUT: {
+            "child_order_id",
+            "source_child_event_id",
+            "broker_order_id",
+            "trade_id",
+            "anchor_market_data_id",
+            "action_evidence_id",
+            "child_receipt_evidence_id",
+            "unavailable_reason",
+            *common_mark_fields,
+            *cadence_fields,
+        },
+        EvidenceCaptureType.ACTION_REJECT: {
+            "child_order_id",
+            "source_child_event_id",
+            "broker_order_id",
+            "trade_id",
+            "anchor_market_data_id",
+            "action_evidence_id",
+            "child_receipt_evidence_id",
+            "unavailable_reason",
+            *common_mark_fields,
+            *cadence_fields,
+        },
+        EvidenceCaptureType.CHILD_RECEIPT: {
+            "trade_id",
+            "mark_series_key",
+            "horizon_seconds",
+            "target_time_utc",
+            "anchor_trade_event_id",
+            "mark_status",
+            *cadence_fields,
+        },
+        EvidenceCaptureType.PROTECTION_BAND_TRIGGER: {
+            "trade_id",
+            "mark_series_key",
+            "horizon_seconds",
+            "target_time_utc",
+            "anchor_trade_event_id",
+            "mark_status",
+            "child_receipt_evidence_id",
+            *cadence_fields,
+        },
+        EvidenceCaptureType.MARKOUT_60S: {"evaluation_id", "source_child_event_id", "broker_order_id", "child_receipt_evidence_id", *cadence_fields},
+        EvidenceCaptureType.MARKOUT_300S: {"evaluation_id", "source_child_event_id", "broker_order_id", "child_receipt_evidence_id", *cadence_fields},
+        EvidenceCaptureType.MARKOUT_900S: {"evaluation_id", "source_child_event_id", "broker_order_id", "child_receipt_evidence_id", *cadence_fields},
+        EvidenceCaptureType.CADENCE_AGGREGATE: {
+            "binding_id",
+            "parent_intent_id",
+            "child_order_id",
+            "action_id",
+            "algo_instance_id",
+            "evaluation_id",
+            "source_child_event_id",
+            "broker_order_id",
+            "trade_id",
+            "anchor_market_data_id",
+            "action_evidence_id",
+            "child_receipt_evidence_id",
+            "market_data_id",
+            "quote",
+            "tradability",
+            "tradability_id",
+            "eligibility_state",
+            "unavailable_reason",
+            "quality_reason_code",
+            "stage",
+            "quote_age_ms",
+            "source_lag_ms",
+            "transport_lag_ms",
+            "exchange_age_ms",
+            "clock_age_divergence_ms",
+            "ingress_sequence",
+            "source_payload_sha256",
+            "quote_source",
+            "source_method",
+            *common_mark_fields,
+        },
+    }
+    unexpected = sorted(
+        field_name
+        for field_name in forbidden_by_capture[evidence.capture_type]
+        if getattr(evidence, field_name) is not None
+    )
+    if unexpected:
+        raise quote_contract_error(
+            QuoteContractReasonCode.PAYLOAD_INVALID,
+            f"{evidence.capture_type.value} evidence contains forbidden fields: {', '.join(unexpected)}",
+        )
+
+
+def _evidence_source_input_payload(evidence: MarketDataEvidenceV1) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "capture_type": evidence.capture_type,
+        "runtime_id": evidence.runtime_id,
+        "symbol": evidence.symbol,
+        "policy_sha256": evidence.policy_sha256,
+        "config_sha256": evidence.config_sha256,
+        "control_revision": evidence.control_revision,
+    }
+    if evidence.capture_type in {EvidenceCaptureType.ACTION_INPUT, EvidenceCaptureType.ACTION_REJECT}:
+        return {
+            **base,
+            "evaluation_id": evidence.evaluation_id,
+            "parent_intent_id": evidence.parent_intent_id,
+            "algo_instance_id": evidence.algo_instance_id,
+            "action_id": evidence.action_id,
+            "side": evidence.side,
+            "clock_event_id": evidence.clock_event_id,
+            "market_data_id": evidence.market_data_id,
+            "source_payload_sha256": evidence.source_payload_sha256,
+            "normalized_quote_sha256": evidence.quote.normalized_quote_sha256 if evidence.quote is not None else None,
+            "tradability_id": evidence.tradability_id,
+            "eligibility_state": evidence.eligibility_state,
+            "reason_code": evidence.quality_reason_code,
+            "stage": evidence.stage,
+        }
+    if evidence.capture_type == EvidenceCaptureType.CHILD_RECEIPT:
+        return {
+            **base,
+            "action_evidence_id": evidence.action_evidence_id,
+            "anchor_market_data_id": evidence.anchor_market_data_id,
+            "source_child_event_id": evidence.source_child_event_id,
+            "child_order_id": evidence.child_order_id,
+            "broker_order_id": evidence.broker_order_id,
+            "receipt_time_utc": evidence.captured_at_utc,
+            "market_data_id": evidence.market_data_id,
+            "normalized_quote_sha256": evidence.quote.normalized_quote_sha256 if evidence.quote is not None else None,
+            "unavailable_reason": evidence.unavailable_reason,
+        }
+    if evidence.capture_type == EvidenceCaptureType.PROTECTION_BAND_TRIGGER:
+        return {
+            **base,
+            "action_id": evidence.action_id,
+            "action_evidence_id": evidence.action_evidence_id,
+            "child_order_id": evidence.child_order_id,
+            "trigger_identity": evidence.source_child_event_id,
+            "market_data_id": evidence.market_data_id,
+            "normalized_quote_sha256": evidence.quote.normalized_quote_sha256 if evidence.quote is not None else None,
+            "unavailable_reason": evidence.unavailable_reason,
+        }
+    if evidence.capture_type in {
+        EvidenceCaptureType.MARKOUT_60S,
+        EvidenceCaptureType.MARKOUT_300S,
+        EvidenceCaptureType.MARKOUT_900S,
+    }:
+        return {
+            **base,
+            "anchor_trade_event_id": evidence.anchor_trade_event_id,
+            "trade_id": evidence.trade_id,
+            "child_order_id": evidence.child_order_id,
+            "anchor_market_data_id": evidence.anchor_market_data_id,
+            "mark_series_key": evidence.mark_series_key,
+            "target_time_utc": evidence.target_time_utc,
+            "horizon_seconds": evidence.horizon_seconds,
+            "source_session_id": evidence.source_session_id,
+            "ingress_generation": evidence.ingress_generation,
+            "mark_status": evidence.mark_status,
+            "market_data_id": evidence.market_data_id,
+            "normalized_quote_sha256": evidence.quote.normalized_quote_sha256 if evidence.quote is not None else None,
+            "unavailable_reason": evidence.unavailable_reason,
+        }
+    return {
+        **base,
+        "source_session_id": evidence.source_session_id,
+        "ingress_generation": evidence.ingress_generation,
+        "cadence_window_start_utc": evidence.cadence_window_start_utc,
+        "cadence_counts": evidence.cadence_counts,
+        "first_accepted_sha256": evidence.cadence_first_accepted_sha256,
+        "last_accepted_sha256": evidence.cadence_last_accepted_sha256,
+    }
+
 @runtime_checkable
 class QuoteSnapshotProvider(Protocol):
     """Future core boundary; adapters must provide only validated snapshots."""
@@ -1215,6 +1862,7 @@ class QuoteSnapshotProvider(Protocol):
 
 __all__ = [
     "ActionQuoteEligibility",
+    "AuctionFieldManifest",
     "AuctionCapabilityState",
     "AuctionMode",
     "BookState",
@@ -1226,6 +1874,7 @@ __all__ = [
     "DepthQuantityUnit",
     "EligibilityState",
     "EvidenceCaptureType",
+    "EvidenceMarkStatus",
     "ExecutionClockEvent",
     "FiveLevelQuote",
     "MarketCode",
