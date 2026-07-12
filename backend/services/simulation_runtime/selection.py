@@ -12,11 +12,19 @@ import json
 import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from math import isfinite
 from typing import Any
 
 from backend.services.data_refresh_audit import DataRefreshAuditRepository
+from backend.services.advisory_phase1.stage_trace import (
+    Phase1TraceCaptureReceipt,
+    Phase1TraceCaptureService,
+    REASON_TRACE_CONTEXT_INVALID,
+    REASON_TRACE_CAPTURE_FAILED,
+    TraceCaptureResult,
+    TraceCaptureState,
+)
 from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion, SelectionMode
 from backend.services.selection_center.package_health import SelectionPackageHealthService
@@ -95,6 +103,7 @@ class StrategyPackageSelectionResult:
     evidence_capture_receipt: EvidenceCaptureReceipt = field(
         default_factory=ProspectiveSelectionEvidenceAssembler.not_requested_receipt
     )
+    phase1_trace_capture_receipt: Phase1TraceCaptureReceipt = field(default_factory=Phase1TraceCaptureReceipt.disabled)
 
 
 class DailySelectionSignalService:
@@ -255,6 +264,7 @@ class StrategyPackageSelectionService:
         repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         signal_service: DailySelectionSignalService | None = None,
         asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
+        phase1_trace_capture_service: Phase1TraceCaptureService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.runtime = runtime or StrategyPackageRuntime()
@@ -277,6 +287,7 @@ class StrategyPackageSelectionService:
             runtime=self.runtime,
             selection_artifact_service=self.selection_artifact_service,
         )
+        self.phase1_trace_capture_service = phase1_trace_capture_service or Phase1TraceCaptureService()
 
     def run_selection(
         self,
@@ -483,6 +494,15 @@ class StrategyPackageSelectionService:
             stage_trace_by_package=stage_trace_by_package,
             candidate_outcome_by_package=candidate_outcome_by_package,
         )
+        phase1_trace_receipt = self._capture_phase1_stage_traces(
+            prospective_context=prospective_context,
+            data_source=data_source,
+            trade_date=trade_date,
+            records_by_id=records_by_id,
+            package_runtime_configs=package_configs,
+            artifact_by_package=artifact_by_package,
+            stage_trace_by_package=stage_trace_by_package,
+        )
         config = self._attach_evidence_refs(config, evidence_by_package, capture_receipt=capture_receipt)
         return StrategyPackageSelectionResult(
             runtime_config=config,
@@ -495,7 +515,83 @@ class StrategyPackageSelectionService:
             no_candidate_reason=no_candidate_reason,
             stage_trace_by_package=stage_trace_by_package,
             evidence_capture_receipt=capture_receipt,
+            phase1_trace_capture_receipt=phase1_trace_receipt,
         )
+
+    def _capture_phase1_stage_traces(
+        self,
+        *,
+        prospective_context: ProspectiveSelectionContext | None,
+        data_source: str,
+        trade_date: date,
+        records_by_id: dict[str, Any],
+        package_runtime_configs: dict[str, dict[str, Any]],
+        artifact_by_package: dict[str, Any],
+        stage_trace_by_package: dict[str, SelectionStageTrace],
+    ) -> Phase1TraceCaptureReceipt:
+        """Capture after Selection/DSE work; all capture faults remain explicit side receipts."""
+
+        if prospective_context is None or prospective_context.capture_mode is not EvidenceCaptureMode.PROSPECTIVE:
+            return Phase1TraceCaptureReceipt.disabled()
+        if not self.phase1_trace_capture_service.enabled:
+            return Phase1TraceCaptureReceipt.disabled()
+        results: dict[str, TraceCaptureResult] = {}
+        decision_as_of_trade_date = self._prospective_decision_as_of_trade_date(prospective_context)
+        for package_id, stage_trace in stage_trace_by_package.items():
+            if decision_as_of_trade_date is None:
+                results[package_id] = TraceCaptureResult(
+                    package_id=package_id,
+                    state=TraceCaptureState.CAPTURE_FAILED,
+                    reason_codes=(REASON_TRACE_CONTEXT_INVALID,),
+                )
+                continue
+            try:
+                record = records_by_id[package_id]
+                manifest = record.current_manifest()
+                results[package_id] = self.phase1_trace_capture_service.capture_package(
+                    selection_run_id=prospective_context.selection_run_id,
+                    package_id=package_id,
+                    manifest_sha256=manifest.manifest_sha256,
+                    decision_as_of_trade_date=decision_as_of_trade_date,
+                    data_source=data_source,
+                    execution_origin=prospective_context.execution_origin.value,
+                    research_scope=prospective_context.research_scope,
+                    execution_prohibited=True,
+                    manifest=manifest,
+                    artifact=artifact_by_package[package_id],
+                    stage_trace=stage_trace,
+                    runtime_config=package_runtime_configs[package_id],
+                )
+            except Exception:
+                logger.exception(
+                    "phase1 stage trace capture boundary failed",
+                    extra={"package_id": package_id, "selection_run_id": prospective_context.selection_run_id},
+                )
+                results[package_id] = TraceCaptureResult(
+                    package_id=package_id,
+                    state=TraceCaptureState.CAPTURE_FAILED,
+                    reason_codes=(REASON_TRACE_CAPTURE_FAILED,),
+                )
+        reason_codes = tuple(
+            sorted({reason for result in results.values() for reason in result.reason_codes})
+        )
+        return Phase1TraceCaptureReceipt(
+            requested=self.phase1_trace_capture_service.enabled,
+            results_by_package=results,
+            reason_codes=reason_codes,
+        )
+
+    @staticmethod
+    def _prospective_decision_as_of_trade_date(context: ProspectiveSelectionContext) -> date | None:
+        raw = context.decision_clock_seed.get("decision_as_of_trade_date")
+        if isinstance(raw, datetime):
+            return None
+        if isinstance(raw, date):
+            return raw
+        try:
+            return date.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _prospective_hmm_effective_trade_date(context: ProspectiveSelectionContext | None) -> date | None:
