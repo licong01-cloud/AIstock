@@ -465,6 +465,8 @@ export default function FactorList({
     failed_tail?: any[];
     dispatch_sync_error?: string | null;
     remote_progress_status?: string | null;
+    resumed_from_task_id?: string | null;
+    checkpoint?: { retry_factor_count?: number; status?: string } | null;
   };
   type RemoteNodeStats = {
     node_id: string;
@@ -680,6 +682,35 @@ export default function FactorList({
       alert(`官方共用因子缓存任务已提交 (task_id: ${d.task_id})`);
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
   }, [cacheStartDate, cacheEndDate, submitOfficialFullCompute]);
+
+  const retryFailedCacheTask = useCallback(async () => {
+    const task = selectedCacheTask;
+    if (!task || task.status !== "failed") return;
+    const confirmed = confirm(
+      `将严格按任务 ${task.task_id} 持久化的失败因子清单续算。\n` +
+      `不会重算已成功因子，也不会清空现有缓存。\n` +
+      `续算并行度：${cacheWorkers}\n` +
+      "确认提交失败因子续算任务？",
+    );
+    if (!confirmed) return;
+    setCacheBusy(true);
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/compute-status/${encodeURIComponent(task.task_id)}/retry-failed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workers: cacheWorkers }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.ok === false) throw new Error(data.detail || data.error || "失败因子续算提交失败");
+      setSelectedCacheTaskId(data.task_id);
+      await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(data.task_id)]);
+      alert(`已提交 ${data.retry_factor_count} 个失败因子的严格续算任务 (task_id: ${data.task_id})`);
+    } catch (e: any) {
+      alert(e?.message || "失败因子续算提交失败");
+    } finally {
+      setCacheBusy(false);
+    }
+  }, [cacheWorkers, fetchCacheStats, fetchCacheTaskDetail, fetchCacheTasks, fetchRemoteStats, selectedCacheTask]);
 
   const triggerRemoteSync = useCallback(async (factorNames?: string[]) => {
     setRemoteSyncBusy(true);
@@ -2018,8 +2049,17 @@ export default function FactorList({
                     </div>
                   )}
                   <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-                    官方路径仅通过 WSL/计算节点 dispatch 执行；旧手工 backfill/resume 不再作为业务入口。失败因子请重新提交选中因子，窗口整体变化时执行全量计算。
+                    官方路径仅通过 WSL/计算节点 dispatch 执行。失败任务可从持久化检查点精确续算，窗口整体变化时执行全量计算。
                   </div>
+                  {selectedCacheTask.status === "failed" && (
+                    <button
+                      onClick={retryFailedCacheTask}
+                      disabled={cacheBusy}
+                      style={{ marginBottom: 8, padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#92400e", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
+                    >
+                      {cacheBusy ? "提交中..." : "严格续算失败因子"}
+                    </button>
+                  )}
                   {selectedCacheTask.task_state && (
                     <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
                       checkpoint: 成功 {selectedCacheTask.task_state.success_factors?.length ?? 0} |

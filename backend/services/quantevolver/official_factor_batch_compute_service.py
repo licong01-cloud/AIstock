@@ -34,22 +34,24 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 OFFICIAL_FACTOR_CACHE_ROOT = REPO_ROOT / "rdagent_assets" / "factor_values"
 OFFICIAL_FACTOR_CACHE_SINGLE_DIR = OFFICIAL_FACTOR_CACHE_ROOT / "single"
 OFFICIAL_FACTOR_CACHE_META_PATH = OFFICIAL_FACTOR_CACHE_ROOT / "_meta.json"
+OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR = OFFICIAL_FACTOR_CACHE_ROOT / "checkpoints"
 OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
 OFFICIAL_FACTOR_WINDOW_END = "2026-06-30"
 OFFICIAL_CACHE_SCHEMA_VERSION = "official_factor_cache_v3"
 OFFICIAL_CACHE_SOURCE_SYSTEM = "official_offline_backtest_factor_data"
 DEFAULT_BATCH_SIZE = 16
-DEFAULT_METRIC_WORKERS = 2
+DEFAULT_METRIC_WORKERS = 1
 DEFAULT_SOFT_RSS_MB = 48 * 1024
 DEFAULT_HARD_RSS_MB = 55 * 1024
 DEFAULT_MIN_AVAILABLE_MB = 8 * 1024
-DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 1024
+DEFAULT_SWAP_GROWTH_HARD_STOP_MB = 8 * 1024
 DEFAULT_RESOURCE_POLL_SEC = 5.0
+DEFAULT_RESOURCE_RECOVERY_POLLS = 3
 DEFAULT_ONE_WORKER_AVAILABLE_MULTIPLIER = 5
 DEFAULT_TWO_WORKER_AVAILABLE_MULTIPLIER = 8
 DEFAULT_RESULT_DRAIN_CHUNK_SIZE = 4
-DEFAULT_FACTOR_WORKER_ESTIMATED_MB = 2 * 1024
-DEFAULT_METRIC_WORKER_ESTIMATED_MB = 2 * 1024
+DEFAULT_FACTOR_WORKER_ESTIMATED_MB = 12 * 1024
+DEFAULT_METRIC_WORKER_ESTIMATED_MB = 8 * 1024
 DEFAULT_MAX_EFFECTIVE_WORKERS = 4
 RESOURCE_GATE_FAILED = "memory_gate_failed"
 FACTOR_TIMEOUT = "factor_timeout"
@@ -109,6 +111,7 @@ class BatchComputeConfig:
     task_id: str | None = None
     validation_mode: str | None = None
     expected_factor_count: int | None = None
+    resumed_from_task_id: str | None = None
 
 
 class OfficialFactorBatchComputeService:
@@ -199,6 +202,7 @@ class OfficialFactorBatchComputeService:
             self._emit("failed", task_id=task_id, error=metrics_error)
             compute_single_factor_metrics = None  # type: ignore[assignment]
         self._active_meta_context = {
+            "task_id": task_id,
             "data_start": start_date,
             "data_end": end_date,
             "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
@@ -226,6 +230,7 @@ class OfficialFactorBatchComputeService:
         batches = list(_chunks(eligible, max(1, int(cfg.batch_size or DEFAULT_BATCH_SIZE))))
         memory_samples: list[dict[str, Any]] = []
         resource_failures: list[dict[str, Any]] = []
+        resource_actions: list[dict[str, Any]] = []
 
         for batch_index, batch in enumerate(batches, start=1):
             batch_id = f"{task_id}_b{batch_index:04d}"
@@ -370,7 +375,8 @@ class OfficialFactorBatchComputeService:
                     err = exec_result.error or "unknown"
                     resource_gate_failed = exec_result.error_type == RESOURCE_GATE_FAILED
                     if resource_gate_failed and not batch_resource_failure_recorded:
-                        resource_failures.append({
+                        failure_detail = dict(getattr(self, "_last_batch_resource_failure_detail", {}) or {})
+                        failure_detail.update({
                             "phase": "during_batch",
                             "task_id": task_id,
                             "batch_id": batch_id,
@@ -378,6 +384,7 @@ class OfficialFactorBatchComputeService:
                             "reason": err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
                             "error_type": RESOURCE_GATE_FAILED,
                         })
+                        resource_failures.append(failure_detail)
                         batch_resource_failure = ResourceGateDecision(
                             False,
                             err.replace(f"{RESOURCE_GATE_FAILED}: ", "", 1),
@@ -456,6 +463,7 @@ class OfficialFactorBatchComputeService:
                     ),
                     eligible_index=eligible_index,
                 )
+                resource_actions.extend(getattr(self, "_last_batch_resource_actions", []))
                 for row in batch:
                     name = str(row.get("factor_name") or "").strip()
                     if name in handled_names:
@@ -571,7 +579,33 @@ class OfficialFactorBatchComputeService:
             batch_count=len(batches),
             memory_samples=memory_samples,
             resource_failures=resource_failures,
+            resource_actions=resource_actions,
             universe_meta=universe_meta,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        retry_factor_names = self._retry_factor_names(results, db_result)
+        snapshot_promotion = self._promote_snapshot_if_ready(
+            overall_success=overall_success,
+            cfg=cfg,
+            eligible_names=eligible_names,
+            start_date=start_date,
+            end_date=end_date,
+            universe_meta=universe_meta,
+            base_cache_manifest=base_cache_manifest,
+            qlib_bin_path=qlib_bin_path,
+        )
+        checkpoint = self._write_checkpoint_atomic(
+            task_id=task_id,
+            status="success" if overall_success else "failed",
+            cfg=cfg,
+            requested=requested,
+            eligible_names=eligible_names,
+            results=results,
+            retry_factor_names=retry_factor_names,
+            db_result=db_result,
+            runtime_validation=runtime_validation,
+            snapshot_promotion=snapshot_promotion,
             start_date=start_date,
             end_date=end_date,
         )
@@ -599,6 +633,9 @@ class OfficialFactorBatchComputeService:
             "total_metrics_inserted": db_result["inserted"],
             "total_metrics_skipped": db_result["skipped"],
             "runtime_validation": runtime_validation,
+            "retry_factor_names": retry_factor_names,
+            "checkpoint": checkpoint,
+            "snapshot_promotion": snapshot_promotion,
         }
         if metrics_error or db_result.get("errors") or fail_count:
             result["error"] = " | ".join([x for x in [metrics_error, "; ".join(db_result.get("errors", [])[:5])] if x]) or f"failed factors={fail_count}"
@@ -627,6 +664,9 @@ class OfficialFactorBatchComputeService:
                 if data.get("expected_factor_count") is not None
                 else None
             ),
+            resumed_from_task_id=(str(data.get("resumed_from_task_id")).strip() or None)
+            if data.get("resumed_from_task_id") is not None
+            else None,
         )
 
     def _select_batch_workers(self, requested_workers: int, snapshot: ResourceSnapshot) -> int:
@@ -948,6 +988,14 @@ class OfficialFactorBatchComputeService:
         completed_names: set[str] = set()
         last_resource_gate_check = 0.0
         queue_safe_to_drain = True
+        effective_max_workers = max(1, int(max_workers or 1))
+        recoverable_pressure_polls = 0
+        max_recovery_polls = max(
+            1,
+            _env_int("AISTOCK_OFFICIAL_FACTOR_RESOURCE_RECOVERY_POLLS", DEFAULT_RESOURCE_RECOVERY_POLLS),
+        )
+        self._last_batch_resource_actions = []
+        self._last_batch_resource_failure_detail = None
 
         def _store_or_handle_result(name: str, result: FactorExecutionResult) -> None:
             if name in completed_names:
@@ -960,7 +1008,7 @@ class OfficialFactorBatchComputeService:
 
         try:
             while pending or running:
-                while pending and len(running) < max_workers:
+                while pending and len(running) < effective_max_workers:
                     item = pending.pop(0)
                     name = str(item.get("factor_name") or "").strip() or "<missing>"
                     code_text = str(item.get("code_text") or "")
@@ -1070,6 +1118,36 @@ class OfficialFactorBatchComputeService:
                         extra_pids=[state["pid"] for state in running.values() if state.get("pid")],
                     )
                     if not gate.ok:
+                        action = {
+                            **dict(gate.detail),
+                            "requested_workers": int(max_workers or 1),
+                            "effective_workers_before": effective_max_workers,
+                        }
+                        if gate.reason == "available_memory_below_minimum":
+                            if effective_max_workers > 1:
+                                effective_max_workers -= 1
+                                action.update({
+                                    "action": "reduce_factor_concurrency",
+                                    "effective_workers_after": effective_max_workers,
+                                })
+                                self._last_batch_resource_actions.append(action)
+                                self._emit("resource_concurrency_reduced", **action)
+                                continue
+                            recoverable_pressure_polls += 1
+                            action.update({
+                                "action": "wait_for_memory_recovery",
+                                "effective_workers_after": effective_max_workers,
+                                "recovery_poll": recoverable_pressure_polls,
+                                "max_recovery_polls": max_recovery_polls,
+                            })
+                            self._last_batch_resource_actions.append(action)
+                            self._emit("resource_recovery_wait", **action)
+                            if recoverable_pressure_polls < max_recovery_polls:
+                                continue
+                        self._last_batch_resource_failure_detail = dict(gate.detail)
+                        self._last_batch_resource_failure_detail["recovery_actions"] = list(
+                            self._last_batch_resource_actions
+                        )
                         queue_safe_to_drain = False
                         self._terminate_running_factors(running)
                         now = time.monotonic()
@@ -1084,6 +1162,7 @@ class OfficialFactorBatchComputeService:
                             _store_or_handle_result(name, result)
                         pending.clear()
                         break
+                    recoverable_pressure_polls = 0
 
                 if pending or running:
                     time.sleep(0.2)
@@ -1296,27 +1375,41 @@ class OfficialFactorBatchComputeService:
         qlib_bin_path: str | None,
         universe_meta: dict[str, Any],
         base_cache_manifest: dict[str, Any],
+        task_id: str | None = None,
+        promote_snapshot: bool = False,
     ) -> None:
         meta = self._load_meta()
-        meta.update({
-            "schema_version": OFFICIAL_CACHE_SCHEMA_VERSION,
-            "source_system": OFFICIAL_CACHE_SOURCE_SYSTEM,
-            "as_of_date": data_end,
-            "data_start": data_start,
-            "data_end": data_end,
-            "factor_data_dir": factor_data_dir,
-            "qlib_bin_path": qlib_bin_path,
-            "base_data_cache_policy": "load_once_readonly",
-            "data_source_mode": "official_offline_backtest_factor_data",
-            "data_freshness_profile": "qe_backtest_coverage",
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "window_train_start": data_start,
-            "window_backtest_end": data_end,
-            "base_data_manifest": base_cache_manifest,
-            "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
-        })
-        meta.update(universe_meta)
         meta.setdefault("factors", {}).update(factor_entries)
+        if promote_snapshot:
+            meta.update({
+                "schema_version": OFFICIAL_CACHE_SCHEMA_VERSION,
+                "source_system": OFFICIAL_CACHE_SOURCE_SYSTEM,
+                "as_of_date": data_end,
+                "data_start": data_start,
+                "data_end": data_end,
+                "factor_data_dir": factor_data_dir,
+                "qlib_bin_path": qlib_bin_path,
+                "base_data_cache_policy": "load_once_readonly",
+                "data_source_mode": "official_offline_backtest_factor_data",
+                "data_freshness_profile": "qe_backtest_coverage",
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "window_train_start": data_start,
+                "window_backtest_end": data_end,
+                "base_data_manifest": base_cache_manifest,
+                "moneyflow_unit_contract_version": MONEYFLOW_UNIT_CONTRACT_VERSION,
+                "snapshot_status": "complete",
+                "snapshot_task_id": task_id,
+            })
+            meta.update(universe_meta)
+            meta.pop("pending_snapshot", None)
+        else:
+            meta["pending_snapshot"] = {
+                "task_id": task_id,
+                "target_start": data_start,
+                "target_end": data_end,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "in_progress",
+            }
         tmp = OFFICIAL_FACTOR_CACHE_META_PATH.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(OFFICIAL_FACTOR_CACHE_META_PATH)
@@ -1325,6 +1418,149 @@ class OfficialFactorBatchComputeService:
         if OFFICIAL_FACTOR_CACHE_META_PATH.exists():
             return json.loads(OFFICIAL_FACTOR_CACHE_META_PATH.read_text(encoding="utf-8"))
         return {"factors": {}}
+
+    @staticmethod
+    def _retry_factor_names(results: list[dict[str, Any]], db_result: dict[str, Any]) -> list[str]:
+        names = [
+            str(item.get("name") or "").strip()
+            for item in results
+            if not item.get("success") and str(item.get("name") or "").strip()
+        ]
+        names.extend(str(name).strip() for name in db_result.get("save_failures") or [] if str(name).strip())
+        return list(dict.fromkeys(names))
+
+    def _write_checkpoint_atomic(
+        self,
+        *,
+        task_id: str,
+        status: str,
+        cfg: BatchComputeConfig,
+        requested: list[str],
+        eligible_names: list[str],
+        results: list[dict[str, Any]],
+        retry_factor_names: list[str],
+        db_result: dict[str, Any],
+        runtime_validation: dict[str, Any],
+        snapshot_promotion: dict[str, Any],
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, Any]:
+        OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = OFFICIAL_FACTOR_CACHE_CHECKPOINT_DIR / f"{task_id}.json"
+        completed = [
+            str(item.get("name") or "").strip()
+            for item in results
+            if item.get("success") and str(item.get("name") or "").strip() not in set(retry_factor_names)
+        ]
+        failed = [item for item in results if not item.get("success")]
+        payload = {
+            "schema_version": "official_factor_compute_checkpoint_v1",
+            "task_id": task_id,
+            "status": status,
+            "resumed_from_task_id": cfg.resumed_from_task_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "window_train_start": start_date,
+            "window_backtest_end": end_date,
+            "factor_data_dir": str(Path(cfg.factor_data_dir).expanduser()),
+            "qlib_bin_path": cfg.qlib_bin_path,
+            "include_disabled": cfg.include_disabled,
+            "requested_factor_names": requested,
+            "eligible_factor_names": eligible_names,
+            "completed_factor_names": completed,
+            "retry_factor_names": retry_factor_names,
+            "failed_factors": failed,
+            "db_result": db_result,
+            "resource_failures": runtime_validation.get("resource_failures") or [],
+            "resource_actions": runtime_validation.get("resource_actions") or [],
+            "snapshot_promotion": snapshot_promotion,
+        }
+        tmp = checkpoint_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        tmp.replace(checkpoint_path)
+        return {
+            "path": str(checkpoint_path),
+            "status": status,
+            "retry_factor_count": len(retry_factor_names),
+            "resumed_from_task_id": cfg.resumed_from_task_id,
+        }
+
+    def _promote_snapshot_if_ready(
+        self,
+        *,
+        overall_success: bool,
+        cfg: BatchComputeConfig,
+        eligible_names: list[str],
+        start_date: str,
+        end_date: str,
+        universe_meta: dict[str, Any],
+        base_cache_manifest: dict[str, Any],
+        qlib_bin_path: Path | None,
+    ) -> dict[str, Any]:
+        if not overall_success:
+            return {"status": "not_promoted", "reason": "task_not_successful"}
+        all_eligible = self._eligibility_service.list_eligible_factors(
+            factor_names=None,
+            include_disabled=False,
+            source_mode="official_offline",
+        )
+        if not all_eligible:
+            return {"status": "not_promoted", "reason": "no_official_eligible_factors"}
+        meta = self._load_meta()
+        factors = meta.get("factors") if isinstance(meta.get("factors"), dict) else {}
+        missing_cache: list[str] = []
+        for row in all_eligible:
+            name = str(row.get("factor_name") or "").strip()
+            entry = factors.get(name) if name else None
+            if (
+                not isinstance(entry, dict)
+                or entry.get("status") != "ok"
+                or str(entry.get("window_train_start") or "") != start_date
+                or str(entry.get("window_backtest_end") or entry.get("as_of_date") or "") != end_date
+                or str(entry.get("code_hash") or "") != _code_hash(str(row.get("code_text") or ""))
+                or not (OFFICIAL_FACTOR_CACHE_SINGLE_DIR / f"{name}.parquet").exists()
+            ):
+                missing_cache.append(name)
+        metric_counts: dict[str, int] = {}
+        names = [str(row.get("factor_name") or "").strip() for row in all_eligible]
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT factor_name, COUNT(DISTINCT eval_window)
+                    FROM aistock_factor_metrics
+                    WHERE snapshot_date = %s AND factor_name = ANY(%s)
+                    GROUP BY factor_name
+                    """,
+                    (end_date, names),
+                )
+                metric_counts = {str(name): int(count) for name, count in cur.fetchall()}
+        missing_metrics = [name for name in names if metric_counts.get(name, 0) < 5]
+        if missing_cache or missing_metrics:
+            return {
+                "status": "not_promoted",
+                "reason": "global_snapshot_incomplete",
+                "eligible_factor_count": len(names),
+                "missing_cache_count": len(missing_cache),
+                "missing_cache_sample": missing_cache[:20],
+                "missing_metric_count": len(missing_metrics),
+                "missing_metric_sample": missing_metrics[:20],
+            }
+        self._update_meta_atomic(
+            {},
+            data_start=start_date,
+            data_end=end_date,
+            factor_data_dir=str(Path(cfg.factor_data_dir).expanduser()),
+            qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
+            universe_meta=universe_meta,
+            base_cache_manifest=base_cache_manifest,
+            task_id=cfg.task_id,
+            promote_snapshot=True,
+        )
+        return {
+            "status": "promoted",
+            "eligible_factor_count": len(names),
+            "snapshot_date": end_date,
+        }
 
     def _record_error_meta(self, factor_name: str, code_text: str | None, error: str) -> None:
         entry = {
@@ -1426,6 +1662,7 @@ class OfficialFactorBatchComputeService:
         batch_count: int,
         memory_samples: list[dict[str, Any]],
         resource_failures: list[dict[str, Any]],
+        resource_actions: list[dict[str, Any]],
         universe_meta: dict[str, Any],
         start_date: str,
         end_date: str,
@@ -1519,6 +1756,7 @@ class OfficialFactorBatchComputeService:
             },
             "resource_limits": asdict(getattr(self, "_resource_limits", FactorResourceLimits())),
             "resource_failures": resource_failures[-12:],
+            "resource_actions": resource_actions[-24:],
             "checks": checks,
             "failure_summary": failure_summary,
             "failed_factors": [

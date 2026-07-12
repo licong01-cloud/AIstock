@@ -33,6 +33,7 @@ class OfficialFactorFullComputeDispatchService:
         qlib_bin_path: str | None = None,
         node_id: str | None = None,
         task_id: str | None = None,
+        resumed_from_task_id: str | None = None,
     ) -> Dict[str, Any]:
         if not factor_data_dir:
             raise ValueError("factor_data_dir is required for official_factor_full_compute")
@@ -49,6 +50,7 @@ class OfficialFactorFullComputeDispatchService:
             "workers": workers,
             "timeout_per_factor": timeout_per_factor,
             "force": force,
+            "resumed_from_task_id": resumed_from_task_id,
             "qlib_bin_path": qlib_bin_path,
             "cache_source": "official_offline_backtest_factor_data",
             "code_source": "code_text",
