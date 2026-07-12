@@ -29,8 +29,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-12T16:44:35.028689Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d67bc78461692aa89ea7304157cadfe1b09e7866",
+  "fixed_at": "2026-07-12T17:08:09.310823Z",
   "github_issue_number": 2014,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2014",
   "last_seen_at": "2026-07-12T16:44:35.028689Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2015",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -58,6 +59,10 @@
     "fingerprint": "89606b5a73daa2d73a01eb3e",
     "source_event_id": "FE-20260712-89606b5a73da"
   },
+  "validation_evidence": [
+    "PR #2015 all required GitHub checks passed including paper_v2_backend, L0/module registry, CodeQL, and Semgrep",
+    "local focused regression: 21 multi-alpha tests and 74 prospective evidence/Selection Center tests passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
