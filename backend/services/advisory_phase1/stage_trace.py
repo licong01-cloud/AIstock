@@ -530,7 +530,11 @@ def build_stage_trace_envelope(
             raise ComponentEvidenceError(REASON_TRACE_CONTEXT_INVALID)
         stage_payload = _copy_json(receipt.model_dump(mode="json") if hasattr(receipt, "model_dump") else receipt)
         candidate_components: dict[str, dict[str, Any]] = {}
-        for candidate in stage_payload.get("candidates") or []:
+        stage_members = [
+            *(stage_payload.get("candidates") or []),
+            *(stage_payload.get("exclusions") or []),
+        ]
+        for candidate in stage_members:
             result = build_component_evidence(
                 manifest=manifest,
                 artifact=artifact,
@@ -538,7 +542,10 @@ def build_stage_trace_envelope(
                 runtime_config=runtime_config,
                 stage_name=name,
             )
-            candidate_components[str(candidate["symbol"])] = result.model_dump(mode="json")
+            symbol = str(candidate["symbol"])
+            if symbol in candidate_components:
+                raise ComponentEvidenceError(REASON_TRACE_CONTEXT_INVALID)
+            candidate_components[symbol] = result.model_dump(mode="json")
             component_capabilities.append(result.capability)
         stages.append(
             {
@@ -573,7 +580,10 @@ def build_stage_trace_envelope(
         trace_outbox_id=f"sto_{trace_content_hash[:20]}",
         trace_content_hash=trace_content_hash,
         trace_content=trace_content,
-        candidate_count=len((stages[0]["receipt"].get("candidates") or [])),
+        candidate_count=(
+            len(stages[0]["receipt"].get("candidates") or [])
+            + len(stages[0]["receipt"].get("exclusions") or [])
+        ),
         size_bytes=_canonical_json_size(trace_content),
     )
 

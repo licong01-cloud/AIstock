@@ -35,6 +35,21 @@ _EXPORTS = {
     "TraceCaptureReconciler": ".trace_outbox",
     "TraceDeliveryEvent": ".trace_outbox",
     "TraceDeliveryEventRequest": ".trace_outbox",
+    "CaptureBatch": ".capture_foundation",
+    "CaptureBatchRequest": ".capture_foundation",
+    "CaptureBatchStatus": ".capture_foundation",
+    "CaptureMembership": ".capture_foundation",
+    "CapturePlan": ".capture_foundation",
+    "InMemoryCaptureBatchRepository": ".capture_foundation",
+    "InMemoryTraceAdmissionValidator": ".capture_foundation",
+    "InMemoryTraceCaptureGapRepository": ".capture_foundation",
+    "PostgresCaptureBatchRepository": ".capture_foundation",
+    "PostgresTraceAdmissionValidator": ".capture_foundation",
+    "PostgresTraceCaptureGapRepository": ".capture_foundation",
+    "FrozenTradingCalendarVerifier": ".observation_capture",
+    "InMemoryObservationCaptureRepository": ".observation_capture",
+    "ObservationCaptureRecord": ".observation_capture",
+    "expected_evidence_bundle_hash": ".observation_capture",
 }
 
 __all__ = sorted(_EXPORTS)
