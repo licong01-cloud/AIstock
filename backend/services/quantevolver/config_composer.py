@@ -1656,6 +1656,9 @@ class ConfigComposer:
         uploader_src = scripts_dir / "qe_prediction_store_client.py"
         if uploader_src.exists():
             shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
+        resource_helper_src = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_src.exists():
+            shutil.copy2(resource_helper_src, exp_dir / "qe_runtime_resource.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace（qrun_limit.py 同样需要）
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
@@ -1745,6 +1748,10 @@ class ConfigComposer:
         task_id: Optional[str] = None,
         loop_index: Optional[int] = None,
         train_only: bool = False,
+        resource_session_id: Optional[str] = None,
+        resource_source_run_key: Optional[str] = None,
+        resource_session_token: Optional[str] = None,
+        phase_pipeline_enabled: bool = False,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -1973,6 +1980,18 @@ class ConfigComposer:
         uploader_path = scripts_dir / "qe_prediction_store_client.py"
         if uploader_path.exists():
             experiment_files["qe_prediction_store_client.py"] = uploader_path.read_text(encoding="utf-8")
+        resource_helper_path = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_path.exists():
+            experiment_files["qe_runtime_resource.py"] = resource_helper_path.read_text(encoding="utf-8")
+        if resource_session_token:
+            experiment_files["qe_resource_session_secret.json"] = json.dumps(
+                {
+                    "session_id": resource_session_id,
+                    "source_run_key": resource_source_run_key,
+                    "token": resource_session_token,
+                },
+                ensure_ascii=False,
+            )
         if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             minute_path = scripts_dir / "qrun_limit_minute.py"
             if minute_path.exists():
@@ -2035,6 +2054,10 @@ class ConfigComposer:
             prediction_store_run_key=prediction_store_run_key,
             task_id=task_id,
             loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
         needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
@@ -2053,6 +2076,10 @@ class ConfigComposer:
             prediction_store_run_key=prediction_store_run_key,
             task_id=task_id,
             loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2689,6 +2716,9 @@ class ConfigComposer:
         uploader_src = scripts_dir / "qe_prediction_store_client.py"
         if uploader_src.exists():
             shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
+        resource_helper_src = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_src.exists():
+            shutil.copy2(resource_helper_src, exp_dir / "qe_runtime_resource.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
@@ -4782,6 +4812,10 @@ class ConfigComposer:
         prediction_store_run_key: Optional[str] = None,
         task_id: Optional[str] = None,
         loop_index: Optional[int] = None,
+        resource_session_id: Optional[str] = None,
+        resource_source_run_key: Optional[str] = None,
+        resource_session_token: Optional[str] = None,
+        phase_pipeline_enabled: bool = False,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -4823,6 +4857,20 @@ class ConfigComposer:
             loop_index_text = str(int(loop_index))
             env_lines.append(f"export QE_LOOP_INDEX={loop_index_text}")
             env_lines.append(f"export QE_LOOP_ID=Loop{loop_index_text}")
+        resource_values = (
+            resource_session_id,
+            resource_source_run_key,
+            resource_session_token,
+        )
+        if any(resource_values) and not all(resource_values):
+            raise ValueError("QE resource session env requires id, source_run_key, and token together")
+        if resource_session_id:
+            env_lines.append(f"export QE_RESOURCE_SESSION_ID={shlex.quote(resource_session_id)}")
+            env_lines.append(f"export QE_RESOURCE_SOURCE_RUN_KEY={shlex.quote(resource_source_run_key)}")
+        if phase_pipeline_enabled:
+            if not resource_session_id:
+                raise ValueError("QE phase pipeline requires a persisted resource session")
+            env_lines.append("export QE_PHASE_PIPELINE_ENABLED=1")
         effective_factor_data_dir = str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "").strip()
         if effective_factor_data_dir:
             env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
@@ -4861,6 +4909,8 @@ class ConfigComposer:
         if train_only:
             core_parts.append("export TRAIN_ONLY=1")
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
+        if resource_session_id:
+            core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
             core_parts.append("python prepare_factors.py")
@@ -4886,7 +4936,11 @@ class ConfigComposer:
                               prediction_store_base_url: Optional[str] = None,
                               prediction_store_run_key: Optional[str] = None,
                               task_id: Optional[str] = None,
-                              loop_index: Optional[int] = None) -> str:
+                              loop_index: Optional[int] = None,
+                              resource_session_id: Optional[str] = None,
+                              resource_source_run_key: Optional[str] = None,
+                              resource_session_token: Optional[str] = None,
+                              phase_pipeline_enabled: bool = False) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -4910,6 +4964,10 @@ class ConfigComposer:
             prediction_store_run_key=prediction_store_run_key,
             task_id=task_id,
             loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
         env_block = "\n".join(env_lines)
 

@@ -96,6 +96,30 @@ class TestBacktestExecutorBasic:
         assert result.experiment_files == MOCK_EXPERIMENT_FILES
         assert result.wsl_command == MOCK_WSL_COMMAND
 
+    def test_submit_redacts_resource_session_secret_from_result(self):
+        composer = make_mock_composer()
+        composer.compose_experiment_in_memory.return_value["experiment_files"][
+            "qe_resource_session_secret.json"
+        ] = '{"token":"scoped-secret"}'
+        client = make_mock_client()
+        executor = BacktestExecutor(composer, client)
+        cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")
+        ctx = ExecutionContext(
+            task_id="task_test",
+            loop_index=1,
+            experiment_name="task_test/Loop1",
+            resource_session_id="qers_1",
+            resource_source_run_key="task_test_L1",
+            resource_session_token="scoped-secret",
+            phase_pipeline_enabled=True,
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(executor.submit(cfg, ctx))
+
+        assert result.experiment_files["qe_resource_session_secret.json"] == "<redacted>"
+        submitted_files = client.create_and_run_loop.await_args.args[3]
+        assert submitted_files["qe_resource_session_secret.json"] == '{"token":"scoped-secret"}'
+
     def test_backtest_only_requires_model_source(self):
         executor = BacktestExecutor(make_mock_composer(), make_mock_client())
         cfg = ExperimentConfig(factor_names=["f1"], model_id="lgbm")

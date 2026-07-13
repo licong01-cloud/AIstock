@@ -31,6 +31,13 @@ from ..db.pg_pool import get_conn
 from psycopg2.extras import RealDictCursor, execute_values
 
 from ..services.quantevolver.factor_eligibility_service import FactorEligibilityService
+from ..services.quantevolver.qe_resource_phase_service import (
+    AUTH_FAILED_REASON,
+    PHASE_INVALID_REASON,
+    SEQUENCE_CONFLICT_REASON,
+    QEResourcePhaseError,
+    QEResourcePhaseService,
+)
 from ..services.quantevolver.experiment_config import (
     ensure_qe_risk_policy,
     normalize_label_horizon,
@@ -1209,6 +1216,8 @@ class CustomEvolutionCreateRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism, default 1, max 4")
+    phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
+    resource_telemetry_enabled: bool = Field(False, description="Persist phase-level GPU/RAM telemetry to QE Archive")
     engine_mode: str = Field("unified", description="引擎模式: only unified is supported")
 
     auto_start: bool = Field(True, description="Create and immediately submit loops; template materialization sets false")
@@ -1221,6 +1230,8 @@ class CustomEvoConfigUpdateRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="Loop 配置列表，至少1个", min_length=1)
     node_id: Optional[str] = Field(None, description="执行节点 ID, None=默认本地节点")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    phase_pipeline_enabled: bool = Field(False, description="Allow GPU-train/CPU-backtest phase pipelining")
+    resource_telemetry_enabled: bool = Field(False, description="Persist phase-level GPU/RAM telemetry to QE Archive")
     engine_mode: str = Field("unified", description="Only unified is supported")
 
 
@@ -1228,6 +1239,8 @@ class CustomEvoLoopRerunRequest(BaseModel):
     loop: CustomEvoLoopConfig = Field(..., description="Replacement config for the target Loop")
     node_id: Optional[str] = Field(None, description="Default execution node for this mutation")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    phase_pipeline_enabled: Optional[bool] = Field(None, description="Optional task-level phase-pipeline override")
+    resource_telemetry_enabled: Optional[bool] = Field(None, description="Optional task-level telemetry override")
     engine_mode: str = Field("unified", description="Only unified is supported")
     confirm_delete_old_result: bool = Field(False, description="Must be true because rerun deletes old results")
 
@@ -1236,6 +1249,8 @@ class CustomEvoAppendRequest(BaseModel):
     loops: List[CustomEvoLoopConfig] = Field(..., description="New Loop configs to append", min_length=1)
     node_id: Optional[str] = Field(None, description="Default execution node for appended loops")
     node_parallelism: Optional[Dict[str, int]] = Field(None, description="Per-node parallelism")
+    phase_pipeline_enabled: Optional[bool] = Field(None, description="Optional task-level phase-pipeline override")
+    resource_telemetry_enabled: Optional[bool] = Field(None, description="Optional task-level telemetry override")
     engine_mode: str = Field("unified", description="Only unified is supported")
     ack_failed_loop_warning: bool = Field(False, description="Caller acknowledged existing failed/cancelled loops")
 
@@ -1452,6 +1467,8 @@ async def create_custom_evolution_task(req: CustomEvolutionCreateRequest, backgr
             loops_config=loops_config,
             node_id=loop1_node_id,
             node_parallelism=node_parallelism,
+            phase_pipeline_enabled=req.phase_pipeline_enabled,
+            resource_telemetry_enabled=req.resource_telemetry_enabled,
             engine_mode="unified",
             clone_from_task_id=req.clone_from_task_id,
             auto_start=req.auto_start,
@@ -1522,6 +1539,8 @@ async def update_custom_evo_config(task_id: str, req: CustomEvoConfigUpdateReque
             loops_config=loops_config,
             node_id=loop1_node_id,
             node_parallelism=node_parallelism,
+            phase_pipeline_enabled=req.phase_pipeline_enabled,
+            resource_telemetry_enabled=req.resource_telemetry_enabled,
             engine_mode="unified",
         )
         return {"status": "success", **result}
@@ -1633,6 +1652,8 @@ async def rerun_custom_evo_loop(
             loop_config=loops_config[0],
             node_id=request_node_id,
             node_parallelism=node_parallelism,
+            phase_pipeline_enabled=req.phase_pipeline_enabled,
+            resource_telemetry_enabled=req.resource_telemetry_enabled,
         )
         background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, [loop_index])
         return {"status": "success", **result}
@@ -1681,6 +1702,8 @@ async def append_custom_evo_loops(
             loops_config=loops_config,
             node_id=request_node_id,
             node_parallelism=node_parallelism,
+            phase_pipeline_enabled=req.phase_pipeline_enabled,
+            resource_telemetry_enabled=req.resource_telemetry_enabled,
             ack_failed_loop_warning=req.ack_failed_loop_warning,
         )
         background_tasks.add_task(scheduler.submit_custom_evo_selected_loops, task_id, result["new_loop_indexes"])
@@ -1761,6 +1784,41 @@ class LoopCompletedPayload(BaseModel):
     loop_id: str = Field(..., description="Loop DB ID, 格式: {task_id}_Loop{N}")
 
 
+class LoopResourcePhasePayload(BaseModel):
+    session_id: str
+    source_run_key: str
+    task_id: str
+    loop_id: str
+    loop_index: int = Field(..., ge=1)
+    node_id: str
+    sequence_no: int = Field(..., ge=1)
+    phase: str
+    phase_status: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = Field(None, ge=0)
+    sample_count: Optional[int] = Field(None, ge=0)
+    process_rss_peak_bytes: Optional[int] = Field(None, ge=0)
+    process_vm_hwm_peak_bytes: Optional[int] = Field(None, ge=0)
+    gpu_device_index: Optional[int] = Field(None, ge=0)
+    gpu_name: Optional[str] = None
+    gpu_memory_used_peak_bytes: Optional[int] = Field(None, ge=0)
+    gpu_process_memory_peak_bytes: Optional[int] = Field(None, ge=0)
+    gpu_utilization_avg_pct: Optional[float] = Field(None, ge=0, le=100)
+    gpu_utilization_peak_pct: Optional[float] = Field(None, ge=0, le=100)
+    cuda_allocated_peak_bytes: Optional[int] = Field(None, ge=0)
+    cuda_reserved_peak_bytes: Optional[int] = Field(None, ge=0)
+    cuda_allocated_end_bytes: Optional[int] = Field(None, ge=0)
+    cuda_reserved_end_bytes: Optional[int] = Field(None, ge=0)
+    resident_requested: Optional[bool] = None
+    resident_active: Optional[bool] = None
+    resident_fallback: Optional[bool] = None
+    fallback_reason_code: Optional[str] = None
+    release_check_passed: Optional[bool] = None
+    reason_code: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
 class PromotionReviewCreateRequest(BaseModel):
     requested_by: str = Field("manual_user", description="Operator or UI identity requesting manual SOTA review")
     review_reason: Optional[str] = Field(None, description="Manual review note; does not approve SOTA")
@@ -1786,6 +1844,27 @@ async def on_loop_completed_webhook(request: Request, payload: LoopCompletedPayl
     _task = asyncio.create_task(_process_with_logging())
     _task.add_done_callback(lambda t: logger.error(f"Webhook task error: {t.exception()}") if t.exception() else None)
     return {"status": "accepted", "message": f"Processing loop {payload.loop_id}"}
+
+
+@router.post("/webhook/loop-resource-phase", summary="Persist authenticated QE runtime phase resources")
+def on_loop_resource_phase_webhook(request: Request, payload: LoopResourcePhasePayload):
+    token = request.headers.get("X-QE-Resource-Token", "").strip()
+    if not token:
+        raise HTTPException(status_code=403, detail={"reason_code": AUTH_FAILED_REASON})
+    try:
+        result = QEResourcePhaseService().ingest_event(
+            token=token,
+            payload=payload.model_dump(mode="json"),
+        )
+        return {"status": "success", "data": result}
+    except QEResourcePhaseError as exc:
+        status_code = 403 if exc.reason_code == AUTH_FAILED_REASON else 409
+        if exc.reason_code not in {AUTH_FAILED_REASON, SEQUENCE_CONFLICT_REASON, PHASE_INVALID_REASON}:
+            status_code = 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
 
 
 @router.post("/tasks/{task_id}/loops/{loop_id}/promotion-review", summary="Create a manual SOTA promotion review")

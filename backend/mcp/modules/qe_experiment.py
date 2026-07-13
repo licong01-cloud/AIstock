@@ -225,7 +225,7 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(f"/quantevolver/evolution/tasks/{safe}/logs/tail", params={"tail": sanitize_tail(tail)})
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
-    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None) -> Any:
+    def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
         normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
         return client.post(
@@ -239,11 +239,13 @@ def register(registry: "ModuleRegistry") -> None:
                 "engine_mode": engine_mode,
                 "auto_start": False,
                 "clone_from_task_id": clone_from_task_id,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
             },
         )
 
     @registry.mcp.tool(name="qe_custom_evo_update_config_confirmed")
-    def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified") -> Any:
+    def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
         registry.confirm(confirm_update, QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM, "confirm_update")
         normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
         safe = registry.sanitize(task_id, "task_id")
@@ -257,6 +259,8 @@ def register(registry: "ModuleRegistry") -> None:
                 "node_id": safe_node,
                 "node_parallelism": node_parallelism,
                 "engine_mode": engine_mode,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
             },
         )
 
@@ -285,18 +289,23 @@ def register(registry: "ModuleRegistry") -> None:
         )
 
     @registry.mcp.tool(name="qe_custom_evo_rerun_loop_confirmed")
-    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None) -> Any:
+    def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
         registry.confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
         loop_payload = dict(loop or {})
         _ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
             f"/quantevolver/evolution/tasks/{safe}/loops/{_require_positive_loop_index(loop_index)}/rerun",
-            {"loop": loop_payload, "confirm_delete_old_result": True},
+            {
+                "loop": loop_payload,
+                "confirm_delete_old_result": True,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
+            },
         )
 
     @registry.mcp.tool(name="qe_custom_evo_append_loops_confirmed")
-    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None) -> Any:
+    def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> Any:
         registry.confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
         loop_payloads = [dict(loop or {}) for loop in (loops or [])]
         for idx, loop in enumerate(loop_payloads, start=1):
@@ -304,7 +313,12 @@ def register(registry: "ModuleRegistry") -> None:
         safe = registry.sanitize(task_id, "task_id")
         return client.post(
             f"/quantevolver/evolution/tasks/{safe}/custom-loops/append",
-            {"loops": loop_payloads, "ack_failed_loop_warning": True},
+            {
+                "loops": loop_payloads,
+                "ack_failed_loop_warning": True,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
+            },
         )
 
     @registry.mcp.tool(name="qe_template_create")

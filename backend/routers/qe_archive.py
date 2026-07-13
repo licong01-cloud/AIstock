@@ -16,6 +16,10 @@ from backend.services.qe_archive.backfill_service import (
 )
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.worker_service import QEArchiveWorkerService, WORKER_CONFIRM_TEXT
+from backend.services.quantevolver.qe_resource_phase_service import (
+    QEResourcePhaseError,
+    QEResourcePhaseService,
+)
 
 
 router = APIRouter(prefix="/qe-archive", tags=["qe-archive"])
@@ -107,6 +111,30 @@ def get_qe_archive_health():
         "status": "success",
         "data": get_repository().get_archive_summary(),
     }
+
+
+@router.get("/resource-phases", summary="Query phase-level QE GPU/RAM resource telemetry")
+def query_qe_archive_resource_phases(
+    run_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    loop_index: int | None = Query(None, ge=1),
+    source_run_key: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+):
+    try:
+        rows = QEResourcePhaseService().list_resource_phases(
+            run_id=run_id,
+            task_id=task_id,
+            loop_index=loop_index,
+            source_run_key=source_run_key,
+            limit=limit,
+        )
+    except QEResourcePhaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+    return {"status": "success", "data": rows, "count": len(rows)}
 
 
 @router.get("/outbox", summary="Recent QE archive outbox events")

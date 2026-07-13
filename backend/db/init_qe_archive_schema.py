@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution convenience.
     from backend.db.pg_pool import get_conn
 
 
-QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v3_20260628"
+QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v4_20260713"
 
 
 BASE_DDL: list[str] = [
@@ -590,6 +590,94 @@ BASE_DDL: list[str] = [
     """
     CREATE INDEX IF NOT EXISTS idx_qear_training_metric_run
         ON qe_archive.run_model_training_metric(run_id, metric_key, split_name, epoch, step)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_resource_session (
+        session_id TEXT PRIMARY KEY,
+        source_run_key TEXT NOT NULL,
+        attempt_no INTEGER NOT NULL,
+        task_id TEXT NOT NULL,
+        loop_id TEXT NOT NULL,
+        loop_index INTEGER NOT NULL,
+        node_id TEXT NOT NULL,
+        archive_run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE SET NULL,
+    token_sha256 TEXT NOT NULL,
+    phase_pipeline_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive',
+    current_phase TEXT NOT NULL DEFAULT 'created',
+        last_sequence_no INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        gpu_phase_released_at TIMESTAMPTZ,
+        terminal_reason_code TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        CONSTRAINT uq_qear_resource_session_attempt UNIQUE (source_run_key, attempt_no),
+    CONSTRAINT ck_qear_resource_session_status CHECK (
+        status IN ('reserved', 'running', 'completed', 'failed', 'cancelled')
+    ),
+    CONSTRAINT ck_qear_resource_session_gpu_policy CHECK (
+        gpu_training_policy IN ('exclusive', 'parallel')
+    )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_session_task_loop
+        ON qe_archive.run_resource_session(task_id, loop_index, attempt_no DESC)
+    """,
+    """
+CREATE INDEX IF NOT EXISTS idx_qear_resource_session_node_phase
+ON qe_archive.run_resource_session(node_id, gpu_training_policy, status, current_phase)
+        WHERE phase_pipeline_enabled = TRUE
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_session_archive_run
+        ON qe_archive.run_resource_session(archive_run_id)
+        WHERE archive_run_id IS NOT NULL
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_resource_phase (
+        id BIGSERIAL PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES qe_archive.run_resource_session(session_id) ON DELETE CASCADE,
+        source_run_key TEXT NOT NULL,
+        sequence_no INTEGER NOT NULL,
+        phase TEXT NOT NULL,
+        phase_status TEXT NOT NULL,
+        started_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ,
+        duration_seconds DOUBLE PRECISION,
+        sample_count INTEGER,
+        process_rss_peak_bytes BIGINT,
+        process_vm_hwm_peak_bytes BIGINT,
+        gpu_device_index INTEGER,
+        gpu_name TEXT,
+        gpu_memory_used_peak_bytes BIGINT,
+        gpu_process_memory_peak_bytes BIGINT,
+        gpu_utilization_avg_pct DOUBLE PRECISION,
+        gpu_utilization_peak_pct DOUBLE PRECISION,
+        cuda_allocated_peak_bytes BIGINT,
+        cuda_reserved_peak_bytes BIGINT,
+        cuda_allocated_end_bytes BIGINT,
+        cuda_reserved_end_bytes BIGINT,
+        resident_requested BOOLEAN,
+        resident_active BOOLEAN,
+        resident_fallback BOOLEAN,
+        fallback_reason_code TEXT,
+        release_check_passed BOOLEAN,
+        reason_code TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        event_sha256 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_qear_resource_phase_sequence UNIQUE (session_id, sequence_no)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_phase_source
+        ON qe_archive.run_resource_phase(source_run_key, sequence_no)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_phase_reason
+        ON qe_archive.run_resource_phase(reason_code, created_at DESC)
     """,
     """
     CREATE TABLE IF NOT EXISTS qe_archive.run_position (

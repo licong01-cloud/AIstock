@@ -183,22 +183,38 @@ def qe_custom_evo_retry_loop_confirmed(task_id: str, loop_index: int, retry_mode
 
 
 @mcp.tool()
-def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None) -> dict[str, Any]:
+def qe_custom_evo_rerun_loop_confirmed(task_id: str, loop_index: int, loop: dict[str, Any], confirm_rerun: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> dict[str, Any]:
     require_confirm(confirm_rerun, "QE_CUSTOM_EVO_RERUN", "confirm_rerun")
     loop_payload = dict(loop or {})
     ensure_loop_fixed_seed(loop_payload, context="qe_custom_evo_rerun_loop_confirmed.loop")
     safe = sanitize_identifier(task_id, "task_id")
-    return _client().post(f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/rerun", {"loop": loop_payload, "confirm_delete_old_result": True})
+    return _client().post(
+        f"/quantevolver/evolution/tasks/{safe}/loops/{int(loop_index)}/rerun",
+        {
+            "loop": loop_payload,
+            "confirm_delete_old_result": True,
+            "phase_pipeline_enabled": phase_pipeline_enabled,
+            "resource_telemetry_enabled": resource_telemetry_enabled,
+        },
+    )
 
 
 @mcp.tool()
-def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None) -> dict[str, Any]:
+def qe_custom_evo_append_loops_confirmed(task_id: str, loops: list[dict[str, Any]], confirm_append: str | None = None, phase_pipeline_enabled: bool | None = None, resource_telemetry_enabled: bool | None = None) -> dict[str, Any]:
     require_confirm(confirm_append, "QE_CUSTOM_EVO_APPEND", "confirm_append")
     loop_payloads = [dict(loop or {}) for loop in (loops or [])]
     for idx, loop in enumerate(loop_payloads, start=1):
         ensure_loop_fixed_seed(loop, context=f"qe_custom_evo_append_loops_confirmed.loops[{idx}]")
     safe = sanitize_identifier(task_id, "task_id")
-    return _client().post(f"/quantevolver/evolution/tasks/{safe}/custom-loops/append", {"loops": loop_payloads, "ack_failed_loop_warning": True})
+    return _client().post(
+        f"/quantevolver/evolution/tasks/{safe}/custom-loops/append",
+        {
+            "loops": loop_payloads,
+            "ack_failed_loop_warning": True,
+            "phase_pipeline_enabled": phase_pipeline_enabled,
+            "resource_telemetry_enabled": resource_telemetry_enabled,
+        },
+    )
 
 
 @mcp.tool()

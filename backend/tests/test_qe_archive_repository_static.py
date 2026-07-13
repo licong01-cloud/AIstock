@@ -2200,6 +2200,35 @@ def test_qe_archive_worker_api_returns_worker_report(monkeypatch) -> None:
     assert response.json()["data"]["completed"] == 2
 
 
+def test_qe_archive_resource_phase_api_forwards_bounded_filters(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResourceService:
+        def list_resource_phases(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return [{"session_id": "qers_1", "phases": []}]
+
+    monkeypatch.setattr(qe_archive_router, "QEResourcePhaseService", lambda: FakeResourceService())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/qe-archive/resource-phases",
+        params={"task_id": "qe_task", "loop_index": 2, "source_run_key": "qe_task_L2", "limit": 25},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert captured == {
+        "run_id": None,
+        "task_id": "qe_task",
+        "loop_index": 2,
+        "source_run_key": "qe_task_L2",
+        "limit": 25,
+    }
+
+
 def test_qe_archive_implementation_does_not_read_worker_workspace_paths() -> None:
     banned_tokens = (
         "workspace_path",

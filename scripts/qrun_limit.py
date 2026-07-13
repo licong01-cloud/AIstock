@@ -31,6 +31,18 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
         raise
     maybe_upload_prediction_artifacts = None
 
+try:
+    from qe_runtime_resource import finish_resource_monitor, start_resource_monitor
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_runtime_resource":
+        raise
+
+    def start_resource_monitor():
+        return None
+
+    def finish_resource_monitor(*, status: str, error: str | None = None):
+        return None
+
 
 RECORDER_REF_FILE = "qe_current_recorder.json"
 
@@ -237,6 +249,18 @@ def apply_qe_fixed_seed(config: dict) -> int | None:
 
 def main():
     yaml_path = sys.argv[1] if len(sys.argv) > 1 else "conf.yaml"
+
+    start_resource_monitor()
+    try:
+        _run_main(yaml_path)
+    except Exception as exc:
+        finish_resource_monitor(status="failed", error=type(exc).__name__)
+        raise
+    else:
+        finish_resource_monitor(status="completed")
+
+
+def _run_main(yaml_path):
 
     # Jinja2 渲染 → YAML 解析
     rendered = render_yaml_template(yaml_path)
