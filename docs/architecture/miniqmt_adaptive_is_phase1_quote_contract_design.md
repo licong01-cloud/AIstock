@@ -6,7 +6,7 @@
 >
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
-> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`）；P1-D 已由 PR #2011 合入（merge `03ed6615`）。下一开发阶段为 P1-E；本次修订只把 P1-E 补全到可直接实施级别，不表示 P1-E 代码、binding、真实 SIM 或 broker side effect 已产生。
+> 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`），P1-D 已由 PR #2011 合入（merge `03ed6615`），P1-E 已由 PR #2019 合入（merge `fa0e97bf`）。Production activation wiring 已按 §8.7 完成实现并由 §13.6 验收，源代码合入状态必须以对应 PR 与 `main` readback 为准；production DDL/config/restart/binding 持久化、真实 SIM 和 broker side effect 仍分别由用户授权和执行。
 >
 > 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
 
@@ -73,7 +73,7 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 - `backend/services/trading_calendar_status.py:TradingCalendarStatusService` 仍是交易日 authority：DB 为事实源、月度文件缓存为正常读取路径、缺行 fail loud，禁止周末/工作日推断；P1-C 的 `miniqmt_quote_context.py` 已复用该 service。`xtdata.get_trading_calendar()` 不作为第二套 scheduler authority。
 - `backend/services/paper_trading_v2/market_data.py` 的 suspend/limit/previous-close/equity-metadata authority 已通过 scheduler-owned adapter 预加载 immutable context；quote callback、writer 与 evaluator 不复制 SQL、不访问 DB。
 - `quote_normalizer.py` 只复制/规范化 `stockStatus/openint`；它们是 per-symbol 交叉证据，不是交易日或市场时段 authority。P1-C 已按 exact registered value 保留 capability/data evidence，未知或冲突不会被解释成可交易。
-- `backend/services/miniqmt_execution_runtime/runtime.py` 的既有 `VnpyTick` 仍仅服务 LEGACY_B0；`QuoteIngressSupervisor`、normalized store、`ActionQuoteEvaluator` 与 `QuoteEvidenceCoordinator` 尚未接入 `MiniQMTExecutionRuntimeClient.submit_event_loop_vnpy_parent_intents()`。P1-E 必须补齐该单一路径，不能以 metadata-only、测试专用 adapter 或另一条 submit 路径代替。
+- P1-E 已把 `QuoteIngressSupervisor`、normalized/context store、`ActionQuoteEvaluator`、`QuoteEvidenceCoordinator` 与 strict `VnpyTick` projection 接入唯一 `MiniQMTExecutionRuntimeClient` event-loop 路径；但合入后的生产事实显示 `build_simulation_lifecycle_scheduler_from_env()` 尚未构造 supervisor/factory，`StrategyRuntimeReleaseService.create_binding()` 也尚无显式 quote-control 参数，故代码存在但默认进程仍只能运行 LEGACY_B0。当前 activation slice 必须闭合这两个生产入口，不能通过测试专用 factory、手工改 DB 或运行中改写 binding 代替。
 
 ### 1.3 迅投/xtquant 能力边界
 
@@ -1286,6 +1286,38 @@ order/trade/reconcile、无重复 child、完整 durable links 和 §5.12 v2 exp
 | P1-D | P1-C、现有 event/TCA carrier | 不逐 tick 写 DB；不合成 auction；不绑定 revision/调用 broker | unit/property + dev-DB migration/readback + strictly read-only diagnostics；真实 observation activation 仍需用户另行授权 |
 | P1-E | P1-D、production CHECK readback、新 B0_QUOTE_V2 revision/assignment | 不启用 Adaptive IS；一个 parent 一个 revision；evidence ack 前无 submit；LEGACY path 不变 | code gate 可离线完成；binding 激活与正常交易日真实 SIM B0 control 需用户另行授权 |
 
+### 8.7 Production activation wiring（P1-E 合入后的生产入口闭合）
+
+本切片不重新实现 P1-E，也不产生生产 side effect；它只把已经验收的组件接入唯一生产
+composition root，并提供不可变 binding 的强类型创建入口：
+
+1. `build_simulation_lifecycle_scheduler_from_env()` 必须严格解析已注册 process config，并只读调用
+   `quote_event_schema_gate()`；startup 永不执行 migration/rollback。switch=true 但 readback 非
+   `applied_and_verified` 或异常时，health 必须为 `BLOCKED`、factory 必须缺席，显式 B0 assignment
+   继续 loud `ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT`；LEGACY_B0 继续原路径。
+2. schema exact 且 switch=true 时，只构造一个 scheduler-owned
+   `QuoteIngressSupervisor + B0QuoteV2ControllerFactory`，固定
+   `data_session_key=SIM:B0_QUOTE_V2:simulation_scheduler`。bootstrap 必须复用该 Phase 1 physical
+   lease 后的 `get_full_tick(..., ensure_subscription=false, ensure_fresh=false)`，不得另建 LEGACY
+   managed subscription；bootstrap 完整性与 freshness 仍分别由 P1-B/P1-C exact contract 判定。
+3. switch=false 时只构造 lazy drain-only factory，状态 `DRAINING`；普通 LEGACY startup 不读取
+   schema、不构造 QMT client/subscriber/supervisor。只有具有 durable active algo 或 active child fact
+   的既有 runtime 以 `recovering_active=true` 恢复时，factory 才只读验证 schema exact 并构造唯一
+   supervisor/delegate；非 exact/readback failure loud 拒绝且不构造依赖。新 run、新 parent、terminal/
+   空 runtime 均不得借 recovery 标志绕过 switch；fresh submit 必须在 gateway/runtime 构造前调用
+   factory admission contract，避免先写 `RUNTIME_CREATED` 再发现 drain-only。
+4. scheduler 的每个合法 lifecycle/post-close tick 调用 supervisor epoch/watchdog 一次；background
+   shutdown 先停止接纳新 assignment，再关闭唯一 supervisor。status 公开 bounded activation/
+   controller health，不吞掉 schema、factory 或 lifecycle 错误，不由 read API 构造/修复组件。
+5. `StrategyRuntimeReleaseService.create_binding()` 接受唯一显式
+   `miniqmt_quote_control` 对象，复用 `QuoteControlBindingV1` exact parser 后再持久化；非 MiniQMT SIM、
+   missing/unknown/null/非法 revision 均 loud 拒绝。历史调用未传对象时保持既有 LEGACY identity；
+   unattended roll-forward 必须精确保留源 binding 的 quote-control，不得次日静默降成 LEGACY。
+6. activation 只能针对**新** immutable execution policy/release/binding/date。不得修改当前 run 的
+   binding、plan、parent assignment 或 runtime metadata；有活动订单/child 的 LEGACY run 必须按原
+   revision 完成。实际创建 production release/binding、写 config、重启和正常交易日 SIM 验证仍由
+   用户另行授权，不新增 approval/RBAC/permit/人工 acknowledge。
+
 所有服务重启由用户执行。Codex 只能提出重启要求并在重启后验证。P1-E 的 binding/config 持久化与真实 SIM 选择需要用户单独授权；LIVE、DDL、依赖安装和任务外功能始终不在本阶段默认授权内。
 
 ---
@@ -1308,6 +1340,7 @@ order/trade/reconcile、无重复 child、完整 durable links 和 §5.12 v2 exp
 | auction | OBSERVE_ONLY 默认；UNAVAILABLE 不合成字段、不阻塞 continuous |
 | B0 parity | fresh/valid action 逐字段等价；invalid/stale 只产生预注册安全差异；不得自动切换 revision |
 | config | process/policy 分层、ConfigManager round-trip、unknown/illegal schema loud |
+| production activation | switch false + pending schema 无组件；switch true + pending/readback failure loud BLOCKED；exact schema READY；false + exact schema DRAINING-only；single factory/bootstrap 不走 LEGACY subscription；scheduler epoch/watchdog/shutdown；fresh assignment 与 durable-active recovery 分离；binding exact create/非 MiniQMT 拒绝/roll-forward revision 保持 |
 | migration | 旧/new event types 与 sources、constraint preflight、idempotent apply、rollback、production readback |
 
 #### 9.1.1 P1-C 必须存在的直接测试
@@ -1622,6 +1655,7 @@ rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；t
 | F-017 | SIM-first/default-off/active-parent drain/显式 revision 回滚与 LIVE hard lock不变；不新增审批、RBAC、permit、confirm-run 或人工 ack |
 | F-019 | generation lease、bootstrap、reserved slots、single writer、heartbeat/restart、独立高优先级通道、per-symbol eligibility 与 dependency-group watermark 完整 |
 | F-020 | `market_data_id`、MarketDataEvidenceV1 exact schema/hash、action/reject/child/protection/markout/cadence chain、single-writer/outbox/retry、late-fill/restart/session-boundary、auction raw capability、event types、read-only API、retention/cardinality、metrics/alerts/runbook、精确 CHECK migration/rollback/readback，以及 Phase 0B v2 单查询 export/coverage/completeness 完整 |
+| F-021 | production scheduler composition 唯一、switch=true eager/switch=false durable-recovery-only lazy schema readback 自动 fail closed、READY/DRAINING、Phase 1 bootstrap 不创建 LEGACY subscription、不可变 binding exact create 与 unattended roll-forward revision 保持完整；不执行 DDL/config/restart/binding mutation/broker，也不新增人工门禁 |
 
 ---
 
@@ -1640,6 +1674,7 @@ rollback 同样只接受 exact target 或 exact old：old 已存在则 no-op；t
 | F-017 | §0.4、§4.5.2、§6.1.1、§8.5、§10–§11 | default-off SIM、显式 revision selection、scheduler-owned自动恢复、user-owned config/restart/binding activation、active drain、LIVE hard lock、no approval/RBAC/permit 已定义 | design_ready | none |
 | F-019 | §4.2–§4.3、§5.6–§5.7、§8.2–§8.3、§9.4 | bootstrap/generation/reserved slot/worker/priority/per-symbol/group watermark、metrics/alerts/runbook 已定义 | design_ready | none |
 | F-020 | §4.4.1–§4.5、§5.8–§5.12、§6.1、§7、§8.4–§8.5、§9.1.2–§9.4、§10.3 | P1-D exact evidence/repository/migration 与 P1-E action/child/restart closure、Phase 0B v2 bounded snapshot export、coverage/completeness、metrics/alerts/runbook 均已定义到直接 nodeid | design_ready | none |
+| F-021 | §4.5、§6.1–§6.1.1、§8.7、§9.1、§10–§11 | unique production composition、eager/lazy 只读 DDL readback、READY/BLOCKED/DRAINING、durable-active recovery、pure LEGACY startup parity、exact bootstrap、binding create/roll-forward 与禁止原地切换均已定义到直接 nodeid | design_ready | none |
 
 ---
 
@@ -1746,11 +1781,11 @@ repository/diagnostics 的 PostgreSQL transaction、recursive link、pagination�
 路径由 disposable dev-DB 直接执行，不以 mock-only 结果替代。生产数据库、broker、服务进程和
 持久化运行配置均未触碰。
 
-### 13.5 P1-E implementation acceptance contract（代码 PR 必填）
+### 13.5 P1-E implementation acceptance record（2026-07-12）
 
-本表是 P1-E 代码 PR 的完成判据，不是本设计 PR 的实现声明。代码 PR 必须把每行更新为
-`implemented_verified`，填写真实 symbol/file refs、nodeids/receipts 与边界；任何一行仍为
-`required_for_p1e_pr`、partial、mock-only 或 gap 时不得请求合入。
+本表对应 PR #2019 / merge `fa0e97bf` 的 P1-E 代码验收记录。每行已填写真实
+symbol/file refs、nodeids/receipts 与边界；它不表示 production composition、DDL/config/restart、
+binding 持久化、真实 SIM 或 broker side effect 已完成，后续生产入口由 §8.7/§13.6 单独验收。
 
 | P1-E implementation item | required implementation refs | required test/evidence | design-time status | explicit boundary |
 |---|---|---|---|---|
@@ -1769,6 +1804,31 @@ active-instance 旧断言、event-loop no-child 旧断言、两个 deferred-buy 
 compiler-route 旧异常类型断言，不是 P1-E 分支新增回归。本记录不把基线失败写成绿色，也不以修复
 任务外既有行为来换取假成功。
 
+### 13.6 Production activation wiring implementation acceptance record（2026-07-13）
+
+本记录只证明 §8.7 的生产代码入口已完整实现并通过本地 gate；源代码是否已合入必须以对应 PR 与
+`main` readback 分别核验。它不表示 production DDL/config/restart/release/binding 已执行，更不表示当前
+LEGACY run 被原地切换、真实 SIM feed/broker 已运行或 Phase 1 运行验收已完成。
+
+| activation item | implementation refs | test/evidence | status | explicit boundary |
+|---|---|---|---|---|
+| unique production composition 与 strict config/schema state | `simulation_runtime/miniqmt_quote_activation.py::{build_miniqmt_quote_ingress_activation_from_env,MiniQMTQuoteIngressActivation,_build_runtime_components}`；`scheduler.py::build_simulation_lifecycle_scheduler_from_env` | `test_miniqmt_quote_activation.py`：switch=true exact READY、pending/readback failure BLOCKED 且 dependency=0、single factory identity、bootstrap `ensure_subscription=false/ensure_fresh=false` | implemented_verified | startup 只读 schema；不执行 DDL，不写 config，不连接/调用 broker；explicit B0 无 factory 时仍 loud，绝不转 LEGACY |
+| pure LEGACY startup 与 switch=false durable drain recovery | `DrainOnlyB0QuoteV2ControllerFactory`；`client.py::_b0_quote_v2_recovering_active`；`B0QuoteV2ControllerFactory.assert_accepts_new_assignments` | false-switch 构造后 schema/subscriber/QMT calls=0；fresh admission 在 runtime/gateway 前拒绝；仅 durable ACTIVE/PAUSED algo 或 active child 可触发 lazy exact readback/delegate；pending/readback failure typed loud；P1-E lifecycle/restart 回归 | implemented_verified | lazy proxy 不创建 consumer/feed；terminal/empty/new runtime 不可伪装 recovery；active parent 不切 revision、不重复 submit |
+| scheduler epoch/watchdog/status/shutdown ownership | `SimulationLifecycleScheduler::{_advance_miniqmt_quote_ingress_lifecycle,_miniqmt_quote_ingress_activation_health,shutdown_miniqmt_quote_ingress}`；background shutdown | direct lifecycle/post-close 每 tick 一次、health exact mapping、shutdown idempotent/stopped rejection；background executor shutdown regression通过 | implemented_verified | 不创建第二 scheduler/gateway；read API 不构造/repair；生命周期异常不吞掉、不改 run status 为假成功 |
+| immutable binding create 与 unattended roll-forward | `StrategyRuntimeReleaseService.create_binding(miniqmt_quote_control=...)`；`scheduler.py::_roll_forward_unattended_binding` | exact `QuoteControlBindingV1` canonical readback、非 MiniQMT loud reject、历史 omitted identity 保持、B0 next-date roll-forward revision exact 保持；P1-E binding/adapter/restart/parity/Phase0B + activation matrix `56 passed` | implemented_verified | 不复制 policy 阈值、不读/新增 approval gate；不修改当前 binding/run/plan；实际 production release/binding 创建仍需用户另行授权 |
+| quality、coverage 与跨模块回归 | changed-only ruff/compile/diff/guardrail、ownership、L0/module-registry/F2；activation direct、schema/config/ingress、Paper/Selection/Package、simulation L2 | activation `12 passed`，含真实 client fresh submit 在 runtime/gateway/QMT 前拒绝与 durable-active tick driver 经 drain delegate 恢复；statement `88.89%`、branch `74.19%`；schema/config/ingress `60 passed`；`paper_v2_backend=905 passed, 2 skipped, 2 xfailed`；simulation L2 `238 passed, 4 failed`，同 4 个失败在未修改 main exact nodeid 复现 | implemented_verified | 4 个基线失败仍为两个 deferred-buy 旧断言、retired compiler-route 异常类型和 operator fixture 账户依赖；未改任务外业务逻辑来制造绿色 |
+
+DESIGN-COMPLIANCE-001 四项结论：
+
+- `no_simplified_delivery=PASS`：production composition、eager/lazy schema、drain recovery、binding create/
+  roll-forward、lifecycle/status/shutdown 均有真实代码入口与直接反例，不以 mock-only factory 代替。
+- `no_silent_error=PASS`：schema readback、missing admission contract、fresh/drain 冲突、非法 binding、
+  lifecycle 方法缺失均为 typed loud 结果；仅按设计保留 LEGACY，未伪报 B0 成功。
+- `no_business_semantic_drift=PASS`：LEGACY startup 不读 schema、不构造 QMT/subscriber，旧 binding hash
+  不变；price/quantity/direction/core/gateway/OMS/evidence identity 未改；B0 roll-forward 不降级 revision。
+- `no_unrequested_gate_or_approval=PASS`：只增加批准设计中的自动 schema/identity/admission 完整性条件；
+  未增加 approval/RBAC/permit/confirm-run/人工 acknowledge，也未改变既有 LIVE hard lock。
+
 ---
 
 ## 14. Exit Criteria / 设计退出条件
@@ -1784,7 +1844,7 @@ compiler-route 旧异常类型断言，不是 P1-E 分支新增回归。本记�
 - 不得把静态、占位、简化或 mock-only 产物写成已完成。
 - 不存在人工审批/RBAC/permit/confirm-run/ack；所有技术条件可自动正向满足且只影响对应 symbol/revision。
 
-P1-A/P1-B/P1-C/P1-D 已完成实现与合入；P1-D 的权威实现记录为 §13.4 / PR #2011 / merge `03ed6615`。本修订使下一阶段 P1-E 达到可直接实施级别，但 §13.5 全部验证前不得宣称 P1-E code complete；production CHECK DDL 未获授权或未完成 production readback 时必须单独报告 `production_ddl_gate=pending`，不得激活 ingress。P1-E 代码合入也不自动表示 binding/config 已持久化、服务已重启或真实 SIM 已验证；这些状态必须分别报告。任何阶段都不得把本设计完成误报为 ADAPTIVE_IS_L1、B1 可下单、LEGACY_B0 已改变或 BUG-599/600/604/614 已被本阶段重写。
+P1-A～P1-E 已完成实现与合入；P1-E 的权威实现记录为 §13.5 / PR #2019 / merge `fa0e97bf`。Production activation wiring 的实现记录为 §13.6，其 source merge 状态必须由对应 PR 与 `main` readback 单独证明。即使代码合入，production CHECK DDL 未获授权/未完成 readback 时仍必须单独报告 gate，且不得激活新 B0 assignment；binding/config 持久化、服务重启、正常交易日真实 SIM 与 broker evidence 必须分别报告。任何阶段都不得把代码入口完成误报为 ADAPTIVE_IS_L1、B1 可下单、LEGACY_B0 当前 run 已切换或 BUG-599/600/604/614 已被本阶段重写。
 
 ---
 

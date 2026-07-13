@@ -1679,6 +1679,16 @@ class B0QuoteV2ControllerFactory:
 
         self._accept_new_assignments = bool(enabled)
 
+    def assert_accepts_new_assignments(self) -> None:
+        """Fail before runtime construction when the process is drain-only."""
+
+        if not self._accept_new_assignments:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 switch is disabled for new assignments; only durable active runtimes may drain",
+                context={"data_session_key": self.data_session_key, "recovering_active": False},
+            )
+
     def validate_revision_parity(
         self,
         *,

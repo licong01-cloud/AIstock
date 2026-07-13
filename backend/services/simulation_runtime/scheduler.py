@@ -89,6 +89,7 @@ from .models import (
     StrategyRuntimeRelease,
     canonical_json_sha256,
 )
+from .miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
@@ -2005,10 +2006,12 @@ def build_simulation_lifecycle_scheduler_from_env(
         provider: SimulationRunContextProvider = ProductionSimulationRunContextProvider()
     else:
         provider = FailFastSimulationRunContextProvider()
+    quote_ingress_activation = build_miniqmt_quote_ingress_activation_from_env()
     return SimulationLifecycleScheduler(
         repository=repository,
         context_provider=provider,
         trading_calendar_service=TradingCalendarStatusService(),
+        miniqmt_quote_ingress_activation=quote_ingress_activation,
     )
 
 
@@ -2099,20 +2102,33 @@ class SimulationLifecycleScheduler:
         trading_calendar_service: Any | None = None,
         miniqmt_quote_context_adapter: Any | None = None,
         b0_quote_v2_controller_factory: Any | None = None,
+        miniqmt_quote_ingress_activation: Any | None = None,
         selection_inference_timeout_seconds: float | None = None,
         selection_inference_max_workers: int | None = None,
     ) -> None:
+        activation_factory = (
+            getattr(miniqmt_quote_ingress_activation, "controller_factory", None)
+            if miniqmt_quote_ingress_activation is not None
+            else None
+        )
+        if (
+            b0_quote_v2_controller_factory is not None
+            and activation_factory is not None
+            and b0_quote_v2_controller_factory is not activation_factory
+        ):
+            raise ValueError("scheduler quote activation and explicit B0_QUOTE_V2 controller factories conflict")
+        effective_b0_factory = b0_quote_v2_controller_factory or activation_factory
         self.repository = repository or SimulationRuntimeRepository()
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
         self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
             repository=self.repository,
-            b0_quote_v2_controller_factory=b0_quote_v2_controller_factory,
+            b0_quote_v2_controller_factory=effective_b0_factory,
         )
-        if orchestrator is not None and b0_quote_v2_controller_factory is not None:
+        if orchestrator is not None and effective_b0_factory is not None:
             existing_factory = getattr(orchestrator, "b0_quote_v2_controller_factory", None)
-            if existing_factory is not None and existing_factory is not b0_quote_v2_controller_factory:
+            if existing_factory is not None and existing_factory is not effective_b0_factory:
                 raise ValueError("scheduler and orchestrator B0_QUOTE_V2 controller factories conflict")
-            orchestrator.b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
+            orchestrator.b0_quote_v2_controller_factory = effective_b0_factory
         self.context_provider = context_provider or FailFastSimulationRunContextProvider()
         self.performance_service = performance_service or StrategyPerformanceProjectionService()
         self._selection_inference_timeout_seconds = (
@@ -2143,7 +2159,8 @@ class SimulationLifecycleScheduler:
         else:
             self.trading_calendar_service = TradingCalendarStatusService()
         self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter
-        self._b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
+        self._miniqmt_quote_ingress_activation = miniqmt_quote_ingress_activation
+        self._b0_quote_v2_controller_factory = effective_b0_factory
 
     def status(self) -> dict[str, Any]:
         provider_status = _context_provider_status(self.context_provider)
@@ -2175,6 +2192,7 @@ class SimulationLifecycleScheduler:
                 "live_forbidden": True,
             },
             "miniqmt_quote_context": self._miniqmt_quote_context_health(),
+            "miniqmt_quote_ingress_activation": self._miniqmt_quote_ingress_activation_health(),
             "b0_quote_v2_controllers": (
                 self._b0_quote_v2_controller_factory.health()
                 if self._b0_quote_v2_controller_factory is not None
@@ -2274,6 +2292,64 @@ class SimulationLifecycleScheduler:
                 "message": "configured MiniQMT quote context health is not a mapping",
             }
         return dict(result)
+
+    def _miniqmt_quote_ingress_activation_health(self) -> dict[str, Any]:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return {
+                "schema_version": "miniqmt_quote_ingress_activation_v1",
+                "status": "UNCONFIGURED",
+                "factory_available": False,
+            }
+        health = getattr(activation, "health", None)
+        if not callable(health):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation has no health method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_HEALTH",
+                },
+            )
+        payload = health()
+        if not isinstance(payload, dict):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT quote ingress activation health must be a mapping",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_HEALTH",
+                },
+            )
+        return dict(payload)
+
+    def _advance_miniqmt_quote_ingress_lifecycle(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        begin_epoch = getattr(activation, "begin_lifecycle_epoch", None)
+        if not callable(begin_epoch):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation lacks its scheduler lifecycle method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                },
+            )
+        begin_epoch()
+
+    def shutdown_miniqmt_quote_ingress(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        shutdown = getattr(activation, "shutdown", None)
+        if not callable(shutdown):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation has no shutdown method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_SHUTDOWN",
+                },
+            )
+        shutdown()
 
     def shutdown_selection_inference(self, *, wait: bool = True) -> None:
         self._selection_inference_executor.shutdown(wait=wait, cancel_futures=not wait)
@@ -2418,6 +2494,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
         self._refresh_miniqmt_quote_context_lifecycle()
+        self._advance_miniqmt_quote_ingress_lifecycle()
         stale_run_results = self._terminalize_stale_miniqmt_active_runs(
             trade_date=trade_date,
             broker_backend=broker_backend,
@@ -3101,6 +3178,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         if as_of_time is not None:
             as_of_time = self._scheduler_time(as_of_time)
+        self._advance_miniqmt_quote_ingress_lifecycle()
         terminalized = self._terminalize_post_close_miniqmt_runs(
             trade_date=trade_date,
             broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
@@ -3972,6 +4050,11 @@ class SimulationLifecycleScheduler:
             order_remark_prefix=source.order_remark_prefix,
             approval_state=source.approval_state,
             binding_metadata=binding_metadata,
+            miniqmt_quote_control=(
+                dict(source.binding_config_json["miniqmt_quote_control"])
+                if isinstance(source.binding_config_json.get("miniqmt_quote_control"), dict)
+                else None
+            ),
             effective_from=trade_date,
             effective_to=trade_date,
             created_by=created_by,
@@ -8178,6 +8261,10 @@ class SimulationLifecycleBackgroundScheduler:
                 graceful,
                 thread_alive,
             )
+        shutdown_quote_ingress = getattr(self.lifecycle_scheduler, "shutdown_miniqmt_quote_ingress", None)
+        if callable(shutdown_quote_ingress):
+            shutdown_quote_ingress()
+            logger.info("Simulation runtime scheduler MiniQMT quote ingress stopped")
         logger.info("Simulation runtime scheduler stopped")
         return self.status()
 

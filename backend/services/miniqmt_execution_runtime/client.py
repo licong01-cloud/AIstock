@@ -659,6 +659,24 @@ class MiniQMTExecutionRuntimeClient:
                     "broker_called": False,
                 },
             )
+        if quote_revision is not None:
+            assert self.b0_quote_v2_controller_factory is not None
+            assert_new_assignment = getattr(
+                self.b0_quote_v2_controller_factory,
+                "assert_accepts_new_assignments",
+                None,
+            )
+            if not callable(assert_new_assignment):
+                raise BrokerSubmitError(
+                    "B0_QUOTE_V2 controller factory lacks the required admission contract",
+                    context={
+                        "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                        "stage": "ADAPTER",
+                        "runtime_id": runtime_id,
+                        "broker_called": False,
+                    },
+                )
+            assert_new_assignment()
         gateway = QmtClientMiniQMTEventLoopGateway(
             qmt_client=qmt_client,
             strategy_name=strategy_name,
@@ -992,10 +1010,15 @@ class MiniQMTExecutionRuntimeClient:
                 )
             controller = self.b0_quote_v2_controller_factory.get(runtime_id)
             if controller is None:
+                recovering_active = _b0_quote_v2_recovering_active(
+                    algo_instances=all_runtime_instances,
+                    active_child_orders=tuple(self.repository.list_child_orders(runtime_id, active_only=True)),
+                )
                 controller = self.b0_quote_v2_controller_factory.create(
                     runtime=runtime,
                     assignments=quote_assignments,
                     symbols=tuple(sorted({instance.symbol for instance in all_runtime_instances})),
+                    recovering_active=recovering_active,
                 )
                 runtime.bind_b0_quote_v2_controller(controller)
         before_children = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
@@ -3464,6 +3487,22 @@ def _event_loop_batch_status(
     ):
         return OrderBatchStatus.FAILED
     return OrderBatchStatus.PREFLIGHT_FAILED
+
+
+def _b0_quote_v2_recovering_active(
+    *,
+    algo_instances: tuple[MiniQMTExecutionAlgoInstance, ...],
+    active_child_orders: tuple[MiniQMTChildOrder, ...],
+) -> bool:
+    """Allow drain recovery only when durable active execution facts exist."""
+
+    return bool(
+        active_child_orders
+        or any(
+            instance.status in {MiniQMTAlgoInstanceStatus.ACTIVE, MiniQMTAlgoInstanceStatus.PAUSED}
+            for instance in algo_instances
+        )
+    )
 
 
 def _event_loop_preflight_passed(
