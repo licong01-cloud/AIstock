@@ -62,6 +62,7 @@
 | F-013 | 模型训练策略只分 `exclusive`/`parallel` 两类：GAT/EfficientGATs 必须为 `exclusive`，其他模型默认 `parallel`；允许非 GAT 模型通过 catalog `model_config.gpu_training_policy` 显式收紧为 `exclusive`。 |
 | F-014 | 每节点使用共享/独占 GPU phase gate：`exclusive` 与任何训练互斥，多个 `parallel` 共享租约可按现有 `node_parallelism` 并行；等待中的独占租约优先，避免 GAT 饥饿。 |
 | F-015 | 模型策略写入 Loop config 与 resource session；非法策略或把已知 GAT 声明为 `parallel` 必须 fail-fast，不允许静默绕过独占门。 |
+| F-016 | 后端重启不得终止已提交到 QE Workspace 的实验；GPU 租约必须以数据库原子预留为跨进程真值，runner 本地 outbox 在后端恢复后按 sequence 幂等重放，启动扫描器立即对账 terminal session。 |
 
 ## Contracts
 
@@ -123,13 +124,14 @@ loop coroutine
   -> if full_train: acquire model-aware gpu phase lease(node, policy)
        exclusive: wait until no exclusive/shared lease
        parallel:  wait until no exclusive/waiting-exclusive lease
+       atomically check conflicts + insert reserved resource session under node advisory transaction lock
   -> submit loop
   -> wait for authenticated gpu_phase_released OR terminal
   -> release gpu phase lease exactly once
   -> keep total_loop_semaphore until terminal + result processing
 ```
 
-默认关闭时仍执行原 whole-loop `node_parallelism` 路径。流水线开启后，第二个 coroutine 可以先占总 Loop 槽位并等待模型感知租约。多个 `parallel` Loop 可直接提交；`exclusive` Loop 会等待所有共享租约结束，且其等待期间阻止新的共享租约插队。第一独占 Loop 释放租约后，后续 Loop 可提交。DB `node_parallelism` 继续限制 active Loop 总数，不替代 GPU phase gate。
+默认关闭时仍执行原 whole-loop `node_parallelism` 路径。流水线开启后，第二个 coroutine 可以先占总 Loop 槽位并等待模型感知租约。多个 `parallel` Loop 可直接提交；`exclusive` Loop 会等待所有共享租约结束，且其等待期间阻止新的共享租约插队。进程内 gate 在同一事件循环的所有 scheduler 实例间共享，只负责公平排队；数据库在节点级 transaction advisory lock 下把冲突检查与 resource session 插入合并为一次原子预留，负责跨 scheduler、跨进程和重启后的安全。只有 `gpu_phase_released_at` 或真实 Loop terminal 才解除持久化冲突；`release_rejected`、未带释放证明的 `backtest/finalize` 均继续占用。DB `node_parallelism` 继续限制 active Loop 总数，不替代 GPU phase gate。
 
 ### 4. Runner phase/session 事件
 
@@ -138,8 +140,9 @@ runner 使用工作区内的 `qe_runtime_resource.py`：
 - 启动 daemon sampler，默认每 1 秒采样一次。
 - 进程资源按当前 PID 及递归子进程聚合；`rss_peak_bytes` 取阶段内样本峰值，`vm_hwm_bytes` 取 `/proc/<pid>/status` 可得的最大 HWM。
 - GPU 资源同时记录设备级 utilization/memory.used 与当前进程组 used memory；CUDA 可用时记录 PyTorch allocated/reserved/peak。
-- phase transition 先原子落本地 `qe_runtime_resource.json`，再上传结构化事件。
-- 上传失败写 `qe_runtime_resource_upload_failure.json` 并输出 error reason code。普通 telemetry 上传失败不改变实验结果；流水线所需 release 事件上传失败则调度保持串行。
+- phase transition 先按单调 sequence 原子落本地 `qe_runtime_resource.json` outbox，再上传结构化事件；服务端已接受但响应丢失时，重复上传由 event hash 判定为幂等成功。
+- 上传失败写 `qe_runtime_resource_upload_failure.json` 并输出 error reason code。后台 sampler 在实验继续运行期间定时重试，下一 phase 也会按 sequence 从最早未确认事件重放；恢复后写结构化 recovered marker。普通 telemetry 上传失败不改变实验结果；流水线所需 release 事件在服务端确认前调度保持串行。
+- runner terminal 阶段提供有界 final drain；超过窗口仍不可达时不得伪造上传成功，Loop terminal 对账可安全解除调度占用，本地 outbox 保留完整未上传事实。
 - runner `finally` 必须结束 sampler 并提交 terminal/finalize aggregate。
 
 ### 5. EfficientGATs release contract
@@ -222,6 +225,8 @@ MCP 新增只读工具 `qe_archive_query_resource_phases`，参数和 API 一致
 | `QE_RESOURCE_EVENT_SEQUENCE_CONFLICT` | HTTP 409，不覆盖历史事件。 |
 | `QE_RESOURCE_EVENT_PHASE_INVALID` | HTTP 409，不允许状态倒退或越权释放。 |
 | `QE_RESOURCE_EVENT_UPLOAD_FAILED` | 本地 marker + error log；调度保持串行。 |
+| `QE_RESOURCE_EVENT_UPLOAD_RECOVERED` | 后端恢复后 outbox 已按 sequence 全部重放并确认。 |
+| `QE_GPU_PHASE_LEASE_BUSY` | 持久化租约冲突；释放进程内 gate 后排队重试，不提交冲突训练。 |
 | `QE_RESOURCE_SESSION_SCHEMA_NOT_READY` | 创建/启动 pipeline task 时 fail-fast，提示待执行 DDL；运行时不自动建表。 |
 
 ## Implementation Plan
@@ -249,9 +254,11 @@ MCP 新增只读工具 `qe_archive_query_resource_phases`，参数和 API 一致
 - EfficientGATs resident/streaming/failure 三类 predict 路径均执行 cleanup；release pass/fail reason code 可断言。
 - phase transition、token hash、sequence idempotency/conflict、非法 release 的服务单测。
 - scheduler fake loop：Loop1 release 后 Loop2 才 submit；Loop1 terminal 前总槽位不释放；release rejected/unsupported 时 Loop2 等待 terminal。
+- 两个 scheduler 实例共享同一进程 gate；并发数据库预留通过节点级 transaction lock 保证 exclusive/parallel 冲突检查与 session 插入原子化。
 - composer 断言仅 opt-in 命令包含 phase env/token，默认命令无变化。
-- runner sampler 用 fake psutil/nvidia-smi/torch 验证峰值、均值、HWM 与 terminal flush。
+- runner sampler 用 fake psutil/nvidia-smi/torch 验证峰值、均值、HWM、采样失败 reason code、outbox sequence、回调中断后恢复重放与 terminal flush。
 - repository/API/MCP 的过滤、limit、排序和空结果。
+- 模拟后端回调中断：运行任务不失败，`release_rejected` 不放行；恢复后 outbox 顺序重放，terminal DB 写失败也以真实 Loop terminal 安全释放本地 gate。
 
 ### L2/L3
 
@@ -302,13 +309,14 @@ current_running_experiment = untouched
 | F-013 | `qe_gpu_training_policy.py` resolver and Loop config snapshot | GAT/LSTM/TCN/explicit/invalid policy cases | verified | none |
 | F-014 | `ModelAwareGPUPhaseGate` and scheduler policy-specific lease acquisition | shared/shared, exclusive/shared, writer-priority and idempotent release cases | verified | none |
 | F-015 | resource session `gpu_training_policy`, migration constraint and scheduler fail-fast path | schema/service/scheduler integration tests | verified | none |
+| F-016 | `qe_resource_phase_service.py` atomic reservation/reconciliation、process-shared gate、runner outbox replay、startup scanners | atomic conflict、cross-scheduler gate、upload recovery、terminal reconciliation tests | verified | none |
 
 ## Local Verification Results
 
 - `ruff check`：全部变更 Python 文件通过。
 - `py_compile`：全部变更运行时代码通过。
-- 资源服务、模型策略、共享/独占 gate、runner、API、执行器、配置、归档与调度回归：`223 passed, 25 skipped`。
-- QE MCP、manifest 与 custom-evo mutation routes：`74 passed`。
+- 资源服务、模型策略、共享/独占 gate、runner、API、执行器、配置、归档、调度、QE MCP 与 manifest 最终合并矩阵：`292 passed, 25 skipped`。
+- 后端重启安全专项：节点级显式事务原子预留、`release_rejected` 持续占位、跨 scheduler 共享 gate、runner outbox 恢复重放、terminal 对账、shutdown 不调用远端 `kill_loop` 均有直接回归证据。
 - 密钥边界专项：实际上传文件保留 token，但命令、任务快照和 `ExecutionResult` 返回值不含 raw token；专项回归通过。
 - `git diff --check`、F2 feature validator 与 rebase 到最新 `origin/main` 后的最小回归均通过。
 - DEV/生产数据库 migration apply/readback/rollback 未执行；依据本设计必须等待明确 DDL 授权。
@@ -320,4 +328,5 @@ current_running_experiment = untouched
 - [x] `no_business_semantic_drift`：默认关闭，模型输出/策略/回测口径不变。
 - [x] `no_unrequested_gate_or_approval`：只增加自动资源安全校验，不增加人工审批。
 - [x] all/selected/retry/rerun 没有阶段调度旁路。
+- [x] backend restart 不调用远端 `kill_loop`；持久化租约、outbox replay 与启动 terminal reconciliation 覆盖进程内状态丢失。
 - [x] migration、merge、生产 DDL、重启、runtime activation 分离汇报。

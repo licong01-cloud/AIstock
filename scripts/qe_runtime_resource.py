@@ -106,6 +106,12 @@ class _PhaseAggregate:
 
     def observe(self, sample: dict[str, Any]) -> None:
         self.sample_count += 1
+        sample_errors = sample.get("resource_sample_errors") or []
+        if sample_errors:
+            recorded = self.metadata.setdefault("sample_errors", [])
+            for error in sample_errors:
+                if error not in recorded and len(recorded) < 20:
+                    recorded.append(error)
         self.process_rss_peak_bytes = max(self.process_rss_peak_bytes, int(sample.get("process_rss_bytes") or 0))
         self.process_vm_hwm_peak_bytes = max(
             self.process_vm_hwm_peak_bytes,
@@ -171,14 +177,18 @@ class QERuntimeResourceMonitor:
         self.phase_pipeline_enabled = _env_bool("QE_PHASE_PIPELINE_ENABLED", False)
         self.sample_interval = _env_float("QE_RESOURCE_SAMPLE_INTERVAL_SEC", 1.0)
         self.upload_timeout = _env_float("QE_RESOURCE_UPLOAD_TIMEOUT_SEC", 10.0)
+        self.upload_retry_interval = _env_float("QE_RESOURCE_UPLOAD_RETRY_INTERVAL_SEC", 5.0)
+        self.final_upload_grace = _env_float("QE_RESOURCE_FINAL_UPLOAD_GRACE_SEC", 30.0)
         self.url = self._resolve_url()
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._phase = _PhaseAggregate("bootstrap")
         self._sequence_no = 0
+        self._last_uploaded_sequence_no = 0
         self._events: list[dict[str, Any]] = []
         self._upload_broken = False
+        self._next_upload_retry_monotonic = 0.0
         self._finished = False
 
     @classmethod
@@ -226,6 +236,7 @@ class QERuntimeResourceMonitor:
     def _sample_loop(self) -> None:
         while not self._stop.wait(self.sample_interval):
             self._sample_once()
+            self._retry_pending_uploads_if_due()
 
     def _sample_once(self) -> None:
         try:
@@ -240,8 +251,19 @@ class QERuntimeResourceMonitor:
 
     def _collect_sample(self) -> dict[str, Any]:
         sample = self._process_sample()
-        sample.update(self._gpu_sample())
-        sample.update(self._torch_sample())
+        errors: list[str] = []
+        for reason_code, sampler in (
+            ("QE_RESOURCE_GPU_SAMPLE_FAILED", self._gpu_sample),
+            ("QE_RESOURCE_CUDA_SAMPLE_FAILED", self._torch_sample),
+        ):
+            try:
+                sample.update(sampler())
+            except Exception as exc:
+                error = f"{reason_code}:{type(exc).__name__}"
+                errors.append(error)
+                print(f"[ERROR] reason_code={reason_code} error={type(exc).__name__}: {exc}")
+        if errors:
+            sample["resource_sample_errors"] = errors
         return sample
 
     @staticmethod
@@ -297,7 +319,11 @@ class QERuntimeResourceMonitor:
             text=True,
             timeout=5,
         )
-        if query.returncode == 0 and query.stdout.strip():
+        if query.returncode != 0:
+            raise RuntimeError(f"nvidia-smi GPU query failed with exit_code={query.returncode}")
+        if not query.stdout.strip():
+            raise RuntimeError("nvidia-smi GPU query returned no rows")
+        try:
             name, memory_mib, utilization = [part.strip() for part in query.stdout.splitlines()[0].split(",", 2)]
             result.update(
                 {
@@ -306,6 +332,8 @@ class QERuntimeResourceMonitor:
                     "gpu_utilization_pct": float(utilization),
                 }
             )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("nvidia-smi GPU query returned an invalid row") from exc
 
         process_query = subprocess.run(
             [
@@ -318,19 +346,26 @@ class QERuntimeResourceMonitor:
             text=True,
             timeout=5,
         )
-        if process_query.returncode == 0:
-            process_pids = set(self._process_sample().get("process_pids") or [])
-            process_memory_mib = 0
-            for line in process_query.stdout.splitlines():
-                parts = [part.strip() for part in line.split(",", 1)]
-                if len(parts) != 2:
-                    continue
-                try:
-                    if int(parts[0]) in process_pids:
-                        process_memory_mib += int(float(parts[1]))
-                except ValueError:
-                    continue
-            result["gpu_process_memory_bytes"] = process_memory_mib * 1024 * 1024
+        if process_query.returncode != 0:
+            raise RuntimeError(
+                f"nvidia-smi process query failed with exit_code={process_query.returncode}"
+            )
+        process_pids = set(self._process_sample().get("process_pids") or [])
+        process_memory_mib = 0
+        invalid_rows = 0
+        for line in process_query.stdout.splitlines():
+            parts = [part.strip() for part in line.split(",", 1)]
+            if len(parts) != 2:
+                invalid_rows += 1
+                continue
+            try:
+                if int(parts[0]) in process_pids:
+                    process_memory_mib += int(float(parts[1]))
+            except ValueError:
+                invalid_rows += 1
+        if invalid_rows:
+            raise RuntimeError(f"nvidia-smi process query returned invalid_rows={invalid_rows}")
+        result["gpu_process_memory_bytes"] = process_memory_mib * 1024 * 1024
         return result
 
     @staticmethod
@@ -397,7 +432,7 @@ class QERuntimeResourceMonitor:
             self._publish(release_event)
             self._phase = _PhaseAggregate("backtest")
             self._sample_once()
-            return passed and not self._upload_broken
+            return passed and self._last_uploaded_sequence_no >= int(release_event["sequence_no"])
 
     def finish(self, *, status: str, error: str | None = None) -> None:
         with self._lock:
@@ -420,6 +455,14 @@ class QERuntimeResourceMonitor:
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 print("[ERROR] reason_code=QE_RESOURCE_SAMPLER_STOP_TIMEOUT")
+        deadline = time.monotonic() + self.final_upload_grace
+        while self._last_uploaded_sequence_no < self._sequence_no and time.monotonic() < deadline:
+            retry_wait = self._next_upload_retry_monotonic - time.monotonic()
+            if retry_wait > 0:
+                time.sleep(min(retry_wait, max(0.0, deadline - time.monotonic())))
+                continue
+            with self._lock:
+                self._flush_pending_events()
         self._write_local()
 
     def _publish_current(self, phase_status: str) -> None:
@@ -454,33 +497,71 @@ class QERuntimeResourceMonitor:
         }
 
     def _publish(self, event: dict[str, Any]) -> None:
-        if self._upload_broken:
-            event = dict(event)
-            event["upload_skipped_reason_code"] = "QE_RESOURCE_EVENT_UPLOAD_FAILED"
-            self._events.append(event)
-            self._write_local()
+        queued = dict(event)
+        expected_sequence = self._sequence_no + 1
+        if int(queued.get("sequence_no") or 0) != expected_sequence:
+            raise RuntimeError(
+                f"QE resource outbox sequence mismatch: expected={expected_sequence}, "
+                f"actual={queued.get('sequence_no')}"
+            )
+        self._sequence_no = expected_sequence
+        self._events.append(queued)
+        self._write_local()
+        if self._upload_broken and time.monotonic() < self._next_upload_retry_monotonic:
             return
-        error: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                response = requests.post(
-                    self.url,
-                    json=event,
-                    headers={"X-QE-Resource-Token": self.token},
-                    timeout=self.upload_timeout,
-                )
-                if response.status_code >= 400:
-                    raise RuntimeError(f"HTTP_{response.status_code}")
-                self._sequence_no = int(event["sequence_no"])
-                self._events.append(dict(event))
-                self._write_local()
-                return
-            except Exception as exc:  # retry exact same payload for idempotency
-                error = exc
-                if attempt < 3:
-                    time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
+        self._flush_pending_events()
+
+    def _flush_pending_events(self) -> bool:
+        pending = [
+            event
+            for event in self._events
+            if int(event.get("sequence_no") or 0) > self._last_uploaded_sequence_no
+        ]
+        if not pending:
+            self._upload_broken = False
+            return True
+
+        was_broken = self._upload_broken
+        for event in pending:
+            error: Exception | None = None
+            for attempt in range(1, 4):
+                try:
+                    response = requests.post(self.url, json=event, headers={"X-QE-Resource-Token": self.token}, timeout=self.upload_timeout)
+                    if response.status_code >= 400:
+                        raise RuntimeError(f"HTTP_{response.status_code}")
+                    self._last_uploaded_sequence_no = int(event["sequence_no"])
+                    self._write_local()
+                    error = None
+                    break
+                except Exception as exc:  # retry the exact payload for server idempotency
+                    error = exc
+                    if attempt < 3:
+                        time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
+            if error is not None:
+                self._record_upload_failure(event, error)
+                return False
+
+        self._upload_broken = False
+        self._next_upload_retry_monotonic = 0.0
+        if was_broken:
+            recovery = {
+                "schema_version": "qe_runtime_resource_upload_failure_v1",
+                "reason_code": "QE_RESOURCE_EVENT_UPLOAD_RECOVERED",
+                "failure_reason_code": "QE_RESOURCE_EVENT_UPLOAD_FAILED",
+                "session_id": self.session_id,
+                "status": "recovered",
+                "last_uploaded_sequence_no": self._last_uploaded_sequence_no,
+                "recovered_at": _utc_now(),
+            }
+            _atomic_json(Path.cwd() / UPLOAD_FAILURE_FILE, recovery)
+            print("[INFO] reason_code=QE_RESOURCE_EVENT_UPLOAD_RECOVERED")
+        self._write_local()
+        return True
+
+    def _record_upload_failure(self, event: dict[str, Any], error: Exception) -> None:
         self._upload_broken = True
-        error_type = type(error).__name__ if error is not None else "UnknownError"
+        self._next_upload_retry_monotonic = time.monotonic() + self.upload_retry_interval
+        error_type = type(error).__name__
         marker = {
             "schema_version": "qe_runtime_resource_upload_failure_v1",
             "reason_code": "QE_RESOURCE_EVENT_UPLOAD_FAILED",
@@ -492,11 +573,16 @@ class QERuntimeResourceMonitor:
             "written_at": _utc_now(),
         }
         _atomic_json(Path.cwd() / UPLOAD_FAILURE_FILE, marker)
-        failed_event = dict(event)
-        failed_event["upload_error_type"] = error_type
-        self._events.append(failed_event)
         self._write_local()
         print("[ERROR] reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED")
+
+    def _retry_pending_uploads_if_due(self) -> None:
+        with self._lock:
+            if self._last_uploaded_sequence_no >= self._sequence_no:
+                return
+            if time.monotonic() < self._next_upload_retry_monotonic:
+                return
+            self._flush_pending_events()
 
     def _write_local(self) -> None:
         payload = {
@@ -510,6 +596,8 @@ class QERuntimeResourceMonitor:
             "phase_pipeline_enabled": self.phase_pipeline_enabled,
             "current_phase": self._phase.phase,
             "last_sequence_no": self._sequence_no,
+            "last_uploaded_sequence_no": self._last_uploaded_sequence_no,
+            "pending_event_count": max(0, self._sequence_no - self._last_uploaded_sequence_no),
             "upload_broken": self._upload_broken,
             "events": list(self._events),
             "updated_at": _utc_now(),

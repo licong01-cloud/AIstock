@@ -1407,27 +1407,90 @@ def test_scheduler_resolves_model_aware_gpu_training_policy(monkeypatch):
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy(None) == "parallel"
 
 
-def test_scheduler_acquires_policy_specific_gpu_phase_leases(monkeypatch):
+def test_scheduler_atomically_reserves_policy_specific_gpu_phase_sessions(monkeypatch):
     scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
-    scheduler._gpu_phase_gates = {}
     requested = []
 
     class FakeResourceService:
-        def has_unreleased_gpu_session(self, *, node_id, requested_policy):
-            requested.append((node_id, requested_policy))
-            return False
-
-    monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
+        def create_session(self, **kwargs):
+            requested.append(dict(kwargs))
+            return types.SimpleNamespace(session_id=f"session-{kwargs['gpu_training_policy']}")
 
     async def scenario():
-        parallel = await scheduler._acquire_gpu_phase_lease("node-a", "parallel")
+        parallel, parallel_session = await scheduler._reserve_gpu_phase_session(
+            service=FakeResourceService(),
+            task_id="qe_task",
+            loop_index=1,
+            node_id="node-a",
+            policy="parallel",
+        )
+        assert parallel_session.session_id == "session-parallel"
         await parallel.release()
-        exclusive = await scheduler._acquire_gpu_phase_lease("node-a", "exclusive")
+        exclusive, exclusive_session = await scheduler._reserve_gpu_phase_session(
+            service=FakeResourceService(),
+            task_id="qe_task",
+            loop_index=2,
+            node_id="node-a",
+            policy="exclusive",
+        )
+        assert exclusive_session.session_id == "session-exclusive"
         await exclusive.release()
 
     asyncio.run(scenario())
 
-    assert requested == [("node-a", "parallel"), ("node-a", "exclusive")]
+    assert [(item["node_id"], item["gpu_training_policy"]) for item in requested] == [
+        ("node-a", "parallel"),
+        ("node-a", "exclusive"),
+    ]
+    assert all(item["reserve_gpu_phase"] is True for item in requested)
+
+
+def test_scheduler_instances_share_one_process_gpu_gate():
+    first = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    second = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    async def scenario():
+        lease = await first._acquire_gpu_phase_lease("node-shared", "exclusive")
+        waiter = asyncio.create_task(second._acquire_gpu_phase_lease("node-shared", "parallel"))
+        await asyncio.sleep(0)
+        assert waiter.done() is False
+        await lease.release()
+        shared = await asyncio.wait_for(waiter, timeout=1)
+        await shared.release()
+
+    asyncio.run(scenario())
+
+
+def test_scheduler_releases_local_gate_before_retrying_durable_busy_session(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    attempts = 0
+
+    class FakeResourceService:
+        def create_session(self, **_kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise qes.QEResourcePhaseError(qes.GPU_LEASE_BUSY_REASON, "occupied")
+            return types.SimpleNamespace(session_id="session-after-retry")
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+
+    async def scenario():
+        lease, session = await scheduler._reserve_gpu_phase_session(
+            service=FakeResourceService(),
+            task_id="qe_task",
+            loop_index=6,
+            node_id="node-retry",
+            policy="exclusive",
+        )
+        assert session.session_id == "session-after-retry"
+        await lease.release()
+
+    asyncio.run(scenario())
+    assert attempts == 2
 
 
 def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeypatch):
@@ -1499,6 +1562,72 @@ def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeyp
         "completed",
         "QE_GPU_PHASE_RELEASE_THRESHOLD_EXCEEDED",
     )
+
+
+def test_gpu_phase_waiter_releases_local_slot_when_terminal_session_write_fails(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+
+    class FakeLease:
+        policy = "exclusive"
+        active = True
+
+        async def release(self):
+            self.active = False
+
+    lease = FakeLease()
+
+    class FakeResourceService:
+        def get_session_state(self, _session_id):
+            return {"current_phase": "release_rejected"}
+
+        def mark_session_terminal(self, *_args, **_kwargs):
+            raise RuntimeError("database restart window")
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchone(self):
+            return ("completed",)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+
+    asyncio.run(
+        scheduler._wait_resource_session_until_safe_release(
+            session_id="qers_terminal_db_error",
+            task_id="qe_task",
+            loop_index=5,
+            gpu_lease=lease,
+        )
+    )
+
+    assert lease.active is False
+
+
+def test_backend_lifespan_shutdown_never_kills_remote_qe_loops():
+    backend_main = Path(qes.__file__).resolve().parents[2] / "main.py"
+    source = backend_main.read_text(encoding="utf-8")
+    shutdown = source[source.index("    finally:\n        # ── SHUTDOWN ──") :]
+
+    assert "shutdown_event.set()" in shutdown
+    assert "kill_loop(" not in shutdown
 
 
 def test_gpu_phase_waiter_releases_parallel_lease_at_terminal_without_unsupported_reason(monkeypatch):

@@ -5,6 +5,7 @@ import asyncio
 import uuid
 import threading
 import base64
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -21,7 +22,13 @@ from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, n
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
-from .qe_resource_phase_service import QEResourcePhaseService
+from .qe_resource_phase_service import (
+    GPU_LEASE_BUSY_REASON,
+    RESOURCE_SCHEMA_REASON,
+    QEResourcePhaseError,
+    QEResourcePhaseService,
+    ResourceSessionSecret,
+)
 from .qe_gpu_training_policy import (
     GPUPhaseLease,
     GPU_TRAINING_POLICY_PARALLEL,
@@ -119,6 +126,12 @@ CUSTOM_EVO_ACTIVE_LOOP_STATUSES = ("running", "processing")
 CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS = 15
 
 
+_PROCESS_GPU_PHASE_GATES: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    Dict[str, ModelAwareGPUPhaseGate],
+] = weakref.WeakKeyDictionary()
+
+
 def normalize_qe_loop_retry_mode(mode: Optional[str]) -> str:
     """Normalize explicit loop retry mode from API/UI callers."""
     normalized = (mode or QE_LOOP_RETRY_MODE_AUTO).strip().lower().replace("-", "_")
@@ -179,14 +192,16 @@ class AutoEvolutionScheduler:
         self._log_stream_lock = threading.RLock()
         self._active_log_stream_counts: Dict[str, int] = {}
         self._log_stream_stop_requested: set[str] = set()
-        self._gpu_phase_gates: Dict[str, ModelAwareGPUPhaseGate] = {}
         self._resource_session_wait_tasks: set[asyncio.Task] = set()
+        self._resource_schema_not_ready_logged = False
 
     def _gpu_phase_gate(self, node_id: str) -> ModelAwareGPUPhaseGate:
-        gate = self._gpu_phase_gates.get(node_id)
+        event_loop = asyncio.get_running_loop()
+        gates = _PROCESS_GPU_PHASE_GATES.setdefault(event_loop, {})
+        gate = gates.get(node_id)
         if gate is None:
             gate = ModelAwareGPUPhaseGate()
-            self._gpu_phase_gates[node_id] = gate
+            gates[node_id] = gate
         return gate
 
     @staticmethod
@@ -199,28 +214,67 @@ class AutoEvolutionScheduler:
         return resolve_gpu_training_policy(model_info or {"model_id": model_id})
 
     async def _acquire_gpu_phase_lease(self, node_id: str, policy: str) -> GPUPhaseLease:
-        """Acquire a model-aware local lease and reconcile persisted conflicts after restart."""
+        """Acquire the process-wide fair gate; DB reservation is performed separately."""
 
-        gate = self._gpu_phase_gate(node_id)
-        service = QEResourcePhaseService()
+        return await self._gpu_phase_gate(node_id).acquire(policy)
+
+    async def _reserve_gpu_phase_session(
+        self,
+        *,
+        service: QEResourcePhaseService,
+        task_id: str,
+        loop_index: int,
+        node_id: str,
+        policy: str,
+    ) -> tuple[GPUPhaseLease, ResourceSessionSecret]:
+        """Atomically reserve the durable GPU slot after acquiring the process-local fair gate."""
+
         while True:
-            lease = await gate.acquire(policy)
+            lease = await self._acquire_gpu_phase_lease(node_id, policy)
             try:
-                if not service.has_unreleased_gpu_session(
+                session = service.create_session(
+                    task_id=task_id,
+                    loop_index=loop_index,
                     node_id=node_id,
-                    requested_policy=policy,
-                ):
-                    return lease
+                    phase_pipeline_enabled=True,
+                    gpu_training_policy=policy,
+                    reserve_gpu_phase=True,
+                )
+                return lease, session
+            except QEResourcePhaseError as exc:
+                await lease.release()
+                if exc.reason_code != GPU_LEASE_BUSY_REASON:
+                    raise
+                logger.info(
+                    "QE GPU phase lease conflicts with a durable session: "
+                    "task=%s Loop%s node=%s policy=%s",
+                    task_id,
+                    loop_index,
+                    node_id,
+                    policy,
+                )
             except Exception:
                 await lease.release()
                 raise
-            await lease.release()
-            logger.info(
-                "QE GPU phase lease conflicts with a persisted session: node=%s policy=%s",
-                node_id,
-                policy,
-            )
             await asyncio.sleep(CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS)
+
+    def _reconcile_resource_sessions_after_restart(self) -> None:
+        """Reconcile terminal resource sessions without making schema readiness a legacy-runtime gate."""
+
+        try:
+            updated = QEResourcePhaseService().reconcile_terminal_sessions()
+            self._resource_schema_not_ready_logged = False
+            if updated:
+                logger.info("QE resource session restart reconciliation updated %s rows", updated)
+        except QEResourcePhaseError as exc:
+            if exc.reason_code != RESOURCE_SCHEMA_REASON:
+                raise
+            if not self._resource_schema_not_ready_logged:
+                logger.info(
+                    "QE resource session restart reconciliation inactive: reason_code=%s",
+                    exc.reason_code,
+                )
+                self._resource_schema_not_ready_logged = True
 
     def _track_resource_wait_task(self, task: asyncio.Task) -> None:
         self._resource_session_wait_tasks.add(task)
@@ -277,8 +331,21 @@ class AutoEvolutionScheduler:
                             )
                             row = cur.fetchone()
                     loop_status = str(row[0]) if row else "failed"
-                    if loop_status in {"completed", "failed", "cancelled", "canceled"}:
-                        terminal = "cancelled" if loop_status in {"cancelled", "canceled"} else loop_status
+                    if loop_status in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "canceled",
+                        "interrupted",
+                        "timeout",
+                        "stopped",
+                    }:
+                        if loop_status in {"cancelled", "canceled"}:
+                            terminal = "cancelled"
+                        elif loop_status == "completed":
+                            terminal = "completed"
+                        else:
+                            terminal = "failed"
                         reason_code = None
                         if gpu_lease is not None and current_phase != "gpu_phase_released":
                             if gpu_lease.policy == GPU_TRAINING_POLICY_PARALLEL:
@@ -289,12 +356,24 @@ class AutoEvolutionScheduler:
                                     if current_phase == "release_rejected"
                                     else "QE_GPU_PHASE_CONTRACT_UNSUPPORTED"
                                 )
-                        service.mark_session_terminal(
-                            session_id,
-                            status=terminal,
-                            reason_code=reason_code,
-                        )
                         terminal_safe_release = True
+                        try:
+                            service.mark_session_terminal(
+                                session_id,
+                                status=terminal,
+                                reason_code=reason_code,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "QE_RESOURCE_SESSION_TERMINAL_RECONCILE_FAILED: "
+                                "task=%s Loop%s session=%s status=%s error=%s",
+                                task_id,
+                                loop_index,
+                                session_id,
+                                terminal,
+                                exc,
+                                exc_info=True,
+                            )
                         break
                 except asyncio.CancelledError:
                     raise
@@ -2505,6 +2584,7 @@ class AutoEvolutionScheduler:
         3. F5: 检测 running 的 task 但没有任何活跃 loop（僵尸 task）
         """
         try:
+            self._reconcile_resource_sessions_after_restart()
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     # 原有：扫描 running 状态的 loop
@@ -3912,11 +3992,14 @@ class AutoEvolutionScheduler:
             if retry_resource_telemetry_enabled:
                 retry_gpu_training_policy = self._resolve_model_gpu_training_policy(cfg.model_id)
             if retry_phase_pipeline_enabled:
-                retry_gpu_lease = await self._acquire_gpu_phase_lease(
-                    effective_node_id,
-                    retry_gpu_training_policy,
+                retry_gpu_lease, retry_resource_session = await self._reserve_gpu_phase_session(
+                    service=retry_resource_service,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    node_id=effective_node_id,
+                    policy=retry_gpu_training_policy,
                 )
-            if retry_resource_telemetry_enabled:
+            elif retry_resource_telemetry_enabled:
                 retry_resource_session = retry_resource_service.create_session(
                     task_id=task_id,
                     loop_index=loop_index,
@@ -6727,11 +6810,14 @@ class AutoEvolutionScheduler:
             if resource_telemetry_enabled:
                 gpu_training_policy = self._resolve_model_gpu_training_policy(cfg.model_id)
             if phase_pipeline_enabled:
-                gpu_phase_lease = await self._acquire_gpu_phase_lease(
-                    effective_node_id,
-                    gpu_training_policy,
+                gpu_phase_lease, resource_session = await self._reserve_gpu_phase_session(
+                    service=resource_service,
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    node_id=effective_node_id,
+                    policy=gpu_training_policy,
                 )
-            if resource_telemetry_enabled:
+            elif resource_telemetry_enabled:
                 resource_session = resource_service.create_session(
                     task_id=task_id,
                     loop_index=loop_index,

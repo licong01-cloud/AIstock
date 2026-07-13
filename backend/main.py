@@ -350,14 +350,14 @@ async def _lifespan(app: FastAPI):
             scan_interval = int((os.getenv("QE_EVOLUTION_SCAN_INTERVAL_SEC") or "60").strip() or "60")
             while not stop_event.is_set():
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break  # stop_event was set
-                except asyncio.TimeoutError:
-                    pass  # Normal timeout, run scan
-                try:
                     await scanner.scan_running_loops()
                 except Exception as e:
                     logging.getLogger("aistock.evolution_scanner").warning(f"Evolution scan error: {e}")
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
+                    break  # stop_event was set
+                except asyncio.TimeoutError:
+                    pass  # Normal timeout, run the next scan.
 
         scan_task = asyncio.create_task(_timer_scan_loop(shutdown_event))
 
@@ -373,11 +373,6 @@ async def _lifespan(app: FastAPI):
             scanner = QEExperimentStatusScanner(batch_size=batch_size)
             while not stop_event.is_set():
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
-                    break
-                except asyncio.TimeoutError:
-                    pass
-                try:
                     stats = await scanner.scan_once()
                     if stats.get("checked") or stats.get("synced_terminal") or stats.get("errors"):
                         logging.getLogger("aistock.qe_experiment_scanner").info(
@@ -387,6 +382,11 @@ async def _lifespan(app: FastAPI):
                     logging.getLogger("aistock.qe_experiment_scanner").warning(
                         "QE experiment scan error: %s", e, exc_info=True
                     )
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=scan_interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
 
         qe_exp_scan_task = asyncio.create_task(_qe_experiment_scan_loop(shutdown_event))
 

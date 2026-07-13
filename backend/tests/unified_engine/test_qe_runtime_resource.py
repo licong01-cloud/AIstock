@@ -17,6 +17,8 @@ def _set_resource_env(monkeypatch):
         "QE_NODE_ID": "wsl2-5080",
         "QE_PHASE_PIPELINE_ENABLED": "1",
         "QE_RESOURCE_SAMPLE_INTERVAL_SEC": "60",
+        "QE_RESOURCE_UPLOAD_RETRY_INTERVAL_SEC": "0.01",
+        "QE_RESOURCE_FINAL_UPLOAD_GRACE_SEC": "0.01",
         "AISTOCK_PREDICTION_STORE_BASE_URL": "http://127.0.0.1:8001",
     }
     for key, value in values.items():
@@ -126,3 +128,71 @@ def test_runtime_resource_upload_failure_is_loud_and_release_remains_closed(monk
     assert "secret-token" not in resource_text
     assert "secret-token" not in console_text
     assert "reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED" in console_text
+
+
+def test_runtime_resource_outbox_replays_ordered_events_after_backend_recovers(monkeypatch, tmp_path, capsys):
+    _set_resource_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    qrr._MONITOR = None
+    qrr._RESOURCE_SECRET_CACHE = None
+    available = False
+    attempts = []
+
+    def recovering_post(_url, *, json, **_kwargs):
+        attempts.append((available, int(json["sequence_no"]), json["phase"]))
+        if not available:
+            raise TimeoutError("backend restarting")
+        return SimpleNamespace(status_code=200, text="ok")
+
+    monkeypatch.setattr(qrr.requests, "post", recovering_post)
+    monkeypatch.setattr(qrr.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_collect_sample",
+        lambda _self: {"process_rss_bytes": 1, "process_vm_hwm_bytes": 1},
+    )
+
+    monitor = qrr.QERuntimeResourceMonitor()
+    monitor._sample_once()
+    monitor.transition("train")
+    monitor.transition("predict")
+    assert [event["sequence_no"] for event in monitor._events] == [1, 2]
+    assert monitor._last_uploaded_sequence_no == 0
+    assert monitor._upload_broken is True
+
+    available = True
+    monitor._next_upload_retry_monotonic = 0.0
+    monitor._retry_pending_uploads_if_due()
+
+    successful = [item for item in attempts if item[0]]
+    assert successful == [(True, 1, "bootstrap"), (True, 2, "train")]
+    assert monitor._last_uploaded_sequence_no == 2
+    assert monitor._upload_broken is False
+    marker = json.loads((tmp_path / qrr.UPLOAD_FAILURE_FILE).read_text(encoding="utf-8"))
+    assert marker["status"] == "recovered"
+    assert marker["reason_code"] == "QE_RESOURCE_EVENT_UPLOAD_RECOVERED"
+    assert "reason_code=QE_RESOURCE_EVENT_UPLOAD_RECOVERED" in capsys.readouterr().out
+
+
+def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatch, tmp_path, capsys):
+    _set_resource_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    qrr._RESOURCE_SECRET_CACHE = None
+
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_process_sample",
+        lambda _self: {"process_rss_bytes": 1, "process_vm_hwm_bytes": 2},
+    )
+    monkeypatch.setattr(
+        qrr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=9, stdout="", stderr="unavailable"),
+    )
+
+    monitor = qrr.QERuntimeResourceMonitor()
+    sample = monitor._collect_sample()
+
+    assert sample["process_rss_bytes"] == 1
+    assert sample["resource_sample_errors"] == ["QE_RESOURCE_GPU_SAMPLE_FAILED:RuntimeError"]
+    assert "reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED" in capsys.readouterr().out

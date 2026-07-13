@@ -26,6 +26,7 @@ RESOURCE_SCHEMA_REASON = "QE_RESOURCE_SESSION_SCHEMA_NOT_READY"
 AUTH_FAILED_REASON = "QE_RESOURCE_EVENT_AUTH_FAILED"
 SEQUENCE_CONFLICT_REASON = "QE_RESOURCE_EVENT_SEQUENCE_CONFLICT"
 PHASE_INVALID_REASON = "QE_RESOURCE_EVENT_PHASE_INVALID"
+GPU_LEASE_BUSY_REASON = "QE_GPU_PHASE_LEASE_BUSY"
 
 TERMINAL_PHASES = {"completed", "failed", "cancelled"}
 GPU_RELEASE_PHASES = {"gpu_phase_released", "release_rejected"}
@@ -96,17 +97,134 @@ class QEResourcePhaseService:
     PHASE_TABLE = "qe_archive.run_resource_phase"
 
     def __init__(self, connection_provider: Callable[[], Any] | None = None) -> None:
+        self._uses_default_connection_provider = connection_provider is None
         self._connection_provider = connection_provider or get_conn
 
+    def _connection(self, *, transactional: bool = False) -> Any:
+        if self._uses_default_connection_provider:
+            return get_conn(
+                autocommit=not transactional,
+                manage_transaction=transactional,
+            )
+        return self._connection_provider()
+
     def ensure_schema_ready(self) -> None:
-        with self._connection_provider() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT to_regclass(%s), to_regclass(%s)", (self.SESSION_TABLE, self.PHASE_TABLE))
-                row = cur.fetchone()
-        if not row or row[0] is None or row[1] is None:
+        required_session_columns = {
+            "session_id",
+            "source_run_key",
+            "attempt_no",
+            "task_id",
+            "loop_id",
+            "loop_index",
+            "node_id",
+            "archive_run_id",
+            "token_sha256",
+            "phase_pipeline_enabled",
+            "gpu_training_policy",
+            "current_phase",
+            "last_sequence_no",
+            "status",
+            "gpu_phase_released_at",
+            "terminal_reason_code",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        }
+        required_phase_columns = {
+            "id",
+            "session_id",
+            "source_run_key",
+            "sequence_no",
+            "phase",
+            "phase_status",
+            "started_at",
+            "ended_at",
+            "duration_seconds",
+            "sample_count",
+            "process_rss_peak_bytes",
+            "process_vm_hwm_peak_bytes",
+            "gpu_device_index",
+            "gpu_name",
+            "gpu_memory_used_peak_bytes",
+            "gpu_process_memory_peak_bytes",
+            "gpu_utilization_avg_pct",
+            "gpu_utilization_peak_pct",
+            "cuda_allocated_peak_bytes",
+            "cuda_reserved_peak_bytes",
+            "cuda_allocated_end_bytes",
+            "cuda_reserved_end_bytes",
+            "resident_requested",
+            "resident_active",
+            "resident_fallback",
+            "fallback_reason_code",
+            "release_check_passed",
+            "reason_code",
+            "metadata",
+            "event_sha256",
+            "created_at",
+        }
+        required_constraints = {
+            "uq_qear_resource_session_attempt",
+            "ck_qear_resource_session_status",
+            "ck_qear_resource_session_gpu_policy",
+            "uq_qear_resource_phase_sequence",
+        }
+        try:
+            with self._connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT to_regclass(%s), to_regclass(%s)",
+                        (self.SESSION_TABLE, self.PHASE_TABLE),
+                    )
+                    row = cur.fetchone()
+                    if not row or row[0] is None or row[1] is None:
+                        raise QEResourcePhaseError(
+                            RESOURCE_SCHEMA_REASON,
+                            "qe_archive resource session/phase tables are missing",
+                        )
+                    cur.execute(
+                        """
+                        SELECT table_name, column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'qe_archive'
+                          AND table_name IN ('run_resource_session', 'run_resource_phase')
+                        """
+                    )
+                    columns_by_table: dict[str, set[str]] = {
+                        "run_resource_session": set(),
+                        "run_resource_phase": set(),
+                    }
+                    for table_name, column_name in cur.fetchall():
+                        columns_by_table.setdefault(str(table_name), set()).add(str(column_name))
+                    cur.execute(
+                        """
+                        SELECT conname
+                        FROM pg_constraint
+                        WHERE conrelid IN (
+                            'qe_archive.run_resource_session'::regclass,
+                            'qe_archive.run_resource_phase'::regclass
+                        )
+                        """
+                    )
+                    constraints = {str(item[0]) for item in cur.fetchall()}
+        except QEResourcePhaseError:
+            raise
+        except Exception as exc:
             raise QEResourcePhaseError(
                 RESOURCE_SCHEMA_REASON,
-                "qe_archive resource session/phase tables are missing; apply the versioned migration before enabling telemetry",
+                f"resource schema readiness inspection failed: {type(exc).__name__}: {exc}",
+            ) from exc
+
+        missing_session = sorted(required_session_columns - columns_by_table["run_resource_session"])
+        missing_phase = sorted(required_phase_columns - columns_by_table["run_resource_phase"])
+        missing_constraints = sorted(required_constraints - constraints)
+        if missing_session or missing_phase or missing_constraints:
+            raise QEResourcePhaseError(
+                RESOURCE_SCHEMA_REASON,
+                "resource schema contract is incomplete; apply the versioned migration before enabling telemetry: "
+                f"missing_session_columns={missing_session}, "
+                f"missing_phase_columns={missing_phase}, "
+                f"missing_constraints={missing_constraints}",
             )
 
     def create_session(
@@ -117,6 +235,7 @@ class QEResourcePhaseService:
         node_id: str,
         phase_pipeline_enabled: bool,
         gpu_training_policy: str = GPU_TRAINING_POLICY_EXCLUSIVE,
+        reserve_gpu_phase: bool = False,
     ) -> ResourceSessionSecret:
         self.ensure_schema_ready()
         normalized_policy = str(gpu_training_policy or "").strip().lower()
@@ -125,8 +244,45 @@ class QEResourcePhaseService:
         source_run_key = f"{task_id}_L{int(loop_index)}"
         session_id = f"qers_{uuid.uuid4().hex}"
         token = secrets.token_urlsafe(32)
-        with self._connection_provider() as conn:
+        with self._connection(transactional=True) as conn:
             with conn.cursor() as cur:
+                if reserve_gpu_phase:
+                    if not phase_pipeline_enabled:
+                        raise ValueError("reserve_gpu_phase requires phase_pipeline_enabled=true")
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"qe_gpu_phase:{node_id}",),
+                    )
+                    policy_conflict = ""
+                    params: list[Any] = [node_id]
+                    if normalized_policy != GPU_TRAINING_POLICY_EXCLUSIVE:
+                        policy_conflict = "AND gpu_training_policy = 'exclusive'"
+                    cur.execute(
+                        f"""
+                        SELECT session_id
+                        FROM qe_archive.run_resource_session
+                        WHERE node_id = %s
+                          AND phase_pipeline_enabled = TRUE
+                          {policy_conflict}
+                          AND status IN ('reserved', 'running')
+                          AND gpu_phase_released_at IS NULL
+                          AND EXISTS (
+                              SELECT 1
+                              FROM qe_evolution_loops l
+                              WHERE l.task_id = qe_archive.run_resource_session.task_id
+                                AND l.loop_index = qe_archive.run_resource_session.loop_index
+                                AND l.status IN ('pending', 'running', 'processing')
+                          )
+                        LIMIT 1
+                        """,
+                        params,
+                    )
+                    conflict = cur.fetchone()
+                    if conflict is not None:
+                        raise QEResourcePhaseError(
+                            GPU_LEASE_BUSY_REASON,
+                            f"GPU phase lease is occupied on node={node_id} for policy={normalized_policy}",
+                        )
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtext(%s))",
                     (source_run_key,),
@@ -171,7 +327,7 @@ class QEResourcePhaseService:
         )
 
     def mark_session_submitted(self, session_id: str) -> None:
-        with self._connection_provider() as conn:
+        with self._connection(transactional=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -195,7 +351,7 @@ class QEResourcePhaseService:
         normalized = "cancelled" if status in {"cancelled", "canceled"} else status
         if normalized not in TERMINAL_PHASES:
             raise ValueError(f"invalid terminal resource session status: {status}")
-        with self._connection_provider() as conn:
+        with self._connection(transactional=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -233,7 +389,7 @@ class QEResourcePhaseService:
         policy_conflict = ""
         if normalized_policy != GPU_TRAINING_POLICY_EXCLUSIVE:
             policy_conflict = "AND gpu_training_policy = 'exclusive'"
-        with self._connection_provider() as conn:
+        with self._connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
@@ -243,7 +399,7 @@ class QEResourcePhaseService:
                       AND phase_pipeline_enabled = TRUE
                       {policy_conflict}
                       AND status IN ('reserved', 'running')
-                      AND current_phase NOT IN ('gpu_phase_released', 'release_rejected', 'backtest', 'finalize', 'completed', 'failed', 'cancelled')
+                      AND gpu_phase_released_at IS NULL
                       AND EXISTS (
                           SELECT 1
                           FROM qe_evolution_loops l
@@ -258,8 +414,47 @@ class QEResourcePhaseService:
                 )
                 return cur.fetchone() is not None
 
+    def reconcile_terminal_sessions(self) -> int:
+        """Converge session state from durable loop terminal state after callbacks/restarts."""
+
+        self.ensure_schema_ready()
+        with self._connection(transactional=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE qe_archive.run_resource_session s
+                    SET status = CASE
+                            WHEN l.status IN ('cancelled', 'canceled') THEN 'cancelled'
+                            WHEN l.status = 'completed' THEN 'completed'
+                            ELSE 'failed'
+                        END,
+                        current_phase = CASE
+                            WHEN l.status IN ('cancelled', 'canceled') THEN 'cancelled'
+                            WHEN l.status = 'completed' THEN 'completed'
+                            ELSE 'failed'
+                        END,
+                        terminal_reason_code = COALESCE(
+                            s.terminal_reason_code,
+                            'QE_RESOURCE_RECONCILED_FROM_LOOP_TERMINAL'
+                        ),
+                        completed_at = COALESCE(s.completed_at, NOW()),
+                        updated_at = NOW()
+                    FROM qe_evolution_loops l
+                    WHERE s.task_id = l.task_id
+                      AND s.loop_index = l.loop_index
+                      AND s.status IN ('reserved', 'running')
+                      AND l.status IN (
+                          'completed', 'failed', 'cancelled', 'canceled',
+                          'interrupted', 'timeout', 'stopped'
+                      )
+                    """
+                )
+                updated = int(cur.rowcount or 0)
+            conn.commit()
+        return updated
+
     def get_session_state(self, session_id: str) -> dict[str, Any] | None:
-        with self._connection_provider() as conn:
+        with self._connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     """
@@ -306,7 +501,7 @@ class QEResourcePhaseService:
         if phase not in _PHASE_TRANSITIONS:
             raise QEResourcePhaseError(PHASE_INVALID_REASON, f"unknown phase {phase!r}")
 
-        with self._connection_provider() as conn:
+        with self._connection(transactional=True) as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     "SELECT * FROM qe_archive.run_resource_session WHERE session_id = %s FOR UPDATE",
@@ -478,7 +673,7 @@ class QEResourcePhaseService:
             params.append(source_run_key)
         where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
         params.append(limit)
-        with self._connection_provider() as conn:
+        with self._connection() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
                     f"""
@@ -539,7 +734,7 @@ class QEResourcePhaseService:
         attempt_no: int | None = None,
     ) -> int:
         self.ensure_schema_ready()
-        with self._connection_provider() as conn:
+        with self._connection(transactional=True) as conn:
             with conn.cursor() as cur:
                 if attempt_no is not None:
                     cur.execute(

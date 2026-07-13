@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import pytest
 
+from backend.services.quantevolver import qe_resource_phase_service as qrps
 from backend.services.quantevolver.qe_resource_phase_service import (
     AUTH_FAILED_REASON,
+    GPU_LEASE_BUSY_REASON,
     PHASE_INVALID_REASON,
     QEResourcePhaseError,
     _canonical_sha256,
@@ -21,6 +23,32 @@ class _FakeResourceState:
         self.phases = {}
         self.list_rows = []
         self.has_unreleased = False
+        self.last_gpu_conflict_sql = ""
+        self.loop_statuses = {}
+        self.session_columns = {
+            "session_id", "source_run_key", "attempt_no", "task_id", "loop_id",
+            "loop_index", "node_id", "archive_run_id", "token_sha256", "phase_pipeline_enabled",
+            "gpu_training_policy", "current_phase", "last_sequence_no", "status",
+            "gpu_phase_released_at", "terminal_reason_code", "created_at", "updated_at",
+            "completed_at",
+        }
+        self.phase_columns = {
+            "id", "session_id", "source_run_key", "sequence_no", "phase", "phase_status",
+            "started_at", "ended_at", "duration_seconds", "sample_count",
+            "process_rss_peak_bytes", "process_vm_hwm_peak_bytes", "gpu_device_index",
+            "gpu_name", "gpu_memory_used_peak_bytes", "gpu_process_memory_peak_bytes",
+            "gpu_utilization_avg_pct", "gpu_utilization_peak_pct",
+            "cuda_allocated_peak_bytes", "cuda_reserved_peak_bytes",
+            "cuda_allocated_end_bytes", "cuda_reserved_end_bytes", "resident_requested",
+            "resident_active", "resident_fallback", "fallback_reason_code",
+            "release_check_passed", "reason_code", "metadata", "event_sha256", "created_at",
+        }
+        self.constraints = {
+            "uq_qear_resource_session_attempt",
+            "ck_qear_resource_session_status",
+            "ck_qear_resource_session_gpu_policy",
+            "uq_qear_resource_phase_sequence",
+        }
         self.commits = 0
 
 
@@ -45,8 +73,18 @@ class _FakeResourceCursor:
         self.rowcount = 0
         if "SELECT to_regclass" in normalized:
             self.row = ("run_resource_session", "run_resource_phase") if self.state.tables_ready else (None, None)
+        elif "FROM information_schema.columns" in normalized:
+            self.rows = [
+                *(('run_resource_session', column) for column in sorted(self.state.session_columns)),
+                *(('run_resource_phase', column) for column in sorted(self.state.phase_columns)),
+            ]
+        elif "FROM pg_constraint" in normalized:
+            self.rows = [(constraint,) for constraint in sorted(self.state.constraints)]
         elif "pg_advisory_xact_lock" in normalized:
             self.row = (None,)
+        elif "SELECT session_id FROM qe_archive.run_resource_session" in normalized:
+            self.state.last_gpu_conflict_sql = normalized
+            self.row = ("qers_conflict",) if self.state.has_unreleased else None
         elif "SELECT COALESCE(MAX(attempt_no)" in normalized:
             source_run_key = params[0]
             attempts = [row["attempt_no"] for row in self.state.sessions.values() if row["source_run_key"] == source_run_key]
@@ -103,7 +141,27 @@ class _FakeResourceCursor:
             session["terminal_reason_code"] = reason_code or session["terminal_reason_code"]
             self.rowcount = 1
         elif "SELECT 1 FROM qe_archive.run_resource_session" in normalized:
+            self.state.last_gpu_conflict_sql = normalized
             self.row = (1,) if self.state.has_unreleased else None
+        elif normalized.startswith("UPDATE qe_archive.run_resource_session s SET status = CASE"):
+            updated = 0
+            for session in self.state.sessions.values():
+                loop_status = self.state.loop_statuses.get((session["task_id"], session["loop_index"]))
+                if session["status"] not in {"reserved", "running"}:
+                    continue
+                if loop_status not in {
+                    "completed", "failed", "cancelled", "canceled",
+                    "interrupted", "timeout", "stopped",
+                }:
+                    continue
+                terminal = "cancelled" if loop_status in {"cancelled", "canceled"} else loop_status
+                session["status"] = terminal
+                session["current_phase"] = terminal
+                session["terminal_reason_code"] = (
+                    session["terminal_reason_code"] or "QE_RESOURCE_RECONCILED_FROM_LOOP_TERMINAL"
+                )
+                updated += 1
+            self.rowcount = updated
         elif normalized.startswith("SELECT session_id, source_run_key"):
             session = self.state.sessions.get(params[0])
             self.row = dict(session) if session else None
@@ -183,6 +241,22 @@ def test_resource_phase_token_hash_and_event_hash_are_deterministic():
     assert _token_sha256("secret") == _token_sha256("secret")
     assert _token_sha256("secret") != _token_sha256("other")
     assert _canonical_sha256({"b": 2, "a": 1}) == _canonical_sha256({"a": 1, "b": 2})
+
+
+def test_resource_service_requests_managed_transaction_for_atomic_paths(monkeypatch):
+    calls = []
+    state = _FakeResourceState()
+
+    def fake_get_conn(**kwargs):
+        calls.append(dict(kwargs))
+        return _FakeResourceConn(state)
+
+    monkeypatch.setattr(qrps, "get_conn", fake_get_conn)
+    service = QEResourcePhaseService()
+    with service._connection(transactional=True):
+        pass
+
+    assert calls == [{"autocommit": False, "manage_transaction": True}]
 
 
 def test_gpu_phase_release_requires_positive_release_proof():
@@ -268,6 +342,63 @@ def test_resource_schema_readiness_fails_loudly():
     with pytest.raises(QEResourcePhaseError) as exc_info:
         service.ensure_schema_ready()
     assert exc_info.value.reason_code == RESOURCE_SCHEMA_REASON
+
+
+def test_resource_schema_readiness_rejects_partial_contract():
+    service, state = _service_with_fake_state()
+    state.session_columns.remove("gpu_phase_released_at")
+    state.constraints.remove("uq_qear_resource_phase_sequence")
+    with pytest.raises(QEResourcePhaseError) as exc_info:
+        service.ensure_schema_ready()
+    assert exc_info.value.reason_code == RESOURCE_SCHEMA_REASON
+    assert "gpu_phase_released_at" in exc_info.value.message
+    assert "uq_qear_resource_phase_sequence" in exc_info.value.message
+
+
+def test_resource_session_gpu_reservation_is_atomic_and_release_rejected_stays_busy():
+    service, state = _service_with_fake_state()
+    state.has_unreleased = True
+    with pytest.raises(QEResourcePhaseError) as exc_info:
+        service.create_session(
+            task_id="qe_task",
+            loop_index=3,
+            node_id="wsl2-5080",
+            phase_pipeline_enabled=True,
+            gpu_training_policy="exclusive",
+            reserve_gpu_phase=True,
+        )
+    assert exc_info.value.reason_code == GPU_LEASE_BUSY_REASON
+    assert state.sessions == {}
+    assert "gpu_phase_released_at IS NULL" in state.last_gpu_conflict_sql
+    assert "release_rejected" not in state.last_gpu_conflict_sql
+
+    state.has_unreleased = False
+    secret = service.create_session(
+        task_id="qe_task",
+        loop_index=3,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=True,
+        gpu_training_policy="exclusive",
+        reserve_gpu_phase=True,
+    )
+    assert secret.session_id in state.sessions
+
+
+def test_resource_session_restart_reconciliation_uses_durable_loop_terminal_state():
+    service, state = _service_with_fake_state()
+    secret = service.create_session(
+        task_id="qe_task",
+        loop_index=4,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=True,
+    )
+    service.mark_session_submitted(secret.session_id)
+    state.loop_statuses[("qe_task", 4)] = "completed"
+
+    assert service.reconcile_terminal_sessions() == 1
+    session = service.get_session_state(secret.session_id)
+    assert session["status"] == "completed"
+    assert session["terminal_reason_code"] == "QE_RESOURCE_RECONCILED_FROM_LOOP_TERMINAL"
 
 
 def test_resource_event_ingestion_is_ordered_authenticated_and_idempotent():
