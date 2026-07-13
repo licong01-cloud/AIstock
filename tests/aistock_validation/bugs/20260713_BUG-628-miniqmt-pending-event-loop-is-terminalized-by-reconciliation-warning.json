@@ -2,7 +2,9 @@
   "actual": "2026-07-13 production SIM run simrun_7e0ac11328470378 has qmt batch SUBMITTING with 13 submitted, 16 pending, 0 failed and 29 ACTIVE algos. Broker-authoritative reconciliation reports 91 UNBACKED_STRATEGY_POSITION warnings and submit_result_gate=blocked, which rewrites the run to FAILED_RETRYABLE. _should_drive_existing_miniqmt_event_loop accepts only SUBMITTING or INTRADAY_RUNNING, so the 16 valid pending algos stop receiving scheduler ticks. Preserve loud broker reconciliation and capping, but keep the durable event-loop runtime INTRADAY_RUNNING while pending algos exist; do not duplicate orders, silently fallback, weaken broker authority, or add approval gates.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260713_BUG-628-miniqmt-pending-event-loop-is-terminalized-by-reconciliation-warning.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-628",
