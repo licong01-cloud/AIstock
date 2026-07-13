@@ -8,6 +8,15 @@ from fastapi import HTTPException
 from backend.routers import quantevolver_evolution as qe
 
 
+def test_evolution_router_json_response_declares_utf8_for_chinese_metadata():
+    response = qe.QEEvolutionJSONResponse({"task_name": "板块轮动任务", "target_desc": "中文描述"})
+
+    assert qe.router.default_response_class is qe.QEEvolutionJSONResponse
+    assert response.headers["content-type"] == "application/json; charset=utf-8"
+    assert "板块轮动任务" in response.body.decode("utf-8")
+    assert "中文描述" in response.body.decode("utf-8")
+
+
 class DummyScheduler:
     def __init__(self, editable_config=None):
         self.calls = []
