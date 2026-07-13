@@ -1160,6 +1160,10 @@ Batch C file-set foundation verify receipt；stale fencing、非法 transition�
 
 ### 17.5 Batch D：Parquet、CAS、promotion 与 SEALED golden
 
+实施级契约、允许修改范围、确定性 writer/verifier、CAS/promotion/seal、crash recovery 和 18 项验收矩阵见：
+
+`docs/architecture/advisory_phase1c3_batch_d_parquet_cas_sealed_golden_f2_design_20260713.md`
+
 - `snapshot_writer.py`
 - deterministic PyArrow writer/verifier
 - real local filesystem CAS adapter
@@ -1317,12 +1321,12 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 | F-004 | fixed-capital cashflow, per-share corporate action processing and exact rational equal-weight benchmark in `outcome_engine.py` | lot/minimum-fee/residual-cash, per-current-share action, unbuyable/zero-lot cash retention and unequal-weight rejection fixtures | batch_a_verified | none |
 | F-005 | `label_builder.py` LabelAppendRequest, logical header/payload, in-memory repository and terminal-first selector | serial/concurrent/URI retry, stale predecessor, transition, exact/no-fallback and mapping collision tests | batch_b_verified | none |
 | F-006 | `label_builder.py` alpha_raw candidate enumerator, LABEL_CAPTURE_V1 builder and universe raw rows | single/multi-alpha/empty, source/policy/duplicate universe, coverage, real-CAS COMPLETE/gap tests | batch_b_verified | none |
-| F-007 | Batch C child design §7-§8; planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
-| F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; Batch C child design §9 schema/repository boundary; planned Batch D `snapshot_writer.py` | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
-| F-009 | Batch C child design §5-§10 migration/rollback, capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
-| F-010 | §17 four implementation batches; Batch A/B implementation refs are recorded by F-001..F-006/F-008 | Batch B direct label suite 37 passed; capture/label combined suite 48 passed; Advisory Phase 1 regression 173 passed/3 skipped; pure branch coverage: label capture 85.71%, label builder 85.21%; Batch C/D exits remain defined by §17 | batch_b_verified | none |
-| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch B zero-diff/import scan; Advisory Phase 1 regression; runtime remains noop | batch_b_verified | none |
-| F-012 | §2/§4/§18/§20 plus Batch B changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; DESIGN-COMPLIANCE Batch B review | batch_b_verified | none |
+| F-007 | Batch C `dataset_build.py` and in-memory/PostgreSQL repositories | state reachability, lease/fencing/recover/terminate and PostgreSQL transition matrix | batch_c_verified | none |
+| F-008 | Batch A local atomic create-if-absent primitive; Batch C snapshot/blob/ref schema; Batch D child design `snapshot_writer.py`/dataset CAS | Batch C real-file/repository closure passed; Batch D byte-identical Parquet/blob/ref/SEALED golden is fully designed and remains implementation exit | design_ready | none |
+| F-009 | Batch C migration/rollback, capture discriminator and label authority header/payload repositories | DEV apply/readback, constraints, positive/negative mutation and rollback passed | batch_c_verified | none |
+| F-010 | §17 four implementation batches; Batch A-C implementation refs and Batch D child design | Batch C complete Advisory DEV matrix 191 passed; Batch D exits remain defined by §17 and its 18-item child acceptance matrix | batch_c_verified | none |
+| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch C zero-diff/import scan and complete Advisory DEV regression; runtime remains noop | batch_c_verified | none |
+| F-012 | §2/§4/§18/§20 plus Batch C changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; Batch C DESIGN-COMPLIANCE review | batch_c_verified | none |
 
 ## 23. Production Gates / 生产与运行状态
 
@@ -1384,11 +1388,11 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 ## 26. Exit Criteria
 
-本文当前状态表示 Batch A/B 已合入；Batch C 已完成实施级详细设计，仍待设计复查、提交和合入，
-其代码尚未开始；Batch D 仍按批次边界等待后续详细设计与实施：
+本文当前状态表示 Batch A/B/C 已完成代码、验证和合入，Batch C production schema 已同步；Batch D 已完成
+实施级详细设计并通过 F2 结构校验，但代码、真实 Parquet/CAS promotion 和首个 SEALED golden 尚未开始：
 
-- F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap；Batch C 子设计的 16 项
-  acceptance items 均为 `design_ready`。
+- F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap；Batch D 子设计的 18 项验收项均为
+  `design_ready`。
 - F2 feature workflow validation 通过。
 - 父级 identity、label、build、snapshot、isolation 和 no-approval 条款无冲突。
 - 所有 code-time 参数决策均有 frozen policy/hash 位置，不留“实现时自行决定”。
