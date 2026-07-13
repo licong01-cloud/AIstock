@@ -44,56 +44,96 @@ class PostgresSourceAvailabilityLedger:
     def append(self, request: SourceAvailabilityEventRequest) -> SourceAvailabilityEvent:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (request.derived_partition_chain_key,))
-                cur.execute(
-                    """
-                    SELECT * FROM app.advisory_source_availability_event
-                    WHERE dataset_name = %s AND source_role = %s
-                      AND partition_key_hash = %s AND event_revision_no = %s
-                    FOR UPDATE
-                    """,
-                    (request.dataset_name, request.source_role, request.partition_key_hash, request.event_revision_no),
+                return self._append_with_cursor(cur=cur, request=request)
+
+    def append_in_transaction(self, *, conn: Any, request: SourceAvailabilityEventRequest) -> SourceAvailabilityEvent:
+        """Append using a caller-owned transaction without committing it.
+
+        Phase 1D uses this only inside its event/receipt/cursor transaction.
+        The public ``append`` path above remains behaviorally identical for
+        all existing consumers.
+        """
+
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            return self._append_with_cursor(cur=cur, request=request)
+
+    def terminal_for_partition_in_transaction(
+        self,
+        *,
+        conn: Any,
+        dataset_name: str,
+        source_role: str,
+        partition_key: dict[str, Any],
+    ) -> SourceAvailabilityEvent | None:
+        """Return the latest chain terminal without applying as-of eligibility rules."""
+
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM app.advisory_source_availability_event
+                WHERE dataset_name = %s AND source_role = %s AND partition_key_hash = %s
+                ORDER BY event_revision_no DESC
+                LIMIT 1
+                FOR KEY SHARE
+                """,
+                (dataset_name, source_role, canonical_json_sha256(canonicalize(partition_key))),
+            )
+            row = cur.fetchone()
+        return None if row is None else _event_from_row(dict(row))
+
+    @staticmethod
+    def _append_with_cursor(*, cur: Any, request: SourceAvailabilityEventRequest) -> SourceAvailabilityEvent:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (request.derived_partition_chain_key,))
+        cur.execute(
+            """
+            SELECT * FROM app.advisory_source_availability_event
+            WHERE dataset_name = %s AND source_role = %s
+              AND partition_key_hash = %s AND event_revision_no = %s
+            FOR UPDATE
+            """,
+            (request.dataset_name, request.source_role, request.partition_key_hash, request.event_revision_no),
+        )
+        existing_row = cur.fetchone()
+        if existing_row is not None:
+            existing = _event_from_row(dict(existing_row))
+            if existing.input.append_request_hash == request.derived_append_request_hash:
+                return existing
+            raise SourceLedgerError(
+                REASON_EVENT_CONFLICT,
+                "same natural partition revision has a different append request",
+                context={"availability_event_id": existing.availability_event_id},
+            )
+        cur.execute("SELECT clock_timestamp() AS first_observed_at")
+        event = SourceAvailabilityEvent.from_request(
+            request,
+            first_observed_at=cur.fetchone()["first_observed_at"],
+        )
+        try:
+            cur.execute(
+                """
+                INSERT INTO app.advisory_source_availability_event (
+                    availability_event_id, append_request_hash, dataset_name, source_role, partition_key,
+                    partition_key_hash, partition_chain_key, revision_id, event_revision_no,
+                    event_type, predecessor_event_hash, provider_job_id, refresh_job_id,
+                    provider_published_at, first_observed_at, formal_available_at,
+                    schema_fingerprint, row_count, partition_content_hash, quality_status,
+                    reason_codes, event_content_hash, created_by_service_principal
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
-                existing_row = cur.fetchone()
-                if existing_row is not None:
-                    existing = _event_from_row(dict(existing_row))
-                    if existing.input.append_request_hash == request.derived_append_request_hash:
-                        return existing
-                    raise SourceLedgerError(
-                        REASON_EVENT_CONFLICT,
-                        "same natural partition revision has a different append request",
-                        context={"availability_event_id": existing.availability_event_id},
-                    )
-                cur.execute("SELECT clock_timestamp() AS first_observed_at")
-                event = SourceAvailabilityEvent.from_request(
-                    request,
-                    first_observed_at=cur.fetchone()["first_observed_at"],
-                )
-                try:
-                    cur.execute(
-                        """
-                        INSERT INTO app.advisory_source_availability_event (
-                            availability_event_id, append_request_hash, dataset_name, source_role, partition_key,
-                            partition_key_hash, partition_chain_key, revision_id, event_revision_no,
-                            event_type, predecessor_event_hash, provider_job_id, refresh_job_id,
-                            provider_published_at, first_observed_at, formal_available_at,
-                            schema_fingerprint, row_count, partition_content_hash, quality_status,
-                            reason_codes, event_content_hash, created_by_service_principal
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        )
-                        RETURNING *
-                        """,
-                        _event_insert_params(event),
-                    )
-                except (psycopg2.IntegrityError, psycopg2.errors.RaiseException) as exc:
-                    raise SourceLedgerError(
-                        REASON_EVENT_CHAIN_INVALID,
-                        "database rejected the source availability chain",
-                        context={"database_constraint": getattr(exc.diag, "constraint_name", None)},
-                    ) from exc
-                return _event_from_row(dict(cur.fetchone()))
+                RETURNING *
+                """,
+                _event_insert_params(event),
+            )
+        except (psycopg2.IntegrityError, psycopg2.errors.RaiseException) as exc:
+            raise SourceLedgerError(
+                REASON_EVENT_CHAIN_INVALID,
+                "database rejected the source availability chain",
+                context={"database_constraint": getattr(exc.diag, "constraint_name", None)},
+            ) from exc
+        return _event_from_row(dict(cur.fetchone()))
 
     def select_as_of(
         self,
