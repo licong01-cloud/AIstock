@@ -15,6 +15,8 @@ from backend.services.selection_center.models import (
 )
 from backend.services.trading_core.errors import UnsupportedFeatureError
 
+DEPRECATED_REASON_CODE = "selection_multi_package_adhoc_combine_deprecated"
+
 
 class FakeSelectionCenterService:
     def __init__(self, run: SelectionRun) -> None:
@@ -29,8 +31,9 @@ class FakeSelectionCenterService:
         self.calls.append(kwargs)
         return self.run
 
-    def list_selectable_packages(self, *, limit: int = 200):
+    def list_selectable_packages(self, *, limit: int = 200, view: str = "full"):
         assert limit > 0
+        assert view in {"full", "summary"}
         return [
             {
                 "package_id": "pkg_a",
@@ -129,7 +132,41 @@ def _weighted_run() -> SelectionRun:
     )
 
 
-def test_selection_center_api_accepts_weighted_fusion_and_returns_trace() -> None:
+def _single_run(package_id: str = "pkg_a", run_id: str = "sel_single_api") -> SelectionRun:
+    return SelectionRun(
+        run_id=run_id,
+        mode=SelectionMode.SINGLE_PACKAGE,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        package_ids=[package_id],
+        runtime_config={"top_k": 20},
+        status=SelectionRunStatus.SUCCEEDED,
+        aggregate_results=[
+            SelectionCandidate(
+                symbol="000001.SZ",
+                score=0.8,
+                rank=1,
+                target_weight=0.03,
+                reference_price=10.0,
+                component_scores={"artifact_source": "live_qe_model_inference_v1", "raw_rank": 1},
+                reason="single_package",
+            )
+        ],
+        manifest_sha256_by_package={package_id: "sha_single"},
+    )
+
+
+def _assert_deprecated_payload(payload: dict, *, mode: str, path: str) -> None:
+    detail = payload["detail"]
+    assert detail["error_code"] == "SELECTION_MULTI_PACKAGE_ADHOC_COMBINE_DEPRECATED"
+    assert detail["reason_code"] == DEPRECATED_REASON_CODE
+    assert "from-multi-alpha-combine-run" in detail["message"]
+    assert detail["context"]["mode"] == mode
+    assert detail["context"]["path"] == path
+    assert detail["context"]["replacement_route"] == "from-multi-alpha-combine-run"
+
+
+def test_selection_center_api_rejects_manual_multi_package_runs_with_reason_code() -> None:
     service = FakeSelectionCenterService(_weighted_run())
     client = _client(service)
 
@@ -144,14 +181,77 @@ def test_selection_center_api_accepts_weighted_fusion_and_returns_trace() -> Non
         },
     )
 
+    assert response.status_code == 410
+    _assert_deprecated_payload(response.json(), mode="weighted_fusion", path="selection_center.runs")
+    assert response.json()["detail"]["context"]["package_ids"] == ["pkg_a", "pkg_b"]
+    assert service.calls == []
+
+
+def test_selection_center_api_rejects_non_single_mode_even_with_one_package() -> None:
+    service = FakeSelectionCenterService(_single_run())
+    client = _client(service)
+
+    response = client.post(
+        "/api/v1/selection-center/runs",
+        json={
+            "package_ids": ["pkg_a"],
+            "trade_date": "2024-01-02",
+            "data_source": "DB_HISTORICAL",
+            "mode": "union",
+            "runtime_config": {},
+        },
+    )
+
+    assert response.status_code == 410
+    _assert_deprecated_payload(response.json(), mode="union", path="selection_center.runs")
+    assert response.json()["detail"]["context"]["package_count"] == 1
+    assert service.calls == []
+
+
+def test_selection_center_api_keeps_single_package_runs_unchanged() -> None:
+    service = FakeSelectionCenterService(_single_run())
+    client = _client(service)
+
+    response = client.post(
+        "/api/v1/selection-center/runs",
+        json={
+            "package_ids": ["pkg_a"],
+            "trade_date": "2024-01-02",
+            "data_source": "DB_HISTORICAL",
+            "mode": "single_package",
+            "runtime_config": {"top_k": 20},
+        },
+    )
+
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
-    assert payload["run"]["mode"] == "weighted_fusion"
-    assert payload["run"]["package_ids"] == ["pkg_a", "pkg_b"]
-    assert payload["run"]["aggregate_results"][0]["component_scores"]["fusion_method"] == "weighted_rank_fusion"
-    assert service.calls[0]["mode"] == SelectionMode.WEIGHTED_FUSION
-    assert service.calls[0]["runtime_config"]["package_weights"] == {"pkg_a": 0.6, "pkg_b": 0.4}
+    assert payload["run"]["mode"] == "single_package"
+    assert payload["run"]["package_ids"] == ["pkg_a"]
+    assert service.calls[0]["mode"] == SelectionMode.SINGLE_PACKAGE
+    assert service.calls[0]["runtime_config"] == {"top_k": 20}
+
+
+def test_selection_center_api_treats_multi_alpha_parent_as_single_package() -> None:
+    service = FakeSelectionCenterService(_single_run(package_id="pkg_multi_alpha_parent", run_id="sel_multi_alpha_parent"))
+    client = _client(service)
+
+    response = client.post(
+        "/api/v1/selection-center/runs",
+        json={
+            "package_ids": ["pkg_multi_alpha_parent"],
+            "trade_date": "2024-01-02",
+            "data_source": "DB_HISTORICAL",
+            "mode": "single_package",
+            "runtime_config": {"selection_artifact_config": {"auto_generate": True}},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["run"]["package_ids"] == ["pkg_multi_alpha_parent"]
+    assert service.calls[0]["package_ids"] == ["pkg_multi_alpha_parent"]
 
 
 def test_selection_center_api_exposes_aggregate_results() -> None:
@@ -208,7 +308,7 @@ def test_selection_center_api_lists_selectable_packages() -> None:
     assert payload["packages"][0]["metrics_summary"]["sharpe"] == 1.2
 
 
-def test_selection_center_api_aggregates_existing_runs() -> None:
+def test_selection_center_api_deprecates_aggregate_existing_runs_at_router() -> None:
     service = FakeSelectionCenterService(_weighted_run())
     client = _client(service)
 
@@ -221,12 +321,11 @@ def test_selection_center_api_aggregates_existing_runs() -> None:
         },
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 410
     payload = response.json()
-    assert payload["ok"] is True
-    assert payload["run"]["run_id"] == "sel_weighted_api"
-    assert service.calls[0]["source_run_ids"] == ["sel_a", "sel_b"]
-    assert service.calls[0]["mode"] == SelectionMode.WEIGHTED_FUSION
+    _assert_deprecated_payload(payload, mode="weighted_fusion", path="selection_center.aggregate_runs")
+    assert payload["detail"]["context"]["source_run_ids"] == ["sel_a", "sel_b"]
+    assert service.calls == []
 
 
 def test_selection_center_api_lists_runs_with_pagination() -> None:

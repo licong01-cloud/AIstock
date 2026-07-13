@@ -1,0 +1,90 @@
+{
+  "actual": "Nightly qe_archive_data_quality failed with missing schema version: qe_archive_v3_20260628, even though the production qe_archive structure matched the current code (37 tables, 613 commented columns).",
+  "allowed_write_scope": [
+    "backend/db/init_qe_archive_schema.py",
+    "backend/services/qe_archive",
+    "backend/tests/qe_archive",
+    "backend/tests/test_qe_archive_schema.py",
+    "scripts/qe_archive_data_quality_smoke.py",
+    "tests/aistock_validation/bugs/20260629_BUG-555-qe-archive-ci-failure-requires-triage-error-process-completed-with-exit.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-555",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T10:37:20.671042Z",
+  "description": "The promoted Nightly failure came from qe_archive_data_quality. Local reproduction showed schema_version_present=false while expected_table_count=existing_table_count=37, expected_column_count=commented_column_count=613, and no missing table/column comments. The fix keeps structural drift fail-closed and exposes schema_version_status, but does not block Nightly solely on metadata absence when structure is current.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-a279d578763e",
+      "timestamp": "2026-06-29T10:37:20.671036Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/28334737223",
+    "https://github.com/licong01-cloud/AIstock/issues/1723",
+    "tmp/issue_workflow/ci-issue-1723/failure-event.json",
+    "tmp/issue_workflow/ci-issue-1723/context-pack.md"
+  ],
+  "expected": "Read-only qe_archive data-quality smoke should fail on structural drift, but treat a missing version marker as an auditable warning when all expected tables, columns, and comments match current code.",
+  "first_seen_at": "2026-06-29T10:37:20.671042Z",
+  "fix_branch": null,
+  "fix_commit": "9ab6518faec3092a4f91574509dbdf9cb0f679e9",
+  "fixed_at": "2026-06-29T10:59:14.767806Z",
+  "github_issue_number": 1723,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1723",
+  "last_seen_at": "2026-06-29T10:37:20.671042Z",
+  "module": "qe_archive",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1741",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s qe_archive_data_quality",
+  "required_verification": [
+    "python -m nox -s qe_archive_data_quality",
+    "python -m pytest backend/tests/test_qe_archive_schema.py -q -p no:cacheprovider",
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "qe_archive"
+  ],
+  "title": "qe_archive_data_quality fails when schema version marker is missing despite matching structure",
+  "trigger_condition": {
+    "fingerprint": "a279d578763e3bdfc686c752",
+    "source_event_id": "FE-20260629-a279d578763e"
+  },
+  "validation_evidence": [
+    "python -m nox -s qe_archive_data_quality -> passed",
+    "python -m pytest backend/tests/test_qe_archive_schema.py -q -p no:cacheprovider -> 12 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> passed",
+    "git diff --check -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-555 --module qe_archive --changed-file backend/tests/test_qe_archive_schema.py --changed-file scripts/qe_archive_data_quality_smoke.py --changed-file tests/aistock_validation/bugs/20260629_BUG-555-qe-archive-ci-failure-requires-triage-error-process-completed-with-exit.json -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

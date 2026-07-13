@@ -19,9 +19,29 @@ from pathlib import Path
 
 from jinja2 import Template, meta
 from ruamel.yaml import YAML
-from qlib.workflow.cli import sys_config, task_train
+from qlib.workflow.cli import sys_config
+from qlib.workflow.cli import task_train
 import qlib
 from qlib.config import C
+
+try:
+    from qe_prediction_store_client import maybe_upload_prediction_artifacts
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_prediction_store_client":
+        raise
+    maybe_upload_prediction_artifacts = None
+
+try:
+    from qe_runtime_resource import finish_resource_monitor, start_resource_monitor
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_runtime_resource":
+        raise
+
+    def start_resource_monitor():
+        return None
+
+    def finish_resource_monitor(*, status: str, error: str | None = None):
+        return None
 
 
 RECORDER_REF_FILE = "qe_current_recorder.json"
@@ -54,6 +74,34 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
     tmp.replace(path)
     print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
     return payload
+
+
+def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment_name: str, config: dict):
+    if maybe_upload_prediction_artifacts is None:
+        print("[INFO] Prediction-store uploader helper not present; skipping upload")
+        return None
+    return maybe_upload_prediction_artifacts(
+        recorder=recorder,
+        recorder_ref=recorder_ref,
+        experiment_name=experiment_name,
+        mode=mode,
+        config=config,
+    )
+
+
+def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
+    task_config = (config or {}).get("task") if isinstance(config, dict) else None
+    model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
+    model_kwargs = model_cfg.get("kwargs") or {}
+    if isinstance(model_kwargs, dict) and (
+        model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias"
+        or model_kwargs.get("gats_industry_embedding") is True
+        or str(model_kwargs.get("gats_industry_embedding", "off")).lower() == "on"
+    ):
+        from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
+
+        inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
+    return task_train(task_config, experiment_name=experiment_name)
 
 
 def render_yaml_template(yaml_path: str) -> str:
@@ -89,47 +137,55 @@ def patch_backtest_config(config: dict):
 
 
 def load_benchmark_series(config=None):
-    """加载预计算的 SH000300 日收益率 Series。
+    """从 Qlib bin 加载 SH000300(000300.SH) 日收益率 Series（BUG-625/方案A）。
 
-    优先读取本地 parquet 文件。如果不存在，尝试从 qlib 在线生成（需要 qlib 已初始化）。
+    benchmark 直接取自回测所用的 Qlib daily bin —— provider 内已含 000300.SH 指数
+    日线(features/000300.sh)，覆盖范围与价格同源、自动到数据末日。校验其完整覆盖
+    backtest 的 start_time/end_time；缺失/不足即 fail-fast，绝不静默 disable/截断/填0。
+    不再读取 benchmark_sh000300.parquet（该 parquet workaround 已废弃）。
 
     Returns:
-        pd.Series(index=DatetimeIndex, values=daily_return) or None
+        pd.Series(index=DatetimeIndex name=datetime, values=daily_return)
     """
     import pandas as pd
+    from qlib.data import D
 
-    # 优先从 parquet 文件加载
-    benchmark_path = Path(__file__).parent / "benchmark_sh000300.parquet"
-    if benchmark_path.exists():
-        df = pd.read_parquet(benchmark_path)
-        sr = df["bench"]
-        sr.index.name = "datetime"
-        print(f"[INFO] Loaded benchmark from parquet: {len(sr)} days, {sr.index.min()} ~ {sr.index.max()}")
-        return sr
-
-    # Fallback: 从 qlib 在线生成（需要 qlib 已初始化且有 000300.sh 日线数据）
-    try:
-        from qlib.data import D
-        start, end = "2024-07-01", "2026-04-27"
-        if config:
-            bt = _find_backtest_config(config)
-            if bt:
-                start = str(bt.get("start_time", start))
-                end = str(bt.get("end_time", end))
-        df = D.features(["000300.sh"], ["$close/Ref($close,1)-1"], start_time=start, end_time=end, freq="day")
-        if df.empty:
-            print("[WARN] 000300.sh benchmark data empty, benchmark disabled")
-            return None
-        df.columns = ["bench"]
-        sr = df["bench"].droplevel("instrument")
-        sr.index.name = "datetime"
-        # 缓存到本地
-        sr.to_frame().to_parquet(benchmark_path)
-        print(f"[INFO] Generated benchmark from qlib: {len(sr)} days, cached to {benchmark_path}")
-        return sr
-    except Exception as e:
-        print(f"[WARN] Failed to generate benchmark: {e}, benchmark disabled")
-        return None
+    start = end = None
+    if config:
+        bt = _find_backtest_config(config)
+        if bt:
+            start, end = bt.get("start_time"), bt.get("end_time")
+    if not start or not end:
+        raise RuntimeError(
+            "[BENCH-FATAL bench_no_window] backtest start_time/end_time not found in config; "
+            "cannot load benchmark from Qlib bin"
+        )
+    df = D.features(["000300.SH"], ["$close/Ref($close,1)-1"], start_time=str(start), end_time=str(end), freq="day")
+    if df is None or df.empty:
+        raise RuntimeError(
+            f"[BENCH-FATAL bench_empty] Qlib bin has no 000300.SH benchmark in [{start},{end}]; "
+            "ensure features/000300.sh is present in the daily bin (no silent benchmark disable)"
+        )
+    sr = df.iloc[:, 0].droplevel("instrument")
+    sr.index = pd.to_datetime(sr.index)
+    sr.index.name = "datetime"
+    sr = sr.sort_index()
+    re_ = pd.Timestamp(end).normalize()
+    if sr.index.max() < re_:
+        raise RuntimeError(
+            f"[BENCH-FATAL bench_end_short] benchmark ends {sr.index.max().date()} < required_end {re_.date()}; "
+            "refusing to use partial benchmark"
+        )
+    if sr.isna().any():
+        # a leading NaN (no prior close at window start) is tolerable; any interior NaN is a gap
+        if sr.iloc[1:].isna().any():
+            raise RuntimeError("[BENCH-FATAL bench_internal_gap] benchmark has NaN returns within window")
+        sr = sr.iloc[1:]
+    print(
+        f"[INFO] Loaded benchmark from Qlib bin (000300.SH): {len(sr)} days, "
+        f"{sr.index.min().date()} ~ {sr.index.max().date()} (required {start} ~ {end})"
+    )
+    return sr
 
 
 def _find_backtest_config(config):
@@ -202,6 +258,18 @@ def apply_qe_fixed_seed(config: dict) -> int | None:
 def main():
     yaml_path = sys.argv[1] if len(sys.argv) > 1 else "conf.yaml"
 
+    start_resource_monitor()
+    try:
+        _run_main(yaml_path)
+    except Exception as exc:
+        finish_resource_monitor(status="failed", error=type(exc).__name__)
+        raise
+    else:
+        finish_resource_monitor(status="completed")
+
+
+def _run_main(yaml_path):
+
     # Jinja2 渲染 → YAML 解析
     rendered = render_yaml_template(yaml_path)
     yaml = YAML(typ="safe", pure=True)
@@ -226,9 +294,10 @@ def main():
 
     # Run training + backtesting
     experiment_name = config.get("experiment_name", "workflow")
-    recorder = task_train(config.get("task"), experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, "full", experiment_name)
+    recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, "full", experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, "full", experiment_name, config)
 
 
 if __name__ == '__main__':

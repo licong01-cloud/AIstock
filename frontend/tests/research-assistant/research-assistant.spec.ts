@@ -66,6 +66,38 @@ const chatTurnResponse = {
   },
 };
 
+
+const llmUsageReportResponse = {
+  schema_version: "aistock_research_assistant_llm_usage_report_v1",
+  source_of_truth: "assistant_llm_usage_events",
+  filters: { date_from: "2026-06-21T00:00:00+08:00", date_to: "2026-06-27T23:59:59+08:00", granularity: "day", timezone: "Asia/Shanghai" },
+  summary: {
+    call_count: 3,
+    prompt_tokens: 1200,
+    completion_tokens: 420,
+    total_tokens: 1620,
+    total_cost_usd: "0.0123000000",
+    usage_status: "recorded",
+    cost_status: "mixed",
+    estimated_usage_event_count: 0,
+    unavailable_usage_event_count: 0,
+    unavailable_cost_event_count: 1,
+    failed_cost_event_count: 0,
+  },
+  time_series: [
+    { bucket_start: "2026-06-27T09:00:00+08:00", bucket_end: "2026-06-27T10:00:00+08:00", model: "deepseek-chat", provider: "deepseek", call_count: 2, prompt_tokens: 900, completion_tokens: 300, total_tokens: 1200, total_cost_usd: "0.0100000000", usage_status: "recorded", cost_status: "recorded", usage_status_counts: { recorded: 2 }, cost_status_counts: { recorded: 2 } },
+    { bucket_start: "2026-06-27T10:00:00+08:00", bucket_end: "2026-06-27T11:00:00+08:00", model: "deepseek-reasoner", provider: "deepseek", call_count: 1, prompt_tokens: 300, completion_tokens: 120, total_tokens: 420, total_cost_usd: null, usage_status: "recorded", cost_status: "unavailable", usage_status_counts: { recorded: 1 }, cost_status_counts: { unavailable: 1 } },
+  ],
+  model_breakdown: [
+    { model: "deepseek-chat", provider: "deepseek", call_count: 2, prompt_tokens: 900, completion_tokens: 300, total_tokens: 1200, total_cost_usd: "0.0100000000", usage_status: "recorded", cost_status: "recorded" },
+    { model: "deepseek-reasoner", provider: "deepseek", call_count: 1, prompt_tokens: 300, completion_tokens: 120, total_tokens: 420, total_cost_usd: null, usage_status: "recorded", cost_status: "unavailable" },
+  ],
+  status_breakdown: { usage: { recorded: 3, estimated: 0, unavailable: 0, failed: 0 }, cost: { recorded: 2, estimated: 0, unavailable: 1, failed: 0 } },
+  prompt_text_retained: false,
+  degraded: false,
+  reason_code: null,
+};
+
 function page<T>(items: T[]) {
   return { items, total: items.length, page: 1, page_size: 100, has_more: false };
 }
@@ -224,8 +256,12 @@ test("Research Assistant chat renders tool choice markup as readable MCP route c
   await browserPage.getByRole("button", { name: "发送" }).click();
 
   await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("<assistant_tool_choice>");
-  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("aistock-validation/mcp_github_issue_sync_bug");
+  await expect(browserPage.getByTestId("ra-chat-main")).toContainText("validation issue");
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("route decision");
+  await expect(browserPage.getByTestId("ra-chat-main")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
   await expect(browserPage.getByTestId("ra-mcp-route-card")).toContainText("需要确认和审批后才可执行");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("MCP route decision");
+  await expect(browserPage.getByTestId("ra-mcp-route-card")).not.toContainText("aistock-validation/mcp_github_issue_sync_bug");
 });
 
 test("Research Assistant chat renders auto-executed MCP summary result cards", async ({ page: browserPage }) => {
@@ -304,21 +340,23 @@ test("Research Assistant chat renders auto-executed MCP summary result cards", a
 
   const main = browserPage.getByTestId("ra-chat-main");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已执行只读 MCP 摘要查询");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("已完成只读业务查询");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("aistock-factor-library/factor_library_list");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("summary-first");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("返回 2 / 总计 47");
   await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("alpha_momentum_20d");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("原始 payload / 矩阵 / 因子明细行");
-  await expect(browserPage.getByTestId("ra-mcp-summary-card")).toContainText("factor_library_get_detail");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("原始 payload / 矩阵 / 因子明细行");
+  await expect(browserPage.getByTestId("ra-mcp-summary-card")).not.toContainText("factor_library_get_detail");
   await expect(main).not.toContainText("raw_payload");
   await expect(main).not.toContainText("factor_value_rows");
+  await expect(main).not.toContainText("research_assistant_catalog_summary_adapter");
   await expect(main).not.toContainText('"items"');
   await expect(main).not.toContainText("{");
 });
 
 
 
-test("Research Assistant blocker errors are visible as direct log blocks", async ({ page: browserPage }) => {
+test("Research Assistant blocker diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
   const response = {
     ...chatTurnResponse,
     assistant_message: {
@@ -327,7 +365,7 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
     },
     cards: {
       ...chatTurnResponse.cards,
-      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: false },
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
       action_proposals: [
         { title: "read-only health overview", approval_required: false, status: "read_only" },
         { title: "repair plan", approval_required: false, status: "plan_only" },
@@ -337,7 +375,7 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
           approval_required: true,
           status: "approval_required",
           reason: "local_data_apply_repair_confirmed",
-          next_step: "Review the Workbench preflight and provide explicit confirmation before execution.",
+          next_step: "请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。",
           provenance: { source: "action_proposals" },
         },
       ],
@@ -357,14 +395,91 @@ test("Research Assistant blocker errors are visible as direct log blocks", async
 
   const blockerLog = browserPage.getByTestId("ra-blocker-log");
   await expect(blockerLog).toBeVisible();
-  await expect(blockerLog).toContainText("proposal-blocker-3");
   await expect(blockerLog).toContainText("approval_required");
   await expect(blockerLog).toContainText("local_data_apply_repair_confirmed");
-  await expect(blockerLog).toContainText("Review the Workbench preflight and provide explicit confirmation before execution.");
+  await expect(blockerLog).toContainText("请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。");
   await expect(blockerLog).toContainText("action_proposals");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await expect(blockerLog.locator(".ra-json-preview")).toHaveCount(0);
+  await blockerLog.locator("summary").first().click();
+  await expect(blockerLog.locator(".ra-json-summary")).not.toHaveCount(0);
+  await expect(blockerLog).toContainText("状态");
+  await expect(blockerLog).toContainText("原因");
+  await expect(blockerLog).toContainText("下一步");
+  await expect(blockerLog).toContainText("来源");
+  await expect(blockerLog.locator("pre")).toBeHidden();
+  await blockerLog.getByText("查看原始数据/开发者").click();
   await expect(blockerLog.locator("pre")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(0);
-  await expect(blockerLog.locator(".ra-json-summary")).toHaveCount(0);
+  await expect(blockerLog.locator("pre")).toContainText("proposal-blocker-3");
+  await expect(browserPage.getByTestId("ra-blocker-card").locator("details.ra-detail-drawer")).toHaveCount(1);
+});
+
+test("Research Assistant evidence diagnostics are collapsed behind developer details", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: {
+      content_text: "Evidence card keeps provenance readable and raw diagnostic payload collapsed.",
+      content_json: {},
+    },
+    cards: {
+      ...chatTurnResponse.cards,
+      ui_display: { show_plan_card: false, show_clarification_card: false, show_context_health_badge: false, details_default_collapsed: true },
+      evidence_cards: [
+        {
+          card_id: "evidence-card-1",
+          title: "stock evidence",
+          summary: "Quote evidence captured from stock MCP.",
+          status: "supported",
+          evidence_refs: [
+            {
+              source: "stock_analysis.latest_quote",
+              source_ref: "stock_analysis:000688",
+              as_of: "",
+              provenance: {
+                source: "stock_analysis",
+                server_key: "aistock-stock-analysis",
+                trace_id: "trace-secret-raw-json",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/chat/turn")) return respond(response);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("show stock evidence");
+  await browserPage.locator(".ra-chat-send").click();
+
+  const evidenceCard = browserPage.getByTestId("ra-evidence-card");
+  await expect(evidenceCard).toBeVisible();
+  const evidenceGrid = evidenceCard.locator(".ra-evidence-ref-grid");
+  await expect(evidenceGrid).toContainText("stock_analysis.latest_quote");
+  await expect(evidenceGrid).toContainText("stock_analysis");
+  await expect(evidenceGrid).toContainText("-");
+  await expect(evidenceGrid).not.toContainText("trace-secret-raw-json");
+  await expect(evidenceGrid).not.toContainText("{");
+
+  const evidenceLog = browserPage.getByTestId("ra-evidence-log");
+  await expect(evidenceLog).toBeVisible();
+  await expect(evidenceLog.locator("summary").first()).toContainText("Developer details / Diagnostic log");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.locator("summary").first().click();
+  await expect(evidenceLog).toContainText("来源");
+  await expect(evidenceLog).toContainText("服务");
+  await expect(evidenceLog).toContainText("Trace ID");
+  await expect(evidenceLog.locator("pre")).toBeHidden();
+  await evidenceLog.getByText("查看原始数据/开发者").click();
+  await expect(evidenceLog.locator("pre")).toBeVisible();
+  await expect(evidenceLog.locator("pre")).toContainText("trace-secret-raw-json");
+  await expect(evidenceCard.locator("details.ra-detail-drawer")).toHaveCount(1);
 });
 
 test("Research Assistant MCP tools page treats ready servers as ready", async ({ page: browserPage }) => {
@@ -401,97 +516,164 @@ test("Research Assistant MCP tools page treats ready servers as ready", async ({
   for (const label of ["因子库", "因子独立指标", "因子相关性", "模型库", "策略库", "执行策略库"]) {
     await expect(browserPage.getByText(label).first()).toBeVisible();
   }
-  await expect(browserPage.getByText("模型版本 / 模型试验")).toBeVisible();
+  await expect(browserPage.getByText("模型版本 / 模型试验").first()).toBeVisible();
   await expect(browserPage.getByText("summary-first").first()).toBeVisible();
-  await expect(browserPage.getByText("limit=50&include_schema=false")).toBeVisible();
-  await expect(browserPage.getByText("已就绪").first()).toBeVisible();
+  await expect(browserPage.getByText("include_schema=false").first()).toBeVisible();
+  await expect(browserPage.getByText("ready").first()).toBeVisible();
   await expect(browserPage.locator("body")).not.toContainText("鎴");
   await expect(browserPage.locator("body")).not.toContainText("锛");
 });
-test("Research Assistant admin page separates audit tools from the chat entry", async ({ page: browserPage }) => {
+test("Research Assistant retired workbench redirects to the single chat entry", async ({ page: browserPage }) => {
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
-    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
-    if (path.endsWith("/mcp/tools")) {
-      return respond(page([
-        {
-          tool_id: "mcp_tool_research_assistant_issue",
-          server_key: "research-assistant",
-          tool_name: "assistant_create_issue_candidate",
-          title: "创建候选 Issue",
-          risk_level: "high",
-          requires_approval: true,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["dedupe_key"] },
-          required_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"],
-        },
-      ]));
-    }
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_demo_1", title: "QE 实验规划", status: "running" }]));
-    if (path.endsWith("/mcp/preflight")) return respond({ passed: false, approval_required: true, missing_confirmations: ["APPROVE_RESEARCH_ASSISTANT_ACTION"], trace_event: { event_type: "approval_required" }, deep_links: ["/research-assistant/approvals"] });
-    return respond(page([]));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: page([]) }) });
   });
 
-  await browserPage.goto("/research-assistant/admin");
-  await expect(browserPage.getByRole("heading", { name: "旧版表格与 JSON 详情保留在这里" })).toBeVisible();
-  await expect(browserPage.getByText("后台管理区面向开发、审计和问题排查")).toBeVisible();
-
   await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: /Action Proposal/ })).toBeVisible();
-  await expect(browserPage.locator("#ra-legacy-payload")).toBeVisible();
-  await browserPage.getByRole("button", { name: /preflight/ }).click();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log")).toContainText("missing_confirmations");
-  await expect(browserPage.getByTestId("ra-workbench-dry-run-log").locator("details.ra-detail-drawer")).toHaveCount(0);
+  await expect(browserPage).toHaveURL(/\/research-assistant\/chat$/);
+  await expect(browserPage.locator(".ra-chat-input")).toBeVisible();
+
+  const nav = browserPage.getByRole("navigation", { name: "研究助理功能导航" });
+  await expect(nav.getByRole("link", { name: "对话" })).toHaveAttribute("href", "/research-assistant/chat");
+  await expect(nav.getByRole("link", { name: /对话/ })).toHaveCount(1);
+  await expect(nav.locator('a[href="/research-assistant"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/workbench"]')).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "工作台" })).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/audit"]')).toHaveCount(1);
+  await expect(nav.locator('a[href="/research-assistant/tasks"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/trace"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/agent-runs"]')).toHaveCount(0);
+  await expect(nav.locator('a[href="/research-assistant/external-agents"]')).toHaveCount(0);
+  await expect(browserPage.locator("body")).not.toContainText("本地数据 MCP 工作台");
+});
+
+test("Research Assistant audit legacy routes redirect to the consolidated audit tabs", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data: page([]) }) });
+  });
+
+  const cases = [
+    ["/research-assistant/tasks", "tasks", "Task Ledger"],
+    ["/research-assistant/trace", "trace", "Trace Events"],
+    ["/research-assistant/agent-runs", "agent-runs", "Agent 运行审计"],
+    ["/research-assistant/external-agents", "external-agents", "External Agent Connector"],
+  ] as const;
+
+  for (const [legacyPath, tab, expectedText] of cases) {
+    await browserPage.goto(legacyPath);
+    await expect(browserPage).toHaveURL(new RegExp(`/research-assistant/audit\\?tab=${tab}$`));
+    await expect(browserPage.getByRole("heading", { name: "研究助理审计" })).toBeVisible();
+    await expect(browserPage.getByText(expectedText).first()).toBeVisible();
+  }
 });
 
 
-test("Research Assistant workbench surfaces local data MCP tools as readable cards", async ({ page: browserPage }) => {
+test("Research Assistant chat shows per-turn LLM usage in the right rail only", async ({ page: browserPage }) => {
+  const response = {
+    ...chatTurnResponse,
+    assistant_message: { ...chatTurnResponse.assistant_message, message_id: "msg_usage" },
+    trace: {
+      trace_id: "trace_usage",
+      cost_json: {
+        source_of_truth: "assistant_llm_usage_events",
+        prompt_text_retained: false,
+        usage_event_refs: ["assistant_llm_usage_events:llmu_usage"],
+        usage_summary: {
+          call_count: 2,
+          prompt_tokens: 1234,
+          completion_tokens: 456,
+          total_tokens: 1690,
+          total_cost_usd: "0.0123000000",
+          usage_status: "recorded",
+          cost_status: "recorded",
+        },
+      },
+    },
+  };
   await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
-    const url = new URL(route.request().url());
-    const path = url.pathname;
+    const path = new URL(route.request().url()).pathname;
     const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
-    if (path.endsWith("/capabilities")) return respond(page([]));
-    if (path.endsWith("/actions")) return respond(page([]));
-    if (path.endsWith("/tasks")) return respond(page([{ task_id: "rat_local_data_1", title: "本地数据检查", status: "running" }]));
-    if (path.endsWith("/mcp/tools")) {
-      return respond(page([
-        {
-          tool_id: "mcp_tool_local_data_health",
-          server_key: "aistock-local-data",
-          tool_name: "local_data_health_overview",
-          title: "数据健康总览",
-          risk_level: "read_only",
-          requires_approval: false,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["dataset", "alerts", "jobs"] },
-          required_confirmations: [],
-        },
-        {
-          tool_id: "mcp_tool_local_data_plan_repair",
-          server_key: "aistock-local-data",
-          tool_name: "local_data_plan_repair",
-          title: "生成本地数据修复计划",
-          risk_level: "plan_only",
-          requires_approval: false,
-          status: "enabled",
-          input_schema_json: { type: "object" },
-          preflight_schema_json: { checks: ["overview", "gaps", "targets"] },
-          required_confirmations: [],
-        },
-      ]));
-    }
+    if (path.endsWith("/chat/turn")) return respond(response);
+    if (path.endsWith("/llm-usage/summary")) return respond({ summary: response.trace.cost_json.usage_summary });
     return respond(page([]));
   });
 
-  await browserPage.goto("/research-assistant/workbench");
-  await expect(browserPage.getByRole("heading", { name: "本地数据 MCP 工作台" })).toBeVisible();
-  await expect(browserPage.getByTestId("ra-local-data-workbench-card")).toContainText("local_data_management");
-  await expect(browserPage.getByText("本地数据检查").first()).toBeVisible();
-  await expect(browserPage.getByText("本地数据工具目录")).toBeVisible();
-  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("数据健康总览");
-  await expect(browserPage.getByTestId("ra-local-data-tool-cards")).toContainText("生成本地数据修复计划");
+  await browserPage.goto("/research-assistant");
+  await browserPage.locator(".ra-chat-input").fill("usage check");
+  await browserPage.locator(".ra-chat-send").click();
+
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("本轮消耗");
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("1,690");
+  await expect(browserPage.getByTestId("ra-turn-usage-panel")).toContainText("$0.0123");
+  await expect(browserPage.locator(".ra-chat-bubble").filter({ hasText: "1,690" })).toHaveCount(0);
+  await expect(browserPage.locator(".ra-chat-bubble").filter({ hasText: "usage=recorded" })).toHaveCount(0);
+});
+
+test("Research Assistant audit LLM usage tab renders charts and KPI cards without tables", async ({ page: browserPage }) => {
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/llm-usage/report")) return respond(llmUsageReportResponse);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/audit?tab=llm-usage");
+
+  await expect(browserPage.getByTestId("ra-llm-usage-section")).toBeVisible();
+  await expect(browserPage.getByText("LLM 消耗报表")).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "最近 7 天" })).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "最近 30 天" })).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-usage-kpis")).toContainText("1,620");
+  await expect(browserPage.getByTestId("ra-llm-token-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-cost-chart")).toContainText("部分成本不可用");
+  await expect(browserPage.getByTestId("ra-llm-top-model-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-status-chart")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-llm-usage-section").locator("table")).toHaveCount(0);
+});
+
+test("Research Assistant graph page renders React Flow read-only graph with local layout controls", async ({ page: browserPage }) => {
+  const graphSummary = {
+    namespace: "aistock",
+    entity_count: 3,
+    relation_count: 2,
+    evolution_path_count: 1,
+    entities: [
+      { entity_id: "entity_qe", entity_type: "module", entity_key: "qe", title: "QE 实验", summary: "量化实验与回测", source_refs: ["docs/qe.md"], confidence: 0.98, approval_status: "approved" },
+      { entity_id: "entity_paper", entity_type: "module", entity_key: "paper_v2", title: "Paper v2", summary: "模拟盘与策略包", source_refs: ["docs/paper.md"], confidence: 0.95, approval_status: "approved" },
+      { entity_id: "entity_factor", entity_type: "factor", entity_key: "alpha158", title: "Alpha158 因子", summary: "因子集合", source_refs: ["docs/factor.md"], confidence: 0.9, approval_status: "draft" },
+    ],
+    relations: [
+      { relation_id: "rel_qe_paper", source_entity_id: "entity_qe", target_entity_id: "entity_paper", relation_type: "promotes_to", evidence_refs: ["workflow:qe-to-paper"], confidence: 0.88, approval_status: "approved" },
+      { relation_id: "rel_missing", source_entity_id: "entity_qe", target_entity_id: "entity_missing", relation_type: "missing_target", evidence_refs: ["workflow:missing"], confidence: 0.5, approval_status: "draft" },
+    ],
+    evolution_paths: [{ path_id: "path_qe_paper", objective: "QE 到 Paper v2" }],
+  };
+
+  await browserPage.route("**/api/v1/research-assistant/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const respond = (data: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify({ status: status >= 400 ? "error" : "success", data }) });
+    if (path.endsWith("/graph/summary")) return respond(graphSummary);
+    return respond(page([]));
+  });
+
+  await browserPage.goto("/research-assistant/graph");
+
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toBeVisible();
+  await expect(browserPage.getByTestId("ra-graph-flow").locator(".react-flow")).toBeVisible();
+  await expect(browserPage.locator(".react-flow__minimap")).toBeVisible();
+  await expect(browserPage.locator(".react-flow__controls")).toBeVisible();
+  await expect(browserPage.getByRole("button", { name: "重置布局" })).toBeVisible();
+  await expect(browserPage.getByText("QE 实验").first()).toBeVisible();
+  await expect(browserPage.getByText("Paper v2").first()).toBeVisible();
+  await expect(browserPage.getByTestId("ra-graph-degraded-relations")).toContainText("graph_relation_endpoint_missing");
+  await expect(browserPage.getByTestId("ra-graph-degraded-relations")).toContainText("未静默绘制成假边");
+
+  await browserPage.getByTestId("ra-graph-node").filter({ hasText: "QE 实验" }).first().click();
+  await expect(browserPage.getByTestId("ra-graph-inspector")).toContainText("实体：QE 实验");
+  await expect(browserPage.getByTestId("ra-graph-inspector")).toContainText("图谱可审计详情");
+
+  await browserPage.evaluate(() => window.localStorage.setItem("aistock.ra.graph.layout.aistock.v1", JSON.stringify({ entity_qe: { x: 17, y: 23 } })));
+  await browserPage.reload();
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toContainText("本地布局已恢复");
+  await browserPage.getByRole("button", { name: "重置布局" }).click();
+  await expect(browserPage.getByTestId("ra-graph-flow-section")).toContainText("自动布局");
 });

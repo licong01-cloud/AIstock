@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeClient
+from backend.services.miniqmt_execution_runtime import (
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTChildOrderStatus,
+    MiniQMTExecutionEventType,
+    MiniQMTExecutionRuntimeClient,
+)
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
     OrderHandle,
@@ -27,6 +32,7 @@ from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingC
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 from backend.services.simulation_runtime import ExecutionPathNotCanonicalError, MiniQMTExecutionBridge, SimulationBrokerBackend
+from backend.services.trading_core.errors import BrokerSubmitError
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import _SnapshotOnlyRepository
@@ -89,6 +95,17 @@ class RecordingPaperMiniQMTBroker:
     def query_position_marks(self):
         return {}, {}
 
+    def query_quote(self, symbol: str) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "bid_price_1": 10.0,
+            "bid_volume_1": 10_000,
+            "ask_price_1": 10.0,
+            "ask_volume_1": 10_000,
+            "last_price": 10.0,
+            "source": "unit_fake_quote",
+        }
+
     def shutdown(self) -> None:
         return None
 
@@ -96,13 +113,51 @@ class RecordingPaperMiniQMTBroker:
 class RecordingManagedOrderBroker:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.quotes = {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 10_000,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 10_000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.0,
+                "bid_price_1": 8.0,
+                "bid_volume_1": 10_000,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 10_000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.0,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 10_000,
+                "ask_price_1": 20.0,
+                "ask_volume_1": 10_000,
+            },
+        }
 
     def get_positions(self) -> list[dict[str, Any]]:
         return [{"stock_code": "000003.SZ", "can_sell": 1000}]
 
+    def get_orders(self, cancelable_only: bool = False) -> list[dict[str, Any]]:  # noqa: ARG002
+        return []
+
+    def get_trades(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_full_tick(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        return {symbol: dict(self.quotes[symbol]) for symbol in symbols if symbol in self.quotes}
+
     def place_order(self, **kwargs: Any) -> tuple[int, str]:
         self.calls.append(dict(kwargs))
         return len(self.calls), "accepted by unit fake"
+
+    def cancel_order(self, order_id: str) -> tuple[bool, str]:
+        return True, f"cancelled {order_id}"
 
 
 def _paper_portfolio(manifest: Any) -> PaperPortfolio:
@@ -140,6 +195,20 @@ def _paper_intent(portfolio: PaperPortfolio) -> OrderIntent:
         limit_price=None,
         target_trade_date=TRADE_DATE,
     )
+
+
+def _vnpy_execution_policy_context(algo_code: str = "SNIPER_MINIQMT") -> dict[str, Any]:
+    policy_json = {"algo_code": algo_code, "algo_config": {}}
+    return {
+        "validated_execution_policy_id": f"execpol_{algo_code.lower()}_unit",
+        "policy_sha256": f"sha_{algo_code.lower()}_unit",
+        "policy_name": f"{algo_code} unit policy",
+        "algo_code": algo_code,
+        "policy_json": policy_json,
+        "source_backtest_id": "bt_vnpy_unit",
+        "source_backtest_status": "BACKTEST_VALIDATED",
+        "validation_status": "BACKTEST_VALIDATED",
+    }
 
 
 def _managed_order_service(binding_strategy_id: str, binding_strategy_name: str, account_id: str) -> tuple[QmtManagedOrderService, RecordingManagedOrderBroker]:
@@ -181,27 +250,37 @@ def _managed_order_service(binding_strategy_id: str, binding_strategy_name: str,
     return service, broker
 
 
-def test_paper_v2_n1_and_simulation_runtime_n_many_share_runtime_owner_evidence() -> None:
-    runtime_client = MiniQMTExecutionRuntimeClient()
+def test_simulation_runtime_event_loop_a_remains_canonical_and_paper_v2_legacy_path_rejects() -> None:
+    runtime_client = MiniQMTExecutionRuntimeClient(
+        repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+    )
     manifest = make_paper_enabled_manifest()
     portfolio = _paper_portfolio(manifest)
     paper_repo = _SnapshotOnlyRepository(portfolio)
     paper_broker = RecordingPaperMiniQMTBroker()
 
-    paper_result = PaperTradingDayRunner(repository=paper_repo, minqmt_runtime_client=runtime_client)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=_paper_run(portfolio),
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_paper_intent(portfolio)],
-        broker=paper_broker,  # type: ignore[arg-type]
-    )
+    with pytest.raises(BrokerSubmitError, match="MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS") as exc_info:
+        PaperTradingDayRunner(repository=paper_repo, minqmt_runtime_client=runtime_client)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=_paper_run(portfolio),
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_paper_intent(portfolio)],
+            broker=paper_broker,  # type: ignore[arg-type]
+            execution_policy_context=_vnpy_execution_policy_context(),
+        )
+    assert exc_info.value.context["operation"] == "execute_paper_vnpy_intent"
+    assert paper_broker.submitted == []
 
     _release, binding, plan = _compiled_plan_for_bridge(
         backend=SimulationBrokerBackend.MINIQMT_SIM,
-        execution_policy_payload={"algo_code": "CLOSE_PRICE", "schedule_window": {"mode": "open_to_close"}},
-        execution_policy_version_id="exec_policy_close_price",
-        execution_policy_sha256="exec_policy_hash_close_price",
+        execution_policy_payload={
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {},
+            "schedule_window": {"mode": "open_to_close"},
+        },
+        execution_policy_version_id="vnpy_asset:SNIPER_MINIQMT",
+        execution_policy_sha256="exec_policy_hash_sniper_miniqmt",
     )
     service, managed_broker = _managed_order_service(
         binding_strategy_id=binding.strategy_id,
@@ -211,31 +290,31 @@ def test_paper_v2_n1_and_simulation_runtime_n_many_share_runtime_owner_evidence(
     simulation_result = MiniQMTExecutionBridge(
         managed_order_service=service,
         runtime_client=runtime_client,
-    ).submit_plan(
+    ).submit_event_loop_plan(
         plan=plan,
         binding=binding,
-        price_by_symbol={"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")},
     )
 
-    paper_evidence = paper_repo.orders[0].metadata["runtime_evidence"]
     simulation_evidence = simulation_result.runtime_evidence.to_dict()
-
-    assert paper_result.run.status == RunStatus.SUCCEEDED
-    assert paper_repo.orders[0].metadata["runtime_owner"] == RUNTIME_OWNER
-    assert paper_evidence["runtime_owner"] == RUNTIME_OWNER
-    assert paper_evidence["source"] == "paper_v2_direct_miniqmt"
-    assert paper_evidence["submitted_child_count"] == 1
-    assert paper_evidence["child_order_ids"]
-    assert paper_repo.execution_states[0].algo_state["runtime_owner"] == RUNTIME_OWNER
-    assert paper_broker.submitted[0].metadata["runtime_owner"] == RUNTIME_OWNER
 
     assert simulation_result.success is True
     assert simulation_evidence["runtime_owner"] == RUNTIME_OWNER
-    assert simulation_evidence["source"] == "simulation_runtime_submit"
+    assert simulation_evidence["source"] == "simulation_runtime_event_loop_submit"
     assert simulation_evidence["submitted_child_count"] == 2
     assert len(simulation_evidence["algo_instance_ids"]) == 2
     assert len(simulation_evidence["child_order_ids"]) == 2
     assert len(managed_broker.calls) == 2
+    simulation_events = runtime_client.repository.list_events(simulation_evidence["runtime_id"])
+    child_submit_events = [
+        event for event in simulation_events if event.event_type == MiniQMTExecutionEventType.CHILD_ORDER_SUBMITTED
+    ]
+    assert all(event.source == "gateway" and event.payload["accepted"] is True for event in child_submit_events)
+    assert len(child_submit_events) == len(managed_broker.calls)
+    simulation_children = runtime_client.repository.list_child_orders(
+        simulation_evidence["runtime_id"], active_only=False
+    )
+    assert {child.status for child in simulation_children} == {MiniQMTChildOrderStatus.SUBMITTED}
+    assert all(child.broker_order_id for child in simulation_children)
 
 
 def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls() -> None:
@@ -265,7 +344,16 @@ def test_product_miniqmt_paths_delegate_to_runtime_client_not_raw_broker_calls()
         assert "MiniQMTExecutionRuntimeClient" in text or "MiniQMTExecutionBridge" in text
 
     runtime_client = (root / "backend/services/miniqmt_execution_runtime/client.py").read_text(encoding="utf-8")
-    assert "managed_order_service.submit_batch(requests)" in runtime_client
+    direct_submit_batch_hits = [
+        (index, line.strip())
+        for index, line in enumerate(runtime_client.splitlines(), start=1)
+        if ".submit_batch(" in line
+    ]
+    assert [line for _, line in direct_submit_batch_hits] == [
+        "return order_service.submit_batch(list(self.requests))"
+    ], direct_submit_batch_hits
+    assert "gateway.submit_managed_batch(" in runtime_client
+    assert "managed_order_service.submit_batch(" not in runtime_client
     assert "self.broker.submit_order_intent(child_intent)" in runtime_client
 
 

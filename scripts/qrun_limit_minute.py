@@ -25,9 +25,11 @@
 import argparse
 import os
 import random
+import re
 import shutil
 import stat
 import sys
+import time
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +54,25 @@ except ModuleNotFoundError:
             sys.path.append(str(Path(config_path).parent.resolve().absolute() / p))
 import qlib
 from qlib.config import C
+
+try:
+    from qe_prediction_store_client import maybe_upload_prediction_artifacts
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_prediction_store_client":
+        raise
+    maybe_upload_prediction_artifacts = None
+
+try:
+    from qe_runtime_resource import finish_resource_monitor, start_resource_monitor
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_runtime_resource":
+        raise
+
+    def start_resource_monitor():
+        return None
+
+    def finish_resource_monitor(*, status: str, error: str | None = None):
+        return None
 
 
 
@@ -78,6 +99,126 @@ PRED_BACKTEST_PICKLE_MAX_BYTES_ENV = "QE_PRED_BACKTEST_PICKLE_MAX_BYTES"
 PARAMS_PICKLE_MAX_BYTES_ENV = "QE_BACKTEST_PARAMS_PICKLE_MAX_BYTES"
 DEFAULT_PRED_BACKTEST_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_PARAMS_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS"
+MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC"
+DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS = 3
+DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC = 0.1
+_MLFLOW_EMPTY_METRIC_RE = re.compile(r"Metric '([^']+)' is malformed\. No data found\.")
+
+
+class QEMlflowMetricReadRaceError(RuntimeError):
+    """Raised after exhausting the specific MLflow empty metric read retry."""
+
+
+def _env_int(name: str, default_value: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return default_value
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw_value!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _env_float(name: str, default_value: float) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return default_value
+    try:
+        value = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a float, got {raw_value!r}") from exc
+    if value < 0:
+        raise ValueError(f"{name} must be >= 0, got {value}")
+    return value
+
+
+def _empty_mlflow_metric_name(exc: ValueError) -> str | None:
+    match = _MLFLOW_EMPTY_METRIC_RE.search(str(exc))
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def _mlflow_metric_file_hint(recorder, metric_name: str) -> str:
+    if recorder is None:
+        return "<unknown-recorder>/metrics/" + metric_name
+    try:
+        local_dir = recorder.get_local_dir()
+    except (AttributeError, RuntimeError, ValueError, OSError):
+        local_dir = None
+    if local_dir:
+        return str(Path(local_dir) / "metrics" / metric_name)
+
+    info = getattr(recorder, "info", {}) or {}
+    exp_id = str(info.get("experiment_id") or getattr(recorder, "experiment_id", "") or "")
+    run_id = str(info.get("id") or info.get("recorder_id") or getattr(recorder, "id", "") or "")
+    tracking_uri = str(os.environ.get("MLFLOW_TRACKING_URI") or getattr(recorder, "uri", "") or "")
+    tracking_uri = tracking_uri.removeprefix("file:")
+    if tracking_uri and exp_id and run_id:
+        return str(Path(tracking_uri) / exp_id / run_id / "metrics" / metric_name)
+    if exp_id or run_id:
+        return f"<unknown-mlruns>/{exp_id}/{run_id}/metrics/{metric_name}"
+    return "<unknown-recorder>/metrics/" + metric_name
+
+
+def _retry_empty_mlflow_metric_read(operation, *, recorder=None, context: str):
+    attempts = _env_int(
+        MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV,
+        DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS,
+    )
+    sleep_seconds = _env_float(
+        MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV,
+        DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC,
+    )
+    for attempt in range(attempts + 1):
+        try:
+            return operation()
+        except ValueError as exc:
+            metric_name = _empty_mlflow_metric_name(exc)
+            if metric_name is None:
+                raise
+            metric_path = _mlflow_metric_file_hint(recorder, metric_name)
+            if attempt >= attempts:
+                raise QEMlflowMetricReadRaceError(
+                    f"{context} failed after {attempts} retries because MLflow metric "
+                    f"{metric_name!r} stayed empty/malformed; metric_path={metric_path}; original_error={exc}"
+                ) from exc
+            print(
+                f"[WARN] {context}: transient MLflow empty metric read for metric={metric_name!r} "
+                f"metric_path={metric_path}; retry {attempt + 1}/{attempts} after {sleep_seconds:.3f}s"
+            )
+            if sleep_seconds:
+                time.sleep(sleep_seconds)
+
+
+def _install_mlflow_metric_read_retry() -> bool:
+    from qlib.workflow import record_temp
+
+    record_temp_cls = getattr(record_temp, "RecordTemp", None)
+    if record_temp_cls is None:
+        raise RuntimeError("qlib.workflow.record_temp.RecordTemp is unavailable; cannot install QE metric retry")
+    if getattr(record_temp_cls.check, "_qe_mlflow_metric_retry", False):
+        return False
+
+    original_check = record_temp_cls.check
+
+    def _check_with_mlflow_metric_retry(self, *args, **kwargs):
+        recorder = getattr(self, "recorder", None)
+        return _retry_empty_mlflow_metric_read(
+            lambda: original_check(self, *args, **kwargs),
+            recorder=recorder,
+            context=f"{type(self).__name__}.check",
+        )
+
+    _check_with_mlflow_metric_retry._qe_mlflow_metric_retry = True
+    _check_with_mlflow_metric_retry._qe_original_check = original_check
+    record_temp_cls.check = _check_with_mlflow_metric_retry
+    print("[INFO] Installed QE MLflow empty metric read retry for Qlib record checks")
+    return True
 
 
 def _pickle_max_bytes(env_name: str, default_bytes: int) -> int:
@@ -132,6 +273,19 @@ def _write_qe_current_recorder(recorder, mode: str, experiment_name: str):
     tmp.replace(path)
     print(f"[INFO] QE recorder binding written: {path} recorder_id={recorder_id} mode={mode}")
     return payload
+
+
+def _maybe_upload_prediction_store(recorder, recorder_ref, mode: str, experiment_name: str, config: dict):
+    if maybe_upload_prediction_artifacts is None:
+        print("[INFO] Prediction-store uploader helper not present; skipping upload")
+        return None
+    return maybe_upload_prediction_artifacts(
+        recorder=recorder,
+        recorder_ref=recorder_ref,
+        experiment_name=experiment_name,
+        mode=mode,
+        config=config,
+    )
 
 
 class BacktestRecorderIsolationError(RuntimeError):
@@ -524,49 +678,54 @@ def patch_backtest_config(config: dict):
 
 
 def load_benchmark_series(config=None):
-    """加载预计算的 SH000300 日收益率 Series。
+    """从 Qlib bin 加载 SH000300(000300.SH) 日收益率 Series（BUG-625/方案A，与日线路径一致）。
 
-    优先读取本地 parquet 文件。如果不存在，尝试从 qlib 在线生成（需要 qlib 已初始化）。
+    benchmark 直接取自回测所用的 Qlib daily bin —— provider 内已含 000300.SH 指数
+    日线(features/000300.sh)，覆盖范围与价格同源、自动到数据末日。校验其完整覆盖
+    backtest 的 start_time/end_time；缺失/不足即 fail-fast，绝不静默 disable/截断/填0。
+    不再读取 benchmark_sh000300.parquet（该 parquet workaround 已废弃）。
 
     Returns:
-        pd.Series(index=DatetimeIndex, values=daily_return) or None
+        pd.Series(index=DatetimeIndex name=datetime, values=daily_return)
     """
     import pandas as pd
+    from qlib.data import D
 
-    # 优先从 parquet 文件加载
-    benchmark_path = Path(__file__).parent / "benchmark_sh000300.parquet"
-    if benchmark_path.exists():
-        df = pd.read_parquet(benchmark_path)
-        sr = df["bench"]
-        sr.index.name = "datetime"
-        print(f"[INFO] Loaded benchmark from parquet: {len(sr)} days, {sr.index.min()} ~ {sr.index.max()}")
-        return sr
-
-    # Fallback: 从 qlib 在线生成（需要 qlib 已初始化且有 000300.sh 日线数据）
-    try:
-        from qlib.data import D
-        # 从 config 提取回测区间
-        start, end = "2024-07-01", "2026-04-27"
-        if config:
-            # 简单递归查找 backtest.start_time / end_time
-            bt = _find_backtest_config(config)
-            if bt:
-                start = str(bt.get("start_time", start))
-                end = str(bt.get("end_time", end))
-        df = D.features(["000300.sh"], ["$close/Ref($close,1)-1"], start_time=start, end_time=end, freq="day")
-        if df.empty:
-            print("[WARN] 000300.sh benchmark data empty, benchmark disabled")
-            return None
-        df.columns = ["bench"]
-        sr = df["bench"].droplevel("instrument")
-        sr.index.name = "datetime"
-        # 缓存到本地
-        sr.to_frame().to_parquet(benchmark_path)
-        print(f"[INFO] Generated benchmark from qlib: {len(sr)} days, cached to {benchmark_path}")
-        return sr
-    except Exception as e:
-        print(f"[WARN] Failed to generate benchmark: {e}, benchmark disabled")
-        return None
+    start = end = None
+    if config:
+        bt = _find_backtest_config(config)
+        if bt:
+            start, end = bt.get("start_time"), bt.get("end_time")
+    if not start or not end:
+        raise RuntimeError(
+            "[BENCH-FATAL bench_no_window] backtest start_time/end_time not found in config; "
+            "cannot load benchmark from Qlib bin"
+        )
+    df = D.features(["000300.SH"], ["$close/Ref($close,1)-1"], start_time=str(start), end_time=str(end), freq="day")
+    if df is None or df.empty:
+        raise RuntimeError(
+            f"[BENCH-FATAL bench_empty] Qlib bin has no 000300.SH benchmark in [{start},{end}]; "
+            "ensure features/000300.sh is present in the daily bin (no silent benchmark disable)"
+        )
+    sr = df.iloc[:, 0].droplevel("instrument")
+    sr.index = pd.to_datetime(sr.index)
+    sr.index.name = "datetime"
+    sr = sr.sort_index()
+    re_ = pd.Timestamp(end).normalize()
+    if sr.index.max() < re_:
+        raise RuntimeError(
+            f"[BENCH-FATAL bench_end_short] benchmark ends {sr.index.max().date()} < required_end {re_.date()}; "
+            "refusing to use partial benchmark"
+        )
+    if sr.isna().any():
+        if sr.iloc[1:].isna().any():
+            raise RuntimeError("[BENCH-FATAL bench_internal_gap] benchmark has NaN returns within window")
+        sr = sr.iloc[1:]
+    print(
+        f"[INFO] Loaded benchmark from Qlib bin (000300.SH): {len(sr)} days, "
+        f"{sr.index.min().date()} ~ {sr.index.max().date()} (required {start} ~ {end})"
+    )
+    return sr
 
 
 def _find_backtest_config(config):
@@ -1055,10 +1214,26 @@ def _run_seed_analysis_records(config: dict, recorder, label_obj) -> None:
         record.generate()
 
 
+def _task_train_with_gats_industry_provider(config: dict, experiment_name: str):
+    task_config = (config or {}).get("task") if isinstance(config, dict) else None
+    model_cfg = (task_config or {}).get("model") if isinstance(task_config, dict) else {}
+    model_kwargs = model_cfg.get("kwargs") or {}
+    if isinstance(model_kwargs, dict) and (
+        model_kwargs.get("gats_adjacency_mode", "off") == "industry_bias"
+        or model_kwargs.get("gats_industry_embedding") is True
+        or str(model_kwargs.get("gats_industry_embedding", "off")).lower() == "on"
+    ):
+        from aistock_models.gats_industry_provider import inject_gats_industry_provider_if_needed
+
+        inject_gats_industry_provider_if_needed(config, cwd=Path.cwd(), print_fn=print)
+    return task_train(task_config, experiment_name=experiment_name)
+
+
 def _run_full_backtest(config: dict, experiment_name: str, *, mode: str = "full", output_dir: Path | str | None = None):
-    recorder = task_train(config.get("task"), experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, mode, experiment_name)
+    recorder = _task_train_with_gats_industry_provider(config, experiment_name=experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, mode, experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, mode, experiment_name, config)
     save_minute_trades_from_recorder(recorder, output_dir=output_dir or os.getcwd())
     return recorder
 
@@ -1222,7 +1397,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
     )
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "seed_portfolio_ensemble", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "seed_portfolio_ensemble", experiment_name)
         save_payload = {
             "pred.pkl": combined_pred,
             "config": config,
@@ -1239,6 +1414,7 @@ def _run_seed_portfolio_ensemble(config: dict, experiment_name: str, ensemble: d
         if "label.pkl" in save_payload:
             _run_seed_analysis_records(config, recorder, label_obj)
         recorder.save_objects(config=config)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "seed_portfolio_ensemble", experiment_name, config)
         manifest["final_recorder_id"] = str((getattr(recorder, "info", {}) or {}).get("id") or "")
 
     manifest["combined_rows"] = int(combined_pred.shape[0])
@@ -1260,6 +1436,18 @@ def main():
     mode_group.add_argument("--pred-backtest", type=str, metavar="PRED_PKL",
                             help="run IC analysis and portfolio backtest from an existing prediction pkl")
     args = parser.parse_args()
+
+    start_resource_monitor()
+    try:
+        _run_main(args)
+    except Exception as exc:
+        finish_resource_monitor(status="failed", error=type(exc).__name__)
+        raise
+    else:
+        finish_resource_monitor(status="completed")
+
+
+def _run_main(args):
 
     # Jinja2 渲染 → YAML 解析
     rendered = render_yaml_template(args.yaml_path)
@@ -1289,6 +1477,7 @@ def main():
     if args.backtest_only:
         _validate_backtest_recorder_isolation_manifest(isolation_manifest)
     qlib.init(**config.get("qlib_init"), exp_manager=exp_manager)
+    _install_mlflow_metric_read_retry()
 
     # 注入 benchmark Series（在 qlib init 之后，fallback 需要 D.features）
     benchmark_series = load_benchmark_series(config)
@@ -1433,7 +1622,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
 
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "pred_backtest", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "pred_backtest", experiment_name)
         # 注入 prediction 和 label 到 recorder
         # SigAnaRecord 依赖: pred.pkl + label.pkl（check() 验证两者都存在）
         # PortAnaRecord 依赖: pred.pkl（从 recorder 加载预测信号）
@@ -1453,6 +1642,7 @@ def _run_pred_backtest(config: dict, experiment_name: str, pred_path: Path):
             print(f"[INFO] Completed: {rec_class}")
 
         recorder.save_objects(config=config)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "pred_backtest", experiment_name, config)
         
         # 保存分钟级交易记录（环境变量控制）
         save_minute_trades_from_recorder(recorder, output_dir=os.getcwd())
@@ -1487,10 +1677,12 @@ def _run_train_only(config: dict, experiment_name: str):
 
     task_config["record"] = filtered_records
 
-    # 执行训练（task_train 内部会执行 filtered_records 中的 SignalRecord + SigAnaRecord）
-    recorder = task_train(task_config, experiment_name=experiment_name)
-    _write_qe_current_recorder(recorder, "train_only", experiment_name)
+    config_for_train = copy.deepcopy(config)
+    config_for_train["task"] = task_config
+    recorder = _task_train_with_gats_industry_provider(config_for_train, experiment_name=experiment_name)
+    recorder_ref = _write_qe_current_recorder(recorder, "train_only", experiment_name)
     recorder.save_objects(config=config)
+    _maybe_upload_prediction_store(recorder, recorder_ref, "train_only", experiment_name, config)
     print("[INFO] Train-only completed: model trained, pred.pkl generated")
     return recorder
 
@@ -1540,6 +1732,14 @@ def _run_backtest_only(config: dict, experiment_name: str):
             f"under {source_params_dir}; target mlruns is reserved for recorder writes."
         )
     print(f"[INFO] Loaded trained model from isolated source params.pkl {params_path}")
+    if (
+        getattr(model, "gats_adjacency_mode", None) == "industry_bias"
+        or getattr(model, "gats_industry_embedding", None) is True
+        or str(getattr(model, "gats_industry_embedding", "off")).lower() == "on"
+    ):
+        from aistock_models.gats_industry_provider import attach_gats_industry_provider_to_model
+
+        attach_gats_industry_provider_to_model(model, config, cwd=Path.cwd(), print_fn=print)
 
     # 重建 dataset（从配置重新初始化，不需要训练数据）
     dataset: Dataset = init_instance_by_config(task_config["dataset"], accept_types=Dataset)
@@ -1560,7 +1760,7 @@ def _run_backtest_only(config: dict, experiment_name: str):
 
     with R.start(experiment_name=experiment_name):
         recorder = R.get_recorder()
-        _write_qe_current_recorder(recorder, "backtest_only", experiment_name)
+        recorder_ref = _write_qe_current_recorder(recorder, "backtest_only", experiment_name)
         for record_config in records:
             r = init_instance_by_config(
                 record_config,
@@ -1570,6 +1770,7 @@ def _run_backtest_only(config: dict, experiment_name: str):
             )
             r.generate()
         recorder.save_objects(config=config, params_pkl=model)
+        _maybe_upload_prediction_store(recorder, recorder_ref, "backtest_only", experiment_name, config)
 
     print("[INFO] Backtest-only completed successfully")
 

@@ -1,4 +1,4 @@
-﻿"""Strategy Package Center service layer."""
+"""Strategy Package Center service layer."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from .candidate import (
     CandidateStrategyPackageStatus,
 )
 from .asset_eligibility import StrategyPackageAssetEligibilityService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
 from .execution_policy import (
     BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
@@ -35,6 +36,7 @@ from .model_state import (
 )
 from .models import LiveApprovalStatus, PackageStatus, SourceType, StrategyPackageLiveApproval, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
+from .package_asset_freeze import PackageAssetFreezeService
 from .qe_source_resolver import QEExperimentSourceResolver
 from .repository import PackageStatusEvent, StrategyPackageRecord, StrategyPackageRepository
 from .runtime_variant import (
@@ -62,6 +64,11 @@ logger = logging.getLogger(__name__)
 STATUS_TRANSITIONS: dict[PackageStatus, set[PackageStatus]] = {
     PackageStatus.ASSET_VALIDATED: {PackageStatus.DRAFT},
     PackageStatus.BACKTEST_APPROVED: {PackageStatus.DRAFT, PackageStatus.ASSET_VALIDATED},
+    PackageStatus.SELECTION_ENABLED: {PackageStatus.BACKTEST_APPROVED},
+    PackageStatus.PAPER_ENABLED: {PackageStatus.BACKTEST_APPROVED, PackageStatus.SELECTION_ENABLED},
+    PackageStatus.PAPER_RUNNING: {PackageStatus.PAPER_ENABLED},
+    PackageStatus.PAPER_PASSED: {PackageStatus.PAPER_RUNNING},
+    PackageStatus.PAPER_FAILED: {PackageStatus.PAPER_ENABLED, PackageStatus.PAPER_RUNNING},
     PackageStatus.RETIRED: {
         status for status in PackageStatus if status != PackageStatus.RETIRED
     },
@@ -89,16 +96,6 @@ BROKER_COMPATIBILITY_SUCCESS_STATUSES = {"PASSED", "VERIFIED", "COMPATIBLE"}
 LIVE_STRICT_GOVERNANCE_LIMIT = 10_000
 
 
-def _is_deprecated_runtime_admission_status(status: PackageStatus) -> bool:
-    core_statuses = {
-        PackageStatus.DRAFT,
-        PackageStatus.ASSET_VALIDATED,
-        PackageStatus.BACKTEST_APPROVED,
-        PackageStatus.RETIRED,
-    }
-    return status not in core_statuses
-
-
 class StrategyPackageService:
     def __init__(
         self,
@@ -108,12 +105,18 @@ class StrategyPackageService:
         validator: StrategyPackageValidator | None = None,
         candidate_service: CandidateStrategyPackageService | None = None,
         asset_eligibility: StrategyPackageAssetEligibilityService | None = None,
+        asset_freezer: PackageAssetFreezeService | None = None,
+        frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.resolver = resolver or QEExperimentSourceResolver()
         self.validator = validator or StrategyPackageValidator()
         self.candidate_service = candidate_service or CandidateStrategyPackageService()
         self.asset_eligibility = asset_eligibility or StrategyPackageAssetEligibilityService(validator=self.validator)
+        self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        self.frozen_runtime_self_check = frozen_runtime_self_check or FrozenRuntimeSelfCheckService(
+            asset_store=getattr(self.asset_freezer, "asset_store", None)
+        )
 
     def create_from_qe_experiment(
         self,
@@ -121,12 +124,15 @@ class StrategyPackageService:
         *,
         resolve_runtime_assets: bool = False,
     ) -> StrategyPackageRecord:
+        _ = resolve_runtime_assets  # Batch 1 always freezes runtime assets after read-only manifest resolution.
         manifest = self.resolver.build_from_experiment(
             experiment_id,
-            resolve_runtime_assets=resolve_runtime_assets,
+            resolve_runtime_assets=False,
         )
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_qe_evolution_loop(
         self,
@@ -135,13 +141,16 @@ class StrategyPackageService:
         qe_loop_id: str,
         resolve_runtime_assets: bool = False,
     ) -> StrategyPackageRecord:
+        _ = resolve_runtime_assets  # Batch 1 always freezes runtime assets after read-only manifest resolution.
         manifest = self.resolver.build_from_evolution_loop(
             qe_task_id=qe_task_id,
             qe_loop_id=qe_loop_id,
-            resolve_runtime_assets=resolve_runtime_assets,
+            resolve_runtime_assets=False,
         )
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def create_from_candidate(
         self,
@@ -171,8 +180,10 @@ class StrategyPackageService:
             }
         )
         manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
-        self.validator.validate_manifest(manifest)
-        return self.repository.save_manifest(manifest)
+        frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
+        self.validator.validate_manifest(frozen_assets.manifest)
+        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         self.validator.validate_manifest(manifest)
@@ -180,6 +191,15 @@ class StrategyPackageService:
 
     def list_packages(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[StrategyPackageRecord]:
         return self.repository.list(status=status, limit=limit)
+
+    def list_package_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        list_summaries = getattr(self.repository, "list_summaries", None)
+        if callable(list_summaries):
+            return list_summaries(status=status, limit=limit)
+        raise StrategyPackageValidationError(
+            "strategy package summary listing is unsupported by repository",
+            context={"reason_code": "STRATEGY_PACKAGE_SUMMARY_LIST_UNSUPPORTED"},
+        )
 
     def get_package(self, package_id: str) -> StrategyPackageRecord:
         return self.repository.get(package_id)
@@ -396,16 +416,26 @@ class StrategyPackageService:
         reason: str,
         context: dict[str, Any] | None = None,
     ) -> StrategyPackageRecord:
-        if _is_deprecated_runtime_admission_status(to_status):
-            record = self.repository.get(package_id)
-            self.asset_eligibility.require_eligible(record)
-            return record
+        if to_status == PackageStatus.RETIRED and hasattr(self.repository, "list_component_parents"):
+            active_parents: list[str] = []
+            for component in self.repository.list_component_parents(package_id):
+                parent = self.repository.get(component.parent_package_id)
+                if parent.package_status != PackageStatus.RETIRED:
+                    active_parents.append(parent.package_id)
+            if active_parents:
+                raise InvalidStateTransitionError(
+                    "referenced single-alpha child package cannot be retired",
+                    context={"package_id": package_id, "active_parent_package_ids": sorted(active_parents)},
+                )
         allowed = STATUS_TRANSITIONS.get(to_status)
         if not allowed:
             raise StrategyPackageValidationError(
                 "unsupported strategy package target status",
                 context={"package_id": package_id, "to_status": to_status.value},
             )
+        if to_status in {PackageStatus.SELECTION_ENABLED, PackageStatus.PAPER_ENABLED}:
+            record = self.repository.get(package_id)
+            self.asset_eligibility.require_eligible(record)
         return self.repository.transition_status(
             package_id=package_id,
             to_status=to_status,
@@ -415,14 +445,18 @@ class StrategyPackageService:
         )
 
     def enable_selection(self, package_id: str) -> StrategyPackageRecord:
-        record = self.repository.get(package_id)
-        self.asset_eligibility.require_eligible(record)
-        return record
+        return self.transition_status(
+            package_id=package_id,
+            to_status=PackageStatus.SELECTION_ENABLED,
+            reason="enable_selection",
+        )
 
     def enable_paper(self, package_id: str) -> StrategyPackageRecord:
-        record = self.repository.get(package_id)
-        self.asset_eligibility.require_eligible(record)
-        return record
+        return self.transition_status(
+            package_id=package_id,
+            to_status=PackageStatus.PAPER_ENABLED,
+            reason="enable_paper",
+        )
 
     def retire(self, package_id: str, *, reason: str = "retire_package") -> StrategyPackageRecord:
         return self.transition_status(

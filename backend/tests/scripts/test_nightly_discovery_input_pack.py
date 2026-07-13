@@ -1,0 +1,202 @@
+﻿from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from scripts import nightly_discovery_input_pack as pack
+
+
+def test_collect_changed_files_filters_bom_diff_headers_and_log_noise(tmp_path: Path) -> None:
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text(
+        "\ufeffChanges:\n"
+        "--- Changes ---\n"
+        "+++ b/scripts/llm_provider_adapter.py\n"
+        "@@ -1,1 +1,1 @@\n"
+        "a/scripts/nightly_discovery_input_pack.py\n"
+        "b/.github/workflows/nightly.yml\n"
+        "F:/Dev/AIstock/scripts/absolute-should-drop.py\n"
+        "https://example.invalid/not-a-path\n"
+        "scripts/nightly_discovery_input_pack.py\n",
+        encoding="utf-8",
+    )
+
+    changed = pack.collect_changed_files(
+        changed_files=[
+            "./scripts/llm_provider_adapter.py",
+            "Changes:",
+            "\u9518\u7e2fests/aistock_validation/history/noisy.md",
+        ],
+        changed_files_file=changed_file,
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    assert changed == [
+        "scripts/llm_provider_adapter.py",
+        "tests/aistock_validation/history/noisy.md",
+        "scripts/nightly_discovery_input_pack.py",
+        ".github/workflows/nightly.yml",
+    ]
+
+
+def test_build_discovery_input_pack_writes_compact_contract(tmp_path: Path) -> None:
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text("\ufeffChanges:\nscripts/nightly_discovery_input_pack.py\n", encoding="utf-8")
+
+    payload = pack.build_discovery_input_pack(
+        run_id="27720422313",
+        changed_files_file=changed_file,
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    assert payload["schema_version"] == "aistock_discovery_input_pack_v1"
+    assert payload["run_id"] == "27720422313"
+    assert payload["changed_files"] == ["scripts/nightly_discovery_input_pack.py"]
+    assert payload["input_quality"]["noise_filtered"] is True
+    assert payload["production_gates"]["production_ddl_gate"] == "noop"
+    assert "no_production_db_write" in payload["stop_conditions"]
+    assert payload["rotation"]["readonly_only"] is True
+    assert payload["discovery_statistics"]["candidate_count"] == 0
+
+
+def test_rotation_uses_weekly_focus_and_changed_module_priority(tmp_path: Path) -> None:
+    payload = pack.build_discovery_input_pack(
+        run_id="rotation-test",
+        run_date="2026-06-19",
+        changed_files=["scripts/nightly_discovery_plans.py"],
+        allowed_plan_keys=[
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+        ],
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    rotation = payload["rotation"]
+    assert rotation["focus_key"] == "code_intelligence_llm"
+    assert rotation["changed_modules"] == ["code_intelligence"]
+    assert rotation["selected_plan_keys"][0] == "validation_semantic_drift_discovery_readonly"
+    assert "code_intelligence_discovery_affected_tests_quality" in rotation["selected_plan_keys"]
+    assert len(rotation["selected_plan_keys"]) <= rotation["budget_plan_limit"]
+    assert payload["discovery_statistics"]["planned_plan_count"] == len(rotation["selected_plan_keys"])
+
+
+def test_rotation_explains_no_allowlisted_discovery_plan(tmp_path: Path) -> None:
+    payload = pack.build_discovery_input_pack(
+        run_id="rotation-empty",
+        run_date="2026-06-15",
+        allowed_plan_keys=["l0"],
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    assert payload["rotation"]["focus_key"] == "workflow_validation"
+    assert payload["rotation"]["selected_plan_keys"] == []
+    assert payload["rotation"]["no_candidate_reason"] == "no_allowlisted_readonly_discovery_plan_selected"
+
+
+def test_previous_candidate_manifest_biases_next_rotation(tmp_path: Path) -> None:
+    manifest = tmp_path / "previous" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_bug_candidate_queue_v1",
+                "rotation": {
+                    "focus_modules": ["validation_center"],
+                    "selected_plan_keys": [
+                        "validation_center_discovery_run_record_integrity",
+                        "workflow_discovery_root_clean_guard",
+                    ],
+                },
+                "summary": {
+                    "candidate_count": 2,
+                    "high_value_candidate_count": 1,
+                    "issue_payload_ready_count": 0,
+                    "deduped_count": 1,
+                    "accepted_count": 1,
+                    "closed_count": 1,
+                },
+                "discovery_effectiveness": {
+                    "candidate_count": 2,
+                    "high_value_candidate_count": 1,
+                    "issue_payload_ready_count": 0,
+                    "deduped_count": 1,
+                    "accepted_count": 1,
+                    "closed_count": 1,
+                    "confirmed_real_bug_count": 1,
+                    "confirmed_real_bug_rate": 0.5,
+                    "noise_rate": 0.0,
+                    "no_candidate_reason": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = pack.build_discovery_input_pack(
+        run_id="feedback-test",
+        run_date="2026-06-19",
+        allowed_plan_keys=[
+            "validation_discovery_issue_intake_readonly",
+            "workflow_discovery_root_clean_guard",
+            "validation_semantic_drift_discovery_readonly",
+            "code_intelligence_discovery_affected_tests_quality",
+            "validation_center_discovery_run_record_integrity",
+        ],
+        previous_candidate_manifest=manifest,
+        budget_plan_limit=3,
+        base_ref=None,
+        root=tmp_path,
+    )
+
+    rotation = payload["rotation"]
+    assert rotation["selection_reasons"][0]["reason"] == "previous_discovery_feedback"
+    assert rotation["selected_plan_keys"][0] == "validation_center_discovery_run_record_integrity"
+    assert "validation_discovery_issue_intake_readonly" in rotation["selected_plan_keys"]
+    assert rotation["feedback"]["signals"] == ["candidate_without_issue_payload", "deduped_candidates"]
+    assert rotation["feedback_focus_modules"] == ["validation_center"]
+    previous = payload["previous_discovery_feedback"]["previous_summary"]
+    assert previous["high_value_candidate_count"] == 1
+    assert previous["accepted_count"] == 1
+    assert previous["closed_count"] == 1
+    assert previous["confirmed_real_bug_rate"] == 0.5
+    stats = payload["discovery_statistics"]
+    assert stats["candidate_feedback_available"] is True
+    assert stats["accepted_count"] == 1
+    assert stats["closed_count"] == 1
+    assert stats["confirmed_real_bug_count"] == 1
+
+
+def test_cli_writes_input_pack_and_changed_files(tmp_path: Path, capsys) -> None:
+    source = tmp_path / "raw.txt"
+    output = tmp_path / "pack.json"
+    changed_output = tmp_path / "nightly-changed-files.txt"
+    source.write_text("Changes:\nscripts/code_intelligence_adapter.py\n", encoding="utf-8")
+
+    exit_code = pack.main(
+        [
+            "--run-id",
+            "run-1",
+            "--changed-files-file",
+            str(source),
+            "--output",
+            str(output),
+            "--changed-files-output",
+            str(changed_output),
+            "--root",
+            str(tmp_path),
+        ]
+    )
+    stdout = capsys.readouterr().out
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert stdout.startswith("PASS discovery-input-pack")
+    assert payload["changed_files"] == ["scripts/code_intelligence_adapter.py"]
+    assert changed_output.read_text(encoding="utf-8") == "scripts/code_intelligence_adapter.py\n"

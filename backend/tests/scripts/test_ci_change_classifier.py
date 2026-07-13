@@ -74,6 +74,25 @@ def test_non_registry_change_keeps_backend_matrix(tmp_path: Path) -> None:
     assert payload["classification"] == "full_ci_required"
     assert payload["backend_required"] is True
     assert payload["non_bug_registry_files"] == ["scripts/aistock_issue_workflow.py"]
+    assert payload["backend_sessions"] == list(classifier.BACKEND_MATRIX_SESSIONS)
+
+
+def test_backend_change_selects_relevant_backend_matrix_slice(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["backend/services/paper_trading_v2/runtime.py"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "full_ci_required"
+    assert payload["backend_required"] is True
+    assert payload["backend_sessions"] == ["paper_v2_backend"]
+
+    qe_payload = classifier.classify_changed_files(
+        ["backend/services/quantevolver/qe_evolution_service.py"],
+        repo_root=tmp_path,
+    )
+
+    assert qe_payload["backend_sessions"] == ["qe_data_contract_backend"]
 
 
 def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None:
@@ -86,6 +105,7 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
             "scripts/ci_change_classifier.py",
             "backend/tests/scripts/test_ci_change_classifier.py",
             "docs/architecture/aistock_pr_quality_p0p1_evidence_gate_design_20260602.md",
+            "docs/codex_project_memory.md",
         ],
         repo_root=tmp_path,
     )
@@ -94,6 +114,45 @@ def test_workflow_validation_only_uses_focused_fast_lane(tmp_path: Path) -> None
     assert payload["backend_required"] is False
     assert payload["workflow_validation_required"] is True
     assert payload["prompt_evaluation_required"] is False
+
+
+def test_docs_fast_update_skips_code_validation(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/analysis/example.md", "docs/design/example.md"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "docs_fast_update"
+    assert payload["docs_fast_tier"] == "docs_fast_update"
+    assert payload["docs_fast_required"] is True
+    assert payload["docs_controlled_required"] is False
+    assert payload["backend_required"] is False
+    assert payload["static_gate_required"] is False
+
+
+def test_docs_fast_new_records_new_doc_tier(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/handoff/new-handoff.md"],
+        repo_root=tmp_path,
+        added_files=["docs/handoff/new-handoff.md"],
+    )
+
+    assert payload["classification"] == "docs_fast_new"
+    assert payload["docs_fast_tier"] == "docs_fast_new"
+    assert payload["backend_required"] is False
+
+
+def test_docs_controlled_keeps_normal_guardrails(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        ["docs/standards/aistock_issue_workflow_quickstart.md", "AGENTS.md"],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "docs_controlled"
+    assert payload["docs_fast_required"] is False
+    assert payload["docs_controlled_required"] is True
+    assert payload["backend_required"] is True
+    assert payload["static_gate_required"] is True
 
 
 def test_unrelated_workflow_validation_change_does_not_run_prompt_evaluation(tmp_path: Path) -> None:
@@ -133,13 +192,21 @@ def test_validation_llm_prompt_pack_change_uses_focused_fast_lane(tmp_path: Path
     payload = classifier.classify_changed_files(
         [
             "prompt_packs/validation_llm/triage_failure.prompt.yml",
+            "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
+            "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
             "prompt_packs/validation_llm/evaluation_cases/historical_failure_fixtures.json",
             "configs/validation/llm_triage.yaml",
+            "configs/validation/design_drift_audit.yaml",
+            "configs/validation/silent_degradation_audit.yaml",
             "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
             "scripts/llm_provider_adapter.py",
             "scripts/nightly_adaptive_scheduler.py",
+            "scripts/nightly_design_drift_audit.py",
+            "scripts/nightly_silent_degradation_audit.py",
             "backend/tests/scripts/test_llm_provider_adapter.py",
             "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+            "backend/tests/scripts/test_nightly_design_drift_audit.py",
+            "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
         ],
         repo_root=tmp_path,
     )
@@ -212,6 +279,7 @@ def test_workflow_validation_only_allows_fixed_same_task_bug_metadata_and_client
             "backend/tests/scripts/test_aistock_issue_workflow.py",
             ".codex/skills/fix-aistock-issue/SKILL.md",
             ".claude/commands/fix-aistock-issue.md",
+            "docs/codex_project_memory.md",
             bug_rel,
             allocator_rel,
         ],
@@ -232,6 +300,44 @@ def test_workflow_validation_only_allows_fixed_same_task_bug_metadata_and_client
 
     assert payload["classification"] == "workflow_validation_only"
     assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["workflow_bug_metadata_files"] == [bug_rel]
+
+
+def test_workflow_client_instruction_cleanup_change_skips_backend_matrix(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260702_BUG-579-cleanup-fast.json"
+    allocator_rel = "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    bug = tmp_path / bug_rel
+    allocator = tmp_path / allocator_rel
+    workflow_files = [
+        "scripts/aistock_issue_workflow.py",
+        "scripts/ci_change_classifier.py",
+        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_ci_change_classifier.py",
+        ".codex/skills/aistock-docs-handoff/SKILL.md",
+        ".codex/skills/aistock-task-router/SKILL.md",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".claude/commands/aistock-docs-handoff.md",
+            ".claude/commands/aistock-task-router.md",
+            ".claude/commands/fix-aistock-issue.md",
+            "docs/codex_project_memory.md",
+    ]
+    _write_bug(
+        bug,
+        status="open",
+        module="validation_llm_pipeline",
+        allowed_write_scope=[*workflow_files, bug_rel, allocator_rel],
+    )
+    allocator.write_text(json.dumps({"last_allocated": 579}), encoding="utf-8")
+
+    payload = classifier.classify_changed_files(
+        [*workflow_files, bug_rel, allocator_rel],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
     assert payload["workflow_validation_required"] is True
     assert payload["workflow_bug_metadata_files"] == [bug_rel]
 
@@ -277,6 +383,32 @@ def test_workflow_validation_fast_lane_rejects_business_files(tmp_path: Path) ->
     assert payload["workflow_validation_required"] is False
 
 
+def test_obsolete_surface_removal_skips_backend_matrix_and_defers_nightly(tmp_path: Path) -> None:
+    bug_rel = "tests/aistock_validation/bugs/20260703_BUG-580-remove-obsolete-surface.json"
+    _write_bug(tmp_path / bug_rel, status="open", module="strategy_package")
+
+    payload = classifier.classify_changed_files(
+        [
+            "frontend/src/app/strategy-package-governance/page.tsx",
+            "frontend/src/lib/navigation/nav-groups.ts",
+            "frontend/tests/strategy-package-governance/governance.spec.ts",
+            "backend/routers/strategy_packages.py",
+            "backend/tests/strategy_package/test_governance_eligibility.py",
+            "tests/aistock_validation/catalog/ui_targets.yaml",
+            "tests/aistock_validation/catalog/test_plans.yaml",
+            "noxfile.py",
+            bug_rel,
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "obsolete_surface_removal"
+    assert payload["backend_required"] is False
+    assert payload["backend_sessions"] == []
+    assert payload["obsolete_surface_removal"] is True
+    assert payload["nightly_deferred_verification"]["required"] is True
+
+
 def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     import yaml
 
@@ -289,7 +421,11 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert jobs["classify-changes"]["outputs"]["prompt_evaluation_required"].endswith(
         "steps.classify.outputs.prompt_evaluation_required }}"
     )
+    assert jobs["classify-changes"]["outputs"]["backend_sessions"].endswith(
+        "steps.classify.outputs.backend_sessions }}"
+    )
     assert jobs["backend-tests"]["if"] == "needs.classify-changes.outputs.backend_required != 'false'"
+    assert jobs["backend-tests"]["strategy"]["matrix"]["session"] == "${{ fromJson(needs.classify-changes.outputs.backend_sessions) }}"
     assert jobs["workflow-validation-tests"]["if"] == (
         "needs.classify-changes.outputs.workflow_validation_required == 'true'"
     )
@@ -299,6 +435,109 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "scripts/llm_provider_adapter.py --json prompt-evaluation" in prompt_eval_run_steps
     assert "prompt-evaluation" in jobs["failure-bug-register"]["needs"]
     assert "workflow-validation-tests" in jobs["failure-bug-register"]["needs"]
+
+
+def test_static_gate_uses_registry_metadata_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    static_gate_steps = workflow["jobs"]["static-gate"]["steps"]
+    registry_steps = [
+        step
+        for step in static_gate_steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "BUG registry metadata check"
+    ]
+
+    assert len(registry_steps) == 1
+    assert registry_steps[0]["if"] == "needs.classify-changes.outputs.close_sync_metadata_only == 'true'"
+    assert "scripts/bug_registry_metadata_check.py" in registry_steps[0]["run"]
+    assert "--close-sync-only" in registry_steps[0]["run"]
+
+    nox_steps = [
+        step
+        for step in static_gate_steps
+        if isinstance(step, dict) and str(step.get("name") or "").startswith("nox -s ")
+    ]
+    assert nox_steps
+    assert all("close_sync_metadata_only != 'true'" in str(step.get("if") or "") for step in nox_steps)
+
+
+def test_pr_quality_has_single_lane_and_registry_sync_record() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    names = [str(step.get("name") or "") for step in steps if isinstance(step, dict)]
+
+    assert names.count("Detect PR quality lane") == 1
+    assert names.count("Build registry-sync quality record") == 1
+    assert names.count("Comment PR summary") == 1
+    assert names.count("Upload PR quality artifacts") == 1
+    assert not any("Legacy" in name for name in names)
+
+    registry_step = next(step for step in steps if isinstance(step, dict) and step.get("name") == "Build registry-sync quality record")
+    assert registry_step["if"] == "steps.quality_lane.outputs.registry_sync == '1'"
+    assert "scripts/bug_registry_metadata_check.py" in registry_step["run"]
+    assert "--close-sync-only" in registry_step["run"]
+
+    normal_lane_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict)
+        and step.get("name")
+        in {
+            "Set up Python 3.12",
+            "Install quality tooling",
+            "Build AIstock PR quality summary",
+            "Build code intelligence PR artifact",
+            "Ruff changed Python files",
+            "Semgrep AIstock guardrails (report-only phase)",
+        }
+    ]
+    assert normal_lane_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in normal_lane_steps)
+
+
+def test_codeql_uses_registry_sync_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
+    jobs = workflow["jobs"]
+    fast_lane = jobs["docs-lite"]
+    analyze_steps = jobs["analyze"]["steps"]
+
+    assert fast_lane["outputs"]["registry_sync"].endswith("steps.fast_lane.outputs.registry_sync }}")
+    detect_step = next(step for step in fast_lane["steps"] if step.get("name") == "Detect CodeQL fast lane")
+    assert "scripts/ci_change_classifier.py" in detect_step["run"]
+    assert "close_sync_metadata_only" in detect_step["run"]
+
+    no_op = next(step for step in analyze_steps if step.get("name") == "Fast-lane CodeQL no-op")
+    assert "registry_sync == '1'" in str(no_op["if"])
+    gated_steps = [step for step in analyze_steps if step.get("name") in {"Initialize CodeQL", "Perform CodeQL Analysis"}]
+    assert gated_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in gated_steps)
+
+
+def test_semgrep_uses_registry_sync_fast_lane() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["semgrep"]["steps"]
+
+    detect_step = next(step for step in steps if step.get("name") == "Detect Semgrep fast lane")
+    assert detect_step["id"] == "fast_lane"
+    assert "scripts/ci_change_classifier.py" in detect_step["run"]
+    assert "close_sync_metadata_only" in detect_step["run"]
+
+    semgrep_steps = [
+        step
+        for step in steps
+        if step.get("name") in {"Set up Python 3.12", "Install Semgrep", "Run Semgrep"}
+    ]
+    assert semgrep_steps
+    assert all("registry_sync != '1'" in str(step.get("if") or "") for step in semgrep_steps)
+    no_op = next(step for step in steps if step.get("name") == "Emit fast-lane semgrep no-op record")
+    assert "registry_sync == '1'" in str(no_op["if"])
 
 
 def test_allocator_change_keeps_backend_matrix(tmp_path: Path) -> None:
@@ -335,6 +574,37 @@ def test_cli_writes_github_outputs(tmp_path: Path, capsys) -> None:
 
     assert json.loads(out.read_text(encoding="utf-8"))["backend_required"] is False
     assert "backend_required=false" in github_out.read_text(encoding="utf-8")
+    assert "backend_sessions=[]" in github_out.read_text(encoding="utf-8")
     assert "workflow_validation_required=false" in github_out.read_text(encoding="utf-8")
     assert "prompt_evaluation_required=false" in github_out.read_text(encoding="utf-8")
     assert json.loads(capsys.readouterr().out)["classification"] == "close_sync_metadata_only"
+
+
+def test_workflow_instruction_skill_changes_use_focused_fast_lane(tmp_path: Path) -> None:
+    payload = classifier.classify_changed_files(
+        [
+            "AGENTS.md",
+            "docs/codex_project_memory.md",
+            "docs/standards/README.md",
+            "docs/design/workflow_skill_token_lean_design_20260703.md",
+            ".codex/skills/aistock-task-router/SKILL.md",
+            ".codex/skills/fix-aistock-issue/SKILL.md",
+            ".codex/skills/verify-aistock-feature/SKILL.md",
+            ".codex/skills/aistock-validation-delegation/SKILL.md",
+            ".codex/skills/aistock-validation-delegation/agents/openai.yaml",
+            ".claude/commands/aistock-task-router.md",
+            ".claude/commands/fix-aistock-issue.md",
+            ".claude/commands/aistock-feature-workflow.md",
+            ".claude/commands/aistock-validation-delegation.md",
+            "scripts/aistock_issue_workflow.py",
+            "scripts/ci_change_classifier.py",
+            "backend/tests/scripts/test_aistock_issue_workflow.py",
+            "backend/tests/scripts/test_ci_change_classifier.py",
+        ],
+        repo_root=tmp_path,
+    )
+
+    assert payload["classification"] == "workflow_validation_only"
+    assert payload["backend_required"] is False
+    assert payload["workflow_validation_required"] is True
+    assert payload["docs_controlled_required"] is True

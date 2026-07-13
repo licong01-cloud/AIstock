@@ -1,0 +1,85 @@
+{
+  "actual": "当前 _compute_batch_frames_with_process_timeouts 只在整个 batch 完成后返回 results，父进程 results 在执行阶段持续累积成功 DataFrame；BUG-427 的 _drain_success_frames 只能释放 compute() 主循环拿到 batch_exec 之后的引用，不能降低执行阶段峰值。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "tests/aistock_validation/bugs/20260619_BUG-429-dataframe.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-429",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T14:06:02.328073Z",
+  "description": "当前 _compute_batch_frames_with_process_timeouts 只在整个 batch 完成后返回 results，父进程 results 在执行阶段持续累积成功 DataFrame；BUG-427 的 _drain_success_frames 只能释放 compute() 主循环拿到 batch_exec 之后的引用，不能降低执行阶段峰值。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-d38b2ab849cf",
+      "timestamp": "2026-06-19T14:06:02.328069Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-427 后代码审计：_drain_factor_results 写入 results[name] = result；compute() 在 _compute_batch_frames 返回前无法释放已完成 DataFrame。"
+  ],
+  "expected": "官方全量离线因子计算在 WSL 中应把成功因子结果按小块或流式方式交给写缓存和指标计算，执行阶段也不得整批保留所有 DataFrame；默认 batch_size=16 时内存峰值应受 result drain chunk 控制。",
+  "first_seen_at": "2026-06-19T14:06:02.328073Z",
+  "fix_branch": null,
+  "fix_commit": "ba4866ade0d4d2eeed1f5a259acf2346224544cd",
+  "fixed_at": "2026-06-19T14:39:35.394981Z",
+  "github_issue_number": 1313,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1313",
+  "last_seen_at": "2026-06-19T14:06:02.328073Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1315",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "阅读 backend/services/quantevolver/official_factor_batch_compute_service.py: _compute_batch_frames_with_process_timeouts 将每个 queue result 放入 results 后继续执行，直到 pending/running 为空才返回。",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方全量因子执行阶段仍整批累积 DataFrame",
+  "trigger_condition": {
+    "fingerprint": "d38b2ab849cf8fbdf8c0d481",
+    "source_event_id": "FE-20260619-d38b2ab849cf"
+  },
+  "validation_evidence": [
+    "GitHub PR #1315 checks -> all green",
+    "ruff check changed files -> passed",
+    "py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 21 passed, 1 skipped",
+    "WSL process streaming smoke -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

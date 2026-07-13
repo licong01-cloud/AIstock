@@ -8,7 +8,7 @@ import PaperTable from "@/components/paper-v2/PaperTable";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { simulationRuntimeApi } from "@/lib/paper-v2/api";
-import { formatCompact, shortHash } from "@/lib/paper-v2/format";
+import { formatCompact, shortHash, statusLabel } from "@/lib/paper-v2/format";
 import type {
   JsonObject,
   SimulationRuntimePlanSummary,
@@ -55,13 +55,95 @@ function hashLabel(value: unknown, size = 10): string {
   return text === "-" ? "-" : shortHash(text, size);
 }
 
+function displayValue(row: SimulationRuntimeRunSummary | null | undefined, key: string): string {
+  const display = objectValue(itemValue(row, "display"));
+  return textValue(itemValue(display, key));
+}
+
+function runStatusLabel(value: unknown): string {
+  const status = String(value || "").toUpperCase();
+  const labels: Record<string, string> = {
+    PLANNING_EXECUTION: "执行计划已生成",
+    INTRADAY_RUNNING: "盘中运行中",
+    SUCCEEDED: "已完成 / 无待处理错误",
+    FAILED_RETRYABLE: "当日失败 / 可重试",
+    FAILED_TERMINAL: "终止失败",
+    CANCELLED: "已取消",
+  };
+  return labels[status] || statusLabel(value);
+}
+
+function brokerLabel(row: SimulationRuntimeRunSummary): string {
+  const display = displayValue(row, "broker_label");
+  if (display !== "-") return display;
+  if (row.broker_backend === "minqmt_sim") return "MiniQMT 模拟盘";
+  if (row.broker_backend === "local_sim") return "LocalSim 本地模拟";
+  return textValue(row.broker_backend);
+}
+
+function readableIdentifier(value: unknown): string {
+  const raw = textValue(value);
+  if (raw === "-") return "-";
+  const ignored = new Set(["strategy", "simrun", "srr", "simbind", "dse", "plan", "pkg", "ag", "slot"]);
+  const words = raw.split(/[_-]+/).filter(Boolean).filter((part) => !ignored.has(part.toLowerCase())).map((part) => {
+    const lower = part.toLowerCase();
+    if (lower === "local") return "Local";
+    if (lower === "miniqmt" || lower === "minqmt") return "MiniQMT";
+    if (lower === "qmt") return "QMT";
+    if (lower === "sim") return "SIM";
+    if (lower === "ops") return "Ops";
+    if (/^(19|20)\d{6}$/.test(part)) return `${part.slice(0, 4)}-${part.slice(4, 6)}-${part.slice(6)}`;
+    return part.slice(0, 1).toUpperCase() + part.slice(1);
+  });
+  return words.length ? words.join(" ") : hashLabel(raw, 8);
+}
+
+function strategyLabel(row: SimulationRuntimeRunSummary): string {
+  const display = displayValue(row, "strategy_label");
+  return display !== "-" ? display : readableIdentifier(row.strategy_id);
+}
+
+function accountSlotLabel(row: SimulationRuntimeRunSummary): string {
+  const display = displayValue(row, "account_slot_label");
+  if (display !== "-") return display;
+  const account = row.account_group_id ? readableIdentifier(row.account_group_id) : "本地模拟账户";
+  const slot = row.strategy_slot_id ? readableIdentifier(row.strategy_slot_id) : "默认策略槽";
+  return `${account} / ${slot}`;
+}
+
+function selectionLabel(row: SimulationRuntimeRunSummary): string {
+  const display = displayValue(row, "selection_label");
+  if (display !== "-") return display;
+  return `选出 ${mapCount(row.stage_counts, "target_count")} 只候选`;
+}
+
+function executionPlanLabel(row: SimulationRuntimeRunSummary): string {
+  const display = displayValue(row, "execution_plan_label");
+  if (display !== "-") return display;
+  const counts = row.stage_counts || {};
+  const intents = mapCount(counts, "execution_plan_intent_count") || mapCount(counts, "order_intent_count");
+  return `交易意图 ${intents} / 已提交 ${mapCount(counts, "submitted_intents")} / 失败 ${mapCount(counts, "failed_intents")}`;
+}
+
+function orderResultLabel(row: SimulationRuntimeRunSummary): string {
+  const orderCount = projectionRows(row, "orders").length || brokerOrderCount(row);
+  const fillCount = projectionRows(row, "fills").length;
+  const errorCount = projectionRows(row, "errors").length;
+  if (errorCount) return `错误 ${errorCount} / 订单 ${orderCount} / 成交同步 ${fillCount}`;
+  return `订单 ${orderCount} / 成交同步 ${fillCount}`;
+}
+
+function secondaryId(label: string, value: unknown) {
+  return <div className="pv2-muted pv2-mono" title={textValue(value)}>{label}: {hashLabel(value, 8)}</div>;
+}
+
 function stageSummary(row: SimulationRuntimeRunSummary): string {
   const counts = row.stage_counts || {};
   const target = mapCount(counts, "target_count");
   const intents = mapCount(counts, "execution_plan_intent_count") || mapCount(counts, "order_intent_count");
   const submitted = mapCount(counts, "submitted_intents");
   const failed = mapCount(counts, "failed_intents");
-  return `targets ${target} / intents ${intents} / submitted ${submitted} / failed ${failed}`;
+  return `选股 ${target} / 意图 ${intents} / 已提交 ${submitted} / 失败 ${failed}`;
 }
 
 function brokerOrderCount(row: SimulationRuntimeRunSummary | null | undefined): number {
@@ -89,13 +171,6 @@ function projectionRows(row: SimulationRuntimeRunSummary | null | undefined, key
   return arrayValue(row[key]).map(objectValue).filter((item): item is JsonObject => Boolean(item));
 }
 
-const OPERATOR_COMMAND_OPTIONS = [
-  "CANCEL_ALL_OPEN_ORDERS",
-  "FLATTEN_ALL_POSITIONS",
-  "FLATTEN_STRATEGY_SLOT",
-  "RESET_STRATEGY_SLOT",
-  "REPLACE_ALPHA_SIGNAL_BOOK",
-] as const;
 
 export default function SimulationRuntimeOpsPage() {
   const [scheduler, setScheduler] = useState<SimulationRuntimeSchedulerStatus | null>(null);
@@ -108,12 +183,6 @@ export default function SimulationRuntimeOpsPage() {
   const [strategyId, setStrategyId] = useState("");
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [operatorCommand, setOperatorCommand] = useState<(typeof OPERATOR_COMMAND_OPTIONS)[number]>("CANCEL_ALL_OPEN_ORDERS");
-  const [operatorReason, setOperatorReason] = useState("");
-  const [operatorConfirmText, setOperatorConfirmText] = useState("");
-  const [operatorAlphaSignalBookId, setOperatorAlphaSignalBookId] = useState("");
-  const [operatorSubmitting, setOperatorSubmitting] = useState(false);
-  const [operatorResult, setOperatorResult] = useState<JsonObject | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
@@ -173,38 +242,6 @@ export default function SimulationRuntimeOpsPage() {
   function clearSelectedRun() {
     setSelectedRun(null);
     setSelectedPlan(null);
-    setOperatorResult(null);
-  }
-
-  async function executeOperatorCommand() {
-    if (!selectedRun) return;
-    setOperatorSubmitting(true);
-    setError(null);
-    setOperatorResult(null);
-    try {
-      const result = await simulationRuntimeApi.executeMiniQmtOperatorCommand({
-        command_type: operatorCommand,
-        account_group_id: String(selectedRun.run.account_group_id || ""),
-        strategy_slot_id: selectedRun.run.strategy_slot_id ? String(selectedRun.run.strategy_slot_id) : undefined,
-        alpha_signal_book_id: operatorAlphaSignalBookId.trim() || undefined,
-        trade_date: selectedRun.run.trade_date || tradeDate,
-        runtime_config_hash: String(selectedRun.run.execution_plan_hash || selectedRun.run.binding_hash || selectedRun.run.release_hash || ""),
-        runtime_id: miniQmtRuntimeId(selectedRun.run),
-        reason: operatorReason.trim(),
-        confirm_text: operatorConfirmText.trim(),
-        requested_by: "paper-v2-simulation-runtime-ui",
-        payload: {
-          selected_run_id: selectedRun.run.run_id,
-          source: "simulation_runtime_ops_page",
-        },
-      });
-      setOperatorResult(result as unknown as JsonObject);
-      await load();
-    } catch (exc) {
-      setError(exc);
-    } finally {
-      setOperatorSubmitting(false);
-    }
   }
 
   return (
@@ -230,21 +267,39 @@ export default function SimulationRuntimeOpsPage() {
         </div>
       </SectionCard>
 
-      <SectionCard title="运行列表" eyebrow="release / binding / evidence / plan trace">
+      <SectionCard title="运行列表" eyebrow="人类可读的运行摘要；ID/Hash 仅作为次要追踪信息">
         <PaperTable
           rows={runs}
           empty="暂无符合条件的统一模拟盘运行记录。"
           columns={[
-            { key: "run", header: "运行", render: (row) => <span className="pv2-mono" title={row.run_id}>{hashLabel(row.run_id, 12)}</span> },
+            {
+              key: "summary",
+              header: "运行摘要",
+              render: (row) => <div><strong>{row.trade_date} - {runStatusLabel(row.status)}</strong>{secondaryId("run", row.run_id)}<div className="pv2-muted">{stageSummary(row)}</div></div>,
+            },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status} /> },
-            { key: "backend", header: "Backend", render: (row) => row.broker_backend === "minqmt_sim" ? "MiniQMT SIM" : "LocalSim" },
-            { key: "strategy", header: "策略实例", render: (row) => <span className="pv2-mono">{row.strategy_id}</span> },
-            { key: "release", header: "运行版本", render: (row) => <span title={`${row.release_id} / ${row.release_hash}`}>{hashLabel(row.release_id)} / {hashLabel(row.release_hash)}</span> },
-            { key: "binding", header: "绑定版本", render: (row) => <span title={`${row.binding_id} / ${row.binding_hash}`}>{hashLabel(row.binding_id)} / {hashLabel(row.binding_hash)}</span> },
-            { key: "slot", header: "Account Slot", render: (row) => <span className="pv2-mono" data-testid={`sim-runtime-slot-${row.run_id}`}>{textValue(row.account_group_id)} / {textValue(row.strategy_slot_id)}</span> },
-            { key: "signal", header: "选股证据", render: (row) => <span title={textValue(row.selection_artifact_hash)}>{hashLabel(row.selection_evidence_id)} / {hashLabel(row.selection_artifact_hash)}</span> },
-            { key: "plan", header: "执行计划", render: (row) => <span title={textValue(row.execution_plan_hash)}>{hashLabel(row.execution_plan_id)} / {hashLabel(row.execution_plan_hash)}</span> },
-            { key: "counts", header: "阶段计数", render: (row) => stageSummary(row) },
+            { key: "backend", header: "Broker", render: (row) => brokerLabel(row) },
+            {
+              key: "strategyAccount",
+              header: "策略 / 账户",
+              render: (row) => <div data-testid={`sim-runtime-slot-${row.run_id}`}><strong>策略实例：{strategyLabel(row)}</strong><div className="pv2-muted" title={`${textValue(row.account_group_id)} / ${textValue(row.strategy_slot_id)}`}>账户槽：{accountSlotLabel(row)}</div></div>,
+            },
+            {
+              key: "runtimeConfig",
+              header: "运行配置",
+              render: (row) => <div><strong>{displayValue(row, "package_label") !== "-" ? displayValue(row, "package_label") : `策略包 ${readableIdentifier(row.package_id)}`}</strong>{secondaryId("release", row.release_hash)}{secondaryId("binding", row.binding_hash)}</div>,
+            },
+            {
+              key: "selection",
+              header: "选股结果",
+              render: (row) => <div><strong>{selectionLabel(row)}</strong>{secondaryId("evidence", row.selection_evidence_id || row.selection_artifact_hash)}</div>,
+            },
+            {
+              key: "plan",
+              header: "执行计划",
+              render: (row) => <div><strong>{executionPlanLabel(row)}</strong>{secondaryId("plan", row.execution_plan_id || row.execution_plan_hash)}</div>,
+            },
+            { key: "orders", header: "订单 / 错误", render: (row) => orderResultLabel(row) },
             { key: "action", header: "详情", render: (row) => <button className="pv2-link-button" data-testid={`sim-runtime-run-detail-${row.run_id}`} onClick={() => showRun(row)} disabled={detailLoading} type="button">查看链路</button> },
           ]}
         />
@@ -290,42 +345,6 @@ export default function SimulationRuntimeOpsPage() {
         />
       </SectionCard>
 
-      <SectionCard title="MiniQMT Operator Command" eyebrow="runtime command">
-        <NoticePanel title="必须进入 MiniQMTExecutionRuntime" tone="warning">
-          清仓、撤单、重置策略槽和换 alpha 信号只允许通过受控 runtime 命令执行；页面不会自动触发，破坏性命令必须输入确认文本。
-        </NoticePanel>
-        <div className="pv2-form-grid" data-testid="sim-runtime-operator-command-panel">
-          <div className="pv2-field">
-            <label>command</label>
-            <select className="pv2-select" data-testid="sim-runtime-operator-command-type" value={operatorCommand} onChange={(event) => setOperatorCommand(event.target.value as (typeof OPERATOR_COMMAND_OPTIONS)[number])}>
-              {OPERATOR_COMMAND_OPTIONS.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </div>
-          <div className="pv2-field">
-            <label>reason</label>
-            <input className="pv2-input" data-testid="sim-runtime-operator-reason" value={operatorReason} onChange={(event) => setOperatorReason(event.target.value)} placeholder="必须填写运维原因" />
-          </div>
-          <div className="pv2-field">
-            <label>confirm_text</label>
-            <input className="pv2-input" data-testid="sim-runtime-operator-confirm" value={operatorConfirmText} onChange={(event) => setOperatorConfirmText(event.target.value)} placeholder={`EXECUTE ${operatorCommand}`} />
-          </div>
-          <div className="pv2-field">
-            <label>alpha_signal_book_id</label>
-            <input className="pv2-input" data-testid="sim-runtime-operator-alpha-book" value={operatorAlphaSignalBookId} onChange={(event) => setOperatorAlphaSignalBookId(event.target.value)} placeholder="REPLACE_ALPHA_SIGNAL_BOOK 必填" />
-          </div>
-        </div>
-        <div className="pv2-readable-panel">
-          <div className="pv2-readable-table">
-            <div className="pv2-readable-row"><div className="pv2-readable-key">目标运行</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-operator-selected-run">{selectedRun?.run.run_id || "请先选择 MiniQMT SIM 运行记录"}</div></div>
-            <div className="pv2-readable-row"><div className="pv2-readable-key">account group / slot</div><div className="pv2-readable-value pv2-mono">{textValue(selectedRun?.run.account_group_id)} / {textValue(selectedRun?.run.strategy_slot_id)}</div></div>
-            <div className="pv2-readable-row"><div className="pv2-readable-key">确认文本</div><div className="pv2-readable-value pv2-mono">EXECUTE {operatorCommand}</div></div>
-            <div className="pv2-readable-row"><div className="pv2-readable-key">last result</div><div className="pv2-readable-value" data-testid="sim-runtime-operator-result">{textValue(itemValue(objectValue(operatorResult?.result), "status") || itemValue(operatorResult, "ok"))}</div></div>
-          </div>
-        </div>
-        <button className="pv2-button pv2-button-danger" data-testid="sim-runtime-operator-submit" type="button" onClick={executeOperatorCommand} disabled={!selectedRun || selectedRun.run.broker_backend !== "minqmt_sim" || operatorSubmitting || !operatorReason.trim()}>
-          {operatorSubmitting ? "执行中..." : "提交 runtime 命令"}
-        </button>
-      </SectionCard>
 
       <SectionCard title="选中运行链路" eyebrow="operator detail">
         {selectedRun ? (
@@ -336,7 +355,7 @@ export default function SimulationRuntimeOpsPage() {
                 <div className="pv2-readable-table">
                   <div className="pv2-readable-row"><div className="pv2-readable-key">run</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-run-id">{selectedRun.run.run_id}</div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">strategy</div><div className="pv2-readable-value pv2-mono">{selectedRun.run.strategy_id}</div></div>
-                  <div className="pv2-readable-row"><div className="pv2-readable-key">backend</div><div className="pv2-readable-value">{selectedRun.run.broker_backend === "minqmt_sim" ? "MiniQMT SIM" : "LocalSim"}</div></div>
+                  <div className="pv2-readable-row"><div className="pv2-readable-key">backend</div><div className="pv2-readable-value">{brokerLabel(selectedRun.run)}</div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">status</div><div className="pv2-readable-value"><StatusBadge status={selectedRun.run.status} /></div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">last stage</div><div className="pv2-readable-value">{selectedRun.run.last_stage || "-"}</div></div>
                   <div className="pv2-readable-row"><div className="pv2-readable-key">account group / slot</div><div className="pv2-readable-value pv2-mono" data-testid="sim-runtime-selected-account-slot">{textValue(selectedRun.run.account_group_id)} / {textValue(selectedRun.run.strategy_slot_id)}</div></div>

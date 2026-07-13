@@ -41,6 +41,29 @@ from .models import (
 
 ConnectionProvider = Callable[[], Any]
 
+ARCHIVE_ROUTING_CLASS = "archive"
+PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS = ("paper_v2.daemon", "paper_v2")
+MULTI_ALPHA_OUTBOX_SKIP_SOURCE_SYSTEMS = ("multi_alpha",)
+PAPER_DAEMON_EVENT_TYPES = (
+    "paper.daemon.run_started",
+    "paper.daemon.intent_created",
+    "paper.daemon.order_submitted",
+    "paper.daemon.fill_received",
+    "paper.daemon.order_rejected",
+    "paper.daemon.order_cancelled",
+    "paper.daemon.position_updated",
+    "paper.daemon.run_completed",
+    "paper.daemon.run_failed",
+)
+PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES = (
+    "paper.portfolio_run.completed",
+    "paper.daily_snapshot.captured",
+    "paper.config.changed",
+)
+PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED = "paper_daemon_telemetry_not_archived"
+PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY = "paper_v2_archive_deferred_throwaway"
+UNSUPPORTED_OUTBOX_EVENT_TYPE = "unsupported_outbox_event_type"
+
 
 RUN_COLUMNS = (
     "run_id",
@@ -92,6 +115,87 @@ RUN_SOURCE_COLUMNS = (
     "qlib_recorder_name",
     "node_api_base_url",
     "metadata",
+)
+
+MULTI_ALPHA_RUN_COLUMNS = (
+    "run_id",
+    "roster_hash",
+    "oos_start",
+    "oos_end",
+    "normalize_method",
+    "walk_forward_json",
+    "baseline_leg_id",
+    "leg_count",
+    "status",
+    "logical_status",
+    "reason_json",
+    "source_created_at",
+    "archived_at",
+)
+
+MULTI_ALPHA_LEG_COLUMNS = (
+    "run_id",
+    "leg_id",
+    "leg_order",
+    "seed_run_ids",
+    "factor_set_hash",
+    "factor_names",
+    "factor_count",
+    "model_type",
+    "model_family",
+    "freq",
+    "label_horizon",
+    "seed_count",
+    "source_run_meta",
+    "provenance_complete",
+)
+
+MULTI_ALPHA_LEG_SOURCE_COLUMNS = (
+    "run_id",
+    "leg_id",
+    "source_seq",
+    "seed_ref",
+    "seed_ref_kind",
+    "source_experiment_id",
+    "source_task_id",
+    "source_loop_id",
+    "source_loop_index",
+    "source_run_type",
+    "source_model_type",
+    "source_factor_set_hash",
+    "resolved",
+    "resolve_method",
+    "resolve_note",
+)
+
+MULTI_ALPHA_SCHEME_COLUMNS = (
+    "run_id",
+    "weighting_scheme",
+    "scheme_algorithm",
+    "weights_json",
+    "per_window_weights_json",
+    "cagr",
+    "max_drawdown",
+    "sharpe",
+    "calmar",
+    "topk_return_20",
+    "topk_hit_rate_20",
+    "turnover",
+    "vs_baseline_sharpe_delta",
+    "vs_baseline_calmar_delta",
+    "pred_persisted",
+    "skipped",
+    "skipped_reason",
+    "is_best",
+)
+
+MULTI_ALPHA_LOO_COLUMNS = (
+    "run_id",
+    "weighting_scheme",
+    "dropped_leg_id",
+    "marginal_cagr",
+    "marginal_sharpe",
+    "marginal_calmar",
 )
 
 RUN_CONFIG_COLUMNS = (
@@ -418,6 +522,13 @@ JSON_COLUMNS = {
     "canonical_config",
     "raw_config",
     "factor_list",
+    "walk_forward_json",
+    "reason_json",
+    "seed_run_ids",
+    "factor_names",
+    "source_run_meta",
+    "weights_json",
+    "per_window_weights_json",
     "model_config",
     "model_params",
     "strategy_config",
@@ -451,12 +562,17 @@ JSON_COLUMNS = {
 QE_ARCHIVE_ANALYTICS_VIEW_DEFS: dict[str, dict[str, str]] = {
     "run_leaderboard": {
         "view_name": "v_run_leaderboard",
-        "purpose": "Run-level signal and return/risk leaderboard.",
+        "purpose": "Run-level CAGR/MDD/Calmar leaderboard with Top-K quality.",
+        "grain": "run_id",
+    },
+    "topk_quality": {
+        "view_name": "v_topk_quality",
+        "purpose": "Run-level forward-only prediction-rank Top-K quality.",
         "grain": "run_id",
     },
     "seed_robustness": {
         "view_name": "v_seed_robustness",
-        "purpose": "Multi-seed robustness by config fingerprint.",
+        "purpose": "Multi-seed return/risk robustness with nullable Top-K aggregates.",
         "grain": "factor_set_hash x model_type x label_horizon x undertrain_mode x topk",
     },
     "factor_importance_stability": {
@@ -501,6 +617,14 @@ def _order_by_clause(value: str | None, allowed: set[str], default: str) -> str:
     if column not in allowed:
         column = default
     return f"{column} DESC NULLS LAST"
+
+
+def _order_by_clause_with_direction(value: str | None, allowed: set[str], default: str, *, ascending: set[str] | None = None) -> str:
+    column = str(value or default).strip().lower()
+    if column not in allowed:
+        column = default
+    direction = "ASC" if column in (ascending or set()) else "DESC"
+    return f"{column} {direction} NULLS LAST"
 
 
 class QEArchiveRepository:
@@ -604,6 +728,177 @@ class QEArchiveRepository:
                 cur.execute(sql, [self._adapt_value(col, record[col]) for col in columns])
                 row = cur.fetchone()
         return int(row[0]) if row else None
+
+    def fetch_archive_run_for_seed(self, seed_run_id: str) -> dict[str, Any] | None:
+        """Fetch the authoritative QE archive run row for a seed reference."""
+
+        seed_run_id = str(seed_run_id or "").strip()
+        if not seed_run_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        r.run_id,
+                        r.experiment_id,
+                        r.task_id,
+                        r.loop_id,
+                        r.loop_index,
+                        r.run_type,
+                        r.model_type,
+                        r.model_family,
+                        r.factor_set_hash,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        rc.factor_list AS factor_names,
+                        r.completed_at,
+                        r.archived_at,
+                        r.source_created_at,
+                        r.source_updated_at
+                    FROM qe_archive.run r
+                    LEFT JOIN qe_archive.run_config rc ON rc.run_id = r.run_id
+                    WHERE r.run_id = %s
+                    """,
+                    (seed_run_id,),
+                )
+                rows = self._fetch_dicts(cur)
+        return rows[0] if rows else None
+
+    def resolve_evolution_loop_seed(self, *, task_id: str, loop_index: int) -> dict[str, Any] | None:
+        """Resolve qe_<task>_L<idx> style seeds through QE loop rows and archive runs."""
+
+        task_id = str(task_id or "").strip()
+        if not task_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        l.task_id,
+                        l.loop_id,
+                        l.loop_index,
+                        l.experiment_id,
+                        l.status AS loop_status,
+                        l.config_json,
+                        l.metrics_json,
+                        r.run_id,
+                        r.run_type,
+                        r.model_type,
+                        r.model_family,
+                        r.factor_set_hash,
+                        r.factor_count,
+                        r.freq,
+                        r.label_horizon,
+                        rc.factor_list AS factor_names,
+                        r.completed_at,
+                        r.archived_at,
+                        r.source_created_at,
+                        r.source_updated_at
+                    FROM qe_evolution_loops l
+                    LEFT JOIN qe_archive.run r
+                      ON r.task_id = l.task_id
+                     AND (r.loop_id = l.loop_id OR r.loop_index = l.loop_index)
+                     AND r.run_type IN ('evolution_loop','single_experiment')
+                    LEFT JOIN qe_archive.run_config rc ON rc.run_id = r.run_id
+                    WHERE l.task_id = %s
+                      AND l.loop_index = %s
+                    ORDER BY r.archived_at DESC NULLS LAST, r.completed_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (task_id, loop_index),
+                )
+                rows = self._fetch_dicts(cur)
+        return rows[0] if rows else None
+
+    def fetch_multi_alpha_combine_run(self, run_id: str) -> dict[str, Any] | None:
+        """Read the macb source-of-truth business tables for one run."""
+
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return None
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run
+                    WHERE id = %s
+                    """,
+                    (run_id,),
+                )
+                run_rows = self._fetch_dicts(cur)
+                if not run_rows:
+                    return None
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_scheme_result
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme
+                    """,
+                    (run_id,),
+                )
+                schemes = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM strategy_pkg.multi_alpha_combine_backtest_loo
+                    WHERE run_id = %s
+                    ORDER BY weighting_scheme, dropped_leg_id
+                    """,
+                    (run_id,),
+                )
+                loo = self._fetch_dicts(cur)
+        return {"run": run_rows[0], "scheme_results": schemes, "loo": loo}
+
+    def list_multi_alpha_combine_run_ids(
+        self,
+        *,
+        statuses: Sequence[str] = ("succeeded", "partial_failed", "failed"),
+        include_archived: bool = False,
+        limit: int = 500,
+    ) -> list[str]:
+        """List terminal macb business runs for manual or historical backfill."""
+
+        normalized_statuses = [str(status).strip() for status in statuses if str(status).strip()]
+        if not normalized_statuses:
+            return []
+        limit = max(1, min(int(limit or 500), 5000))
+        archive_filter = (
+            ""
+            if include_archived
+            else """
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM qe_archive.multi_alpha_run ar
+                  WHERE ar.run_id = r.id
+              )
+            """
+        )
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT r.id
+                    FROM strategy_pkg.multi_alpha_combine_backtest_run r
+                    WHERE (
+                        r.status = ANY(%s)
+                        OR (
+                            r.status = 'failed'
+                            AND r.reason->>'logical_status' = 'partial_failed'
+                            AND 'partial_failed' = ANY(%s)
+                        )
+                    )
+                    {archive_filter}
+                    ORDER BY r.created_at ASC
+                    LIMIT %s
+                    """,
+                    (normalized_statuses, normalized_statuses, limit),
+                )
+                return [str(row[0]) for row in cur.fetchall()]
 
     def upsert_run_config(self, config: RunConfigRecord | Mapping[str, Any]) -> str:
         if isinstance(config, Mapping):
@@ -815,6 +1110,9 @@ class QEArchiveRepository:
         worker_id: str,
         limit: int = 10,
         event_types: Sequence[str] | None = None,
+        source_systems: Sequence[str] | None = None,
+        routing_class: str | None = ARCHIVE_ROUTING_CLASS,
+        allow_missing_routing_class: bool = True,
     ) -> list[ClaimedOutboxEvent]:
         if limit <= 0:
             return []
@@ -824,6 +1122,17 @@ class QEArchiveRepository:
         if event_types:
             event_filter = "AND event_type = ANY(%s)"
             params.append(list(event_types))
+        source_filter = ""
+        if source_systems:
+            source_filter = "AND source_system = ANY(%s)"
+            params.append(list(source_systems))
+        routing_filter = ""
+        if routing_class is not None:
+            if allow_missing_routing_class:
+                routing_filter = "AND (payload->>'routing_class' = %s OR NOT (payload ? 'routing_class'))"
+            else:
+                routing_filter = "AND payload->>'routing_class' = %s"
+            params.append(routing_class)
         params.extend([limit, worker_id])
 
         sql = f"""
@@ -833,6 +1142,8 @@ class QEArchiveRepository:
                 WHERE status = 'pending'
                   AND next_retry_at <= NOW()
                   {event_filter}
+                  {source_filter}
+                  {routing_filter}
                 ORDER BY next_retry_at ASC, created_at ASC
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
@@ -886,6 +1197,116 @@ class QEArchiveRepository:
                     """,
                     (event_id,),
                 )
+
+    def skip_outbox_event(
+        self,
+        event: ClaimedOutboxEvent,
+        *,
+        reason_code: str,
+        trigger_reason: str = "realtime",
+    ) -> None:
+        """Mark an unprocessable outbox event as an explicit audited skip.
+
+        ``skipped`` is an honest terminal state: it is not ``completed`` (not
+        archived) and not ``failed`` (not retryable). The status change and
+        skip/ingest audit rows share one DB transaction.
+        """
+
+        if trigger_reason not in {"realtime", "manual"}:
+            raise ValueError(
+                "skip_outbox_event trigger_reason must be 'realtime' or 'manual', "
+                f"got {trigger_reason!r}"
+            )
+        if not reason_code:
+            raise ValueError("skip_outbox_event requires a non-empty reason_code")
+
+        payload = dict(event.payload or {})
+        source_type = _policy_skip_source_type(event.event_type)
+        payload_sha256 = sha256_json(payload) if payload else None
+        stats = {
+            "reason_code": reason_code,
+            "event_type": event.event_type,
+            "routing_class": payload.get("routing_class"),
+            "event_id": event.event_id,
+        }
+        archive_policy_source = "paper_v2_throwaway_policy"
+        if event.source_system == "multi_alpha":
+            archive_policy_source = "multi_alpha_archive_policy"
+        skip_record = SkipRegistryRecord(
+            source_system=event.source_system,
+            source_type=source_type,
+            source_id=event.source_id,
+            source_sub_id=event.source_sub_id,
+            event_type=event.event_type,
+            archive_policy="SKIP",
+            archive_policy_source=archive_policy_source,
+            skip_reason=reason_code,
+            trigger_reason=trigger_reason,
+            payload_sha256=payload_sha256,
+            created_by="qe_archive_worker",
+            metadata=stats,
+        )
+        history_record = IngestHistoryRecord(
+            source_system=event.source_system,
+            source_type=source_type,
+            source_id=event.source_id,
+            source_sub_id=event.source_sub_id,
+            trigger_reason=trigger_reason,
+            archive_policy="SKIP",
+            ingest_status="skipped",
+            event_id=event.event_id,
+            payload_sha256=payload_sha256,
+            stats=stats,
+            error_message=reason_code,
+            created_by="qe_archive_worker",
+        )
+        skip_row = self._prepare_record(skip_record, SKIP_REGISTRY_COLUMNS)
+        history_row = self._prepare_record(history_record, INGEST_HISTORY_COLUMNS)
+
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                self._assert_skip_audit_schema(cur, trigger_reason=trigger_reason)
+                skip_columns = list(skip_row.keys())
+                skip_assignments = ", ".join(
+                    f"{column} = EXCLUDED.{column}"
+                    for column in skip_columns
+                    if column not in {"skip_id", "created_by"}
+                )
+                cur.execute(
+                    f"""
+                    INSERT INTO qe_archive.skip_registry ({", ".join(skip_columns)})
+                    VALUES ({", ".join(["%s"] * len(skip_columns))})
+                    ON CONFLICT (source_system, source_type, source_id, (COALESCE(source_sub_id, ''))) DO UPDATE SET
+                        {skip_assignments},
+                        last_seen_at = NOW()
+                    """,
+                    [self._adapt_value(col, skip_row.get(col)) for col in skip_columns],
+                )
+                history_columns = list(history_row.keys())
+                cur.execute(
+                    f"""
+                    INSERT INTO qe_archive.ingest_history ({", ".join(history_columns)})
+                    VALUES ({", ".join(["%s"] * len(history_columns))})
+                    """,
+                    [self._adapt_value(col, history_row.get(col)) for col in history_columns],
+                )
+                cur.execute(
+                    """
+                    UPDATE qe_archive.outbox_event
+                    SET status = 'skipped',
+                        locked_by = NULL,
+                        locked_at = NULL,
+                        error_message = %s,
+                        updated_at = NOW()
+                    WHERE event_id = %s
+                    """,
+                    (reason_code, event.event_id),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        "skip_outbox_event expected to update exactly one outbox_event "
+                        f"for event_id={event.event_id!r}; updated={cur.rowcount}"
+                    )
 
     def fail_outbox_event(
         self,
@@ -1419,6 +1840,24 @@ class QEArchiveRepository:
                 pending_outbox_count = int(cur.fetchone()[0])
                 cur.execute(
                     """
+                    SELECT COUNT(*)
+                    FROM qe_archive.outbox_event
+                    WHERE status = 'pending'
+                      AND payload->>'routing_class' = 'archive'
+                    """
+                )
+                pending_archive_outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM qe_archive.outbox_event
+                    WHERE status = 'pending'
+                      AND NOT (payload ? 'routing_class')
+                    """
+                )
+                pending_unrouted_outbox_count = int(cur.fetchone()[0])
+                cur.execute(
+                    """
                     SELECT status, COUNT(*)
                     FROM qe_archive.outbox_event
                     GROUP BY status
@@ -1426,6 +1865,46 @@ class QEArchiveRepository:
                     """
                 )
                 outbox_status_counts = {str(status): int(count) for status, count in cur.fetchall()}
+                cur.execute(
+                    """
+                    SELECT
+                        source_system,
+                        COALESCE(payload->>'routing_class', 'unknown') AS routing_class,
+                        status,
+                        COUNT(*) AS count,
+                        MIN(created_at) AS oldest_created_at
+                    FROM qe_archive.outbox_event
+                    GROUP BY source_system, COALESCE(payload->>'routing_class', 'unknown'), status
+                    ORDER BY count DESC, source_system ASC, routing_class ASC, status ASC
+                    LIMIT 25
+                    """
+                )
+                outbox_source_routing_counts = self._fetch_dicts(cur)
+                cur.execute(
+                    """
+                    SELECT
+                        event_id,
+                        event_type,
+                        source_system,
+                        source_id,
+                        source_sub_id,
+                        COALESCE(payload->>'routing_class', 'unknown') AS routing_class,
+                        status,
+                        next_retry_at,
+                        created_at,
+                        locked_by,
+                        locked_at,
+                        error_message
+                    FROM qe_archive.outbox_event
+                    WHERE status IN ('pending', 'processing')
+                    ORDER BY
+                        CASE WHEN COALESCE(payload->>'routing_class', '') = 'archive' THEN 0 ELSE 1 END,
+                        next_retry_at ASC,
+                        created_at ASC
+                    LIMIT 10
+                    """
+                )
+                outbox_oldest_pending = self._fetch_dicts(cur)
                 cur.execute(
                     """
                     SELECT status, COUNT(*)
@@ -1471,7 +1950,11 @@ class QEArchiveRepository:
             "run_count": run_count,
             "research_valid_counts": research_valid_counts,
             "pending_outbox_count": pending_outbox_count,
+            "pending_archive_outbox_count": pending_archive_outbox_count,
+            "pending_unrouted_outbox_count": pending_unrouted_outbox_count,
             "outbox_status_counts": outbox_status_counts,
+            "outbox_source_routing_counts": outbox_source_routing_counts,
+            "outbox_oldest_pending": outbox_oldest_pending,
             "archive_job_status_counts": archive_job_status_counts,
             "latest_archived_at": latest_archived_at,
             "skip_count": skip_count,
@@ -1904,7 +2387,7 @@ class QEArchiveRepository:
         min_icir: float | None = None,
         min_ir: float | None = None,
         limit: int = 20,
-        order_by: str = "cagr",
+        order_by: str = "calmar",
     ) -> list[dict[str, Any]]:
         limit = _clamped_limit(limit)
         filters: list[str] = []
@@ -1919,10 +2402,23 @@ class QEArchiveRepository:
             filters.append("information_ratio >= %s")
             params.append(float(min_ir))
         where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr", "sharpe", "information_ratio", "icir", "rank_icir", "completed_at", "score_total"},
-            "cagr",
+            {
+                "cagr",
+                "sharpe",
+                "information_ratio",
+                "icir",
+                "rank_icir",
+                "completed_at",
+                "score_total",
+                "calmar",
+                "max_drawdown",
+                "topk_return_20",
+                "topk_hit_rate_20",
+                "within_portfolio_rankic",
+            },
+            "calmar",
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -1933,13 +2429,69 @@ class QEArchiveRepository:
                            factor_count, label_horizon, ic, icir, rank_ic, rank_icir,
                            cagr, sharpe, information_ratio, max_drawdown, calmar,
                            random_seed, reproducibility_level, verification_status,
-                           score_total, completed_at
+                           score_total, completed_at,
+                           topk_return_20, topk_return_50, topk_hit_rate_20,
+                           topk_hit_rate_50, topk_decay, within_portfolio_rankic,
+                           topk_dispersion_20, topk_dispersion_50,
+                           topk_quality_status, topk_source, topk_date_count,
+                           topk_joined_observation_count
                     FROM qe_archive.v_run_leaderboard
                     {where_sql}
                     ORDER BY {order_sql}
                     LIMIT %s
                     """,
                     params,
+                )
+                return self._fetch_dicts(cur)
+
+    def query_topk_quality(
+        self,
+        *,
+        run_id: str | None = None,
+        task_id: str | None = None,
+        k: int | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        limit = _clamped_limit(limit)
+        filters: list[str] = []
+        params: list[Any] = []
+        if run_id:
+            filters.append("run_id = %s")
+            params.append(run_id)
+        if task_id:
+            filters.append("task_id = %s")
+            params.append(task_id)
+        if k is not None and int(k) not in {20, 50}:
+            raise ValueError("k must be one of 20 or 50")
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        params.append(limit)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, task_id, loop_index, experiment_id, model_type,
+                           factor_set_hash, label_horizon, completed_at,
+                           topk_return_20, topk_return_50, topk_hit_rate_20,
+                           topk_hit_rate_50, topk_decay, within_portfolio_rankic,
+                           topk_dispersion_20, topk_dispersion_50,
+                           topk_date_count, topk_joined_observation_count,
+                           topk_pred_observation_count, topk_label_observation_count,
+                           topk_rankic_date_count, topk_observation_count_20,
+                           topk_observation_count_50, topk_quality_status,
+                           topk_source, topk_error, topk_label_source,
+                           topk_rank_direction,
+                           CASE WHEN %s = 20 THEN topk_return_20
+                                WHEN %s = 50 THEN topk_return_50 END AS selected_topk_return,
+                           CASE WHEN %s = 20 THEN topk_hit_rate_20
+                                WHEN %s = 50 THEN topk_hit_rate_50 END AS selected_topk_hit_rate,
+                           CASE WHEN %s = 20 THEN topk_dispersion_20
+                                WHEN %s = 50 THEN topk_dispersion_50 END AS selected_topk_dispersion
+                    FROM qe_archive.v_topk_quality
+                    {where_sql}
+                    ORDER BY completed_at DESC NULLS LAST
+                    LIMIT %s
+                    """,
+                    [k, k, k, k, k, k, *params],
                 )
                 return self._fetch_dicts(cur)
 
@@ -1960,10 +2512,24 @@ class QEArchiveRepository:
             params.append(model_type)
         if stable_only:
             filters.append("is_return_stable = TRUE")
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
+            {
+                "cagr_mean",
+                "sharpe_mean",
+                "ir_mean",
+                "icir_mean",
+                "rank_icir_mean",
+                "latest_completed_at",
+                "calmar_mean",
+                "max_drawdown_mean",
+                "cagr_cv",
+                "topk_return_20_mean",
+                "topk_hit_rate_20_mean",
+                "within_portfolio_rankic_mean",
+            },
             "cagr_mean",
+            ascending={"cagr_cv"},
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -1972,10 +2538,15 @@ class QEArchiveRepository:
                     f"""
                     SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
                            topk, run_count, distinct_seed_count, random_seeds,
-                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
-                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
-                           icir_mean, icir_std, rank_icir_mean,
-                           is_return_stable, latest_completed_at
+                            cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                            sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                            icir_mean, icir_std, rank_icir_mean,
+                            is_return_stable, latest_completed_at, calmar, calmar_mean,
+                            topk_return_20_mean, topk_return_20_std, topk_return_20_cv,
+                            topk_return_20_sample_count, topk_return_50_mean,
+                            topk_hit_rate_20_mean, topk_hit_rate_50_mean, topk_decay_mean,
+                            within_portfolio_rankic_mean, topk_dispersion_20_mean,
+                            topk_dispersion_50_mean, topk_metric_run_count, topk_ok_run_count
                     FROM qe_archive.v_seed_robustness
                     WHERE {' AND '.join(filters)}
                     ORDER BY {order_sql}
@@ -2102,7 +2673,7 @@ class QEArchiveRepository:
         model_type: str | None = None,
         min_seed_count: int = 5,
         limit: int = 20,
-        order_by: str = "cagr_mean",
+        order_by: str = "calmar",
     ) -> list[dict[str, Any]]:
         limit = _clamped_limit(limit)
         filters = ["distinct_seed_count >= %s"]
@@ -2110,10 +2681,25 @@ class QEArchiveRepository:
         if model_type:
             filters.append("model_type = %s")
             params.append(model_type)
-        order_sql = _order_by_clause(
+        order_sql = _order_by_clause_with_direction(
             order_by,
-            {"cagr_mean", "sharpe_mean", "ir_mean", "icir_mean", "rank_icir_mean", "latest_completed_at"},
-            "cagr_mean",
+            {
+                "cagr_mean",
+                "sharpe_mean",
+                "ir_mean",
+                "icir_mean",
+                "rank_icir_mean",
+                "latest_completed_at",
+                "calmar",
+                "calmar_mean",
+                "max_drawdown_mean",
+                "cagr_cv",
+                "topk_return_20_mean",
+                "topk_hit_rate_20_mean",
+                "within_portfolio_rankic_mean",
+            },
+            "calmar",
+            ascending={"cagr_cv"},
         )
         params.append(limit)
         with self._connection_provider() as conn:
@@ -2122,10 +2708,21 @@ class QEArchiveRepository:
                     f"""
                     SELECT factor_set_hash, model_type, label_horizon, undertrain_mode,
                            topk, run_count, distinct_seed_count, random_seeds,
-                           cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
-                           sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
-                           icir_mean, rank_icir_mean, is_return_stable,
-                           latest_completed_at, passes_gate
+                            cagr_mean, cagr_std, cagr_cv, cagr_worst, cagr_best,
+                            sharpe_mean, ir_mean, ir_worst, max_drawdown_mean,
+                            icir_mean, rank_icir_mean, is_return_stable,
+                            latest_completed_at, passes_gate, calmar, calmar_mean,
+                            cagr_gate_passes, max_drawdown_gate_passes,
+                            cagr_cv_gate_passes, overfit_gate_passes,
+                            cagr_gate_threshold, max_drawdown_gate_threshold,
+                            cagr_cv_gate_threshold, topk_return_20_mean,
+                            topk_return_20_std, topk_return_20_cv,
+                            topk_return_20_sample_count, topk_return_50_mean,
+                            topk_hit_rate_20_mean, topk_hit_rate_50_mean,
+                            topk_decay_mean, within_portfolio_rankic_mean,
+                            topk_dispersion_20_mean, topk_dispersion_50_mean,
+                            topk_metric_run_count, topk_ok_run_count,
+                            topk_return_20_present, topk_soft_gate_status
                     FROM qe_archive.v_promotion_candidates
                     WHERE {' AND '.join(filters)}
                     ORDER BY {order_sql}
@@ -2200,6 +2797,97 @@ class QEArchiveRepository:
                     self._delete_existing_metrics(cur, records)
                 execute_values(cur, insert_sql, rows, page_size=1000)
         return len(records)
+
+    def archive_multi_alpha_bundle(
+        self,
+        *,
+        run_header: Mapping[str, Any],
+        archive_run: Mapping[str, Any],
+        run_source: Mapping[str, Any],
+        legs: Sequence[Mapping[str, Any]],
+        leg_sources: Sequence[Mapping[str, Any]],
+        schemes: Sequence[Mapping[str, Any]],
+        loo: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        """Idempotently write all Phase A macb archive rows in one transaction."""
+
+        run_record = self._prepare_record(archive_run, RUN_COLUMNS, defaults={"attempt_no": 1, "is_latest_attempt": True})
+        self._require(run_record, RUN_REQUIRED)
+        macb_run = self._prepare_record(run_header, MULTI_ALPHA_RUN_COLUMNS)
+        self._require(macb_run, ("run_id", "roster_hash", "oos_start", "oos_end", "normalize_method", "status"))
+        source_record = self._prepare_record(run_source, RUN_SOURCE_COLUMNS)
+        self._require(source_record, ("run_id", "source_system", "source_type", "source_id"))
+        leg_records = [self._prepare_record(row, MULTI_ALPHA_LEG_COLUMNS) for row in legs]
+        source_records = [self._prepare_record(row, MULTI_ALPHA_LEG_SOURCE_COLUMNS) for row in leg_sources]
+        scheme_records = [self._prepare_record(row, MULTI_ALPHA_SCHEME_COLUMNS) for row in schemes]
+        loo_records = [self._prepare_record(row, MULTI_ALPHA_LOO_COLUMNS) for row in loo]
+        for record in leg_records:
+            self._require(record, ("run_id", "leg_id", "leg_order"))
+        for record in source_records:
+            self._require(record, ("run_id", "leg_id", "source_seq", "seed_ref", "seed_ref_kind", "resolve_method"))
+        for record in scheme_records:
+            self._require(record, ("run_id", "weighting_scheme", "scheme_algorithm"))
+        for record in loo_records:
+            self._require(record, ("run_id", "weighting_scheme", "dropped_leg_id"))
+
+        with self._transaction_connection() as conn:
+            with conn.cursor() as cur:
+                self._execute_upsert_run(cur, run_record)
+                self._execute_upsert_run_source(cur, source_record)
+                self._execute_upsert_single(
+                    cur,
+                    table_name="qe_archive.multi_alpha_run",
+                    columns=MULTI_ALPHA_RUN_COLUMNS,
+                    record=macb_run,
+                    conflict_target="run_id",
+                )
+                run_id = str(macb_run["run_id"])
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_leg",
+                    columns=MULTI_ALPHA_LEG_COLUMNS,
+                    records=leg_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_leg WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_leg_source",
+                    columns=MULTI_ALPHA_LEG_SOURCE_COLUMNS,
+                    records=source_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_leg_source WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_scheme",
+                    columns=MULTI_ALPHA_SCHEME_COLUMNS,
+                    records=scheme_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_scheme WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+                self._execute_replace_rows(
+                    cur,
+                    table_name="qe_archive.multi_alpha_loo",
+                    columns=MULTI_ALPHA_LOO_COLUMNS,
+                    records=loo_records,
+                    delete_sql="DELETE FROM qe_archive.multi_alpha_loo WHERE run_id = %s",
+                    delete_params=(run_id,),
+                )
+        return {
+            "run_id": str(macb_run["run_id"]),
+            "run_rows": 1,
+            "leg_rows": len(leg_records),
+            "leg_source_rows": len(source_records),
+            "scheme_rows": len(scheme_records),
+            "loo_rows": len(loo_records),
+        }
+
+    def _transaction_connection(self) -> Any:
+        try:
+            return self._connection_provider(autocommit=False, manage_transaction=True)
+        except TypeError:
+            return self._connection_provider()
 
     def replace_run_curves(self, run_id: str, curves: Sequence[CurveRecord | Mapping[str, Any]]) -> int:
         records = [self._prepare_record(curve, CURVE_COLUMNS) for curve in curves]
@@ -2446,6 +3134,186 @@ class QEArchiveRepository:
             return Json(normalize_json(value), dumps=canonical_json_dumps)
         return value
 
+    def _assert_skip_audit_schema(self, cur: Any, *, trigger_reason: str) -> None:
+        required_by_table = {
+            "skip_registry": {
+                "source_system",
+                "source_type",
+                "source_id",
+                "source_sub_id",
+                "event_type",
+                "archive_policy",
+                "archive_policy_source",
+                "skip_reason",
+                "trigger_reason",
+                "metadata",
+            },
+            "ingest_history": {
+                "source_system",
+                "source_type",
+                "source_id",
+                "source_sub_id",
+                "trigger_reason",
+                "archive_policy",
+                "ingest_status",
+                "stats",
+                "error_message",
+            },
+            "outbox_event": {"event_id", "status", "error_message", "locked_by", "locked_at"},
+        }
+        cur.execute(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'qe_archive'
+              AND table_name = ANY(%s)
+            """,
+            (list(required_by_table),),
+        )
+        observed: dict[str, set[str]] = {table: set() for table in required_by_table}
+        for row in cur.fetchall():
+            table = str(row["table_name"] if isinstance(row, Mapping) else row[0])
+            column = str(row["column_name"] if isinstance(row, Mapping) else row[1])
+            observed.setdefault(table, set()).add(column)
+        missing = {
+            table: sorted(required - observed.get(table, set()))
+            for table, required in required_by_table.items()
+            if required - observed.get(table, set())
+        }
+        if missing:
+            raise RuntimeError(f"qe_archive skip audit schema missing required columns: {missing}")
+
+        cur.execute(
+            """
+            SELECT pg_get_constraintdef(c.oid) AS constraint_def
+            FROM pg_constraint c
+            JOIN pg_namespace n ON n.oid = c.connamespace
+            JOIN pg_class rel ON rel.oid = c.conrelid
+            WHERE n.nspname = 'qe_archive'
+              AND rel.relname = 'ingest_history'
+              AND c.conname = 'ck_qear_ingest_trigger'
+            """
+        )
+        rows = cur.fetchall()
+        if not rows:
+            raise RuntimeError("qe_archive.ingest_history constraint ck_qear_ingest_trigger is missing")
+        constraint_text = "\n".join(
+            str(row["constraint_def"] if isinstance(row, Mapping) else row[0])
+            for row in rows
+        )
+        if f"'{trigger_reason}'" not in constraint_text:
+            raise RuntimeError(
+                "qe_archive.ingest_history trigger_reason CHECK does not allow "
+                f"{trigger_reason!r}: {constraint_text}"
+            )
+
+    def _execute_upsert_run(self, cur: Any, record: Mapping[str, Any]) -> None:
+        columns = list(record.keys())
+        placeholders = ", ".join(["%s"] * len(columns))
+        assignment_parts: list[str] = []
+        for column in columns:
+            if column == "run_id":
+                continue
+            if column == "archived_at":
+                assignment_parts.append(
+                    "archived_at = COALESCE(EXCLUDED.archived_at, qe_archive.run.archived_at)"
+                )
+            else:
+                assignment_parts.append(f"{column} = EXCLUDED.{column}")
+        if record.get("is_latest_attempt") is True:
+            cur.execute(
+                """
+                UPDATE qe_archive.run
+                SET is_latest_attempt = FALSE, updated_at = NOW()
+                WHERE logical_experiment_id = %s AND run_id <> %s
+                """,
+                (record["logical_experiment_id"], record["run_id"]),
+            )
+        cur.execute(
+            f"""
+            INSERT INTO qe_archive.run ({", ".join(columns)})
+            VALUES ({placeholders})
+            ON CONFLICT (run_id) DO UPDATE SET
+                {", ".join(assignment_parts)},
+                updated_at = NOW()
+            """,
+            [self._adapt_value(col, record[col]) for col in columns],
+        )
+
+    def _execute_upsert_run_source(self, cur: Any, record: Mapping[str, Any]) -> None:
+        columns = list(record.keys())
+        cur.execute(
+            """
+            DELETE FROM qe_archive.run_source
+            WHERE source_system = %s
+              AND source_type = %s
+              AND source_id = %s
+              AND COALESCE(source_sub_id, '') = COALESCE(%s, '')
+            """,
+            (
+                record["source_system"],
+                record["source_type"],
+                record["source_id"],
+                record.get("source_sub_id"),
+            ),
+        )
+        cur.execute(
+            f"""
+            INSERT INTO qe_archive.run_source ({", ".join(columns)})
+            VALUES ({", ".join(["%s"] * len(columns))})
+            """,
+            [self._adapt_value(col, record[col]) for col in columns],
+        )
+
+    def _execute_upsert_single(
+        self,
+        cur: Any,
+        *,
+        table_name: str,
+        columns: Sequence[str],
+        record: Mapping[str, Any],
+        conflict_target: str,
+    ) -> None:
+        insert_columns = [column for column in columns if column in record]
+        assignments = ", ".join(
+            f"{column} = EXCLUDED.{column}"
+            for column in insert_columns
+            if column != conflict_target
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {table_name} ({", ".join(insert_columns)})
+            VALUES ({", ".join(["%s"] * len(insert_columns))})
+            ON CONFLICT ({conflict_target}) DO UPDATE SET
+                {assignments}
+            """,
+            [self._adapt_value(col, record.get(col)) for col in insert_columns],
+        )
+
+    def _execute_replace_rows(
+        self,
+        cur: Any,
+        *,
+        table_name: str,
+        columns: Sequence[str],
+        records: Sequence[Mapping[str, Any]],
+        delete_sql: str,
+        delete_params: Sequence[Any],
+    ) -> None:
+        cur.execute(delete_sql, tuple(delete_params))
+        if not records:
+            return
+        rows = [
+            tuple(self._adapt_value(column, record.get(column)) for column in columns)
+            for record in records
+        ]
+        execute_values(
+            cur,
+            f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES %s",
+            rows,
+            page_size=500,
+        )
+
     @staticmethod
     def _fetch_dicts(cur: Any) -> list[dict[str, Any]]:
         rows = cur.fetchall()
@@ -2475,6 +3343,7 @@ class QEArchiveRepository:
             if key in seen:
                 continue
             seen.add(key)
+
             cur.execute(
                 """
                 DELETE FROM qe_archive.run_metric
@@ -2489,3 +3358,16 @@ class QEArchiveRepository:
                 """,
                 key,
             )
+
+def _policy_skip_source_type(event_type: str) -> str:
+    if event_type == "qe.multi_alpha.combine.completed":
+        return "multi_alpha_combine"
+    if event_type.startswith("paper.daemon."):
+        return "paper_daemon_telemetry"
+    if event_type == "paper.portfolio_run.completed":
+        return "paper_portfolio_run"
+    if event_type == "paper.daily_snapshot.captured":
+        return "paper_daily_snapshot"
+    if event_type == "paper.config.changed":
+        return "paper_config_change"
+    return "outbox_event"

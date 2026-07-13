@@ -13,7 +13,7 @@ def _ensure_available():
     if not tdx_block_service.is_available():
         raise HTTPException(
             status_code=503,
-            detail="通达信板块功能未启用: 请配置 TDX_BLOCK_DIR 环境变量指向通达信 blocknew 目录",
+            detail="通达信板块功能未启用: 请配置 TDX_CLIENT_PATH 并确认通达信客户端已运行、已登录且 TdxQuant 可连接",
         )
 
 
@@ -35,6 +35,17 @@ def sync_from_category(
     _ensure_available()
     try:
         return tdx_block_service.sync_from_category(category_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/sync-from-category-id", summary="按自选分类 id 同步到通达信板块")
+def sync_from_category_id(
+    category_id: int = Body(..., embed=True),
+) -> Dict[str, Any]:
+    _ensure_available()
+    try:
+        return tdx_block_service.sync_from_category_id(category_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

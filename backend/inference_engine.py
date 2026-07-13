@@ -7,6 +7,7 @@ and the requirements in 模型权重文件定位方案_v2.md.
 """
 
 import inspect
+import hashlib
 import json
 import logging
 import math
@@ -16,7 +17,7 @@ import tempfile
 import shutil
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,13 +26,14 @@ import pandas as pd
 
 from .db.pg_pool import get_conn
 from .data_service.api import get_history_window
-from .data_service.cache import get_selection_data_cache, get_cache_stats
+from .data_service.cache import get_selection_data_cache
 from .data_service.preprocessor import (
     compute_precomputed_factors,
     validate_precomputed_factors,
     get_required_data_window,
     check_data_window_sufficient,
 )
+from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
 from .services.strategy_package.workspace_policy import (
     ensure_not_forbidden_worker_workspace_path,
@@ -163,6 +165,25 @@ def _build_score_frame_for_scored_features(scored_features: pd.DataFrame, scores
     df_scores = pd.DataFrame(index=scored_features.index)
     df_scores["score"] = score_values
     return df_scores
+
+
+def _inference_receipt_sha256(payload: Any) -> str:
+    """Hash a small, canonical provenance payload without persisting raw source rows."""
+
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _frame_receipt_sha256(frame: pd.DataFrame) -> str:
+    """Return a deterministic content fingerprint for one already-read source frame."""
+
+    normalized = frame.sort_index().copy()
+    normalized = normalized.reindex(sorted(normalized.columns, key=str), axis=1)
+    digest = hashlib.sha256()
+    digest.update(json.dumps([str(item) for item in normalized.index.names], ensure_ascii=False).encode("utf-8"))
+    digest.update(json.dumps([str(item) for item in normalized.columns], ensure_ascii=False).encode("utf-8"))
+    digest.update(pd.util.hash_pandas_object(normalized, index=True).values.tobytes())
+    return digest.hexdigest()
 
 
 def _safe_get_datetime_level(df_or_index) -> pd.Index:
@@ -535,6 +556,10 @@ class InferenceEngine:
         self.initialized = False
         self.validator = factor_validator or FactorValidator()
         self.assets_root = (Path(__file__).resolve().parents[1] / "rdagent_assets" / "rdagent_tasks").resolve()
+        # Populated only after a successful run. Callers that need provenance
+        # read this from the same engine instance; existing score consumers keep
+        # the original DataFrame return contract.
+        self.last_inference_receipt: dict[str, Any] | None = None
 
     def _get_latest_available_trade_date(self, target_date: datetime) -> datetime:
         """从数据库查询小于等于 target_date 的最近一个交易日"""
@@ -724,7 +749,8 @@ class InferenceEngine:
 
         def _pick_col(candidates: List[str]) -> str:
             for c in candidates:
-                if c in df.columns: return c
+                if c in df.columns:
+                    return c
             raise KeyError(f"Missing columns: {candidates}")
 
         try:
@@ -738,9 +764,6 @@ class InferenceEngine:
             raise ValueError(f"缺少必需 OHLCV 列: {e}")
 
         close = df[close_col]
-        open_ = df[open_col]
-        high = df[high_col]
-        low = df[low_col]
         vol = df[vol_col]
         eps = 1e-12
 
@@ -917,25 +940,35 @@ class InferenceEngine:
                 )
             )
         
-        if "WVMA5" in col_list: out["WVMA5"] = _wvma_last(5)
-        if "WVMA60" in col_list: out["WVMA60"] = _wvma_last(60)
+        if "WVMA5" in col_list:
+            out["WVMA5"] = _wvma_last(5)
+        if "WVMA60" in col_list:
+            out["WVMA60"] = _wvma_last(60)
         
         vol_log = np.log(vol.abs() + 1.0)
-        if "CORR5" in col_list: out["CORR5"] = _corr_series_last(close, vol_log, 5)
-        if "CORR10" in col_list: out["CORR10"] = _corr_series_last(close, vol_log, 10)
-        if "CORR20" in col_list: out["CORR20"] = _corr_series_last(close, vol_log, 20)
-        if "CORR60" in col_list: out["CORR60"] = _corr_series_last(close, vol_log, 60)
+        if "CORR5" in col_list:
+            out["CORR5"] = _corr_series_last(close, vol_log, 5)
+        if "CORR10" in col_list:
+            out["CORR10"] = _corr_series_last(close, vol_log, 10)
+        if "CORR20" in col_list:
+            out["CORR20"] = _corr_series_last(close, vol_log, 20)
+        if "CORR60" in col_list:
+            out["CORR60"] = _corr_series_last(close, vol_log, 60)
 
         vol_log_ret = np.log(vol / (g_vol.shift(1) + eps) + 1.0)
         close_ret = close / (g_close.shift(1) + eps)
-        if "CORD5" in col_list: out["CORD5"] = _corr_series_last(close_ret, vol_log_ret, 5)
-        if "CORD10" in col_list: out["CORD10"] = _corr_series_last(close_ret, vol_log_ret, 10)
-        if "CORD60" in col_list: out["CORD60"] = _corr_series_last(close_ret, vol_log_ret, 60)
+        if "CORD5" in col_list:
+            out["CORD5"] = _corr_series_last(close_ret, vol_log_ret, 5)
+        if "CORD10" in col_list:
+            out["CORD10"] = _corr_series_last(close_ret, vol_log_ret, 10)
+        if "CORD60" in col_list:
+            out["CORD60"] = _corr_series_last(close_ret, vol_log_ret, 60)
 
         # 回归因子（避免重复计算）
         if any(x in col_list for x in ["RSQR5", "RESI5"]):
             r2, resi = _rolling_reg_r2_and_resi_last(close, 5)
-            if "RSQR5" in col_list: out["RSQR5"] = r2
+            if "RSQR5" in col_list:
+                out["RSQR5"] = r2
             if "RESI5" in col_list:
                 close_last = close.loc[last_date]
                 close_last_series = pd.Series(
@@ -951,7 +984,8 @@ class InferenceEngine:
         
         if any(x in col_list for x in ["RSQR10", "RESI10"]):
             r2, resi = _rolling_reg_r2_and_resi_last(close, 10)
-            if "RSQR10" in col_list: out["RSQR10"] = r2
+            if "RSQR10" in col_list:
+                out["RSQR10"] = r2
             if "RESI10" in col_list:
                 close_last = close.loc[last_date]
                 close_last_series = pd.Series(
@@ -965,8 +999,10 @@ class InferenceEngine:
             del r2, resi
             gc.collect()
 
-        if "RSQR20" in col_list: out["RSQR20"] = _rolling_reg_r2_and_resi_last(close, 20)[0]
-        if "RSQR60" in col_list: out["RSQR60"] = _rolling_reg_r2_and_resi_last(close, 60)[0]
+        if "RSQR20" in col_list:
+            out["RSQR20"] = _rolling_reg_r2_and_resi_last(close, 20)[0]
+        if "RSQR60" in col_list:
+            out["RSQR60"] = _rolling_reg_r2_and_resi_last(close, 60)[0]
         
         # 标准差因子（只计算最后一个窗口）
         if "VSTD5" in col_list:
@@ -1267,6 +1303,8 @@ class InferenceEngine:
         1. TASK runtime mode: use task_run_id + loop_id, load from rdagent_assets
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
+        self.last_inference_receipt = None
+        observed_at = datetime.now(timezone.utc)
         target_date = trade_date
         if cutoff_date and target_date.date() > cutoff_date.date():
             target_date = cutoff_date
@@ -1402,11 +1440,12 @@ class InferenceEngine:
                 universe=universe,
                 start=start_date,
                 end=actual_date,
-                fields=["open", "high", "low", "close", "volume", "amount"],
+                fields=["open", "high", "low", "close", "volume", "amount", "factor"],
                 freq="1d",
                 adj="front",
             )
-            if df_history.empty: raise ValueError("获取历史数据为空")
+            if df_history.empty:
+                raise ValueError("获取历史数据为空")
 
             # 从数据库获取基本面+资金流数据
             from .data_service import timescaledb_adapter
@@ -1467,20 +1506,7 @@ class InferenceEngine:
             # 重命名字段以匹配因子代码期望的字段名
             field_mapping = {
                 # 资金流字段
-                'buy_lg_amount': 'mf_lg_buy_amt',
-                'sell_lg_amount': 'mf_lg_sell_amt',
-                'buy_elg_amount': 'mf_elg_buy_amt',
-                'sell_elg_amount': 'mf_elg_sell_amt',
-                'buy_lg_vol': 'mf_lg_buy_vol',
-                'sell_lg_vol': 'mf_lg_sell_vol',
-                'buy_elg_vol': 'mf_elg_buy_vol',
-                'sell_elg_vol': 'mf_elg_sell_vol',
-                'buy_sm_amount': 'mf_sm_buy_amt',
-                'sell_sm_amount': 'mf_sm_sell_amt',
-                'buy_md_amount': 'mf_md_buy_amt',
-                'sell_md_amount': 'mf_md_sell_amt',
-                'net_mf_amount': 'mf_net_amt',
-                'net_mf_vol': 'mf_net_vol',
+                **MONEYFLOW_FIELD_MAP,
                 # 基本面字段（保持db_前缀）
                 'close': 'db_close',
                 'turnover_rate': 'db_turnover_rate',
@@ -1578,14 +1604,14 @@ class InferenceEngine:
                         logger.info(f"转换后共同instrument数量: {len(common_after)}")
                         
                         if len(common_after) > 0:
-                            logger.info(f"✓ instrument格式转换成功")
+                            logger.info("✓ instrument格式转换成功")
                         else:
                             if _strict_inference_enabled():
                                 raise ValueError(
                                     "strict inference instrument format conversion failed: "
                                     "df_history and df_fund have no common instruments"
                                 )
-                            logger.error(f"❌ instrument格式转换后仍不匹配")
+                            logger.error("❌ instrument格式转换后仍不匹配")
                             logger.error(f"df_history样例: {history_instruments[:3].tolist()}")
                             logger.error(f"df_fund转换后样例: {fund_instruments_new[:3].tolist()}")
                 else:
@@ -1638,7 +1664,7 @@ class InferenceEngine:
             if extra_cols:
                 logger.error(f"❌ df_history被污染！包含{len(extra_cols)}个额外列: {extra_cols[:20]}...")
                 logger.error(f"df_history总列数: {len(df_history.columns)}")
-                logger.error(f"强制只保留OHLCV列")
+                logger.error("强制只保留OHLCV列")
                 # 只保留OHLCV列
                 df_history = df_history[[col for col in expected_ohlcv_cols if col in df_history.columns]]
                 logger.info(f"✓ df_history已清理，当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
@@ -1728,8 +1754,8 @@ class InferenceEngine:
                         logger.warning(f"SOTA因子：目标日期 {last_date.date()} 无数据，使用最近可用日期 {closest_date.date()}")
                     else:
                         raise ValueError(
-                            f"SOTA因子计算结果中没有任何日期数据。"
-                            f"请检查因子计算函数是否正确处理了输入数据。"
+                            "SOTA因子计算结果中没有任何日期数据。"
+                            "请检查因子计算函数是否正确处理了输入数据。"
                         )
             
             # 确保返回的是MultiIndex格式
@@ -1865,6 +1891,113 @@ class InferenceEngine:
         scores = predict_scores(model, inner_model, model_kind, X)
 
         df_scores = _build_score_frame_for_scored_features(X, scores)
+
+        calendar_identity_payload = {
+            "dataset_id": "market.trading_calendar",
+            "effective_trade_date": actual_date.date().isoformat(),
+            "calendar_version": "market.trading_calendar.v1",
+            "calendar_source": "market.trading_calendar",
+        }
+        calendar_identity_hash = _inference_receipt_sha256(calendar_identity_payload)
+        calendar_payload = {
+            "calendar_identity_hash": calendar_identity_hash,
+            "window_start_date": start_date.date().isoformat(),
+            "required_window": required_window,
+            "window_resolution": start_date_source,
+        }
+        calendar_hash = _inference_receipt_sha256(calendar_payload)
+        self.last_inference_receipt = {
+            "contract_version": "strategy_package_live_inference_receipt_v2",
+            "universe_count": int(len(universe)),
+            "source_read_receipts": [
+                {
+                    "source_role": "pit_universe",
+                    "dataset_id": "market.stock_universe_pit",
+                    "partition_ref": actual_date.date().isoformat(),
+                    "query_template_id": "StockUniversePitService.get_eligible_codes",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {"trade_date": actual_date.date().isoformat(), "ensure": True}
+                    ),
+                    "row_count": int(len(universe)),
+                    "content_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "market_history",
+                    "dataset_id": "market.kline_daily_raw",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "get_history_window",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "start": start_date.date().isoformat(),
+                            "end": actual_date.date().isoformat(),
+                            "universe_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                            "fields": ["open", "high", "low", "close", "volume", "amount", "factor"],
+                        }
+                    ),
+                    "row_count": int(len(df_history)),
+                    "content_hash": _frame_receipt_sha256(df_history),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "fundamental_moneyflow",
+                    "dataset_id": "timescaledb.fundamental_moneyflow",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "timescaledb_adapter.fetch_fundamental_data_ts",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "start_date": start_date.date().isoformat(),
+                            "end_date": actual_date.date().isoformat(),
+                            "universe_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                        }
+                    ),
+                    "row_count": int(len(df_fund_raw)),
+                    "content_hash": _frame_receipt_sha256(df_fund_raw),
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+                {
+                    "source_role": "trading_calendar",
+                    "dataset_id": "market.trading_calendar",
+                    "partition_ref": f"{start_date.date().isoformat()}:{actual_date.date().isoformat()}",
+                    "query_template_id": "InferenceEngine.trade_date_and_window_resolution",
+                    "query_template_version": "v1",
+                    "parameter_hash": _inference_receipt_sha256(
+                        {
+                            "target_trade_date": target_date.date().isoformat(),
+                            "required_window": required_window,
+                            "buffer_days": 5,
+                        }
+                    ),
+                    "row_count": 2,
+                    "content_hash": calendar_hash,
+                    "first_observed_at": observed_at.isoformat(),
+                    "admissibility": "PROSPECTIVE_FIRST_OBSERVED",
+                },
+            ],
+            "input_context": {
+                "requested_trade_date": requested_trade_date.date().isoformat(),
+                "effective_trade_date": actual_date.date().isoformat(),
+                "score_trade_date": actual_date.date().isoformat(),
+                "pit_mode": "stock_universe_pit_v1",
+                "calendar_version": "market.trading_calendar.v1",
+                "calendar_identity_hash": calendar_identity_hash,
+                "calendar_hash": calendar_hash,
+                "calendar_source": "market.trading_calendar",
+                "window_start_date": start_date.date().isoformat(),
+                "required_window": required_window,
+                "window_resolution": start_date_source,
+                "window_lineage_hash": calendar_hash,
+                "universe_input_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
+                "strict_feature_filter": dict(LAST_STRICT_FEATURE_FILTER or {}),
+                "scored_row_count": int(len(df_scores)),
+            },
+        }
 
         # 保存信号到数据库（使用提取的模块级函数）
         save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)

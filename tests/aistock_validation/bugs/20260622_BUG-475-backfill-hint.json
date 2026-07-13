@@ -1,0 +1,82 @@
+{
+  "actual": "monitoring/process-exporter/config.yml 仍匹配 backfill_factor_cache；correlation_compute_service 缺缓存 hint 仍使用 backfill 命名。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "monitoring/process-exporter/config.yml",
+    "tests/aistock_validation/bugs/20260622_BUG-475-backfill-hint.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-475",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T07:33:24.907388Z",
+  "description": "monitoring/process-exporter/config.yml 仍匹配 backfill_factor_cache；correlation_compute_service 缺缓存 hint 仍使用 backfill 命名。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-e7ada547a757",
+      "timestamp": "2026-06-22T07:33:24.907385Z"
+    },
+    {
+      "action": "scope_expand",
+      "actor": "codex",
+      "note": "Add process-exporter config because BUG actual/expected explicitly cites retired backfill_factor_cache monitoring.",
+      "timestamp": "2026-06-22T07:58:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "官方缓存链路只提示 official_factor_full_compute / 官方因子缓存计算入口；监控不再追踪 retired backfill_factor_cache 脚本。",
+  "first_seen_at": "2026-06-22T07:33:24.907388Z",
+  "fix_branch": null,
+  "fix_commit": "d167d8922c023f7a3a3dd2a2873816ffba769aec",
+  "fixed_at": "2026-06-22T10:20:54.148075Z",
+  "github_issue_number": 1464,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1464",
+  "last_seen_at": "2026-06-22T07:33:24.907388Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1472",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方因子缓存仍残留 backfill 监控与过时 hint",
+  "trigger_condition": {
+    "fingerprint": "e7ada547a7576e71e48d5304",
+    "source_event_id": "FE-20260622-e7ada547a757"
+  },
+  "validation_evidence": [
+    "PR #1472 merged and CI passed: pending=0 failed=0"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

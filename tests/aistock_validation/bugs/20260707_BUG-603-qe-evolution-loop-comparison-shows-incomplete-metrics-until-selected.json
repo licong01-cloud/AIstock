@@ -1,0 +1,196 @@
+{
+  "actual": "QE automatic evolution results page /quantevolver/evolution shows Incomplete metrics for non-selected loops after a multi-loop experiment completes. Only the selected/last loop has full comparison metrics because the frontend loads summary task data initially and lazy-loads full loop metrics on click; backend summary/comparison payloads do not expose compact enhanced metrics needed by the comparison table. Fix backend compact payloads and frontend hydration so completed loops display complete metrics without per-loop manual selection.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260707_BUG-603-qe-evolution-loop-comparison-shows-incomplete-metrics-until-selected.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/routers/quantevolver_evolution.py",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+    "frontend/src/app/quantevolver/evolution/components/loopDiagnostics.ts",
+    "backend/tests/quantevolver/test_payload_summary.py",
+    "backend/tests/unified_engine/test_qe_evolution_read_paths.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-603",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-07T17:34:59.475729Z",
+  "description": "QE automatic evolution results page /quantevolver/evolution shows Incomplete metrics for non-selected loops after a multi-loop experiment completes. Only the selected/last loop has full comparison metrics because the frontend loads summary task data initially and lazy-loads full loop metrics on click; backend summary/comparison payloads do not expose compact enhanced metrics needed by the comparison table. Fix backend compact payloads and frontend hydration so completed loops display complete metrics without per-loop manual selection.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260707-f4abccada586",
+      "timestamp": "2026-07-07T17:34:59.475724Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-07T17:34:59.475729Z",
+  "fix_branch": null,
+  "fix_commit": "366436df222c213123bf73a46c840e357d7d44e9",
+  "fixed_at": "2026-07-07T17:55:40.024558Z",
+  "github_issue_number": 1905,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1905",
+  "last_seen_at": "2026-07-07T17:34:59.475729Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1906",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE evolution loop comparison shows incomplete metrics until selected",
+  "trigger_condition": {
+    "fingerprint": "f4abccada586d83c6dbc3739",
+    "source_event_id": "FE-20260707-f4abccada586"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/quantevolver/evolution",
+    "ui_routes": [
+      "/quantevolver/evolution"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1906 CI statusCheckRollup => all required checks success",
+    "source PR merged at 2026-07-07T17:53:38Z merge commit 366436df222c213123bf73a46c840e357d7d44e9"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "quantevolver"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "quantevolver"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_fix"
+}

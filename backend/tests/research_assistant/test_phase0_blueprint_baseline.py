@@ -106,7 +106,9 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
     service_text = SERVICE.read_text(encoding="utf-8")
     service_anchors = [
         _line_number(SERVICE, "_complete_chat_with_reactive_recovery"),
-        _line_number(SERVICE, "_maybe_auto_execute_read_only_mcp_route"),
+        _line_number(SERVICE, "_complete_chat_with_react_grounding"),
+        _line_number(SERVICE, "_agentic_function_tools"),
+        _line_number(SERVICE, "_react_messages_for_agentic_synthesis"),
         _line_number(SERVICE, "def build_context_pack"),
         _line_number(SERVICE, "def create_external_agent_session"),
         _line_number(SERVICE, "def route_model"),
@@ -155,7 +157,10 @@ def test_blueprint_baseline_defects_match_current_head_lines() -> None:
         assert "tree_path" not in memory_table
         assert '"graph_relation_refs": []' in service_text
     assert not re.search(r"arxiv|scholar|tavily|web_search|paper_search", service_text, re.I)
-    assert not re.search(r"prompt_lab|reflection_card|research_curriculum", service_text, re.I)
+    assert "generate_reflection_card" in service_text
+    assert "run_prompt_lab_offline" in service_text
+    assert "deposit_successful_workflow_skill" in service_text
+    assert "search_skill_library_for_curriculum" in service_text
 
 
 def test_phase0_module_registry_registers_all_blueprint_modules_with_owner() -> None:

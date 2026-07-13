@@ -19,8 +19,9 @@ Default rule: load this file only for AIstock architecture, backend, frontend, d
 
 ## Active Standards
 
-Use the active standard only when it is relevant to the current task:
+Use the active standard only when it is relevant to the current task. Start from `docs/standards/README.md` when there is any doubt about the current standard set.
 
+- `docs/standards/README.md`
 - `docs/standards/aistock_development_standard_v1.5_20260523.md`
 - `docs/standards/aistock_development_standard_v1.5_20260523.yaml`
 - `docs/standards/aistock_issue_fix_parallel_workflow_standard_20260514.md`
@@ -33,6 +34,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 - Every non-trivial feature, bugfix, or documentation change uses a new task branch and an isolated worktree from latest `origin/main`.
 - Do not develop directly in `F:\Dev\AIstock` when it is on `main` or dirty.
 - Do not reuse another active window's physical worktree.
+- Do not create or keep a non-root worktree on local `main`; task worktrees must use task branches. If a stale worktree holds `main`, audit it outside the repo, remove it safely, and restore `F:\Dev\AIstock` to `main...origin/main`.
 - Before editing, check `git status --short --branch`, current branch, and recent commits.
 - Stage and commit only files belonging to the current task.
 - Never run destructive Git commands such as `git reset --hard`, `git checkout -- .`, or `git clean -fd` unless the user explicitly approves that exact action.
@@ -40,15 +42,26 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Context Budget Rules
 
-- Classify work before loading context: T0 quick fix, T1 standard issue, T2 same-module batch, T3 design or architecture work.
-- T0/T1 work starts from compact context packs, issue JSON, selected active-standard sections, ownership catalogs, and relevant code snippets.
-- Expand to full standards or design documents only when scope, risk, or explicit acceptance criteria require it.
-- Module-specific design documents are opt-in: open them only when the current task is inside that module, the issue cites them, or the user explicitly asks.
-- Treat historical notes as secondary evidence; verify against current code and tests before relying on them.
+- Read the project-level rules once, then route into exactly one task-specific skill or Claude command for execution.
+- The selected skill is the authority for that scenario; do not also load other scenario skills, quickstarts, full standards, or module designs unless the skill, issue evidence, or user explicitly requires it.
+- T0/T1 BUG, docs, cleanup, merge, and read-only tasks use compact context packs, task cards, ownership catalogs, CodeGraph/UA refs, and narrow code snippets instead of full standards.
+- After context compaction or client restart, use `resume` plus `task-card.md` Context Resume Digest hashes; do not re-read skills, project memory, standards README, quickstart, or RTK unless a digest changed, state is missing, or the user explicitly asks.
+- Keep code exploration bounded: use precise `rg`, avoid reprinting the same source range, and pause to summarize before broad scans when exploratory commands exceed the soft budget.
+
+
+## Feature Workflow Rules
+
+- New non-trivial feature delivery uses `FEATURE-WORKFLOW-001` in the active development standard; BUG fixes, workflow policy changes, docs cleanup, audits, and generic analysis continue to use the issue/docs lane.
+- Classify feature work before implementation: `F0` lightweight Feature Card, `F1` standard single-module design, `F2` cross-module or production-critical architecture design.
+- F0/F1/F2 feature work must keep a stable `Design Acceptance Index` and a pre-merge design acceptance matrix.
+- Before PR or merge, run `python scripts/aistock_feature_workflow.py validate --design <path> --tier F0|F1|F2` for the feature artifact.
+- Do not report completion or request merge when the matrix has an unapproved gap, simplified/POC/mock-only/static delivery, or silent fallback.
+- Codex uses `.codex/skills/verify-aistock-feature/SKILL.md`; Claude Code uses `.claude/commands/aistock-feature-workflow.md` for the same feature workflow entrypoint. Do not route non-feature maintenance work through this lane just because the word "feature" appears in the request.
 
 ## Issue Workflow Rules
 
 - Use `scripts/aistock_issue_workflow.py` as the high-level entrypoint for submitting, fixing, triaging, batching, finishing, closing, syncing, or resuming AIstock BUG/GitHub Issues.
+- Developer-client workflow entrypoints are synced by `python scripts/aistock_issue_workflow.py install-client --apply`; after `.codex/**` or `.claude/**` changes, run it after merge before old client windows rely on the new wrappers.
 - `scripts/issue_flow.py` is a lower-level helper, not the default entrypoint.
 - New BUG records must stay synchronized with GitHub Issues; a BUG JSON without `github_issue_number` and `github_issue_url` is only a triage draft and must not be merged into `main`.
 - Fix work must respect `allowed_write_scope`. If the fix requires files outside scope, stop and update scope before editing further.
@@ -57,11 +70,13 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 ## Validation And CI/CD Rules
 
-- Use targeted tests first, then the selected module or gate validation required by the issue/design.
-- Do not run broad expensive validation repeatedly after every small change; rerun final gates once the patch is stable.
-- Before PR, run a preflight appropriate to the change: changed-file lint/static checks, targeted tests, scope check, `git diff --check`, PR body/evidence check, and production gates.
-- GitHub Actions, nox sessions, PR Quality, Semgrep, CodeQL, and validation catalogs are the authoritative CI/CD foundation.
-- CI failures must be summarized by failed job, failed test, error signature, reproduce command, suspected module/files, and fingerprint before creating or promoting a BUG.
+- Codex keeps the smallest safe local gate: changed-file lint/compile, direct fix-point targeted test or contract smoke, `git diff --check`, scope check, and production gates.
+- After a local test failure, rerun the failed nodeid or `pytest --lf` first; do not repeat broad suites for the same failure. Run a related final small matrix at most once after behavior stabilizes.
+- If local exploration or validation exceeds about 30 minutes, command count exceeds the task-card soft limit, or coverage must become broad/cross-module/UI/API/business-flow, delegate validation to VC/CI/nightly instead of expanding the interactive window.
+- Broad module matrices, UI journeys, API/business-flow E2E, LLM design drift, and cross-module regression are nightly-deferred by default and run once across the day's merged BUG/PR changes.
+- For complex validation, Codex should request a pipeline/Validation Center run; DeepSeek may select plans and diagnose failures, while allowlisted deterministic runners execute the tests and return a compact receipt.
+- Successful workflow/validation commands should write compact stdout by default; JSON artifacts are diagnostic-only unless a command must persist state/evidence or `AISTOCK_WORKFLOW_ARTIFACTS=1` is set.
+- Immediate deep validation remains only for DDL, production writes, order/cash/position invariants, fail-closed safety, or explicit user request.
 
 ## Production Safety Gates
 
@@ -86,6 +101,7 @@ The current issue Context Pack, explicit user request, and relevant code paths a
 
 - Durable project standards live under `docs/standards`.
 - Architecture and design docs live under `docs/architecture` or `docs/analysis` as appropriate, but they must not become competing global standards.
+- `docs/handoff/` is for formal tracked handoff evidence only. Temporary Codex/Claude exchange notes must use ignored scratch paths such as `tmp/handoff/`, `docs/handoff/_scratch/`, or `docs/handoff/local/`.
 - Do not append detailed module changelogs, historical validation narratives, old handoffs, or temporary troubleshooting notes to this file.
 - Store task evidence in validation history, PR bodies, issue workflow state, or module-specific docs instead of this project memory.
 

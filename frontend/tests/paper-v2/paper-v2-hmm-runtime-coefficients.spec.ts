@@ -65,12 +65,13 @@ async function respond(route: Route, payload: JsonObject, status = 200) {
   await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(payload) });
 }
 
-async function mockPaperV2Api(page: Page, captures: JsonObject[]) {
+async function mockPaperV2Api(page: Page, captures: JsonObject[], requests: string[] = []) {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname.replace(/^\/api\/v1/, "");
     const method = request.method();
+    requests.push(`${method} ${path}`);
     const post = () => {
       try {
         return request.postDataJSON() as JsonObject;
@@ -85,6 +86,15 @@ async function mockPaperV2Api(page: Page, captures: JsonObject[]) {
     if (method === "GET" && path === "/hmm-training/configs") return respond(route, [hmmConfig]);
     if (method === "GET" && path === `/hmm-training/configs/${configId}/snapshots`) return respond(route, [hmmSnapshot]);
     if (method === "GET" && path === "/selection-center/industry-tree") return respond(route, { industries: [] });
+    if (method === "GET" && path === "/paper-v2/overview-summary") {
+      return respond(route, {
+        summary: {
+          package_counts: { total: 5, active: 4, retired: 1 },
+          selection_counts: { packages_with_latest_run: 3, latest_run_count: 3 },
+          portfolio_counts: { total: 2, active: 2 },
+        },
+      });
+    }
     if (method === "GET" && path === "/selection-center/selectable-packages") return respond(route, { packages: [packageRow] });
     if (method === "GET" && path === "/paper-v2/running-summary") {
       return respond(route, { summaries: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 0 } });
@@ -169,6 +179,19 @@ test("Paper overview displays official trading-day status from unified service",
   await expect(page.getByText("2026-05-22")).toBeVisible();
   await expect(page.getByText("2026-05-26")).toBeVisible();
   await expect(page.getByText("market.trading_calendar does not cover the full next month")).toBeVisible();
+});
+
+test("Paper overview avoids heavyweight package list APIs on initial load", async ({ page }) => {
+  const captures: JsonObject[] = [];
+  const requests: string[] = [];
+  await mockPaperV2Api(page, captures, requests);
+
+  await page.goto("/paper-v2");
+  await expect(page.getByText("market.trading_calendar does not cover the full next month")).toBeVisible();
+
+  expect(requests).toContain("GET /paper-v2/overview-summary");
+  expect(requests).not.toContain("GET /selection-center/selectable-packages");
+  expect(requests).not.toContain("GET /strategy-packages");
 });
 
 test("Portfolio creation persists HMM model config in the initial session runtime config", async ({ page }) => {

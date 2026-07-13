@@ -236,7 +236,8 @@ def test_build_context_pack_injects_compact_code_intelligence_context(tmp_path: 
     assert code_context["understand_anything"]["summary_count"] == 1
     assert "selected_nodes" not in json.dumps(code_context, ensure_ascii=False)
     assert pack["external_source_refs"]
-    assert pack["pack_summary"].endswith("code-intelligence complete")
+    assert "code-intelligence complete" in pack["pack_summary"]
+    assert "code context refs" in pack["pack_summary"]
 
 
 def test_build_context_pack_degrades_when_code_intelligence_artifacts_missing(tmp_path: Path, monkeypatch: Any) -> None:

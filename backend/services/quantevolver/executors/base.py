@@ -19,6 +19,10 @@ class ExecutionContext(BaseModel):
     model_source: dict[str, Any] | None = None
     extra_experiment_files: dict[str, str] | None = None
     require_fixed_seed: bool = False
+    resource_session_id: str | None = None
+    resource_source_run_key: str | None = None
+    resource_session_token: str | None = None
+    phase_pipeline_enabled: bool = False
 
 
 class ExecutionResult(BaseModel):

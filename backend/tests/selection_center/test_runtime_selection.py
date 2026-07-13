@@ -4,7 +4,7 @@ import io
 import json
 import runpy
 import tarfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -57,6 +57,68 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 class NoopRefreshAudit:
     def require_success(self, **_kwargs):
         return None
+
+
+def _live_inference_result(
+    scores: list[dict],
+    *,
+    metadata: dict | None = None,
+    requested_trade_date: date = date(2024, 1, 2),
+    effective_trade_date: date = date(2024, 1, 2),
+) -> LiveInferenceResult:
+    observed_at = datetime(2024, 1, 2, 15, 0, tzinfo=UTC)
+    receipt_hashes = {
+        "pit": "1" * 64,
+        "market": "2" * 64,
+        "fundamental": "3" * 64,
+        "calendar": "4" * 64,
+        "universe": "5" * 64,
+    }
+    return LiveInferenceResult(
+        scores=scores,
+        metadata=metadata or {},
+        universe_count=max(10, len(scores)),
+        source_read_receipts=[
+            {
+                "source_role": "pit_universe",
+                "dataset_id": "market.stock_universe_pit",
+                "row_count": 10,
+                "content_hash": receipt_hashes["pit"],
+                "first_observed_at": observed_at,
+            },
+            {
+                "source_role": "market_history",
+                "dataset_id": "market.kline_daily_raw",
+                "row_count": 100,
+                "content_hash": receipt_hashes["market"],
+                "first_observed_at": observed_at,
+            },
+            {
+                "source_role": "fundamental_moneyflow",
+                "dataset_id": "timescaledb.fundamental_moneyflow",
+                "row_count": 100,
+                "content_hash": receipt_hashes["fundamental"],
+                "first_observed_at": observed_at,
+            },
+            {
+                "source_role": "trading_calendar",
+                "dataset_id": "market.trading_calendar",
+                "row_count": 2,
+                "content_hash": receipt_hashes["calendar"],
+                "first_observed_at": observed_at,
+            },
+        ],
+        input_context={
+            "requested_trade_date": requested_trade_date.isoformat(),
+            "effective_trade_date": effective_trade_date.isoformat(),
+            "score_trade_date": effective_trade_date.isoformat(),
+            "pit_mode": "stock_universe_pit_v1",
+            "calendar_version": "market.trading_calendar.v1",
+            "calendar_hash": receipt_hashes["calendar"],
+            "calendar_source": "market.trading_calendar",
+            "universe_input_hash": receipt_hashes["universe"],
+        },
+    )
 
 
 class NoopSelectionResultEnrichment:
@@ -302,6 +364,36 @@ def test_strategy_package_runtime_builds_signal_and_targets() -> None:
     assert targets[0].target_quantity == 300
 
 
+def test_selection_center_records_filtered_empty_as_valid_no_candidate() -> None:
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_filtered_empty", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    risk_policy_service = RecordingRiskPolicyService(
+        {"000001.SZ": RiskDecision(symbol="000001.SZ", can_buy=False)}
+    )
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        risk_policy_service=risk_policy_service,
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    run = service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+        runtime_config=versioned_selection_runtime_config({"top_k": 1}),
+    )
+
+    assert run.status == SelectionRunStatus.VALID_NO_CANDIDATE
+    assert run.valid_no_candidate is True
+    assert run.aggregate_results == []
+    assert run.package_results[manifest.package_id] == []
+    assert [item.reason for item in run.excluded_results[manifest.package_id]] == ["risk_policy_block_buy"]
+    assert run.no_candidate_reason == "ADVISORY_PHASE0A_VALID_NO_CANDIDATE"
+
+
 def test_strategy_package_runtime_rejects_runtime_config_selection_scores() -> None:
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.SELECTION_ENABLED}))
 
@@ -476,13 +568,15 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
 
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return LiveInferenceResult(
-                scores=[
+            return _live_inference_result(
+                [
                     {"symbol": "000002.SZ", "score": 0.8, "rank": 2},
                     {"symbol": "000001.SZ", "score": 0.9, "rank": 1},
                     {"symbol": "000003.SZ", "score": 0.7, "rank": 3},
                 ],
                 metadata={"provider": "fake"},
+                requested_trade_date=kwargs["trade_date"],
+                effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
             )
 
     package_repo = InMemoryStrategyPackageRepository()
@@ -514,6 +608,14 @@ def test_selection_artifact_service_generates_live_inference_artifact_without_ex
     assert artifact.metadata["source_type"] == AUTHORITATIVE_SELECTION_SOURCE_TYPE
     assert artifact.metadata["authority_scope"] == AUTHORITATIVE_SELECTION_SCOPE
     assert [row["symbol"] for row in artifact.scores_json[:3]] == ["000001.SZ", "000002.SZ", "000003.SZ"]
+    assert artifact.artifact_contract_version == "selection_score_artifact_v2"
+    assert artifact.universe_count == 10
+    assert artifact.universe_count > artifact.score_count
+    assert artifact.metadata["source_read_receipts"]
+    assert artifact.metadata["artifact_input_context"]["pit_mode"] == "stock_universe_pit_v1"
+    assert artifact.artifact_input_context_hash
+    assert artifact.source_revision_set_hash
+    assert artifact.asset_closure_hash
 
     cutoff_artifact = artifact_service.generate_from_live_inference(
         package_id=manifest.package_id,
@@ -572,10 +674,11 @@ def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) 
     class FakeProvider:
         backend_name = "fake_live"
 
-        def run(self, **_kwargs):
-            return LiveInferenceResult(
-                scores=[{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
-                metadata={},
+        def run(self, **kwargs):
+            return _live_inference_result(
+                [{"symbol": "000001.SZ", "score": 1.0, "rank": 1}],
+                requested_trade_date=kwargs["trade_date"],
+                effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
             )
 
     package_repo = InMemoryStrategyPackageRepository()
@@ -616,6 +719,144 @@ def test_selection_artifact_service_resolves_qe_evolution_loop_source(tmp_path) 
             "run_id": "qe_task_L1",
         }
     ]
+
+
+def test_single_alpha_live_inference_records_natural_raw_empty(tmp_path) -> None:
+    class FakeResolver:
+        def load_source_for_strategy_package(self, **_kwargs):
+            return {"experiment_id": "unit_raw_empty"}
+
+        def prepare_workspace(self, **_kwargs):
+            return type(
+                "Prepared",
+                (),
+                {
+                    "workspace_path": tmp_path,
+                    "factor_order_path": tmp_path / "factor_order.json",
+                    "factor_entry_path": tmp_path / "factor_entry.py",
+                    "model_params_path": tmp_path / "params.pkl",
+                    "model_source_path": tmp_path / "source_params.pkl",
+                    "factor_source_dir": tmp_path / "factors",
+                    "factor_order": ["factor_a"],
+                    "alpha158_factors": [],
+                    "dynamic_factors": ["factor_a"],
+                    "model_candidate_count": 1,
+                },
+            )()
+
+    class FakeProvider:
+        backend_name = "fake_live"
+
+        def run(self, **kwargs):
+            return _live_inference_result(
+                [],
+                requested_trade_date=kwargs["trade_date"],
+                effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
+            )
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_single_raw_empty"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    artifact_service = StrategyPackageSelectionArtifactService(
+        package_repository=package_repo,
+        artifact_repository=artifact_repo,
+        runtime_asset_resolver=FakeResolver(),
+        live_inference_provider=FakeProvider(),
+    )
+
+    artifact = artifact_service.generate_from_live_inference(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        include_reference_price=False,
+    )
+    snapshot = StrategyPackageRuntime(artifact_repository=artifact_repo).build_signal_snapshot(
+        manifest=manifest,
+        trade_date=date(2024, 1, 2),
+        data_source="DB_HISTORICAL",
+    )
+
+    assert artifact.status.value == "SUCCEEDED"
+    assert artifact.scores_json == []
+    assert artifact.score_count == 0
+    assert artifact.universe_count == 10
+    assert artifact.metadata["candidate_outcome"] == "VALID_NO_CANDIDATE"
+    assert artifact.metadata["empty_stage"] == "alpha_raw"
+    assert snapshot.valid_no_candidate is True
+    assert snapshot.candidates == []
+
+
+def test_prospective_runtime_rejects_manual_no_candidate_declaration(tmp_path) -> None:
+    class FakeResolver:
+        def load_source_for_strategy_package(self, **_kwargs):
+            return {"experiment_id": "unit_raw_empty"}
+
+        def prepare_workspace(self, **_kwargs):
+            return type(
+                "Prepared",
+                (),
+                {
+                    "workspace_path": tmp_path,
+                    "factor_order_path": tmp_path / "factor_order.json",
+                    "factor_entry_path": tmp_path / "factor_entry.py",
+                    "model_params_path": tmp_path / "params.pkl",
+                    "model_source_path": tmp_path / "source_params.pkl",
+                    "factor_source_dir": tmp_path / "factors",
+                    "factor_order": ["factor_a"],
+                    "alpha158_factors": [],
+                    "dynamic_factors": ["factor_a"],
+                    "model_candidate_count": 1,
+                },
+            )()
+
+    class FakeProvider:
+        backend_name = "fake_live"
+
+        def run(self, **kwargs):
+            return _live_inference_result(
+                [],
+                requested_trade_date=kwargs["trade_date"],
+                effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
+            )
+
+    package_repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(
+            update={
+                "package_status": PackageStatus.SELECTION_ENABLED,
+                "strategy_config": {"strategy_id": "pkg_prospective_declaration_rejected"},
+            }
+        )
+    )
+    package_repo.save_manifest(manifest)
+    artifact_repo = InMemorySelectionScoreArtifactRepository()
+    artifact_service = StrategyPackageSelectionArtifactService(
+        package_repository=package_repo,
+        artifact_repository=artifact_repo,
+        runtime_asset_resolver=FakeResolver(),
+        live_inference_provider=FakeProvider(),
+    )
+    artifact_service.generate_from_live_inference(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 2),
+        include_reference_price=False,
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot declare valid_no_candidate"):
+        StrategyPackageRuntime(artifact_repository=artifact_repo).build_signal_snapshot_with_trace(
+            manifest=manifest,
+            trade_date=date(2024, 1, 2),
+            data_source="DB_HISTORICAL",
+            runtime_config={"valid_no_candidate": True},
+            prohibit_no_candidate_declaration=True,
+        )
 
 
 def test_selection_center_generates_binding_for_ad_hoc_runtime_config() -> None:
@@ -740,12 +981,14 @@ def test_selection_center_pit_mode_resolves_previous_trading_day_and_passes_cuto
 
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return LiveInferenceResult(
-                scores=[
+            return _live_inference_result(
+                [
                     {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
                     {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
                 ],
                 metadata={"provider": "fake"},
+                requested_trade_date=kwargs["trade_date"],
+                effective_trade_date=kwargs["cutoff_date"] or kwargs["trade_date"],
             )
 
     package_repo = InMemoryStrategyPackageRepository()
@@ -1407,6 +1650,102 @@ def test_selection_center_lists_selectable_packages_with_metrics_and_latest_run(
     assert packages[0]["model_state"]["package_id"] == manifest.package_id
     assert "selection_health" in packages[0]
     assert packages[0]["latest_selection_run"]["run_id"] == run.run_id
+
+
+def test_selectable_packages_summary_path_does_not_expand_limit_or_upsert_model_state() -> None:
+    class CountingPackageRepository(InMemoryStrategyPackageRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.summary_limits: list[int] = []
+            self.model_state_upserts = 0
+
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            self.summary_limits.append(limit)
+            return super().list_summaries(status=status, limit=limit)
+
+        def upsert_model_state(self, state):  # noqa: ANN001, ANN202
+            self.model_state_upserts += 1
+            return super().upsert_model_state(state)
+
+    package_repo = CountingPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=7, view="summary")
+
+    assert package_repo.summary_limits == [7]
+    assert package_repo.model_state_upserts == 0
+    assert len(packages) == 1
+    assert packages[0]["model_state"]["summary_only"] is True
+    assert packages[0]["selection_health"]["summary_only"] is True
+    assert "manifest" not in packages[0]
+    assert "runtime_config_contract" not in packages[0]
+
+
+def test_selectable_packages_summary_path_filters_summary_ineligible_rows() -> None:
+    class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            rows = super().list_summaries(status=status, limit=limit)
+            rows.append({
+                **rows[0],
+                "package_id": "pkg_blocked_summary",
+                "asset_eligibility": {
+                    "eligible": False,
+                    "summary_only": True,
+                    "blockers": ["multi_alpha_runtime_not_validated_until_dry_run"],
+                },
+            })
+            return rows[:limit]
+
+    package_repo = SummaryOnlyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable_filter", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=10, view="summary")
+
+    assert [item["package_id"] for item in packages] == [manifest.package_id]
+
+
+def test_selectable_packages_summary_path_preserves_localsim_multi_alpha_warning_rows() -> None:
+    class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
+        def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
+            rows = super().list_summaries(status=status, limit=limit)
+            rows[0]["alpha_mode"] = "multi_alpha"
+            rows[0]["asset_eligibility"] = {
+                "eligible": True,
+                "summary_only": True,
+                "blockers": [],
+                "warnings": ["multi_alpha_runtime_not_validated_until_dry_run"],
+            }
+            return rows[:limit]
+
+    package_repo = SummaryOnlyPackageRepository()
+    manifest = ready_manifest_with_scores("pkg_light_selectable_multi_alpha_warn", "000001.SZ", 0.9, 1)
+    package_repo.save_manifest(manifest)
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+    )
+
+    packages = service.list_selectable_packages(limit=10, view="summary")
+
+    assert [item["package_id"] for item in packages] == [manifest.package_id]
+    assert packages[0]["asset_eligibility"]["eligible"] is True
+    assert packages[0]["asset_eligibility"]["warnings"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
 
 
 def test_selection_center_authoritative_mode_uses_platform_risk_policy_and_display_top_n() -> None:

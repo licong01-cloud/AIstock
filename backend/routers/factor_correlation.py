@@ -11,6 +11,8 @@ from psycopg2.extras import RealDictCursor
 from backend.db.pg_pool import get_conn
 from backend.services.mcp_payload_budget import artifact_ref, clamp_limit, clamp_offset, strip_forbidden_fields, summary_envelope
 from backend.services.quantevolver.correlation_scheduler import correlation_scheduler
+from backend.services.quantevolver.factor_compute_preflight import build_official_cache_preflight
+from backend.services.quantevolver.factor_metrics_scheduler import OFFICIAL_FACTOR_WINDOW_END
 
 router = APIRouter(prefix="/factor-correlation", tags=["factor-correlation"])
 SUBMIT_FACTOR_CORRELATION_CONFIRM = "SUBMIT_FACTOR_CORRELATION"
@@ -45,9 +47,21 @@ def plan_correlation(req: FactorCorrelationPlanRequest) -> dict[str, Any]:
     names = [str(name).strip() for name in (req.factor_names or []) if str(name).strip()]
     if names:
         found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE factor_name = ANY(%s) ORDER BY factor_name", (names,))
+        count = sum(bool(row.get("is_available")) for row in found)
     else:
-        found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE is_available = TRUE ORDER BY factor_name LIMIT 100")
-    count = len(found)
+        found = _rows("SELECT factor_name, source, is_available FROM aistock_factor_catalog WHERE is_available = TRUE ORDER BY factor_name LIMIT 20")
+        count_row = _one("SELECT COUNT(*) AS total FROM aistock_factor_catalog WHERE is_available = TRUE") or {}
+        count = int(count_row.get("total") or 0)
+    target_end = str(
+        req.options.get("as_of_date")
+        or req.options.get("end_date")
+        or req.options.get("data_date")
+        or OFFICIAL_FACTOR_WINDOW_END
+    )
+    cache_preflight = build_official_cache_preflight(
+        target_end=target_end,
+        eligible_factor_count=count,
+    )
     return {
         "ok": True,
         "domain": "factor_correlation",
@@ -55,8 +69,11 @@ def plan_correlation(req: FactorCorrelationPlanRequest) -> dict[str, Any]:
         "dataset": req.dataset,
         "method": req.method,
         "eligible_preview": strip_forbidden_fields(found[:20]),
-        "eligible_factor_count_preview": count,
+        "eligible_factor_count": count,
+        "eligible_factor_count_preview": min(len(found), 20),
         "estimated_pair_count": max(0, count * (count - 1) // 2),
+        "target_end": target_end,
+        "cache_preflight": cache_preflight,
         "required_confirmation": SUBMIT_FACTOR_CORRELATION_CONFIRM,
         "async_job": True,
         "matrix_inline_allowed": False,
@@ -68,8 +85,9 @@ def plan_correlation(req: FactorCorrelationPlanRequest) -> dict[str, Any]:
 def validate_inputs(req: FactorCorrelationPlanRequest) -> dict[str, Any]:
     plan = plan_correlation(req)
     blockers: list[str] = []
-    if int(plan["eligible_factor_count_preview"] or 0) < 2:
+    if int(plan["eligible_factor_count"] or 0) < 2:
         blockers.append("at_least_two_factors_required")
+    blockers.extend(plan["cache_preflight"].get("blockers") or [])
     return {"ok": not blockers, "domain": "factor_correlation", "blockers": blockers, "plan": plan}
 
 

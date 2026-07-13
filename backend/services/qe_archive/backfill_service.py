@@ -12,6 +12,7 @@ from typing import Any, Mapping, Sequence
 
 from .archive_service import QEArchiveService
 from .bootstrap_marker import REBOOTSTRAP_CONFIRM_TEXT, assert_can_broad_backfill, mark_bootstrap
+from .handlers.multi_alpha_combine_archive_handler import MultiAlphaCombineArchiveHandler
 from .ingest_history import record_ingest_history
 from .models import BackfillRunItemRecord, BackfillRunRecord
 from .policy import resolve_archive_policy
@@ -22,7 +23,7 @@ from .source_assembler import QEArchiveSourceAssembler
 
 WRITE_CONFIRM_TEXT = "QE_ARCHIVE_WRITE"
 BACKFILL_CONFIRM_TEXT = "QE_ARCHIVE_BACKFILL"
-SUPPORTED_SOURCES = {"experiment", "loop", "task", "all"}
+SUPPORTED_SOURCES = {"experiment", "loop", "task", "multi-alpha", "all"}
 SOURCE_MODE_TO_SOURCE = {
     "completed_single_experiments": "experiment",
     "completed_custom_evo_loops": "loop",
@@ -106,11 +107,13 @@ class QEArchiveBackfillService:
         *,
         assembler: QEArchiveSourceAssembler | None = None,
         archive_service: QEArchiveService | None = None,
+        multi_alpha_handler: MultiAlphaCombineArchiveHandler | None = None,
         repository: QEArchiveRepository | None = None,
     ) -> None:
         self._assembler = assembler or QEArchiveSourceAssembler()
         self._repository = repository or QEArchiveRepository()
         self._archive_service = archive_service or QEArchiveService(repository=self._repository)
+        self._multi_alpha_handler = multi_alpha_handler or MultiAlphaCombineArchiveHandler(repository=self._repository)
 
     def preview_backfill(self, options: QEArchiveBackfillRunOptions) -> dict[str, Any]:
         legacy = options.to_legacy_options(write=False)
@@ -266,20 +269,44 @@ class QEArchiveBackfillService:
         if options.write and options.confirm_write != WRITE_CONFIRM_TEXT:
             raise ValueError(f"write mode requires confirm_write={WRITE_CONFIRM_TEXT!r}")
 
+        if source == "multi-alpha":
+            return self.backfill_multi_alpha_combine_runs(
+                write=options.write,
+                confirm_write=options.confirm_write,
+                include_archived=options.include_archived,
+                limit=options.limit,
+            )
+
         candidates = self._build_candidates(options, source=source)
         results = [
             self._process_candidate(candidate, write=options.write, options=options)
             for candidate in candidates
         ]
+        multi_alpha_report: dict[str, Any] | None = None
+        if source == "all":
+            multi_alpha_report = self.backfill_multi_alpha_combine_runs(
+                write=options.write,
+                confirm_write=options.confirm_write,
+                include_archived=options.include_archived,
+                limit=options.limit,
+            )
         counts = _result_counts(results, candidate_count=len(candidates))
+        if multi_alpha_report is not None:
+            counts = {
+                "candidate_count": counts["candidate_count"] + int(multi_alpha_report.get("candidate_count") or 0),
+                "ingested_count": counts["ingested_count"] + int(multi_alpha_report.get("ingested_count") or 0),
+                "skipped_count": counts["skipped_count"] + int(multi_alpha_report.get("skipped_count") or 0),
+                "failed_count": counts["failed_count"] + int(multi_alpha_report.get("failed_count") or 0),
+            }
         return {
             "dry_run": not options.write,
             "write_enabled": options.write,
             "source": source,
             "status": options.status,
-            "processed_count": len(results),
+            "processed_count": len(results) + int((multi_alpha_report or {}).get("processed_count") or 0),
             **counts,
             "results": results,
+            "multi_alpha_report": multi_alpha_report,
             "archive_summary": self._repository.get_archive_summary() if options.write else None,
         }
 
@@ -367,9 +394,78 @@ class QEArchiveBackfillService:
         )
         return self.process_backfill(options)
 
+    def archive_multi_alpha_combine_completed(
+        self,
+        *,
+        run_id: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        report = self._multi_alpha_handler.archive_run(run_id, dry_run=dry_run)
+        return {
+            "dry_run": dry_run,
+            "write_enabled": not dry_run,
+            "source": "multi_alpha",
+            "processed_count": 1,
+            "candidate_count": 1,
+            "ingested_count": 0 if dry_run or report.get("skipped_reason") else 1,
+            "skipped_count": 1 if report.get("skipped_reason") else 0,
+            "failed_count": 0,
+            "results": [report],
+        }
+
+    def backfill_multi_alpha_combine_runs(
+        self,
+        *,
+        write: bool = False,
+        confirm_write: str = "",
+        include_archived: bool = False,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        if write and confirm_write != WRITE_CONFIRM_TEXT:
+            raise ValueError(f"write mode requires confirm_write={WRITE_CONFIRM_TEXT!r}")
+        run_ids = self._repository.list_multi_alpha_combine_run_ids(
+            include_archived=include_archived,
+            limit=limit,
+        )
+        results: list[dict[str, Any]] = []
+        for run_id in run_ids:
+            try:
+                results.append(self._multi_alpha_handler.archive_run(run_id, dry_run=not write))
+            except Exception as exc:
+                results.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"})
+        total_sources = sum(int(item.get("leg_source_count") or 0) for item in results)
+        resolved_sources = sum(int(item.get("resolved_source_count") or 0) for item in results)
+        complete_legs = sum(int(item.get("provenance_complete_leg_count") or 0) for item in results)
+        total_legs = sum(int(item.get("leg_count") or 0) for item in results)
+        return {
+            "dry_run": not write,
+            "write_enabled": write,
+            "source": "multi_alpha",
+            "processed_count": len(results),
+            "candidate_count": len(run_ids),
+            "ingested_count": sum(1 for item in results if not item.get("error") and not item.get("skipped_reason") and write),
+            "skipped_count": sum(1 for item in results if item.get("skipped_reason")),
+            "failed_count": sum(1 for item in results if item.get("error")),
+            "archive_coverage": {
+                "candidate_run_count": len(run_ids),
+                "processed_run_count": len(results),
+                "write_enabled": write,
+            },
+            "provenance_report": {
+                "leg_count": total_legs,
+                "provenance_complete_leg_count": complete_legs,
+                "provenance_complete_leg_rate": complete_legs / total_legs if total_legs else None,
+                "leg_source_count": total_sources,
+                "resolved_source_count": resolved_sources,
+                "source_resolve_rate": resolved_sources / total_sources if total_sources else None,
+            },
+            "results": results,
+        }
+
     def _build_candidates(self, options: QEArchiveBackfillOptions, *, source: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         seen_sources: set[tuple[str, str | None, str | None]] = set()
+        has_explicit_scope = _has_explicit_selection(options)
 
         def append_candidate(candidate: dict[str, Any]) -> None:
             payload = dict(candidate.get("payload") or {})
@@ -430,6 +526,9 @@ class QEArchiveBackfillService:
             for missing_index in requested_indices:
                 if missing_index not in found_indices:
                     append_candidate(_missing_loop_candidate(options.task_id, missing_index))
+
+        if has_explicit_scope:
+            return candidates
 
         if candidates:
             return candidates
@@ -694,6 +793,17 @@ def _dedupe_non_empty(values: Sequence[str]) -> list[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def _has_explicit_selection(options: QEArchiveBackfillOptions) -> bool:
+    return bool(
+        _dedupe_non_empty(options.experiment_ids)
+        or _dedupe_non_empty(options.task_ids)
+        or _dedupe_non_empty(options.loop_ids)
+        or str(options.task_id or "").strip()
+        or options.loop_index is not None
+        or _dedupe_positive_ints(options.loop_indices or ())
+    )
 
 
 def _int_or_none(value: Any) -> int | None:

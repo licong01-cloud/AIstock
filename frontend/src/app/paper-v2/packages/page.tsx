@@ -12,8 +12,24 @@ import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import WorkflowStepper from "@/components/paper-v2/WorkflowStepper";
 import { strategyPackageApi } from "@/lib/paper-v2/api";
-import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash } from "@/lib/paper-v2/format";
-import type { ExecutionPolicy, JsonObject, QEPackagingSource, StrategyPackage } from "@/lib/paper-v2/types";
+import { formatPercent, packageDisplayLabel, paperV2WorkflowSteps, shortHash, todayIso } from "@/lib/paper-v2/format";
+import type {
+  ExecutionPolicy,
+  JsonObject,
+  MultiAlphaCombineRun,
+  MultiAlphaCombineRunDetail,
+  MultiAlphaCombineSchemeResult,
+  QEPackagingSource,
+  StrategyPackage,
+  StrategyPackagePromotionResult,
+} from "@/lib/paper-v2/types";
+
+type PackagingSourceKind = "all" | "qe_experiment" | "qe_evolution_loop" | "multi_alpha_combine_run";
+
+const MULTI_ALPHA_PROMOTE_CONFIRMATION = "MULTI_ALPHA_PACKAGE_PROMOTE";
+const MULTI_ALPHA_SUPPORTED_SCHEME = "ic_weighted";
+const MULTI_ALPHA_WEIGHT_POLICY = { mode: "frozen_backtest_terminal_weights" };
+const MULTI_ALPHA_DRY_RUN_CONFIRMATION = "MULTI_ALPHA_LOCALSIM_DRY_RUN";
 
 function sourceKey(source: QEPackagingSource): string {
   return `${source.source_kind}:${source.experiment_id}:${source.qe_task_id || ""}:${source.qe_loop_id || ""}`;
@@ -22,6 +38,46 @@ function sourceKey(source: QEPackagingSource): string {
 function metricText(source: QEPackagingSource): string {
   const m = source.metrics_summary || {};
   return `年化 ${formatPercent(m.annual_return)} / IC ${formatPercent(m.ic)} / 回撤 ${formatPercent(m.max_drawdown)}`;
+}
+
+function finiteNumber(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function combineRoster(run?: MultiAlphaCombineRun | null): unknown[] {
+  return Array.isArray(run?.roster_json) ? run.roster_json : [];
+}
+
+function combineRunTopk(run?: MultiAlphaCombineRun | null): number | null {
+  const backtestConfig = objectValue(run?.backtest_config_json);
+  const strategyParams = objectValue(backtestConfig.strategy_params || backtestConfig.strategy_kwargs);
+  return finiteNumber(backtestConfig.topk ?? backtestConfig.top_k ?? strategyParams.topk ?? strategyParams.top_k);
+}
+
+function combineRunLabel(run: MultiAlphaCombineRun): string {
+  const roster = combineRoster(run);
+  const legNames = roster
+    .map((item) => {
+      const row = objectValue(item);
+      const leg = row.leg_id || row.alpha_id || row.factor_name || row.name;
+      return typeof leg === "string" ? leg : "";
+    })
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" + ");
+  const topk = combineRunTopk(run);
+  const rosterHash = run.roster_hash ? `roster ${shortHash(run.roster_hash, 8)}` : "roster -";
+  return `${run.id} | ${roster.length}腿 | topk=${topk ?? "-"} | ${rosterHash}${legNames ? ` | ${legNames}` : ""}`;
+}
+
+function icWeightedScheme(detail: MultiAlphaCombineRunDetail | null): MultiAlphaCombineSchemeResult | null {
+  return (detail?.scheme_results || []).find((row) => row.weighting_scheme === MULTI_ALPHA_SUPPORTED_SCHEME) || null;
+}
+
+function combineSchemeMetricText(row: MultiAlphaCombineSchemeResult | null): string {
+  if (!row) return "缺少 ic_weighted scheme_result";
+  return `CAGR ${formatPercent(row.cagr ?? row.annual_return)} / Sharpe ${finiteNumber(row.sharpe)?.toFixed(2) ?? "-"} / 回撤 ${formatPercent(row.max_drawdown)}`;
 }
 
 function lifecycleText(status: string): string {
@@ -55,6 +111,18 @@ function totalDependencyCount(deps: JsonObject | null): number {
   return Object.values(deps).reduce<number>((total, value) => total + arrayCount(value), 0);
 }
 
+function dryRunTopKFromVariant(variant: "top_k=25" | "top_k=50"): 25 | 50 {
+  return variant === "top_k=50" ? 50 : 25;
+}
+
+function dryRunArtifactSummary(payload: JsonObject | null): JsonObject {
+  if (!payload) return {};
+  const dryRun = objectValue(payload.dry_run);
+  const admission = objectValue(payload.admission);
+  const artifactShas = objectValue(dryRun.artifact_shas || admission.artifact_shas || {});
+  return { dryRun, admission, artifactShas };
+}
+
 function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "source" | "dependencies" | "model" }) {
   if (kind === "dependencies") {
     const rows = Object.entries(value).map(([key, item]) => ({ key, count: arrayCount(item), value: item }));
@@ -83,13 +151,25 @@ function PackagePayloadSummary({ value, kind }: { value: JsonObject; kind: "sour
   }
   const manifest = objectValue(value.manifest || value.package_manifest || value);
   const readiness = objectValue(value.readiness || value.paper_readiness || value.asset_eligibility || {});
+  const paperAdmission = objectValue(value.paper_admission || {});
+  const materialization = Array.isArray(value.auto_component_materialization) ? value.auto_component_materialization : [];
+  const componentCount = finiteNumber(value.components_created_or_reused) ?? materialization.length;
+  const materializedLegs = materialization
+    .map((item) => {
+      const row = objectValue(item);
+      return textValue(row.leg_id || row.alpha_id || row.package_id);
+    })
+    .filter((item) => item !== "-");
   return (
     <div className="pv2-readable-panel">
       <div className="pv2-readable-table">
         <div className="pv2-readable-row"><div className="pv2-readable-key">策略包</div><div className="pv2-readable-value">{textValue(value.package_name || manifest.package_name || value.created_package_id)}</div></div>
-        <div className="pv2-readable-row"><div className="pv2-readable-key">资产合格</div><div className="pv2-readable-value">{readiness.eligible === false || readiness.status === "BLOCKED" ? "不合格，查看诊断信息" : "可进入选股/模拟盘"}</div></div>
+        <div className="pv2-readable-row"><div className="pv2-readable-key">资产合格</div><div className="pv2-readable-value">{Object.keys(readiness).length ? (readiness.eligible === false || readiness.status === "BLOCKED" ? "不合格，查看诊断信息" : "已通过或可进入下一步") : textValue(value.package_status || "以策略包列表为准")}</div></div>
+        {Object.keys(paperAdmission).length ? <div className="pv2-readable-row"><div className="pv2-readable-key">Paper 诊断</div><div className="pv2-readable-value">{paperAdmission.required_for_signal_admission === false ? "dry-run 仅诊断，不作为信号准入硬门" : paperAdmission.eligible === true ? "eligible=true" : `eligible=false，${textValue(Array.isArray(paperAdmission.blocking) ? paperAdmission.blocking.join(", ") : paperAdmission.blocking)}`}</div></div> : null}
+        {componentCount ? <div className="pv2-readable-row"><div className="pv2-readable-key">Component 单包</div><div className="pv2-readable-value">{componentCount} 个自动建/复用{materializedLegs.length ? `：${materializedLegs.slice(0, 4).join("、")}` : ""}</div></div> : null}
         <div className="pv2-readable-row"><div className="pv2-readable-key">manifest</div><div className="pv2-readable-value pv2-mono">{textValue(value.manifest_sha256 || manifest.manifest_sha256)}</div></div>
         <div className="pv2-readable-row"><div className="pv2-readable-key">来源</div><div className="pv2-readable-value">{textValue(value.source_type || manifest.source_type || (objectValue(manifest.source).source_type))}</div></div>
+        {value.next_step ? <div className="pv2-readable-row"><div className="pv2-readable-key">下一步</div><div className="pv2-readable-value">{textValue(value.next_step)}</div></div> : null}
         <div className="pv2-readable-row"><div className="pv2-readable-key">诊断字段</div><div className="pv2-readable-value">{Object.keys(value).slice(0, 12).join(", ") || "-"}</div></div>
       </div>
     </div>
@@ -108,9 +188,18 @@ function dependencyCount(deps: JsonObject | null): number {
 export default function PaperV2PackagesPage() {
   const [packages, setPackages] = useState<StrategyPackage[]>([]);
   const [sources, setSources] = useState<QEPackagingSource[]>([]);
+  const [combineRuns, setCombineRuns] = useState<MultiAlphaCombineRun[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [sourceKind, setSourceKind] = useState<"all" | "qe_experiment" | "qe_evolution_loop">("all");
+  const [sourceKind, setSourceKind] = useState<PackagingSourceKind>("all");
   const [sourceKeyValue, setSourceKeyValue] = useState("");
+  const [selectedCombineRunId, setSelectedCombineRunId] = useState("");
+  const [combineRunDetail, setCombineRunDetail] = useState<MultiAlphaCombineRunDetail | null>(null);
+  const [multiAlphaTopk, setMultiAlphaTopk] = useState<25 | 50>(25);
+  const [multiAlphaDryRunBroker, setMultiAlphaDryRunBroker] = useState<"local_sim" | "minqmt_sim">("local_sim");
+  const [multiAlphaDryRunVariant, setMultiAlphaDryRunVariant] = useState<"top_k=25" | "top_k=50">("top_k=25");
+  const [multiAlphaDryRunTradeDate, setMultiAlphaDryRunTradeDate] = useState(todayIso());
+  const [multiAlphaDryRunInitialCash, setMultiAlphaDryRunInitialCash] = useState(1000000);
+  const [multiAlphaDryRunResult, setMultiAlphaDryRunResult] = useState<JsonObject | null>(null);
   const [resolveRuntimeAssets, setResolveRuntimeAssets] = useState(true);
   const [policies, setPolicies] = useState<ExecutionPolicy[]>([]);
   const [events, setEvents] = useState<JsonObject[]>([]);
@@ -129,29 +218,78 @@ export default function PaperV2PackagesPage() {
     () => sources.find((item) => sourceKey(item) === sourceKeyValue) || sources[0],
     [sources, sourceKeyValue],
   );
+  const isMultiAlphaSource = sourceKind === "multi_alpha_combine_run";
+  const selectedCombineRun = useMemo(
+    () => combineRuns.find((item) => item.id === selectedCombineRunId) || combineRuns[0],
+    [combineRuns, selectedCombineRunId],
+  );
+  const selectedScheme = useMemo(
+    () => combineRunDetail?.run?.id === selectedCombineRun?.id ? icWeightedScheme(combineRunDetail) : null,
+    [combineRunDetail, selectedCombineRun?.id],
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [packageRows, sourceRows] = await Promise.all([
-        strategyPackageApi.list(undefined, 300),
-        strategyPackageApi.qeSources(sourceKind, 300),
+      const [packageRows, sourceRows, combineRows] = await Promise.all([
+        strategyPackageApi.listSummary(undefined, 100),
+        isMultiAlphaSource ? Promise.resolve([]) : strategyPackageApi.qeSources(sourceKind, 300),
+        isMultiAlphaSource ? strategyPackageApi.listCombineRuns(200) : Promise.resolve([]),
       ]);
       setPackages(packageRows);
       setSources(sourceRows);
-      if (!selectedId && packageRows[0]) setSelectedId(packageRows[0].package_id);
+      setCombineRuns(combineRows);
+      const requestedPackageId = typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("package_id")
+        : null;
+      const requestedPackage = packageRows.find((item) => item.package_id === requestedPackageId);
+      if (requestedPackage) {
+        setSelectedId(requestedPackage.package_id);
+      } else if ((!selectedId || !packageRows.some((item) => item.package_id === selectedId)) && packageRows[0]) {
+        setSelectedId(packageRows[0].package_id);
+      }
       if (!sourceRows.some((item) => sourceKey(item) === sourceKeyValue)) {
         setSourceKeyValue(sourceRows[0] ? sourceKey(sourceRows[0]) : "");
+      }
+      if (!combineRows.some((item) => item.id === selectedCombineRunId)) {
+        setSelectedCombineRunId(combineRows[0]?.id || "");
       }
     } catch (exc) {
       setError(exc);
     } finally {
       setLoading(false);
     }
-  }, [selectedId, sourceKind, sourceKeyValue]);
+  }, [isMultiAlphaSource, selectedCombineRunId, selectedId, sourceKind, sourceKeyValue]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setMultiAlphaDryRunResult(null);
+  }, [selected?.package_id, multiAlphaDryRunBroker, multiAlphaDryRunVariant, multiAlphaDryRunTradeDate]);
+
+  useEffect(() => {
+    if (!isMultiAlphaSource || !selectedCombineRun?.id) {
+      setCombineRunDetail(null);
+      return;
+    }
+    let alive = true;
+    async function loadCombineRunDetail() {
+      setError(null);
+      setCombineRunDetail(null);
+      try {
+        const detail = await strategyPackageApi.getCombineRun(selectedCombineRun.id);
+        if (alive) setCombineRunDetail(detail);
+      } catch (exc) {
+        if (alive) {
+          setCombineRunDetail(null);
+          setError(exc);
+        }
+      }
+    }
+    void loadCombineRunDetail();
+    return () => { alive = false; };
+  }, [isMultiAlphaSource, selectedCombineRun?.id]);
 
   useEffect(() => {
     if (!selected) return;
@@ -208,9 +346,80 @@ export default function PaperV2PackagesPage() {
     }
   }
 
+  async function runMultiAlphaDryRun() {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setMultiAlphaDryRunResult(null);
+    try {
+      const topK = dryRunTopKFromVariant(multiAlphaDryRunVariant);
+      const result = await strategyPackageApi.paperRuntimeDryRun(selected.package_id, {
+        broker_backend: multiAlphaDryRunBroker,
+        trade_date: multiAlphaDryRunTradeDate,
+        runtime_variant: multiAlphaDryRunVariant,
+        confirmation: MULTI_ALPHA_DRY_RUN_CONFIRMATION,
+        validated_by: "paper_v2_packages_ui",
+        runtime_config: {
+          runtime_profile: { selection: { top_k: topK } },
+          selection_artifact_config: {
+            auto_generate: true,
+            multi_alpha_live_inference_enabled: true,
+            component_coverage_threshold: topK,
+          },
+        },
+        initial_cash: multiAlphaDryRunInitialCash,
+      });
+      setMultiAlphaDryRunResult(result);
+      await load();
+    } catch (exc) {
+      setError(exc);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function sourceAction(action: "preview" | "readiness" | "create") {
     setError(null);
     setSourcePreview(null);
+    if (isMultiAlphaSource) {
+      if (action !== "create") {
+        setError(new Error("多Alpha combine 来源不支持 QE Manifest 预览或 QE 资产合格性检查；请查看下方 run 指标后直接创建 StrategyPackage。"));
+        return;
+      }
+      if (!selectedCombineRun?.id) {
+        setError(new Error("请先选择一个 succeeded 多Alpha combine run。"));
+        return;
+      }
+      setBusy(true);
+      try {
+        const created: StrategyPackagePromotionResult = await strategyPackageApi.createFromMultiAlphaCombineRun({
+          combine_backtest_run_id: selectedCombineRun.id,
+          weighting_scheme: MULTI_ALPHA_SUPPORTED_SCHEME,
+          topk: multiAlphaTopk,
+          weight_policy: MULTI_ALPHA_WEIGHT_POLICY,
+          confirmation: MULTI_ALPHA_PROMOTE_CONFIRMATION,
+        });
+        setSelectedId(created.package_id);
+        setSourcePreview({
+          created_package_id: created.package_id,
+          package_name: created.package_name,
+          manifest_sha256: created.manifest_sha256,
+          package_status: created.package_status,
+          source_type: "multi_alpha_combine_run",
+          source_run_id: created.source_run_id || selectedCombineRun.id,
+          paper_admission: created.paper_admission || {},
+          components_created_or_reused: created.components?.length ?? 0,
+          auto_component_materialization: created.auto_component_materialization || [],
+          next_step: "多Alpha 包已建成 ASSET_VALIDATED。LocalSim 与 MiniQMT SIM 同用信号层判据，可进入 selectable-packages 与 create_portfolio；dry-run 仍可在本页作为可选留证。MiniQMT 执行层仍保留 account/group/slot/execution policy/data_source 门。",
+        });
+        await load();
+      } catch (exc) {
+        setError(exc);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (!selectedSource) {
       setError(new Error("请先选择一个 QE 来源。"));
       return;
@@ -255,6 +464,29 @@ export default function PaperV2PackagesPage() {
   const depsCount = dependencyCount(deleteDependencies);
   const canDelete = Boolean(selected && depsCount === 0);
   const metrics = selected?.metrics_summary || {};
+  const combineRunStatus = String(selectedCombineRun?.status || "").toLowerCase();
+  const combineDetailLoaded = !selectedCombineRun?.id || combineRunDetail?.run?.id === selectedCombineRun.id;
+  const combineRunReady = isMultiAlphaSource && Boolean(selectedCombineRun?.id) && combineRunStatus === "succeeded" && combineDetailLoaded && Boolean(selectedScheme);
+  const combineDisabledReason = !isMultiAlphaSource
+    ? ""
+    : !selectedCombineRun?.id
+      ? "请先选择 succeeded combine run"
+      : combineRunStatus !== "succeeded"
+        ? `后端只接受 succeeded run，当前状态为 ${selectedCombineRun.status || "-"}`
+        : !combineDetailLoaded
+          ? "正在加载选中 run 的 scheme_results"
+           : !selectedScheme
+           ? "选中 run 缺少 ic_weighted scheme_result，创建会被后端拒绝"
+           : "";
+  const selectedIsMultiAlpha = String(selected?.alpha_mode || "").toLowerCase() === "multi_alpha";
+  const selectedTopK = selected?.portfolio_topk === 50 ? 50 : selected?.portfolio_topk === 25 ? 25 : dryRunTopKFromVariant(multiAlphaDryRunVariant);
+  const selectedAssetWarnings = Array.isArray(assetEligibility.warnings) ? assetEligibility.warnings.map(String) : [];
+  const selectedAssetBlockers = Array.isArray(assetEligibility.blockers) ? assetEligibility.blockers.map(String) : [];
+  const hasLegacyDryRunSupersededWarning = selectedAssetWarnings.includes("multi_alpha_legacy_paper_dry_run_blocker_superseded");
+  const dryRunSummary = dryRunArtifactSummary(multiAlphaDryRunResult);
+  const dryRunResult = objectValue(dryRunSummary.dryRun);
+  const dryRunAdmission = objectValue(dryRunSummary.admission);
+  const dryRunArtifacts = objectValue(dryRunSummary.artifactShas);
 
   const workflowSteps = paperV2WorkflowSteps({
     hasPackages: packages.length > 0,
@@ -270,7 +502,7 @@ export default function PaperV2PackagesPage() {
       <WorkflowStepper steps={workflowSteps} compact />
       <ErrorPanel error={error} title="策略包操作失败" />
 
-      <SectionCard title="从 QE 创建策略包" eyebrow="StrategyPackage 只能来自 QE" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
+      <SectionCard title="从 QE 创建策略包" eyebrow="QE 单Alpha / 多Alpha combine 统一入口" action={<button className="pv2-button" onClick={load} disabled={loading} type="button">刷新来源</button>}>
         <div className="pv2-form-grid">
           <div className="pv2-field">
             <label>来源类型</label>
@@ -278,29 +510,78 @@ export default function PaperV2PackagesPage() {
               <option value="all">全部来源</option>
               <option value="qe_experiment">QE 单次实验</option>
               <option value="qe_evolution_loop">QE 演进 Loop</option>
+              <option value="multi_alpha_combine_run">多Alpha 组合回测</option>
             </select>
           </div>
-          <div className="pv2-field pv2-field-wide">
-            <label>QE 来源</label>
-            <select className="pv2-select" value={sourceKeyValue} onChange={(event) => setSourceKeyValue(event.target.value)}>
-              {sources.map((item) => {
-                const key = sourceKey(item);
-                return <option value={key} key={key}>{item.display_name || `${item.experiment_name} | ${metricText(item)}`}</option>;
-              })}
-            </select>
-          </div>
+          {isMultiAlphaSource ? (
+            <div className="pv2-field pv2-field-wide">
+              <label>Combine run（仅 succeeded）</label>
+              <select className="pv2-select" value={selectedCombineRun?.id || ""} onChange={(event) => setSelectedCombineRunId(event.target.value)}>
+                {combineRuns.map((item) => <option value={item.id} key={item.id}>{combineRunLabel(item)}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div className="pv2-field pv2-field-wide">
+              <label>QE 来源</label>
+              <select className="pv2-select" value={sourceKeyValue} onChange={(event) => setSourceKeyValue(event.target.value)}>
+                {sources.map((item) => {
+                  const key = sourceKey(item);
+                  return <option value={key} key={key}>{item.display_name || `${item.experiment_name} | ${metricText(item)}`}</option>;
+                })}
+              </select>
+            </div>
+          )}
         </div>
-        <label className="pv2-chip" style={{ marginTop: 12 }}>
-          <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
-          创建时解析并复制运行资产
-        </label>
+        {isMultiAlphaSource ? (
+          <>
+            <div className="pv2-form-grid" style={{ marginTop: 12 }}>
+              <div className="pv2-field">
+                <label>Weighting scheme</label>
+                <select className="pv2-select" value={MULTI_ALPHA_SUPPORTED_SCHEME} disabled>
+                  <option value={MULTI_ALPHA_SUPPORTED_SCHEME}>ic_weighted（S1/P0 唯一支持）</option>
+                  <option value="equal">equal（置灰，后端拒绝）</option>
+                  <option value="orthogonality_aware">orthogonality_aware（置灰，后端拒绝）</option>
+                  <option value="risk_parity">risk_parity（置灰，后端拒绝）</option>
+                </select>
+                <div className="pv2-help">多Alpha StrategyPackage S1 仅支持 ic_weighted；其它 scheme 不做前端兜底，后端会 fail-fast。</div>
+              </div>
+              <div className="pv2-field">
+                <label>TopK</label>
+                <select className="pv2-select" value={multiAlphaTopk} onChange={(event) => setMultiAlphaTopk(Number(event.target.value) as 25 | 50)}>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+                <div className="pv2-help">默认 25，可切 50；创建 payload 严格传 topk，不从 QE 来源推断。</div>
+              </div>
+            </div>
+            <div className="pv2-grid pv2-grid-3" style={{ marginTop: 12 }}>
+              <MetricCard label="Run 状态" value={selectedCombineRun?.status || "-"} hint={`run_id=${selectedCombineRun?.id || "-"}`} tone={combineRunReady ? "success" : "warning"} />
+              <MetricCard label="Roster" value={`${combineRoster(selectedCombineRun).length || "-"} 腿`} hint={`roster_hash=${selectedCombineRun?.roster_hash || "-"}`} />
+              <MetricCard label="ic_weighted 指标" value={selectedScheme ? "可创建" : "缺失"} hint={combineSchemeMetricText(selectedScheme)} tone={selectedScheme ? "success" : "warning"} />
+            </div>
+            <NoticePanel title="多Alpha 创建后的下一步" tone="warning">
+              创建只冻结 multi_alpha 父包并自动建/复用 component 单包。LocalSim 与 MiniQMT SIM 同用信号层判据：可进入 selectable-packages、荐股下拉和 create_portfolio；dry-run 仍可选做留证。MiniQMT 执行层 account/group/slot、validated execution policy 与 data_source 仍 fail-closed。
+            </NoticePanel>
+          </>
+        ) : (
+          <label className="pv2-chip" style={{ marginTop: 12 }}>
+            <input type="checkbox" checked={resolveRuntimeAssets} onChange={(event) => setResolveRuntimeAssets(event.target.checked)} />
+            创建时解析并复制运行资产
+          </label>
+        )}
         <div className="pv2-row-actions" style={{ marginTop: 12 }}>
-          <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || !selectedSource} type="button">预览 Manifest</button>
-          <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || !selectedSource} type="button">检查资产合格性</button>
-          <button className="pv2-button-primary" onClick={() => sourceAction("create")} disabled={busy || !selectedSource} type="button">创建 StrategyPackage</button>
+          <button className="pv2-button" onClick={() => sourceAction("preview")} disabled={busy || isMultiAlphaSource || !selectedSource} type="button">预览 Manifest</button>
+          <button className="pv2-button" onClick={() => sourceAction("readiness")} disabled={busy || isMultiAlphaSource || !selectedSource} type="button">检查资产合格性</button>
+          <button className="pv2-button-primary" onClick={() => sourceAction("create")} disabled={busy || (isMultiAlphaSource ? !combineRunReady : !selectedSource)} title={isMultiAlphaSource ? combineDisabledReason || "创建多Alpha StrategyPackage" : "创建 StrategyPackage"} type="button">创建 StrategyPackage</button>
         </div>
-        <div className="pv2-help">策略包入场只检查资产与 manifest 完整性；HMM、黑名单、TopK、停牌剔除、交易日和行情源都属于运行时平台能力。</div>
-        {!sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">没有找到尚未打包的 QE 实验或演进 Loop。</NoticePanel> : null}
+        <div className="pv2-help">
+          {isMultiAlphaSource
+            ? "多Alpha combine 不能走 /strategy-packages/qe-sources，也不调用 QE experiment-only 预览/合格性端点；所有失败原因直接透传后端。"
+            : "策略包入场只检查资产与 manifest 完整性；HMM、黑名单、TopK、停牌剔除、交易日和行情源都属于运行时平台能力。"}
+        </div>
+        {isMultiAlphaSource && combineDisabledReason ? <NoticePanel title="当前多Alpha来源不可创建" tone="warning">{combineDisabledReason}</NoticePanel> : null}
+        {!isMultiAlphaSource && !sources.length ? <NoticePanel title="暂无可打包 QE 来源" tone="info">没有找到尚未打包的 QE 实验或演进 Loop。</NoticePanel> : null}
+        {isMultiAlphaSource && !combineRuns.length ? <NoticePanel title="暂无 succeeded combine run" tone="info">/multi-alpha/combine-backtest/runs?status=succeeded 未返回可创建来源。</NoticePanel> : null}
         {sourcePreview ? <PackagePayloadSummary value={sourcePreview} kind="source" /> : null}
       </SectionCard>
 
@@ -330,13 +611,65 @@ export default function PaperV2PackagesPage() {
               <MetricCard label="模拟盘准入" value={assetEligible ? "可创建模拟盘" : "不可创建"} hint="不再需要旧的模拟盘启用状态或治理就绪状态。" tone={assetEligible ? "success" : "warning"} />
             </div>
             <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
-              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}`}>用此包创建模拟盘</Link>
+              <Link className={assetEligible ? "pv2-button-primary" : "pv2-button"} href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${selectedTopK}`}>用此包创建 LocalSim 模拟盘</Link>
               <ConfirmAction label="退役策略包" confirmText={selected.package_id} onConfirm={retireSelected} danger disabled={busy || selectedStatus === "RETIRED"} testId="strategy-package-retire" mode="dialog" />
               <ConfirmAction label="彻底删除策略包" confirmText={selected.package_id} onConfirm={deleteSelected} danger disabled={busy || !canDelete} testId="strategy-package-delete" mode="dialog" />
             </div>
             <NoticePanel title="退役与删除的区别" tone={depsCount ? "warning" : "info"}>
               退役只归档策略包，不删除历史组合和证据；彻底删除会物理删除没有任何运行时引用的策略包。当前删除依赖数量：{depsCount}。
             </NoticePanel>
+            {selectedIsMultiAlpha ? (
+              <div className="pv2-card" style={{ marginTop: 14 }}>
+                <div className="pv2-eyebrow">MultiAlpha 信号准入</div>
+                <NoticePanel title={hasLegacyDryRunSupersededWarning ? "旧 dry-run blocker 已被信号证据 supersede" : "信号层准入状态"} tone={selectedAssetBlockers.length ? "warning" : "success"}>
+                  LocalSim 与 MiniQMT SIM 使用同一信号层判据：持久化 self-check 证据 + 非空确定性 selection。订单差额、执行策略、MiniQMT account/group/slot 属于执行层，建组合或 auto-run 时仍 fail-closed。当前 blockers：{selectedAssetBlockers.join(", ") || "无"}；warnings：{selectedAssetWarnings.join(", ") || "无"}。
+                </NoticePanel>
+                <div className="pv2-form-grid" style={{ marginTop: 12 }}>
+                  <div className="pv2-field">
+                    <label>Broker</label>
+                    <select className="pv2-select" value={multiAlphaDryRunBroker} onChange={(event) => setMultiAlphaDryRunBroker(event.target.value as "local_sim" | "minqmt_sim")}>
+                      <option value="local_sim">local_sim（可选留证）</option>
+                      <option value="minqmt_sim">minqmt_sim（dry-run 诊断会拒绝）</option>
+                    </select>
+                  </div>
+                  <div className="pv2-field">
+                    <label>Runtime variant</label>
+                    <select className="pv2-select" value={multiAlphaDryRunVariant} onChange={(event) => setMultiAlphaDryRunVariant(event.target.value as "top_k=25" | "top_k=50")}>
+                      <option value="top_k=25">top_k=25</option>
+                      <option value="top_k=50">top_k=50</option>
+                    </select>
+                  </div>
+                  <div className="pv2-field">
+                    <label>Trade date</label>
+                    <input className="pv2-input" type="date" value={multiAlphaDryRunTradeDate} onChange={(event) => setMultiAlphaDryRunTradeDate(event.target.value)} />
+                  </div>
+                  <div className="pv2-field">
+                    <label>Initial cash</label>
+                    <input className="pv2-input" type="number" min={1} value={multiAlphaDryRunInitialCash} onChange={(event) => setMultiAlphaDryRunInitialCash(Number(event.target.value))} />
+                  </div>
+                </div>
+                <div className="pv2-row-actions" style={{ marginTop: 12 }}>
+                    <button className="pv2-button" onClick={runMultiAlphaDryRun} disabled={busy} type="button">执行 paper-runtime-dry-run（可选诊断）</button>
+                  <Link className="pv2-button-primary" href={`/paper-v2/portfolios?package_id=${selected.package_id}&broker_backend=local_sim&top_k=${dryRunTopKFromVariant(multiAlphaDryRunVariant)}`}>进入 LocalSim 建组合</Link>
+                </div>
+                {multiAlphaDryRunBroker !== "local_sim" ? (
+                  <NoticePanel title="MiniQMT 执行层门保留" tone="warning">
+                    当前 dry-run 端点仍只支持 local_sim 诊断；minqmt_sim 是否可建组合由执行层 account/group/slot、validated execution policy 与数据源兼容门决定，不会伪造 admission。
+                  </NoticePanel>
+                ) : null}
+                {multiAlphaDryRunResult ? (
+                  <div className="pv2-readable-panel" style={{ marginTop: 12 }}>
+                    <div className="pv2-readable-table">
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">dry_run_run_id</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunResult.dry_run_run_id)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">admission_id</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunAdmission.admission_id)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">targets / orders</div><div className="pv2-readable-value">{textValue(dryRunResult.target_count)} / {textValue(dryRunResult.order_intent_count)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">combined artifact</div><div className="pv2-readable-value pv2-mono">{textValue(dryRunArtifacts.combined_score_artifact_sha256 || dryRunResult.selection_artifact_sha256)}</div></div>
+                      <div className="pv2-readable-row"><div className="pv2-readable-key">component artifacts</div><div className="pv2-readable-value">{Object.keys(objectValue(dryRunArtifacts.component_score_artifact_sha256)).length || "-"}</div></div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {deleteDependencies ? <PackagePayloadSummary value={deleteDependencies} kind="dependencies" /> : null}
             <div className="pv2-grid pv2-grid-3" style={{ marginTop: 14 }}>
               <MetricCard label="年化收益" value={formatPercent(metrics.annual_return)} />

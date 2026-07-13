@@ -7,12 +7,20 @@ export type AssistantEnvelope<T> = {
   data: T;
 };
 
-export type AssistantPage<T> = {
+export type AssistantPage<T> = JsonObject & {
   items: T[];
   total: number;
   page: number;
   page_size: number;
   has_more: boolean;
+  data_state?: string;
+  source_of_truth?: string;
+  reason_codes?: string[];
+  warnings?: string[];
+  draft_storage_authoritative?: boolean;
+  assistant_draft_storage_notice?: string;
+  retired_draft_tables?: string[];
+  official_submission_required?: string;
 };
 
 export type AssistantMcpToolPage<T> = AssistantPage<T> & JsonObject & {
@@ -292,7 +300,7 @@ export const LOCAL_DATA_MANAGEMENT_PHASES: LocalDataPhase[] = [
     key: "confirm",
     title: "等待用户确认",
     shortTitle: "确认",
-    description: "展示将调用的工具、写入范围、长任务风险和确认口令；确认前禁止执行。",
+    description: "在对话内展示将调用的工具、写入范围和长任务风险；确认前禁止执行。",
     primaryTools: [
       "local_data_apply_repair_confirmed",
       "local_data_run_dataset_sync_confirmed",
@@ -456,21 +464,6 @@ export type AssistantApproval = JsonObject & {
   created_at?: string;
 };
 
-export type AssistantIssueCandidate = JsonObject & {
-  candidate_id: string;
-  title?: string;
-  severity?: string;
-  module?: string;
-  status?: string;
-  problem_statement?: string;
-  reproduce_command?: string | null;
-  github_sync_status?: string;
-  github_issue_number?: number | null;
-  github_issue_url?: string | null;
-  github_sync_json?: JsonObject;
-  evidence_refs?: string[];
-};
-
 export type AssistantWorkbenchDryRunResult = JsonObject & {
   dry_run?: boolean;
   status?: string;
@@ -537,6 +530,118 @@ export type AssistantTraceEvent = JsonObject & {
   cost_json?: JsonObject;
   duration_ms?: number;
   created_at?: string;
+};
+
+export type AssistantLlmUsageEvent = JsonObject & {
+  usage_event_id: string;
+  trace_id?: string | null;
+  task_id?: string | null;
+  conversation_id?: string | null;
+  message_id?: string | null;
+  call_group_id?: string | null;
+  call_index?: number;
+  phase?: string;
+  component?: string;
+  provider?: string;
+  model?: string;
+  model_profile_id?: string | null;
+  litellm_model?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+  prompt_tokens_estimated?: boolean;
+  completion_tokens_estimated?: boolean;
+  usage_source?: string;
+  usage_status?: string;
+  usage_reason_code?: string | null;
+  prompt_cost_usd?: string | number | null;
+  completion_cost_usd?: string | number | null;
+  total_cost_usd?: string | number | null;
+  currency?: string;
+  cost_source?: string;
+  cost_status?: string;
+  cost_reason_code?: string | null;
+  pricing_snapshot_json?: JsonObject;
+  usage_raw_json?: JsonObject;
+  request_meta_json?: JsonObject;
+  response_meta_json?: JsonObject;
+  duration_ms?: number | null;
+  completed_at?: string;
+  created_at?: string;
+};
+
+export type AssistantLlmUsageTotals = JsonObject & {
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  reasoning_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  estimated_usage_event_count?: number;
+  unavailable_usage_event_count?: number;
+  unavailable_cost_event_count?: number;
+  failed_cost_event_count?: number;
+  total_cost_usd?: string | number | null;
+  currency?: string;
+  usage_status?: string;
+  cost_status?: string;
+  reason_code?: string | null;
+  cost_reason_code?: string | null;
+};
+
+export type AssistantLlmUsageSummary = JsonObject & {
+  schema_version?: string;
+  source_of_truth?: string;
+  filters?: JsonObject;
+  summary?: AssistantLlmUsageTotals;
+  events_page?: AssistantPage<AssistantLlmUsageEvent>;
+};
+
+export type AssistantLlmUsageTimeBucket = JsonObject & {
+  bucket_start: string;
+  bucket_end?: string | null;
+  model?: string;
+  provider?: string;
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  total_cost_usd?: string | number | null;
+  usage_status?: string;
+  cost_status?: string;
+  usage_status_counts?: Record<string, number>;
+  cost_status_counts?: Record<string, number>;
+};
+
+export type AssistantLlmUsageModelBreakdown = JsonObject & {
+  model?: string;
+  provider?: string;
+  call_count?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  total_cost_usd?: string | number | null;
+  usage_status?: string;
+  cost_status?: string;
+  usage_status_counts?: Record<string, number>;
+  cost_status_counts?: Record<string, number>;
+};
+
+export type AssistantLlmUsageReport = JsonObject & {
+  schema_version?: string;
+  source_of_truth?: string;
+  filters?: JsonObject;
+  summary?: AssistantLlmUsageTotals;
+  time_series?: AssistantLlmUsageTimeBucket[];
+  model_breakdown?: AssistantLlmUsageModelBreakdown[];
+  status_breakdown?: { usage?: Record<string, number>; cost?: Record<string, number> };
+  prompt_text_retained?: boolean;
+  degraded?: boolean;
+  reason_code?: string | null;
 };
 
 export type AssistantAgentRun = JsonObject & {
@@ -615,6 +720,29 @@ export type AssistantConversationMessage = JsonObject & {
   created_at?: string;
 };
 
+export type AssistantDecisionOption = JsonObject & {
+  id: string;
+  label: string;
+  description?: string;
+};
+
+export type AssistantDecisionRequest = JsonObject & {
+  decision_id: string;
+  kind: "clarify" | "approve_action";
+  prompt_text: string;
+  options: AssistantDecisionOption[];
+  allow_free_text: boolean;
+  approve_requires_option?: boolean;
+  pending_action?: (JsonObject & {
+    server_key?: string;
+    tool_name?: string;
+    tool_args?: JsonObject;
+    risk_level?: string;
+    approval_id?: string;
+    action_proposal_id?: string;
+  }) | null;
+};
+
 export type AssistantChatTurnResult = JsonObject & {
   conversation?: JsonObject;
   user_message?: AssistantConversationMessage;
@@ -627,6 +755,7 @@ export type AssistantChatTurnResult = JsonObject & {
   trace?: JsonObject;
   cards?: JsonObject;
   mode_decision?: AssistantModeDecision;
+  decision_request?: AssistantDecisionRequest | null;
 };
 
 export type AssistantCatalogReadinessCheck = JsonObject & {
@@ -647,11 +776,6 @@ export type AssistantCatalogReadiness = JsonObject & {
   operator_action?: string | null;
   human_message?: string;
   generated_at?: string;
-};
-
-export type AssistantValidationDiscoverySummary = JsonObject & {
-  latest_reports?: JsonObject[];
-  candidate_issues_needing_review?: AssistantIssueCandidate[];
 };
 
 export class ResearchAssistantApiError extends Error {
@@ -862,15 +986,6 @@ export const researchAssistantApi = {
   reject(approvalId: string): Promise<AssistantApproval> {
     return post<AssistantApproval>(`/research-assistant/approvals/${encodeURIComponent(approvalId)}/reject`, { confirmation_text: "" });
   },
-  issueCandidates(params: { status?: string; module?: string; search?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantIssueCandidate>> {
-    return unwrap<AssistantPage<AssistantIssueCandidate>>(appendQuery("/research-assistant/issue-candidates", { limit: 50, ...params }));
-  },
-  createIssueCandidate(payload: JsonObject): Promise<AssistantIssueCandidate> {
-    return post<AssistantIssueCandidate>("/research-assistant/issue-candidates", payload);
-  },
-  githubSyncIssueCandidate(candidateId: string, payload: JsonObject): Promise<AssistantIssueCandidate> {
-    return post<AssistantIssueCandidate>(`/research-assistant/issue-candidates/${encodeURIComponent(candidateId)}/github-sync`, payload);
-  },
   modelProfiles(): Promise<AssistantPage<AssistantModelProfile>> {
     return unwrap<AssistantPage<AssistantModelProfile>>("/research-assistant/models/profiles");
   },
@@ -895,6 +1010,15 @@ export const researchAssistantApi = {
   traceEvents(params: { task_id?: string; component?: string; status?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantTraceEvent>> {
     return unwrap<AssistantPage<AssistantTraceEvent>>(appendQuery("/research-assistant/trace-events", { limit: 100, ...params }));
   },
+  llmUsageEvents(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; limit?: number; offset?: number } = {}): Promise<AssistantPage<AssistantLlmUsageEvent>> {
+    return unwrap<AssistantPage<AssistantLlmUsageEvent>>(appendQuery("/research-assistant/llm-usage/events", { limit: 100, ...params }));
+  },
+  llmUsageSummary(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; limit?: number } = {}): Promise<AssistantLlmUsageSummary> {
+    return unwrap<AssistantLlmUsageSummary>(appendQuery("/research-assistant/llm-usage/summary", { limit: 100, ...params }));
+  },
+  llmUsageReport(params: { trace_id?: string; task_id?: string; conversation_id?: string; model?: string; provider?: string; date_from?: string; date_to?: string; granularity?: "hour" | "day"; timezone?: string; limit_models?: number } = {}): Promise<AssistantLlmUsageReport> {
+    return unwrap<AssistantLlmUsageReport>(appendQuery("/research-assistant/llm-usage/report", { timezone: "Asia/Shanghai", limit_models: 8, ...params }));
+  },
   notificationSummary(): Promise<JsonObject> {
     return unwrap<JsonObject>("/research-assistant/notifications/summary");
   },
@@ -903,8 +1027,5 @@ export const researchAssistantApi = {
   },
   agenda(): Promise<AssistantPage<JsonObject>> {
     return unwrap<AssistantPage<JsonObject>>("/research-assistant/agenda");
-  },
-  validationDiscoverySummary(): Promise<AssistantValidationDiscoverySummary> {
-    return unwrap<AssistantValidationDiscoverySummary>("/research-assistant/validation-discovery/summary");
   },
 };

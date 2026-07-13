@@ -169,10 +169,17 @@ export type ValidationCodeIntelligenceSummary = JsonObject & {
   codegraph?: (JsonObject & {
     status?: string;
     freshness?: string;
+    effective_freshness?: string;
+    effective_status?: string;
+    effective_source?: string;
+    stale_metadata_warning?: boolean;
+    current_git_commit?: string;
+    latest_git_commit?: string;
     generated_at?: string;
     artifact_path?: string;
     summary_ref?: string | null;
     warnings?: string[];
+    notes?: string[];
     index_summary?: JsonObject;
   }) | null;
   understand_anything?: JsonObject & {
@@ -761,6 +768,27 @@ export type ValidationIssueCandidateItem = JsonObject & {
   severity?: string;
   status?: string;
   fingerprint?: string;
+  confidence?: number | string | null;
+  summary?: string | null;
+  llm_hypothesis?: string | null;
+  expected?: string | null;
+  actual?: string | null;
+  verification_result?: string | null;
+  reproduce?: string[];
+  source_plan_key?: string | null;
+  quality_gate?: JsonObject;
+  quality_gate_state?: string | null;
+  issue_payload_ready?: boolean | null;
+  auto_submit_allowed?: boolean | null;
+  promotion_mode?: string | null;
+  llm_enhancement_opt_in?: boolean | null;
+  quality_gate_reasons?: string[];
+  no_submit_reasons?: string[];
+  why_not_submitted?: string | null;
+  active_discovery_reason?: string | null;
+  codegraph_refs?: string[];
+  ua_refs?: string[];
+  github_issue_payload_ref?: string | null;
   run_count?: number;
   github_issue_number?: string | number | null;
   github_issue_url?: string | null;
@@ -777,9 +805,18 @@ export type ValidationIssueCandidateSummary = JsonObject & {
   open_count?: number;
   linked_issue_count?: number;
   missing_issue_link_count?: number;
+  nightly_candidate_count?: number;
+  issue_payload_ready_count?: number;
+  draft_count?: number;
+  deduped_count?: number;
+  artifact_only_count?: number;
   by_status?: Record<string, number>;
   by_module?: Record<string, number>;
   by_severity?: Record<string, number>;
+  by_source_type?: Record<string, number>;
+  by_quality_gate?: Record<string, number>;
+  no_submit_reason_counts?: Record<string, number>;
+  outcome_metrics?: JsonObject;
   reason_codes?: string[];
 };
 

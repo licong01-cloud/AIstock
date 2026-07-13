@@ -1,0 +1,85 @@
+{
+  "actual": "AIstock execution plan plan_84d0b654fa274992 generated SELL intent for 688689.SH quantity=878 with current_available_quantity=878, then MiniQMT accepted order 1098928449 at 09:42:12, status=50, traded_volume=0, cancelable=true. TDX quote for 688689 shows last=46.82 but open/high/low=0, total_hand=0, and all bid/ask levels 0. QMT itself is connected and today had 24 orders with 23 completed and 54 trades, so the blocker is AIstock lacking suspended/no-quote pre-trade filtering and open-order handling.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime",
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/simulation_runtime",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260617_BUG-405-p0-paper-v2-simulationruntime-suspended-no-quote-symbols-must-be-filtere.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-405",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T10:57:33.325210Z",
+  "description": "AIstock execution plan plan_84d0b654fa274992 generated SELL intent for 688689.SH quantity=878 with current_available_quantity=878, then MiniQMT accepted order 1098928449 at 09:42:12, status=50, traded_volume=0, cancelable=true. TDX quote for 688689 shows last=46.82 but open/high/low=0, total_hand=0, and all bid/ask levels 0. QMT itself is connected and today had 24 orders with 23 completed and 54 trades, so the blocker is AIstock lacking suspended/no-quote pre-trade filtering and open-order handling.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-f84cbfbea2ca",
+      "timestamp": "2026-06-17T10:57:33.325207Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-17/simrun_ebf382bde34bf3f9; qmt-order://1098928449; tdx-quote://688689/2026-06-17/no-bid-ask-zero-volume; related://BUG-335,BUG-338,BUG-396,BUG-400"
+  ],
+  "expected": "Before daily simulation order generation for both LocalSim and MiniQMT, AIstock checks suspend_d and/or authoritative realtime quote tradability. Suspended/no-quote symbols must not produce executable BUY/SELL orders. Existing holdings that are suspended/no-quote are carried with explicit SUSPENDED_OR_NO_QUOTE_BLOCKED evidence; their sell proceeds must not be counted for residual buys. Runs must not remain open indefinitely because a suspended/no-quote sell order was submitted. MiniQMT broker status=50 open orders for untradable symbols must be reconciled as explicit blocked/carry evidence and handled by controlled cancel/terminalization policy, not fake success.",
+  "first_seen_at": "2026-06-17T10:57:33.325210Z",
+  "fix_branch": null,
+  "fix_commit": "0b9b21f87141f2ffe19fbfd90b6701d1ff4c1659",
+  "fixed_at": "2026-06-17T12:54:59.572586Z",
+  "github_issue_number": 1210,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1210",
+  "last_seen_at": "2026-06-17T10:57:33.325210Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1212",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET /api/v1/simulation-runtime/runs/simrun_ebf382bde34bf3f9; GET /api/v1/simulation-runtime/execution-plans/plan_84d0b654fa274992 and inspect 688689.SH SELL intent; GET /api/v1/qmt/orders?cancelable_only=true and inspect order 1098928449; GET http://127.0.0.1:19080/api/quote?code=688689 and verify open/high/low/total_hand/bid/ask are zero.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][SimulationRuntime] suspended/no-quote symbols must be filtered before LocalSim and MiniQMT order generation",
+  "trigger_condition": {
+    "fingerprint": "f84cbfbea2ca013616712240",
+    "source_event_id": "FE-20260617-f84cbfbea2ca"
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/services/paper_trading_v2/market_data.py backend/services/simulation_runtime/decision.py backend/services/simulation_runtime/lifecycle.py backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 73 passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-405 --module paper_v2 ... -> PASS workflow_gate=ready",
+    "python -m nox -s validation_module_registry_l0 -> success, 8 passed",
+    "python -m nox -s l0 -> success",
+    "python -m nox -s paper_v2_l3 -> success: 6 sessions; paper_v2_backend 624 passed, 1 skipped, 2 xfailed; data_quality_deep 10 passed, 21 skipped; paper_v2_ui 26 passed, 1 skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

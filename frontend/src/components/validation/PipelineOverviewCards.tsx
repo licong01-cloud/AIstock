@@ -9,6 +9,7 @@ import {
   type ValidationExecutionJob,
   type ValidationGithubPrSummary,
   type ValidationHealth,
+  type ValidationIssueCandidateSummary,
   type ValidationIssueWorkflowSummary,
   type ValidationLegacyDebtSummary,
   type ValidationMergeGate,
@@ -65,6 +66,7 @@ export type PipelineOverviewCardsProps = {
   plans?: ValidationPlan[];
   executions?: ValidationPage<ValidationExecutionJob> | null;
   mergeGate?: ValidationMergeGate | null;
+  issueCandidateSummary?: ValidationIssueCandidateSummary | null;
   issueWorkflowSummary?: ValidationIssueWorkflowSummary | null;
   moduleQuality?: ValidationModuleQualitySummary | null;
   moduleDetailSummary?: ValidationModuleQualitySummary | null;
@@ -176,10 +178,12 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
     const productionTouched = Boolean(props.health?.production_8001_touched || props.cardsSummary?.production_8001_touched);
     const planCount = props.plans?.length ?? props.health?.plan_catalog?.plan_count ?? 0;
     const tone = productionTouched ? "red" : toneFromState(state);
-    const codeIntel = props.validationSummary?.code_intelligence;
+    const codeIntel = props.codeIntelligenceSummary || props.validationSummary?.code_intelligence;
     const codegraph = isObject(codeIntel?.codegraph) ? codeIntel?.codegraph : {};
     const ua = isObject(codeIntel?.understand_anything) ? codeIntel?.understand_anything : {};
     const codeIntelWarnings = stringList(codeIntel?.warnings);
+    const codegraphFreshness =
+      objectField(codegraph, "effective_freshness") || objectField(codegraph, "freshness") || objectField(codegraph, "status") || "-";
     return {
       id: section.id,
       label: section.label,
@@ -198,7 +202,9 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ["runner", props.health?.runner || props.validationSummary?.runner],
         ["GitHub 连接", props.automationSummary?.gh_auth_status || props.githubIssueSummary?.data_state || props.githubPrSummary?.data_state],
         ["code intelligence", codeIntel?.data_state || "missing"],
-        ["CodeGraph freshness", objectField(codegraph, "freshness") || objectField(codegraph, "status") || "-"],
+        ["CodeGraph freshness", codegraphFreshness],
+        ["CodeGraph effective_source", objectField(codegraph, "effective_source") || "-"],
+        ["CodeGraph stale_metadata_warning", objectField(codegraph, "stale_metadata_warning") ?? false],
         ["UA summaries", objectField(ua, "summary_count") ?? "-"],
         ["code intelligence warnings", codeIntelWarnings.length ? codeIntelWarnings.join(" / ") : "none"],
         ["可选 API 降级", warningKeys.length ? warningKeys.join(" / ") : "无"],
@@ -216,7 +222,9 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
     const codegraph = isObject(codeIntel?.codegraph) ? codeIntel?.codegraph : {};
     const ua = isObject(codeIntel?.understand_anything) ? codeIntel?.understand_anything : {};
     const warningsList = stringList(codeIntel?.warnings);
-    const freshness = String(objectField(codegraph, "freshness") || objectField(codegraph, "status") || "missing");
+    const freshness = String(
+      objectField(codegraph, "effective_freshness") || objectField(codegraph, "freshness") || objectField(codegraph, "status") || "missing",
+    );
     const dataState = String(codeIntel?.data_state || "missing");
     const warningOnly = codeIntel?.blocking_for_issue_workflow === false;
     const tone = freshness === "fresh" && dataState === "complete" ? "green" : "yellow";
@@ -235,6 +243,8 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ["artifact_count", codeIntel?.artifact_count],
         ["artifact_roots", codeIntel?.artifact_roots],
         ["CodeGraph freshness", freshness],
+        ["CodeGraph effective_source", objectField(codegraph, "effective_source")],
+        ["CodeGraph stale_metadata_warning", objectField(codegraph, "stale_metadata_warning") ?? false],
         ["CodeGraph generated_at", objectField(codegraph, "generated_at")],
         ["CodeGraph artifact_path", objectField(codegraph, "artifact_path")],
         ["CodeGraph summary_ref", objectField(codegraph, "summary_ref")],
@@ -269,14 +279,16 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
 
   if (section.id === "issue_workflow") {
     const missing = numberValue(props.issueWorkflowSummary?.missing_scope_count) + numberValue(props.issueWorkflowSummary?.missing_required_verification_count);
+    const readyDrafts = numberValue(props.issueCandidateSummary?.issue_payload_ready_count);
+    const candidateWarnings = numberValue(props.issueCandidateSummary?.missing_issue_link_count);
     return {
       id: section.id,
       label: section.label,
       hint: section.hint,
-      tone: missing ? "yellow" : normalizeTone(backendCard?.health_tone || "green"),
-      state: missing ? "需补齐" : "可跟踪",
-      meta: `open ${display(props.issueWorkflowSummary?.open_count ?? objectField(backendCard?.summary, "open_count") ?? 0)}`,
-      risk: backendCard?.risk_score ?? missing * 12,
+      tone: missing || candidateWarnings ? "yellow" : normalizeTone(backendCard?.health_tone || "green"),
+      state: missing ? "needs-scope" : readyDrafts ? "issue-ready" : "ready",
+      meta: `open ${display(props.issueWorkflowSummary?.open_count ?? objectField(backendCard?.summary, "open_count") ?? 0)} / nightly ${display(props.issueCandidateSummary?.nightly_candidate_count ?? props.issueCandidateSummary?.candidate_count ?? 0)}`,
+      risk: backendCard?.risk_score ?? (missing + candidateWarnings) * 12,
       rows: [
         ...baseRows,
         ["open_count", props.issueWorkflowSummary?.open_count],
@@ -284,9 +296,13 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
         ["review_ready_count", props.issueWorkflowSummary?.review_ready_count],
         ["missing_scope_count", props.issueWorkflowSummary?.missing_scope_count],
         ["missing_required_verification_count", props.issueWorkflowSummary?.missing_required_verification_count],
+        ["nightly_candidate_count", props.issueCandidateSummary?.nightly_candidate_count],
+        ["issue_payload_ready_count", props.issueCandidateSummary?.issue_payload_ready_count],
+        ["candidate_status", props.issueCandidateSummary?.by_status],
+        ["candidate_no_submit_reasons", props.issueCandidateSummary?.no_submit_reason_counts],
         ["by_workflow_state", props.issueWorkflowSummary?.by_workflow_state],
       ],
-      reasonCodes: stringList(props.issueWorkflowSummary?.reason_codes),
+      reasonCodes: [...stringList(props.issueWorkflowSummary?.reason_codes), ...stringList(props.issueCandidateSummary?.reason_codes)],
     };
   }
 

@@ -5,7 +5,7 @@
 - 因子源代码文件是权威数据源，所有改造操作必须以文件系统为基础
 - 原始因子源代码文件（asset_path）严禁修改
 - 改造后代码必须先写入文件系统（qe_factors/），再更新数据库字段
-- 数据库中的 code_text / realtime_code_text 仅用于分析和展示，不作为改造依据
+- 数据库中的 code_text / realtime_code_text（历史字段名）仅用于分析和展示，不作为改造依据
 
 完整的因子代码改造工作流：
 1. 从文件系统读取原始因子代码（asset_path，禁止使用数据库 code_text）
@@ -25,7 +25,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...db.pg_pool import get_conn
-from .factor_code_transformer import FactorCodeTransformer
+from .factor_code_transformer import FactorCodeTransformer, NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT
 
 logger = logging.getLogger("aistock.factor_transformation_service")
 
@@ -105,10 +105,15 @@ def _call_llm(
 
 
 class FactorTransformationService:
-    """因子代码转换工作流服务"""
+    """Non-official live/simulation code transformation service.
+
+    This service may use RealtimeFactorDataLoader for transformed code and
+    must never be used by official factor metrics, correlation, or QE cache compute.
+    """
 
     def __init__(self):
-        self.transformer = FactorCodeTransformer()
+        self.data_source_scope = NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT
+        self.transformer = FactorCodeTransformer(usage_context=self.data_source_scope)
 
     def transform_factor(
         self,
@@ -257,7 +262,7 @@ class FactorTransformationService:
             # 若审核失败后需要重新改造，会再次覆盖此文件。
             self._update_job(job_id, status="ANALYSIS_REVIEWING")
             try:
-                temp_qe_code_path = self._save_realtime_code(
+                temp_qe_code_path = self._save_non_official_code(
                     factor_name, factor_source, current_code, "REVIEWING"
                 )
             except RuntimeError as e:
@@ -296,7 +301,7 @@ class FactorTransformationService:
 
                 # 修复后再次写入文件系统，然后重新审核
                 try:
-                    temp_qe_code_path = self._save_realtime_code(
+                    temp_qe_code_path = self._save_non_official_code(
                         factor_name, factor_source, current_code, "REVIEWING"
                     )
                     if temp_qe_code_path:
@@ -324,7 +329,7 @@ class FactorTransformationService:
             self._update_job(job_id, status="SUCCESS",
                 final_code_text=current_code, completed_at=_now_beijing())
             try:
-                final_qe_code_path = self._save_realtime_code(
+                final_qe_code_path = self._save_non_official_code(
                     factor_name, factor_source, current_code, "SUCCESS"
                 )
             except RuntimeError as e:
@@ -406,6 +411,10 @@ class FactorTransformationService:
             "trading_days_in_effective_range": len(effective_days),
         }
 
+    def _assert_non_official_live_scope(self) -> None:
+        if self.data_source_scope != NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT:
+            raise RuntimeError("factor transformation non-official live loader is not available outside live-only scope")
+
     def _run_original_factor_sample(
         self,
         factor_name: str,
@@ -421,6 +430,7 @@ class FactorTransformationService:
         from pathlib import Path
         import pandas as pd
         try:
+            self._assert_non_official_live_scope()
             from backend.data_service.realtime_factor_data_loader import RealtimeFactorDataLoader
             from backend.data_service.qe_data_service import build_static_factors
 
@@ -436,7 +446,7 @@ class FactorTransformationService:
                     adjust="qfq",
                 )
                 # RDAgent 因子使用无 $ 前缀列名（open, close, ...），
-                # RealtimeFactorDataLoader 返回的列名也是无前缀，直接写入即可
+                # 非官方 live/simulation loader 返回的列名也是无前缀，直接写入即可
                 df_pv.to_hdf(os.path.join(tmpdir, "daily_pv.h5"), key="data", mode="w")
 
                 df_static = build_static_factors(instruments, start_date, end_date)
@@ -798,11 +808,11 @@ except Exception:
         提示词结构参考 RDAgent CoSTEER evolving_strategy_factor_implementation，
         内容针对因子改造（而非因子研发）场景。
         """
-        system_prompt = f"""你是一位专业的Python量化因子改造工程师。你的任务是将RDAgent研发阶段生成的因子代码（原始代码）改造为可以直接从实时数据接口读取数据的版本。
+        system_prompt = f"""你是一位专业的Python量化因子改造工程师。你的任务是将RDAgent研发阶段生成的因子代码（原始代码）改造为可以直接从非官方 live/simulation 数据加载器读取数据的版本。
 
 ## 改造场景说明
 
-原始因子代码通过读取本地 HDF5/Parquet 文件获取数据。改造目标是将文件读取替换为通过 `_REALTIME_LOADER` 和 `_STATIC_FACTORS_LOADER` 接口实时获取数据，同时保持因子计算逻辑完全不变。
+原始因子代码通过读取本地 HDF5/Parquet 文件获取数据。改造目标是将文件读取替换为通过 `_REALTIME_LOADER` 和 `_STATIC_FACTORS_LOADER` 接口获取非官方 live/simulation 数据，同时保持因子计算逻辑完全不变。
 
 改造后的代码中已注入以下全局对象（运行时可用，无需在代码中定义或导入）：
 - `_REALTIME_LOADER`：替代 `pd.read_hdf('daily_pv.h5')`，提供行情数据
@@ -1053,7 +1063,7 @@ static_df = _STATIC_FACTORS_LOADER.load(
 ## 审核背景
 
 RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文件（daily_pv.h5、static_factors.parquet）获取数据。
-改造目标是将文件读取替换为通过 `_REALTIME_LOADER` 和 `_STATIC_FACTORS_LOADER` 接口实时获取数据，
+改造目标是将文件读取替换为通过 `_REALTIME_LOADER` 和 `_STATIC_FACTORS_LOADER` 接口获取非官方 live/simulation 数据，
 同时保持因子计算逻辑完全不变。
 
 改造后的代码运行时已注入以下全局对象（无需在代码中定义）：
@@ -1376,14 +1386,14 @@ RDAgent研发阶段生成的因子代码（原始代码）通过读取本地文�
     def _fail_job(self, job_id: str, factor_name: str, factor_source: str, error_message: str) -> Dict[str, Any]:
         self._update_job(job_id, status="FAILED", error_message=error_message, completed_at=_now_beijing())
         try:
-            self._save_realtime_code(factor_name, factor_source, None, "FAILED")
+            self._save_non_official_code(factor_name, factor_source, None, "FAILED")
         except Exception as e:
             logger.warning(f"_fail_job 更新数据库状态时出错（不影响失败结果）: {e}")
         logger.error(f"因子改造失败: {factor_name} ({factor_source}): {error_message[:200]}")
         return {"ok": False, "job_id": job_id, "factor_name": factor_name,
                 "factor_source": factor_source, "status": "FAILED", "message": error_message}
 
-    def _save_realtime_code(
+    def _save_non_official_code(
         self,
         factor_name: str,
         factor_source: str,

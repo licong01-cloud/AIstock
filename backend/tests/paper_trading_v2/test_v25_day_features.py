@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -42,6 +44,10 @@ class FakeAudit:
 
 
 class StaticV25Provider(DbV25DayFeatureProvider):
+    def __init__(self, *, turnover_rate_f: Any = 6.0, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.turnover_rate_f = turnover_rate_f
+
     def _previous_trading_day(self, before_date: date) -> date:
         if before_date == date(2024, 1, 3):
             return date(2024, 1, 2)
@@ -55,7 +61,7 @@ class StaticV25Provider(DbV25DayFeatureProvider):
         return {"open_li": 9000, "high_li": 11000, "low_li": 8000, "close_li": 10000, "volume_hand": 100, "amount_li": 1_000_000}
 
     def _load_daily_basic_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
-        return {"turnover_rate": 5.0, "turnover_rate_f": 6.0, "pb": 2.0}
+        return {"turnover_rate": 5.0, "turnover_rate_f": self.turnover_rate_f, "pb": 2.0}
 
     def _load_moneyflow_row(self, symbol: str, trade_date: date) -> dict[str, Any]:
         return {"net_mf_amount": 50.0}
@@ -108,6 +114,48 @@ def test_db_v25_day_feature_provider_fails_when_required_audit_is_missing() -> N
 
     with pytest.raises(DataUnavailableError, match="refresh status"):
         provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+
+@pytest.mark.parametrize(
+    ("turnover_rate_f", "source_value", "reason_code"),
+    [
+        (None, "None", "V25_DAY_FEATURE_TURNOVER_RATE_F_MISSING"),
+        (float("nan"), "nan", "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"),
+        ("nan", "nan", "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"),
+        (" NaN ", " NaN ", "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"),
+        (Decimal("NaN"), "NaN", "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"),
+        (Decimal("sNaN"), "sNaN", "V25_DAY_FEATURE_TURNOVER_RATE_F_NON_FINITE"),
+    ],
+)
+def test_db_v25_day_feature_provider_fails_closed_for_missing_free_float_turnover(
+    turnover_rate_f: Any,
+    source_value: str,
+    reason_code: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=turnover_rate_f)
+    caplog.set_level(logging.ERROR, logger="backend.services.paper_trading_v2.day_features")
+
+    with pytest.raises(DataUnavailableError, match="turnover_rate_f") as exc_info:
+        provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+    assert exc_info.value.context["reason_code"] == reason_code
+    assert exc_info.value.context["source_value"] == source_value
+    assert exc_info.value.context["fail_closed_policy"] == "exclude_symbol_for_trade_date"
+    assert exc_info.value.context["forbidden_fallback"] == "turnover_rate"
+    assert reason_code in caplog.text
+    assert "exclude_symbol_for_trade_date" in caplog.text
+
+
+@pytest.mark.parametrize("turnover_rate_f", ["bad", ""])
+def test_db_v25_day_feature_provider_still_fails_for_invalid_free_turnover(turnover_rate_f: Any) -> None:
+    provider = StaticV25Provider(conn_factory=lambda: None, refresh_audit=FakeAudit(), turnover_rate_f=turnover_rate_f)
+
+    with pytest.raises(DataUnavailableError, match="turnover_rate_f is invalid") as exc_info:
+        provider.load_day_features(symbol="000001.SZ", trade_date=date(2024, 1, 3))
+
+    assert exc_info.value.context["reason_code"] == "V25_DAY_FEATURE_TURNOVER_RATE_F_INVALID"
+    assert exc_info.value.context["fail_closed_policy"] == "exclude_symbol_for_trade_date"
 
 
 def test_market_data_includes_day_features_only_when_required() -> None:

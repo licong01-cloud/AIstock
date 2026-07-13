@@ -8,15 +8,16 @@ import {
   ThreadPrimitive,
   useLocalRuntime,
   useMessage,
+  useThreadRuntime,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
-import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
 
 import { BlockerCard } from "@/components/research-assistant/BlockerCard";
 import { EvidenceCard, evidenceCompleteness, normalizeEvidenceRef } from "@/components/research-assistant/EvidenceCard";
+import { asRecord as usageRecord, formatUsageNumber, usageStatusText, usageTotalCost } from "@/components/research-assistant/llm-usage-format";
 import {
   LOCAL_DATA_MANAGEMENT_CAPABILITY,
   LOCAL_DATA_MANAGEMENT_PHASES,
@@ -25,8 +26,11 @@ import {
   researchAssistantApi,
   type AssistantCatalogReadiness,
   type AssistantChatTurnResult,
+  type AssistantDecisionOption,
+  type AssistantDecisionRequest,
   type AssistantBlockerCard,
   type AssistantEvidenceCard,
+  type AssistantLlmUsageTotals,
   type JsonObject,
   type LocalDataPhase,
   type LocalDataPhaseKey,
@@ -100,8 +104,11 @@ type ChatCards = {
     show_clarification_card?: boolean;
     show_context_health_badge?: boolean;
     details_default_collapsed?: boolean;
+    developer_diagnostics?: boolean;
   };
 };
+
+type PendingDecisionState = AssistantDecisionRequest | null;
 
 type CatalogNotReadyDetail = {
   code?: string;
@@ -148,9 +155,10 @@ function routeDecision(cards: ChatCards): McpRouteDecision | null {
 function stripAssistantToolChoiceMarkup(text: string, route: McpRouteDecision | null): string {
   if (!text.toLowerCase().includes("<assistant_tool_choice")) return text;
   const cleaned = text.replace(/<assistant_tool_choice\b[^>]*>[\s\S]*?<\/assistant_tool_choice>/gi, "").trim();
+  const domain = route?.domain ? textValue(route.domain).replaceAll("_", " ") : "业务工具";
   const prefix = route
-    ? `我已完成 MCP route decision：${route.domain || "mcp"} -> ${route.server_key}/${route.tool_name}。确认前只展示 preflight、计划和 summary-first 结果，不直接执行写操作。`
-    : "我已识别到需要工具选择，会先展示 route decision、preflight 和确认边界，不直接执行写操作。";
+    ? `我已识别为${domain}需求。确认前只展示安全预检、计划和业务结果，不直接执行写操作。`
+    : "我已识别到需要工具选择，会先展示安全预检、计划和确认边界，不直接执行写操作。";
   return [prefix, cleaned].filter(Boolean).join("\n\n");
 }
 
@@ -194,6 +202,44 @@ function textValue(value: unknown): string {
     return items.length ? items.join(" / ") : "-";
   }
   return "-";
+}
+
+const MCP_PROCESS_MARKERS = [
+  "summary-first",
+  "summary_first",
+  "route decision",
+  "artifact_ref",
+  "payload budget",
+  "raw_payload",
+  "server_key",
+  "tool_name",
+  "detail tool",
+  "detail_tool",
+  "transport",
+  "research_assistant_catalog_summary_adapter",
+  "summary_adapter",
+  "source=",
+  "as_of=",
+  "referenced detail",
+];
+
+function containsMcpProcessMarker(value: unknown): boolean {
+  const text = textValue(value).toLowerCase();
+  if (MCP_PROCESS_MARKERS.some((marker) => text.includes(marker))) return true;
+  if (/aistock-[a-z0-9-]+\/[a-z0-9_:-]+/.test(text)) return true;
+  if (
+    /^(?:[a-z0-9-]+\/)?[a-z0-9]+(?:_[a-z0-9]+){2,}$/.test(text) &&
+    /(local_data|factor_|model_|strategy_|execution_|external_|_list|_get|_plan|_query|_confirmed)/.test(text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function safeBusinessText(value: unknown, fallback = "-"): string {
+  const text = textValue(value);
+  if (text === "-" || containsMcpProcessMarker(text)) return fallback;
+  return text;
 }
 
 function recordList(value: unknown): JsonObject[] {
@@ -271,7 +317,7 @@ function extractBlockerCards(cards: JsonObject): AssistantBlockerCard[] {
       blocker_id: blockerId,
       status: "approval_required",
       reason: String(proposal.reason || proposal.title || "High risk action requires approval"),
-      next_step: String(proposal.next_step || "Review the Workbench preflight and provide explicit confirmation before execution."),
+      next_step: String(proposal.next_step || "请在对话内审批卡片查看预检结果，并输入精确确认令牌后再执行。"),
       provenance: { source: "action_proposals", action_proposal_id: proposal.action_proposal_id || blockerId },
       as_of: typeof proposal.as_of === "string" ? proposal.as_of : undefined,
     } as AssistantBlockerCard];
@@ -284,7 +330,7 @@ function assistantSummaryText(result: AssistantChatTurnResult): string {
   const contentJson = asRecord(result.assistant_message?.content_json) || {};
   const summary = String(cards.orchestrator_summary || cards.summary || contentJson.summary || result.assistant_message?.content_text || "").trim();
   if (!summary || summary.startsWith("{") || summary.includes("worker_results") || summary.includes("payload_json")) {
-    return "The orchestrator summary is unavailable or unsafe for the main bubble. Open Workbench or Trace for worker process details.";
+    return "执行摘要暂不可安全展示。请在对话内审批卡片或 Trace 中查看过程细节。";
   }
   return summary;
 }
@@ -293,22 +339,8 @@ function hasMcpExecutionCards(cards: ChatCards): boolean {
   return Boolean(
     asRecord(cards.mcp_execution_result) ||
       asRecord(cards.mcp_summary_result) ||
-      recordList(cards.mcp_result_cards).length ||
-      asRecord(cards.mcp_tool_event),
+      recordList(cards.mcp_result_cards).length,
   );
-}
-
-function humanOmittedSection(section: string): string {
-  const labels: Record<string, string> = {
-    raw_payload: "原始 payload",
-    full_logs: "完整日志",
-    matrix: "矩阵",
-    model_weights: "模型权重",
-    training_curves: "训练曲线",
-    factor_value_rows: "因子明细行",
-    database_rows: "数据库原始行",
-  };
-  return labels[section] || section.replaceAll("_", " ");
 }
 
 function mcpCountText(summary: JsonObject, execution: JsonObject): string {
@@ -320,15 +352,14 @@ function mcpCountText(summary: JsonObject, execution: JsonObject): string {
 }
 
 function mcpSummaryItemTitle(item: JsonObject, index: number): string {
-  return textValue(
+  return safeBusinessText(
     item.title ||
       item.name ||
       item.factor_name ||
       item.model_name ||
       item.strategy_name ||
-      item.tool_name ||
-      item.server_key ||
-      `概要条目 ${index + 1}`,
+      item.result_type ||
+      `业务条目 ${index + 1}`,
   );
 }
 
@@ -336,11 +367,10 @@ function mcpSummaryItemMeta(item: JsonObject): string {
   return [
     item.category,
     item.status,
-    item.risk_level,
-    item.server_key && item.tool_name ? `${item.server_key}/${item.tool_name}` : item.tool_name,
+    item.result_type,
   ]
     .map((value) => textValue(value))
-    .filter((value) => value && value !== "-")
+    .filter((value) => value && value !== "-" && !containsMcpProcessMarker(value))
     .join(" · ");
 }
 
@@ -414,12 +444,24 @@ function shouldShowSideDetails(latest: AssistantChatTurnResult | null, cards: Ch
   return hasPlan || hasClarification || hasProposal || Boolean(routeDecision(cards)) || hasMcpExecutionCards(cards) || hasLocalDataContext(cards);
 }
 
+function decisionFromResult(result: AssistantChatTurnResult): PendingDecisionState {
+  const direct = asRecord(result.decision_request);
+  if (direct?.decision_id && direct.kind) return direct as AssistantDecisionRequest;
+  const contentJson = asRecord(result.assistant_message?.content_json);
+  const nested = asRecord(contentJson?.decision_request);
+  if (nested?.decision_id && nested.kind) return nested as AssistantDecisionRequest;
+  return null;
+}
+
 function createAdapter(
   onTurn: (result: AssistantChatTurnResult) => void,
   onStage: (steps: RailStep[]) => void,
   onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void,
   conversationId: string | null,
   setConversationId: (id: string) => void,
+  pendingDecision: PendingDecisionState,
+  setPendingDecision: (decision: PendingDecisionState) => void,
+  developerDiagnostics: boolean,
 ): ChatModelAdapter {
   return {
     async run(options) {
@@ -429,8 +471,15 @@ function createAdapter(
       }
       onStage(thinkingSteps);
       let result: AssistantChatTurnResult;
-      const payload: Record<string, unknown> = { message, phase: "planning", risk_level: "medium", allow_execute: false };
+      const payload: Record<string, unknown> = {
+        message,
+        phase: "planning",
+        risk_level: "medium",
+        allow_execute: false,
+        developer_diagnostics: developerDiagnostics,
+      };
       if (conversationId) payload.conversation_id = conversationId;
+      if (pendingDecision) payload.decision_id = pendingDecision.decision_id;
       try {
         result = await researchAssistantApi.chatTurn(payload);
       } catch (error) {
@@ -446,9 +495,15 @@ function createAdapter(
       const newConversationId = (result.conversation as Record<string, unknown> | null)?.conversation_id as string | undefined;
       if (newConversationId && !conversationId) setConversationId(newConversationId);
       onTurn(result);
+      setPendingDecision(decisionFromResult(result));
       const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
       if (cards.status_rail?.length) onStage(cards.status_rail);
-      const reply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
+      const rawReply = stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards));
+      const reply = containsMcpProcessMarker(rawReply)
+        ? hasMcpExecutionCards(cards)
+          ? "已完成业务查询，结果见下方业务汇总。"
+          : "已识别到业务工具需求，安全边界已展示；不会直接执行写操作。"
+        : rawReply;
       return { content: [{ type: "text", text: reply }] };
     },
   };
@@ -507,7 +562,6 @@ function TaskProgressRail({ steps, latest }: { steps: RailStep[]; latest: Assist
           </p>
         </div>
       ) : null}
-      <Link className="ra-chat-admin-link" href="/research-assistant/admin">{chatCopy.rail.adminLink}</Link>
     </aside>
   );
 }
@@ -531,34 +585,31 @@ function ChatMessage() {
 function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
   const execution = asRecord(cards.mcp_execution_result) || {};
   const summary = asRecord(cards.mcp_summary_result) || {};
-  const toolEvent = asRecord(cards.mcp_tool_event) || {};
   const resultCards = mcpResultCards(cards);
-  if (!Object.keys(execution).length && !Object.keys(summary).length && !resultCards.length && !Object.keys(toolEvent).length) return null;
+  if (!Object.keys(execution).length && !Object.keys(summary).length && !resultCards.length) return null;
 
-  const route = textValue(
-    execution.route ||
-      (execution.server_key && execution.tool_name ? `${execution.server_key}/${execution.tool_name}` : undefined) ||
-      resultCards[0]?.route ||
-      (toolEvent.server_key && toolEvent.tool_name ? `${toolEvent.server_key}/${toolEvent.tool_name}` : undefined),
-  );
-  const status = textValue(execution.status || toolEvent.status || "succeeded");
+  const status = textValue(execution.status || "succeeded");
   const countText = mcpCountText(summary, execution);
   const responseSummary = asRecord(execution.response_summary) || {};
   const items = recordList(summary.items).slice(0, 5);
-  const omittedSections = stringList(summary.omitted_sections);
-  const artifactRefs = stringList(summary.artifact_refs || toolEvent.artifact_refs || responseSummary.artifact_refs);
-  const nextStep = textValue(summary.next_step || resultCards[0]?.next_step || responseSummary.next_step);
-  const detailTool = textValue(summary.detail_tool || responseSummary.detail_tool);
+  const nextStep = safeBusinessText(summary.next_step || resultCards[0]?.next_step || responseSummary.next_step);
+  const safeResultCards = resultCards
+    .map((card) => ({
+      title: safeBusinessText(card.title || card.summary, ""),
+      summary: safeBusinessText(card.summary, ""),
+      nextStep: safeBusinessText(card.next_step, ""),
+    }))
+    .filter((card) => card.title || card.summary || card.nextStep);
 
   return (
     <div className="ra-chat-confirm-card" data-testid="ra-mcp-summary-card">
-      <strong>已执行只读 MCP 摘要查询</strong>
-      <p>{route} · {status} · summary-first</p>
-      {resultCards.map((card, index) => (
-        <div className="ra-chat-mcp-result" key={`${card.title || card.route || "mcp-card"}-${index}`}>
-          <strong>{textValue(card.title || card.route || route)}</strong>
-          <p>{textValue(card.summary)}</p>
-          {card.next_step ? <p>下一步：{textValue(card.next_step)}</p> : null}
+      <strong>已完成只读业务查询</strong>
+      <p>状态：{status}。</p>
+      {safeResultCards.map((card, index) => (
+        <div className="ra-chat-mcp-result" key={`${card.title || card.summary || "business-card"}-${index}`}>
+          {card.title ? <strong>{card.title}</strong> : null}
+          {card.summary ? <p>{card.summary}</p> : null}
+          {card.nextStep ? <p>下一步：{card.nextStep}</p> : null}
         </div>
       ))}
       {countText ? <p>{countText}</p> : null}
@@ -572,9 +623,6 @@ function McpSummaryResultCard({ cards }: { cards: ChatCards }) {
           ))}
         </ul>
       ) : null}
-      {omittedSections.length ? <p>已折叠：{omittedSections.map(humanOmittedSection).join(" / ")}。</p> : null}
-      {artifactRefs.length ? <p>审计引用：{artifactRefs.slice(0, 3).join(" / ")}</p> : null}
-      {detailTool !== "-" ? <p>需要详情时再调用：{detailTool}</p> : null}
       {nextStep !== "-" ? <p>下一步：{nextStep}</p> : null}
     </div>
   );
@@ -612,6 +660,130 @@ function RuntimeCodePanel({ latest }: { latest: AssistantChatTurnResult | null }
   );
 }
 
+function turnUsageFromTrace(latest: AssistantChatTurnResult | null): { summary?: AssistantLlmUsageTotals; eventRefs: string[]; traceId?: string; degradedReason?: string } {
+  const trace = usageRecord(latest?.trace);
+  const costJson = usageRecord(trace.cost_json);
+  const summary = usageRecord(costJson.usage_summary) as AssistantLlmUsageTotals;
+  const eventRefs = Array.isArray(costJson.usage_event_refs) ? costJson.usage_event_refs.map((item) => String(item)) : [];
+  const traceId = typeof trace.trace_id === "string" ? trace.trace_id : undefined;
+  if (isUsableTurnUsageSummary(summary) && summary.status !== "pending" && summary.status !== "failed") {
+    return { summary, eventRefs, traceId };
+  }
+  const reason = String(summary?.reason_code || costJson.reason_code || "llm_usage_summary_unavailable");
+  return { eventRefs, traceId, degradedReason: reason };
+}
+
+function isUsableTurnUsageSummary(summary?: AssistantLlmUsageTotals | null): summary is AssistantLlmUsageTotals {
+  return Boolean(summary && Number(summary.call_count || 0) > 0);
+}
+
+function TurnUsagePanel({ latest, history }: { latest: AssistantChatTurnResult | null; history: AssistantChatTurnResult[] }) {
+  const [lookupSummary, setLookupSummary] = useState<AssistantLlmUsageTotals | null>(null);
+  const [lookupReason, setLookupReason] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const initialUsage = useMemo(() => turnUsageFromTrace(latest), [latest]);
+  const traceId = initialUsage.traceId;
+  const historyRows = useMemo(
+    () =>
+      history.slice(-5).map((item, index, rows) => {
+        const usage = turnUsageFromTrace(item);
+        const summary = usage.summary;
+        const ordinal = history.length - rows.length + index + 1;
+        return {
+          key: item.assistant_message?.message_id || usage.traceId || `${ordinal}`,
+          ordinal,
+          summary,
+          reason: usage.degradedReason,
+        };
+      }),
+    [history],
+  );
+
+  useEffect(() => {
+    setLookupSummary(null);
+    setLookupReason(null);
+    setDetailsOpen(false);
+    if (!latest || initialUsage.summary || !traceId) return;
+    let cancelled = false;
+    researchAssistantApi.llmUsageSummary({ trace_id: traceId })
+      .then((summary) => {
+        if (cancelled) return;
+        const nextSummary = summary.summary || null;
+        if (isUsableTurnUsageSummary(nextSummary)) {
+          setLookupSummary(nextSummary);
+        } else {
+          const degraded = usageRecord(nextSummary);
+          setLookupReason(String(degraded.reason_code || degraded.status || "llm_usage_summary_unavailable"));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) setLookupReason(error instanceof Error ? error.message : "llm_usage_summary_lookup_failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [latest, initialUsage.summary, traceId]);
+
+  if (!latest) {
+    return (
+      <section className="ra-chat-card ra-turn-usage-panel" data-testid="ra-turn-usage-panel">
+        <span className="ra-chat-eyebrow">本轮消耗</span>
+        <h2>等待对话完成</h2>
+        <p>每次助手回答完成后，这里会显示本轮 LLM 调用、token 和成本；不会写入回答正文。</p>
+      </section>
+    );
+  }
+  const usage = { ...initialUsage, summary: initialUsage.summary || lookupSummary || undefined };
+  const summary = usage.summary;
+  const messageId = latest.assistant_message?.message_id;
+  const degradedReason = lookupReason || usage.degradedReason;
+  return (
+    <section className="ra-chat-card ra-turn-usage-panel" data-testid="ra-turn-usage-panel">
+      <span className="ra-chat-eyebrow">本轮消耗</span>
+      <h2>{summary ? `${formatUsageNumber(summary.call_count)} 次 LLM 调用` : "消耗统计暂不可用"}</h2>
+      {summary ? (
+        <>
+          <div className="ra-turn-usage-grid">
+            <span>输入 <strong>{formatUsageNumber(summary.prompt_tokens)}</strong></span>
+            <span>输出 <strong>{formatUsageNumber(summary.completion_tokens)}</strong></span>
+            <span>总计 <strong>{formatUsageNumber(summary.total_tokens)}</strong></span>
+            <span>成本 <strong>{usageTotalCost(summary)}</strong></span>
+          </div>
+          <p>{usageStatusText(summary)}</p>
+          {(summary.estimated_usage_event_count || summary.unavailable_usage_event_count || summary.unavailable_cost_event_count || summary.failed_cost_event_count) ? (
+            <p>
+              估算 {formatUsageNumber(summary.estimated_usage_event_count)}；usage 不可用 {formatUsageNumber(summary.unavailable_usage_event_count)}；cost 不可用/失败 {formatUsageNumber((summary.unavailable_cost_event_count || 0) + (summary.failed_cost_event_count || 0))}。
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p className="ra-turn-usage-degraded">本轮消耗统计暂不可用：{degradedReason}</p>
+      )}
+      <details className="ra-turn-usage-details" onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>查看 ledger refs / trace</summary>
+        {detailsOpen ? (
+          <>
+            <p className="ra-mono">message_id={messageId || "-"}</p>
+            <p className="ra-mono">trace_id={usage.traceId || "-"}</p>
+            <p className="ra-mono">refs={usage.eventRefs.length ? usage.eventRefs.join(", ") : "-"}</p>
+          </>
+        ) : null}
+      </details>
+      {historyRows.length ? (
+        <div className="ra-turn-usage-history" data-testid="ra-turn-usage-history">
+          <p>本会话已完成 {formatUsageNumber(history.length)} 轮；下方保留最近 {formatUsageNumber(historyRows.length)} 轮消耗。</p>
+          {historyRows.map((row) => (
+            <span key={row.key}>
+              第 {formatUsageNumber(row.ordinal)} 轮：
+              {row.summary ? `${formatUsageNumber(row.summary.total_tokens)} tokens / ${usageTotalCost(row.summary)}` : `暂不可用：${row.reason || "llm_usage_summary_unavailable"}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | null }) {
   if (!latest) return null;
   const cards = asCards(latest.cards || latest.assistant_message?.content_json?.cards);
@@ -628,7 +800,6 @@ function Phase7EvidencePanel({ latest }: { latest: AssistantChatTurnResult | nul
         {evidenceCards.map((card) => <EvidenceCard card={card} key={card.card_id} />)}
         {blockerCards.map((card) => <BlockerCard card={card} key={card.blocker_id} />)}
       </div>
-      {latest.task?.task_id ? <Link className="ra-chat-admin-link" href={`/research-assistant/workbench?task_id=${encodeURIComponent(latest.task.task_id)}`}>Open Workbench process</Link> : null}
     </section>
   );
 }
@@ -681,11 +852,9 @@ function PlanSummary({ latest }: { latest: AssistantChatTurnResult | null }) {
       ) : null}
       {route ? (
         <div className="ra-chat-confirm-card" data-testid="ra-mcp-route-card">
-          <strong>MCP route decision</strong>
-          <p>{route.domain || "mcp"} {"->"} {route.server_key}/{route.tool_name}</p>
-          <p>{route.summary_first ? "summary-first：列表只展示概要，详情按需展开。" : "按工具返回结果展示。"}</p>
+          <strong>业务工具安全边界</strong>
+          <p>需求类型：{safeBusinessText(route.domain, "业务查询").replaceAll("_", " ")}。</p>
           <p>{route.confirmation_required ? "需要确认和审批后才可执行。" : route.preflight_required ? "先执行 preflight/计划，不直接写入。" : "只读查询，不执行写操作。"}</p>
-          {route.reason ? <p>{route.reason}</p> : null}
         </div>
       ) : null}
       <McpSummaryResultCard cards={cards} />
@@ -741,13 +910,169 @@ function CatalogSetupCard({
   );
 }
 
-function AssistantThread() {
+function DeveloperDiagnosticsToggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: Dispatch<SetStateAction<boolean>>;
+}) {
+  return (
+    <button
+      className={`ra-chat-debug-toggle${enabled ? " ra-chat-debug-toggle-on" : ""}`}
+      type="button"
+      onClick={() => onChange((current) => !current)}
+      aria-pressed={enabled}
+    >
+      开发者调试 {enabled ? "开" : "关"}
+    </button>
+  );
+}
+
+function InlineDecisionBar({
+  decision,
+  conversationId,
+  developerDiagnostics,
+  onTurn,
+  onStage,
+  onCatalogIssue,
+  setConversationId,
+  setPendingDecision,
+}: {
+  decision: PendingDecisionState;
+  conversationId: string | null;
+  developerDiagnostics: boolean;
+  onTurn: (result: AssistantChatTurnResult) => void;
+  onStage: (steps: RailStep[]) => void;
+  onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void;
+  setConversationId: (id: string) => void;
+  setPendingDecision: (decision: PendingDecisionState) => void;
+}) {
+  const runtime = useThreadRuntime();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const options = decision?.options || [];
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [decision?.decision_id]);
+
+  const submitOption = useCallback(
+    async (option: AssistantDecisionOption) => {
+      if (!decision || submitting) return;
+      setSubmitting(true);
+      onStage(thinkingSteps);
+      runtime.append({ role: "user", content: [{ type: "text", text: option.label }], startRun: false });
+      const payload: Record<string, unknown> = {
+        message: option.label,
+        phase: "planning",
+        risk_level: "medium",
+        allow_execute: false,
+        decision_id: decision.decision_id,
+        decision_option_id: option.id,
+        developer_diagnostics: developerDiagnostics,
+      };
+      if (conversationId) payload.conversation_id = conversationId;
+      try {
+        const result = await researchAssistantApi.chatTurn(payload);
+        onCatalogIssue(null);
+        const newConversationId = (result.conversation as Record<string, unknown> | null)?.conversation_id as string | undefined;
+        if (newConversationId && !conversationId) setConversationId(newConversationId);
+        onTurn(result);
+        setPendingDecision(decisionFromResult(result));
+        const cards = asCards(result.cards || result.assistant_message?.content_json?.cards);
+        if (cards.status_rail?.length) onStage(cards.status_rail);
+        runtime.append({
+          role: "assistant",
+          content: [{ type: "text", text: stripAssistantToolChoiceMarkup(assistantSummaryText(result) || chatCopy.fallbackReply, routeDecision(cards)) }],
+          startRun: false,
+        });
+      } catch (error) {
+        const detail = catalogNotReadyDetail(error);
+        if (detail) {
+          onCatalogIssue(detail);
+          onStage(initialSteps);
+          runtime.append({ role: "assistant", content: [{ type: "text", text: catalogSetupReply(detail) }], startRun: false });
+        } else {
+          runtime.append({
+            role: "assistant",
+            content: [{ type: "text", text: error instanceof Error ? error.message : "decision_request 提交失败" }],
+            startRun: false,
+          });
+        }
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [conversationId, decision, developerDiagnostics, onCatalogIssue, onStage, onTurn, runtime, setConversationId, setPendingDecision, submitting],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (!options.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedIndex((index) => (index + 1) % options.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedIndex((index) => (index - 1 + options.length) % options.length);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        void submitOption(options[selectedIndex]);
+      }
+    },
+    [options, selectedIndex, submitOption],
+  );
+
+  if (!decision) return null;
+  return (
+    <div className="ra-inline-decision" role="group" aria-label="对话内决策" tabIndex={0} onKeyDown={handleKeyDown}>
+      <span className="ra-chat-eyebrow">{decision.kind === "approve_action" ? "Approval" : "Clarify"}</span>
+      <strong>{decision.prompt_text}</strong>
+      {options.length ? (
+        <div className="ra-inline-decision-options">
+          {options.map((option, index) => (
+            <button
+              className={`ra-inline-decision-option${index === selectedIndex ? " ra-inline-decision-option-selected" : ""}`}
+              type="button"
+              key={option.id}
+              onMouseEnter={() => setSelectedIndex(index)}
+              onClick={() => void submitOption(option)}
+              disabled={submitting}
+            >
+              <span>{index === selectedIndex ? ">" : " "}</span>
+              <strong>{option.label}</strong>
+              {option.description ? <small>{option.description}</small> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {decision.approve_requires_option ? (
+        <p>生产敏感审批必须选择内联选项；拒绝仍可直接输入自然语言。</p>
+      ) : decision.allow_free_text ? (
+        <p>也可以直接在输入框用自然语言回复。</p>
+      ) : null}
+    </div>
+  );
+}
+
+function AssistantThread(props: {
+  pendingDecision: PendingDecisionState;
+  conversationId: string | null;
+  developerDiagnostics: boolean;
+  onTurn: (result: AssistantChatTurnResult) => void;
+  onStage: (steps: RailStep[]) => void;
+  onCatalogIssue: (detail: CatalogNotReadyDetail | null) => void;
+  setConversationId: (id: string) => void;
+  setPendingDecision: (decision: PendingDecisionState) => void;
+}) {
   return (
     <ThreadPrimitive.Root className="ra-chat-thread-root">
       <ThreadPrimitive.Viewport className="ra-chat-viewport">
         <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
         <ThreadPrimitive.ViewportFooter />
       </ThreadPrimitive.Viewport>
+      <InlineDecisionBar {...props} decision={props.pendingDecision} />
       <ComposerPrimitive.Root className="ra-chat-composer">
         <ComposerPrimitive.Input
           className="ra-chat-input"
@@ -768,13 +1093,18 @@ export default function ResearchAssistantChatPage() {
   const [initializingCatalogs, setInitializingCatalogs] = useState(false);
   const [catalogInitMessage, setCatalogInitMessage] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [turnUsageHistory, setTurnUsageHistory] = useState<AssistantChatTurnResult[]>([]);
+  const [pendingDecision, setPendingDecision] = useState<PendingDecisionState>(null);
+  const [developerDiagnostics, setDeveloperDiagnostics] = useState(false);
 
   const newConversation = useCallback(() => {
     setConversationId(null);
     setLatest(null);
+    setTurnUsageHistory([]);
     setSteps(initialSteps);
     setCatalogIssue(null);
     setCatalogInitMessage(null);
+    setPendingDecision(null);
   }, []);
 
   const initializeCatalogs = useCallback(async () => {
@@ -798,7 +1128,25 @@ export default function ResearchAssistantChatPage() {
     }
   }, []);
 
-  const adapter = useMemo(() => createAdapter(setLatest, setSteps, setCatalogIssue, conversationId, setConversationId), [conversationId]);
+  const handleTurn = useCallback((result: AssistantChatTurnResult) => {
+    setLatest(result);
+    setTurnUsageHistory((prev) => [...prev, result]);
+  }, []);
+
+  const adapter = useMemo(
+    () =>
+      createAdapter(
+        handleTurn,
+        setSteps,
+        setCatalogIssue,
+        conversationId,
+        setConversationId,
+        pendingDecision,
+        setPendingDecision,
+        developerDiagnostics,
+      ),
+    [conversationId, developerDiagnostics, handleTurn, pendingDecision],
+  );
   const runtime = useLocalRuntime(adapter, { initialMessages: welcomeMessages });
 
   return (
@@ -809,6 +1157,7 @@ export default function ResearchAssistantChatPage() {
           <span className="ra-chat-eyebrow">{chatCopy.hero.eyebrow}</span>
           <h1>{chatCopy.hero.title}</h1>
           <p>{chatCopy.hero.body}</p>
+          <DeveloperDiagnosticsToggle enabled={developerDiagnostics} onChange={setDeveloperDiagnostics} />
           {conversationId ? (
             <button className="ra-chat-new-session-button" type="button" onClick={newConversation}>
               {chatCopy.hero.newConversation}
@@ -816,7 +1165,16 @@ export default function ResearchAssistantChatPage() {
           ) : null}
         </div>
         <AssistantRuntimeProvider runtime={runtime}>
-          <AssistantThread />
+          <AssistantThread
+            pendingDecision={pendingDecision}
+            conversationId={conversationId}
+            developerDiagnostics={developerDiagnostics}
+            onTurn={handleTurn}
+            onStage={setSteps}
+            onCatalogIssue={setCatalogIssue}
+            setConversationId={setConversationId}
+            setPendingDecision={setPendingDecision}
+          />
         </AssistantRuntimeProvider>
       </section>
       {catalogIssue ? (
@@ -827,11 +1185,14 @@ export default function ResearchAssistantChatPage() {
           onInitialize={initializeCatalogs}
         />
       ) : (
-        <>
-          <Phase7EvidencePanel latest={latest} />
-          <RuntimeCodePanel latest={latest} />
-          <PlanSummary latest={latest} />
-        </>
+        developerDiagnostics ? (
+          <>
+            <Phase7EvidencePanel latest={latest} />
+            <TurnUsagePanel latest={latest} history={turnUsageHistory} />
+            <RuntimeCodePanel latest={latest} />
+            <PlanSummary latest={latest} />
+          </>
+        ) : null
       )}
     </main>
   );

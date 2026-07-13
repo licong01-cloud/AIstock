@@ -1,0 +1,101 @@
+{
+  "actual": "Read-only partial evidence insufficiency can return an overall structured error instead of available evidence plus gaps.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/service.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260625_BUG-524-ra-read-only-partial-evidence-should-degrade-instead-of-fail-closed.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-524",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-25T03:35:31.738264Z",
+  "description": "Read-only partial evidence insufficiency can return an overall structured error instead of available evidence plus gaps.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-4bc1ad0ddaf9",
+      "timestamp": "2026-06-25T03:35:31.738261Z"
+    },
+    {
+      "action": "evidence_reproduced",
+      "actor": "codex",
+      "note": "Before fix, read-only partial stock-depth evidence was blocked as fail-closed instead of degraded. Guard reason/stopped_reason=stock_depth_required_evidence_missing; collected read-only quote/kline/fund_flow evidence had real source/as_of, while other dimensions were missing.",
+      "timestamp": "2026-06-25T07:05:31Z"
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "note": "Added side_effect_level propagation and read_only partial-evidence degradation. Degradation is gated by action mechanism metadata: all attempted calls/results must be read_only, no program/config errors, at least one sourced business evidence result, and anti-hallucination redlines still pass. No new question keyword/type classifier was added for the degradation decision; write/production_sensitive/program/config/placeholder/unsourced failures remain fail-closed.",
+      "timestamp": "2026-06-25T07:05:31Z"
+    },
+    {
+      "action": "validation",
+      "actor": "codex",
+      "note": "Passed: targeted pytest test_react_grounding.py (14), targeted pytest test_service.py (110), ruff changed Python files, git diff --check, nox l0, validation_module_registry_l0, ra_phase0_baseline (349), ra_phase5_agent_teams (13), research_assistant_backend (349), research_assistant_mcp_contract (38), ra_phase7_full_accept (349 backend tests + frontend lint/build + Playwright 4/4 and 9/9 + crosscheck/catalog/ownership). No production service/DB/DDL touched; only nox-owned test port 3011 webServer teardown was stopped after Playwright tests completed to release the Windows runner.",
+      "timestamp": "2026-06-25T07:05:31Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Read-only partial evidence gaps produce a grounded degraded answer with explicit missing dimensions; write/side-effect failures, anti-hallucination failures, and program/config errors still fail-closed.",
+  "first_seen_at": "2026-06-25T03:35:31.738264Z",
+  "fix_branch": null,
+  "fix_commit": "d09894779bc1d72e57b8f46684119653b903534b",
+  "fixed_at": "2026-06-25T08:07:40.121490Z",
+  "github_issue_number": 1632,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1632",
+  "last_seen_at": "2026-06-25T03:35:31.738264Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1634",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "RA chat with a read-only question where one dimension/tool returns empty and other dimensions have grounded data",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "research_assistant_backend",
+    "ra_phase7_full_accept",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA read-only partial evidence should degrade instead of fail-closed",
+  "trigger_condition": {
+    "fingerprint": "4bc1ad0ddaf915c46d29dfcb",
+    "source_event_id": "FE-20260625-4bc1ad0ddaf9"
+  },
+  "validation_evidence": [
+    "gh pr view 1634 --json state,mergedAt,mergeCommit,statusCheckRollup -> merged with checks green"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

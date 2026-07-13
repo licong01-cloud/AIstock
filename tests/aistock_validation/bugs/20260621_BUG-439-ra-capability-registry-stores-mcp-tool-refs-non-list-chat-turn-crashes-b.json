@@ -1,0 +1,101 @@
+{
+  "actual": "Any RA chat question can fail with reason_code=chat_turn_unexpected_error, stage=chat_turn, exception_type=ValueError, error_summary=capability skill_library.reuse mcp_tool_refs must be a list.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260621_BUG-439-ra-capability-registry-stores-mcp-tool-refs-non-list-chat-turn-crashes-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/research_assistant/repository.py",
+    "backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.sql",
+    "backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.rollback.sql",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_schema_contract.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-439",
+  "closed_at": "2026-06-21T02:08:00Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T17:33:59.111728Z",
+  "description": "Any RA chat question can fail with reason_code=chat_turn_unexpected_error, stage=chat_turn, exception_type=ValueError, error_summary=capability skill_library.reuse mcp_tool_refs must be a list.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-ce36e22f9db2",
+      "timestamp": "2026-06-20T17:33:59.111724Z"
+    },
+    {
+      "action": "scope_expansion_for_bug_439_implementation",
+      "actor": "codex",
+      "note": "Expanded scope for BUG-439 implementation: service registry-read hardening, repository JSON serialization fix, RA upgrade repair migration forward/rollback, and offline tests. production_ddl_gate set to pending because a repair migration is added but Codex will not apply production DDL or connect production DB.",
+      "timestamp": "2026-06-20T17:43:33.481606Z"
+    },
+    {
+      "action": "implementation_complete",
+      "actor": "codex",
+      "note": "Implemented registry-read fail-closed hardening for non-list mcp_tool_refs/skill_refs, fixed repository _adapt_json empty-list persistence provenance, added startup/sync self-heal for empty shapes, and added 010 repair migration forward/rollback. Validation passed: targeted BUG-439 pytest 7 passed; nox l0 passed; nox research_assistant_backend 291 passed; nox research_assistant_mcp_contract 38 passed; nox validation_module_registry_l0 8 passed; nox ra_phase7_full_accept passed (backend 291 passed, frontend lint/build with existing warnings, Playwright 4+8 passed, crosscheck/catalog/ownership passed); git diff --check passed; ruff changed files passed. No production DB connection, no DDL apply, no production service start/restart; production_ddl_gate remains pending.",
+      "timestamp": "2026-06-20T20:13:27Z"
+    },
+    {
+      "action": "final_close_sync_metadata",
+      "actor": "codex",
+      "timestamp": "2026-06-21T02:08:00Z",
+      "note": "Post-merge aftercare: GitHub Issue #1355 is closed with status:fixed; BUG JSON remains status=fixed per registry schema, closed_at/fix_branch backfilled; production_ddl_gate stays pending because migration 010 was not applied by Codex."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Registry-origin mcp_tool_refs are normalized or fail-closed with a specific capability_registry_invalid_mcp_tool_refs config error; empty dict/None/empty string normalize to []; non-empty non-list stays loud and specific; sync/migration repair legacy empty dict rows; chat_turn does not crash as unexpected error.",
+  "first_seen_at": "2026-06-20T17:33:59.111728Z",
+  "fix_branch": "bug/BUG-439-ra-capability-registry-stores-mcp-tool-refs-non-20260621",
+  "fix_commit": "d54c8ed1377aa33c74195a91077f33bebb9b4422",
+  "fixed_at": "2026-06-21T02:03:46.412456Z",
+  "github_issue_number": 1355,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1355",
+  "last_seen_at": "2026-06-20T17:33:59.111728Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1369",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask RA any question such as 国城矿业未来走势/基本面/行业地位 against a registry containing {} mcp_tool_refs for approved skill capabilities.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA capability registry stores {} mcp_tool_refs (non-list) -> chat_turn crashes; BUG-431 validation gap on registry read path",
+  "trigger_condition": {
+    "fingerprint": "ce36e22f9db23a292d970e5b",
+    "source_event_id": "FE-20260621-ce36e22f9db2"
+  },
+  "validation_evidence": [
+    "PR #1369 checks all pass/skip; no pending/failing checks",
+    "Merged squash commit d54c8ed1377aa33c74195a91077f33bebb9b4422"
+  ],
+  "verification_run_id": "BUG-439-local-20260621",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

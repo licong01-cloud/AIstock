@@ -2,6 +2,17 @@
 
 ## Architecture Overview
 
+
+## Agent Workflow Entrypoints
+
+- Read `docs/codex_project_memory.md` once for AIstock repo/workflow/runtime work, then use exactly one task-specific skill or Claude command; do not load unrelated standards or scenario instructions by default.
+- Broad or ambiguous requests start with the lightweight router: Codex `.codex/skills/aistock-task-router/SKILL.md`; Claude `.claude/commands/aistock-task-router.md`.
+- BUG fixes use `scripts/aistock_issue_workflow.py` through the issue skill; do not hand-write BUG JSON or skip GitHub sync.
+- New non-trivial features use the feature skill/command and `FEATURE-WORKFLOW-001` acceptance ids; read the approved design only after the task is confirmed as feature delivery.
+- Codex/Claude keep minimal local validation and delegate broad UI/API/business-flow or cross-module suites to Validation Center/CI/Nightly through the validation-delegation lane.
+- Never report simplified, POC, mock-only, static-success, partial, or silent-fallback delivery as complete unless the user explicitly approved the deviation and the acceptance matrix records it.
+
+
 3-tier full-stack A-share quantitative trading platform.
 
 **3 Services (start_all_ai_stock.bat):**

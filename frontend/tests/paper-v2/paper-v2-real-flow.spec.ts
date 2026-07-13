@@ -343,24 +343,20 @@ function field(section: ReturnType<typeof openSection> extends Promise<infer T> 
 }
 
 async function chooseSelectionPackages(page: Page, packageIds: string[]) {
-  for (const pkg of ensuredPackages) {
-    const checkbox = page.getByTestId(`selection-package-${pkg.package_id}`);
-    if (await checkbox.count()) {
-      if (await checkbox.isChecked()) await checkbox.uncheck();
+  expect(packageIds.length, "Selection UI now accepts exactly one StrategyPackage").toBe(1);
+  const packageId = packageIds[0];
+  const radio = page.getByTestId(`selection-package-${packageId}`);
+  if (await radio.count() === 0) {
+    const refresh = page.getByRole("button", { name: /刷新策略包/ });
+    if (await refresh.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await refresh.click();
     }
   }
-  for (const packageId of packageIds) {
-    const checkbox = page.getByTestId(`selection-package-${packageId}`);
-    if (await checkbox.count() === 0) {
-      const refresh = page.getByRole("button", { name: /刷新策略包/ });
-      if (await refresh.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await refresh.click();
-      }
-    }
-    await expect(checkbox, `selection package ${packageId} must be visible after selector refresh`).toBeVisible({ timeout: 60_000 });
-    await expect(checkbox, `selection package ${packageId} must be enabled by health gate`).toBeEnabled();
-    await checkbox.check();
-  }
+  await expect(radio, `selection package ${packageId} must be visible after selector refresh`).toBeVisible({ timeout: 60_000 });
+  await expect(radio, `selection package ${packageId} must be enabled by health gate`).toBeEnabled();
+  await expect(radio, `selection package ${packageId} must be a single-select radio`).toHaveAttribute("type", "radio");
+  await radio.check();
+  await expect(radio).toBeChecked();
 }
 
 async function chooseIndustryBlacklist(page: Page, l1Code: string, l2Code: string) {
@@ -428,38 +424,6 @@ async function assertSinglePackageRunArtifactEvidence(request: APIRequestContext
   expect(componentScores.artifact_source, `selection run ${runId} must keep live artifact authority`).toBe("live_qe_model_inference_v1");
   expect(Number(componentScores.raw_rank), `selection run ${runId} must keep raw rank provenance`).toBeGreaterThan(0);
   expect(Number(rows[0].selection_entry_price), `selection run ${runId} must expose persisted entry price`).toBeGreaterThan(0);
-}
-
-async function assertWeightedFusionRunEvidence(
-  request: APIRequestContext,
-  runPayload: JsonObject,
-  expectedWeights: Record<string, number>,
-) {
-  const runId = String(runPayload.run?.run_id || runPayload.run_id || "");
-  expect(runId, "weighted fusion response must include the persisted run id").toMatch(/^sel_/);
-
-  const run = await apiJson(request, `/selection-center/runs/${runId}`);
-  expect(run.response.ok(), `load weighted fusion run ${runId}: ${JSON.stringify(run.payload).slice(0, 1200)}`).toBeTruthy();
-  const runRecord: JsonObject = run.payload.run || {};
-  expect(runRecord.mode, `weighted fusion run ${runId} must persist mode`).toBe("weighted_fusion");
-  const runtimeWeights: JsonObject = runRecord.runtime_config?.package_weights || {};
-  for (const [packageId, expectedWeight] of Object.entries(expectedWeights)) {
-    expect(Number(runtimeWeights[packageId]), `weighted fusion run ${runId} must persist runtime weight for ${packageId}`).toBeCloseTo(expectedWeight, 6);
-  }
-
-  const aggregate = await apiJson(request, `/selection-center/runs/${runId}/aggregate-results`);
-  expect(aggregate.response.ok(), `load weighted fusion aggregate ${runId}: ${JSON.stringify(aggregate.payload).slice(0, 1200)}`).toBeTruthy();
-  const rows: JsonObject[] = aggregate.payload.aggregate_results || [];
-  expect(rows.length, `weighted fusion run ${runId} must persist aggregate rows`).toBeGreaterThan(0);
-  const componentScores = rows[0].component_scores || {};
-  expect(componentScores.fusion_method, `weighted fusion run ${runId} must keep fusion method evidence`).toBe("weighted_rank_fusion");
-  for (const [packageId, expectedWeight] of Object.entries(expectedWeights)) {
-    expect(Number(componentScores.package_weights?.[packageId]), `weighted fusion row must persist package weight for ${packageId}`).toBeCloseTo(expectedWeight, 6);
-  }
-  const normalizedWeights: JsonObject = componentScores.normalized_package_weights || {};
-  const normalizedTotal = Object.values(normalizedWeights).reduce((sum, value) => sum + Number(value), 0);
-  expect(normalizedTotal, `weighted fusion run ${runId} normalized weights must sum to 1`).toBeCloseTo(1, 6);
-  expect(Number(rows[0].selection_entry_price), `weighted fusion run ${runId} must expose persisted entry price`).toBeGreaterThan(0);
 }
 
 function consoleRuntimeText(topK = 20): string {
@@ -706,7 +670,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expectNoRawJsonUi(page);
 
     await page.goto("/paper-v2/selection");
-    const history = await openSection(page, "历史选股记录与动态聚合");
+    const history = await openSection(page, "历史选股记录");
     await expect(history).toContainText("点击记录可显示结果");
     await expect(page.getByTestId("selection-history-select-page")).toBeVisible();
     await page.getByTestId("selection-history-select-page").click();
@@ -717,13 +681,15 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expect(results.locator("tbody tr").first()).toBeVisible();
   });
 
-  test("Multi-package historical run aggregation is clickable and produces aggregate selections", async ({ page }) => {
+  test("Selection history keeps bulk selection but removes manual aggregate entry", async ({ page }) => {
     await page.goto("/paper-v2/selection");
     const control = await openSection(page, "选股控制");
-    await control.locator("select").first().selectOption("union");
-    await expect(page.getByText("多策略包当前只用于统一选股研究")).toBeVisible();
+    await expect(control.getByTestId("selection-mode-fixed")).toContainText("单策略包");
+    await expect(page.getByTestId("selection-mode")).toHaveCount(0);
+    await expect(page.locator("[data-testid^='selection-weight-']")).toHaveCount(0);
+    await expect(page.getByText("from-multi-alpha-combine-run")).toBeVisible();
 
-    const history = await openSection(page, "历史选股记录与动态聚合");
+    const history = await openSection(page, "历史选股记录");
     const sourceRunIds = ensuredRuns.slice(0, 2).map((item) => item.run_id);
     expect(sourceRunIds.length, "E2E setup must create at least two compatible single-package runs").toBe(2);
     for (const runId of sourceRunIds) {
@@ -731,61 +697,21 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
       await expect(checkbox, `compatible selection run ${runId} must be visible in history`).toBeVisible();
       await checkbox.check();
     }
-    await expect(page.getByTestId("selection-aggregate-runs")).toBeEnabled();
-    await history.getByRole("button", { name: "聚合已选股票" }).click();
-
-    const results = await openSection(page, "选股结果");
-    await expect(results.locator("tbody tr").first()).toBeVisible({ timeout: 30_000 });
-    await expect(results).toContainText(/union|source_run|raw_rank|artifact_source/);
+    await expect(page.getByTestId("selection-aggregate-runs")).toHaveCount(0);
+    await expect(history.getByRole("button", { name: /删除选中/ })).toBeEnabled();
+    await page.getByTestId("selection-history-clear-page").click();
+    await expect(history.locator('tbody input[type="checkbox"]:checked')).toHaveCount(0);
   });
 
-  test("Selection Center validates weighted fusion, HMM, blacklist backfill, and TopK guard through UI", async ({ page, request }) => {
+  test("Selection Center validates single-package HMM, blacklist backfill, and TopK guard through UI", async ({ page, request }) => {
     const hmm = await requireHmmAutomaticRuntimeConfig(request);
-    const [first, second, third] = ensuredPackages;
+    const [first] = ensuredPackages;
     await page.goto("/paper-v2/selection");
 
-    const runnableEnsured = ensuredPackages.filter((item) => runnableSelectionPackageIds.has(item.package_id));
-    expect(runnableEnsured.length, "weighted/union UI validation requires at least two runnable packages").toBeGreaterThanOrEqual(2);
-
-    await page.getByTestId("selection-mode").selectOption("weighted_fusion");
-    await page.getByTestId("selection-trade-date").fill(replayTradeDate);
-    await page.getByTestId("selection-top-k").fill("50");
-    await chooseSelectionPackages(page, [first.package_id, second.package_id]);
-    await page.getByTestId(`selection-weight-${first.package_id}`).fill("2");
-    await page.getByTestId(`selection-weight-${second.package_id}`).fill("1");
-    const weightedPayload = await clickSelectionRunAndAcceptPit(page);
-
     const results = await openSection(page, "选股结果");
-    await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
-    await expect(results).toContainText("weighted_fusion_aggregate", { timeout: 300_000 });
-    await expect(results.locator("tbody tr").first()).toBeVisible();
-    await assertWeightedFusionRunEvidence(request, weightedPayload, {
-      [first.package_id]: 2,
-      [second.package_id]: 1,
-    });
-
-    await page.getByTestId("selection-mode").selectOption("intersection");
-    const intersectionPackages = third ? [second.package_id, third.package_id] : [first.package_id, second.package_id];
-    await chooseSelectionPackages(page, intersectionPackages);
-    const intersectionResult = await clickSelectionRunAndAcceptPitResult(page);
-    await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
-    if (intersectionResult.ok) {
-      await expect(results).toContainText("intersection_aggregate", { timeout: 300_000 });
-      await expect(results.locator("tbody tr").first()).toBeVisible();
-    } else {
-      expect(intersectionResult.status, `intersection no-candidate response: ${intersectionResult.text.slice(0, 1200)}`).toBe(400);
-      expect(intersectionResult.text).toMatch(/selection aggregation produced no candidates|ARTIFACT_GENERATION_FAILED/i);
-      await expect(page.locator(".pv2-error-panel")).toContainText(/selection aggregation produced no candidates|no candidates|ARTIFACT_GENERATION_FAILED/i);
-    }
-
-    await page.getByTestId("selection-mode").selectOption("union");
-    await chooseSelectionPackages(page, [first.package_id, second.package_id]);
-    await clickSelectionRunAndAcceptPit(page);
-    await expect(page.getByTestId("selection-run")).toBeEnabled({ timeout: 300_000 });
-    await expect(results).toContainText("union_aggregate", { timeout: 300_000 });
-    await expect(results.locator("tbody tr").first()).toBeVisible();
-
-    await page.getByTestId("selection-mode").selectOption("single_package");
+    await expect(page.getByTestId("selection-mode-fixed")).toContainText("单策略包");
+    await expect(page.getByTestId("selection-mode")).toHaveCount(0);
+    await expect(page.locator("[data-testid^='selection-weight-']")).toHaveCount(0);
     await chooseSelectionPackages(page, [first.package_id]);
     await page.getByTestId("selection-top-k").fill("20");
     await page.getByTestId("selection-trade-date").fill(hmm.trade_date);
@@ -920,7 +846,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await expectNoRawJsonUi(page);
   });
 
-  test("Overview, settings, and portfolio detail lifecycle are usable without market-time streams", async ({ page, request }) => {
+  test("Overview and portfolio detail lifecycle are usable without market-time streams", async ({ page, request }) => {
     test.skip(Boolean(paperPortfolioRuntimeBlocked), `Paper portfolio runtime asset block: ${paperPortfolioRuntimeBlocked}`);
     expect(replayPortfolioId, "previous replay portfolio must be available for UI detail validation").toMatch(/^paper_/);
 
@@ -962,10 +888,7 @@ test.describe.serial("Paper Trading v2 UI real-backend validation", () => {
     await page.getByTestId("miniqmt-position-sort-code").click();
     await page.getByTestId("miniqmt-position-sort-code").click();
 
-    await page.goto("/paper-v2/settings");
-    await expect(page.locator('a[href="/paper-v2/packages"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/paper-v2/selection"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/paper-v2/portfolios"]').first()).toBeVisible();
+    await expect(page.locator('a[href="/paper-v2/settings"]')).toHaveCount(0);
 
     await page.goto(`/paper-v2/portfolios/${replayPortfolioId}`);
     await expect(page.locator(`a[href="/paper-v2/portfolios/${replayPortfolioId}/run-console"]`).first()).toBeVisible();

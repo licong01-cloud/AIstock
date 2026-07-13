@@ -1,0 +1,84 @@
+{
+  "actual": "run_official_factor_full_compute_wsl.py 使用 batch_size=16 workers=4，服务降级为 effective_workers=1 后，batch b0007 during_batch rss_mb=47184.03 available_mb=7573.92 低于 min_available_mb=8192，任务最终 failed factors=467。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "tests/aistock_validation/bugs/20260619_BUG-427-worker.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-427",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-19T11:33:35.507855Z",
+  "description": "run_official_factor_full_compute_wsl.py 使用 batch_size=16 workers=4，服务降级为 effective_workers=1 后，batch b0007 during_batch rss_mb=47184.03 available_mb=7573.92 低于 min_available_mb=8192，任务最终 failed factors=467。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-cb86f944ef40",
+      "timestamp": "2026-06-19T11:33:35.507852Z"
+    }
+  ],
+  "evidence_uris": [
+    "debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_compute_after_bug426.log resource_gate_failed at 2026-06-19T11:27:40Z; failed event at 2026-06-19T11:30:15Z"
+  ],
+  "expected": "官方全量离线因子计算在 WSL 内使用统一回测基础数据缓存，按批生成 575 个因子 single cache；内存门禁应通过更小批次/更低峰值/及时释放保证完成，或者在预估不可满足时 fail-fast 且提供可执行调参，不应在默认全量任务第 7 批中断。",
+  "first_seen_at": "2026-06-19T11:33:35.507855Z",
+  "fix_branch": null,
+  "fix_commit": "167a7cc0569bc544b821c71ec3913c9d71756836",
+  "fixed_at": "2026-06-19T14:00:54.183317Z",
+  "github_issue_number": 1309,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1309",
+  "last_seen_at": "2026-06-19T11:33:35.507855Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1311",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "wsl.exe -e bash -lc 'cd /mnt/f/Dev/AIstock && source /home/lc999/miniconda3/etc/profile.d/conda.sh && conda activate rdagent-gpu && python -u backend/scripts/run_official_factor_full_compute_wsl.py debug_tools/qe/20260619_factor_cache_full_chain_validation/official_full_payload_after_bug426.json'",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "官方全量因子计算单 worker 批内仍触发内存门禁",
+  "trigger_condition": {
+    "fingerprint": "cb86f944ef406ee672e5a11c",
+    "source_event_id": "FE-20260619-cb86f944ef40"
+  },
+  "validation_evidence": [
+    "py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
+    "pytest backend/tests/quantevolver/test_official_factor_batch_compute.py backend/tests/quantevolver/test_official_runtime_validation.py -q -> 19 passed, 1 skipped",
+    "WSL py_compile official_factor_batch_compute_service.py test_official_factor_batch_compute.py -> passed",
+    "WSL inline _drain_success_frames smoke -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 nox -s qe_read_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

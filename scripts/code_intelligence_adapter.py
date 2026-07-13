@@ -2,6 +2,7 @@
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,11 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts import nightly_discovery_input_pack  # noqa: E402
+
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 DEFAULT_CODEGRAPH_VERSION = "0.9.4"
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.6"
@@ -597,6 +603,23 @@ def _persist_effective_codegraph_freshness(
     }
 
 
+def _latest_codegraph_artifact_needs_effective_persist(
+    *,
+    latest: dict[str, Any] | None,
+    effective: dict[str, Any] | None,
+    current_git_commit: str | None,
+) -> bool:
+    return bool(
+        latest
+        and latest.get("git_commit")
+        and current_git_commit
+        and str(latest.get("git_commit")) != str(current_git_commit)
+        and effective
+        and (effective or {}).get("freshness") == "fresh"
+        and str((effective or {}).get("git_commit") or "") == str(current_git_commit)
+    )
+
+
 def latest_codegraph_freshness(
     root: Path | None = None,
     *,
@@ -658,13 +681,11 @@ def latest_codegraph_freshness(
     )
     needs_effective_persist = bool(
         persist_effective
-        and latest
-        and latest.get("git_commit")
-        and current_git_commit
-        and str(latest.get("git_commit")) != str(current_git_commit)
-        and effective
-        and (effective or {}).get("freshness") == "fresh"
-        and str((effective or {}).get("git_commit") or "") == str(current_git_commit)
+        and _latest_codegraph_artifact_needs_effective_persist(
+            latest=latest,
+            effective=effective,
+            current_git_commit=current_git_commit,
+        )
     )
     if needs_effective_persist:
         latest = _persist_effective_codegraph_freshness(root, effective, output_dir=output_dir)
@@ -732,17 +753,46 @@ def _user_home() -> Path:
     return Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
 
 
+def _user_home_candidates(home: Path | None = None) -> list[Path]:
+    windows_home = None
+    if os.environ.get("HOMEDRIVE") and os.environ.get("HOMEPATH"):
+        windows_home = Path(f"{os.environ['HOMEDRIVE']}{os.environ['HOMEPATH']}")
+    candidates = [
+        home,
+        Path(os.environ["USERPROFILE"]) if os.environ.get("USERPROFILE") else None,
+        Path(os.environ["HOME"]) if os.environ.get("HOME") else None,
+        windows_home,
+        Path.home(),
+    ]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        key = os.path.normcase(str(candidate.expanduser().resolve()))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate.expanduser())
+    return unique
+
+
 def _codex_understand_skill_path(home: Path | None = None) -> Path:
-    return (home or _user_home()) / ".agents" / "skills" / "understand"
+    candidates = [candidate / ".agents" / "skills" / "understand" for candidate in _user_home_candidates(home)]
+    return _first_existing_dir(candidates) or candidates[0]
 
 
 def _ua_plugin_root_candidates(home: Path | None = None) -> list[Path]:
-    home = home or _user_home()
-    return [
-        home / ".understand-anything-plugin",
-        home / ".understand-anything" / "repo" / "understand-anything-plugin",
-        home / ".codex" / "understand-anything" / "understand-anything-plugin",
-    ]
+    candidates: list[Path] = []
+    for candidate_home in _user_home_candidates(home):
+        candidates.extend(
+            [
+                candidate_home / ".understand-anything-plugin",
+                candidate_home / ".understand-anything" / "repo" / "understand-anything-plugin",
+                candidate_home / ".codex" / "understand-anything" / "understand-anything-plugin",
+            ]
+        )
+    return candidates
 
 
 def _first_existing_dir(paths: list[Path]) -> Path | None:
@@ -750,6 +800,14 @@ def _first_existing_dir(paths: list[Path]) -> Path | None:
         if path.exists() and path.is_dir():
             return path
     return None
+
+
+def _ua_skill_file(skill_name: str, home: Path | None = None) -> Path:
+    candidates = [root / "skills" / skill_name / "SKILL.md" for root in _ua_plugin_root_candidates(home)]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[0]
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -771,7 +829,7 @@ def _claude_understand_plugin_status(*, skip_external: bool = False) -> dict[str
     result = _run_command([command, "plugins", "list"], cwd=REPO_ROOT, timeout=30)
     stdout = str(result.get("stdout") or "")
     enabled = "understand-anything@understand-anything" in stdout and (
-        "Status: √ enabled" in stdout or "Status: ✓ enabled" in stdout or "Status: enabled" in stdout
+        "Status: 鈭?enabled" in stdout or "Status: 鉁?enabled" in stdout or "Status: enabled" in stdout
     )
     return {
         "available": bool(result.get("ok")),
@@ -1218,6 +1276,922 @@ def render_code_intelligence_run_manifest_markdown(payload: dict[str, Any]) -> s
     return text.rstrip("\n")
 
 
+def _artifact_ref(path: Path, root: Path) -> str | None:
+    return _repo_rel(path, root) if path.exists() else None
+
+
+def _artifact_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload:
+        return {}
+    return {
+        "schema_version": payload.get("schema_version"),
+        "workflow_gate": payload.get("workflow_gate") or payload.get("gate"),
+        "artifact": payload.get("artifact") or payload.get("artifact_path"),
+    }
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_metric_int(*sources: dict[str, Any], key: str) -> int:
+    for source in sources:
+        if key in source and source.get(key) is not None:
+            return _safe_int(source.get(key), 0)
+    return 0
+
+
+def _first_metric_float(*sources: dict[str, Any], key: str) -> float | None:
+    for source in sources:
+        if key in source and source.get(key) is not None:
+            return _safe_float(source.get(key))
+    return None
+
+
+def _ua_manifest_freshness(ua_manifest: dict[str, Any]) -> tuple[str, dict[str, int]]:
+    summary_refs = ua_manifest.get("summary_refs") if isinstance(ua_manifest.get("summary_refs"), list) else []
+    counts = {
+        "fresh": _first_metric_int(ua_manifest, key="fresh_summary_count"),
+        "base_current": _first_metric_int(ua_manifest, key="base_current_summary_count"),
+        "stale": _first_metric_int(ua_manifest, key="stale_summary_count"),
+        "missing": _first_metric_int(ua_manifest, key="missing_summary_count"),
+    }
+    if summary_refs and not any(counts.values()):
+        for item in summary_refs:
+            if not isinstance(item, dict):
+                continue
+            freshness = str(item.get("freshness") or "").strip()
+            if freshness in {"fresh", "base_current", "stale"}:
+                counts[freshness] += 1
+            elif freshness in {"missing", "unknown"}:
+                counts["missing"] += 1
+    if summary_refs and counts["fresh"] == len(summary_refs):
+        return "fresh", counts
+    if summary_refs and counts["stale"] == 0 and counts["missing"] == 0 and counts["base_current"] > 0:
+        return "base_current", counts
+    if counts["stale"] > 0:
+        return "stale", counts
+    if counts["missing"] > 0:
+        return "missing", counts
+    return "unknown", counts
+
+
+def _unique_refs(*values: Any) -> list[str]:
+    refs: list[str] = []
+    for value in values:
+        if isinstance(value, list):
+            refs.extend(str(item) for item in value if item is not None and str(item).strip())
+        elif isinstance(value, dict):
+            refs.extend(str(item) for item in value.values() if item is not None and str(item).strip())
+        elif str(value or "").strip():
+            refs.append(str(value))
+    return list(dict.fromkeys(refs))
+
+
+def _plan_changed(advised: list[str], baseline: list[str]) -> bool:
+    if not advised:
+        return False
+    if not baseline:
+        return True
+    return advised != baseline
+
+
+LLM_USAGE_ARTIFACTS = (
+    ("test_plan_advice", "llm-test-plan-advice.json"),
+    ("scheduler_advice", "llm-nightly-scheduler-advice.json"),
+    ("discovery_hypotheses", "llm-hypotheses.json"),
+    ("adaptive_scheduler", "llm-nightly-adaptive-scheduler.json"),
+    ("design_drift_audit", "design-drift-audit.json"),
+    ("silent_degradation_audit", "silent-degradation-audit.json"),
+    ("triage_quality_smoke", "llm-triage-quality.json"),
+    ("prompt_evaluation", "llm-prompt-evaluation.json"),
+    ("guarded_rollout", "llm-guarded-rollout-gate.json"),
+)
+
+REQUIRED_LLM_USAGE_STEPS = frozenset(
+    {
+        "test_plan_advice",
+        "scheduler_advice",
+        "discovery_hypotheses",
+        "adaptive_scheduler",
+        "design_drift_audit",
+        "silent_degradation_audit",
+    }
+)
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_from_evidence(evidence: dict[str, Any]) -> tuple[dict[str, int | None], bool]:
+    usage = evidence.get("usage_summary") if isinstance(evidence.get("usage_summary"), dict) else None
+    if usage is not None:
+        units = {
+            "prompt_units": _optional_int(usage.get("prompt_units", usage.get("prompt_tokens"))),
+            "completion_units": _optional_int(usage.get("completion_units", usage.get("completion_tokens"))),
+            "total_units": _optional_int(usage.get("total_units", usage.get("total_tokens"))),
+        }
+        return units, any(value is not None for value in units.values())
+    public_units = evidence.get("usage_units") if isinstance(evidence.get("usage_units"), dict) else None
+    if public_units is not None:
+        units = {
+            "prompt_units": _optional_int(public_units.get("prompt")),
+            "completion_units": _optional_int(public_units.get("completion")),
+            "total_units": _optional_int(public_units.get("total")),
+        }
+        return units, any(value is not None for value in units.values())
+    return {"prompt_units": None, "completion_units": None, "total_units": None}, False
+
+
+def _usage_duration(payload: dict[str, Any], evidence: dict[str, Any]) -> tuple[float | None, str | None]:
+    candidates = (
+        ("llm_invocation_evidence.duration_seconds", evidence.get("duration_seconds")),
+        ("llm_invocation_evidence.elapsed_seconds", evidence.get("elapsed_seconds")),
+        ("duration_seconds", payload.get("duration_seconds")),
+        ("elapsed_seconds", payload.get("elapsed_seconds")),
+        ("timing.duration_seconds", _mapping(payload.get("timing")).get("duration_seconds")),
+        ("timing.elapsed_seconds", _mapping(payload.get("timing")).get("elapsed_seconds")),
+        (
+            "timing_summary.known_duration_seconds",
+            _mapping(payload.get("timing_summary")).get("known_duration_seconds"),
+        ),
+        (
+            "timing_summary.inferred_elapsed_seconds",
+            _mapping(payload.get("timing_summary")).get("inferred_elapsed_seconds"),
+        ),
+    )
+    for source, value in candidates:
+        duration = _optional_float(value)
+        if duration is not None and duration >= 0:
+            return round(duration, 3), source
+    return None, None
+
+
+def _usage_missing_reason(*, payload: dict[str, Any], evidence: dict[str, Any], invoked: bool) -> str | None:
+    if not evidence:
+        return "llm_invocation_evidence_missing"
+    if evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint"):
+        return "provider_error_or_fallback_without_usage"
+    if not invoked:
+        return "llm_not_invoked"
+    if payload.get("llm_gate") == "degraded":
+        return "llm_degraded_without_usage"
+    return "provider_usage_missing"
+
+
+def _usage_step_record(*, step: str, artifact_path: Path, payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    evidence = payload.get("llm_invocation_evidence") if isinstance(payload.get("llm_invocation_evidence"), dict) else {}
+    invoked = bool(evidence.get("invoked", payload.get("llm_invoked")))
+    reason = str(evidence.get("reason") or "")
+    attempted = invoked or bool(evidence.get("error") or evidence.get("error_type") or evidence.get("error_fingerprint")) or reason.endswith("_failed_fallback")
+    units, usage_available = _usage_from_evidence(evidence)
+    duration_seconds, timing_source = _usage_duration(payload, evidence)
+    total_units = units.get("total_units")
+    if total_units is None and units.get("prompt_units") is not None and units.get("completion_units") is not None:
+        total_units = int(units["prompt_units"] or 0) + int(units["completion_units"] or 0)
+        units["total_units"] = total_units
+    consumption = _mapping(payload.get("advice_consumption"))
+    selected_plan_keys = _string_list(payload.get("selected_plan_keys"))
+    if not selected_plan_keys:
+        selected_plan_keys = _string_list(payload.get("advised_plan_keys"))
+    return {
+        "step": step,
+        "artifact": _repo_rel(artifact_path, root),
+        "required_llm": step in REQUIRED_LLM_USAGE_STEPS,
+        "schema_version": payload.get("schema_version"),
+        "provider": evidence.get("provider") or payload.get("effective_provider") or payload.get("provider"),
+        "model": evidence.get("model") or payload.get("effective_model") or payload.get("model"),
+        "invoked": invoked,
+        "attempted": attempted,
+        "reason": evidence.get("reason"),
+        "fallback_used": bool(evidence.get("fallback_used")),
+        "fallback_reason": evidence.get("fallback_reason"),
+        "usage_available": usage_available,
+        "usage_missing_reason": None
+        if usage_available
+        else _usage_missing_reason(payload=payload, evidence=evidence, invoked=invoked),
+        "prompt_units": units.get("prompt_units"),
+        "completion_units": units.get("completion_units"),
+        "total_units": units.get("total_units"),
+        "duration_seconds": duration_seconds,
+        "timing_source": timing_source,
+        "advice_consumed": bool(consumption.get("advice_consumed") or payload.get("advice_consumed")),
+        "selected_plan_count": len(selected_plan_keys),
+    }
+
+
+def _aggregate_usage_records(records: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    seen_required_steps = {str(item.get("step")) for item in records if item.get("required_llm")}
+    required_missing_steps = sorted(
+        REQUIRED_LLM_USAGE_STEPS
+        - {str(item.get("step")) for item in records if item.get("required_llm") and item.get("invoked")}
+    )
+    required_artifact_missing_steps = sorted(REQUIRED_LLM_USAGE_STEPS - seen_required_steps)
+    required_usage_missing_steps = sorted(
+        str(item.get("step"))
+        for item in records
+        if item.get("required_llm") and item.get("attempted") and not item.get("usage_available")
+    )
+    duration_records = [item for item in records if _optional_float(item.get("duration_seconds")) is not None]
+    totals = {
+        "record_count": len(records),
+        "invoked_count": sum(1 for item in records if item.get("invoked")),
+        "attempted_count": sum(1 for item in records if item.get("attempted")),
+        "usage_available_count": sum(1 for item in records if item.get("usage_available")),
+        "usage_missing_count": sum(1 for item in records if item.get("attempted") and not item.get("usage_available")),
+        "prompt_units": sum(_optional_int(item.get("prompt_units")) or 0 for item in records),
+        "completion_units": sum(_optional_int(item.get("completion_units")) or 0 for item in records),
+        "total_units": sum(_optional_int(item.get("total_units")) or 0 for item in records),
+        "duration_available_count": len(duration_records),
+        "total_duration_seconds": round(sum(_optional_float(item.get("duration_seconds")) or 0.0 for item in records), 3),
+        "required_invocation_expected_count": len(REQUIRED_LLM_USAGE_STEPS),
+        "required_invocation_record_count": sum(1 for item in records if item.get("required_llm")),
+        "required_invocation_invoked_count": sum(
+            1 for item in records if item.get("required_llm") and item.get("invoked")
+        ),
+        "required_invocation_missing_count": len(required_missing_steps),
+        "required_invocation_missing_steps": required_missing_steps,
+        "required_artifact_missing_count": len(required_artifact_missing_steps),
+        "required_artifact_missing_steps": required_artifact_missing_steps,
+        "required_usage_missing_count": len(required_usage_missing_steps),
+        "required_usage_missing_steps": required_usage_missing_steps,
+        "slowest_steps": [
+            {
+                "step": str(item.get("step") or "unknown"),
+                "duration_seconds": _optional_float(item.get("duration_seconds")) or 0.0,
+            }
+            for item in sorted(
+                duration_records,
+                key=lambda value: _optional_float(value.get("duration_seconds")) or 0.0,
+                reverse=True,
+            )[:3]
+        ],
+        "limit_enforced": False,
+    }
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in records:
+        provider = str(item.get("provider") or "unknown")
+        model = str(item.get("model") or "unknown")
+        key = f"{provider}\0{model}"
+        bucket = grouped.setdefault(
+            key,
+            {
+                "provider": provider,
+                "model": model,
+                "invoked_count": 0,
+                "usage_available_count": 0,
+                "prompt_units": 0,
+                "completion_units": 0,
+                "total_units": 0,
+            },
+        )
+        if item.get("invoked"):
+            bucket["invoked_count"] += 1
+        if item.get("usage_available"):
+            bucket["usage_available_count"] += 1
+        bucket["prompt_units"] += _optional_int(item.get("prompt_units")) or 0
+        bucket["completion_units"] += _optional_int(item.get("completion_units")) or 0
+        bucket["total_units"] += _optional_int(item.get("total_units")) or 0
+    return totals, sorted(grouped.values(), key=lambda value: (value["provider"], value["model"]))
+
+
+def build_llm_usage_summary(
+    *,
+    root: Path | None = None,
+    artifact_dir: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    artifact_dir = artifact_dir or root / "tmp" / "validation" / "code-intelligence" / "latest"
+    records: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    payloads: dict[str, dict[str, Any]] = {}
+    for step, filename in LLM_USAGE_ARTIFACTS:
+        artifact_path = artifact_dir / filename
+        payload = _read_json_object(artifact_path)
+        if not payload:
+            warnings.append(f"LLM usage source artifact is missing or empty: {filename}")
+            continue
+        payloads[step] = payload
+        records.append(_usage_step_record(step=step, artifact_path=artifact_path, payload=payload, root=root))
+    totals, by_provider_model = _aggregate_usage_records(records)
+    adaptive = payloads.get("adaptive_scheduler", {})
+    scheduler = payloads.get("scheduler_advice", {})
+    hypotheses = payloads.get("discovery_hypotheses", {})
+    bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
+    bug_summary = _mapping(bug_candidate_manifest.get("summary"))
+    bug_effectiveness = _mapping(bug_candidate_manifest.get("discovery_effectiveness"))
+    adaptive_consumption = _mapping(adaptive.get("advice_consumption"))
+    scheduler_consumption = _mapping(scheduler.get("advice_consumption"))
+    hypothesis_selected = _string_list(hypotheses.get("selected_plan_keys"))
+    adaptive_advised = _string_list(adaptive.get("advised_plan_keys"))
+    adaptive_baseline = _string_list(adaptive.get("deterministic_plan_keys")) or _string_list(
+        adaptive.get("executed_plan_keys")
+    )
+    scheduler_advised = _string_list(scheduler.get("advised_plan_keys"))
+    scheduler_baseline = _string_list(scheduler.get("deterministic_plan_keys")) or _string_list(
+        scheduler.get("executed_plan_keys")
+    )
+    advice_changed_plan = bool(
+        hypothesis_selected
+        or _plan_changed(adaptive_advised, adaptive_baseline)
+        or _plan_changed(scheduler_advised, scheduler_baseline)
+    )
+    return {
+        "schema_version": "aistock_llm_token_usage_summary_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "warning_only": True,
+        "limit_enforced": False,
+        "artifact_dir": _repo_rel(artifact_dir, root),
+        "totals": totals,
+        "by_provider_model": by_provider_model,
+        "records": records,
+        "value_context": {
+            "advice_consumed": bool(
+                adaptive_consumption.get("advice_consumed")
+                or scheduler_consumption.get("advice_consumed")
+                or hypothesis_selected
+            ),
+            "advice_changed_plan": advice_changed_plan,
+            "selected_plan_count": len(hypothesis_selected),
+            "high_value_candidate_count": _first_metric_int(
+                bug_summary,
+                bug_effectiveness,
+                key="high_value_candidate_count",
+            ),
+            "issue_payload_ready_count": _first_metric_int(
+                bug_summary,
+                bug_effectiveness,
+                key="issue_payload_ready_count",
+            ),
+        },
+        "warnings": warnings,
+    }
+
+
+def render_llm_usage_summary_markdown(payload: dict[str, Any]) -> str:
+    totals = _mapping(payload.get("totals"))
+    value = _mapping(payload.get("value_context"))
+    lines = [
+        "## LLM Token Usage Summary",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- limit_enforced: `{bool(payload.get('limit_enforced'))}`",
+        f"- invoked_steps: `{totals.get('invoked_count', 0)}`",
+        f"- attempted_steps: `{totals.get('attempted_count', 0)}`",
+        f"- usage_available_steps: `{totals.get('usage_available_count', 0)}`",
+        f"- usage_missing_steps: `{totals.get('usage_missing_count', 0)}`",
+        f"- total_units: `{totals.get('total_units', 0)}`",
+        f"- prompt_units: `{totals.get('prompt_units', 0)}`",
+        f"- completion_units: `{totals.get('completion_units', 0)}`",
+        f"- duration_available_steps: `{totals.get('duration_available_count', 0)}`",
+        f"- total_duration_seconds: `{totals.get('total_duration_seconds', 0)}`",
+        f"- required_llm_health: `expected={totals.get('required_invocation_expected_count', 0)}, invoked={totals.get('required_invocation_invoked_count', 0)}, missing={totals.get('required_invocation_missing_count', 0)}, artifact_missing={totals.get('required_artifact_missing_count', 0)}, usage_missing={totals.get('required_usage_missing_count', 0)}`",
+        f"- value_context: `advice_consumed={bool(value.get('advice_consumed'))}, advice_changed_plan={bool(value.get('advice_changed_plan'))}, high_value_candidates={value.get('high_value_candidate_count', 0)}, issue_payloads={value.get('issue_payload_ready_count', 0)}`",
+        "",
+        "| step | required | provider | model | attempted | invoked | usage | total_units | duration_s | missing_reason |",
+        "|---|---|---|---|---|---|---|---:|---:|---|",
+    ]
+    for item in payload.get("records") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item.get("step") or "unknown"),
+                    str(bool(item.get("required_llm"))),
+                    str(item.get("provider") or "unknown"),
+                    str(item.get("model") or "unknown"),
+                    str(bool(item.get("attempted"))),
+                    str(bool(item.get("invoked"))),
+                    str(bool(item.get("usage_available"))),
+                    str(item.get("total_units") if item.get("total_units") is not None else "-"),
+                    str(item.get("duration_seconds") if item.get("duration_seconds") is not None else "-"),
+                    str(item.get("usage_missing_reason") or "-"),
+                ]
+            )
+            + " |"
+        )
+    missing_required = totals.get("required_invocation_missing_steps") or []
+    missing_artifacts = totals.get("required_artifact_missing_steps") or []
+    slowest_steps = totals.get("slowest_steps") or []
+    if missing_required:
+        lines.append("")
+        lines.append("missing_required_llm_steps: `" + ", ".join(str(item) for item in missing_required) + "`")
+    if missing_artifacts:
+        lines.append("missing_required_artifacts: `" + ", ".join(str(item) for item in missing_artifacts) + "`")
+    if slowest_steps:
+        rendered = ", ".join(
+            f"{item.get('step')}={item.get('duration_seconds')}s"
+            for item in slowest_steps
+            if isinstance(item, dict)
+        )
+        lines.append("slowest_llm_artifacts: `" + rendered + "`")
+    lines.extend(
+        [
+            "",
+            "This summary is observability-only. It does not enforce token limits, change workflow gates, invoke LLMs, or capture prompt content.",
+        ]
+    )
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    return "\n".join(lines).rstrip("\n")
+
+
+def build_llm_value_summary(
+    *,
+    root: Path | None = None,
+    artifact_dir: Path | None = None,
+) -> dict[str, Any]:
+    root = root or REPO_ROOT
+    artifact_dir = artifact_dir or root / "tmp" / "validation" / "code-intelligence" / "latest"
+    codegraph = _read_json_object(artifact_dir / "codegraph-freshness.json")
+    code_summary = _read_json_object(artifact_dir / "code-intelligence-summary.json")
+    adaptive = _read_json_object(artifact_dir / "llm-nightly-adaptive-scheduler.json")
+    scheduler = _read_json_object(artifact_dir / "llm-nightly-scheduler-advice.json")
+    hypotheses = _read_json_object(artifact_dir / "llm-hypotheses.json")
+    prompt_eval = _read_json_object(artifact_dir / "llm-prompt-evaluation.json")
+    rollout = _read_json_object(artifact_dir / "llm-guarded-rollout-gate.json")
+    design_drift = _read_json_object(artifact_dir / "design-drift-audit.json")
+    silent_degradation = _read_json_object(artifact_dir / "silent-degradation-audit.json")
+    repo_hygiene = _read_json_object(artifact_dir / "repo-hygiene-orphan-audit.json")
+    ua_manifest = _read_json_object(artifact_dir / "ua-summary-manifest.json")
+    discovery_manifest = _read_json_object(artifact_dir / "discovery-plans" / "manifest.json")
+    bug_candidate_manifest = _read_json_object(artifact_dir / "bug-candidates" / "manifest.json")
+    adaptive_evidence = (
+        adaptive.get("llm_invocation_evidence") if isinstance(adaptive.get("llm_invocation_evidence"), dict) else {}
+    )
+    scheduler_evidence = (
+        scheduler.get("llm_invocation_evidence") if isinstance(scheduler.get("llm_invocation_evidence"), dict) else {}
+    )
+    hypothesis_evidence = (
+        hypotheses.get("llm_invocation_evidence")
+        if isinstance(hypotheses.get("llm_invocation_evidence"), dict)
+        else {}
+    )
+    queue = adaptive.get("queue_summary") if isinstance(adaptive.get("queue_summary"), dict) else {}
+    consumption = adaptive.get("advice_consumption") if isinstance(adaptive.get("advice_consumption"), dict) else {}
+    ua_summary = (
+        code_summary.get("understand_anything_summary")
+        if isinstance(code_summary.get("understand_anything_summary"), dict)
+        else {}
+    )
+    prompt_metrics = prompt_eval.get("metrics") if isinstance(prompt_eval.get("metrics"), dict) else {}
+    bug_summary = _mapping(bug_candidate_manifest.get("summary"))
+    bug_effectiveness = _mapping(bug_candidate_manifest.get("discovery_effectiveness"))
+    discovery_summary = _mapping(discovery_manifest.get("summary"))
+    context = _mapping(code_summary.get("context"))
+    context_quality = _mapping(context.get("context_quality"))
+    hypothesis_rotation = _mapping(hypotheses.get("rotation"))
+    discovery_rotation = _mapping(discovery_manifest.get("rotation"))
+    ua_manifest_freshness, ua_freshness_counts = _ua_manifest_freshness(ua_manifest)
+    adaptive_consumption = _mapping(adaptive.get("advice_consumption"))
+    scheduler_consumption = _mapping(scheduler.get("advice_consumption"))
+    hypothesis_selected = _string_list(hypotheses.get("selected_plan_keys"))
+    rotation_selected = _string_list(hypothesis_rotation.get("selected_plan_keys")) or _string_list(
+        discovery_rotation.get("selected_plan_keys")
+    )
+    scheduler_advised = _string_list(scheduler.get("advised_plan_keys"))
+    scheduler_baseline = _string_list(scheduler.get("deterministic_plan_keys")) or _string_list(
+        scheduler.get("executed_plan_keys")
+    )
+    adaptive_advised = _string_list(adaptive.get("advised_plan_keys"))
+    adaptive_baseline = _string_list(adaptive.get("deterministic_plan_keys")) or _string_list(
+        adaptive.get("executed_plan_keys")
+    )
+    llm_invoked = bool(
+        adaptive.get("llm_invoked")
+        or scheduler.get("llm_invoked")
+        or hypotheses.get("llm_invoked")
+        or adaptive_evidence.get("invoked")
+        or scheduler_evidence.get("invoked")
+        or hypothesis_evidence.get("invoked")
+    )
+    llm_advice_generated = bool(
+        llm_invoked
+        and (
+            scheduler_advised
+            or adaptive_advised
+            or hypothesis_selected
+            or hypotheses.get("hypotheses")
+            or scheduler.get("llm_advice")
+            or adaptive.get("llm_advice")
+        )
+    )
+    llm_advice_consumed = bool(
+        consumption.get("advice_consumed")
+        or adaptive_consumption.get("advice_consumed")
+        or scheduler_consumption.get("advice_consumed")
+        or adaptive.get("advice_consumed")
+        or hypotheses.get("selected_plan_keys")
+    )
+    changed_plan_source = None
+    if _plan_changed(hypothesis_selected, rotation_selected):
+        changed_plan_source = "nightly_discovery_hypothesis"
+    elif _plan_changed(adaptive_advised, adaptive_baseline):
+        changed_plan_source = "adaptive_scheduler"
+    elif _plan_changed(scheduler_advised, scheduler_baseline):
+        changed_plan_source = "scheduler_advice"
+    llm_advice_changed_plan = changed_plan_source is not None
+    provider = (
+        adaptive.get("effective_provider")
+        or adaptive.get("provider")
+        or scheduler.get("effective_provider")
+        or scheduler.get("provider")
+        or hypotheses.get("effective_provider")
+        or hypotheses.get("provider")
+        or adaptive_evidence.get("provider")
+        or scheduler_evidence.get("provider")
+        or hypothesis_evidence.get("provider")
+    )
+    model = (
+        adaptive.get("effective_model")
+        or adaptive.get("model")
+        or scheduler.get("effective_model")
+        or scheduler.get("model")
+        or hypotheses.get("effective_model")
+        or hypotheses.get("model")
+        or adaptive_evidence.get("model")
+        or scheduler_evidence.get("model")
+        or hypothesis_evidence.get("model")
+    )
+    warnings: list[str] = []
+    if not codegraph:
+        warnings.append("CodeGraph freshness artifact is missing.")
+    if not adaptive and not scheduler:
+        warnings.append("LLM scheduler advice artifact is missing.")
+    if not hypotheses:
+        warnings.append("LLM discovery hypothesis artifact is missing.")
+    if not prompt_eval:
+        warnings.append("LLM prompt evaluation artifact is missing.")
+    if not rollout:
+        warnings.append("LLM guarded rollout artifact is missing.")
+    if not design_drift:
+        warnings.append("LLM design drift audit artifact is missing.")
+    if not silent_degradation:
+        warnings.append("LLM silent degradation audit artifact is missing.")
+    if not repo_hygiene:
+        warnings.append("Repo hygiene orphan audit artifact is missing.")
+    artifact_refs = {
+        "codegraph_freshness_json": _artifact_ref(artifact_dir / "codegraph-freshness.json", root),
+        "codegraph_freshness_md": _artifact_ref(artifact_dir / "codegraph-freshness.md", root),
+        "code_intelligence_summary_json": _artifact_ref(artifact_dir / "code-intelligence-summary.json", root),
+        "code_intelligence_summary_md": _artifact_ref(artifact_dir / "code-intelligence-summary.md", root),
+        "understand_anything_manifest_json": _artifact_ref(artifact_dir / "ua-summary-manifest.json", root),
+        "adaptive_scheduler_json": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.json", root),
+        "adaptive_scheduler_md": _artifact_ref(artifact_dir / "llm-nightly-adaptive-scheduler.md", root),
+        "scheduler_advice_json": _artifact_ref(artifact_dir / "llm-nightly-scheduler-advice.json", root),
+        "discovery_hypotheses_json": _artifact_ref(artifact_dir / "llm-hypotheses.json", root),
+        "selected_plans_json": _artifact_ref(artifact_dir / "selected-plans.json", root),
+        "discovery_plans_manifest_json": _artifact_ref(artifact_dir / "discovery-plans" / "manifest.json", root),
+        "bug_candidate_queue_manifest_json": _artifact_ref(artifact_dir / "bug-candidates" / "manifest.json", root),
+        "bug_candidate_queue_markdown": _artifact_ref(artifact_dir / "bug-candidates" / "candidate-summary.md", root),
+        "test_plan_advice_json": _artifact_ref(artifact_dir / "llm-test-plan-advice.json", root),
+        "prompt_evaluation_json": _artifact_ref(artifact_dir / "llm-prompt-evaluation.json", root),
+        "guarded_rollout_json": _artifact_ref(artifact_dir / "llm-guarded-rollout-gate.json", root),
+        "design_drift_audit_json": _artifact_ref(artifact_dir / "design-drift-audit.json", root),
+        "design_drift_audit_markdown": _artifact_ref(artifact_dir / "design-drift-audit.md", root),
+        "silent_degradation_audit_json": _artifact_ref(artifact_dir / "silent-degradation-audit.json", root),
+        "silent_degradation_audit_markdown": _artifact_ref(artifact_dir / "silent-degradation-audit.md", root),
+        "repo_hygiene_orphan_audit_json": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.json", root),
+        "repo_hygiene_orphan_audit_markdown": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.md", root),
+        "repo_hygiene_orphan_audit_csv": _artifact_ref(artifact_dir / "repo-hygiene-orphan-audit.csv", root),
+    }
+    codegraph_refs = _unique_refs(
+        artifact_refs["codegraph_freshness_json"],
+        artifact_refs["codegraph_freshness_md"],
+        artifact_refs["code_intelligence_summary_json"],
+        artifact_refs["code_intelligence_summary_md"],
+        code_summary.get("context_ref"),
+        code_summary.get("affected_tests_ref"),
+        code_summary.get("latest_freshness_ref"),
+    )
+    ua_refs = _unique_refs(
+        artifact_refs["understand_anything_manifest_json"],
+        code_summary.get("understand_anything_summary_ref"),
+        [item.get("summary_ref") for item in (ua_manifest.get("summary_refs") or []) if isinstance(item, dict)],
+    )
+    codegraph_ready = (
+        codegraph.get("freshness") == "fresh"
+        or codegraph.get("status") == "ok"
+        or code_summary.get("status") == "ok"
+    )
+    broad_scan_avoided = bool(
+        codegraph_ready
+        and codegraph_refs
+        and not bool(context_quality.get("broad_scan_required"))
+        and not bool(code_summary.get("fallback_used"))
+    )
+    candidate_count = _first_metric_int(bug_summary, bug_effectiveness, key="candidate_count")
+    high_value_candidates = _first_metric_int(bug_summary, bug_effectiveness, key="high_value_candidate_count")
+    issue_payload_ready_count = _first_metric_int(bug_summary, bug_effectiveness, key="issue_payload_ready_count")
+    accepted_count = _first_metric_int(bug_summary, bug_effectiveness, key="accepted_count")
+    rejected_count = _first_metric_int(bug_summary, bug_effectiveness, key="rejected_count")
+    closed_count = _first_metric_int(bug_summary, bug_effectiveness, key="closed_count")
+    confirmed_real_bug_count = _first_metric_int(bug_summary, bug_effectiveness, key="confirmed_real_bug_count")
+    pending_count = max(candidate_count - accepted_count - rejected_count - closed_count, 0)
+    candidate_feedback_available = bool(bug_candidate_manifest)
+    value_metrics = {
+        "schema_version": "aistock_llm_code_intelligence_value_metrics_v1",
+        "llm_advice_generated": llm_advice_generated,
+        "llm_advice_consumed": llm_advice_consumed,
+        "llm_advice_changed_plan": llm_advice_changed_plan,
+        "changed_plan_source": changed_plan_source,
+        "codegraph_refs_used": len(codegraph_refs),
+        "ua_refs_used": len(ua_refs),
+        "broad_scan_avoided": broad_scan_avoided,
+        "high_value_candidates": high_value_candidates,
+        "issue_payload_ready_count": issue_payload_ready_count,
+        "candidate_feedback_available": candidate_feedback_available,
+        "candidate_feedback": {
+            "schema_version": "aistock_nightly_candidate_feedback_compact_v1",
+            "candidate_count": candidate_count,
+            "accepted_count": accepted_count,
+            "rejected_count": rejected_count,
+            "closed_count": closed_count,
+            "pending_count": pending_count,
+            "confirmed_real_bug_count": confirmed_real_bug_count,
+            "confirmed_real_bug_rate": _first_metric_float(
+                bug_summary,
+                bug_effectiveness,
+                key="confirmed_real_bug_rate",
+            ),
+            "noise_rate": _first_metric_float(bug_summary, bug_effectiveness, key="noise_rate"),
+            "no_candidate_reason": bug_effectiveness.get("no_candidate_reason")
+            or bug_summary.get("no_candidate_reason"),
+            "placeholders_present": True,
+        },
+        "compact_only": True,
+    }
+    return {
+        "schema_version": "aistock_llm_code_intelligence_value_summary_v1",
+        "generated_at": _utc_now(),
+        "workflow_gate": "warning" if warnings else "ready",
+        "blocking_for_issue_workflow": False,
+        "artifact_dir": _repo_rel(artifact_dir, root),
+        "codegraph": {
+            "workflow_gate": codegraph.get("workflow_gate") or codegraph.get("gate"),
+            "freshness": codegraph.get("freshness"),
+            "status": codegraph.get("status"),
+            "git_commit": codegraph.get("git_commit"),
+            "graph_root_git_commit": codegraph.get("graph_root_git_commit"),
+            "files": (codegraph.get("index_summary") or {}).get("files") or codegraph.get("files"),
+            "nodes": (codegraph.get("index_summary") or {}).get("nodes") or codegraph.get("nodes"),
+            "edges": (codegraph.get("index_summary") or {}).get("edges") or codegraph.get("edges"),
+        },
+        "understand_anything": {
+            "status": code_summary.get("understand_anything_status")
+            or ua_summary.get("status")
+            or ("available" if ua_manifest else "unknown"),
+            "summary_ref": code_summary.get("understand_anything_summary_ref") or ua_summary.get("summary_ref"),
+            "manifest_ref": artifact_refs["understand_anything_manifest_json"],
+            "summary_count": len(ua_manifest.get("summary_refs") or []) if isinstance(ua_manifest.get("summary_refs"), list) else 0,
+            "manifest_freshness": ua_manifest_freshness,
+            "fresh_summary_count": ua_freshness_counts["fresh"],
+            "base_current_summary_count": ua_freshness_counts["base_current"],
+            "stale_summary_count": ua_freshness_counts["stale"],
+            "missing_summary_count": ua_freshness_counts["missing"],
+        },
+        "llm": {
+            "provider": provider,
+            "model": model,
+            "llm_invoked": llm_invoked,
+            "fallback_used": bool(
+                adaptive_evidence.get("fallback_used")
+                or scheduler_evidence.get("fallback_used")
+                or hypothesis_evidence.get("fallback_used")
+            ),
+            "advice_generated": llm_advice_generated,
+            "advice_consumed": llm_advice_consumed,
+            "advice_changed_plan": llm_advice_changed_plan,
+            "changed_plan_source": changed_plan_source,
+            "allowed_plan_keys": queue.get("allowed_plan_keys")
+            or adaptive.get("allowed_plan_keys")
+            or hypotheses.get("selected_plan_keys")
+            or [],
+            "issue_creation": ((adaptive.get("issue_creation_policy") or {}) if isinstance(adaptive.get("issue_creation_policy"), dict) else {}).get("mode")
+            or adaptive.get("issue_creation")
+            or rollout.get("mode"),
+            "adaptive_scheduler": _artifact_summary(adaptive),
+            "scheduler_advice": _artifact_summary(scheduler),
+            "discovery_hypotheses": _artifact_summary(hypotheses),
+            "discovery_hypothesis_count": len(hypotheses.get("hypotheses") or []) if isinstance(hypotheses.get("hypotheses"), list) else 0,
+            "selected_plan_count": len(hypotheses.get("selected_plan_keys") or []) if isinstance(hypotheses.get("selected_plan_keys"), list) else 0,
+            "discovery_executed_plan_count": discovery_summary.get("executed_count", 0),
+            "discovery_anomaly_count": discovery_summary.get("anomaly_count", 0),
+            "bug_candidate_count": candidate_count,
+            "bug_candidate_issue_payload_count": issue_payload_ready_count,
+            "high_value_candidate_count": high_value_candidates,
+        },
+        "design_drift_audit": {
+            "workflow_gate": design_drift.get("workflow_gate"),
+            "llm_gate": design_drift.get("llm_gate"),
+            "candidate_only": design_drift.get("candidate_only"),
+            "manual_analysis_required_before_bug_registration": design_drift.get(
+                "manual_analysis_required_before_bug_registration"
+            ),
+            "review_target_count": (design_drift.get("summary") or {}).get("review_target_count")
+            if isinstance(design_drift.get("summary"), dict)
+            else None,
+            "finding_count": (design_drift.get("summary") or {}).get("finding_count")
+            if isinstance(design_drift.get("summary"), dict)
+            else None,
+            "llm_invoked": bool(design_drift.get("llm_invoked")),
+            "degraded_reason": (design_drift.get("summary") or {}).get("degraded_reason")
+            if isinstance(design_drift.get("summary"), dict)
+            else None,
+            "artifact_ref": artifact_refs["design_drift_audit_json"],
+            "markdown_ref": artifact_refs["design_drift_audit_markdown"],
+        },
+        "silent_degradation_audit": {
+            "workflow_gate": silent_degradation.get("workflow_gate"),
+            "llm_gate": silent_degradation.get("llm_gate"),
+            "candidate_only": silent_degradation.get("candidate_only"),
+            "manual_analysis_required_before_bug_registration": silent_degradation.get(
+                "manual_analysis_required_before_bug_registration"
+            ),
+            "review_target_count": (silent_degradation.get("summary") or {}).get("review_target_count")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
+            "finding_count": (silent_degradation.get("summary") or {}).get("finding_count")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
+            "llm_invoked": bool(silent_degradation.get("llm_invoked")),
+            "degraded_reason": (silent_degradation.get("summary") or {}).get("degraded_reason")
+            if isinstance(silent_degradation.get("summary"), dict)
+            else None,
+            "artifact_ref": artifact_refs["silent_degradation_audit_json"],
+            "markdown_ref": artifact_refs["silent_degradation_audit_markdown"],
+        },
+        "repo_hygiene_orphan_audit": {
+            "workflow_gate": repo_hygiene.get("workflow_gate"),
+            "candidate_only": repo_hygiene.get("candidate_only"),
+            "cleanup_requires_human_pr": repo_hygiene.get("cleanup_requires_human_pr"),
+            "total_scanned": (repo_hygiene.get("summary") or {}).get("total_scanned")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "candidate_count": (repo_hygiene.get("summary") or {}).get("candidate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "review_count": (repo_hygiene.get("summary") or {}).get("review_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "relocate_count": (repo_hygiene.get("summary") or {}).get("relocate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "archive_count": (repo_hygiene.get("summary") or {}).get("archive_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "delete_candidate_count": (repo_hygiene.get("summary") or {}).get("delete_candidate_count")
+            if isinstance(repo_hygiene.get("summary"), dict)
+            else None,
+            "artifact_ref": artifact_refs["repo_hygiene_orphan_audit_json"],
+            "markdown_ref": artifact_refs["repo_hygiene_orphan_audit_markdown"],
+            "csv_ref": artifact_refs["repo_hygiene_orphan_audit_csv"],
+        },
+        "prompt_evaluation": {
+            "workflow_gate": prompt_eval.get("workflow_gate") or prompt_eval.get("gate") or (prompt_eval.get("policy_gate") or {}).get("workflow_gate"),
+            "case_count": prompt_eval.get("case_count") or prompt_metrics.get("case_count"),
+            "issue_body_completeness": prompt_eval.get("issue_body_completeness") or prompt_metrics.get("issue_body_completeness"),
+            "false_positive_auto_file_rate": prompt_eval.get("false_positive_auto_file_rate") or prompt_metrics.get("false_positive_auto_file_rate"),
+            "plan_recommendation_accuracy": prompt_eval.get("plan_recommendation_accuracy") or prompt_metrics.get("plan_recommendation_accuracy"),
+        },
+        "guarded_rollout": {
+            "workflow_gate": rollout.get("workflow_gate") or rollout.get("gate"),
+            "mode": rollout.get("mode"),
+            "auto_file_allowed": rollout.get("auto_file_allowed"),
+            "llm_can_enhance_issue": rollout.get("llm_can_enhance_issue"),
+            "llm_enhancement_allowed": rollout.get("llm_enhancement_allowed"),
+        },
+        "value_metrics": value_metrics,
+        "artifact_refs": artifact_refs,
+        "warnings": warnings,
+    }
+
+
+def render_llm_value_summary_markdown(payload: dict[str, Any]) -> str:
+    codegraph = payload.get("codegraph") if isinstance(payload.get("codegraph"), dict) else {}
+    ua = payload.get("understand_anything") if isinstance(payload.get("understand_anything"), dict) else {}
+    llm = payload.get("llm") if isinstance(payload.get("llm"), dict) else {}
+    prompt = payload.get("prompt_evaluation") if isinstance(payload.get("prompt_evaluation"), dict) else {}
+    rollout = payload.get("guarded_rollout") if isinstance(payload.get("guarded_rollout"), dict) else {}
+    design_drift = payload.get("design_drift_audit") if isinstance(payload.get("design_drift_audit"), dict) else {}
+    silent_degradation = (
+        payload.get("silent_degradation_audit")
+        if isinstance(payload.get("silent_degradation_audit"), dict)
+        else {}
+    )
+    metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
+    repo_hygiene = (
+        payload.get("repo_hygiene_orphan_audit")
+        if isinstance(payload.get("repo_hygiene_orphan_audit"), dict)
+        else {}
+    )
+    feedback = metrics.get("candidate_feedback") if isinstance(metrics.get("candidate_feedback"), dict) else {}
+    refs = payload.get("artifact_refs") if isinstance(payload.get("artifact_refs"), dict) else {}
+    allowed_plan_keys = ",".join(llm.get("allowed_plan_keys") or []) or "none"
+    prompt_cases = prompt.get("case_count") or "unknown"
+    prompt_completeness = prompt.get("issue_body_completeness")
+    prompt_false_positive = prompt.get("false_positive_auto_file_rate")
+    codegraph_ref = refs.get("codegraph_freshness_md") or refs.get("codegraph_freshness_json") or "missing"
+    code_summary_ref = refs.get("code_intelligence_summary_md") or refs.get("code_intelligence_summary_json") or "missing"
+    adaptive_ref = refs.get("adaptive_scheduler_md") or refs.get("adaptive_scheduler_json") or "missing"
+    hypotheses_ref = refs.get("discovery_hypotheses_json") or "missing"
+    discovery_manifest_ref = refs.get("discovery_plans_manifest_json") or "missing"
+    bug_candidate_ref = refs.get("bug_candidate_queue_manifest_json") or "missing"
+    lines = [
+        "## LLM + Code Intelligence Value",
+        "",
+        f"- workflow_gate: `{payload.get('workflow_gate') or 'unknown'}`",
+        f"- codegraph: `{codegraph.get('freshness') or 'unknown'}` / `{codegraph.get('status') or 'unknown'}`",
+        f"- understand_anything: `{ua.get('status') or 'unknown'}` freshness=`{ua.get('manifest_freshness') or 'unknown'}` summaries=`{ua.get('summary_count') or 0}`",
+        f"- llm_provider: `{llm.get('provider') or 'unknown'}`",
+        f"- llm_model: `{llm.get('model') or 'unknown'}`",
+        f"- llm_invoked: `{bool(llm.get('llm_invoked'))}`",
+        f"- fallback_used: `{bool(llm.get('fallback_used'))}`",
+        f"- advice_generated: `{bool(metrics.get('llm_advice_generated'))}`",
+        f"- advice_consumed: `{bool(llm.get('advice_consumed'))}`",
+        f"- advice_changed_plan: `{bool(metrics.get('llm_advice_changed_plan'))}` source=`{metrics.get('changed_plan_source') or 'none'}`",
+        f"- graph_refs: `codegraph={metrics.get('codegraph_refs_used', 0)}, ua={metrics.get('ua_refs_used', 0)}, broad_scan_avoided={bool(metrics.get('broad_scan_avoided'))}`",
+        f"- discovery_hypotheses: `hypotheses={llm.get('discovery_hypothesis_count') or 0}, selected_plans={llm.get('selected_plan_count') or 0}`",
+        f"- discovery_plans: `executed={llm.get('discovery_executed_plan_count') or 0}, anomalies={llm.get('discovery_anomaly_count') or 0}`",
+        f"- bug_candidates: `candidates={llm.get('bug_candidate_count') or 0}, high_value={metrics.get('high_value_candidates') or 0}, issue_payload_drafts={metrics.get('issue_payload_ready_count') or 0}`",
+        f"- candidate_feedback: `available={bool(metrics.get('candidate_feedback_available'))}, accepted={feedback.get('accepted_count', 0)}, rejected={feedback.get('rejected_count', 0)}, closed={feedback.get('closed_count', 0)}, pending={feedback.get('pending_count', 0)}`",
+        f"- candidate_no_issue_reason: `{feedback.get('no_candidate_reason') or 'n/a'}`",
+        f"- allowed_plan_keys: `{allowed_plan_keys}`",
+        f"- issue_creation_mode: `{llm.get('issue_creation') or 'warning_only'}`",
+        f"- design_drift_audit: `targets={design_drift.get('review_target_count') or 0}, findings={design_drift.get('finding_count') or 0}, llm_gate={design_drift.get('llm_gate') or 'unknown'}, degraded={bool(design_drift.get('degraded_reason'))}, candidate_only={bool(design_drift.get('candidate_only'))}`",
+        f"- silent_degradation_audit: `targets={silent_degradation.get('review_target_count') or 0}, findings={silent_degradation.get('finding_count') or 0}, llm_gate={silent_degradation.get('llm_gate') or 'unknown'}, degraded={bool(silent_degradation.get('degraded_reason'))}, candidate_only={bool(silent_degradation.get('candidate_only'))}`",
+        f"- repo_hygiene_orphan_audit: `scanned={repo_hygiene.get('total_scanned') or 0}, candidates={repo_hygiene.get('candidate_count') or 0}, delete_candidates={repo_hygiene.get('delete_candidate_count') or 0}, human_pr={bool(repo_hygiene.get('cleanup_requires_human_pr'))}`",
+        f"- prompt_eval: `cases={prompt_cases}, completeness={prompt_completeness if prompt_completeness is not None else 'unknown'}, false_positive={prompt_false_positive if prompt_false_positive is not None else 'unknown'}`",
+        f"- guarded_rollout: `mode={rollout.get('mode') or 'unknown'}, can_enhance={rollout.get('llm_can_enhance_issue')}`",
+        "",
+        "### Compact Artifact Refs",
+        "",
+        f"- codegraph_freshness: `{codegraph_ref}`",
+        f"- code_intelligence_summary: `{code_summary_ref}`",
+        f"- adaptive_scheduler: `{adaptive_ref}`",
+        f"- discovery_hypotheses: `{hypotheses_ref}`",
+        f"- selected_plans: `{refs.get('selected_plans_json') or 'missing'}`",
+        f"- discovery_plans: `{discovery_manifest_ref}`",
+        f"- bug_candidate_queue: `{bug_candidate_ref}`",
+        f"- prompt_evaluation: `{refs.get('prompt_evaluation_json') or 'missing'}`",
+        f"- guarded_rollout: `{refs.get('guarded_rollout_json') or 'missing'}`",
+        f"- design_drift_audit: `{refs.get('design_drift_audit_markdown') or refs.get('design_drift_audit_json') or 'missing'}`",
+        f"- silent_degradation_audit: `{refs.get('silent_degradation_audit_markdown') or refs.get('silent_degradation_audit_json') or 'missing'}`",
+        f"- repo_hygiene_orphan_audit: `{refs.get('repo_hygiene_orphan_audit_markdown') or refs.get('repo_hygiene_orphan_audit_json') or 'missing'}`",
+        f"- repo_hygiene_orphan_audit_csv: `{refs.get('repo_hygiene_orphan_audit_csv') or 'missing'}`",
+        "",
+        "This is a compact value summary. Raw JSON artifacts stay in the uploaded artifact bundle and are not inlined in the Nightly summary.",
+    ]
+    warnings = payload.get("warnings") or []
+    if warnings:
+        lines.extend(["", "### Warnings", *[f"- {item}" for item in warnings]])
+    return "\n".join(lines).rstrip("\n")
+
+
 def understand_anything_status(
     root: Path | None = None,
     *,
@@ -1269,6 +2243,8 @@ def understand_anything_status(
             summary_manifest_freshness = "fresh"
         elif ref_freshness:
             summary_manifest_freshness = ",".join(sorted(ref_freshness))
+        elif refs and freshness in {"fresh", "base_current", "stale", "missing"}:
+            summary_manifest_freshness = freshness
     if graph_path.exists() and graph:
         manifest = {
             "node_count": len(graph.get("nodes") or []),
@@ -1737,7 +2713,7 @@ def build_context_artifacts(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     context_path = output_dir / "codegraph-context.md"
     manifest_path = output_dir / "code-intelligence.json"
@@ -1793,7 +2769,7 @@ def build_context_artifacts(
     context_text = _prepend_context_guidance(
         context_text=context_text,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         status=status,
         quality=quality,
     )
@@ -1932,7 +2908,7 @@ def build_affected_tests_artifact(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = _workflow_dir(item_id, root)
     out_path = output_dir / "affected-tests.json"
     status = codegraph_status(root, skip_external=skip_external)
@@ -1958,7 +2934,7 @@ def build_affected_tests_artifact(
     codegraph_suggested = list(suggested)
     test_fallback_suggested, test_discovery = _discover_repo_test_fallbacks(
         root=root,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         filter_glob=filter_glob,
     )
     supplement = [path for path in test_fallback_suggested if path not in suggested]
@@ -2007,16 +2983,17 @@ def build_summary(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed_files,
+        changed_files=changed,
         root=root,
         skip_external=skip_external,
     )
@@ -2051,7 +3028,7 @@ def build_summary(
     ]
     if module:
         verify_parts.append(f"--module {module}")
-    verify_parts.extend(f"--changed-file {path}" for path in (changed_files or [])[:12])
+    verify_parts.extend(f"--changed-file {path}" for path in changed[:12])
     freshness_effective = freshness.get("effective") if isinstance(freshness, dict) else {}
     return {
         "schema_version": "aistock_code_intelligence_summary_v1",
@@ -2083,17 +3060,51 @@ def build_summary(
     }
 
 
-def _client_file_status(path: Path, required_terms: list[str] | None = None) -> dict[str, Any]:
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _client_file_status(
+    path: Path,
+    required_terms: list[str] | None = None,
+    *,
+    authoritative_path: Path | None = None,
+) -> dict[str, Any]:
     exists = path.exists()
     missing_terms: list[str] = []
-    if exists and required_terms:
+    installed_sha256 = _file_sha256(path)
+    authoritative_exists = authoritative_path.is_file() if authoritative_path is not None else False
+    authoritative_sha256 = _file_sha256(authoritative_path) if authoritative_path is not None else None
+    if authoritative_path is not None:
+        verification = "authoritative_sha256"
+        if not authoritative_exists:
+            status = "authority_missing"
+        else:
+            status = "ready" if exists and installed_sha256 == authoritative_sha256 else ("stale" if exists else "missing")
+    elif exists and required_terms:
         text = _read_text_if_exists(path).lower()
         missing_terms = [term for term in required_terms if term.lower() not in text]
+        status = "ready" if not missing_terms else "stale"
+        verification = "required_terms"
+    else:
+        status = "ready" if exists else "missing"
+        verification = "existence"
     return {
         "path": str(path),
         "exists": exists,
-        "status": "ready" if exists and not missing_terms else ("stale" if exists else "missing"),
+        "status": status,
+        "verification": verification,
         "missing_terms": missing_terms,
+        "installed_sha256": installed_sha256,
+        "authoritative_path": str(authoritative_path) if authoritative_path is not None else None,
+        "authoritative_exists": authoritative_exists,
+        "authoritative_sha256": authoritative_sha256,
     }
 
 
@@ -2108,7 +3119,7 @@ def build_client_verification(
     skip_external: bool = False,
 ) -> dict[str, Any]:
     root = root or REPO_ROOT
-    changed = [path for path in changed_files or [] if path]
+    changed = nightly_discovery_input_pack.unique_repo_paths(list(changed_files or []))
     output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / item_id
     output_dir.mkdir(parents=True, exist_ok=True)
     status = codegraph_status(root, skip_external=skip_external)
@@ -2121,14 +3132,14 @@ def build_client_verification(
     context = build_context_artifacts(
         item_id=item_id,
         query=query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         max_symbols=8,
         skip_external=skip_external,
     )
     affected = build_affected_tests_artifact(
         item_id=item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=root,
         skip_external=skip_external,
     )
@@ -2145,27 +3156,25 @@ def build_client_verification(
             output_dir=output_dir,
         )
     home = _user_home()
+    understand_skill = _ua_skill_file("understand", home)
+    understand_chat_skill = _ua_skill_file("understand-chat", home)
     clients = {
         "codex_issue_skill": _client_file_status(
             home / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md",
             ["graph-first", "code intelligence", "aistock_issue_workflow.py"],
+            authoritative_path=root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md",
         ),
         "claude_issue_command": _client_file_status(
             home / ".claude" / "commands" / "fix-aistock-issue.md",
             ["graph-first", "code intelligence", "aistock_issue_workflow.py"],
+            authoritative_path=root / ".claude" / "commands" / "fix-aistock-issue.md",
         ),
         "codex_understand_skill": _client_file_status(
-            home / ".understand-anything" / "repo" / "understand-anything-plugin" / "skills" / "understand" / "SKILL.md",
+            understand_skill,
             ["understand"],
         ),
         "codex_understand_chat_skill": _client_file_status(
-            home
-            / ".understand-anything"
-            / "repo"
-            / "understand-anything-plugin"
-            / "skills"
-            / "understand-chat"
-            / "SKILL.md",
+            understand_chat_skill,
             ["understand"],
         ),
     }
@@ -2436,9 +3445,13 @@ def cmd_freshness(args: argparse.Namespace) -> int:
 
 
 def cmd_latest_freshness(args: argparse.Namespace) -> int:
+    root = Path(args.root) if args.root else REPO_ROOT
+    live_status = codegraph_status(root, skip_external=args.skip_external)
     payload = latest_codegraph_freshness(
-        root=Path(args.root) if args.root else REPO_ROOT,
+        root=root,
+        live_status=live_status,
         refresh_if_stale=args.refresh_if_stale,
+        persist_effective=args.refresh_if_stale,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         max_age_hours=args.max_age_hours,
         skip_external=args.skip_external,
@@ -2478,6 +3491,71 @@ def cmd_run_manifest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_llm_value_summary(args: argparse.Namespace) -> int:
+    payload = build_llm_value_summary(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        artifact_dir=Path(args.artifact_dir) if args.artifact_dir else None,
+    )
+    if args.output_md:
+        _write_text(Path(args.output_md), render_llm_value_summary_markdown(payload))
+    metrics = payload.get("value_metrics") if isinstance(payload.get("value_metrics"), dict) else {}
+    _emit_compact_line(
+        "llm-value-summary",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "codegraph": (payload.get("codegraph") or {}).get("freshness"),
+            "ua": (payload.get("understand_anything") or {}).get("status"),
+            "provider": (payload.get("llm") or {}).get("provider"),
+            "model": (payload.get("llm") or {}).get("model"),
+            "llm_invoked": str(bool((payload.get("llm") or {}).get("llm_invoked"))).lower(),
+            "fallback_used": str(bool((payload.get("llm") or {}).get("fallback_used"))).lower(),
+            "advice_consumed": str(bool((payload.get("llm") or {}).get("advice_consumed"))).lower(),
+            "advice_changed_plan": str(bool(metrics.get("llm_advice_changed_plan"))).lower(),
+            "broad_scan_avoided": str(bool(metrics.get("broad_scan_avoided"))).lower(),
+            "high_value": metrics.get("high_value_candidates"),
+            "issue_payloads": metrics.get("issue_payload_ready_count"),
+            "summary_ref": args.output_md,
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
+def cmd_llm_usage_summary(args: argparse.Namespace) -> int:
+    payload = build_llm_usage_summary(
+        root=Path(args.root) if args.root else REPO_ROOT,
+        artifact_dir=Path(args.artifact_dir) if args.artifact_dir else None,
+    )
+    if args.output_md:
+        _write_text(Path(args.output_md), render_llm_usage_summary_markdown(payload))
+    totals = _mapping(payload.get("totals"))
+    value = _mapping(payload.get("value_context"))
+    _emit_compact_line(
+        "llm-usage-summary",
+        {
+            "workflow_gate": payload.get("workflow_gate"),
+            "invoked": totals.get("invoked_count"),
+            "usage_available": totals.get("usage_available_count"),
+            "usage_missing": totals.get("usage_missing_count"),
+            "total_units": totals.get("total_units"),
+            "duration_s": totals.get("total_duration_seconds"),
+            "required_invoked": totals.get("required_invocation_invoked_count"),
+            "required_missing": totals.get("required_invocation_missing_count"),
+            "limit_enforced": str(bool(payload.get("limit_enforced"))).lower(),
+            "advice_consumed": str(bool(value.get("advice_consumed"))).lower(),
+            "high_value": value.get("high_value_candidate_count"),
+            "issue_payloads": value.get("issue_payload_ready_count"),
+            "summary_ref": args.output_md,
+        },
+        payload=payload,
+        output=args.output,
+        output_format=args.output_format,
+    )
+    return 0
+
+
 def cmd_context(args: argparse.Namespace) -> int:
     payload = build_context_artifacts(
         item_id=args.item_id,
@@ -2510,10 +3588,10 @@ def cmd_context(args: argparse.Namespace) -> int:
 def cmd_affected_tests(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_affected_tests_artifact(
         item_id=args.item_id,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         root=Path(args.root) if args.root else REPO_ROOT,
         filter_glob=args.filter,
         skip_external=args.skip_external,
@@ -2600,11 +3678,11 @@ def cmd_ua_configure(args: argparse.Namespace) -> int:
 def cmd_summary(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_summary(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         skip_external=args.skip_external,
@@ -2633,11 +3711,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
 def cmd_verify_clients(args: argparse.Namespace) -> int:
     changed = list(args.changed_file or [])
     if args.changed_files_file:
-        changed.extend(Path(args.changed_files_file).read_text(encoding="utf-8").splitlines())
+        changed.extend(nightly_discovery_input_pack.read_changed_files_file(Path(args.changed_files_file)))
     payload = build_client_verification(
         item_id=args.item_id,
         query=args.query,
-        changed_files=changed,
+        changed_files=nightly_discovery_input_pack.unique_repo_paths(changed),
         module=args.module,
         root=Path(args.root) if args.root else REPO_ROOT,
         output_dir=Path(args.output_dir) if args.output_dir else None,
@@ -2733,6 +3811,38 @@ def build_parser() -> argparse.ArgumentParser:
     run_manifest.add_argument("--commit")
     run_manifest.add_argument("--output")
     run_manifest.set_defaults(func=cmd_run_manifest)
+
+    llm_value = sub.add_parser(
+        "llm-value-summary",
+        help="Build a compact human-readable summary of Nightly LLM and code-intelligence value evidence.",
+    )
+    llm_value.add_argument("--root")
+    llm_value.add_argument("--artifact-dir")
+    llm_value.add_argument("--output")
+    llm_value.add_argument("--output-md")
+    llm_value.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints value status only; full-json emits the complete payload.",
+    )
+    llm_value.set_defaults(func=cmd_llm_value_summary)
+
+    llm_usage = sub.add_parser(
+        "llm-usage-summary",
+        help="Build a compact observability-only summary of Nightly LLM token usage.",
+    )
+    llm_usage.add_argument("--root")
+    llm_usage.add_argument("--artifact-dir")
+    llm_usage.add_argument("--output")
+    llm_usage.add_argument("--output-md")
+    llm_usage.add_argument(
+        "--output-format",
+        choices=("compact", "full-json"),
+        default="compact",
+        help="Stdout format. Compact prints usage totals only; full-json emits the complete payload.",
+    )
+    llm_usage.set_defaults(func=cmd_llm_usage_summary)
 
     context = sub.add_parser("context", help="Build a CodeGraph-backed context artifact.")
     context.add_argument("--item-id", required=True)

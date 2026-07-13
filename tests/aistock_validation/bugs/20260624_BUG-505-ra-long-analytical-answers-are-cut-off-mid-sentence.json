@@ -1,0 +1,158 @@
+{
+  "actual": "Long RA analytical answer stops in the middle of a sentence and no continuation is output.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/llm_client.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "scripts/research_assistant_real_model_smoke.py",
+    "backend/tests/scripts/test_research_assistant_real_model_smoke.py",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/components/research-assistant/AssistantShared.tsx",
+    "tests/aistock_validation/bugs/20260624_BUG-505-ra-long-analytical-answers-are-cut-off-mid-sentence.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "configs/research_assistant/runtime_context.yaml",
+    "backend/services/research_assistant/context_budget.py",
+    "backend/services/research_assistant/runtime_config.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-505",
+  "closed_at": "2026-06-24T14:04:15Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T16:59:11.106126Z",
+  "description": "Long RA analytical answer stops in the middle of a sentence and no continuation is output.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-5ea99da8a474",
+      "timestamp": "2026-06-23T16:59:11.106122Z"
+    },
+    {
+      "action": "scope_expanded_for_response_budget_cap_investigation",
+      "actor": "codex",
+      "note": "Expanded scope to runtime_context.yaml, context_budget.py, and runtime_config.py after evidence showed RA LLM max_tokens is sourced from YAML budget.response.max_tokens through context_budget; llm_client.py is not present and ResearchAssistantLlmClient lives in service.py.",
+      "timestamp": "2026-06-23T17:13:41.381659Z"
+    },
+    {
+      "action": "truncation_layer_evidence_collected",
+      "actor": "codex",
+      "note": "Pre-fix evidence: configs/research_assistant/runtime_context.yaml budget.response.max_tokens=1600; context_budget.py maps it directly to ContextBudgetPlan.llm_max_tokens; service.py passes llm_max_tokens to ResearchAssistantLlmClient.complete/litellm.completion for chat and ReAct synthesis. Scoped frontend grep found no chat main-bubble content_text slice/truncate; AssistantShared truncation only affects diagnostic/detail humanized fields. DEEPSEEK_API_KEY is absent, so real-model smoke must loud-skip 77 until user supplies a key.",
+      "timestamp": "2026-06-23T17:27:46.728042Z"
+    },
+    {
+      "action": "implementation_completed",
+      "actor": "codex",
+      "note": "Raised configs/research_assistant/runtime_context.yaml budget.response.max_tokens from 1600 to 384000 (DeepSeek V4 provider maximum output); ContextBudgetPlanner now reserves the configured response max in response_reserved_tokens; LLM calls omit max_tokens only when config is null and fail loud on provider finish_reason=length with reason_code=llm_completion_truncated/stage=llm_completion; added chat preservation, truncation-loudness, and smoke completeness tests.",
+      "timestamp": "2026-06-24T05:35:58.815522Z"
+    },
+    {
+      "action": "validation_completed",
+      "actor": "codex",
+      "note": "Validation evidence: targeted pytest backend/tests/research_assistant/test_service.py::test_default_chat_completion_budget_uses_provider_max_for_long_answers backend/tests/research_assistant/test_service.py::test_chat_turn_preserves_complete_long_raw_api_response backend/tests/research_assistant/test_service.py::test_chat_turn_reports_provider_length_stop_loudly backend/tests/scripts/test_research_assistant_real_model_smoke.py -q => 11 passed; test_react_tool_loop.py => 10 passed; nox l0 => passed; research_assistant_backend => 334 passed; research_assistant_mcp_contract => 38 passed; validation_module_registry_l0 => 8 passed; ra_phase0_baseline => 334 passed; ra_phase5_agent_teams => 13 passed; ra_phase7_full_accept => successful (backend 334 passed, frontend Playwright 4+8 passed, crosscheck/catalog/ownership passed); ruff changed Python files => passed; git diff --check => passed; real-model smoke loud-skipped because DEEPSEEK_API_KEY missing with fake_pass=false/status=skipped.",
+      "timestamp": "2026-06-24T05:35:58.815539Z"
+    },
+    {
+      "action": "final_close_sync_metadata",
+      "actor": "codex",
+      "timestamp": "2026-06-24T14:04:15Z",
+      "note": "close-sync PR #1600 merged; Issue #1561 closed with status:fixed"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant returns complete long analytical answers for multidimensional stock questions, including all requested dimensions and a closing conclusion; no silent mid-sentence truncation. If any safety limit is ever hit, it must be loud and explicit.",
+  "first_seen_at": "2026-06-23T16:59:11.106126Z",
+  "fix_branch": "bug/BUG-505-ra-long-analytical-answers-are-cut-off-mid-sente-20260624",
+  "fix_commit": "e6ffb273f4d5707a6b47064eaadee73678138a02",
+  "fixed_at": "2026-06-24T13:35:20.894983Z",
+  "github_issue_number": 1561,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1561",
+  "last_seen_at": "2026-06-23T16:59:11.106126Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1576",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask RA a long multidimensional analytical question such as 国城矿业跌停原因+未来+基本面, then inspect raw chat/turn response versus UI rendering.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA long analytical answers are cut off mid-sentence",
+  "trigger_condition": {
+    "fingerprint": "5ea99da8a474c1b8bad46674",
+    "source_event_id": "FE-20260624-5ea99da8a474"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/research_assistant/service.py",
+      "backend/services/research_assistant/react_grounding.py",
+      "backend/services/research_assistant/llm_client.py",
+      "backend/tests/research_assistant/test_service.py",
+      "backend/tests/research_assistant/test_react_tool_loop.py",
+      "scripts/research_assistant_real_model_smoke.py",
+      "backend/tests/scripts/test_research_assistant_real_model_smoke.py",
+      "frontend/src/app/research-assistant/chat/page.tsx",
+      "frontend/src/components/research-assistant/AssistantShared.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/frontend",
+    "ui_routes": [
+      "/frontend"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "#1576 required checks green before merge"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

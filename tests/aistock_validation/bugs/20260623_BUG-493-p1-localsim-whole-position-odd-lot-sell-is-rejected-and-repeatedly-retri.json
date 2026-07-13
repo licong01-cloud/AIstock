@@ -1,0 +1,81 @@
+{
+  "actual": "LocalSim ledger rejects whole-position SELL quantities 1547 and 626 with LOCAL_SIM_BOARD_LOT_VIOLATION, no orders/fills are persisted, and scheduler logs repeated LocalSim ledger rejected the order warnings for the same intent.",
+  "allowed_write_scope": [
+    "backend/services/trading_core/ledger.py",
+    "backend/services/paper_trading_v2/broker/localsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260623_BUG-493-p1-localsim-whole-position-odd-lot-sell-is-rejected-and-repeatedly-retri.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-493",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T07:06:41.494267Z",
+  "description": "LocalSim ledger rejects whole-position SELL quantities 1547 and 626 with LOCAL_SIM_BOARD_LOT_VIOLATION, no orders/fills are persisted, and scheduler logs repeated LocalSim ledger rejected the order warnings for the same intent.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-69eab3e5f2f8",
+      "timestamp": "2026-06-23T07:06:41.494263Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime API and backend/logs/aistock.log 2026-06-23 13:31-14:15 Asia/Shanghai"
+  ],
+  "expected": "LocalSim allows whole-position SELL odd lots, rejects only non-whole-position odd-lot orders before broker submit with durable reason_code, and deterministic LocalSim submit failures do not loop forever in SUBMITTING/retry state.",
+  "first_seen_at": "2026-06-23T07:06:41.494267Z",
+  "fix_branch": null,
+  "fix_commit": "2a91ac3b4771144845bc1f4935e2edc492dc996e",
+  "fixed_at": "2026-06-23T09:19:51.983291Z",
+  "github_issue_number": 1528,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1528",
+  "last_seen_at": "2026-06-23T07:06:41.494267Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1534",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET /api/v1/simulation-runtime/runs/simrun_ac556f235ac28537 and /runs/simrun_86ee029b31924074; inspect execution_plan intent_668cd90c2acfaecb and intent_530aca8795f129ca plus submit_failure cause=LOCAL_SIM_BOARD_LOT_VIOLATION.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P1][LocalSim] whole-position odd-lot SELL is rejected and repeatedly retried",
+  "trigger_condition": {
+    "fingerprint": "69eab3e5f2f89aa0f6a40033",
+    "source_event_id": "FE-20260623-69eab3e5f2f8"
+  },
+  "validation_evidence": [
+    "CI for PR #1534 -> passed (17 passed, 0 failed); local targeted pytest 107 passed; ruff changed files passed; git diff --check passed; nox l0 passed; validation_module_registry_l0 passed; paper_v2_l3 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

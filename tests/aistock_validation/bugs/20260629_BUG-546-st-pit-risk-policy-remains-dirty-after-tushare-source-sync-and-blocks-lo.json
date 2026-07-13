@@ -1,0 +1,83 @@
+{
+  "actual": "Tushare post-sync marks shsz_st_pit_active_v1 dirty and calls ensure_st_pit_universe(strict=False), but coverage refresh may return coverage_ready_source_changed_ignored without clearing dirty or extending coverage. Strict risk policy then rejects status=ready dirty=true/end_date<trade_date as ST PIT risk policy universe is not ready.",
+  "allowed_write_scope": [
+    "backend/services/stock_universe_pit_service.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/selection_center/risk_policy.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/selection_center/test_risk_policy.py",
+    "tests/aistock_validation/bugs/20260629_BUG-546-st-pit-risk-policy-remains-dirty-after-tushare-source-sync-and-blocks-lo.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-546",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-28T18:26:34.896168Z",
+  "description": "Tushare post-sync marks shsz_st_pit_active_v1 dirty and calls ensure_st_pit_universe(strict=False), but coverage refresh may return coverage_ready_source_changed_ignored without clearing dirty or extending coverage. Strict risk policy then rejects status=ready dirty=true/end_date<trade_date as ST PIT risk policy universe is not ready.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-ecab09a80724",
+      "timestamp": "2026-06-28T18:26:34.896164Z"
+    }
+  ],
+  "evidence_uris": [
+    "read-only DB/log diagnosis: market.stock_universe_pit_state shsz_st_pit_active_v1 status=ready dirty=true end_date=2026-06-26 dirty_reason=tushare_source_sync_success; Paper errors show ST PIT risk policy universe is not ready with ready+dirty state"
+  ],
+  "expected": "When PIT source datasets change, ensure_st_pit_universe should rebuild or fail loudly with actionable reason before Paper/LocalSIM risk policy consumes it; a ready state with dirty=true or stale end_date must not remain as a misleading ready-but-unusable platform state.",
+  "first_seen_at": "2026-06-28T18:26:34.896168Z",
+  "fix_branch": null,
+  "fix_commit": "fbb890a1452b3d6cdad1db979bd9d54ff4cc3c33",
+  "fixed_at": "2026-06-28T19:27:58.596774Z",
+  "github_issue_number": 1714,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1714",
+  "last_seen_at": "2026-06-28T18:26:34.896168Z",
+  "module": "selection_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1716",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rtk python -m pytest backend/tests/test_stock_universe_pit_service.py backend/tests/test_tushare_sync_engine.py backend/tests/selection_center/test_risk_policy.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "selection_center"
+  ],
+  "title": "ST PIT risk policy remains dirty after Tushare source sync and blocks LocalSIM/Paper readiness",
+  "trigger_condition": {
+    "fingerprint": "ecab09a8072474ba6f5d57d4",
+    "source_event_id": "FE-20260629-ecab09a80724"
+  },
+  "validation_evidence": [
+    "GitHub PR #1716 CI -> passed (17 checks)",
+    "local: pytest stock_universe/tushare/risk_policy, ruff scoped changed files, diff-check, l0, validation_module_registry_l0, paper_v2_backend -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

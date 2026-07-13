@@ -1,0 +1,118 @@
+{
+  "actual": "The repo hygiene orphan audit identified nine P4/delete candidates. After manual triage, four are low-risk tracked runtime/dependency residue that can be deleted, two dev DB apply evidence files should be archived instead of deleted, and factor-data/factors_ui candidates should remain for a separate domain-specific review. This cleanup must happen in an isolated worktree and must not touch production runtime, DB, or unrelated modules.\n\nLow-risk delete candidates:\n- backend/requirements.torch.txt\n- log/2026-02-05_15-09-16-645141/LITELLM_SETTINGS/52996/2026-02-05_15-09-32-957955.pkl\n- log/2026-02-05_15-12-21-893866/LITELLM_SETTINGS/52712/2026-02-05_15-12-34-026809.pkl\n- monitoring/textfile_collector/task_verify.txt\n\nArchive candidates:\n- scripts/dev_db/phase2_pre_apply_baseline_20260510.txt\n- scripts/dev_db/phase2_post_apply_validation_20260510.txt\n\nDo not delete in this BUG:\n- git_ignore_folder/factor_implementation_source_data_test/*\n- factors_ui/instrument_format_analysis.json",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260624_BUG-510-repo-hygiene-p4-candidates-need-safe-cleanup-and-dev-db-evidence-archive.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/requirements.torch.txt",
+    "log/2026-02-05_15-09-16-645141/LITELLM_SETTINGS/52996/2026-02-05_15-09-32-957955.pkl",
+    "log/2026-02-05_15-12-21-893866/LITELLM_SETTINGS/52712/2026-02-05_15-12-34-026809.pkl",
+    "monitoring/textfile_collector/task_verify.txt",
+    "scripts/dev_db/phase2_pre_apply_baseline_20260510.txt",
+    "scripts/dev_db/phase2_post_apply_validation_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_phase2_pre_apply_baseline_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_phase2_post_apply_validation_20260510.txt",
+    "tests/aistock_validation/history/repo_hygiene/BUG-510_p4_cleanup_manifest_20260624.md",
+    ".gitignore"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-510",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T06:30:10.716368Z",
+  "description": "The repo hygiene orphan audit identified nine P4/delete candidates. After manual triage, four are low-risk tracked runtime/dependency residue that can be deleted, two dev DB apply evidence files should be archived instead of deleted, and factor-data/factors_ui candidates should remain for a separate domain-specific review. This cleanup must happen in an isolated worktree and must not touch production runtime, DB, or unrelated modules.\n\nLow-risk delete candidates:\n- backend/requirements.torch.txt\n- log/2026-02-05_15-09-16-645141/LITELLM_SETTINGS/52996/2026-02-05_15-09-32-957955.pkl\n- log/2026-02-05_15-12-21-893866/LITELLM_SETTINGS/52712/2026-02-05_15-12-34-026809.pkl\n- monitoring/textfile_collector/task_verify.txt\n\nArchive candidates:\n- scripts/dev_db/phase2_pre_apply_baseline_20260510.txt\n- scripts/dev_db/phase2_post_apply_validation_20260510.txt\n\nDo not delete in this BUG:\n- git_ignore_folder/factor_implementation_source_data_test/*\n- factors_ui/instrument_format_analysis.json",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-079e4e198d60",
+      "timestamp": "2026-06-24T06:30:10.716363Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Low-risk residue files are removed from git, dev DB evidence is moved to a durable archive path with a short manifest, and the factor-data/factors_ui candidates are left untouched with their timestamps reported for later review. Validation stays lightweight: reference check, git diff --check, guardrail_changed_files, and targeted audit rerun.",
+  "first_seen_at": "2026-06-24T06:30:10.716368Z",
+  "fix_branch": null,
+  "fix_commit": "a1e36588f7ee68a70b14096305ebf810696e2756",
+  "fixed_at": "2026-06-24T06:46:51.523790Z",
+  "github_issue_number": 1580,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1580",
+  "last_seen_at": "2026-06-24T06:30:10.716368Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1581",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Repo hygiene P4 candidates need safe cleanup and dev DB evidence archive",
+  "trigger_condition": {
+    "fingerprint": "079e4e198d604c517113d47f",
+    "source_event_id": "FE-20260624-079e4e198d60"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/delete",
+    "ui_routes": [
+      "/delete"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "rg reference checks for deleted/archived paths -> passed (0 refs outside BUG-510 manifest)",
+    "git diff --cached --check -> passed",
+    "python -m nox -s guardrail_changed_files -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python scripts/repo_hygiene_orphan_audit.py --root <worktree> --output-dir tmp/validation/code-intelligence/BUG-510-after-cleanup --json --max-seconds 300 -> passed (P4 delete_candidate_count=3)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

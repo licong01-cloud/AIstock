@@ -1,0 +1,127 @@
+{
+  "actual": "荐股中心底层已按 program_id 隔离多个荐股任务，但当前 UI 仍偏单选中任务详情模型：多任务同时 ENABLED/WAITING_DATA 时，非选中任务缺少完整独立管理入口，策略包配置/回放验证/应用新绑定不够明确，行级复评日期上下文依赖选中任务详情，容易误解为只有一个任务可激活或管理。期望：支持多个不同荐股任务同时处于激活/运行态，每个任务维护自己的推荐列表、复评历史、active pool、binding versions，互不干扰；每个任务行可独立查看详情、复评/补齐、管理策略包、执行回放验证并应用新策略绑定，不需要通过全局单选详情影响其他任务。验收：两个 ENABLED 任务 A/B 使用不同策略包组合，A/B 可分别发布同一目标交易日的 PUBLISHED 列表；A 复评不改变 B 的 list versions/episodes/review runs；B 应用新 binding 不改变 A 的 active binding；前端行级按钮和详情抽屉/面板按 program_id 独立加载并有 Playwright 覆盖。",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "frontend/tests/paper-v2",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260613_BUG-355-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-355",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T04:57:59.985403Z",
+  "description": "荐股中心底层已按 program_id 隔离多个荐股任务，但当前 UI 仍偏单选中任务详情模型：多任务同时 ENABLED/WAITING_DATA 时，非选中任务缺少完整独立管理入口，策略包配置/回放验证/应用新绑定不够明确，行级复评日期上下文依赖选中任务详情，容易误解为只有一个任务可激活或管理。期望：支持多个不同荐股任务同时处于激活/运行态，每个任务维护自己的推荐列表、复评历史、active pool、binding versions，互不干扰；每个任务行可独立查看详情、复评/补齐、管理策略包、执行回放验证并应用新策略绑定，不需要通过全局单选详情影响其他任务。验收：两个 ENABLED 任务 A/B 使用不同策略包组合，A/B 可分别发布同一目标交易日的 PUBLISHED 列表；A 复评不改变 B 的 list versions/episodes/review runs；B 应用新 binding 不改变 A 的 active binding；前端行级按钮和详情抽屉/面板按 program_id 独立加载并有 Playwright 覆盖。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-5529a8841ba9",
+      "timestamp": "2026-06-13T04:57:59.985400Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-13T04:57:59.985403Z",
+  "fix_branch": null,
+  "fix_commit": "bce5e30190f71c81cf7462050d2694983829c26a",
+  "fixed_at": "2026-06-13T05:45:48.904999Z",
+  "github_issue_number": 1050,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1050",
+  "last_seen_at": "2026-06-13T04:57:59.985403Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1051",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "荐股中心多任务并行管理与策略包切换入口不完整",
+  "trigger_condition": {
+    "fingerprint": "5529a8841ba9e2bdbc374540",
+    "source_event_id": "FE-20260613-5529a8841ba9"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2"
+    ],
+    "ui_issue": true,
+    "ui_route": "/WAITING_DATA",
+    "ui_routes": [
+      "/WAITING_DATA",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "frontend scoped Playwright advisory UI -> 9 passed",
+    "frontend tsc -> advisory and selection changes pass; existing research-assistant null-to-string error remains unrelated",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed; 8 passed",
+    "python -m nox -s paper_v2_backend -> passed; 617 passed, 1 skipped, 2 xfailed",
+    "python -m nox -s paper_v2_l3 with UI skipped and realtime skipped -> passed",
+    "python -m nox -s paper_v2_ui with realtime skipped -> passed; 26 passed, 1 skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

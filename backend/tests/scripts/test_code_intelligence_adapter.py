@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -277,6 +277,48 @@ def test_summary_command_defaults_to_compact_stdout(tmp_path: Path, monkeypatch,
     assert stdout.startswith("PASS code-intelligence-summary ")
     assert "affected_tests=1" in stdout
     assert "selected_nodes" not in stdout
+
+
+def test_summary_command_sanitizes_changed_files_file(tmp_path: Path, monkeypatch, capsys) -> None:
+    changed_file = tmp_path / "changed.txt"
+    changed_file.write_text(
+        "\ufeffChanges:\n"
+        "+++ b/scripts/code_intelligence_adapter.py\n"
+        "scripts/code_intelligence_adapter.py\n"
+        "F:/Dev/AIstock/scripts/nightly_adaptive_scheduler.py\n",
+        encoding="utf-8",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_build_summary(**kwargs):
+        observed.update(kwargs)
+        return {
+            "status": "ok",
+            "latest_freshness": "fresh",
+            "affected_tests_count": 0,
+            "fallback_used": False,
+            "stale_metadata_warning": False,
+        }
+
+    monkeypatch.setattr(adapter, "build_summary", fake_build_summary)
+
+    result = adapter.main(
+        [
+            "summary",
+            "--item-id",
+            "VERIFY",
+            "--query",
+            "workflow",
+            "--changed-files-file",
+            str(changed_file),
+            "--root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out.startswith("PASS code-intelligence-summary ")
+    assert observed["changed_files"] == ["scripts/code_intelligence_adapter.py"]
 
 
 def test_summary_command_full_json_is_explicit(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -1175,6 +1217,64 @@ def test_latest_codegraph_freshness_refreshes_missing_artifact_on_demand(tmp_pat
     assert (tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json").exists()
 
 
+def test_latest_codegraph_freshness_persists_live_current_head_when_artifact_metadata_is_stale(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "nightly-1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "stale-metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_codegraph_freshness_v1",
+                "generated_at": "2026-06-04T00:00:00Z",
+                "provider": "codegraph",
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "git_commit": "old123",
+                "artifact_path": "tmp/validation/code-intelligence/nightly-1/stale-metadata.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    live_status = {
+        "available": True,
+        "index_exists": True,
+        "status": "ok",
+        "status_check": {"ok": True},
+        "index_summary": {"files": 10, "nodes": 20, "edges": 30, "up_to_date": True},
+        "git_commit": "new456",
+        "graph_root": str(tmp_path),
+        "graph_root_source": "current_worktree",
+    }
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "new456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_codegraph_critical_files",
+        lambda root: [],
+    )
+
+    payload = adapter.latest_codegraph_freshness(
+        tmp_path,
+        live_status=live_status,
+        persist_effective=True,
+        output_dir=tmp_path / "tmp" / "validation" / "code-intelligence" / "latest",
+    )
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["effective_source"] == "persisted_effective_artifact"
+    assert payload["refreshed"] is True
+    assert payload["stale_metadata_warning"] is False
+    assert payload["effective"]["git_commit"] == "new456"
+    persisted = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest" / "codegraph-freshness.json"
+    assert persisted.exists()
+    assert json.loads(persisted.read_text(encoding="utf-8"))["git_commit"] == "new456"
+
+
 def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_path: Path, monkeypatch) -> None:
     artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
     artifact_dir.mkdir(parents=True)
@@ -1219,6 +1319,449 @@ def test_code_intelligence_run_manifest_points_agents_to_uploaded_artifact(tmp_p
     markdown = (tmp_path / payload["summary_ref"]).read_text(encoding="utf-8")
     assert "Code Intelligence Run Manifest" in markdown
     assert "Agent Consumption" in markdown
+
+
+def test_llm_value_summary_renders_human_readable_evidence(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "12345"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "codegraph-freshness.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "ready",
+                "freshness": "fresh",
+                "status": "ok",
+                "index_summary": {"files": 12, "nodes": 34, "edges": 56},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "codegraph-freshness.md").write_text("## CodeGraph Freshness\n", encoding="utf-8")
+    (artifact_dir / "code-intelligence-summary.json").write_text(
+        json.dumps(
+            {
+                "understand_anything_status": "available",
+                "understand_anything_summary_ref": "tmp/validation/code-intelligence/12345/ua-validation-summary.md",
+                "context_ref": "tmp/issue_workflow/nightly-12345/codegraph-context.md",
+                "affected_tests_ref": "tmp/issue_workflow/nightly-12345/affected-tests.json",
+                "context": {"context_quality": {"broad_scan_required": False}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "ua-summary-manifest.json").write_text(
+        json.dumps(
+            {
+                "summary_refs": [
+                    {"module": "validation", "freshness": "base_current"},
+                    {"module": "issue_workflow", "freshness": "base_current"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-nightly-adaptive-scheduler.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "ready",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "queue_summary": {"allowed_plan_keys": ["l0", "validation_module_registry_l0"]},
+                "advice_consumption": {"advice_consumed": True},
+                "issue_creation_policy": {"mode": "warning_only_advice"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-hypotheses.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_discovery_hypothesis_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {"invoked": True, "fallback_used": False},
+                "rotation": {"selected_plan_keys": ["workflow_discovery_root_clean_guard"]},
+                "hypotheses": [{"id": "H-001", "recommended_plan_keys": ["validation_catalog_integrity"]}],
+                "selected_plan_keys": ["validation_catalog_integrity"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "selected-plans.json").write_text(
+        json.dumps({"selected_plan_keys": ["validation_catalog_integrity"]}),
+        encoding="utf-8",
+    )
+    discovery_dir = artifact_dir / "discovery-plans"
+    discovery_dir.mkdir()
+    (discovery_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"executed_count": 1, "anomaly_count": 0}}),
+        encoding="utf-8",
+    )
+    bug_candidate_dir = artifact_dir / "bug-candidates"
+    bug_candidate_dir.mkdir()
+    (bug_candidate_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "candidate_count": 2,
+                    "high_value_candidate_count": 1,
+                    "issue_payload_ready_count": 1,
+                    "accepted_count": 1,
+                    "rejected_count": 0,
+                    "closed_count": 0,
+                    "no_candidate_reason": "no_high_value_actionable_candidates",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bug_candidate_dir / "candidate-summary.md").write_text("## Nightly BugCandidate Queue\n", encoding="utf-8")
+    (artifact_dir / "llm-prompt-evaluation.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "passed",
+                "case_count": 20,
+                "issue_body_completeness": 1.0,
+                "false_positive_auto_file_rate": 0.0,
+                "plan_recommendation_accuracy": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-guarded-rollout-gate.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "warning",
+                "mode": "warning_only",
+                "auto_file_allowed": False,
+                "llm_can_enhance_issue": True,
+                "llm_enhancement_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "design-drift-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_design_drift_audit_v1",
+                "workflow_gate": "warning",
+                "candidate_only": True,
+                "manual_analysis_required_before_bug_registration": True,
+                "llm_invoked": True,
+                "summary": {"review_target_count": 5, "finding_count": 1},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "design-drift-audit.md").write_text("# Nightly LLM Design Drift Audit\n", encoding="utf-8")
+    (artifact_dir / "silent-degradation-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_silent_degradation_audit_v1",
+                "workflow_gate": "warning",
+                "candidate_only": True,
+                "manual_analysis_required_before_bug_registration": True,
+                "llm_invoked": True,
+                "summary": {"review_target_count": 6, "finding_count": 2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "silent-degradation-audit.md").write_text(
+        "# Nightly LLM Silent Degradation Audit\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "repo-hygiene-orphan-audit.json").write_text(
+        json.dumps(
+            {
+                "workflow_gate": "ready",
+                "candidate_only": True,
+                "cleanup_requires_human_pr": True,
+                "summary": {
+                    "total_scanned": 8,
+                    "candidate_count": 3,
+                    "review_count": 1,
+                    "relocate_count": 1,
+                    "archive_count": 0,
+                    "delete_candidate_count": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "repo-hygiene-orphan-audit.md").write_text(
+        "# Repo Hygiene Orphan Audit\n",
+        encoding="utf-8",
+    )
+    (artifact_dir / "repo-hygiene-orphan-audit.csv").write_text(
+        "path,file_type\nscripts/old_debug.py,code\n",
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_llm_value_summary(root=tmp_path, artifact_dir=artifact_dir)
+    markdown = adapter.render_llm_value_summary_markdown(payload)
+
+    assert payload["workflow_gate"] == "ready"
+    assert payload["llm"]["llm_invoked"] is True
+    assert payload["llm"]["allowed_plan_keys"] == ["l0", "validation_module_registry_l0"]
+    assert payload["llm"]["discovery_hypothesis_count"] == 1
+    assert payload["llm"]["selected_plan_count"] == 1
+    assert payload["llm"]["bug_candidate_count"] == 2
+    assert payload["llm"]["bug_candidate_issue_payload_count"] == 1
+    assert payload["value_metrics"]["llm_advice_generated"] is True
+    assert payload["value_metrics"]["llm_advice_consumed"] is True
+    assert payload["value_metrics"]["llm_advice_changed_plan"] is True
+    assert payload["value_metrics"]["codegraph_refs_used"] >= 2
+    assert payload["value_metrics"]["ua_refs_used"] >= 1
+    assert payload["value_metrics"]["broad_scan_avoided"] is True
+    assert payload["value_metrics"]["high_value_candidates"] == 1
+    assert payload["value_metrics"]["candidate_feedback"]["accepted_count"] == 1
+    assert payload["value_metrics"]["candidate_feedback"]["no_candidate_reason"] == "no_high_value_actionable_candidates"
+    assert payload["value_metrics"]["candidate_feedback"]["placeholders_present"] is True
+    assert payload["design_drift_audit"]["candidate_only"] is True
+    assert payload["design_drift_audit"]["finding_count"] == 1
+    assert payload["silent_degradation_audit"]["candidate_only"] is True
+    assert payload["silent_degradation_audit"]["finding_count"] == 2
+    assert payload["repo_hygiene_orphan_audit"]["candidate_only"] is True
+    assert payload["repo_hygiene_orphan_audit"]["delete_candidate_count"] == 1
+    assert payload["understand_anything"]["summary_count"] == 2
+    assert payload["understand_anything"]["manifest_freshness"] == "base_current"
+    assert payload["understand_anything"]["base_current_summary_count"] == 2
+    assert "LLM + Code Intelligence Value" in markdown
+    assert "llm_provider: `deepseek_api`" in markdown
+    assert "understand_anything: `available` freshness=`base_current` summaries=`2`" in markdown
+    assert "allowed_plan_keys: `l0,validation_module_registry_l0`" in markdown
+    assert "advice_changed_plan: `True`" in markdown
+    assert "graph_refs: `codegraph=" in markdown
+    assert "discovery_hypotheses: `hypotheses=1, selected_plans=1`" in markdown
+    assert "discovery_plans: `executed=1, anomalies=0`" in markdown
+    assert "bug_candidates: `candidates=2, high_value=1, issue_payload_drafts=1`" in markdown
+    assert "candidate_feedback: `available=True, accepted=1, rejected=0, closed=0, pending=1`" in markdown
+    assert "design_drift_audit: `targets=5, findings=1, llm_gate=unknown, degraded=False, candidate_only=True`" in markdown
+    assert "silent_degradation_audit: `targets=6, findings=2, llm_gate=unknown, degraded=False, candidate_only=True`" in markdown
+    assert "repo_hygiene_orphan_audit: `scanned=8, candidates=3, delete_candidates=1, human_pr=True`" in markdown
+    assert "candidate_no_issue_reason: `no_high_value_actionable_candidates`" in markdown
+    assert "bug-candidates/manifest.json" in markdown
+    assert "selected-plans.json" in markdown
+    assert "design-drift-audit.md" in markdown
+    assert "silent-degradation-audit.md" in markdown
+    assert "repo-hygiene-orphan-audit.md" in markdown
+    assert "Raw JSON artifacts stay in the uploaded artifact bundle" in markdown
+
+
+def test_llm_usage_summary_aggregates_existing_artifacts_without_limits(tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "usage"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "llm-test-plan-advice.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_test_plan_advice_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "duration_seconds": 1.25,
+                    "usage_summary": {"prompt_units": 100, "completion_units": 40, "total_units": 140},
+                },
+                "advice_consumption": {"advice_consumed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-hypotheses.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_discovery_hypothesis_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "elapsed_seconds": 2.5,
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "usage_summary": {"prompt_units": 20, "completion_units": 8, "total_units": 28},
+                },
+                "selected_plan_keys": ["validation_module_registry_l0"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "silent-degradation-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_silent_degradation_audit_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invoked": True,
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "reason": "silent_degradation_audit_live_provider_json",
+                },
+                "timing_summary": {"known_duration_seconds": 3.75},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "design-drift-audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_nightly_design_drift_audit_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_gate": "degraded",
+                "duration_seconds": 4.0,
+                "llm_invocation_evidence": {
+                    "invoked": False,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "reason": "design_drift_audit_live_provider_failed_fallback",
+                    "error_type": "ProviderAdapterError",
+                    "error_fingerprint": "abc123",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (artifact_dir / "llm-prompt-evaluation.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_llm_prompt_evaluation_v1",
+                "provider": "deterministic",
+                "model": "deterministic-baseline-v1",
+                "llm_invocation_evidence": {"invoked": False, "reason": "prompt_evaluation_static_only"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    bug_candidate_dir = artifact_dir / "bug-candidates"
+    bug_candidate_dir.mkdir()
+    (bug_candidate_dir / "manifest.json").write_text(
+        json.dumps({"summary": {"high_value_candidate_count": 2, "issue_payload_ready_count": 1}}),
+        encoding="utf-8",
+    )
+
+    payload = adapter.build_llm_usage_summary(root=tmp_path, artifact_dir=artifact_dir)
+    markdown = adapter.render_llm_usage_summary_markdown(payload)
+
+    assert payload["schema_version"] == "aistock_llm_token_usage_summary_v1"
+    assert payload["blocking_for_issue_workflow"] is False
+    assert payload["limit_enforced"] is False
+    assert payload["totals"]["invoked_count"] == 3
+    assert payload["totals"]["attempted_count"] == 4
+    assert payload["totals"]["usage_available_count"] == 2
+    assert payload["totals"]["usage_missing_count"] == 2
+    assert payload["totals"]["prompt_units"] == 120
+    assert payload["totals"]["completion_units"] == 48
+    assert payload["totals"]["total_units"] == 168
+    assert payload["totals"]["duration_available_count"] == 4
+    assert payload["totals"]["total_duration_seconds"] == 11.5
+    assert payload["totals"]["required_invocation_expected_count"] == 6
+    assert payload["totals"]["required_invocation_invoked_count"] == 3
+    assert payload["totals"]["required_invocation_missing_count"] == 3
+    assert payload["totals"]["required_invocation_missing_steps"] == [
+        "adaptive_scheduler",
+        "design_drift_audit",
+        "scheduler_advice",
+    ]
+    assert payload["totals"]["required_artifact_missing_steps"] == ["adaptive_scheduler", "scheduler_advice"]
+    assert payload["totals"]["required_usage_missing_steps"] == [
+        "design_drift_audit",
+        "silent_degradation_audit",
+    ]
+    assert payload["value_context"]["advice_consumed"] is True
+    assert payload["value_context"]["advice_changed_plan"] is True
+    assert payload["value_context"]["selected_plan_count"] == 1
+    assert payload["value_context"]["high_value_candidate_count"] == 2
+    assert payload["value_context"]["issue_payload_ready_count"] == 1
+    missing = [item for item in payload["records"] if item["step"] == "silent_degradation_audit"][0]
+    assert missing["required_llm"] is True
+    assert missing["duration_seconds"] == 3.75
+    assert missing["timing_source"] == "timing_summary.known_duration_seconds"
+    assert missing["usage_available"] is False
+    assert missing["usage_missing_reason"] == "provider_usage_missing"
+    failed = [item for item in payload["records"] if item["step"] == "design_drift_audit"][0]
+    assert failed["attempted"] is True
+    assert failed["duration_seconds"] == 4.0
+    assert failed["usage_missing_reason"] == "provider_error_or_fallback_without_usage"
+    assert "LLM Token Usage Summary" in markdown
+    assert "attempted_steps: `4`" in markdown
+    assert "limit_enforced: `False`" in markdown
+    assert "total_units: `168`" in markdown
+    assert "total_duration_seconds: `11.5`" in markdown
+    assert "required_llm_health: `expected=6, invoked=3, missing=3" in markdown
+    assert "missing_required_llm_steps: `adaptive_scheduler, design_drift_audit, scheduler_advice`" in markdown
+    assert "slowest_llm_artifacts: `design_drift_audit=4.0s" in markdown
+    assert "silent_degradation_audit" in markdown
+
+
+def test_llm_usage_summary_command_defaults_to_compact_stdout(tmp_path: Path, capsys) -> None:
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "usage-cli"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "llm-test-plan-advice.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_test_plan_advice_v1",
+                "provider": "deepseek_api",
+                "model": "deepseek-v4-pro",
+                "llm_invocation_evidence": {
+                    "invoked": True,
+                    "provider": "deepseek_api",
+                    "model": "deepseek-v4-pro",
+                    "duration_seconds": 0.75,
+                    "usage_summary": {"prompt_units": 3, "completion_units": 2, "total_units": 5},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = artifact_dir / "llm-usage-summary.json"
+    output_md = artifact_dir / "llm-usage-summary.md"
+
+    result = adapter.main(
+        [
+            "llm-usage-summary",
+            "--root",
+            str(tmp_path),
+            "--artifact-dir",
+            str(artifact_dir),
+            "--output",
+            str(output),
+            "--output-md",
+            str(output_md),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert result == 0
+    assert stdout.startswith("WARN llm-usage-summary ")
+    assert "total_units=5" in stdout
+    assert "duration_s=0.75" in stdout
+    assert "required_missing=5" in stdout
+    assert "limit_enforced=false" in stdout
+    assert "records" not in stdout
+    assert json.loads(output.read_text(encoding="utf-8"))["totals"]["total_units"] == 5
+    assert "LLM Token Usage Summary" in output_md.read_text(encoding="utf-8")
+
+
+def test_nightly_workflow_wires_llm_usage_summary_without_invoking_llm() -> None:
+    workflow = Path(".github/workflows/nightly.yml").read_text(encoding="utf-8")
+
+    assert "scripts/code_intelligence_adapter.py llm-usage-summary" in workflow
+    assert "--output \"$outDir/llm-usage-summary.json\"" in workflow
+    assert "--output-md \"$outDir/llm-usage-summary.md\"" in workflow
+    usage_block = workflow.split("scripts/code_intelligence_adapter.py llm-usage-summary", 1)[1].split(
+        "if (Test-Path -LiteralPath \"$outDir/llm-usage-summary.md\")",
+        1,
+    )[0]
+    assert "--invoke-llm" not in usage_block
+    assert "LLM_USAGE_MD=\"tmp/validation/code-intelligence/${RUN_ID}/llm-usage-summary.md\"" in workflow
 
 
 def test_code_intelligence_run_manifest_warns_without_freshness_json(tmp_path: Path, monkeypatch) -> None:
@@ -1511,6 +2054,48 @@ def test_pr_quality_runner_can_reference_ua_summary_manifest(
     assert payload["latest_summary_manifest"]["summary_refs"][0]["module"] == "validation"
 
 
+def test_understand_anything_status_falls_back_to_graph_freshness_for_legacy_summary_manifest(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
+    graph_path.parent.mkdir(parents=True)
+    graph_path.write_text(
+        json.dumps(
+            {
+                "project": {"gitCommitHash": "base123", "analyzedAt": "2026-06-06T00:00:00Z"},
+                "nodes": [{"id": "validation.workflow", "label": "validation workflow"}],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    artifact_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "latest"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "ua-summary-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_understand_anything_summary_manifest_v1",
+                "generated_at": "2026-06-10T00:00:00Z",
+                "workflow_gate": "ready",
+                "summary_refs": [{"module": "validation", "summary_ref": "ua-validation-summary.md"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        adapter,
+        "_git_snapshot",
+        lambda root: {"ok": True, "head": "feature456", "dirty": False, "dirty_count": 0},
+    )
+    monkeypatch.setattr(adapter, "_git_commit_is_ancestor", lambda root, ancestor, descendant: True)
+
+    payload = adapter.understand_anything_status(tmp_path, skip_external=True)
+
+    assert payload["freshness"] == "base_current"
+    assert payload["latest_summary_manifest_freshness"] == "base_current"
+
+
 def test_context_quality_flags_noisy_context_without_requiring_broad_scan(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         adapter,
@@ -1716,6 +2301,11 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     for path in (codex_skill, claude_command, ua_skill, ua_chat):
         path.parent.mkdir(parents=True)
         path.write_text("graph-first Code Intelligence aistock_issue_workflow.py understand", encoding="utf-8")
+    authoritative_codex_skill = tmp_path / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md"
+    authoritative_claude_command = tmp_path / ".claude" / "commands" / "fix-aistock-issue.md"
+    for path in (authoritative_codex_skill, authoritative_claude_command):
+        path.parent.mkdir(parents=True)
+        path.write_text("graph-first Code Intelligence aistock_issue_workflow.py understand", encoding="utf-8")
     monkeypatch.setenv("USERPROFILE", str(home))
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
@@ -1806,6 +2396,56 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     assert len(markdown) < 3000
 
 
+def test_client_status_uses_authoritative_content_identity_instead_of_magic_terms(tmp_path: Path) -> None:
+    authoritative = tmp_path / "repo" / "SKILL.md"
+    installed = tmp_path / "profile" / "SKILL.md"
+    authoritative.parent.mkdir(parents=True)
+    installed.parent.mkdir(parents=True)
+    authoritative.write_text("workflow entry without verifier magic words", encoding="utf-8")
+    installed.write_text("workflow entry without verifier magic words", encoding="utf-8")
+
+    current = adapter._client_file_status(
+        installed,
+        ["graph-first", "code intelligence"],
+        authoritative_path=authoritative,
+    )
+
+    assert current["status"] == "ready"
+    assert current["verification"] == "authoritative_sha256"
+    assert current["missing_terms"] == []
+    assert current["installed_sha256"] == current["authoritative_sha256"]
+
+    installed.write_text("different installed workflow", encoding="utf-8")
+    stale = adapter._client_file_status(installed, authoritative_path=authoritative)
+    assert stale["status"] == "stale"
+    assert stale["installed_sha256"] != stale["authoritative_sha256"]
+
+    authority_missing = adapter._client_file_status(
+        installed,
+        ["workflow"],
+        authoritative_path=tmp_path / "missing-authority" / "SKILL.md",
+    )
+    assert authority_missing["status"] == "authority_missing"
+    assert authority_missing["verification"] == "authoritative_sha256"
+
+
+def test_ua_plugin_discovery_checks_profile_and_system_home(tmp_path: Path, monkeypatch) -> None:
+    profile_home = tmp_path / "profile"
+    system_home = tmp_path / "system-home"
+    plugin_root = system_home / ".understand-anything" / "repo" / "understand-anything-plugin"
+    plugin_root.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(profile_home))
+    monkeypatch.setenv("HOME", str(profile_home))
+    monkeypatch.setenv("HOMEDRIVE", str(system_home.anchor or system_home))
+    monkeypatch.setenv("HOMEPATH", str(system_home).removeprefix(system_home.anchor))
+
+    candidates = adapter._ua_plugin_root_candidates(profile_home)
+
+    assert adapter._first_existing_dir(candidates) == plugin_root
+    assert profile_home / ".understand-anything" / "repo" / "understand-anything-plugin" in candidates
+    assert system_home / ".understand-anything" / "repo" / "understand-anything-plugin" in candidates
+
+
 
 
 def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, monkeypatch) -> None:
@@ -1832,4 +2472,3 @@ def test_understand_anything_summary_manifest_counts_freshness(tmp_path: Path, m
     assert payload["fresh_summary_count"] == 1
     assert payload["base_current_summary_count"] == 1
     assert payload["stale_summary_count"] == 0
-

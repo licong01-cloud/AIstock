@@ -34,7 +34,6 @@ PRICE_UNIT_DIVISOR = 1000.0
 def _normalize_realtime_instrument(code: object) -> str:
     return normalize_ts_code(code)
 
-
 def _validate_realtime_instruments(
     instruments: list[object],
     *,
@@ -49,16 +48,12 @@ def _validate_realtime_instruments(
         end_date=end_date,
     )
 
-
 class RealtimeFactorDataLoader:
     """
     实时因子数据加载器。
 
     为因子代码提供与QLib D.features兼容的数据访问接口，
     直接从PostgreSQL数据库读取数据，支持前复权处理。
-
-    支持快照模式：通过 set_snapshot() 注入预加载的 DataFrame，
-    所有实例的 load() 将从快照切片返回，零 DB 访问。
 
     使用方式（在转换后的因子代码中）：
         loader = RealtimeFactorDataLoader()
@@ -71,27 +66,6 @@ class RealtimeFactorDataLoader:
         # df 为 MultiIndex(datetime, instrument) 的 DataFrame
         # 列名为 open, close, high, low, volume, amount, factor
     """
-
-    # ── 类级别快照（所有实例共享，批次内只读） ──
-    _snapshot_df: Optional[pd.DataFrame] = None
-    _snapshot_data_date: Optional[str] = None
-
-    @classmethod
-    def set_snapshot(cls, df: pd.DataFrame, data_date: str) -> None:
-        """注入快照 DataFrame，后续所有 load() 从快照切片。线程安全（设置后只读）。"""
-        cls._snapshot_df = df
-        cls._snapshot_data_date = data_date
-        logger.info(
-            f"行情快照已注入: data_date={data_date}, "
-            f"{len(df)} 行, {list(df.columns)}"
-        )
-
-    @classmethod
-    def clear_snapshot(cls) -> None:
-        """清除快照，恢复 DB 查询模式。"""
-        cls._snapshot_df = None
-        cls._snapshot_data_date = None
-        logger.info("行情快照已清除")
 
     # 字段名 -> 数据库列名映射
     # 数据库中价格单位为厘，需要除以1000转换为元
@@ -184,18 +158,6 @@ class RealtimeFactorDataLoader:
         if fields is None:
             fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
 
-        # ── 快照模式：从类级别快照切片，零 DB 访问 ──
-        if self.__class__._snapshot_df is not None:
-            return self._slice_snapshot(instruments, start_date, end_date, fields)
-
-        # ── 防护：如果快照曾被注入但被意外清除，不允许静默回退到 DB ──
-        if self.__class__._snapshot_data_date is not None:
-            raise RuntimeError(
-                f"快照数据已被清除但 snapshot_data_date={self.__class__._snapshot_data_date} 仍存在。"
-                "这表明快照在批量计算过程中被意外清除，拒绝回退到 DB 查询。"
-            )
-
-        # ── DB 模式：仅用于快照创建（DataSnapshotManager.create_snapshot）──
         cache_key = (tuple(sorted(instruments)), start_date, end_date, adjust)
         if self._full_cache is not None and self._full_cache_key == cache_key:
             # 从缓存中取请求的列
@@ -245,53 +207,6 @@ class RealtimeFactorDataLoader:
         if available:
             return df_result[available].copy()
         return df_result.copy()
-
-    def _slice_snapshot(
-        self,
-        instruments: List[str],
-        start_date: date,
-        end_date: date,
-        fields: List[str],
-    ) -> pd.DataFrame:
-        """从类级别快照 DataFrame 按 instruments/dates/fields 切片。
-
-        快照 DataFrame 结构: MultiIndex(datetime, instrument), 列=[open,close,high,low,volume,amount,factor]
-        快照是只读共享的，线程安全。
-        """
-        df = self.__class__._snapshot_df
-        if df is None or df.empty:
-            raise RuntimeError(
-                "行情快照为空，无法切片。"
-                "请检查快照是否正确创建。"
-            )
-
-        # 按日期过滤
-        sd = pd.Timestamp(start_date)
-        ed = pd.Timestamp(end_date)
-        dates = df.index.get_level_values(0)
-        date_mask = (dates >= sd) & (dates <= ed)
-
-        # 按股票过滤
-        instr_set = set(instruments)
-        instrs = df.index.get_level_values(1)
-        instr_mask = instrs.isin(instr_set)
-
-        mask = date_mask & instr_mask
-        result = df.loc[mask]
-
-        if result.empty:
-            raise RuntimeError(
-                f"行情快照切片结果为空: "
-                f"instruments={len(instruments)}只, "
-                f"date_range={start_date}~{end_date}, "
-                f"快照日期范围={dates.min()}~{dates.max()}"
-            )
-
-        # 按字段过滤
-        available = [f for f in fields if f in result.columns]
-        if available:
-            return result[available].copy()
-        return result.copy()
 
     def _fetch_from_db(
         self,
@@ -567,10 +482,8 @@ class RealtimeFactorDataLoader:
             end_date=trade_date,
         )
 
-
 # 模块级单例，供因子代码直接使用
 _default_loader: Optional[RealtimeFactorDataLoader] = None
-
 
 def get_default_loader() -> RealtimeFactorDataLoader:
     """获取默认的数据加载器单例"""

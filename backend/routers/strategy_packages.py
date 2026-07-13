@@ -15,8 +15,14 @@ from backend.services.strategy_package.candidate import (
     CandidateStrategyPackageStatus,
 )
 from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
+from backend.services.strategy_package.components import StrategyPackageComponentService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.models import PackageStatus
+from backend.services.paper_trading_v2.models import BrokerBackendId
+from backend.services.strategy_package.multi_alpha_paper_dry_run import (
+    MultiAlphaPaperDryRunValidator,
+)
+from backend.services.strategy_package.multi_alpha_promotion import MultiAlphaPackagePromotionService
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.qe_source_resolver import QEExperimentSourceResolver
 from backend.services.strategy_package.repository import StrategyPackageRecord
@@ -55,6 +61,19 @@ class CreateFromQEEvolutionLoopRequest(BaseModel):
 
 class CreateFromCandidateStrategyPackageRequest(BaseModel):
     manifest_json: dict[str, Any] | None = None
+
+
+class CreateFromMultiAlphaCombineRunRequest(BaseModel):
+    combine_backtest_run_id: str = Field(min_length=1)
+    weighting_scheme: str = Field(min_length=1)
+    scheme_result_id: str | None = None
+    topk: int = Field(gt=0)
+    secondary_topk: list[int] = Field(default_factory=list)
+    package_name: str | None = None
+    component_package_ids: dict[str, str] | None = None
+    weight_policy: dict[str, Any] = Field(default_factory=dict)
+    promotion_gate: dict[str, Any] = Field(default_factory=dict)
+    confirmation: str = Field(min_length=1)
 
 
 class CreateCandidateFromQEExperimentRequest(BaseModel):
@@ -208,6 +227,16 @@ class GenerateSelectionArtifactsRequest(BaseModel):
     cutoff_date: date | None = None
 
 
+class MultiAlphaPaperRuntimeDryRunRequest(BaseModel):
+    broker_backend: BrokerBackendId = "local_sim"
+    trade_date: date
+    runtime_variant: str = Field(pattern=r"^top_k=(25|50)$")
+    confirmation: str = Field(min_length=1)
+    validated_by: str = Field(default="aistock_api", min_length=1)
+    runtime_config: dict[str, Any] = Field(default_factory=dict)
+    initial_cash: float = Field(default=1_000_000.0, gt=0)
+
+
 def _raise_http(exc: TradingCoreError) -> None:
     status_code = 400
     if isinstance(exc, DataUnavailableError):
@@ -232,6 +261,15 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "run_id": record.run_id,
         "package_status": record.package_status.value,
         "manifest_sha256": record.manifest_sha256,
+        "alpha_mode": record.alpha_mode.value,
+        "signal_domain": record.signal_domain,
+        "display_name": record.display_name,
+        "legacy_name": record.legacy_name,
+        "data_vintage": record.data_vintage.isoformat() if record.data_vintage else None,
+        "prediction_ref_uri": record.prediction_ref_uri,
+        "prediction_ref_sha256": record.prediction_ref_sha256,
+        "model_artifact_uri": record.model_artifact_uri,
+        "model_artifact_sha256": record.model_artifact_sha256,
         "paper_portfolio_count": record.paper_portfolio_count,
         "created_at": record.created_at.isoformat(),
         "updated_at": record.updated_at.isoformat(),
@@ -240,6 +278,13 @@ def _record_payload(record: StrategyPackageRecord) -> dict[str, Any]:
         "manifest": manifest.model_dump(mode="json"),
         "runtime_config_contract": build_default_runtime_config_bundle(manifest),
     }
+
+
+def _summary_payload(row: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(row)
+    payload.pop("manifest", None)
+    payload.pop("runtime_config_contract", None)
+    return payload
 
 
 def _candidate_payload(record: CandidateStrategyPackageRecord) -> dict[str, Any]:
@@ -344,10 +389,43 @@ def create_package_from_candidate(
         _raise_http(exc)
 
 
-@router.get("")
-def list_strategy_packages(status: PackageStatus | None = None, limit: int = 100) -> dict[str, Any]:
+@router.post("/from-multi-alpha-combine-run")
+def create_package_from_multi_alpha_combine_run(req: CreateFromMultiAlphaCombineRunRequest) -> dict[str, Any]:
     try:
-        records = StrategyPackageService().list_packages(status=status, limit=limit)
+        result = MultiAlphaPackagePromotionService().promote_from_combine_run(
+            combine_backtest_run_id=req.combine_backtest_run_id,
+            weighting_scheme=req.weighting_scheme,
+            scheme_result_id=req.scheme_result_id,
+            topk=req.topk,
+            secondary_topk=req.secondary_topk,
+            package_name=req.package_name,
+            component_package_ids=req.component_package_ids,
+            weight_policy=req.weight_policy,
+            promotion_gate=req.promotion_gate,
+            confirmation=req.confirmation,
+        )
+        return result.to_response()
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("")
+def list_strategy_packages(
+    status: PackageStatus | None = None,
+    limit: int = 100,
+    view: str = "full",
+) -> dict[str, Any]:
+    try:
+        service = StrategyPackageService()
+        if view == "summary":
+            records = service.list_package_summaries(status=status, limit=limit)
+            return {"ok": True, "packages": [_summary_payload(record) for record in records]}
+        if view != "full":
+            raise StrategyPackageValidationError(
+                "strategy package list view is invalid",
+                context={"view": view, "allowed_views": ["full", "summary"]},
+            )
+        records = service.list_packages(status=status, limit=limit)
         return {"ok": True, "packages": [_record_payload(record) for record in records]}
     except TradingCoreError as exc:
         _raise_http(exc)
@@ -516,6 +594,24 @@ def get_strategy_package(package_id: str) -> dict[str, Any]:
         _raise_http(exc)
 
 
+@router.get("/{package_id}/components")
+def get_strategy_package_components(package_id: str) -> dict[str, Any]:
+    try:
+        components = StrategyPackageComponentService().get_components(package_id)
+        return {"ok": True, **components}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/{package_id}/prediction-ref")
+def get_strategy_package_prediction_ref(package_id: str) -> dict[str, Any]:
+    try:
+        pointer = StrategyPackageComponentService().get_prediction_ref(package_id)
+        return {"ok": True, "prediction_ref": pointer}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
 @router.get("/{package_id}/status-events")
 def list_strategy_package_status_events(package_id: str, limit: int = 200) -> dict[str, Any]:
     try:
@@ -663,6 +759,37 @@ def list_strategy_package_selection_artifacts(package_id: str, limit: int = 100)
             "ok": True,
             "package_id": package_id,
             "artifacts": [_selection_artifact_payload(artifact) for artifact in artifacts],
+        }
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.post("/{package_id}/paper-runtime-dry-run")
+def run_multi_alpha_paper_runtime_dry_run(
+    package_id: str,
+    req: MultiAlphaPaperRuntimeDryRunRequest,
+) -> dict[str, Any]:
+    try:
+        result = MultiAlphaPaperDryRunValidator().run(
+            package_id=package_id,
+            broker_backend=req.broker_backend,
+            trade_date=req.trade_date,
+            runtime_variant=req.runtime_variant,
+            confirmation=req.confirmation,
+            validated_by=req.validated_by,
+            runtime_config=req.runtime_config,
+            initial_cash=req.initial_cash,
+        )
+        return {
+            "ok": True,
+            "package_id": package_id,
+            "broker_backend": req.broker_backend,
+            "runtime_variant": req.runtime_variant,
+            "trade_date": req.trade_date.isoformat(),
+            "diagnostic_only": True,
+            "required_for_signal_admission": False,
+            "admission": result.admission.to_dict(),
+            "dry_run": result.to_dict(),
         }
     except TradingCoreError as exc:
         _raise_http(exc)
@@ -889,25 +1016,6 @@ def get_strategy_package_validation_stability(
             limit=limit,
         )
         return {"ok": True, "stability": _validation_stability_payload(summary)}
-    except TradingCoreError as exc:
-        _raise_http(exc)
-
-
-@router.get("/{package_id}/governance-eligibility")
-def get_strategy_package_governance_eligibility(
-    package_id: str,
-    metric_key: str = "annual_return",
-    limit: int = 500,
-) -> dict[str, Any]:
-    """Return a read-only summary of paper-stage governance eligibility."""
-
-    try:
-        eligibility = StrategyPackageService().governance_eligibility(
-            package_id,
-            metric_key=metric_key,
-            limit=limit,
-        )
-        return {"ok": True, "package_id": package_id, "eligibility": eligibility}
     except TradingCoreError as exc:
         _raise_http(exc)
 

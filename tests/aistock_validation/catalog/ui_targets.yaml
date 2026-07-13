@@ -186,24 +186,25 @@ targets:
   - Review QE Archive Warehouse state
   - Validate QE Archive Warehouse primary workflow
   coverage_status: partial
-- route_id: strategy_package.governance
-  href: /strategy-package-governance
-  label: Strategy Package Governance
-  nav_group: Strategy Package
-  primary_module: strategy_package
+- route_id: qe.prediction_store
+  href: /qe-archive/prediction-store
+  label: QE Pred Store
+  nav_group: QuantEvolver
+  primary_module: qe.archive
   impact_modules:
-  - paper_v2
-  - validation.center
+  - qe.data_completeness
+  - qe.enhanced_metrics
   risk_level: high
   required_test_plans:
   - l0
+  - qe_archive_l3
   recommended_test_plans:
-  - strategy_package_governance_ui
+  - qe_data_contract_backend
   business_operations:
-  - Open Strategy Package Governance
-  - Inspect 5-evidence governance eligibility
-  - Confirm and trigger enable_paper gate
-  coverage_status: partial
+  - Open QE Pred Store
+  - Review prediction artifact pointers and manifests
+  - Validate prediction store health and coverage visibility
+  coverage_status: planned
 - route_id: market_regime.timeline
   href: /market-regime
   label: Market Regime
@@ -258,9 +259,9 @@ targets:
   - Review Auto Evolution state
   - Validate Auto Evolution primary workflow
   coverage_status: planned
-- route_id: qe.multi_alpha_diagnostics
-  href: /quantevolver/multi-alpha/diagnostics
-  label: Multi-Alpha Diagnostics
+- route_id: qe.multi_alpha_orthogonality
+  href: /quantevolver/multi-alpha/orthogonality
+  label: Multi-Alpha Orthogonality
   nav_group: QuantEvolver
   primary_module: qe.auto_evolution
   impact_modules:
@@ -270,29 +271,30 @@ targets:
   - l0
   - qe_read_l3
   recommended_test_plans:
-  - qe_data_contract_backend
+  - qe_archive_backend
   business_operations:
-  - Open Multi-Alpha Diagnostics
-  - Review Multi-Alpha Diagnostics state
-  - Validate Multi-Alpha Diagnostics primary workflow
+  - Open Multi-Alpha Orthogonality
+  - Review prediction correlation matrix
+  - Review Top-K Jaccard matrix
   coverage_status: planned
-- route_id: qe.multi_alpha_evolve
-  href: /quantevolver/multi-alpha/evolve-wizard
-  label: Multi-Alpha Evolution
+- route_id: qe.multi_alpha_combine_backtest
+  href: /quantevolver/multi-alpha/combine-backtest
+  label: Multi-Alpha Combine Backtest
   nav_group: QuantEvolver
   primary_module: qe.auto_evolution
   impact_modules:
-  - qe.custom_evolution
+  - qe.archive
+  - qe.enhanced_metrics
   risk_level: high
   required_test_plans:
   - l0
   - qe_read_l3
   recommended_test_plans:
-  - qe_data_contract_backend
+  - qe_archive_backend
   business_operations:
-  - Open Multi-Alpha Evolution
-  - Review Multi-Alpha Evolution state
-  - Validate Multi-Alpha Evolution primary workflow
+  - Open Multi-Alpha Combine Backtest
+  - Review combine-backtest task grid
+  - Inspect combine-backtest loop detail
   coverage_status: planned
 - route_id: qe.sota
   href: /quantevolver/evolution/sota

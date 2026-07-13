@@ -1,0 +1,83 @@
+{
+  "actual": "Nightly candidate queue emitted BUG-544 fixed_bug_missing_pr_or_commit despite complete PR and close-sync evidence.",
+  "allowed_write_scope": [
+    "scripts/nightly_discovery_plans.py",
+    "scripts/nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_nightly_discovery_plans.py",
+    "tests/aistock_validation/bugs/20260629_BUG-550-nightly-discovery-reports-fixed-bug-544-as-missing-pr-or-commit-evidence.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-550",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T09:09:30.665309Z",
+  "description": "Nightly candidate queue emitted BUG-544 fixed_bug_missing_pr_or_commit despite complete PR and close-sync evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-6e5f70d933ca",
+      "timestamp": "2026-06-29T09:09:30.665306Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\tmp\\validation\\nightly_manual_check\\28334737223-current\\code-intelligence-28334737223\\bug-candidates\\issue-payloads\\nc-20260628-f92def17b8.json"
+  ],
+  "expected": "validation_discovery_issue_intake_readonly should recognize merged PR evidence, close-sync evidence, GitHub Issue closure, and BUG JSON fixed metadata; it should not create fixed_bug_missing_pr_or_commit candidates for already closed and synchronized BUGs.",
+  "first_seen_at": "2026-06-29T09:09:30.665309Z",
+  "fix_branch": null,
+  "fix_commit": "c5a1c80a43f10cc8513792758c11f11a36565625",
+  "fixed_at": "2026-06-29T11:17:24.573272Z",
+  "github_issue_number": 1730,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1730",
+  "last_seen_at": "2026-06-29T09:09:30.665309Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1743",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/nightly_discovery_plans.py --json run --plan-key validation_discovery_issue_intake_readonly",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "Nightly discovery reports fixed BUG-544 as missing PR or commit evidence after close-sync",
+  "trigger_condition": {
+    "fingerprint": "6e5f70d933cab76231dfe109",
+    "source_event_id": "FE-20260629-6e5f70d933ca"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_nightly_discovery_plans.py -q -p no:cacheprovider -> 8 passed",
+    "python scripts/nightly_discovery_plans.py --json run --plan-key validation_discovery_issue_intake_readonly --root . --output tmp/issue_workflow/BUG-550/discovery-after.json -> BUG-544 no longer reported",
+    "python -m nox -s l0 guardrail_changed_files validation_module_registry_l0 -> passed",
+    "git diff --check -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-550 --module validation_llm_pipeline --changed-file scripts/nightly_discovery_plans.py --changed-file backend/tests/scripts/test_nightly_discovery_plans.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

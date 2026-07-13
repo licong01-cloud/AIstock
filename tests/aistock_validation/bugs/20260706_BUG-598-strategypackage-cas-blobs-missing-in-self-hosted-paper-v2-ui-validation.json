@@ -1,0 +1,147 @@
+{
+  "actual": "Validation workspace lacks untracked rdagent_assets/package_assets blobs; live inference correctly fail-closes with strategy_package_asset_blob_missing during paper_v2_ui real-backend flow.",
+  "allowed_write_scope": [
+    ".github/workflows/nightly.yml",
+    "scripts/ci/prepare_self_hosted_workspace.py",
+    "backend/tests/scripts/test_prepare_self_hosted_workspace.py",
+    "tests/aistock_validation/bugs/20260706_BUG-598-strategypackage-cas-blobs-missing-in-self-hosted-paper-v2-ui-validation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-598",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-06T02:29:33.241719Z",
+  "description": "Validation workspace lacks untracked rdagent_assets/package_assets blobs; live inference correctly fail-closes with strategy_package_asset_blob_missing during paper_v2_ui real-backend flow.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260706-e601ba3ce497",
+      "timestamp": "2026-07-06T02:29:33.241715Z"
+    }
+  ],
+  "evidence_uris": [
+    "GitHub Issue #1757; nightly run 28718316991; package_asset_store.py:97; live_inference.py:980/1030; .github/workflows/nightly.yml:230; scripts/ci/prepare_self_hosted_workspace.py:147"
+  ],
+  "expected": "Self-hosted Paper v2 UI validation resolves StrategyPackage package asset blobs from a canonical package asset store or fails early with a loud preflight error before live inference.",
+  "first_seen_at": "2026-07-06T02:29:33.241719Z",
+  "fix_branch": null,
+  "fix_commit": "48e8129362cd94e911cbb1b2345a3f7fd648922f",
+  "fixed_at": "2026-07-06T07:05:38.137787Z",
+  "github_issue_number": 1889,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1889",
+  "last_seen_at": "2026-07-06T02:29:33.241719Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1891",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m nox -s paper_v2_l3",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "paper_v2_backend"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "StrategyPackage CAS blobs missing in self-hosted Paper v2 UI validation workspace",
+  "trigger_condition": {
+    "fingerprint": "e601ba3ce4978b66a1fa3c7b",
+    "source_event_id": "FE-20260706-e601ba3ce497"
+  },
+  "validation_evidence": [
+    "GitHub PR #1891 CI after main-sync -> all checks completed: 17 success, 3 skipped, 0 failed",
+    "rtk python -m pytest backend/tests/scripts/test_prepare_self_hosted_workspace.py -q -p no:cacheprovider -> 3 passed",
+    "rtk python -m py_compile scripts/ci/prepare_self_hosted_workspace.py backend/tests/scripts/test_prepare_self_hosted_workspace.py -> passed",
+    "rtk git diff --check --cached after conflict resolution -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  }
+}

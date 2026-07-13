@@ -11,8 +11,9 @@ from __future__ import annotations
 import copy
 from collections import Counter
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from psycopg2 import errors
 from psycopg2.extras import Json
@@ -69,6 +70,41 @@ TABLES: dict[str, dict[str, Any]] = {
             "omitted_relevant_refs", "pack_json",
         },
         "search": {"context_pack_id", "task_id", "agent_id", "model_profile", "pack_summary"},
+    },
+    "code_context_refs": {
+        "table": "assistant_code_context_refs",
+        "id": "code_ref_id",
+        "json": {"manifest_json", "provenance_json"},
+        "search": {"code_ref_id", "task_id", "query_scope", "source"},
+        "no_updated_at": True,
+    },
+    "proactive_reports": {
+        "table": "assistant_proactive_reports",
+        "id": "report_id",
+        "json": {"sections_json", "source_refs_json"},
+        "search": {"report_id", "report_type", "report_date", "status"},
+        "no_updated_at": True,
+    },
+    "reflection_cards": {
+        "table": "assistant_reflection_cards",
+        "id": "card_id",
+        "json": {"structured_json"},
+        "search": {"card_id", "task_id", "trigger", "memory_ref"},
+        "no_updated_at": True,
+    },
+    "prompt_lab_runs": {
+        "table": "assistant_prompt_lab_runs",
+        "id": "lab_run_id",
+        "json": {"judge_score_json"},
+        "search": {"lab_run_id", "target_prompt_key", "optimizer", "eval_set_ref", "status", "approval_request_id"},
+        "no_updated_at": True,
+    },
+    "skill_library": {
+        "table": "assistant_skill_library",
+        "id": "skill_id",
+        "json": {"recipe_json", "provenance_json"},
+        "search": {"skill_id", "skill_key", "description", "status"},
+        "no_updated_at": True,
     },
     "entities": {
         "table": "research_memory_entities",
@@ -135,12 +171,6 @@ TABLES: dict[str, dict[str, Any]] = {
         "id": "approval_id",
         "json": {"approval_context_json", "execution_result_json"},
         "search": {"approval_id", "task_id", "approval_type", "risk_level", "summary", "status"},
-    },
-    "issue_candidates": {
-        "table": "assistant_issue_candidates",
-        "id": "candidate_id",
-        "json": {"evidence_refs", "github_sync_json"},
-        "search": {"candidate_id", "title", "severity", "module", "status", "problem_statement", "dedupe_key"},
     },
     "external_sessions": {
         "table": "assistant_external_agent_sessions",
@@ -268,17 +298,18 @@ TABLES: dict[str, dict[str, Any]] = {
         "json": {"metadata_json", "evidence_refs"},
         "search": {"agenda_item_id", "namespace", "title", "status", "priority"},
     },
-    "validation_discovery_reports": {
-        "table": "assistant_validation_discovery_reports",
-        "id": "discovery_report_id",
-        "json": {"summary_json", "candidate_issue_refs", "validation_run_refs", "evidence_refs"},
-        "search": {"discovery_report_id", "run_date", "status", "title"},
-    },
     "trace_events": {
         "table": "assistant_trace_events",
         "id": "trace_id",
         "json": {"payload_json", "cost_json"},
         "search": {"trace_id", "task_id", "event_type", "component", "status"},
+    },
+    "llm_usage_events": {
+        "table": "assistant_llm_usage_events",
+        "id": "usage_event_id",
+        "json": {"pricing_snapshot_json", "usage_raw_json", "request_meta_json", "response_meta_json"},
+        "search": {"usage_event_id", "trace_id", "task_id", "conversation_id", "message_id", "phase", "component", "provider", "model", "model_profile_id", "usage_status", "cost_status"},
+        "no_updated_at": True,
     },
 }
 
@@ -288,11 +319,209 @@ def _now_iso() -> str:
 
 
 def _adapt_json(value: Any) -> Json:
-    return Json(normalize_json(value or {}), dumps=canonical_json_dumps)
+    if value is None:
+        normalized: Any = {}
+    else:
+        normalized = normalize_json(value)
+    return Json(normalized, dumps=canonical_json_dumps)
 
 
 def _clean_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return {k: copy.deepcopy(v) for k, v in dict(row).items() if v is not None}
+
+
+def _llm_usage_summary_from_items(items: list[dict[str, Any]]) -> dict[str, Any]:
+    row = (
+        len(items),
+        sum(int(item.get("prompt_tokens") or 0) for item in items),
+        sum(int(item.get("completion_tokens") or 0) for item in items),
+        sum(int(item.get("total_tokens") or 0) for item in items),
+        sum(int(item.get("reasoning_tokens") or 0) for item in items),
+        sum(int(item.get("cache_creation_input_tokens") or 0) for item in items),
+        sum(int(item.get("cache_read_input_tokens") or 0) for item in items),
+        sum(1 for item in items if item.get("prompt_tokens_estimated") or item.get("completion_tokens_estimated") or item.get("usage_status") == "estimated"),
+        sum(1 for item in items if item.get("usage_status") in {"unavailable", "failed"}),
+        sum(1 for item in items if item.get("cost_status") == "unavailable"),
+        sum(1 for item in items if item.get("cost_status") == "failed"),
+        sum(1 for item in items if item.get("total_cost_usd") is not None),
+        sum(float(item.get("total_cost_usd") or 0) for item in items if item.get("total_cost_usd") is not None),
+    )
+    return _llm_usage_summary_from_aggregate_row(row)
+
+
+def _llm_usage_rollup_status(counts: Mapping[str, int], *, empty_status: str = "unavailable") -> str:
+    total = sum(int(value or 0) for value in counts.values())
+    if total <= 0:
+        return empty_status
+    present = {str(key) for key, value in counts.items() if int(value or 0) > 0}
+    if len(present) == 1:
+        return next(iter(present))
+    return "mixed"
+
+
+def _llm_usage_status_counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:
+    statuses = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    for item in items:
+        status = str(item.get(field) or "unavailable")
+        statuses[status] = statuses.get(status, 0) + 1
+    return statuses
+
+
+def _parse_usage_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "").strip()
+        if not raw:
+            raise ValueError("llm_usage_event_missing_completed_at")
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _floor_usage_bucket(dt: datetime, granularity: str) -> datetime:
+    if granularity == "hour":
+        return dt.replace(minute=0, second=0, microsecond=0)
+    if granularity == "day":
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+
+
+def _bucket_end(bucket_start: datetime, granularity: str) -> datetime:
+    return bucket_start + (timedelta(hours=1) if granularity == "hour" else timedelta(days=1))
+
+
+def _llm_usage_bucket_from_items(items: list[dict[str, Any]], bucket_start: datetime, granularity: str) -> dict[str, Any]:
+    summary = _llm_usage_summary_from_items(items)
+    usage_counts = _llm_usage_status_counts(items, "usage_status")
+    cost_counts = _llm_usage_status_counts(items, "cost_status")
+    providers = sorted({str(item.get("provider") or "unknown") for item in items})
+    models = sorted({str(item.get("model") or "unknown") for item in items})
+    return {
+        "bucket_start": bucket_start.isoformat(),
+        "bucket_end": _bucket_end(bucket_start, granularity).isoformat(),
+        "provider": providers[0] if len(providers) == 1 else "mixed",
+        "model": models[0] if len(models) == 1 else "mixed",
+        "call_count": summary["call_count"],
+        "prompt_tokens": summary["prompt_tokens"],
+        "completion_tokens": summary["completion_tokens"],
+        "total_tokens": summary["total_tokens"],
+        "total_cost_usd": summary["total_cost_usd"],
+        "usage_status": _llm_usage_rollup_status(usage_counts),
+        "cost_status": _llm_usage_rollup_status(cost_counts),
+        "usage_status_counts": usage_counts,
+        "cost_status_counts": cost_counts,
+    }
+
+
+def _compact_llm_usage_model_breakdown(items: list[dict[str, Any]], limit_models: int) -> tuple[list[dict[str, Any]], set[str]]:
+    limit = max(1, int(limit_models))
+    if len(items) <= limit:
+        return items, {str(item.get("model") or "unknown") for item in items}
+    keep_count = max(0, limit - 1)
+    kept = items[:keep_count]
+    rest = items[keep_count:]
+    usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+    for item in rest:
+        for key, value in (item.get("usage_status_counts") or {}).items():
+            usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+        for key, value in (item.get("cost_status_counts") or {}).items():
+            cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+    other = {
+        "provider": "mixed",
+        "model": "other",
+        "call_count": sum(int(item.get("call_count") or 0) for item in rest),
+        "prompt_tokens": sum(int(item.get("prompt_tokens") or 0) for item in rest),
+        "completion_tokens": sum(int(item.get("completion_tokens") or 0) for item in rest),
+        "total_tokens": sum(int(item.get("total_tokens") or 0) for item in rest),
+        "total_cost_usd": f"{sum(float(item.get('total_cost_usd') or 0) for item in rest if item.get('total_cost_usd') is not None):.10f}" if any(item.get("total_cost_usd") is not None for item in rest) else None,
+        "usage_status": _llm_usage_rollup_status(usage_counts),
+        "cost_status": _llm_usage_rollup_status(cost_counts),
+        "usage_status_counts": usage_counts,
+        "cost_status_counts": cost_counts,
+    }
+    kept_models = {str(item.get("model") or "unknown") for item in kept}
+    return [*kept, other], kept_models
+
+
+def _compact_llm_usage_time_series(time_series: list[dict[str, Any]], kept_models: set[str], granularity: str) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for bucket in time_series:
+        model = str(bucket.get("model") or "unknown")
+        bucket_start = str(bucket.get("bucket_start") or "")
+        group_model = model if model in kept_models else "other"
+        grouped.setdefault((bucket_start, group_model), []).append(bucket)
+    compacted: list[dict[str, Any]] = []
+    for (bucket_start, model), rows in sorted(grouped.items(), key=lambda item: item[0]):
+        usage_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        cost_counts = {"recorded": 0, "estimated": 0, "unavailable": 0, "failed": 0}
+        for row in rows:
+            for key, value in (row.get("usage_status_counts") or {}).items():
+                usage_counts[str(key)] = usage_counts.get(str(key), 0) + int(value or 0)
+            for key, value in (row.get("cost_status_counts") or {}).items():
+                cost_counts[str(key)] = cost_counts.get(str(key), 0) + int(value or 0)
+        bucket_start_dt = datetime.fromisoformat(bucket_start)
+        compacted.append(
+            {
+                "bucket_start": bucket_start,
+                "bucket_end": _bucket_end(bucket_start_dt, granularity).isoformat(),
+                "provider": rows[0].get("provider") if model != "other" and len({str(row.get("provider") or "unknown") for row in rows}) == 1 else "mixed",
+                "model": model,
+                "call_count": sum(int(row.get("call_count") or 0) for row in rows),
+                "prompt_tokens": sum(int(row.get("prompt_tokens") or 0) for row in rows),
+                "completion_tokens": sum(int(row.get("completion_tokens") or 0) for row in rows),
+                "total_tokens": sum(int(row.get("total_tokens") or 0) for row in rows),
+                "total_cost_usd": f"{sum(float(row.get('total_cost_usd') or 0) for row in rows if row.get('total_cost_usd') is not None):.10f}" if any(row.get("total_cost_usd") is not None for row in rows) else None,
+                "usage_status": _llm_usage_rollup_status(usage_counts),
+                "cost_status": _llm_usage_rollup_status(cost_counts),
+                "usage_status_counts": usage_counts,
+                "cost_status_counts": cost_counts,
+            }
+        )
+    return compacted
+
+
+def _llm_usage_summary_from_aggregate_row(row: Any) -> dict[str, Any]:
+    values = list(row or [0] * 13)
+    while len(values) < 13:
+        values.append(0)
+    call_count = int(values[0] or 0)
+    cost_count = int(values[11] or 0)
+    unavailable_usage = int(values[8] or 0)
+    estimated_usage = int(values[7] or 0)
+    unavailable_cost = int(values[9] or 0)
+    failed_cost = int(values[10] or 0)
+    if unavailable_usage:
+        usage_status = "unavailable"
+    elif estimated_usage:
+        usage_status = "estimated"
+    else:
+        usage_status = "recorded" if call_count else "unavailable"
+    if failed_cost:
+        cost_status = "failed"
+    elif unavailable_cost or not cost_count:
+        cost_status = "unavailable"
+    else:
+        cost_status = "recorded"
+    return {
+        "call_count": call_count,
+        "prompt_tokens": int(values[1] or 0),
+        "completion_tokens": int(values[2] or 0),
+        "total_tokens": int(values[3] or 0),
+        "reasoning_tokens": int(values[4] or 0),
+        "cache_creation_input_tokens": int(values[5] or 0),
+        "cache_read_input_tokens": int(values[6] or 0),
+        "estimated_usage_event_count": estimated_usage,
+        "unavailable_usage_event_count": unavailable_usage,
+        "unavailable_cost_event_count": unavailable_cost,
+        "failed_cost_event_count": failed_cost,
+        "total_cost_usd": f"{float(values[12] or 0):.10f}" if cost_count else None,
+        "currency": "USD",
+        "usage_status": usage_status,
+        "cost_status": cost_status,
+    }
 
 
 class ResearchAssistantRepositoryError(RuntimeError):
@@ -347,11 +576,256 @@ class DatabaseResearchAssistantRepository:
                 try:
                     cur.execute(f"SELECT COUNT(*) FROM {table} {where}", params)
                     total = int(cur.fetchone()[0])
-                    cur.execute(f"SELECT * FROM {table} {where} ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST LIMIT %s OFFSET %s", [*params, limit, offset])
+                    order_by = "created_at DESC" if meta.get("no_updated_at") else "updated_at DESC NULLS LAST, created_at DESC NULLS LAST"
+                    cur.execute(f"SELECT * FROM {table} {where} ORDER BY {order_by} LIMIT %s OFFSET %s", [*params, limit, offset])
                     items = self._rows(cur)
                 except SCHEMA_ERROR_TYPES as exc:
                     raise ResearchAssistantSchemaMissingError(f"Research Assistant schema is missing or out of date for table {table}; apply backend.db.init_research_assistant_schema_20260521") from exc
         return {"items": items, "total": total, "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < total}
+
+    def list_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM assistant_llm_usage_events {where}", params)
+                    total = int(cur.fetchone()[0])
+                    cur.execute(
+                        f"SELECT * FROM assistant_llm_usage_events {where} ORDER BY completed_at DESC, created_at DESC LIMIT %s OFFSET %s",
+                        [*params, limit, offset],
+                    )
+                    items = self._rows(cur)
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+        return {"items": items, "total": total, "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < total}
+
+    def summarize_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COALESCE(SUM(reasoning_tokens), 0),
+                            COALESCE(SUM(cache_creation_input_tokens), 0),
+                            COALESCE(SUM(cache_read_input_tokens), 0),
+                            COALESCE(SUM(CASE WHEN prompt_tokens_estimated OR completion_tokens_estimated OR usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status IN ('unavailable','failed') THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        """,
+                        params,
+                    )
+                    row = cur.fetchone()
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+        return _llm_usage_summary_from_aggregate_row(row)
+
+    def report_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        granularity: str,
+        timezone_name: str,
+        limit_models: int = 8,
+    ) -> dict[str, Any]:
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+        clauses: list[str] = []
+        params: list[Any] = []
+        allowed = {"trace_id", "task_id", "conversation_id", "model", "provider"}
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            if key not in allowed:
+                raise ValueError(f"filter {key!r} is not allowed for assistant_llm_usage_events")
+            clauses.append(f"{key} = %s")
+            params.append(value)
+        if date_from:
+            clauses.append("completed_at >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("completed_at <= %s")
+            params.append(date_to)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        bucket_expr = f"date_trunc('{granularity}', completed_at AT TIME ZONE %s)"
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            {bucket_expr} AS bucket_local,
+                            provider,
+                            model,
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd),
+                            COALESCE(SUM(CASE WHEN usage_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        GROUP BY 1, provider, model
+                        ORDER BY 1 ASC, model ASC, provider ASC
+                        """,
+                        [timezone_name, *params],
+                    )
+                    series_rows = cur.fetchall()
+                    cur.execute(
+                        f"""
+                        SELECT
+                            provider,
+                            model,
+                            COUNT(*),
+                            COALESCE(SUM(prompt_tokens), 0),
+                            COALESCE(SUM(completion_tokens), 0),
+                            COALESCE(SUM(total_tokens), 0),
+                            COUNT(total_cost_usd),
+                            SUM(total_cost_usd),
+                            COALESCE(SUM(CASE WHEN usage_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN usage_status = 'failed' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'recorded' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0),
+                            COALESCE(SUM(CASE WHEN cost_status = 'failed' THEN 1 ELSE 0 END), 0)
+                        FROM assistant_llm_usage_events
+                        {where}
+                        GROUP BY provider, model
+                        ORDER BY COALESCE(SUM(total_tokens), 0) DESC, model ASC
+                        """,
+                        params,
+                    )
+                    breakdown_rows = cur.fetchall()
+                except SCHEMA_ERROR_TYPES as exc:
+                    raise ResearchAssistantSchemaMissingError("Research Assistant schema is missing assistant_llm_usage_events; apply backend.db.migrations.ra_upgrade.011_llm_usage_accounting") from exc
+
+        def _status(row: Any, offset: int) -> tuple[str, dict[str, int]]:
+            counts = {
+                "recorded": int(row[offset] or 0),
+                "estimated": int(row[offset + 1] or 0),
+                "unavailable": int(row[offset + 2] or 0),
+                "failed": int(row[offset + 3] or 0),
+            }
+            return _llm_usage_rollup_status(counts), counts
+
+        tzinfo = ZoneInfo(timezone_name)
+        time_series: list[dict[str, Any]] = []
+        for row in series_rows:
+            bucket_local = row[0]
+            if isinstance(bucket_local, datetime):
+                bucket_start_dt = bucket_local.replace(tzinfo=tzinfo)
+            else:
+                bucket_start_dt = datetime.fromisoformat(str(bucket_local)).replace(tzinfo=tzinfo)
+            usage_status, usage_counts = _status(row, 9)
+            cost_status, cost_counts = _status(row, 13)
+            time_series.append(
+                {
+                    "bucket_start": bucket_start_dt.isoformat(),
+                    "bucket_end": _bucket_end(bucket_start_dt, granularity).isoformat(),
+                    "provider": row[1],
+                    "model": row[2],
+                    "call_count": int(row[3] or 0),
+                    "prompt_tokens": int(row[4] or 0),
+                    "completion_tokens": int(row[5] or 0),
+                    "total_tokens": int(row[6] or 0),
+                    "total_cost_usd": f"{float(row[8] or 0):.10f}" if int(row[7] or 0) else None,
+                    "usage_status": usage_status,
+                    "cost_status": cost_status,
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        model_breakdown: list[dict[str, Any]] = []
+        for row in breakdown_rows:
+            usage_status, usage_counts = _status(row, 8)
+            cost_status, cost_counts = _status(row, 12)
+            model_breakdown.append(
+                {
+                    "provider": row[0],
+                    "model": row[1],
+                    "call_count": int(row[2] or 0),
+                    "prompt_tokens": int(row[3] or 0),
+                    "completion_tokens": int(row[4] or 0),
+                    "total_tokens": int(row[5] or 0),
+                    "total_cost_usd": f"{float(row[7] or 0):.10f}" if int(row[6] or 0) else None,
+                    "usage_status": usage_status,
+                    "cost_status": cost_status,
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        compact_breakdown, kept_models = _compact_llm_usage_model_breakdown(model_breakdown, limit_models)
+        return {"time_series": _compact_llm_usage_time_series(time_series, kept_models, granularity), "model_breakdown": compact_breakdown}
 
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         meta = self._meta(kind)
@@ -379,7 +853,10 @@ class DatabaseResearchAssistantRepository:
             raise ValueError("create row must not be empty")
         values = [self._adapt(meta, column, data[column]) for column in columns]
         update_columns = [column for column in columns if column != meta["id"]]
-        conflict = f"ON CONFLICT ({meta['id']}) DO UPDATE SET " + ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns) + ", updated_at = NOW()"
+        conflict_update = ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
+        if update_columns and not meta.get("no_updated_at"):
+            conflict_update = conflict_update + ", updated_at = NOW()"
+        conflict = f"ON CONFLICT ({meta['id']}) DO UPDATE SET " + conflict_update
         if not update_columns:
             conflict = f"ON CONFLICT ({meta['id']}) DO NOTHING"
         with self._connection_provider() as conn:
@@ -406,11 +883,13 @@ class DatabaseResearchAssistantRepository:
                 raise KeyError(f"{kind} not found: {record_id}")
             return existing
         set_sql = ", ".join(f"{column} = %s" for column in data)
+        if not meta.get("no_updated_at"):
+            set_sql = f"{set_sql}, updated_at = NOW()"
         values = [self._adapt(meta, column, data[column]) for column in data]
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 try:
-                    cur.execute(f"UPDATE {table} SET {set_sql}, updated_at = NOW() WHERE {id_col} = %s RETURNING *", [*values, record_id])
+                    cur.execute(f"UPDATE {table} SET {set_sql} WHERE {id_col} = %s RETURNING *", [*values, record_id])
                     if cur.rowcount == 0:
                         raise KeyError(f"{kind} not found: {record_id}")
                     return self._row(cur)
@@ -515,6 +994,95 @@ class InMemoryResearchAssistantRepository:
         offset = max(0, int(offset or 0))
         return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
 
+    def list_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        limit: int,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        items = list(self.data["llm_usage_events"].values())
+        for key, value in (filters or {}).items():
+            if value is None or value == "":
+                continue
+            items = [item for item in items if item.get(key) == value]
+        if date_from:
+            items = [item for item in items if str(item.get("completed_at") or item.get("created_at") or "") >= str(date_from)]
+        if date_to:
+            items = [item for item in items if str(item.get("completed_at") or item.get("created_at") or "") <= str(date_to)]
+        items.sort(key=lambda item: str(item.get("completed_at") or item.get("created_at") or ""), reverse=True)
+        limit = max(1, int(limit))
+        offset = max(0, int(offset or 0))
+        return {"items": copy.deepcopy(items[offset:offset + limit]), "total": len(items), "page": offset // limit + 1, "page_size": limit, "has_more": offset + limit < len(items)}
+
+    def summarize_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, Any]:
+        return _llm_usage_summary_from_items(
+            self.list_llm_usage_events(filters=filters, date_from=date_from, date_to=date_to, limit=max(1, len(self.data["llm_usage_events"]) or 1))["items"]
+        )
+
+    def report_llm_usage_events(
+        self,
+        *,
+        filters: Mapping[str, Any] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        granularity: str,
+        timezone_name: str,
+        limit_models: int = 8,
+    ) -> dict[str, Any]:
+        if granularity not in {"hour", "day"}:
+            raise ValueError(f"unsupported LLM usage report granularity: {granularity}")
+        tzinfo = ZoneInfo(timezone_name)
+        events = self.list_llm_usage_events(
+            filters=filters,
+            date_from=date_from,
+            date_to=date_to,
+            limit=max(1, len(self.data["llm_usage_events"]) or 1),
+        )["items"]
+        buckets: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        model_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for event in events:
+            completed = _parse_usage_datetime(event.get("completed_at") or event.get("created_at")).astimezone(tzinfo)
+            bucket_start = _floor_usage_bucket(completed, granularity)
+            provider = str(event.get("provider") or "unknown")
+            model = str(event.get("model") or "unknown")
+            buckets.setdefault((bucket_start.isoformat(), provider, model), []).append(event)
+            model_groups.setdefault((provider, model), []).append(event)
+        time_series = []
+        for (bucket_iso, _provider, _model), items in sorted(buckets.items(), key=lambda item: item[0]):
+            time_series.append(_llm_usage_bucket_from_items(items, datetime.fromisoformat(bucket_iso), granularity))
+        model_breakdown = []
+        for (provider, model), items in model_groups.items():
+            summary = _llm_usage_summary_from_items(items)
+            usage_counts = _llm_usage_status_counts(items, "usage_status")
+            cost_counts = _llm_usage_status_counts(items, "cost_status")
+            model_breakdown.append(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "call_count": summary["call_count"],
+                    "prompt_tokens": summary["prompt_tokens"],
+                    "completion_tokens": summary["completion_tokens"],
+                    "total_tokens": summary["total_tokens"],
+                    "total_cost_usd": summary["total_cost_usd"],
+                    "usage_status": _llm_usage_rollup_status(usage_counts),
+                    "cost_status": _llm_usage_rollup_status(cost_counts),
+                    "usage_status_counts": usage_counts,
+                    "cost_status_counts": cost_counts,
+                }
+            )
+        model_breakdown.sort(key=lambda item: int(item.get("total_tokens") or 0), reverse=True)
+        compact_breakdown, kept_models = _compact_llm_usage_model_breakdown(model_breakdown, limit_models)
+        return {"time_series": _compact_llm_usage_time_series(time_series, kept_models, granularity), "model_breakdown": compact_breakdown}
+
     def get_record(self, kind: str, record_id: str) -> dict[str, Any] | None:
         row = self.data[kind].get(record_id)
         return copy.deepcopy(row) if row else None
@@ -531,10 +1099,12 @@ class InMemoryResearchAssistantRepository:
             raise ValueError(f"{id_col} is required")
         now = _now_iso()
         data.setdefault("created_at", now)
-        data.setdefault("updated_at", now)
+        if not meta.get("no_updated_at"):
+            data.setdefault("updated_at", now)
         existing = self.data[kind].get(str(data[id_col]), {})
         existing.update(copy.deepcopy(data))
-        existing["updated_at"] = now
+        if not meta.get("no_updated_at"):
+            existing["updated_at"] = now
         self.data[kind][str(data[id_col])] = existing
         return copy.deepcopy(existing)
 

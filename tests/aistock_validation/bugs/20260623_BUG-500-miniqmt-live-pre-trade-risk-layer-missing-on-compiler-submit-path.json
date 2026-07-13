@@ -1,0 +1,92 @@
+{
+  "actual": "Compiler submit path lacks unified LIVE pre-trade risk layer for price collar, fat-finger, buying power and submit-time kill-switch.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_preflight.py",
+    "tests/aistock_validation/bugs/20260623_BUG-500-miniqmt-live-pre-trade-risk-layer-missing-on-compiler-submit-path.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-500-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md"
+  ],
+  "base_branch": "main",
+  "bug_id": "BUG-500",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T11:41:00Z",
+  "description": "Compiler submit path lacks unified LIVE pre-trade risk layer for price collar, fat-finger, buying power and submit-time kill-switch.",
+  "events": [
+    {
+      "action": "reconstructed_source_bug_json",
+      "actor": "codex",
+      "note": "Reconstructed from GitHub issue body because registry intake state referenced missing source_bug_json.",
+      "timestamp": "2026-06-23T17:56:55.076734+00:00"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "Implemented inert-by-default MiniQMT compiler pre-trade risk layer stacked on BUG-501; PR pending Tier2.",
+      "timestamp": "2026-06-23T18:39:45.793592+00:00"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened stacked PR #1566 based on BUG-501 branch; not merged or close-synced.",
+      "timestamp": "2026-06-23T18:43:56.402787+00:00"
+    },
+    {
+      "action": "rebased_on_main_after_bug_501_merge",
+      "actor": "codex",
+      "note": "Rebased BUG-500 branch on origin/main after BUG-501 merge; skipped duplicate BUG-501 commits and kept ACCOUNT_GROUP_CASH_OVERCOMMIT as always-on account_group_cash_hard_gate distinct from flag-gated miniqmt_pre_trade risk layer. Supersedes closed PR #1566.",
+      "timestamp": "2026-06-24T06:39:00Z"
+    },
+    {
+      "action": "pr_reopened_on_main",
+      "actor": "codex",
+      "note": "Opened PR #1582 against main after PR #1566 was auto-closed by source base branch deletion; supersedes #1566.",
+      "timestamp": "2026-06-24T06:45:00Z"
+    }
+  ],
+  "expected": "Compiler submit path must provide flag-gated pre-trade risk checks with loud reason_code while keeping SIM defaults inert and LIVE locked.",
+  "first_seen_at": "2026-06-23T11:41:00Z",
+  "fix_branch": "bug/BUG-500-p0-miniqmt-live-pre-trade-risk-layer-missing-on-20260624",
+  "fix_commit": "4824d5e212a77bc59bfcae4eefcfa23125f70b37",
+  "fixed_at": "2026-06-24T08:01:55.219868Z",
+  "github_issue_number": 1550,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1550",
+  "last_seen_at": "2026-06-24T06:39:00Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not start, stop, or restart services.",
+    "Do not apply production DB/DDL.",
+    "Do not unlock MiniQMT LIVE trading."
+  ],
+  "pr_number": 1582,
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1582",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rtk rg -n pre_trade_risk backend/services/qmt_strategy_ledger backend/services/paper_trading_v2/broker/minqmtsim.py",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "supersedes_pr_number": 1566,
+  "supersedes_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1566",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "[P0][MiniQMT] LIVE pre-trade risk layer missing on compiler submit path",
+  "ui_issue": false,
+  "validation_evidence": [
+    "rtk gh pr checks 1582 -> passed 17, failed 0"
+  ]
+}

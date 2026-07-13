@@ -1,4 +1,4 @@
-﻿"""
+"""
 QuantEvolver 后端API路由
 
 路由前缀: /quantevolver (在main.py中通过prefix="/api/v1"注册，最终路径为/api/v1/quantevolver/...)
@@ -36,9 +36,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
-import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +50,10 @@ from backend.services.quantevolver.factor_cache_coverage import (
     DEFAULT_WARMUP_TOLERANCE_DAYS,
     factor_cache_covers_window,
 )
+from backend.services.strategy_package.factor_reference_guard import (
+    FACTOR_DELETE_BLOCKED_REASON_CODE,
+    find_strategy_packages_referencing_factor,
+)
 from ..db.pg_pool import get_conn
 from ..services.quantevolver.callback_urls import build_aistock_callback_url
 from ..services.quantevolver.experiment_config import ensure_qe_risk_policy, normalize_label_horizon
@@ -66,109 +67,6 @@ from ..services.quantevolver.seed_contract import normalize_single_experiment_se
 from .model_registry import router as model_registry_router
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _win_to_wsl(path: str) -> str:
-    """Convert a Windows path to a WSL mount path."""
-    p = str(path).replace("\\", "/")
-    if len(p) >= 2 and p[1] == ":":
-        drive = p[0].lower()
-        return f"/mnt/{drive}{p[2:]}"
-    return p
-
-
-_FACTOR_CACHE_DB_ENV_KEYS = (
-    "TDX_DB_HOST",
-    "TDX_DB_PORT",
-    "TDX_DB_NAME",
-    "TDX_DB_USER",
-    "TDX_DB_PASSWORD",
-)
-_FACTOR_CACHE_PG_ALIASES = {
-    "PGHOST": "TDX_DB_HOST",
-    "PGPORT": "TDX_DB_PORT",
-    "PGDATABASE": "TDX_DB_NAME",
-    "PGUSER": "TDX_DB_USER",
-    "PGPASSWORD": "TDX_DB_PASSWORD",
-}
-
-
-def _quote_shell_arg(value: Any) -> str:
-    """Quote a value for the WSL bash command line."""
-    return shlex.quote(str(value))
-
-
-def _collect_factor_cache_wsl_db_env(source_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
-    """Collect DB env vars that must cross the Windows -> WSL process boundary."""
-    env_source = source_env if source_env is not None else os.environ
-    db_env: Dict[str, str] = {}
-    missing: List[str] = []
-    for key in _FACTOR_CACHE_DB_ENV_KEYS:
-        value = env_source.get(key)
-        if value is None or str(value).strip() == "":
-            missing.append(key)
-        else:
-            db_env[key] = str(value)
-    if missing:
-        raise RuntimeError(
-            "Factor cache WSL task requires AIstock DB env vars: " + ", ".join(missing)
-        )
-
-    for pg_key, tdx_key in _FACTOR_CACHE_PG_ALIASES.items():
-        db_env[pg_key] = db_env[tdx_key]
-
-    statement_timeout = env_source.get("AISTOCK_PG_STATEMENT_TIMEOUT_MS")
-    if statement_timeout is not None and str(statement_timeout).strip():
-        db_env["AISTOCK_PG_STATEMENT_TIMEOUT_MS"] = str(statement_timeout)
-    return db_env
-
-
-def _build_factor_cache_wsl_process_env(
-    base_env: Optional[Mapping[str, str]],
-    db_env: Dict[str, str],
-) -> Dict[str, str]:
-    """Build a Popen env that lets WSL import selected DB vars without CLI secrets."""
-    env_source = os.environ if base_env is None else base_env
-    proc_env: Dict[str, str] = {str(k): str(v) for k, v in env_source.items()}
-    proc_env.update({str(k): str(v) for k, v in db_env.items()})
-
-    wslenv_parts = [part for part in proc_env.get("WSLENV", "").split(":") if part]
-    for key in db_env:
-        for idx, part in enumerate(wslenv_parts):
-            name, sep, flags = part.partition("/")
-            if name != key:
-                continue
-            if sep and "u" not in flags:
-                wslenv_parts[idx] = f"{name}/{flags}u"
-            break
-        else:
-            wslenv_parts.append(f"{key}/u")
-    proc_env["WSLENV"] = ":".join(wslenv_parts)
-    return proc_env
-
-
-def _build_factor_cache_wsl_shell_command(
-    *,
-    project_root_wsl: str,
-    backfill_args: List[str],
-    log_path_wsl: str,
-) -> str:
-    """Build the WSL bash script for factor-cache backfill."""
-    if not backfill_args:
-        raise ValueError("backfill_args is required")
-    python_cmd = "python " + " ".join(_quote_shell_arg(arg) for arg in backfill_args)
-    body = " ".join(
-        [
-            "set -e;",
-            f"cd {_quote_shell_arg(project_root_wsl)};",
-            'if [ -z "$TDX_DB_PASSWORD" ]; then '
-            "echo 'TDX_DB_PASSWORD is required for factor cache WSL task' >&2; exit 2; fi;",
-            'source "$HOME/miniconda3/etc/profile.d/conda.sh";',
-            "conda activate rdagent-gpu;",
-            python_cmd + ";",
-        ]
-    )
-    return f"{{ {body} }} > {_quote_shell_arg(log_path_wsl)} 2>&1"
 
 
 def _build_multi_alpha_group_command(gc: dict[str, Any], node_label: str | None = None) -> str:
@@ -255,14 +153,6 @@ class BatchAnalyzeRequest(BaseModel):
     source_filter: Optional[str] = None
     factor_names: Optional[List[str]] = None  # 指定因子名称列表，为空则分析全部
 
-
-class FullPipelineRequest(BaseModel):
-    task_ids: List[str] = []
-    factor_names: Optional[List[str]] = None
-    skip_completed: bool = True
-    max_transform_retries: int = 3
-    skip_transform: bool = False
-    data_date: Optional[str] = None
 
 
 class RecommendFactorsRequest(BaseModel):
@@ -626,6 +516,47 @@ def sync_model_task(task_id: str, req: SyncModelTaskRequest = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_CACHE_STATUS_SORT_SCORE = {
+    "no_cache": 0,
+    "error": 0,
+    "missing_meta_reconcile_required": 1,
+    "hash_mismatch": 1,
+    "partial": 2,
+    "covered": 3,
+    "ok": 3,
+}
+
+
+def _sort_factor_cache_rows(rows: list[Dict[str, Any]], *, sort_field: str, sort_order: str) -> list[Dict[str, Any]]:
+    """Sort cache fields with one comparable type per field and nulls always last."""
+    def _value(row: Dict[str, Any]) -> Any:
+        if sort_field == "cache_status":
+            status = str(row.get("cache_coverage_status") or row.get("cache_status") or "no_cache")
+            return _CACHE_STATUS_SORT_SCORE.get(status, 0)
+        if sort_field == "cache_size_mb":
+            raw_value = row.get("cache_size_mb")
+            if raw_value is None:
+                return None
+            try:
+                return float(raw_value)
+            except (TypeError, ValueError):
+                return None
+        raw_value = row.get(sort_field)
+        return str(raw_value) if raw_value is not None else None
+
+    present: list[tuple[Any, str, Dict[str, Any]]] = []
+    missing: list[Dict[str, Any]] = []
+    for row in rows:
+        value = _value(row)
+        if value is None:
+            missing.append(row)
+        else:
+            present.append((value, str(row.get("factor_name") or ""), row))
+    present.sort(key=lambda item: (item[0], item[1]), reverse=(sort_order == "desc"))
+    missing.sort(key=lambda row: str(row.get("factor_name") or ""))
+    return [row for _value, _name, row in present] + missing
+
+
 @router.get("/factors")
 def list_factors(
     source: Optional[str] = Query(None, description="过滤source"),
@@ -634,7 +565,7 @@ def list_factors(
     category: Optional[str] = Query(None, description="过滤类别，__empty__表示未分类"),
     grade: Optional[str] = Query(None, description="过滤评级，__empty__表示未评级"),
     availability: Optional[str] = Query(None, description="过滤可用状态: enabled/disabled/all"),
-    cache_filter: Optional[str] = Query(None, description="因子值缓存过滤: has_cache/no_cache/covers_range/missing_range/hash_mismatch"),
+    cache_filter: Optional[str] = Query(None, description="因子值缓存过滤: has_cache/no_cache/covers_range/missing_range/hash_mismatch/missing_meta_reconcile_required"),
     cache_start_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标开始日期"),
     cache_end_date: Optional[str] = Query(None, description="用于判断缓存覆盖的目标结束日期"),
     sort_field: Optional[str] = Query(None, description="排序字段"),
@@ -876,7 +807,6 @@ def list_factors(
         # 前端自行决定展示优先级，不在后端覆盖
 
         # 合并 QE 回测因子值缓存信息。
-        # factor_values_realtime 属于快照/官方评估链路，不能作为 QE 回测缓存兜底。
         def _covers_target_range(row: Dict[str, Any]) -> bool:
             if not row.get("has_cache") or row.get("cache_hash_match") is False:
                 return False
@@ -897,7 +827,7 @@ def list_factors(
             for row in rows:
                 fn = row.get("factor_name")
                 selected_cache = _choose_best_factor_cache_candidate(
-                    _collect_factor_cache_candidates(str(fn)),
+                    _collect_factor_cache_candidates(str(fn), infer_missing_meta_window=False),
                     cache_start_date,
                     cache_end_date,
                 )
@@ -915,12 +845,13 @@ def list_factors(
                     row["cache_size_mb"] = selected_cache.get("cache_size_mb")
                     row["cache_source"] = selected_cache.get("source_key")
                     row["cache_source_label"] = selected_cache.get("source_label")
+                    row["cache_reconcile_required"] = False
                     row["cache_status"] = "ok"
                     row["_cache_meta_entry"] = entry
                 else:
                     entry = (selected_cache or {}).get("entry") or {}
                     row["has_cache"] = False
-                    row["cache_date_range"] = None
+                    row["cache_date_range"] = (selected_cache or {}).get("cache_date_range")
                     row["cache_start_date"] = None
                     row["cache_end_date"] = None
                     row["cache_computed_at"] = (selected_cache or {}).get("cache_computed_at") or entry.get("computed_at")
@@ -928,11 +859,15 @@ def list_factors(
                     row["cache_window_train_start"] = (selected_cache or {}).get("cache_window_train_start") or entry.get("window_train_start")
                     row["cache_window_backtest_end"] = (selected_cache or {}).get("cache_window_backtest_end") or entry.get("window_backtest_end")
                     row["cache_data_source_mode"] = (selected_cache or {}).get("cache_data_source_mode") or entry.get("data_source_mode")
-                    row["cache_size_mb"] = None
+                    row["cache_size_mb"] = (selected_cache or {}).get("cache_size_mb")
                     row["cache_hash_match"] = None
                     row["cache_source"] = (selected_cache or {}).get("source_key")
                     row["cache_source_label"] = (selected_cache or {}).get("source_label")
+                    row["cache_reconcile_required"] = bool((selected_cache or {}).get("reconcile_required"))
                     row["cache_status"] = (selected_cache or {}).get("cache_status") or ("error" if entry.get("status") == "error" else "no_cache")
+                    if row["cache_status"] == "missing_meta_reconcile_required":
+                        row["cache_start_date"] = (selected_cache or {}).get("cache_start_date")
+                        row["cache_end_date"] = (selected_cache or {}).get("cache_end_date")
 
             # hash 校验（优先 DB code_text 与缓存写入一致；失败不影响 has_cache）
             try:
@@ -966,31 +901,21 @@ def list_factors(
             if cache_filter_norm == "has_cache":
                 rows = [r for r in rows if r.get("has_cache")]
             elif cache_filter_norm == "no_cache":
-                rows = [r for r in rows if not r.get("has_cache")]
+                rows = [
+                    r for r in rows
+                    if not r.get("has_cache") and r.get("cache_status") != "missing_meta_reconcile_required"
+                ]
             elif cache_filter_norm == "covers_range":
                 rows = [r for r in rows if r.get("cache_coverage_status") == "covered"]
             elif cache_filter_norm == "missing_range":
                 rows = [r for r in rows if r.get("cache_coverage_status") != "covered"]
             elif cache_filter_norm == "hash_mismatch":
                 rows = [r for r in rows if r.get("cache_hash_match") is False]
+            elif cache_filter_norm == "missing_meta_reconcile_required":
+                rows = [r for r in rows if r.get("cache_status") == "missing_meta_reconcile_required"]
 
             if sort_field in cache_sort_fields:
-                status_score = {"no_cache": 0, "error": 0, "hash_mismatch": 1, "partial": 2, "covered": 3, "ok": 3}
-
-                def _cache_sort_value(row: Dict[str, Any]) -> Any:
-                    if sort_field == "cache_status":
-                        return status_score.get(str(row.get("cache_coverage_status") or row.get("cache_status") or "no_cache"), 0)
-                    if sort_field == "cache_size_mb":
-                        return row.get("cache_size_mb")
-                    return row.get(sort_field)
-
-                def _cache_sort_key(row: Dict[str, Any]) -> Tuple[Any, Any]:
-                    value = _cache_sort_value(row)
-                    if sort_order == "desc":
-                        return (value is not None, value or "")
-                    return (value is None, value or "")
-
-                rows.sort(key=_cache_sort_key, reverse=(sort_order == "desc"))
+                rows = _sort_factor_cache_rows(rows, sort_field=sort_field, sort_order=sort_order)
 
             total = len(rows)
             rows = rows[offset: offset + limit]
@@ -1135,6 +1060,28 @@ def delete_factor(
                     raise HTTPException(status_code=404, detail=f"因子 {factor_name} (source={source}) 不存在")
                 catalog_id = row[0]
 
+                package_references = find_strategy_packages_referencing_factor(conn, factor_name)
+                if package_references:
+                    referenced_packages = [reference.to_dict() for reference in package_references]
+                    logger.warning(
+                        "Blocked factor hard delete because StrategyPackage references exist: "
+                        "factor_name=%s, source=%s, referenced_packages=%s",
+                        factor_name,
+                        source,
+                        referenced_packages,
+                    )
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "reason_code": FACTOR_DELETE_BLOCKED_REASON_CODE,
+                            "message": "factor is referenced by non-retired StrategyPackage packages",
+                            "factor_name": factor_name,
+                            "source": source,
+                            "referenced_packages": referenced_packages,
+                        },
+                    )
+
                 deleted_counts = {}
 
                 # 1. aistock_factor_calc_log
@@ -1252,11 +1199,8 @@ def delete_factor(
                 )
                 from ..services.quantevolver.factor_value_loader import FactorValueLoader
 
-                # 两个独立缓存体系：
-                # - factor_values/        回测用 (code_text 生成, 读 bak_basic.h5)
-                # - factor_values_realtime/ 实盘+相关性用 (realtime_code_text 生成, 读 DB loader)
-                # 删除因子必须同时清理两个, 否则遗留孤儿 parquet / _meta 条目
-                for _cache_subdir in ("factor_values", "factor_values_realtime"):
+                # Clean official cache entries for metrics, correlation, and QE backtests.
+                for _cache_subdir in ("factor_values",):
                     _cache_root = os.path.join(_project_root, "rdagent_assets", _cache_subdir)
 
                     # 单因子 parquet 缓存
@@ -1289,7 +1233,7 @@ def delete_factor(
                         except Exception as e:
                             logger.warning(f"清理 {meta_path} 失败 (不影响删除结果): {e}")
 
-                # QE 因子源代码文件 (两个缓存共用一份, 只清一次)
+                # Remove generated QE factor source file.
                 qe_code = os.path.join(
                     _project_root, "rdagent_assets", "qe_factors",
                     f"{factor_name}.py",
@@ -1398,7 +1342,9 @@ class ManualFactorCreate(BaseModel):
     code_text: str = Field(..., description="因子 Python 代码")
     description: Optional[str] = Field(None, description="因子描述")
     expression: Optional[str] = Field(None, description="因子表达式（可选）")
-    data_date: Optional[str] = Field(None, description="?????????? (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class ManualFactorValidate(BaseModel):
@@ -1408,16 +1354,21 @@ class ManualFactorValidate(BaseModel):
 
 class BatchComputeMetricsUnified(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表")
-    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口，请使用 official-evaluation/compute")
-    data_date: Optional[str] = Field(None, description="快照日期 (YYYYMMDD)，指定后使用磁盘快照数据")
+    all_available: bool = Field(True, description="True=全部可用因子（含 disabled）；legacy 接口会转发到 official full-compute")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: Optional[str] = Field(None, description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期")
 
 
 class OfficialEvaluationComputeRequest(BaseModel):
     factor_names: Optional[List[str]] = Field(None, description="指定因子名列表；为空时计算全部符合 official 准入规则的因子")
-    data_date: str = Field(..., description="评估快照日期 (YYYYMMDD)")
+    data_date: Optional[str] = Field(None, description="兼容字段：旧快照日期；官方离线链路将其解释为 end_date")
+    start_date: str = Field("2018-08-01", description="官方离线训练/回测起始日期")
+    end_date: Optional[str] = Field(None, description="官方离线训练/回测截止日期；空时使用 data_date 或默认 2026-06-30")
     include_disabled: bool = Field(True, description="是否包含 is_available=false 的因子；默认 True 以支持 disabled 因子指标计算")
     max_workers: int = Field(4, ge=1, le=16, description="并行 worker 数")
     timeout_per_factor: int = Field(600, ge=60, le=3600, description="单因子超时秒数")
+    force: bool = Field(False, description="强制重新生成 official cache 并计算指标")
 
 
 class DeletionAnalyzeRequest(BaseModel):
@@ -3466,24 +3417,70 @@ FACTOR_CACHE_META_PATH = FACTOR_CACHE_ROOT / "_meta.json"
 FACTOR_CACHE_SOURCE_SPECS: Tuple[Dict[str, Any], ...] = (
     {
         "key": "backtest",
-        "label": "QE回测缓存",
+        "label": "官方共用缓存",
         "single_dir": FACTOR_CACHE_SINGLE_DIR,
         "meta_path": FACTOR_CACHE_META_PATH,
     },
 )
 FACTOR_CODE_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "qe_factors"
-BACKFILL_SCRIPT_WSL = os.getenv(
-    "AISTOCK_FACTOR_CACHE_BACKFILL_WSL",
-    _win_to_wsl(str(AISTOCK_PROJECT_ROOT / "scripts" / "backfill_factor_cache.py")),
-)
 FACTOR_CACHE_TASK_DIR = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "_tasks"
 
 
-def _is_realtime_factor_cache_path(path_value: Any) -> bool:
+def _is_official_factor_cache_path_shape(path_value: Any) -> bool:
     if not path_value:
         return False
     normalized = str(path_value).strip().strip("\"'").replace("\\", "/").rstrip("/")
-    return any(part.lower() == "factor_values_realtime" for part in normalized.split("/") if part)
+    parts = [part.lower() for part in normalized.split("/") if part]
+    if parts and parts[-1] in {"single", "_meta.json"}:
+        parts = parts[:-1]
+    return bool(parts) and parts[-1] == "factor_values"
+
+
+_cache_parquet_window_ttl: Dict[str, Dict[str, Any]] = {}
+_PARQUET_WINDOW_TTL_SEC = 300
+_cache_stats_ttl: Dict[str, Any] = {}
+_FACTOR_CACHE_STATS_TTL_SEC = 30
+
+
+def _infer_factor_cache_window_from_parquet(parquet_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    try:
+        stat = parquet_path.stat()
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cache_key = str(parquet_path.resolve())
+        cached = _cache_parquet_window_ttl.get(cache_key)
+        if (
+            cached
+            and cached.get("signature") == signature
+            and time.time() - float(cached.get("loaded_at", 0)) < _PARQUET_WINDOW_TTL_SEC
+        ):
+            window = cached.get("window") or (None, None, None)
+            return window[0], window[1], window[2]
+
+        import pandas as pd
+
+        frame = pd.read_parquet(parquet_path, columns=[])
+        index = frame.index
+        if hasattr(index, "names") and len(getattr(index, "names", []) or []) > 1:
+            date_level = 0
+            if "datetime" in index.names:
+                date_level = index.names.index("datetime")
+            dates = pd.DatetimeIndex(index.get_level_values(date_level))
+        else:
+            dates = pd.DatetimeIndex(index)
+        if dates.empty:
+            return None, None, None
+        start = dates.min().strftime("%Y-%m-%d")
+        end = dates.max().strftime("%Y-%m-%d")
+        window = (start, end, f"{start}~{end}")
+        _cache_parquet_window_ttl[cache_key] = {
+            "loaded_at": time.time(),
+            "signature": signature,
+            "window": window,
+        }
+        return window
+    except Exception as exc:
+        logger.warning("[factor-cache] infer parquet date range failed for %s: %s", parquet_path, exc)
+        return None, None, None
 
 
 def _get_all_factors_with_code_text() -> list:
@@ -3519,6 +3516,260 @@ def _get_all_factors_with_code_text() -> list:
 # 当前运行中的后台任务
 _active_cache_tasks: Dict[str, Dict[str, Any]] = {}
 _cache_meta_ttl: Dict[str, Dict[str, Any]] = {}
+_OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE = "official_factor_full_compute"
+_FACTOR_CACHE_RECENT_TASK_LIMIT = 20
+_FACTOR_CACHE_RUNNING_STATUSES = {"running", "queued", "paused"}
+_FACTOR_CACHE_TERMINAL_STATUSES = {"success", "completed", "failed", "canceled"}
+
+
+def _json_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
+
+
+def _iso_value(value: Any) -> Any:
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return value
+    return value
+
+
+def _get_dispatch_service():
+    from ..services.dispatch_service import DispatchService
+
+    return DispatchService()
+
+
+def _dispatch_factor_cache_task(task: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    if not task or task.get("task_type") != _OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE:
+        return None
+    config = _json_mapping(task.get("config"))
+    payload = _json_mapping(config.get("payload"))
+    factor_names = payload.get("factor_names") if isinstance(payload.get("factor_names"), list) else None
+    start_date = payload.get("window_train_start") or payload.get("start_date")
+    end_date = payload.get("window_backtest_end") or payload.get("end_date")
+    status = task.get("status") or "unknown"
+    return {
+        "task_id": str(task.get("task_id")),
+        "dispatch_task_id": str(task.get("task_id")),
+        "remote_task_id": task.get("remote_task_id"),
+        "node_id": task.get("node_id"),
+        "status": status,
+        "dispatch_status": status,
+        "started_at": _iso_value(task.get("started_at") or task.get("created_at")),
+        "finished_at": _iso_value(task.get("finished_at")),
+        "workers": payload.get("workers"),
+        "batch_size": payload.get("batch_size"),
+        "factor_count": len(factor_names) if factor_names else "all_enabled_code_text",
+        "include_disabled": bool(payload.get("include_disabled", False)),
+        "strict_backtest_data": True,
+        "data_source_mode": payload.get("cache_source") or "official_offline_backtest_factor_data",
+        "cache_source": payload.get("cache_source") or "official_offline_backtest_factor_data",
+        "code_source": payload.get("code_source") or "code_text",
+        "factor_data_dir": payload.get("factor_data_dir"),
+        "qlib_bin_path": payload.get("qlib_bin_path"),
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+        "start": start_date,
+        "end": end_date,
+        "cache_root": "rdagent_assets/factor_values",
+        "resumed_from_task_id": payload.get("resumed_from_task_id"),
+        "dispatch_payload": payload,
+        "error": task.get("error_message"),
+        "status_source": "dispatch_persistent",
+    }
+
+
+def _load_factor_cache_memory_task_detail(task: Mapping[str, Any]) -> Dict[str, Any]:
+    log_path_raw = task.get("log_path")
+    recent_log = ""
+    if log_path_raw:
+        log_path = Path(str(log_path_raw))
+        if log_path.exists() and log_path.is_file():
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                    recent_log = "".join(lines[-50:])
+            except Exception as e:
+                logger.warning("read factor-cache task log failed %s: %s", log_path, e)
+
+    result = None
+    result_path_raw = task.get("result_path")
+    if task.get("status") in _FACTOR_CACHE_TERMINAL_STATUSES and result_path_raw:
+        result_path = Path(str(result_path_raw))
+        if result_path.exists() and result_path.is_file():
+            try:
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning("read factor-cache task result failed %s: %s", result_path, e)
+
+    task_state = _load_json_file(Path(str(task.get("task_state_path")))) if task.get("task_state_path") else None
+    failed_tail = _load_failed_tail(Path(str(task.get("failed_log_path"))), limit=10) if task.get("failed_log_path") else []
+
+    merged = dict(task)
+    for key in ("experiment_id", "factor_data_dir", "data_source_mode", "window_train_start", "window_backtest_end", "strict_backtest_data"):
+        if merged.get(key) is None and task_state and key in task_state:
+            merged[key] = task_state.get(key)
+        if merged.get(key) is None and result and key in result:
+            merged[key] = result.get(key)
+
+    return {**merged, "recent_log": recent_log, "result": result, "task_state": task_state, "failed_tail": failed_tail}
+
+
+async def _read_factor_cache_remote_progress(svc: Any, task: Mapping[str, Any]) -> Tuple[Dict[str, Any], Optional[str]]:
+    remote_task_id = task.get("remote_task_id")
+    node_id = task.get("node_id")
+    if not remote_task_id or not node_id:
+        return {"remote_progress_status": "missing_remote_mapping"}, "missing remote_task_id or node_id"
+    try:
+        client = svc.get_node_client(str(node_id))
+        progress = await client.get_task_progress(str(remote_task_id))
+    except Exception as e:
+        return {"remote_progress_status": "unreachable"}, str(e)
+    if not isinstance(progress, Mapping):
+        return {"remote_progress_status": "invalid_response"}, "node progress response is not an object"
+    if progress.get("error"):
+        return {"remote_progress_status": "node_error"}, f"node returned error: {progress.get('error')}"
+
+    updates: Dict[str, Any] = {"remote_progress": dict(progress), "remote_progress_status": "ok"}
+    node_status = progress.get("status")
+    if node_status:
+        updates["remote_status"] = node_status
+        updates["status"] = "failed" if node_status == "fail" else node_status
+    for key in ("current_loop", "total_loops", "progress_pct", "best_ic", "best_sharpe", "best_ann_return", "best_max_dd", "log_tail"):
+        if key in progress:
+            updates[key] = progress.get(key)
+    return updates, None
+
+
+def _load_factor_cache_dispatch_task_detail(task_id: str, *, sync_remote: bool = True) -> Optional[Dict[str, Any]]:
+    svc = _get_dispatch_service()
+    task = svc.get_task(task_id)
+    if not task or task.get("task_type") != _OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE:
+        return None
+
+    dispatch_sync_error = None
+    mapped = _dispatch_factor_cache_task(task)
+    if not mapped:
+        return None
+
+    if sync_remote and task.get("status") in _FACTOR_CACHE_RUNNING_STATUSES:
+        try:
+            remote_updates, dispatch_sync_error = asyncio.run(_read_factor_cache_remote_progress(svc, task))
+            mapped.update(remote_updates)
+        except Exception as e:
+            dispatch_sync_error = str(e)
+
+    live_progress = _load_official_factor_live_progress(mapped)
+    if live_progress:
+        mapped["live_progress"] = live_progress
+        mapped["last_progress_at"] = live_progress.get("updated_at")
+
+    recent_log = ""
+    try:
+        logs = svc.get_task_logs_full(task_id, offset=0, limit=5000)
+        lines = logs.get("lines") or []
+        if isinstance(lines, list):
+            recent_log = "\n".join(str(line) for line in lines[-50:])
+    except Exception as e:
+        dispatch_sync_error = dispatch_sync_error or f"log_read_failed: {e}"
+    if not recent_log and mapped.get("log_tail"):
+        recent_log = str(mapped.get("log_tail"))
+
+    result = None
+    if mapped.get("status") in _FACTOR_CACHE_TERMINAL_STATUSES:
+        try:
+            result = asyncio.run(svc.get_task_results(task_id))
+        except Exception as e:
+            dispatch_sync_error = dispatch_sync_error or f"result_read_failed: {e}"
+
+    if dispatch_sync_error:
+        mapped["dispatch_sync_error"] = dispatch_sync_error
+
+    return {**mapped, "recent_log": recent_log, "result": result, "task_state": None, "failed_tail": []}
+
+
+def _extract_official_factor_compute_result(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    """Read the authoritative WSL result without guessing from factor cache state."""
+    direct = task_detail.get("result")
+    if isinstance(direct, Mapping) and isinstance(direct.get("runtime_validation"), Mapping):
+        return dict(direct)
+    recent_log = str(task_detail.get("recent_log") or "")
+    for line in reversed(recent_log.splitlines()):
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if parsed.get("type") == "result" and isinstance(parsed.get("data"), Mapping):
+            data = dict(parsed["data"])
+            if isinstance(data.get("runtime_validation"), Mapping):
+                return data
+    return {}
+
+
+def _load_official_factor_checkpoint(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    worker_task_id = str(payload.get("task_id") or "").strip()
+    if not worker_task_id:
+        return {}
+    checkpoint_path = AISTOCK_PROJECT_ROOT / "rdagent_assets" / "factor_values" / "checkpoints" / f"{worker_task_id}.json"
+    return _load_json_file(checkpoint_path)
+
+
+def _load_official_factor_live_progress(task_detail: Mapping[str, Any]) -> Dict[str, Any]:
+    """Load the worker-written factor-level progress receipt; never infer it from cache coverage."""
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    worker_task_id = str(payload.get("task_id") or "").strip()
+    if not worker_task_id:
+        return {}
+    progress_path = FACTOR_CACHE_ROOT / "checkpoints" / f"{worker_task_id}.progress.json"
+    progress = _load_json_file(progress_path)
+    if not progress or str(progress.get("task_id") or "") != worker_task_id:
+        return {}
+    return progress
+
+
+def _retry_factor_names_from_terminal_task(task_detail: Mapping[str, Any]) -> tuple[list[str], str]:
+    checkpoint = _load_official_factor_checkpoint(task_detail)
+    retry_names = checkpoint.get("retry_factor_names") if isinstance(checkpoint, Mapping) else None
+    if isinstance(retry_names, list):
+        names = [str(name).strip() for name in retry_names if str(name).strip()]
+        if names:
+            return list(dict.fromkeys(names)), "checkpoint"
+    result = _extract_official_factor_compute_result(task_detail)
+    runtime_validation = result.get("runtime_validation") if isinstance(result, Mapping) else None
+    failed = runtime_validation.get("failed_factors") if isinstance(runtime_validation, Mapping) else None
+    if isinstance(failed, list):
+        names = [str(item.get("name") or "").strip() for item in failed if isinstance(item, Mapping)]
+        names.extend(str(name).strip() for name in (result.get("db_result") or {}).get("save_failures") or [])
+        names = [name for name in names if name]
+        if names:
+            return list(dict.fromkeys(names)), "legacy_terminal_result_log"
+    return [], "unavailable"
+
+
+def _list_factor_cache_dispatch_tasks(limit: int = _FACTOR_CACHE_RECENT_TASK_LIMIT) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    try:
+        svc = _get_dispatch_service()
+        rows = svc.list_tasks(task_type=_OFFICIAL_FACTOR_FULL_COMPUTE_TASK_TYPE, limit=limit)
+    except Exception as e:
+        logger.warning("list persisted official factor-cache dispatch tasks failed: %s", e)
+        return [], str(e)
+    tasks: List[Dict[str, Any]] = []
+    for row in rows:
+        mapped = _dispatch_factor_cache_task(row)
+        if mapped:
+            tasks.append(mapped)
+    return tasks, None
 
 
 def _load_cache_meta(ttl_sec: int = 30, meta_path: Optional[Path] = None) -> dict:
@@ -3542,12 +3793,14 @@ def _load_cache_meta(ttl_sec: int = 30, meta_path: Optional[Path] = None) -> dic
 
 
 def _invalidate_cache_meta(meta_path: Optional[Path] = None):
-    """使 meta 内存缓存失效。"""
+    """Invalidate in-process factor-cache metadata caches."""
     if meta_path is None:
         _cache_meta_ttl.clear()
+        _cache_parquet_window_ttl.clear()
+        _cache_stats_ttl.clear()
     else:
         _cache_meta_ttl.pop(str(Path(meta_path).resolve()), None)
-
+        _cache_stats_ttl.clear()
 
 def _split_factor_cache_range(date_range: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     if not date_range or "~" not in str(date_range):
@@ -3585,20 +3838,21 @@ def _factor_cache_candidate_covers(
 def _collect_factor_cache_candidates(
     factor_name: str,
     source_specs: Optional[Tuple[Dict[str, Any], ...]] = None,
+    *,
+    infer_missing_meta_window: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Collect QE backtest cache candidates.
+    """Collect official shared factor-value cache candidates.
 
-    factor_values_realtime is intentionally ignored even if a caller passes it
-    through source_specs. Missing QE backtest cache must recompute, not fallback
-    to snapshot/official caches.
+    Missing cache must be generated by official full compute rather than by
+    falling back to any non-official cache directory.
     """
     candidates: List[Dict[str, Any]] = []
     specs = source_specs or FACTOR_CACHE_SOURCE_SPECS
     for spec in specs:
         if spec.get("key") != "backtest":
             continue
-        if _is_realtime_factor_cache_path(spec.get("single_dir")) or _is_realtime_factor_cache_path(spec.get("meta_path")):
-            logger.warning("[factor-cache] ignore realtime cache path in QE backtest specs: %s", spec)
+        if not _is_official_factor_cache_path_shape(spec.get("single_dir")) or not _is_official_factor_cache_path_shape(spec.get("meta_path")):
+            logger.warning("[factor-cache] ignore non-official cache path in QE backtest specs: %s", spec)
             continue
         meta_path = Path(spec["meta_path"])
         single_dir = Path(spec["single_dir"])
@@ -3613,6 +3867,16 @@ def _collect_factor_cache_candidates(
         status = str(entry.get("status") or ("ok" if has_file else "no_cache")).lower()
         cache_start, cache_end = _split_factor_cache_range(entry.get("date_range"))
         valid_cache = has_entry and has_file and status != "error"
+        reconcile_required = has_file and not has_entry
+        inferred_range = None
+        if reconcile_required and infer_missing_meta_window:
+            cache_start, cache_end, inferred_range = _infer_factor_cache_window_from_parquet(parquet_path)
+        if reconcile_required:
+            cache_status = "missing_meta_reconcile_required"
+        elif valid_cache:
+            cache_status = "ok"
+        else:
+            cache_status = "error" if status == "error" else "no_cache"
         size_mb = round(parquet_path.stat().st_size / 1024 / 1024, 1) if has_file else None
         candidates.append(
             {
@@ -3624,8 +3888,9 @@ def _collect_factor_cache_candidates(
                 "has_entry": has_entry,
                 "has_file": has_file,
                 "valid_cache": valid_cache,
-                "cache_status": "ok" if valid_cache else ("error" if status == "error" else "no_cache"),
-                "cache_date_range": entry.get("date_range"),
+                "reconcile_required": reconcile_required,
+                "cache_status": cache_status,
+                "cache_date_range": entry.get("date_range") or inferred_range,
                 "cache_start_date": cache_start,
                 "cache_end_date": cache_end,
                 "cache_computed_at": entry.get("computed_at"),
@@ -3676,6 +3941,55 @@ def _choose_best_factor_cache_candidate(
         return (is_error, str(candidate.get("cache_computed_at") or ""))
 
     return max(candidates, key=_non_valid_key)
+
+
+def _factor_cache_inventory() -> Dict[str, Any]:
+    """Return read-only disk/meta inventory for the official shared cache."""
+    try:
+        from ..services.quantevolver.factor_value_pipeline import FactorValuePipeline
+
+        pipeline = FactorValuePipeline(output_dir=str(FACTOR_CACHE_ROOT))
+        inventory = pipeline.get_cache_inventory()
+        integrity = pipeline.validate_meta_integrity()
+    except Exception as exc:
+        logger.warning("[factor-cache] inventory scan failed: %s", exc)
+        disk_names = {
+            path.stem
+            for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")
+            if not path.name.startswith("_")
+        } if FACTOR_CACHE_SINGLE_DIR.exists() else set()
+        meta = _load_cache_meta()
+        factors = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        meta_names = set(factors)
+        total_size_mb = round(
+            sum(path.stat().st_size for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")) / 1024 / 1024,
+            1,
+        ) if FACTOR_CACHE_SINGLE_DIR.exists() else 0
+        inventory = {
+            "cache_root": str(FACTOR_CACHE_ROOT),
+            "single_dir": str(FACTOR_CACHE_SINGLE_DIR),
+            "meta_path": str(FACTOR_CACHE_META_PATH),
+            "disk_factor_count": len(disk_names),
+            "meta_factor_count": len(meta_names),
+            "orphan_parquet_count": len(disk_names - meta_names),
+            "orphan_meta_count": len(meta_names - disk_names),
+            "orphan_parquets": sorted(disk_names - meta_names),
+            "orphan_meta_entries": sorted(meta_names - disk_names),
+            "total_size_mb": total_size_mb,
+            "as_of_date": meta.get("as_of_date"),
+            "generated_at": meta.get("generated_at"),
+        }
+        integrity = {
+            "ok": False,
+            "error": str(exc),
+            "disk_factor_count": inventory["disk_factor_count"],
+            "meta_factor_count": inventory["meta_factor_count"],
+            "orphan_parquet_count": inventory["orphan_parquet_count"],
+            "orphan_meta_count": inventory["orphan_meta_count"],
+        }
+    inventory["integrity_ok"] = bool(integrity.get("ok"))
+    inventory["integrity"] = integrity
+    return inventory
 
 
 def _read_file_from_path(path_str: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -3738,120 +4052,175 @@ def _load_failed_tail(path: Path, limit: int = 20) -> List[Dict[str, Any]]:
         return []
 
 
-@router.get("/factor-cache/stats", summary="因子值缓存统计")
-def factor_cache_stats():
-    """返回缓存总览：总缓存数、占用空间、覆盖率、日期范围分布。"""
-    try:
-        cached_files: List[Path] = []
-        for spec in FACTOR_CACHE_SOURCE_SPECS:
-            single_dir = Path(spec["single_dir"])
-            if single_dir.exists():
-                cached_files.extend(single_dir.glob("*.parquet"))
-        total_size = sum(f.stat().st_size for f in cached_files)
+@router.get("/factor-cache/stats", summary="Factor value cache stats")
+def factor_cache_stats(include_hash: bool = Query(False, description="Default false returns lightweight disk/meta inventory; true also checks code_text hashes")):
+    """Return a lightweight official factor-cache overview.
 
-        # 代码因子总数 + 可用/禁用因子名集合（从因子库 code_text 查询）
-        db_available_names: set = set()
-        db_disabled_names: set = set()
-        total_code_factors = 0
-        total_disabled_factors = 0
-        # 当前代码 hash：仅使用因子库 code_text
-        db_code_hashes: Dict[str, str] = {}
+    The default path must stay cheap for the factor library UI: it lists disk
+    parquet names, reads _meta.json, and queries factor names only.  It must not
+    read parquet indices or compute DB code hashes unless include_hash=true.
+    """
+    try:
+        include_hash_enabled = include_hash is True
+        cache_key = f"{FACTOR_CACHE_ROOT.resolve()}|include_hash={int(include_hash_enabled)}"
+        now = time.time()
+        active_tasks = sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running")
+        cached_payload = _cache_stats_ttl.get(cache_key)
+        if cached_payload and now - float(cached_payload.get("loaded_at", 0)) < _FACTOR_CACHE_STATS_TTL_SEC:
+            payload = dict(cached_payload.get("payload") or {})
+            payload["active_tasks"] = active_tasks
+            payload["stats_cache_hit"] = True
+            return payload
+
+        inventory = _factor_cache_inventory()
+        meta = _load_cache_meta()
+        factors_meta = meta.get("factors", {}) if isinstance(meta.get("factors"), dict) else {}
+        disk_names = {
+            path.stem
+            for path in FACTOR_CACHE_SINGLE_DIR.glob("*.parquet")
+            if not path.name.startswith("_")
+        } if FACTOR_CACHE_SINGLE_DIR.exists() else set()
+        meta_names = set(factors_meta)
+        error_names = {
+            name
+            for name, entry in factors_meta.items()
+            if isinstance(entry, dict) and str(entry.get("status") or "ok").lower() == "error"
+        }
+
+        db_available_names: set[str] = set()
+        db_disabled_names: set[str] = set()
         try:
-            from ..db.pg_pool import get_conn
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
                         SELECT factor_name, is_available
                         FROM aistock_factor_catalog
                         WHERE code_text IS NOT NULL
+                          AND length(trim(code_text)) > 0
                     """)
                     for fn, avail in cur.fetchall():
                         if avail:
                             db_available_names.add(fn)
-                            total_code_factors += 1
                         else:
                             db_disabled_names.add(fn)
-                            total_disabled_factors += 1
-            db_code_hashes = _get_current_factor_code_hashes(list(db_available_names))
         except Exception as e:
-            logger.error(f"查询因子总数失败: {e}")
-            raise HTTPException(status_code=500, detail=f"数据库查询失败: {e}")
+            logger.error("factor-cache stats DB query failed: %s", e)
+            raise HTTPException(status_code=500, detail=f"factor-cache stats DB query failed: {e}")
 
-        range_dist: Dict[str, int] = {}
-        by_source: Dict[str, int] = {}
+        enabled_disk_names = db_available_names & disk_names
+        enabled_error_names = db_available_names & error_names
+        enabled_effective_names = enabled_disk_names - enabled_error_names
+        enabled_meta_valid_names = (enabled_disk_names & meta_names) - enabled_error_names
+        enabled_reconcile_names = enabled_disk_names - meta_names
+        disabled_disk_names = db_disabled_names & disk_names
+        disabled_error_names = db_disabled_names & error_names
+        disabled_effective_names = disabled_disk_names - disabled_error_names
+        disabled_meta_valid_names = (disabled_disk_names & meta_names) - disabled_error_names
 
-        # 细分缓存状态：cache_ok / cache_error / hash_mismatch / no_cache
-        cache_ok = 0
-        cache_error = 0
+        hash_ok = len(enabled_meta_valid_names)
         hash_mismatch = 0
-        disabled_cached = 0
-
-        for fn in db_available_names:
-            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
-            entry = (selected_cache or {}).get("entry") or {}
-            cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
-            current_hash = db_code_hashes.get(fn)
-
-            if selected_cache and selected_cache.get("valid_cache"):
+        if include_hash_enabled and enabled_meta_valid_names:
+            db_code_hashes = _get_current_factor_code_hashes(sorted(enabled_meta_valid_names))
+            hash_ok = 0
+            for fn in enabled_meta_valid_names:
+                entry = factors_meta.get(fn) or {}
+                cached_hash = entry.get("source_hash_raw") or entry.get("source_hash")
+                current_hash = db_code_hashes.get(fn)
                 if current_hash and cached_hash and cached_hash != current_hash:
                     hash_mismatch += 1
                 else:
-                    cache_ok += 1
-                dr = selected_cache.get("cache_date_range") or "unknown"
-                range_dist[dr] = range_dist.get(dr, 0) + 1
-                source_key = str(selected_cache.get("source_key") or "unknown")
-                by_source[source_key] = by_source.get(source_key, 0) + 1
-            elif selected_cache and selected_cache.get("cache_status") == "error":
-                # _meta.json 明确记录了失败
-                cache_error += 1
-            # else: no_cache, 不计入
+                    hash_ok += 1
 
-        # 禁用因子缓存统计
-        for fn in db_disabled_names:
-            selected_cache = _choose_best_factor_cache_candidate(_collect_factor_cache_candidates(fn))
-            if selected_cache and selected_cache.get("valid_cache"):
-                disabled_cached += 1
-                dr = selected_cache.get("cache_date_range") or "unknown"
-                range_dist[dr] = range_dist.get(dr, 0) + 1
+        range_dist: Dict[str, int] = {}
+        by_source: Dict[str, int] = {"backtest": len(enabled_effective_names)}
+        for fn in enabled_meta_valid_names:
+            entry = factors_meta.get(fn) or {}
+            dr = entry.get("date_range") or "unknown"
+            range_dist[dr] = range_dist.get(dr, 0) + 1
+        if enabled_reconcile_names:
+            range_dist["metadata_pending"] = range_dist.get("metadata_pending", 0) + len(enabled_reconcile_names)
+        dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else (inventory.get("date_range") or "unknown")
 
-        dominant_range = max(range_dist.items(), key=lambda x: x[1])[0] if range_dist else "unknown"
-
-        return {
+        total_code_factors = len(db_available_names)
+        effective_cached = len(enabled_effective_names)
+        cache_error = len(enabled_error_names)
+        payload = {
             "ok": True,
-            "total_cached": cache_ok + hash_mismatch,
+            "stats_cache_hit": False,
+            "stats_mode": "lightweight_inventory",
+            "hash_check_enabled": include_hash_enabled,
+            "db_hash_check_skipped": not include_hash_enabled,
+            "total_cached": effective_cached,
+            "effective_cached": effective_cached,
+            "meta_valid_cached": len(enabled_meta_valid_names),
+            "disk_cached_enabled": effective_cached,
+            "disk_factor_count": int(inventory.get("disk_factor_count") or len(disk_names)),
+            "factor_parquet_count": int(inventory.get("factor_parquet_count") or len(disk_names)),
+            "all_parquet_count": int(inventory.get("all_parquet_count") or len(disk_names)),
+            "merged_panel_present": bool(inventory.get("merged_panel_present")),
+            "merged_panel_size_mb": float(inventory.get("merged_panel_size_mb") or 0),
+            "meta_factor_count": int(inventory.get("meta_factor_count") or len(meta_names)),
+            "orphan_parquet_count": int(inventory.get("orphan_parquet_count") or len(disk_names - meta_names)),
+            "orphan_meta_count": int(inventory.get("orphan_meta_count") or len(meta_names - disk_names)),
+            "integrity_ok": bool(inventory.get("integrity_ok")),
+            "integrity": inventory.get("integrity"),
+            "reconcile_required": len(enabled_reconcile_names),
+            "reconcile_required_sample": sorted(enabled_reconcile_names)[:20],
             "total_code_factors": total_code_factors,
-            "coverage_pct": round((cache_ok + hash_mismatch) / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
-            "total_size_mb": round(total_size / 1024 / 1024, 1),
+            "coverage_pct": round(effective_cached / total_code_factors * 100, 1) if total_code_factors > 0 else 0,
+            "total_size_mb": float(inventory.get("total_size_mb") or 0),
+            "all_size_mb": float(inventory.get("all_size_mb") or inventory.get("total_size_mb") or 0),
             "date_range_dominant": dominant_range,
             "date_range_distribution": dict(sorted(range_dist.items(), key=lambda x: -x[1])[:10]),
-            "hash_ok": cache_ok,
+            "hash_ok": hash_ok,
             "hash_mismatch": hash_mismatch,
             "cache_error": cache_error,
-            "no_cache": total_code_factors - cache_ok - hash_mismatch - cache_error,
-            "disabled_total": total_disabled_factors,
-            "disabled_cached": disabled_cached,
+            "no_cache": max(total_code_factors - effective_cached - cache_error, 0),
+            "disabled_total": len(db_disabled_names),
+            "disabled_cached": len(disabled_meta_valid_names),
+            "disabled_disk_cached": len(disabled_effective_names),
+            "disabled_cache_error": len(disabled_error_names),
             "by_source": by_source,
-            "last_backfill": _load_cache_meta().get("_last_backfill"),
-            "active_tasks": sum(1 for t in _active_cache_tasks.values() if t.get("status") == "running"),
+            "cache_root": str(FACTOR_CACHE_ROOT),
+            "single_dir": str(FACTOR_CACHE_SINGLE_DIR),
+            "meta_path": str(FACTOR_CACHE_META_PATH),
+            "last_generation": inventory.get("generated_at") or meta.get("generated_at"),
+            "as_of_date": inventory.get("as_of_date"),
+            "data_source_mode": inventory.get("data_source_mode"),
+            "data_freshness_profile": inventory.get("data_freshness_profile"),
+            "window_train_start": inventory.get("window_train_start"),
+            "window_backtest_end": inventory.get("window_backtest_end"),
+            "active_tasks": active_tasks,
         }
+        _cache_stats_ttl[cache_key] = {"loaded_at": now, "payload": dict(payload)}
+        return payload
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.exception("获取缓存统计失败")
+        logger.exception("factor-cache stats failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 class FactorCacheComputeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     factor_names: Optional[List[str]] = Field(None, description="因子名列表；空/None = 全部可用因子")
+    include_disabled: bool = Field(False, description="仅在显式 factor_names 时允许计算 disabled 因子；全量默认只计算启用因子")
     experiment_id: Optional[str] = Field(None, description="实验 ID；仅用于继承节点/数据目录配置，不限制缓存作用域")
     start_date: str = Field(..., description="起始日期；必须由 UI 显式传入")
     end_date: str = Field(..., description="结束日期；必须由 UI 显式传入")
     workers: int = Field(4, description="并行度: 2/4/8/10")
     timeout_per_factor: int = Field(1200, description="单因子超时秒数")
-    incremental: bool = Field(False, description="增量模式: 优先仅补齐缺失后段")
     force: bool = Field(False, description="强制重算（忽略已覆盖的缓存）")
-    resume_task_id: Optional[str] = Field(None, description="从历史任务恢复未完成因子")
-    retry_failed_only: bool = Field(False, description="恢复历史任务时仅重试失败因子")
     strict_backtest_data: bool = Field(True, description="严格使用 QE 默认历史 factor_data_dir 数据（用于全局因子值缓存）")
     auto_sync_remote: bool = Field(True, description="本地缓存计算成功后自动同步到远端执行节点")
+
+
+class FactorCacheRetryFailedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workers: int = Field(1, ge=1, le=10, description="失败因子续算并行度；必须由操作者显式确认")
+    timeout_per_factor: Optional[int] = Field(None, ge=1, description="空时继承原任务的单因子超时")
 
 
 class FactorCacheRemoteSyncRequest(BaseModel):
@@ -3862,240 +4231,273 @@ class FactorCacheRemoteSyncRequest(BaseModel):
     upload_workers: int = Field(4, ge=1, le=16, description="流式上传并发度；默认 4，避免串行单因子同步占不满局域网")
 
 
-@router.post("/factor-cache/compute", summary="触发因子值计算（WSL后台任务）")
+@router.post("/factor-cache/compute", summary="Submit official offline factor full compute via WSL dispatch")
 def factor_cache_compute(req: FactorCacheComputeRequest, background_tasks: BackgroundTasks):
-    """触发 WSL 端因子值计算。使用原始 code_text + subprocess（与回测 prepare_factors.py 一致）。"""
+    """Submit official offline factor cache + metrics compute to WSL/compute-node dispatch.
+
+    Windows FastAPI is a control plane only: no local WSL shell-out and no
+    obsolete local backfill execution. The worker consumes catalog
+    code_text plus factor_data_dir/qlib/ST-PIT data and writes the single
+    official cache under rdagent_assets/factor_values.
+    """
     if req.workers < 1 or req.workers > 10:
-        raise HTTPException(400, "workers 必须为 1~10")
+        raise HTTPException(400, "workers must be 1~10")
 
     from ..services.quantevolver.config_composer import ConfigComposer
+    from ..services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
 
     cc = ConfigComposer()
-    exp_record = None
     node_id = None
-    factor_data_dir = None
     resolved_start = req.start_date.strip()
     resolved_end = req.end_date.strip()
 
     if req.experiment_id:
         exp_record = cc._get_experiment_record(req.experiment_id)
         if not exp_record:
-            raise HTTPException(404, f"实验 {req.experiment_id} 不存在")
+            raise HTTPException(404, f"experiment {req.experiment_id} not found")
         node_id = exp_record.get("node_id") or None
 
     rdagent_cfg = cc._fetch_workspace_config(node_id)
     factor_data_dir = rdagent_cfg.get("factor_data_dir")
+    qlib_bin_path = rdagent_cfg.get("qlib_data_path") or os.getenv("QLIB_BIN_PATH")
     if req.strict_backtest_data and not factor_data_dir:
-        raise HTTPException(400, "无法解析 QE 默认 factor_data_dir")
+        raise HTTPException(400, "failed to resolve QE factor_data_dir")
 
     if not resolved_start or not resolved_end:
-        raise HTTPException(400, "start_date/end_date 必须由 UI 显式传入")
+        raise HTTPException(400, "start_date/end_date must be provided by UI")
     try:
         datetime.strptime(resolved_start, "%Y-%m-%d")
         datetime.strptime(resolved_end, "%Y-%m-%d")
     except ValueError as e:
-        raise HTTPException(400, "start_date/end_date 必须为 YYYY-MM-DD 格式") from e
+        raise HTTPException(400, "start_date/end_date must be YYYY-MM-DD") from e
     if resolved_start > resolved_end:
-        raise HTTPException(400, f"缓存窗口非法: {resolved_start} > {resolved_end}")
+        raise HTTPException(400, f"invalid cache window: {resolved_start} > {resolved_end}")
+    task_id = f"official_factor_full_{int(time.time() * 1000)}_{os.getpid()}"
     try:
-        wsl_db_env = _collect_factor_cache_wsl_db_env()
-    except RuntimeError as e:
+        dispatch_result = OfficialFactorFullComputeDispatchService().submit(
+            factor_names=req.factor_names,
+            factor_data_dir=str(factor_data_dir or ""),
+            start_date=resolved_start,
+            end_date=resolved_end,
+            include_disabled=bool(req.factor_names and req.include_disabled),
+            batch_size=max(1, min(int(req.workers or 1) * 4, 32)),
+            workers=req.workers,
+            timeout_per_factor=req.timeout_per_factor,
+            force=req.force,
+            qlib_bin_path=qlib_bin_path,
+            node_id=node_id,
+            task_id=task_id,
+        )
+    except Exception as e:
+        logger.exception("failed to submit official factor full-compute dispatch")
         raise HTTPException(status_code=500, detail=str(e)) from e
 
-    # ── 从因子库获取 QE 回测权威 code_text ──
-    if req.factor_names:
-        factors_info = cc._get_factors_info(req.factor_names)
-    else:
-        factors_info = _get_all_factors_with_code_text()
-
-    factors_code = {}
-    for f in factors_info:
-        ct = f.get("code_text")
-        if ct:
-            factors_code[f["factor_name"]] = ct
-    if not factors_code and not req.resume_task_id:
-        raise HTTPException(400, "未找到任何有 code_text 的因子")
-
-    # ── 写入 code manifest JSON 文件 ──
-    task_id = f"cache_{int(time.time() * 1000)}_{os.getpid()}"
-    manifest_path = FACTOR_CACHE_TASK_DIR / f"{task_id}_manifest.json"
-    FACTOR_CACHE_TASK_DIR.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(factors_code, ensure_ascii=False), encoding="utf-8"
-    )
-
-    result_path = Path(tempfile.gettempdir()) / f"{task_id}_result.json"
-    log_path = Path(tempfile.gettempdir()) / f"{task_id}.log"
-
-    factors_arg = ",".join(req.factor_names) if req.factor_names else ""
-    project_root_wsl = _win_to_wsl(str(AISTOCK_PROJECT_ROOT))
-    backfill_args = [
-        BACKFILL_SCRIPT_WSL,
-        "--task-id",
-        task_id,
-        "--code-manifest",
-        _win_to_wsl(str(manifest_path)),
-        "--window-train-start",
-        resolved_start,
-        "--window-backtest-end",
-        resolved_end,
-    ]
-    if req.experiment_id:
-        backfill_args.extend(["--experiment-id", req.experiment_id])
-    if factor_data_dir:
-        backfill_args.extend(["--factor-data-dir", factor_data_dir])
-    if req.strict_backtest_data:
-        backfill_args.append("--strict-backtest-data")
-    backfill_args.extend(
-        [
-            "--workers",
-            str(req.workers),
-            "--timeout",
-            str(req.timeout_per_factor),
-            "--json-output",
-            _win_to_wsl(str(result_path)),
-        ]
-    )
-    if factors_arg:
-        backfill_args.extend(["--factors", factors_arg])
-    if req.force:
-        backfill_args.append("--force")
-    if req.incremental:
-        backfill_args.append("--incremental")
-    if req.resume_task_id:
-        backfill_args.extend(["--resume-task-id", req.resume_task_id])
-    if req.retry_failed_only:
-        backfill_args.append("--retry-failed-only")
-
-    cmd_parts = [
-        "wsl",
-        "bash",
-        "-lc",
-        _build_factor_cache_wsl_shell_command(
-            project_root_wsl=project_root_wsl,
-            backfill_args=backfill_args,
-            log_path_wsl=_win_to_wsl(str(log_path)),
-        ),
-    ]
-    proc_env = _build_factor_cache_wsl_process_env(os.environ, wsl_db_env)
-
-    _active_cache_tasks[task_id] = {
-        "task_id": task_id,
-        "status": "running",
+    dispatch_task_id = dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or task_id
+    _active_cache_tasks[str(dispatch_task_id)] = {
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "status": dispatch_result.get("status", "queued"),
         "started_at": datetime.now().isoformat(),
         "workers": req.workers,
-        "factor_count": len(req.factor_names) if req.factor_names else "all",
-        "incremental": req.incremental,
-        "resume_task_id": req.resume_task_id,
-        "retry_failed_only": req.retry_failed_only,
-        "auto_sync_remote": req.auto_sync_remote,
+        "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
+        "factor_count": len(req.factor_names) if req.factor_names else "all_enabled_code_text",
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "experiment_id": req.experiment_id,
         "strict_backtest_data": req.strict_backtest_data,
-        "data_source_mode": "backtest_factor_data_dir" if req.strict_backtest_data else "unspecified",
+        "data_source_mode": "official_offline_backtest_factor_data",
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
         "factor_data_dir": factor_data_dir,
+        "qlib_bin_path": qlib_bin_path,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
-        "log_path": str(log_path),
-        "result_path": str(result_path),
-        "task_state_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.json"),
-        "failed_log_path": str(FACTOR_CACHE_TASK_DIR / f"{task_id}.failed.ndjson"),
-        "start": resolved_start,
-        "end": resolved_end,
+        "cache_root": dispatch_result.get("cache_root"),
+        "dispatch_payload": dispatch_result.get("payload"),
     }
-
-    import subprocess
-    def _run():
-        try:
-            proc = subprocess.Popen(
-                cmd_parts, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                creationflags=0x08000000 if sys.platform == "win32" else 0,
-                env=proc_env,
-            )
-            _active_cache_tasks[task_id]["pid"] = proc.pid
-            proc.wait()
-            _active_cache_tasks[task_id]["returncode"] = proc.returncode
-            _active_cache_tasks[task_id]["status"] = "completed" if proc.returncode == 0 else "failed"
-            _active_cache_tasks[task_id]["finished_at"] = datetime.now().isoformat()
-            _invalidate_cache_meta()
-            if proc.returncode == 0 and req.auto_sync_remote:
-                try:
-                    from ..services.quantevolver.factor_cache_remote_sync_service import (
-                        FactorCacheRemoteSyncService,
-                    )
-
-                    sync_factors = list(req.factor_names or factors_code.keys())
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "running"
-                    sync_result = FactorCacheRemoteSyncService().sync_to_all_remote_nodes(
-                        sync_factors,
-                        force=req.force,
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_status"] = (
-                        "completed" if sync_result.get("ok") else "failed"
-                    )
-                    _active_cache_tasks[task_id]["remote_sync_result"] = sync_result
-                except Exception as sync_exc:
-                    _active_cache_tasks[task_id]["remote_sync_status"] = "failed"
-                    _active_cache_tasks[task_id]["remote_sync_error"] = str(sync_exc)
-                    logger.exception("远端因子缓存自动同步失败 task_id=%s", task_id)
-        except Exception as e:
-            _active_cache_tasks[task_id]["status"] = "error"
-            _active_cache_tasks[task_id]["error"] = str(e)
-            logger.exception(f"缓存计算任务失败 {task_id}")
-
-    background_tasks.add_task(_run)
+    _invalidate_cache_meta()
     return {
-        "ok": True,
-        "task_id": task_id,
-        "status": "queued",
+        "ok": bool(dispatch_result.get("ok", True)),
+        "task_id": str(dispatch_task_id),
+        "dispatch_task_id": str(dispatch_task_id),
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "status": dispatch_result.get("status", "queued"),
         "experiment_id": req.experiment_id,
         "window_train_start": resolved_start,
         "window_backtest_end": resolved_end,
+        "include_disabled": bool(req.factor_names and req.include_disabled),
         "factor_data_dir": factor_data_dir,
-        "auto_sync_remote": req.auto_sync_remote,
+        "qlib_bin_path": qlib_bin_path,
+        "node_id": dispatch_result.get("node_id") or node_id,
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
+        "cache_root": dispatch_result.get("cache_root"),
+        "message": "submitted official offline factor full-compute task to WSL/compute-node dispatch; Windows control plane does not execute local recompute.",
     }
 
 
-@router.get("/factor-cache/compute-status/{task_id}", summary="查询计算任务状态")
+@router.post("/factor-cache/compute-status/{task_id}/retry-failed", summary="Retry exactly the failed official factor compute subset")
+def factor_cache_retry_failed(task_id: str, req: FactorCacheRetryFailedRequest):
+    """Resume a terminal failed run from its persisted checkpoint/result, never from inferred cache coverage."""
+    task_detail = _load_factor_cache_dispatch_task_detail(task_id, sync_remote=False)
+    if not task_detail:
+        raise HTTPException(404, f"official factor compute task {task_id} not found")
+    if str(task_detail.get("status") or "").lower() != "failed":
+        raise HTTPException(409, "only terminal failed official factor compute tasks can be retried")
+    retry_names, recovery_source = _retry_factor_names_from_terminal_task(task_detail)
+    if not retry_names:
+        raise HTTPException(409, "failed task has no persisted retry_factor_names; manual factor selection is required")
+    payload = _json_mapping(task_detail.get("dispatch_payload"))
+    start_date = str(payload.get("window_train_start") or payload.get("start_date") or "").strip()
+    end_date = str(payload.get("window_backtest_end") or payload.get("end_date") or "").strip()
+    factor_data_dir = str(payload.get("factor_data_dir") or "").strip()
+    qlib_bin_path = payload.get("qlib_bin_path")
+    if not start_date or not end_date or not factor_data_dir:
+        raise HTTPException(409, "failed task is missing its authoritative data window or factor_data_dir")
+    include_disabled = bool(payload.get("include_disabled", False))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT factor_name
+                FROM aistock_factor_catalog
+                WHERE factor_name = ANY(%s)
+                  AND code_text IS NOT NULL
+                  AND (is_available = TRUE OR %s = TRUE)
+                """,
+                (retry_names, include_disabled),
+            )
+            eligible_now = {str(row[0]) for row in cur.fetchall()}
+    unavailable = [name for name in retry_names if name not in eligible_now]
+    if unavailable:
+        raise HTTPException(
+            409,
+            {
+                "error": "retry_factor_eligibility_changed",
+                "unavailable_count": len(unavailable),
+                "unavailable_sample": unavailable[:20],
+            },
+        )
+    from ..services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
+
+    worker_task_id = f"official_factor_retry_{int(time.time() * 1000)}_{os.getpid()}"
+    timeout_per_factor = int(req.timeout_per_factor or payload.get("timeout_per_factor") or 1800)
+    dispatch_result = OfficialFactorFullComputeDispatchService().submit(
+        factor_names=retry_names,
+        factor_data_dir=factor_data_dir,
+        start_date=start_date,
+        end_date=end_date,
+        include_disabled=include_disabled,
+        batch_size=max(1, min(int(req.workers) * 4, 32)),
+        workers=int(req.workers),
+        timeout_per_factor=timeout_per_factor,
+        force=False,
+        qlib_bin_path=str(qlib_bin_path) if qlib_bin_path else None,
+        node_id=str(task_detail.get("node_id") or "") or None,
+        task_id=worker_task_id,
+        resumed_from_task_id=task_id,
+    )
+    dispatch_task_id = str(dispatch_result.get("dispatch_task_id") or dispatch_result.get("task_id") or worker_task_id)
+    _active_cache_tasks[dispatch_task_id] = {
+        "task_id": dispatch_task_id,
+        "dispatch_task_id": dispatch_task_id,
+        "remote_task_id": dispatch_result.get("remote_task_id"),
+        "node_id": dispatch_result.get("node_id") or task_detail.get("node_id"),
+        "status": dispatch_result.get("status", "queued"),
+        "started_at": datetime.now().isoformat(),
+        "workers": int(req.workers),
+        "batch_size": dispatch_result.get("payload", {}).get("batch_size"),
+        "factor_count": len(retry_names),
+        "include_disabled": include_disabled,
+        "strict_backtest_data": True,
+        "data_source_mode": "official_offline_backtest_factor_data",
+        "cache_source": "official_offline_backtest_factor_data",
+        "code_source": "code_text",
+        "factor_data_dir": factor_data_dir,
+        "qlib_bin_path": qlib_bin_path,
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+        "cache_root": dispatch_result.get("cache_root"),
+        "dispatch_payload": dispatch_result.get("payload"),
+        "resumed_from_task_id": task_id,
+        "recovery_source": recovery_source,
+    }
+    _invalidate_cache_meta()
+    return {
+        "ok": bool(dispatch_result.get("ok", True)),
+        "task_id": dispatch_task_id,
+        "status": dispatch_result.get("status", "queued"),
+        "resumed_from_task_id": task_id,
+        "recovery_source": recovery_source,
+        "retry_factor_count": len(retry_names),
+        "retry_factor_sample": retry_names[:20],
+        "workers": int(req.workers),
+        "window_train_start": start_date,
+        "window_backtest_end": end_date,
+    }
+
+
+@router.get("/factor-cache/compute-status/{task_id}", summary="Query factor cache compute task status")
 def factor_cache_compute_status(task_id: str):
-    """查询因子值计算任务状态 + 尾部日志。"""
+    """Return official factor-cache task status from memory or persisted dispatch state."""
     task = _active_cache_tasks.get(task_id)
-    if not task:
-        raise HTTPException(404, f"任务 {task_id} 不存在")
-
-    log_path = Path(task.get("log_path", ""))
-    recent_log = ""
-    if log_path.exists():
+    if task:
+        dispatch_task_id = str(task.get("dispatch_task_id") or task_id)
         try:
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-                recent_log = "".join(lines[-50:])
+            dispatch_task = _load_factor_cache_dispatch_task_detail(dispatch_task_id)
         except Exception as e:
-            logger.warning(f"读取任务日志失败 {log_path}: {e}")
+            memory_task = _load_factor_cache_memory_task_detail(task)
+            memory_task["dispatch_sync_error"] = str(e)
+            return memory_task
+        if dispatch_task:
+            merged = {**_load_factor_cache_memory_task_detail(task), **dispatch_task}
+            if str(dispatch_task.get("status") or "").lower() in _FACTOR_CACHE_TERMINAL_STATUSES:
+                _active_cache_tasks.pop(task_id, None)
+            else:
+                _active_cache_tasks[task_id] = merged
+            return merged
+        return _load_factor_cache_memory_task_detail(task)
 
-    result = None
-    result_path = Path(task.get("result_path", ""))
-    if task.get("status") in ("completed", "failed") and result_path.exists():
-        try:
-            result = json.loads(result_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning(f"读取任务结果失败 {result_path}: {e}")
+    dispatch_task = _load_factor_cache_dispatch_task_detail(task_id)
+    if dispatch_task:
+        return dispatch_task
 
-    task_state = _load_json_file(Path(task.get("task_state_path", "")))
-    failed_tail = _load_failed_tail(Path(task.get("failed_log_path", "")), limit=10)
-
-    merged = dict(task)
-    for key in ("experiment_id", "factor_data_dir", "data_source_mode", "window_train_start", "window_backtest_end", "strict_backtest_data"):
-        if merged.get(key) is None and task_state and key in task_state:
-            merged[key] = task_state.get(key)
-        if merged.get(key) is None and result and key in result:
-            merged[key] = result.get(key)
-
-    return {**merged, "recent_log": recent_log, "result": result, "task_state": task_state, "failed_tail": failed_tail}
+    raise HTTPException(404, f"task {task_id} not found or not an official_factor_full_compute dispatch task")
 
 
-@router.get("/factor-cache/active-tasks", summary="当前所有缓存任务")
+@router.get("/factor-cache/active-tasks", summary="List active and recent factor cache tasks")
 def factor_cache_active_tasks():
-    return {"ok": True, "tasks": list(_active_cache_tasks.values())}
+    """Return in-memory tasks plus persisted official full-compute dispatch tasks after restart."""
+    tasks_by_id: Dict[str, Dict[str, Any]] = {}
+    dispatch_tasks, dispatch_error = _list_factor_cache_dispatch_tasks()
+    terminal_memory_task_ids: list[str] = []
+    for task in dispatch_tasks:
+        tasks_by_id[str(task["task_id"])] = task
+    for task_id, task in _active_cache_tasks.items():
+        task_key = str(task_id)
+        persisted = tasks_by_id.get(task_key)
+        if persisted and str(persisted.get("status") or "").lower() in _FACTOR_CACHE_TERMINAL_STATUSES:
+            terminal_memory_task_ids.append(task_key)
+            continue
+        tasks_by_id[task_key] = {**task, **persisted} if persisted else task
+    tasks = sorted(
+        tasks_by_id.values(),
+        key=lambda item: str(item.get("started_at") or item.get("finished_at") or ""),
+        reverse=True,
+    )
+    for task_id in terminal_memory_task_ids:
+        _active_cache_tasks.pop(task_id, None)
+    return {
+        "ok": True,
+        "tasks": tasks[:_FACTOR_CACHE_RECENT_TASK_LIMIT],
+        "dispatch_task_source": "unavailable" if dispatch_error else "ok",
+        "dispatch_error": dispatch_error,
+    }
 
 
 @router.get("/factor-cache/remote-stats", summary="远端因子值缓存同步统计")
@@ -4142,10 +4544,31 @@ def factor_cache_sync_to_node(req: FactorCacheRemoteSyncRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _assert_official_factor_cache_not_computing() -> None:
+    """Fail closed: cache deletion must never race an official compute task."""
+    tasks, dispatch_error = _list_factor_cache_dispatch_tasks()
+    if dispatch_error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"unable to verify official factor-cache task state; cache deletion refused: {dispatch_error}",
+        )
+    active = [
+        str(task.get("task_id"))
+        for task in tasks
+        if str(task.get("status") or "").lower() in _FACTOR_CACHE_RUNNING_STATUSES
+    ]
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"official factor-cache compute is active; cache deletion refused: {', '.join(active)}",
+        )
+
+
 @router.delete("/factor-cache/all", summary="一键清空所有因子值缓存")
 def factor_cache_clear_all():
     """删除 single/*.parquet + 重置 _meta.json。"""
     try:
+        _assert_official_factor_cache_not_computing()
         if not FACTOR_CACHE_SINGLE_DIR.exists():
             return {"ok": True, "deleted": 0}
         deleted = 0
@@ -4163,6 +4586,8 @@ def factor_cache_clear_all():
             )
         _invalidate_cache_meta()
         return {"ok": True, "deleted": deleted}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("清空缓存失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4171,6 +4596,7 @@ def factor_cache_clear_all():
 @router.delete("/factor-cache/{factor_name}", summary="清除单个因子缓存")
 def factor_cache_clear_one(factor_name: str):
     try:
+        _assert_official_factor_cache_not_computing()
         parquet_path = FACTOR_CACHE_SINGLE_DIR / f"{factor_name}.parquet"
         deleted = False
         if parquet_path.exists():
@@ -4187,6 +4613,8 @@ def factor_cache_clear_one(factor_name: str):
             )
             _invalidate_cache_meta()
         return {"ok": True, "deleted": deleted, "factor_name": factor_name}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"清除缓存失败 {factor_name}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -4241,7 +4669,9 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
         code_text=req.code_text,
         description=req.description,
         expression=req.expression,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return result
 
@@ -4249,19 +4679,15 @@ async def manual_factor_full_pipeline(req: ManualFactorCreate):
 @router.post("/factors/batch-compute-metrics-unified", summary="统一批量独立指标计算")
 async def batch_compute_metrics_unified(req: BatchComputeMetricsUnified):
     """Legacy 接口：转调 official evaluation writer。"""
-    if not req.data_date:
-        raise HTTPException(
-            400,
-            "必须指定 data_date（快照日期），确保所有因子使用相同数据计算，便于横向比对。"
-            "请在因子库页面选择或创建数据快照。"
-        )
     from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
     svc = FactorOfficialEvaluationService()
     result = await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.all_available,
+        start_date=req.start_date,
+        end_date=req.end_date,
     )
     return {
         **result,
@@ -4279,17 +4705,13 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
         return f"data: {json.dumps(data, ensure_ascii=False)}\\n\\n"
 
     async def event_generator():
-        if not req.data_date:
-            yield _sse({
-                "type": "error",
-                "error": "必须指定 data_date（快照日期），确保所有因子使用相同数据计算。",
-            })
-            return
         yield _sse({
             "type": "stream_start",
             "deprecated": True,
             "official_api": "/api/v1/quantevolver/official-evaluation/compute",
-            "data_date": req.data_date,
+            "data_date": req.data_date or req.end_date,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
         })
         try:
             from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
@@ -4297,8 +4719,10 @@ def batch_compute_metrics_stream(req: BatchComputeMetricsUnified):
             result = await asyncio.to_thread(
                 svc.compute,
                 factor_names=req.factor_names,
-                data_date=req.data_date,
+                data_date=req.data_date or req.end_date or "",
                 include_disabled=req.all_available,
+                start_date=req.start_date,
+                end_date=req.end_date,
             )
             yield _sse({"type": "stream_complete", **result, "deprecated": True})
         except Exception as e:
@@ -4319,10 +4743,13 @@ async def official_evaluation_compute(req: OfficialEvaluationComputeRequest):
     return await asyncio.to_thread(
         svc.compute,
         factor_names=req.factor_names,
-        data_date=req.data_date,
+        data_date=req.data_date or req.end_date or "",
         include_disabled=req.include_disabled,
         max_workers=req.max_workers,
         timeout_per_factor=req.timeout_per_factor,
+        start_date=req.start_date,
+        end_date=req.end_date,
+        force=req.force,
     )
 
 
@@ -4470,280 +4897,6 @@ def get_monthly_ic_series(
 
 # ============================================================
 # 全流程批处理 SSE 端点
-# ============================================================
-
-@router.post("/factors/full-pipeline-stream")
-def full_pipeline_stream(req: FullPipelineRequest):
-    """因子全流程一键批处理（SSE 流式推送）。
-
-    3 个阶段按顺序执行：
-    1. IC 指标计算 — 通过 ManualFactorService.batch_compute_metrics 统一计算
-    2. 因子代码改造 — 逐个因子同步执行 transform_factor（跳过已完成）
-    3. LLM 分析分类 — 复用 batch_analyze_all_factors_async
-
-    每步异常被捕获为 error 事件，不中断整体流程（幂等）。
-    """
-    import time as _time
-
-    from ..db.pg_pool import get_conn
-    from ..services.quantevolver.factor_analyst import FactorAnalyst
-    from ..services.quantevolver.factor_transformation_service import FactorTransformationService
-
-    def _sse(data: dict) -> str:
-        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-    def _get_factors_for_tasks(task_ids: list) -> list:
-        """查询指定 task_ids 下的所有因子 [(factor_name, source)]"""
-        if not task_ids:
-            return []
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(task_ids))
-                cur.execute(f"""
-                    SELECT factor_name, source
-                    FROM aistock_factor_catalog
-                    WHERE source_task_id IN ({placeholders})
-                """, task_ids)
-                return cur.fetchall()
-
-    def _resolve_task_ids_from_factors(factor_names: list) -> list:
-        """从因子名反查去重后的 source_task_id 列表。"""
-        if not factor_names:
-            return []
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(factor_names))
-                cur.execute(f"""
-                    SELECT DISTINCT source_task_id
-                    FROM aistock_factor_catalog
-                    WHERE factor_name IN ({placeholders})
-                      AND source_task_id IS NOT NULL
-                """, factor_names)
-                return [row[0] for row in cur.fetchall()]
-
-    def _get_pending_transforms(factor_rows: list) -> list:
-        """过滤出尚未改造成功的因子"""
-        if not factor_rows:
-            return []
-        names = [r[0] for r in factor_rows]
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(names))
-                cur.execute(f"""
-                    SELECT factor_name
-                    FROM aistock_factor_catalog
-                    WHERE factor_name IN ({placeholders})
-                      AND transformation_status = 'SUCCESS'
-                """, names)
-                done_set = {row[0] for row in cur.fetchall()}
-        return [r for r in factor_rows if r[0] not in done_set]
-
-    async def event_generator():
-        t0 = _time.time()
-
-        # 0) 收集因子名称（支持 factor_names 或 task_ids 输入）
-        if req.factor_names:
-            factor_names = req.factor_names
-            # 反查 factor_rows 用于 Phase 2/3
-            factor_rows = []
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    placeholders = ",".join(["%s"] * len(factor_names))
-                    cur.execute(f"SELECT factor_name, source FROM aistock_factor_catalog WHERE factor_name IN ({placeholders})", factor_names)
-                    factor_rows = cur.fetchall()
-            task_ids = req.task_ids or []
-        elif req.task_ids:
-            task_ids = req.task_ids
-            factor_rows = await asyncio.to_thread(_get_factors_for_tasks, task_ids)
-            factor_names = [r[0] for r in factor_rows]
-        else:
-            yield _sse({"type": "error", "message": "需要提供 factor_names 或 task_ids"})
-            return
-
-        if not factor_names:
-            yield _sse({"type": "error", "message": "未找到可处理的因子"})
-            return
-
-        phases = ["ic_metrics", "transform", "analyze"] if not req.skip_transform else ["ic_metrics", "analyze"]
-        yield _sse({
-            "type": "pipeline_start",
-            "task_ids": task_ids,
-            "factor_count": len(factor_names),
-            "phases": phases,
-        })
-
-        # ── Phase 1: IC 指标计算（统一计算，不依赖 task） ──
-        BATCH_SIZE = 10
-        yield _sse({"type": "phase_start", "phase": "ic_metrics", "phase_label": "IC指标计算(统一)", "total_tasks": len(factor_names)})
-        ic_success = 0
-        ic_failed = 0
-        total_inserted = 0
-
-        from ..services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
-        svc_metrics = FactorOfficialEvaluationService()
-        # 分批计算，每批推送进度
-        for i in range(0, len(factor_names), BATCH_SIZE):
-            batch = factor_names[i:i + BATCH_SIZE]
-            batch_num = i // BATCH_SIZE + 1
-            yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "computing",
-                        "batch": batch_num, "factors": batch, "current": i, "total": len(factor_names)})
-            try:
-                result = await asyncio.to_thread(
-                    svc_metrics.compute,
-                    factor_names=batch,
-                    data_date=req.data_date,
-                )
-                if result.get("success"):
-                    db_res = result.get("db_result", {})
-                    batch_ok = len(result.get("eligible_factors", []))
-                    batch_err = len(batch) - batch_ok - len(result.get("skipped_factors", []))
-                    batch_saved = db_res.get("inserted", 0)
-                else:
-                    batch_ok = 0
-                    batch_err = len(batch)
-                    batch_saved = 0
-                ic_success += batch_ok
-                ic_failed += max(batch_err, 0)
-                total_inserted += batch_saved
-                yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "done",
-                            "batch": batch_num, "ok": batch_ok, "failed": max(batch_err, 0),
-                            "current": min(i + BATCH_SIZE, len(factor_names)), "total": len(factor_names)})
-            except Exception as e:
-                ic_failed += len(batch)
-                yield _sse({"type": "task_progress", "phase": "ic_metrics", "status": "failed",
-                            "batch": batch_num, "error": str(e),
-                            "current": min(i + BATCH_SIZE, len(factor_names)), "total": len(factor_names)})
-
-        yield _sse({
-            "type": "phase_complete", "phase": "ic_metrics",
-            "success": ic_success, "failed": ic_failed,
-            "inserted": total_inserted, "skipped": 0,
-            "elapsed": round(_time.time() - t0, 1),
-        })
-
-        # ── Phase 2: 因子代码改造 ──
-        tf_success = 0
-        tf_failed = 0
-        if not req.skip_transform:
-            t_phase2 = _time.time()
-            if req.skip_completed:
-                pending = await asyncio.to_thread(_get_pending_transforms, factor_rows)
-            else:
-                pending = list(factor_rows)
-            skipped_count = len(factor_rows) - len(pending)
-            yield _sse({
-                "type": "phase_start", "phase": "transform", "phase_label": "因子代码改造",
-                "total": len(factor_rows), "pending": len(pending), "skipped": skipped_count,
-            })
-            TRANSFORM_CONCURRENCY = 3
-            svc = FactorTransformationService()
-            tf_sem = asyncio.Semaphore(TRANSFORM_CONCURRENCY)
-            tf_queue: asyncio.Queue = asyncio.Queue()
-
-            async def _tf_worker(fname: str, fsource: str):
-                async with tf_sem:
-                    ft0 = _time.time()
-                    try:
-                        result = await asyncio.to_thread(
-                            svc.transform_factor,
-                            factor_name=fname,
-                            factor_source=fsource,
-                            max_llm_retries=req.max_transform_retries,
-                        )
-                        elapsed = round(_time.time() - ft0, 1)
-                        await tf_queue.put(("ok", fname, result, elapsed))
-                    except Exception as e:
-                        elapsed = round(_time.time() - ft0, 1)
-                        await tf_queue.put(("error", fname, e, elapsed))
-
-            tf_tasks = [asyncio.create_task(_tf_worker(fn, fs)) for fn, fs in pending]
-            tf_done_count = 0
-
-            while tf_done_count < len(pending):
-                status_flag, fname, payload, elapsed = await tf_queue.get()
-                tf_done_count += 1
-                if status_flag == "ok":
-                    result = payload
-                    status = result.get("status", "").upper()
-                    if status == "SUCCESS":
-                        tf_success += 1
-                        yield _sse({"type": "factor_progress", "phase": "transform", "factor_name": fname, "status": "success", "current": tf_done_count, "total": len(pending), "elapsed": elapsed})
-                    else:
-                        tf_failed += 1
-                        yield _sse({"type": "factor_progress", "phase": "transform", "factor_name": fname, "status": "failed",
-                                    "error": result.get("error", status), "current": tf_done_count, "total": len(pending), "elapsed": elapsed})
-                else:
-                    tf_failed += 1
-                    yield _sse({"type": "factor_progress", "phase": "transform", "factor_name": fname, "status": "failed",
-                                "error": str(payload), "current": tf_done_count, "total": len(pending), "elapsed": elapsed})
-
-            await asyncio.gather(*tf_tasks, return_exceptions=True)
-            yield _sse({
-                "type": "phase_complete", "phase": "transform",
-                "success": tf_success, "failed": tf_failed, "skipped": skipped_count,
-                "elapsed": round(_time.time() - t_phase2, 1),
-            })
-
-        # ── Phase 3: LLM 分析分类 ──
-        t_phase3 = _time.time()
-        yield _sse({"type": "phase_start", "phase": "analyze", "phase_label": "LLM分析分类", "total": len(factor_names)})
-        fa = FactorAnalyst()
-        an_success = 0
-        an_failed = 0
-        try:
-            async for event in fa.batch_analyze_all_factors_async(
-                use_llm=True,
-                factor_names=factor_names,
-            ):
-                if event.get("type") == "progress":
-                    an_success += 1
-                    yield _sse({
-                        "type": "factor_progress", "phase": "analyze",
-                        "factor_name": event.get("factor_name", ""),
-                        "status": "done",
-                        "current": event.get("current", an_success),
-                        "total": event.get("total", len(factor_names)),
-                    })
-                elif event.get("type") == "error":
-                    an_failed += 1
-                    yield _sse({
-                        "type": "factor_progress", "phase": "analyze",
-                        "factor_name": event.get("factor_name", ""),
-                        "status": "failed",
-                        "error": event.get("error", ""),
-                        "current": an_success + an_failed,
-                        "total": event.get("total", len(factor_names)),
-                    })
-                # "done" 事件由 batch_analyze 内部发出，跳过
-        except Exception as e:
-            logger.exception("全流程 Phase 3 分析失败")
-            yield _sse({"type": "error", "phase": "analyze", "message": str(e)})
-        yield _sse({
-            "type": "phase_complete", "phase": "analyze",
-            "success": an_success, "failed": an_failed,
-            "elapsed": round(_time.time() - t_phase3, 1),
-        })
-
-        # ── 流程结束 ──
-        yield _sse({
-            "type": "pipeline_complete",
-            "total_time": round(_time.time() - t0, 1),
-            "summary": {
-                "ic_inserted": total_inserted,
-                "transform_success": tf_success,
-                "transform_failed": tf_failed,
-                "analyze_success": an_success,
-                "analyze_failed": an_failed,
-            },
-        })
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
-
-
 @router.get("/factors/{factor_name}/independent-metrics")
 def get_factor_independent_metrics(
     factor_name: str,
@@ -5241,7 +5394,7 @@ class FactorTransformRequest(BaseModel):
     llm_model_id: Optional[str] = None
     test_instruments: Optional[list] = None
     test_start_date: str = "2022-01-01"
-    test_end_date: str = "2026-04-28"
+    test_end_date: str = "2026-06-30"
 
 
 class BatchTransformRequest(BaseModel):
@@ -5342,11 +5495,15 @@ def get_factor_transformation_status(
     try:
         from ..services.quantevolver.factor_transformation_service import FactorTransformationService
         svc = FactorTransformationService()
-        return svc.get_factor_transformation_status(
+        result = svc.get_factor_transformation_status(
             factor_source=factor_source,
             limit=limit,
             offset=offset,
         )
+        for item in result.get("items", []):
+            item["has_non_official_code"] = bool(item.pop("has_realtime_code", False))
+            item["non_official_code_path"] = item.pop("qe_code_path", None)
+        return result
     except Exception as e:
         logger.exception("获取因子改造状态失败")
         raise HTTPException(status_code=500, detail=str(e))
@@ -5559,12 +5716,12 @@ def get_transformation_job_progress(job_id: str):
 
 
 @router.get("/factor-transformation/factor/{factor_name}/code")
-def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"):
+def get_factor_non_official_code(factor_name: str, source: str = "rdagent_task_sync"):
     """
-    获取指定因子的改造后实时代码及原始代码。
+    获取指定因子的非官方改造代码及原始代码。
     改造后代码优先从文件系统 qe_code_path 读取（权威数据源）；
     原始代码优先从文件系统 asset_path 读取（权威数据源）。
-    数据库中的 realtime_code_text / code_text 仅作展示兜底，不作为改造依据。
+    数据库中的历史改造代码字段/code_text 仅作展示兜底，不作为改造依据。
     """
     import os
     try:
@@ -5605,12 +5762,14 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
             except (OSError, UnicodeDecodeError) as e:
                 return None, abs_path, str(e)
 
+        non_official_code_path = result.pop("qe_code_path", None)
         # 从文件系统读取改造后代码（权威数据源）
-        transformed_code, transformed_abs, transformed_err = _read_file_from_path(result.get("qe_code_path"))
+        transformed_code, transformed_abs, transformed_err = _read_file_from_path(non_official_code_path)
         # 从文件系统读取原始代码（权威数据源）
         original_code, original_abs, original_err = _read_file_from_path(result.get("asset_path"))
 
-        result["realtime_code_text"] = transformed_code
+        result["non_official_code_path"] = non_official_code_path
+        result["transformed_code_text"] = transformed_code
         result["code_text"] = original_code
         result["_transformed_code_source"] = "filesystem" if transformed_code else "none"
         result["_original_code_source"] = "filesystem" if original_code else "none"
@@ -5623,7 +5782,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("获取因子实时代码失败")
+        logger.exception("获取因子非官方改造代码失败")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -5631,7 +5790,7 @@ def get_factor_realtime_code(factor_name: str, source: str = "rdagent_task_sync"
 def reset_factor_transformation(factor_name: str, source: str = "rdagent_sota"):
     """
     重置指定因子的改造状态为 PENDING，允许重新改造。
-    重置时清空 realtime_code_text 和 qe_code_path（改造相关字段）。
+    重置时清空历史改造代码字段和 qe_code_path（改造相关字段）。
     严禁修改 asset_path 和 code_text（原始因子源代码不可修改）。
     """
     try:
@@ -5673,7 +5832,7 @@ def get_transformation_stats():
                         COUNT(CASE WHEN transformation_status = 'PENDING' OR transformation_status IS NULL THEN 1 END) AS pending,
                         COUNT(CASE WHEN transformation_status NOT IN ('SUCCESS', 'FAILED', 'PENDING') AND transformation_status IS NOT NULL THEN 1 END) AS in_progress,
                         COUNT(CASE WHEN asset_path IS NOT NULL AND asset_path != '' THEN 1 END) AS has_original_code,
-                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_realtime_code
+                        COUNT(CASE WHEN qe_code_path IS NOT NULL AND qe_code_path != '' THEN 1 END) AS has_non_official_code
                     FROM aistock_factor_catalog
                 """)
                 row = cur.fetchone()
@@ -6976,7 +7135,7 @@ async def stream_experiment_logs(experiment_id: str):
                 qe_task_id, qe_loop_id, db_status, custom_params = row
 
         if not qe_task_id:
-            raise HTTPException(status_code=400, detail="?????????????")
+            raise HTTPException(status_code=400, detail="experiment has no QE task id")
 
         params = _parse_qe_custom_params(custom_params)
         node_id = params.get("execution_node_id") or params.get("node_id")

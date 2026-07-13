@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from datetime import date
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Query
@@ -29,6 +29,8 @@ router = APIRouter(prefix="/paper-v2", tags=["paper-v2"])
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULTS_REQUIRED_DATASETS = ("kline_minute_raw", "stk_limit", "suspend_d")
+MINIQMT_PATH_P_DEPRECATED_REASON_CODE = "MINIQMT_PATH_P_AUTO_RUN_DEPRECATED"
+MINIQMT_PATH_S_ENTRYPOINT = "/api/v1/simulation-runtime release+binding"
 
 
 class CreatePortfolioRequest(BaseModel):
@@ -248,6 +250,27 @@ def _raise_http(exc: TradingCoreError) -> None:
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
 
 
+def _raise_minqmt_path_p_deprecated(*, endpoint: str, broker_backend: str) -> NoReturn:
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "error_code": MINIQMT_PATH_P_DEPRECATED_REASON_CODE,
+            "reason_code": MINIQMT_PATH_P_DEPRECATED_REASON_CODE,
+            "message": (
+                "MiniQMT strategies must use simulation-runtime Path S release+binding; "
+                "paper-v2 auto-run Path P cannot route A/event_loop and is disabled for MiniQMT."
+            ),
+            "context": {
+                "endpoint": endpoint,
+                "broker_backend": broker_backend,
+                "deprecated_path": "paper-v2 auto-run Path P",
+                "required_path": "simulation-runtime Path S release+binding",
+                "required_entrypoint": MINIQMT_PATH_S_ENTRYPOINT,
+            },
+        },
+    )
+
+
 def _raise_coldstart_sentinel_http(exc: TradingCoreError) -> None:
     if isinstance(exc, PaperV2DaemonUnavailableError):
         raise HTTPException(status_code=503, detail=exc.to_dict()) from exc
@@ -389,6 +412,8 @@ def get_trading_day_defaults(
 
 @router.post("/portfolios")
 def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
+    if req.broker_backend == "minqmt_sim":
+        _raise_minqmt_path_p_deprecated(endpoint="/api/v1/paper-v2/portfolios", broker_backend=req.broker_backend)
     try:
         _session_service_for_mutation().require_non_trading_operation_window(action="create_portfolio")
         portfolio = PaperTradingV2PortfolioService().create_portfolio(
@@ -409,33 +434,10 @@ def create_portfolio(req: CreatePortfolioRequest) -> dict[str, Any]:
 
 @router.post("/auto-run/miniqmt-portfolios")
 def create_minqmt_auto_run_portfolio(req: CreateMiniQMTAutoRunPortfolioRequest) -> dict[str, Any]:
-    try:
-        result = PaperTradingV2PortfolioService().create_minqmt_auto_run_portfolio(
-            package_id=req.package_id,
-            portfolio_name=req.portfolio_name,
-            initial_cash=req.initial_cash,
-            start_date=req.start_date,
-            broker_account_id=req.broker_account_id,
-            top_k=req.top_k,
-            hmm=req.hmm,
-            industry_blacklist=req.industry_blacklist,
-            fee_policy=req.fee_policy,
-            risk_policy=req.risk_policy,
-            execution_policy=req.execution_policy,
-            trade_window_policy=req.trade_window_policy,
-            auto_run_config=req.auto_run_config,
-            created_by=req.created_by,
-            create_session=req.create_session,
-        )
-        return {
-            "ok": True,
-            "portfolio": result["portfolio"].model_dump(mode="json"),
-            "binding": result["binding"].model_dump(mode="json"),
-            "session": result["session"].model_dump(mode="json") if result.get("session") else None,
-            "auto_run": result["auto_run"],
-        }
-    except TradingCoreError as exc:
-        _raise_http(exc)
+    _raise_minqmt_path_p_deprecated(
+        endpoint="/api/v1/paper-v2/auto-run/miniqmt-portfolios",
+        broker_backend="minqmt_sim",
+    )
 
 
 @router.get("/portfolios")
@@ -444,6 +446,7 @@ def list_portfolios(
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=100),
     status: list[str] | None = Query(default=None),
+    broker_backend: BrokerBackendId | None = Query(default=None),
     search: str | None = Query(default=None),
     sort_by: str = Query(default="created_at"),
     sort_dir: str = Query(default="desc"),
@@ -454,6 +457,7 @@ def list_portfolios(
                 page=page or 1,
                 page_size=page_size or min(limit, 50),
                 statuses=status,
+                broker_backend=broker_backend,
                 search=search,
                 sort_by=sort_by,
                 sort_dir=sort_dir,
@@ -496,6 +500,14 @@ def list_running_portfolio_summary(
             max_initial_cash=max_initial_cash,
         )
         return {"ok": True, **page_data}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/overview-summary")
+def get_overview_summary() -> dict[str, Any]:
+    try:
+        return {"ok": True, "summary": PaperTradingV2PortfolioService().overview_summary()}
     except TradingCoreError as exc:
         _raise_http(exc)
 

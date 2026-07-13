@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover
         sys.path.insert(0, str(repo_root))
     from backend.db.pg_pool import get_conn
 
-RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_memory_tree_v1_20260601"
+RESEARCH_ASSISTANT_SCHEMA_VERSION = "research_assistant_phase12_skill_library_v1_20260616"
 
 RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "planned",
@@ -31,6 +31,7 @@ RESEARCH_ASSISTANT_EVENT_TYPES: tuple[str, ...] = (
     "llm_started",
     "llm_done",
     "llm_failed",
+    "llm_usage_accounting_failed",
     "action_proposed",
     "mcp_preflight_started",
     "mcp_preflight_passed",
@@ -228,6 +229,67 @@ BASE_DDL: list[str] = [
         checksum TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_code_context_refs (
+        code_ref_id TEXT PRIMARY KEY,
+        task_id TEXT,
+        query_scope TEXT NOT NULL,
+        manifest_json JSONB NOT NULL,
+        source TEXT NOT NULL,
+        provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        as_of TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_proactive_reports (
+        report_id TEXT PRIMARY KEY,
+        report_type TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        summary_md TEXT NOT NULL,
+        sections_json JSONB NOT NULL,
+        source_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        status TEXT NOT NULL DEFAULT 'generated',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_apr UNIQUE (report_type, report_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_reflection_cards (
+        card_id TEXT PRIMARY KEY,
+        task_id TEXT,
+        trigger TEXT NOT NULL,
+        lesson_md TEXT NOT NULL,
+        structured_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        memory_ref TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_prompt_lab_runs (
+        lab_run_id TEXT PRIMARY KEY,
+        target_prompt_key TEXT NOT NULL,
+        optimizer TEXT NOT NULL,
+        eval_set_ref TEXT NOT NULL,
+        candidate_text TEXT NOT NULL,
+        judge_score_json JSONB NOT NULL,
+        status TEXT NOT NULL DEFAULT 'candidate',
+        approval_request_id TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS assistant_skill_library (
+        skill_id TEXT PRIMARY KEY,
+        skill_key TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL,
+        recipe_json JSONB NOT NULL,
+        success_count INTEGER NOT NULL DEFAULT 0,
+        provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status TEXT NOT NULL DEFAULT 'draft',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     """
@@ -479,30 +541,6 @@ BASE_DDL: list[str] = [
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT ck_aar_status CHECK (status IN ('pending','approved','rejected','expired'))
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS assistant_issue_candidates (
-        candidate_id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        severity TEXT NOT NULL,
-        module TEXT NOT NULL,
-        problem_statement TEXT NOT NULL,
-        reproduce_command TEXT,
-        evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        dedupe_key TEXT,
-        status TEXT NOT NULL DEFAULT 'needs_review',
-        github_issue_number INTEGER,
-        github_issue_url TEXT,
-        github_sync_status TEXT NOT NULL DEFAULT 'not_requested',
-        github_sync_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-        proposed_by TEXT NOT NULL DEFAULT 'assistant',
-        reviewed_by TEXT,
-        reviewed_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CONSTRAINT ck_aic_status CHECK (status IN ('draft','needs_review','approved_for_github','rejected','synced_to_github','duplicate')),
-        CONSTRAINT uq_aic_dedupe UNIQUE (dedupe_key)
     )
     """,
     """
@@ -889,20 +927,6 @@ BASE_DDL: list[str] = [
     )
     """,
     """
-    CREATE TABLE IF NOT EXISTS assistant_validation_discovery_reports (
-        discovery_report_id TEXT PRIMARY KEY,
-        run_date DATE NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'draft',
-        summary_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-        candidate_issue_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        validation_run_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-    """,
-    """
     CREATE TABLE IF NOT EXISTS assistant_trace_events (
         trace_id TEXT PRIMARY KEY,
         task_id TEXT,
@@ -917,9 +941,64 @@ BASE_DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_aic_status_updated ON assistant_issue_candidates(status, updated_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS assistant_llm_usage_events (
+        usage_event_id TEXT PRIMARY KEY,
+        trace_id TEXT NULL REFERENCES assistant_trace_events(trace_id) ON DELETE SET NULL,
+        task_id TEXT NULL,
+        conversation_id TEXT NULL,
+        message_id TEXT NULL,
+        call_group_id TEXT NULL,
+        call_index INTEGER NOT NULL DEFAULT 1,
+        phase TEXT NOT NULL,
+        component TEXT NOT NULL DEFAULT 'research_assistant.llm',
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        model_profile_id TEXT NULL,
+        litellm_model TEXT NULL,
+        prompt_tokens INTEGER NULL,
+        completion_tokens INTEGER NULL,
+        total_tokens INTEGER NULL,
+        reasoning_tokens INTEGER NULL,
+        cache_creation_input_tokens INTEGER NULL,
+        cache_read_input_tokens INTEGER NULL,
+        prompt_tokens_estimated BOOLEAN NOT NULL DEFAULT FALSE,
+        completion_tokens_estimated BOOLEAN NOT NULL DEFAULT FALSE,
+        usage_source TEXT NOT NULL,
+        usage_status TEXT NOT NULL DEFAULT 'recorded',
+        usage_reason_code TEXT NULL,
+        prompt_cost_usd NUMERIC(18, 10) NULL,
+        completion_cost_usd NUMERIC(18, 10) NULL,
+        total_cost_usd NUMERIC(18, 10) NULL,
+        currency TEXT NOT NULL DEFAULT 'USD',
+        cost_source TEXT NOT NULL DEFAULT 'unavailable',
+        cost_status TEXT NOT NULL DEFAULT 'unavailable',
+        cost_reason_code TEXT NULL,
+        pricing_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        usage_raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        request_meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        response_meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        duration_ms INTEGER NULL,
+        started_at TIMESTAMPTZ NULL,
+        completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_aluer_usage_source CHECK (usage_source IN ('provider_reported','litellm_usage_object','litellm_token_counter_estimated','unavailable')),
+        CONSTRAINT ck_aluer_usage_status CHECK (usage_status IN ('recorded','estimated','unavailable','failed')),
+        CONSTRAINT ck_aluer_cost_status CHECK (cost_status IN ('recorded','estimated','unavailable','failed')),
+        CONSTRAINT ck_aluer_nonnegative_tokens CHECK (
+            COALESCE(prompt_tokens, 0) >= 0 AND
+            COALESCE(completion_tokens, 0) >= 0 AND
+            COALESCE(total_tokens, 0) >= 0
+        )
+    )
+    """,
     "CREATE INDEX IF NOT EXISTS idx_an_user_status_created ON assistant_notifications(user_id, status, created_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_amt_server_tool ON assistant_mcp_tools(server_key, tool_name)",
+    "CREATE INDEX IF NOT EXISTS idx_aluer_completed_at ON assistant_llm_usage_events(completed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_aluer_trace ON assistant_llm_usage_events(trace_id)",
+    "CREATE INDEX IF NOT EXISTS idx_aluer_task ON assistant_llm_usage_events(task_id)",
+    "CREATE INDEX IF NOT EXISTS idx_aluer_conversation ON assistant_llm_usage_events(conversation_id, completed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_aluer_model_day ON assistant_llm_usage_events(model, completed_at DESC)",
 ]
 
 TABLE_COMMENTS = {
@@ -929,6 +1008,11 @@ TABLE_COMMENTS = {
     "assistant_conversation_messages": "Visible and audit-scoped conversation messages; main UI renders only human-readable text and cards.",
     "research_memory_items": "Native long-term Memory Ledger; source of truth, not RAG chunks.",
     "assistant_context_packs": "Deterministic memory/context bundles used by models and external agents.",
+    "assistant_code_context_refs": "Code-intelligence context references injected into Research Assistant Context Packs; AST deterministic, no embedding.",
+    "assistant_proactive_reports": "Proactive morning and experiment reports generated from read-only evidence providers.",
+    "assistant_reflection_cards": "Reflection Cards generated from task failure, correction, or low-confidence signals; writes personal.episodic memory only.",
+    "assistant_prompt_lab_runs": "Prompt Lab offline GEPA/DSPy-style candidate prompt runs with LLM-as-judge scoring and human approval gate.",
+    "assistant_skill_library": "Gated reusable workflow, prompt and tool recipes; draft until human approval and reused only through Action Proposal gates.",
     "research_memory_entities": "Native lightweight knowledge graph entities.",
     "research_memory_relations": "Native lightweight knowledge graph relations with evidence references.",
     "assistant_skill_registry": "Local-only skill catalog with checksum, permissions and approval metadata.",
@@ -937,7 +1021,6 @@ TABLE_COMMENTS = {
     "assistant_mcp_tool_events": "MCP/API execution event ledger including preflight, retry, approval and result-card audit data.",
     "assistant_mcp_tools": "MCP/API execution catalog including risk and preflight metadata.",
     "assistant_approval_requests": "Approval gate records for L2+ assistant operations.",
-    "assistant_issue_candidates": "Candidate issue queue; formal GitHub issue creation requires explicit approval and sync.",
     "assistant_prompt_nodes": "Tree-structured prompt nodes with version, checksum, trigger and phase metadata.",
     "assistant_prompt_sources": "Git-backed prompt pack import records; file content remains the review source and DB stores immutable imported versions.",
     "assistant_prompt_node_versions": "Immutable prompt node versions imported from prompt pack files with checksums and source references.",
@@ -950,6 +1033,7 @@ TABLE_COMMENTS = {
     "assistant_context_key_facts": "Structured key facts extracted from compacted context with source message references.",
     "assistant_context_assembly_traces": "Per-turn context assembly budget, ordering and source-reference audit trail.",
     "qe_autonomous_evolution_runs": "QE autonomous evolution loop ledger with stop conditions, budget guardrails and approval boundary reports.",
+    "assistant_llm_usage_events": "Append-only Research Assistant LLM token and cost ledger; one row per provider call and authoritative for RA token/cost accounting.",
 }
 
 COLUMN_COMMENTS = {
@@ -1020,6 +1104,45 @@ COLUMN_COMMENTS = {
     "assistant_prompt_activation_events.updated_at": "Row update timestamp.",
     "assistant_prompt_bundles.activation_id": "Prompt activation used for this bundle; old requests remain traceable after rollback.",
     "assistant_prompt_bundles.version_refs": "Immutable prompt node version refs selected for this bundle.",
+    "assistant_llm_usage_events.usage_event_id": "Stable llmu_* usage event id for one LLM provider call.",
+    "assistant_llm_usage_events.trace_id": "Optional assistant_trace_events row associated with this LLM call.",
+    "assistant_llm_usage_events.task_id": "Optional Research Assistant task id associated with this LLM call.",
+    "assistant_llm_usage_events.conversation_id": "Optional conversation id associated with this LLM call.",
+    "assistant_llm_usage_events.message_id": "Optional assistant message id associated with this LLM call.",
+    "assistant_llm_usage_events.call_group_id": "Grouping id for calls in the same chat turn or ReAct loop.",
+    "assistant_llm_usage_events.call_index": "One-based call index within call_group_id.",
+    "assistant_llm_usage_events.phase": "LLM call phase such as initial_chat, react_iteration, or recovery.",
+    "assistant_llm_usage_events.component": "Component that emitted the LLM call usage event.",
+    "assistant_llm_usage_events.provider": "Logical provider such as deepseek, openai, or fake test provider.",
+    "assistant_llm_usage_events.model": "Provider model id used for the call.",
+    "assistant_llm_usage_events.model_profile_id": "Research Assistant model profile selected for the call.",
+    "assistant_llm_usage_events.litellm_model": "LiteLLM model id passed to litellm.completion when available.",
+    "assistant_llm_usage_events.prompt_tokens": "Prompt/input tokens reported by provider or estimated when explicitly marked.",
+    "assistant_llm_usage_events.completion_tokens": "Completion/output tokens reported by provider or estimated when explicitly marked.",
+    "assistant_llm_usage_events.total_tokens": "Total tokens reported by provider or derived from prompt plus completion.",
+    "assistant_llm_usage_events.reasoning_tokens": "Reasoning tokens when returned by provider usage details.",
+    "assistant_llm_usage_events.cache_creation_input_tokens": "Input cache creation tokens when returned by provider usage details.",
+    "assistant_llm_usage_events.cache_read_input_tokens": "Input cache read tokens when returned by provider usage details.",
+    "assistant_llm_usage_events.prompt_tokens_estimated": "True when prompt_tokens came from LiteLLM token_counter rather than provider billing usage.",
+    "assistant_llm_usage_events.completion_tokens_estimated": "True when completion_tokens came from LiteLLM token_counter rather than provider billing usage.",
+    "assistant_llm_usage_events.usage_source": "Token source: provider_reported, litellm_usage_object, litellm_token_counter_estimated, or unavailable.",
+    "assistant_llm_usage_events.usage_status": "Token accounting status: recorded, estimated, unavailable, or failed.",
+    "assistant_llm_usage_events.usage_reason_code": "Explicit reason code when token usage is estimated, unavailable, or failed.",
+    "assistant_llm_usage_events.prompt_cost_usd": "Prompt/input cost in USD when LiteLLM or operator pricing is available.",
+    "assistant_llm_usage_events.completion_cost_usd": "Completion/output cost in USD when LiteLLM or operator pricing is available.",
+    "assistant_llm_usage_events.total_cost_usd": "Total USD cost when available.",
+    "assistant_llm_usage_events.currency": "Cost currency; first phase records USD.",
+    "assistant_llm_usage_events.cost_source": "Cost source such as litellm_model_cost or unavailable.",
+    "assistant_llm_usage_events.cost_status": "Cost accounting status: recorded, estimated, unavailable, or failed.",
+    "assistant_llm_usage_events.cost_reason_code": "Explicit reason code when cost is unavailable or failed.",
+    "assistant_llm_usage_events.pricing_snapshot_json": "Pricing metadata snapshot used to interpret this call cost; no prompt text.",
+    "assistant_llm_usage_events.usage_raw_json": "Safe JSON copy of provider/LiteLLM usage object; no prompt text.",
+    "assistant_llm_usage_events.request_meta_json": "Prompt-free request metadata such as message_count and tool_schema_count.",
+    "assistant_llm_usage_events.response_meta_json": "Prompt-free response metadata such as finish_reason, content_chars and tool_call_count.",
+    "assistant_llm_usage_events.duration_ms": "Provider call duration in milliseconds.",
+    "assistant_llm_usage_events.started_at": "Optional provider call start timestamp.",
+    "assistant_llm_usage_events.completed_at": "Provider call completion timestamp.",
+    "assistant_llm_usage_events.created_at": "Ledger row creation timestamp.",
     "assistant_runtime_config_sources.source_id": "Stable runtime config source import identifier.",
     "assistant_runtime_config_sources.config_key": "Logical runtime config key consumed by Research Assistant.",
     "assistant_runtime_config_sources.config_version": "Semantic runtime config version imported from Git.",
@@ -1093,6 +1216,46 @@ COLUMN_COMMENTS = {
     "qe_autonomous_evolution_runs.last_verdict_json": "Compact last verdict and final autonomy report; large artifacts remain referenced externally.",
     "qe_autonomous_evolution_runs.created_at": "Row creation timestamp.",
     "qe_autonomous_evolution_runs.updated_at": "Row update timestamp.",
+    "assistant_code_context_refs.code_ref_id": "Stable code context reference identifier for query-scoped code intelligence.",
+    "assistant_code_context_refs.task_id": "Optional Research Assistant task that owns this code context reference.",
+    "assistant_code_context_refs.query_scope": "Concrete query scope resolved from user text: symbol, module, or path.",
+    "assistant_code_context_refs.manifest_json": "Compact CodeGraph/Understand manifest, affected-tests summary, and context artifact refs.",
+    "assistant_code_context_refs.source": "Code intelligence source such as codegraph or understand_anything.",
+    "assistant_code_context_refs.provenance_json": "Required provenance including commit, file, symbol, and generated_at.",
+    "assistant_code_context_refs.as_of": "Timestamp of the adapter artifact or graph snapshot used by this reference.",
+    "assistant_code_context_refs.created_at": "Row creation timestamp.",
+    "assistant_proactive_reports.report_id": "Stable proactive report identifier.",
+    "assistant_proactive_reports.report_type": "Report type such as morning_brief or experiment_daily.",
+    "assistant_proactive_reports.report_date": "Business date the proactive report covers.",
+    "assistant_proactive_reports.summary_md": "Evidence-first natural-language report body.",
+    "assistant_proactive_reports.sections_json": "Structured sections with facts, source_refs, reason_codes, and warnings.",
+    "assistant_proactive_reports.source_refs_json": "Flattened evidence references used by the report.",
+    "assistant_proactive_reports.status": "Report generation status.",
+    "assistant_proactive_reports.created_at": "Row creation timestamp.",
+    "assistant_reflection_cards.card_id": "Stable Reflection Card identifier.",
+    "assistant_reflection_cards.task_id": "Optional Research Assistant task that produced the reflection.",
+    "assistant_reflection_cards.trigger": "Reflection trigger: failure, correction, or low_confidence.",
+    "assistant_reflection_cards.lesson_md": "External-safe lesson without chain-of-thought disclosure.",
+    "assistant_reflection_cards.structured_json": "Structured cause, lesson, next strategy, source_refs, reason_codes, warnings, and safety flags.",
+    "assistant_reflection_cards.memory_ref": "personal.episodic.* memory_id written for L1 recall.",
+    "assistant_reflection_cards.created_at": "Row creation timestamp.",
+    "assistant_prompt_lab_runs.lab_run_id": "Stable Prompt Lab run identifier.",
+    "assistant_prompt_lab_runs.target_prompt_key": "Prompt node key targeted by the offline optimization candidate.",
+    "assistant_prompt_lab_runs.optimizer": "Offline optimizer family such as gepa, dspy_mipro, or manual.",
+    "assistant_prompt_lab_runs.eval_set_ref": "Historical trace evaluation-set reference used for the candidate.",
+    "assistant_prompt_lab_runs.candidate_text": "Candidate prompt text generated offline; not active until approved.",
+    "assistant_prompt_lab_runs.judge_score_json": "Offline LLM-as-judge or deterministic judge score, dimensions, reason_codes, warnings, and source_refs.",
+    "assistant_prompt_lab_runs.status": "Prompt Lab lifecycle status: candidate, approved, or rejected.",
+    "assistant_prompt_lab_runs.approval_request_id": "Pending assistant_approval_requests record required before prompt activation can change.",
+    "assistant_prompt_lab_runs.created_at": "Row creation timestamp.",
+    "assistant_skill_library.skill_id": "Stable Skill Library recipe identifier.",
+    "assistant_skill_library.skill_key": "Unique reusable skill key derived from a successful workflow or explicit operator key.",
+    "assistant_skill_library.description": "Human-readable summary of the reusable workflow, prompt, and tool recipe.",
+    "assistant_skill_library.recipe_json": "Reusable workflow, prompt, tool, evidence, and risk-gate recipe; never executable without approval.",
+    "assistant_skill_library.success_count": "Number of successful source workflows supporting this recipe.",
+    "assistant_skill_library.provenance_json": "Source task, evidence refs, approval request, and generated_at metadata for audit replay.",
+    "assistant_skill_library.status": "Skill lifecycle status: draft, approved, or deprecated.",
+    "assistant_skill_library.created_at": "Row creation timestamp.",
     "assistant_capabilities.capability_id": "Stable capability registry identifier used by planner and audit replay.",
     "assistant_capabilities.capability_key": "Human and model readable capability key such as qe.create_experiment_draft.",
     "assistant_capabilities.capability_type": "Capability implementation type: mcp_tool, skill, workflow_pack or composite.",

@@ -1,0 +1,169 @@
+{
+  "actual": "Research Assistant token ledger records provider usage, but chat and audit pages show llm_usage_summary_unavailable / cost unavailable for DeepSeek v4 pro. Root evidence: assistant_llm_usage_events has usage_status=recorded but cost_status=unavailable, cost_reason_code includes litellm_cost_per_token_failed / model isn't mapped yet for deepseek/deepseek-v4-pro. Short-term target: correctly compute and show cost for current DeepSeek usage without silent fallback. Mid-term target: preserve pricing snapshots while allowing future LiteLLM price-map updates to be picked up automatically for new events. No DDL, no production DB connection, no service restart in this fix.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "requirements.txt",
+    "backend/requirements.txt",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/repository.py",
+    "backend/tests/research_assistant/test_service.py",
+    "frontend/src/components/research-assistant/llm-usage-format.ts",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/src/app/research-assistant/audit/LlmUsageSection.tsx",
+    "frontend/src/lib/research-assistant/api.ts",
+    "tests/aistock_validation/bugs/20260702_BUG-571-ra-llm-usage-cost-unavailable-for-deepseek-v4-pro-pricing.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-571",
+  "closed_at": "2026-07-02T10:06:57Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T03:28:57.455458Z",
+  "description": "Research Assistant token ledger records provider usage, but chat and audit pages show llm_usage_summary_unavailable / cost unavailable for DeepSeek v4 pro. Root evidence: assistant_llm_usage_events has usage_status=recorded but cost_status=unavailable, cost_reason_code includes litellm_cost_per_token_failed / model isn't mapped yet for deepseek/deepseek-v4-pro. Short-term target: correctly compute and show cost for current DeepSeek usage without silent fallback. Mid-term target: preserve pricing snapshots while allowing future LiteLLM price-map updates to be picked up automatically for new events. No DDL, no production DB connection, no service restart in this fix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-38a05889c1bd",
+      "timestamp": "2026-07-02T03:28:57.455453Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Expand scope for BUG-571 implementation: RA LLM usage cost calculation/repricing read path, UI reason display, and backend tests. No DDL or production runtime changes.",
+      "timestamp": "2026-07-02T03:33:16.530690+00:00"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "User required BUG-571 to use upgraded native LiteLLM pricing only, no model-name fallback/mapping. Scope expanded to pin LiteLLM dependency in requirements.txt; deployment version unification documented in PR/runbook. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:26:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add backend/requirements.txt so BUG-571 can pin the same LiteLLM/OpenAI dependency versions across Windows Conda/root requirements and backend/remote deployment requirements. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:56:39.499232+00:00"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Add .github/workflows/test.yml so CI backend dependency usage pins the same LiteLLM/OpenAI versions as Windows Conda/backend deployment requirements. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T05:58:00.942154+00:00"
+    },
+    {
+      "action": "set_backend_dependency_gate_pending",
+      "actor": "codex",
+      "note": "BUG-571 now changes backend Python dependency pins: LiteLLM must be upgraded uniformly to 1.90.2 and OpenAI to 2.44.0 in Windows Conda AIstock runtime, WSL, and remote machines before production cost readiness; no DDL, no production DB, no service restart performed by Codex.",
+      "timestamp": "2026-07-02T06:26:13.035164+00:00"
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "note": "Implemented BUG-571 with LiteLLM native-pricing-only path: pinned litellm==1.90.2 and openai==2.44.0 across root/backend/CI dependency surfaces, removed DeepSeek v4-pro manual/model-name fallback pricing, made repricing fail loud when native pricing/version is unavailable, preserved current-price display repricing, and added dependency/version/native pricing tests. Verified LiteLLM 1.90.2 wheel contains deepseek/deepseek-v4-pro pricing matching DeepSeek official pricing. No DDL, no production DB, no production service restart.",
+      "timestamp": "2026-07-02T07:41:20.786731+00:00"
+    },
+    {
+      "action": "validation_refresh",
+      "actor": "codex",
+      "note": "Rebased BUG-571 onto origin/main c9e8ee75 and revalidated native LiteLLM pricing-only fix. Verified LiteLLM 1.90.2 wheel native price map contains deepseek/deepseek-v4-pro with DeepSeek official pricing; no model-name mapping/manual fallback added. Full ra_phase7 wrapper repeated the known Playwright webServer cleanup hang after all subprocess tests passed; no production services/DB/DDL touched.",
+      "timestamp": "2026-07-02T09:03:05.651192+00:00"
+    },
+    {
+      "action": "native_pricing_source_verification",
+      "actor": "codex",
+      "note": "Confirmed PyPI latest LiteLLM 1.90.2 exposes deepseek/deepseek-v4-pro in litellm.model_cost with official DeepSeek prices; BUG-571 remains native-pricing-only with no model-name mapping or manual fallback. Deployment dependency gate remains pending until Windows Conda, WSL, and remote runtimes all run litellm==1.90.2/openai==2.44.0.",
+      "timestamp": "2026-07-02T09:07:19.259951+00:00"
+    },
+    {
+      "action": "closed_after_merge_metadata",
+      "actor": "codex",
+      "note": "Persist final BUG-571 closed status after PR #1822 squash merge and close-sync PR #1825; GitHub Issue #1804 already closed with status:fixed; production_ddl_gate=noop, production_frontend_dependency_gate=noop, production_backend_dependency_gate=pending.",
+      "timestamp": "2026-07-02T10:06:57Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-02T03:28:57.455458Z",
+  "fix_branch": null,
+  "fix_commit": "73282884066cb817cd95cfd0b2f840fb06269b00",
+  "fixed_at": "2026-07-02T09:54:12.168565Z",
+  "github_issue_number": 1804,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1804",
+  "last_seen_at": "2026-07-02T03:28:57.455458Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1822",
+  "production_backend_dependency_gate": "pending",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA LLM usage cost unavailable for DeepSeek v4 pro pricing",
+  "trigger_condition": {
+    "fingerprint": "38a05889c1bdd4d8b71d45dc",
+    "source_event_id": "FE-20260702-38a05889c1bd"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/deepseek-v4-pro",
+    "ui_routes": [
+      "/deepseek-v4-pro"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1822 checks all SUCCESS/SKIPPED; merge commit 73282884066cb817cd95cfd0b2f840fb06269b00; local validation per PR body passed; ra_phase7 wrapper cleanup hang was environment-only"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

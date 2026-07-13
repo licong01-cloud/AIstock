@@ -273,6 +273,80 @@ def test_validation_select_keeps_watchlist_bug_on_narrow_plans(capsys: pytest.Ca
     assert payload["required_plans"] == ["l0", "validation_module_registry_l0"]
 
 
+def test_validation_select_keeps_backend_only_changes_off_frontend_l3(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "paper_v2",
+        "--changed-file",
+        "backend/services/paper_trading_v2/runtime.py",
+    ]) == 0
+    paper_payload = json.loads(capsys.readouterr().out)
+
+    assert "paper_v2_backend" in paper_payload["required_plans"]
+    assert "paper_v2_l3" not in paper_payload["required_plans"]
+    assert "paper_v2_l3" in paper_payload["recommended_plans"]
+
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "qe.core",
+        "--changed-file",
+        "backend/services/quantevolver/qe_evolution_service.py",
+    ]) == 0
+    qe_payload = json.loads(capsys.readouterr().out)
+
+    assert "qe_read_backend" in qe_payload["required_plans"]
+    assert "qe_read_l3" not in qe_payload["required_plans"]
+    assert "qe_read_l3" in qe_payload["recommended_plans"]
+
+    assert flow.main([
+        "validation-select",
+        "--module",
+        "research_assistant",
+        "--changed-file",
+        "backend/services/research_assistant/service.py",
+    ]) == 0
+    ra_payload = json.loads(capsys.readouterr().out)
+
+    assert "research_assistant_backend" in ra_payload["required_plans"]
+    assert "ra_phase7_full_accept" not in ra_payload["required_plans"]
+    assert "ra_phase7_full_accept" in ra_payload["recommended_plans"]
+
+
+def test_validation_select_marks_docs_fast_update_as_version_record_only(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--changed-file",
+        "docs/analysis/example.md",
+        "--changed-file",
+        "docs/design/example.md",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["docs_lite"] is True
+    assert payload["docs_fast_tier"] == "docs_fast_update"
+    assert payload["docs_fast_validation"] == "git_diff_check_and_version_note_only"
+    assert payload["docs_controlled_required"] is False
+    assert payload["required_plans"] == []
+
+
+def test_validation_select_marks_docs_controlled_as_normal_guardrails(capsys: pytest.CaptureFixture[str]) -> None:
+    assert flow.main([
+        "validation-select",
+        "--changed-file",
+        "docs/standards/aistock_issue_workflow_quickstart.md",
+        "--changed-file",
+        "AGENTS.md",
+    ]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["docs_lite"] is False
+    assert payload["docs_fast_tier"] is None
+    assert payload["docs_controlled_required"] is True
+    assert payload["required_plans"] == ["l0"]
+
+
 def test_pr_check_reports_scope_and_dependency_gates(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     issue = _write_json(tmp_path / "bug.json", {
         "bug_id": "BUG-124",
@@ -794,6 +868,22 @@ def test_pr_quality_semgrep_scans_changed_files_only() -> None:
     assert "xargs -a tmp/validation/pr_quality/semgrep_changed_files.txt semgrep" in run
     assert "semgrep --config .semgrep.yml --json --output tmp/validation/pr_quality/semgrep.json ." not in run
     assert '"paths":{"scanned":[]}' in run
+
+
+def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["pr-quality"]["steps"]
+    ruff_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and str(step.get("name") or "") == "Ruff changed Python files"
+    ]
+
+    assert len(ruff_steps) == 1
+    run = str(ruff_steps[0]["run"])
+    assert "git diff --name-only --diff-filter=ACMRT" in run
+    assert "changed_python.txt" in run
+    assert "xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude" in run
 
 
 def test_pr_quality_workflow_enforces_p0_p1_evidence_by_default() -> None:

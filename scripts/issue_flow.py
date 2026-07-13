@@ -51,6 +51,16 @@ VALID_CANDIDATE_TRANSITIONS = {
     "ignored": set(),
 }
 VALID_BUG_STATUSES = {"open", "in_progress", "fixed", "verified", "wontfix"}
+DOCS_LITE_PREFIXES = (
+    "docs/architecture/",
+    "docs/analysis/",
+    "docs/design/",
+    "docs/handoff/",
+    "docs/operations/",
+)
+DOCS_LITE_ROOT_FILES = {"README.md"}
+DOCS_STRICT_PREFIXES = ("docs/standards/", ".codex/", ".claude/")
+DOCS_STRICT_FILES = {"docs/codex_project_memory.md", "AGENTS.md", "AGENTS.override.md"}
 ISSUE_FORM_LABEL_ALIASES = {
     "existing bug id": "bug_id",
     "severity": "severity",
@@ -102,6 +112,35 @@ def _repo_path(path: str | Path) -> str:
 
 def _norm_path(path: str | Path) -> str:
     return str(path).replace("\\", "/").lstrip("./")
+
+
+def _is_docs_lite_path(path: str) -> bool:
+    normalized = _norm_path(path)
+    if normalized in DOCS_STRICT_FILES or normalized.startswith(DOCS_STRICT_PREFIXES):
+        return False
+    return (
+        normalized in DOCS_LITE_ROOT_FILES
+        or normalized.startswith(DOCS_LITE_PREFIXES)
+        or normalized.startswith("docs/operations_")
+    )
+
+
+def _is_docs_lite_change(changed_files: list[str]) -> bool:
+    return bool(changed_files) and all(_is_docs_lite_path(path) for path in changed_files)
+
+
+def _docs_fast_tier(changed_files: list[str], added_files: list[str] | None = None) -> str | None:
+    if not _is_docs_lite_change(changed_files):
+        return None
+    added = {_norm_path(path) for path in (added_files or [])}
+    return "docs_fast_new" if any(_norm_path(path) in added for path in changed_files) else "docs_fast_update"
+
+
+def _docs_controlled_required(changed_files: list[str]) -> bool:
+    return any(
+        _norm_path(path) in DOCS_STRICT_FILES or _norm_path(path).startswith(DOCS_STRICT_PREFIXES)
+        for path in changed_files
+    )
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -298,6 +337,9 @@ def match_changed_files(changed_files: list[str]) -> dict[str, Any]:
 
 
 def select_validation(changed_files: list[str], module: str | None = None) -> dict[str, Any]:
+    docs_lite_change = _is_docs_lite_change(changed_files)
+    docs_fast_tier = _docs_fast_tier(changed_files)
+    docs_controlled_required = _docs_controlled_required(changed_files)
     modules = _catalog_modules()
     plans = _plans_by_key()
     ownership = match_changed_files(changed_files)
@@ -328,7 +370,10 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         module_plans = entry.get("test_plans") or {}
         required.extend(_as_list(module_plans.get("required_on_change")))
         recommended.extend(_as_list(module_plans.get("recommended")))
-    if not required:
+    if docs_lite_change:
+        required = []
+        recommended = []
+    elif not required:
         required.append("l0")
     required = [plan for plan in _unique_strings(required) if plan in plans]
     recommended = [plan for plan in _unique_strings(recommended) if plan in plans and plan not in required]
@@ -365,6 +410,11 @@ def select_validation(changed_files: list[str], module: str | None = None) -> di
         "nightly_plans": ["AIstock Nightly L3 + DR"],
         "skip_reasons": skip_reasons,
         "production_gates": gates,
+        "docs_lite": docs_lite_change,
+        "docs_lite_validation": "version_change_record_only" if docs_lite_change else None,
+        "docs_fast_tier": docs_fast_tier,
+        "docs_fast_validation": "git_diff_check_and_version_note_only" if docs_lite_change else None,
+        "docs_controlled_required": docs_controlled_required,
     }
 
 
@@ -920,6 +970,31 @@ def _infer_github_issue_refs_from_text(*values: str) -> list[str]:
     return _unique_strings(f"#{item}" for item in found)
 
 
+def _infer_closing_issue_refs_from_text(*values: str) -> list[str]:
+    found: list[str] = []
+    closing_verbs = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+    for value in values:
+        for match in re.finditer(
+            rf"\b{closing_verbs}\b\s*:?\s*(?:\S+\s+){{0,6}}?#(\d{{1,7}})\b",
+            value or "",
+            flags=re.IGNORECASE,
+        ):
+            prefix = (value or "")[max(0, match.start() - 24) : match.start()]
+            if re.search(r"\b(?:not|does\s+not|do\s+not)\s+$", prefix, flags=re.IGNORECASE):
+                continue
+            found.append(f"#{match.group(1)}")
+        for match in re.finditer(
+            rf"\b{closing_verbs}\b\s*:?\s*(?:\S+\s+){{0,6}}?\b(BUG-\d{{3,}})\b",
+            value or "",
+            flags=re.IGNORECASE,
+        ):
+            prefix = (value or "")[max(0, match.start() - 24) : match.start()]
+            if re.search(r"\b(?:not|does\s+not|do\s+not)\s+$", prefix, flags=re.IGNORECASE):
+                continue
+            found.append(match.group(1).upper())
+    return _unique_strings(found)
+
+
 def _infer_severity_from_text(*values: str) -> list[str]:
     severities: list[str] = []
     for value in values:
@@ -1032,6 +1107,14 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
             if item.get("bug_id")
         ]
     )
+    bug_record_severity_signals = _unique_strings(
+        [
+            str(item.get("severity") or item.get("severity_guess") or "")
+            for item in bug_records
+            if item.get("severity") or item.get("severity_guess")
+        ]
+    )
+    pr_text_severity_signals = _infer_severity_from_text(branch, commit_subjects, pr_title, pr_body)
     inferred_scope: list[str] = []
     for record in bug_records:
         inferred_scope.extend(str(item) for item in _as_list(record.get("allowed_write_scope")))
@@ -1050,15 +1133,11 @@ def _infer_pr_quality_context(changed_files: list[str], *, base: str, head: str)
         "pr_metadata_present": bool(pr_title or pr_body),
         "linked_issues": linked,
         "bug_id_signals": bug_id_signals,
+        "closing_issue_refs": _infer_closing_issue_refs_from_text(pr_title, pr_body, commit_subjects),
         "inferred_allowed_scope": _unique_strings(inferred_scope),
-        "severity_signals": _unique_strings(
-            [
-                str(item.get("severity") or item.get("severity_guess") or "")
-                for item in bug_records
-                if item.get("severity") or item.get("severity_guess")
-            ]
-            + _infer_severity_from_text(branch, commit_subjects, pr_title, pr_body)
-        ),
+        "severity_signals": _unique_strings(bug_record_severity_signals + pr_text_severity_signals),
+        "bug_record_severity_signals": bug_record_severity_signals,
+        "pr_text_severity_signals": pr_text_severity_signals,
         "pr_body_validation_evidence": bool(
             re.search(r"(validation evidence|validation_evidence|nox|pytest|passed|success)", pr_body, flags=re.IGNORECASE)
         ),
@@ -1156,18 +1235,18 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
     issue_record = summary.get("issue_record") or {}
     inferred = summary.get("linkage_inference") or {}
     scope = summary.get("scope_check") or {}
-    severity = _highest_severity(
-        _as_list(issue_record.get("severity"))
-        + _as_list(issue_record.get("severity_guess"))
-        + _as_list(inferred.get("severity_signals"))
-    )
-    explicit_bug_context = bool(
-        _as_list(issue_record.get("bug_id"))
-        or _as_list(inferred.get("bug_json_paths"))
-        or _as_list(inferred.get("bug_id_signals"))
-    )
-    explicit_severity = bool(_as_list(issue_record.get("severity")) or _as_list(issue_record.get("severity_guess")))
-    is_high_risk = severity in {"P0", "P1"} and (explicit_bug_context or explicit_severity)
+    explicit_record_severity = _as_list(issue_record.get("severity")) + _as_list(issue_record.get("severity_guess"))
+    bug_record_severity = explicit_record_severity + _as_list(inferred.get("bug_record_severity_signals"))
+    changed_bug_json = bool(_as_list(inferred.get("bug_json_paths")))
+    closing_issue_refs = _as_list(inferred.get("closing_issue_refs"))
+    closes_bug_issue = bool(closing_issue_refs)
+    linked_bug_record_explicit_severity = bool(bug_record_severity)
+    actual_bug_fix_evidence = changed_bug_json or closes_bug_issue or linked_bug_record_explicit_severity
+    severity_values = list(bug_record_severity)
+    if changed_bug_json or closes_bug_issue:
+        severity_values.extend(_as_list(inferred.get("pr_text_severity_signals")))
+    severity = _highest_severity(severity_values)
+    is_high_risk = severity in {"P0", "P1"} and actual_bug_fix_evidence
     validation_evidence_present = bool(
         issue_record.get("verification_run_id")
         or _as_list(issue_record.get("validation_evidence"))
@@ -1201,6 +1280,14 @@ def evaluate_pr_quality_gate(summary: dict[str, Any], *, enforce_p0_p1: bool = F
         "workflow_gate": gate,
         "enforced": enforce_p0_p1,
         "severity": severity,
+        "is_high_risk": is_high_risk,
+        "high_risk_evidence": {
+            "changed_bug_json": changed_bug_json,
+            "closes_bug_issue": closes_bug_issue,
+            "closing_issue_refs": closing_issue_refs,
+            "linked_bug_record_explicit_severity": linked_bug_record_explicit_severity,
+            "reference_only_bug_id_signals": bool(_as_list(inferred.get("bug_id_signals")) and not actual_bug_fix_evidence),
+        },
         "checks": checks,
         "blocking": missing if gate == "blocked" else [],
         "warnings": missing if gate == "warning" else [],
@@ -1214,12 +1301,14 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
     scope = summary.get("scope_check") if isinstance(summary.get("scope_check"), dict) else {}
     p0p1_gate = summary.get("p0p1_evidence_gate") if isinstance(summary.get("p0p1_evidence_gate"), dict) else {}
     design_gate = summary.get("design_compliance_gate") if isinstance(summary.get("design_compliance_gate"), dict) else {}
+    docs_lite = bool(validation.get("docs_lite"))
+    docs_fast_tier = validation.get("docs_fast_tier")
     compact = {
         "schema_version": "aistock_pr_quality_llm_summary_v1",
         "provider": "deterministic",
         "model": "compact-pr-quality-summary-v1",
         "invoked": False,
-        "input_policy": "pr_metadata_changed_files_catalog_summary_only",
+        "input_policy": "docs_lite_version_record_only" if docs_lite else "pr_metadata_changed_files_catalog_summary_only",
         "prompt_persisted": False,
         "changed_file_count": len(summary.get("changed_files") or []),
         "linked_issue_count": len(summary.get("linked_issues") or []),
@@ -1227,16 +1316,21 @@ def build_pr_quality_llm_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "scope_check": scope.get("status"),
         "p0p1_evidence_gate": p0p1_gate.get("workflow_gate"),
         "design_compliance_gate": design_gate.get("workflow_gate"),
-        "required_validation_count": len(validation.get("required_plans") or []),
-        "recommended_validation_count": len(validation.get("recommended_plans") or []),
+        "docs_lite": docs_lite,
+        "docs_lite_validation": validation.get("docs_lite_validation"),
+        "docs_fast_tier": docs_fast_tier,
+        "docs_fast_validation": validation.get("docs_fast_validation"),
+        "docs_controlled_required": validation.get("docs_controlled_required"),
+        "required_validation_count": 0 if docs_lite else len(validation.get("required_plans") or []),
+        "recommended_validation_count": 0 if docs_lite else len(validation.get("recommended_plans") or []),
         "production_gates": {
             "production_ddl_gate": summary.get("production_ddl_gate"),
             "production_frontend_dependency_gate": summary.get("production_frontend_dependency_gate"),
             "production_backend_dependency_gate": summary.get("production_backend_dependency_gate"),
         },
         "code_intelligence": {
-            "used": "not_available_in_pr_quality_summary",
-            "fallback_reason": "code_intelligence_artifact_built_in_separate_pr_quality_step",
+            "used": "skipped_for_docs_fast" if docs_lite else "not_available_in_pr_quality_summary",
+            "fallback_reason": "git_diff_check_and_version_note_only" if docs_lite else "code_intelligence_artifact_built_in_separate_pr_quality_step",
         },
     }
     prompt_payload = json.dumps(compact, ensure_ascii=False, sort_keys=True)
@@ -1330,7 +1424,10 @@ def build_pr_quality(
             "bug_json_paths": inferred["bug_json_paths"],
             "pr_metadata_present": inferred["pr_metadata_present"],
             "severity_signals": inferred["severity_signals"],
+            "bug_record_severity_signals": inferred["bug_record_severity_signals"],
+            "pr_text_severity_signals": inferred["pr_text_severity_signals"],
             "bug_id_signals": inferred["bug_id_signals"],
+            "closing_issue_refs": inferred["closing_issue_refs"],
             "pr_body_validation_evidence": inferred["pr_body_validation_evidence"],
             "bug_record_validation_evidence": inferred["bug_record_validation_evidence"],
             "pr_body_production_gates": inferred["pr_body_production_gates"],
@@ -1341,7 +1438,9 @@ def build_pr_quality(
             "status": "inferred" if inferred["linked_issues"] else "missing",
         },
         "selected_validation": validation,
-        "validation_results": "not_run_by_pr_quality_dry_run",
+        "docs_lite": bool(validation.get("docs_lite")),
+        "docs_lite_validation": validation.get("docs_lite_validation"),
+        "validation_results": "version_change_record_only" if validation.get("docs_lite") else "not_run_by_pr_quality_dry_run",
         "data_acceptance": "not_required",
         "production_ddl_gate": validation["production_gates"]["ddl"],
         "production_frontend_dependency_gate": validation["production_gates"]["frontend_dependency"],
@@ -1357,6 +1456,8 @@ def build_pr_quality(
 
 def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
     llm_summary = summary.get("llm_triage_summary") if isinstance(summary.get("llm_triage_summary"), dict) else {}
+    selected_validation = summary.get("selected_validation") or {}
+    required_validation = selected_validation.get("required_plans") or []
     gates = [
         f"- production_ddl_gate: `{summary.get('production_ddl_gate')}`",
         f"- production_frontend_dependency_gate: `{summary.get('production_frontend_dependency_gate')}`",
@@ -1374,13 +1475,24 @@ def render_pr_quality_markdown(summary: dict[str, Any]) -> str:
         f"- p0p1_evidence_gate: `{(summary.get('p0p1_evidence_gate') or {}).get('workflow_gate')}`",
         f"- design_compliance_gate: `{(summary.get('design_compliance_gate') or {}).get('workflow_gate')}`",
         f"- feature_linkage_gate: `{(summary.get('feature_linkage_gate') or {}).get('workflow_gate')}`",
-        f"- required_validation: `{', '.join((summary.get('selected_validation') or {}).get('required_plans') or [])}`",
+        f"- docs_lite: `{summary.get('docs_lite')}`",
+        f"- docs_fast_tier: `{summary.get('docs_fast_tier') or 'none'}`",
+        f"- docs_fast_validation: `{summary.get('docs_fast_validation') or 'none'}`",
+        f"- docs_controlled_required: `{summary.get('docs_controlled_required')}`",
+        f"- required_validation: `{', '.join(required_validation) if required_validation else 'none'}`",
         f"- validation_results: `{summary.get('validation_results')}`",
         f"- data_acceptance: `{summary.get('data_acceptance')}`",
         *gates,
         f"- llm_summary: provider=`{llm_summary.get('provider') or 'none'}` invoked=`{llm_summary.get('invoked')}` prompt_tokens=`{llm_summary.get('estimated_prompt_tokens')}` token_status=`{llm_summary.get('token_usage_status') or 'unknown'}`",
         "",
     ]
+    if summary.get("docs_lite"):
+        lines.extend([
+            "### Docs Fast Lane",
+            "- Ordinary documentation updates require only a version/change note and diff check.",
+            "- Code validation, CodeGraph, Semgrep, CodeQL, nox, and backend tests are intentionally skipped.",
+            "",
+        ])
     violations = (summary.get("scope_check") or {}).get("violations") or []
     if violations:
         lines.extend(["### Scope Violations", *[f"- `{item}`" for item in violations], ""])

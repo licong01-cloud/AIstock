@@ -1,0 +1,99 @@
+{
+  "actual": "After PR #1782 production StrategyPackage asset backfill changed package manifests to package-owned frozen assets, active SIM runtime releases and simulation bindings still freeze the old manifest sha. The pre-run manifest identity guard fails closed, causing 2026-07-01 MiniQMT L2/L16 PRE_RUN_FAILED before broker submit. Need controlled dry-run/apply-gated refreeze/rebind script with no production DB writes in the develop phase.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260701_BUG-567-active-simulation-bindings-orphaned-after-package-asset-backfill-manifes.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/strategy_package_binding_refreeze.py",
+    "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
+    "docs/handoff/strategy_package_manifest_sha_drift_readonly_rootcause_2026-07-01.md",
+    "docs/handoff/strategy_package_binding_refreeze_dry_run_2026-07-01.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-567",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-01T03:08:51.523753Z",
+  "description": "After PR #1782 production StrategyPackage asset backfill changed package manifests to package-owned frozen assets, active SIM runtime releases and simulation bindings still freeze the old manifest sha. The pre-run manifest identity guard fails closed, causing 2026-07-01 MiniQMT L2/L16 PRE_RUN_FAILED before broker submit. Need controlled dry-run/apply-gated refreeze/rebind script with no production DB writes in the develop phase.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260701-8f05e59ab68b",
+      "timestamp": "2026-07-01T03:08:51.523748Z"
+    },
+    {
+      "action": "scope_aligned",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260701_BUG-567-active-simulation-bindings-orphaned-after-package-asset-backfill-manifes.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "scripts/strategy_package_binding_refreeze.py",
+        "backend/tests/scripts/test_strategy_package_binding_refreeze.py",
+        "docs/handoff/strategy_package_manifest_sha_drift_readonly_rootcause_2026-07-01.md",
+        "docs/handoff/strategy_package_binding_refreeze_dry_run_2026-07-01.md"
+      ],
+      "note": "Expanded scope before implementation to the user-requested dry-run refreeze script, focused tests, and durable handoff evidence; no production DB apply or runtime action authorized.",
+      "old_scope": [
+        "tests/aistock_validation/bugs/20260701_BUG-567-active-simulation-bindings-orphaned-after-package-asset-backfill-manifes.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-07-01T03:10:56.3341326Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-01T03:08:51.523753Z",
+  "fix_branch": null,
+  "fix_commit": "d9d8a8280f310d4a2e8dfde3680ccc5258e12bbf",
+  "fixed_at": "2026-07-01T07:34:18.142558Z",
+  "github_issue_number": 1786,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1786",
+  "last_seen_at": "2026-07-01T03:08:51.523753Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1787",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Active simulation bindings orphaned after package asset backfill manifest refreeze",
+  "trigger_condition": {
+    "fingerprint": "8f05e59ab68b7cd0d0c6611a",
+    "source_event_id": "FE-20260701-8f05e59ab68b"
+  },
+  "validation_evidence": [
+    "PR #1787 squash merged at d9d8a8280f310d4a2e8dfde3680ccc5258e12bbf; tool archival only; MiniQMT L2/L16 binding refreeze was already applied and read-only verified in prior controlled window; LocalSim 2 bindings intentionally not handled in this PR and remain separate follow-up",
+    "CI real checks passed: CodeQL python/js/fast-lane, Semgrep, static gate, backend tests all pass; only aggregate CodeQL rollup 3s noise failure"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

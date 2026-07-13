@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -28,7 +29,6 @@ from typing import Any, Callable, Iterator, Literal
 
 import pandas as pd
 import psycopg2.extras
-import yaml
 
 from backend.db.pg_pool import get_conn
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
@@ -45,11 +45,20 @@ from backend.services.trading_core.errors import (
     TradingCoreError,
 )
 
+from .models import AlphaMode, FactorAsset, ModelAsset, ModelCodeAsset, RuntimeAssetManifest, StrategyPackageManifest
+from .package_asset_freeze import manifest_has_frozen_runtime_assets, pickled_model_code_references_from_params_bytes
+from .package_asset_store import LocalPackageAssetStore, PackageAssetStore
+from .runtime_schema import (
+    ALPHA158_SCHEMA_VERSION,
+    extract_alpha158_aliases,
+    load_conf_yaml_file,
+    minimal_conf_with_alpha158,
+)
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 logger = logging.getLogger(__name__)
 
-ModelParamsOrigin = Literal["node", "cache", "unavailable"]
+ModelParamsOrigin = Literal["node", "cache", "package_asset", "unavailable"]
 ConnFactory = Callable[[], Iterator[Any]]
 
 AUTHORITATIVE_SELECTION_SOURCE_TYPE = "live_qe_model_inference_v1"
@@ -73,6 +82,9 @@ class QEExperimentRuntimeSource:
     # Set by _materialize_runtime_source_from_node based on whether the
     # mlruns archive came from the QE node API or the local cache fallback.
     model_params_origin: ModelParamsOrigin = "node"
+    source_workspace_type: str = "aistock_node_api_cache"
+    package_id: str | None = None
+    manifest_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -112,10 +124,11 @@ class PreparedInferenceWorkspace:
     model_candidate_count: int
     dataset_processor_path: Path | None = None
     # Provenance of the params.pkl used for this workspace. 'node' = downloaded
-    # from the QE node API (the only origin allowed by default); 'cache' = local
-    # StrategyPackage cache fallback (requires explicit allow_cache_fallback=True
-    # at the materialization call site); 'unavailable' is reserved for failed
-    # runs written from upstream error handlers.
+    # from the QE node API (the only origin allowed by default for unfrozen
+    # packages); 'cache' = local StrategyPackage cache fallback (requires
+    # explicit allow_cache_fallback=True at the materialization call site);
+    # 'package_asset' = package-owned immutable asset blob; 'unavailable' is
+    # reserved for failed runs written from upstream error handlers.
     model_params_origin: ModelParamsOrigin = "node"
 
 
@@ -123,6 +136,12 @@ class PreparedInferenceWorkspace:
 class LiveInferenceResult:
     scores: list[dict[str, Any]]
     metadata: dict[str, Any]
+    # These are produced by the same inference invocation as ``scores``. They
+    # are intentionally separate from diagnostic metadata so artifact v2 can
+    # validate factual source and input provenance without changing score logic.
+    universe_count: int | None = None
+    source_read_receipts: list[dict[str, Any]] | None = None
+    input_context: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -250,34 +269,12 @@ def _parse_jsonish(value: Any) -> Any:
 
 
 def _load_qe_conf_yaml(conf_path: Path, *, purpose: str) -> dict[str, Any]:
-    text = conf_path.read_text(encoding="utf-8")
     try:
-        loaded = yaml.safe_load(text) or {}
-    except Exception as first_exc:
-        sanitized, changed = _sanitize_unresolved_jinja_for_yaml(text)
-        if not changed:
-            raise PackageAssetInvalidError(
-                f"failed to parse QE conf.yaml for {purpose}",
-                context={"conf_path": str(conf_path), "error": str(first_exc)},
-            ) from first_exc
-        try:
-            loaded = yaml.safe_load(sanitized) or {}
-        except Exception as second_exc:
-            raise PackageAssetInvalidError(
-                f"failed to parse QE conf.yaml for {purpose}",
-                context={
-                    "conf_path": str(conf_path),
-                    "error": str(second_exc),
-                    "original_error": str(first_exc),
-                    "template_placeholders_sanitized": True,
-                },
-            ) from second_exc
-    if not isinstance(loaded, dict):
-        raise PackageAssetInvalidError(
-            f"QE conf.yaml must be a mapping for {purpose}",
-            context={"conf_path": str(conf_path), "actual_type": type(loaded).__name__},
-        )
-    return loaded
+        return load_conf_yaml_file(conf_path, purpose=purpose)
+    except PackageAssetInvalidError as exc:
+        exc.context.setdefault("conf_path", str(conf_path))
+        exc.context.setdefault("purpose", purpose)
+        raise
 
 
 def _sanitize_unresolved_jinja_for_yaml(text: str) -> tuple[str, bool]:
@@ -373,6 +370,202 @@ def _safe_cache_component(value: str) -> str:
     return text or "unknown"
 
 
+def _single_model_asset_for_runtime(manifest: StrategyPackageManifest) -> ModelAsset:
+    model_asset = manifest.model_asset
+    models = model_asset if isinstance(model_asset, list) else [model_asset]
+    if len(models) != 1:
+        raise PackageAssetInvalidError(
+            "single-alpha runtime package asset path requires exactly one model asset",
+            context={
+                "reason_code": "strategy_package_runtime_model_asset_ambiguous",
+                "package_id": manifest.package_id,
+                "model_asset_count": len(models),
+            },
+        )
+    model = models[0]
+    if not isinstance(model, ModelAsset):
+        raise PackageAssetInvalidError(
+            "strategy package runtime model asset is invalid",
+            context={"reason_code": "strategy_package_runtime_assets_incomplete", "package_id": manifest.package_id},
+        )
+    return model
+
+
+def _runtime_factor_name(factor: FactorAsset, *, package_id: str) -> str:
+    name = str(factor.factor_name or factor.factor_id or "").strip()
+    if not name:
+        raise PackageAssetInvalidError(
+            "strategy package runtime factor asset is missing factor_name",
+            context={"reason_code": "strategy_package_runtime_assets_incomplete", "package_id": package_id},
+        )
+    if name in {".", ".."} or any(sep in name for sep in ("/", "\\", ":")):
+        raise PackageAssetInvalidError(
+            "strategy package runtime factor_name must be a safe file stem",
+            context={
+                "reason_code": "strategy_package_runtime_factor_name_invalid",
+                "package_id": package_id,
+                "factor_name": name,
+            },
+        )
+    return name
+
+
+def _safe_model_code_relpath(asset: ModelCodeAsset) -> Path:
+    pure = PurePosixPath(str(asset.relative_path or "").replace("\\", "/"))
+    if (
+        not str(pure)
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or pure.suffix != ".py"
+    ):
+        raise PackageAssetInvalidError(
+            "frozen StrategyPackage model code asset path is invalid",
+            context={
+                "reason_code": "strategy_package_model_code_path_invalid",
+                "relative_path": asset.relative_path,
+                "module_name": asset.module_name,
+            },
+        )
+    return Path(*pure.parts)
+
+
+_LOCAL_PICKLED_MODEL_MODULES = frozenset({"model"})
+
+
+def _model_code_module_exists(module_name: str, roots: list[Path]) -> bool:
+    relative_path = Path(*module_name.split(".")) if "." in module_name else Path(f"{module_name}.py")
+    if "." in module_name:
+        relative_path = relative_path.with_suffix(".py")
+    for root in roots:
+        if (root / relative_path).exists() and (root / relative_path).is_file():
+            return True
+    return False
+
+
+def _require_model_code_for_pickled_local_modules(
+    *,
+    model_params_path: Path,
+    model_code_roots: list[Path],
+    package_id: str | None,
+    experiment_id: str | None,
+    source_workspace_type: str,
+    phase: str,
+) -> list[str]:
+    if not model_params_path.exists() or not model_params_path.is_file():
+        return []
+    referenced_refs = pickled_model_code_references_from_params_bytes(
+        model_params_path.read_bytes(),
+        _LOCAL_PICKLED_MODEL_MODULES,
+    )
+    referenced = {ref.module_name for ref in referenced_refs}
+    if not referenced:
+        return []
+    missing = [module for module in sorted(referenced) if not _model_code_module_exists(module, model_code_roots)]
+    if missing:
+        missing_set = set(missing)
+        raise DataUnavailableError(
+            "StrategyPackage model params.pkl references local model code that is missing from the runtime workspace",
+            context={
+                "reason_code": "strategy_package_model_code_missing",
+                "package_id": package_id,
+                "experiment_id": experiment_id,
+                "model_params_path": str(model_params_path),
+                "missing_modules": missing,
+                "missing_relative_paths": [f"{module}.py" for module in missing],
+                "referenced_classes": [ref.qualified_name for ref in referenced_refs],
+                "missing_referenced_classes": [
+                    ref.qualified_name for ref in referenced_refs if ref.module_name in missing_set
+                ],
+                "model_code_roots": [str(path) for path in model_code_roots],
+                "source_workspace_type": source_workspace_type,
+                "phase": phase,
+            },
+        )
+    return sorted(referenced)
+
+
+def _write_inside_runtime_source(target_path: Path, data: bytes, *, source_dir: Path, package_id: str) -> None:
+    source_root = source_dir.resolve(strict=False)
+    target = target_path.resolve(strict=False)
+    if source_root not in target.parents:
+        raise ArtifactGenerationFailedError(
+            "refusing to materialize StrategyPackage asset outside the runtime source cache",
+            context={
+                "reason_code": "strategy_package_runtime_asset_path_invalid",
+                "package_id": package_id,
+                "target_path": str(target_path),
+                "source_dir": str(source_dir),
+            },
+        )
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(data)
+
+
+def _manifest_source_text(source_evidence: dict[str, Any], key: str) -> str | None:
+    value = source_evidence.get(key)
+    text = str(value or "").strip()
+    return text or None
+
+
+def _manifest_runtime_experiment_id(manifest: StrategyPackageManifest) -> str:
+    source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+    for value in (
+        source_evidence.get("experiment_id"),
+        manifest.source.source_id,
+        manifest.source.run_id,
+        manifest.package_id,
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return manifest.package_id
+
+
+def _manifest_runtime_custom_params(
+    manifest: StrategyPackageManifest,
+    *,
+    runtime_assets_override: RuntimeAssetManifest | None = None,
+) -> dict[str, Any]:
+    source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+    backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
+    custom = source_evidence.get("custom_params")
+    if not isinstance(custom, dict):
+        daily_strategy = backtest_context.get("daily_strategy")
+        if isinstance(daily_strategy, dict) and isinstance(daily_strategy.get("custom_params"), dict):
+            custom = daily_strategy["custom_params"]
+        else:
+            custom = {}
+    runtime_custom = dict(custom)
+    runtime_assets = runtime_assets_override if runtime_assets_override is not None else manifest.runtime_assets
+    if runtime_assets is None:
+        runtime_custom["disable_alpha158"] = True
+        runtime_custom["runtime_contract_source"] = "strategy_package_package_assets_legacy"
+        return runtime_custom
+    alpha158 = runtime_assets.alpha158
+    if alpha158.enabled and not (alpha158.asset_ref and alpha158.sha256 and alpha158.aliases):
+        raise PackageAssetInvalidError(
+            "package-owned runtime Alpha158 schema is incomplete",
+            context={
+                "reason_code": "strategy_package_alpha158_schema_missing",
+                "package_id": manifest.package_id,
+                "asset_ref": alpha158.asset_ref,
+                "sha256": alpha158.sha256,
+                "alias_count": len(alpha158.aliases),
+            },
+        )
+    runtime_custom["disable_alpha158"] = not alpha158.enabled
+    runtime_custom["runtime_contract_source"] = "strategy_package_package_assets_v2"
+    return runtime_custom
+
+
+def _manifest_runtime_data_split(source_evidence: dict[str, Any], backtest_context: dict[str, Any]) -> dict[str, Any]:
+    data_split = source_evidence.get("data_split")
+    if isinstance(data_split, dict):
+        return dict(data_split)
+    data_split = backtest_context.get("data_split")
+    return dict(data_split) if isinstance(data_split, dict) else {}
+
+
 def _remote_relpath(value: str) -> str:
     text = str(value or "").strip().replace("\\", "/")
     if not text:
@@ -457,9 +650,11 @@ class QEExperimentRuntimeAssetResolver:
         *,
         conn_factory: ConnFactory | None = None,
         cache_root: Path | str | None = None,
+        asset_store: PackageAssetStore | None = None,
     ) -> None:
         self._conn_factory = conn_factory or get_conn
         self.cache_root = Path(cache_root or Path("rdagent_assets") / "strategy_package_runtime")
+        self.asset_store = asset_store or LocalPackageAssetStore()
 
     def load_source(self, experiment_id: str) -> QEExperimentRuntimeSource:
         experiment_id = str(experiment_id or "").strip()
@@ -475,8 +670,15 @@ class QEExperimentRuntimeAssetResolver:
         source_id: str,
         loop_id: str | None = None,
         run_id: str | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> QEExperimentRuntimeSource:
         """Resolve runtime source using the frozen StrategyPackage source identity."""
+
+        if manifest is not None and (
+            manifest_has_frozen_runtime_assets(manifest) or manifest.runtime_assets is not None
+        ):
+            return self._source_from_package_assets(manifest, package_id=package_id)
 
         normalized_type = str(source_type or "").strip()
         normalized_source_id = str(source_id or "").strip()
@@ -564,7 +766,272 @@ class QEExperimentRuntimeAssetResolver:
                 "source_type": normalized_type,
                 "supported": ["qe_experiment", "qe_evolution_loop", "candidate_strategy_package"],
             },
+            )
+
+    def load_source_for_strategy_package_leg(
+        self,
+        *,
+        manifest: StrategyPackageManifest,
+        package_id: str,
+        leg_id: str,
+        model_asset: ModelAsset,
+        factor_set: list[FactorAsset],
+        runtime_assets: RuntimeAssetManifest | None,
+    ) -> QEExperimentRuntimeSource:
+        """Resolve one MULTI_ALPHA leg strictly from parent package-owned assets."""
+
+        return self._source_from_package_assets(
+            manifest,
+            package_id=package_id,
+            model_asset_override=model_asset,
+            factor_set_override=factor_set,
+            runtime_assets_override=runtime_assets,
+            cache_namespace=f"leg_{_safe_cache_component(leg_id)}",
         )
+
+    def _source_from_package_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        package_id: str | None,
+        model_asset_override: ModelAsset | None = None,
+        factor_set_override: list[FactorAsset] | None = None,
+        runtime_assets_override: RuntimeAssetManifest | None = None,
+        cache_namespace: str | None = None,
+    ) -> QEExperimentRuntimeSource:
+        package_key = str(package_id or manifest.package_id or "").strip()
+        manifest_sha = str(manifest.manifest_sha256 or "").strip().lower()
+        if not package_key or not manifest_sha:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage manifest identity is required for package-owned runtime assets",
+                context={
+                    "reason_code": "strategy_package_runtime_manifest_identity_missing",
+                    "package_id": package_key or None,
+                    "manifest_sha256": manifest_sha or None,
+                },
+            )
+
+        model_asset = model_asset_override or _single_model_asset_for_runtime(manifest)
+        namespace = _safe_cache_component(cache_namespace or "")
+        source_dir = (
+            self.cache_root
+            / "_package_asset_sources"
+            / _safe_cache_component(package_key)
+            / _safe_cache_component(manifest_sha[:16])
+        )
+        if namespace:
+            source_dir = source_dir / namespace
+        self._reset_cache_dir(source_dir)
+        factors_dir = source_dir / "factors"
+        model_dir = source_dir / "mlruns" / "package_asset" / "artifacts"
+        factors_dir.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        factor_names: list[str] = []
+        factors = list(factor_set_override) if factor_set_override is not None else list(manifest.factor_set)
+        for factor in factors:
+            factor_name = _runtime_factor_name(factor, package_id=package_key)
+            factor_names.append(factor_name)
+            payload = self._read_package_asset_bytes(
+                asset_ref=factor.asset_ref,
+                expected_sha256=factor.sha256,
+                package_id=package_key,
+                asset_kind="factor_code",
+                logical_name=factor_name,
+            )
+            _write_inside_runtime_source(
+                factors_dir / f"{factor_name}.py",
+                payload,
+                source_dir=source_dir,
+                package_id=package_key,
+            )
+
+        model_payload = self._read_package_asset_bytes(
+            asset_ref=model_asset.asset_ref,
+            expected_sha256=model_asset.sha256,
+            package_id=package_key,
+            asset_kind="model_weight",
+            logical_name=str(model_asset.model_id),
+        )
+        _write_inside_runtime_source(
+            model_dir / "params.pkl",
+            model_payload,
+            source_dir=source_dir,
+            package_id=package_key,
+        )
+        self._materialize_model_code_assets(
+            model_asset,
+            model_dir=model_dir,
+            source_dir=source_dir,
+            package_id=package_key,
+        )
+        self._materialize_alpha158_conf(
+            manifest,
+            source_dir=source_dir,
+            package_id=package_key,
+            runtime_assets_override=runtime_assets_override,
+        )
+
+        source_evidence = manifest.source_evidence if isinstance(manifest.source_evidence, dict) else {}
+        backtest_context = manifest.backtest_context if isinstance(manifest.backtest_context, dict) else {}
+        custom_params = _manifest_runtime_custom_params(manifest, runtime_assets_override=runtime_assets_override)
+        data_split = _manifest_runtime_data_split(source_evidence, backtest_context)
+        experiment_id = _manifest_runtime_experiment_id(manifest)
+        return QEExperimentRuntimeSource(
+            experiment_id=experiment_id,
+            db_workspace_path=Path(),
+            asset_workspace_path=source_dir,
+            factor_names=factor_names,
+            custom_params=custom_params,
+            data_split=data_split,
+            qe_task_id=_manifest_source_text(source_evidence, "qe_task_id"),
+            qe_loop_id=_manifest_source_text(source_evidence, "qe_loop_id"),
+            execution_node_id=None,
+            model_params_origin="package_asset",
+            source_workspace_type="strategy_package_asset_store",
+            package_id=package_key,
+            manifest_sha256=manifest_sha,
+        )
+
+    def _materialize_alpha158_conf(
+        self,
+        manifest: StrategyPackageManifest,
+        *,
+        source_dir: Path,
+        package_id: str,
+        runtime_assets_override: RuntimeAssetManifest | None = None,
+    ) -> None:
+        runtime_assets = runtime_assets_override if runtime_assets_override is not None else manifest.runtime_assets
+        if runtime_assets is None or not runtime_assets.alpha158.enabled:
+            (source_dir / "conf.yaml").write_text("task: {}\n", encoding="utf-8")
+            return
+        alpha158 = runtime_assets.alpha158
+        try:
+            payload = self._read_package_asset_bytes(
+                asset_ref=alpha158.asset_ref,
+                expected_sha256=alpha158.sha256,
+                package_id=package_id,
+                asset_kind="factor_schema",
+                logical_name="alpha158_schema",
+            )
+        except PackageAssetInvalidError as exc:
+            reason_code = (exc.context or {}).get("reason_code")
+            mapped_reason = (
+                "strategy_package_alpha158_schema_sha_mismatch"
+                if reason_code == "strategy_package_asset_sha_mismatch"
+                else "strategy_package_alpha158_schema_missing"
+            )
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset is unavailable or invalid",
+                context={**(exc.context or {}), "reason_code": mapped_reason, "package_id": package_id},
+            ) from exc
+        try:
+            schema = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset is not valid JSON",
+                context={"reason_code": "strategy_package_alpha158_schema_invalid", "package_id": package_id, "error": str(exc)},
+            ) from exc
+        if schema.get("schema_version") != ALPHA158_SCHEMA_VERSION:
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema asset version is unsupported",
+                context={
+                    "reason_code": "strategy_package_alpha158_schema_invalid",
+                    "package_id": package_id,
+                    "schema_version": schema.get("schema_version"),
+                },
+            )
+        aliases = extract_alpha158_aliases(schema.get("loader_node"))
+        if aliases != list(alpha158.aliases):
+            raise PackageAssetInvalidError(
+                "frozen Alpha158 schema aliases do not match manifest",
+                context={
+                    "reason_code": "strategy_package_alpha158_schema_alias_mismatch",
+                    "package_id": package_id,
+                    "manifest_aliases": list(alpha158.aliases),
+                    "schema_aliases": aliases,
+                },
+            )
+        (source_dir / "conf.yaml").write_text(minimal_conf_with_alpha158(schema), encoding="utf-8")
+
+    def _materialize_model_code_assets(
+        self,
+        model_asset: ModelAsset,
+        *,
+        model_dir: Path,
+        source_dir: Path,
+        package_id: str,
+    ) -> None:
+        assets = list(model_asset.model_code_assets or [])
+        if model_asset.model_code_required and not assets:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage model code asset is required but missing",
+                context={
+                    "reason_code": "strategy_package_model_code_missing",
+                    "package_id": package_id,
+                    "model_id": model_asset.model_id,
+                },
+            )
+        for asset in assets:
+            payload = self._read_package_asset_bytes(
+                asset_ref=asset.asset_ref,
+                expected_sha256=asset.sha256,
+                package_id=package_id,
+                asset_kind="model_code",
+                logical_name=asset.relative_path,
+            )
+            target = model_dir / _safe_model_code_relpath(asset)
+            _write_inside_runtime_source(target, payload, source_dir=source_dir, package_id=package_id)
+
+    def _read_package_asset_bytes(
+        self,
+        *,
+        asset_ref: str | None,
+        expected_sha256: str | None,
+        package_id: str,
+        asset_kind: str,
+        logical_name: str,
+    ) -> bytes:
+        if not asset_ref or not expected_sha256:
+            raise PackageAssetInvalidError(
+                "frozen StrategyPackage runtime asset is missing asset_ref or sha256",
+                context={
+                    "reason_code": "strategy_package_runtime_assets_incomplete",
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                    "asset_ref": asset_ref,
+                    "expected_sha256": expected_sha256,
+                },
+            )
+        try:
+            data = self.asset_store.get(asset_ref)
+        except PackageAssetInvalidError as exc:
+            raise PackageAssetInvalidError(
+                exc.message,
+                context={
+                    **(exc.context or {}),
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                },
+            ) from exc
+        actual = hashlib.sha256(data).hexdigest()
+        expected = str(expected_sha256).strip().lower()
+        if actual != expected:
+            raise PackageAssetInvalidError(
+                "strategy package runtime asset sha256 mismatch",
+                context={
+                    "reason_code": "strategy_package_asset_sha_mismatch",
+                    "package_id": package_id,
+                    "asset_kind": asset_kind,
+                    "logical_name": logical_name,
+                    "asset_ref": asset_ref,
+                    "expected_sha256": expected,
+                    "actual_sha256": actual,
+                },
+            )
+        return data
 
     def preflight_for_strategy_package(
         self,
@@ -574,6 +1041,8 @@ class QEExperimentRuntimeAssetResolver:
         loop_id: str | None = None,
         run_id: str | None = None,
         runtime_config: dict[str, Any] | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> LiveInferencePreflightResult:
         """Cold-start preflight for live inference (P0-F / Codex doc P0-4).
 
@@ -623,14 +1092,30 @@ class QEExperimentRuntimeAssetResolver:
 
         checks: list[LiveInferencePreflightCheck] = []
 
-        # ---- Check 1: qe_source ----
-        try:
-            source = self.load_source_for_strategy_package(
+        if manifest is not None and manifest.alpha_mode == AlphaMode.MULTI_ALPHA:
+            return self._preflight_for_multi_alpha_parent_package(
                 source_type=source_type,
                 source_id=source_id,
                 loop_id=loop_id,
                 run_id=run_id,
+                artifact_config=artifact_config,
+                manifest=manifest,
+                package_id=package_id,
             )
+
+        # ---- Check 1: qe_source ----
+        try:
+            source_kwargs: dict[str, Any] = {
+                "source_type": source_type,
+                "source_id": source_id,
+                "loop_id": loop_id,
+                "run_id": run_id,
+            }
+            if manifest is not None:
+                source_kwargs["manifest"] = manifest
+            if package_id is not None:
+                source_kwargs["package_id"] = package_id
+            source = self.load_source_for_strategy_package(**source_kwargs)
         except TradingCoreError as exc:
             checks.append(
                 LiveInferencePreflightCheck(
@@ -657,18 +1142,37 @@ class QEExperimentRuntimeAssetResolver:
             LiveInferencePreflightCheck(
                 name=PREFLIGHT_CHECK_QE_SOURCE,
                 status=PREFLIGHT_STATUS_PASS,
-                message="QE experiment source resolved",
+                message=(
+                    "StrategyPackage frozen runtime assets resolved"
+                    if source.source_workspace_type == "strategy_package_asset_store"
+                    else "QE experiment source resolved"
+                ),
                 context={
                     "experiment_id": source.experiment_id,
                     "qe_task_id": source.qe_task_id,
                     "qe_loop_id": source.qe_loop_id,
+                    "package_id": source.package_id,
+                    "source_workspace_type": source.source_workspace_type,
                 },
             )
         )
 
         # ---- Check 2: qe_node ----
         execution_node_id = (source.execution_node_id or "").strip()
-        if not execution_node_id:
+        if source.source_workspace_type == "strategy_package_asset_store":
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_NODE,
+                    status=PREFLIGHT_STATUS_PASS,
+                    message="package-owned runtime assets do not require QE node access",
+                    context={
+                        "package_id": source.package_id,
+                        "manifest_sha256": source.manifest_sha256,
+                        "asset_workspace_path": str(source.asset_workspace_path),
+                    },
+                )
+            )
+        elif not execution_node_id:
             checks.append(
                 LiveInferencePreflightCheck(
                     name=PREFLIGHT_CHECK_QE_NODE,
@@ -683,18 +1187,18 @@ class QEExperimentRuntimeAssetResolver:
             )
             checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_NODE))
             return LiveInferencePreflightResult(passed=False, checks=checks)
-
-        checks.append(
-            LiveInferencePreflightCheck(
-                name=PREFLIGHT_CHECK_QE_NODE,
-                status=PREFLIGHT_STATUS_PASS,
-                message="QE execution node resolved",
-                context={
-                    "execution_node_id": execution_node_id,
-                    "asset_workspace_path": str(source.asset_workspace_path),
-                },
+        else:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_NODE,
+                    status=PREFLIGHT_STATUS_PASS,
+                    message="QE execution node resolved",
+                    context={
+                        "execution_node_id": execution_node_id,
+                        "asset_workspace_path": str(source.asset_workspace_path),
+                    },
+                )
             )
-        )
 
         # ---- Check 3: conf.yaml ----
         try:
@@ -792,6 +1296,14 @@ class QEExperimentRuntimeAssetResolver:
             model_params_path, candidate_count = self._resolve_model_params_path(
                 source, artifact_config
             )
+            referenced_model_modules = _require_model_code_for_pickled_local_modules(
+                model_params_path=model_params_path,
+                model_code_roots=[source.asset_workspace_path, model_params_path.parent],
+                package_id=source.package_id,
+                experiment_id=source.experiment_id,
+                source_workspace_type=source.source_workspace_type,
+                phase="preflight",
+            )
         except DataUnavailableError as exc:
             checks.append(
                 LiveInferencePreflightCheck(
@@ -815,7 +1327,291 @@ class QEExperimentRuntimeAssetResolver:
                 context={
                     "model_params_path": str(model_params_path),
                     "candidate_count": candidate_count,
+                    "referenced_model_modules": referenced_model_modules,
                 },
+            )
+        )
+
+        return LiveInferencePreflightResult(passed=True, checks=checks)
+
+    def _preflight_for_multi_alpha_parent_package(
+        self,
+        *,
+        source_type: str,
+        source_id: str,
+        loop_id: str | None,
+        run_id: str | None,
+        artifact_config: dict[str, Any],
+        manifest: StrategyPackageManifest,
+        package_id: str | None,
+    ) -> LiveInferencePreflightResult:
+        """Run cold-start preflight for MULTI_ALPHA parent-owned leg assets."""
+
+        package_key = str(package_id or manifest.package_id or "").strip()
+        checks: list[LiveInferencePreflightCheck] = []
+        try:
+            from .multi_alpha_live import _multi_alpha_evidence, _parent_leg_runtime_slices
+
+            evidence = _multi_alpha_evidence(manifest)
+            leg_slices = _parent_leg_runtime_slices(manifest, evidence=evidence, package_id=package_key)
+        except TradingCoreError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_QE_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion=(
+                        "verify the MULTI_ALPHA parent package embeds every leg model, "
+                        "factor source, and Alpha158 runtime schema asset"
+                    ),
+                    context={
+                        "source_type": source_type,
+                        "source_id": source_id,
+                        "loop_id": loop_id,
+                        "run_id": run_id,
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        leg_sources: list[tuple[Any, QEExperimentRuntimeSource]] = []
+        for leg_slice in leg_slices:
+            try:
+                source = self.load_source_for_strategy_package_leg(
+                    manifest=manifest,
+                    package_id=package_key,
+                    leg_id=leg_slice.leg_id,
+                    model_asset=leg_slice.model_asset,
+                    factor_set=list(leg_slice.factor_set),
+                    runtime_assets=leg_slice.runtime_assets,
+                )
+            except TradingCoreError as exc:
+                checks.append(
+                    LiveInferencePreflightCheck(
+                        name=PREFLIGHT_CHECK_QE_SOURCE,
+                        status=PREFLIGHT_STATUS_BLOCKED,
+                        message=exc.message,
+                        suggestion=(
+                            "verify the MULTI_ALPHA parent package embeds the missing or mismatched "
+                            "asset for this leg"
+                        ),
+                        context={
+                            "source_type": source_type,
+                            "source_id": source_id,
+                            "loop_id": loop_id,
+                            "run_id": run_id,
+                            "package_id": package_key,
+                            "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                            "leg_id": leg_slice.leg_id,
+                            "model_id": leg_slice.component.model_id,
+                            **(exc.context or {}),
+                        },
+                    )
+                )
+                checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_QE_SOURCE))
+                return LiveInferencePreflightResult(passed=False, checks=checks)
+            leg_sources.append((leg_slice, source))
+
+        leg_context = [
+            {
+                "leg_id": leg_slice.leg_id,
+                "model_id": leg_slice.component.model_id,
+                "factor_count": len(leg_slice.factor_set),
+                "source_workspace_type": source.source_workspace_type,
+                "model_params_origin": source.model_params_origin,
+            }
+            for leg_slice, source in leg_sources
+        ]
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA parent package leg runtime assets resolved",
+                context={
+                    "package_id": package_key,
+                    "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                    "leg_count": len(leg_sources),
+                    "legs": leg_context,
+                },
+            )
+        )
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_QE_NODE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA parent package assets do not require QE node access",
+                context={
+                    "package_id": package_key,
+                    "manifest_sha256": manifest.manifest_sha256,
+                    "leg_count": len(leg_sources),
+                },
+            )
+        )
+
+        conf_paths: list[dict[str, Any]] = []
+        active_leg_context: dict[str, Any] = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                conf_paths.append(
+                    {
+                        **active_leg_context,
+                        "conf_path": str(self._resolve_conf_path(source)),
+                    }
+                )
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_CONF_YAML,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify the parent package Alpha158 schema asset can materialize conf.yaml for each leg",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_CONF_YAML))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_CONF_YAML,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg conf.yaml files are present",
+                context={"package_id": package_key, "leg_count": len(conf_paths), "legs": conf_paths},
+            )
+        )
+
+        factor_summaries: list[dict[str, Any]] = []
+        active_leg_context = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                factor_source_dir = self._resolve_factor_source_dir(source)
+                missing_factor_samples: list[str] = []
+                sample_factors = list(source.factor_names[:3])
+                for factor_name in sample_factors:
+                    candidate = factor_source_dir / f"{factor_name}.py"
+                    if not candidate.exists() or not candidate.is_file():
+                        missing_factor_samples.append(factor_name)
+                if missing_factor_samples and len(missing_factor_samples) == len(sample_factors):
+                    checks.append(
+                        LiveInferencePreflightCheck(
+                            name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                            status=PREFLIGHT_STATUS_BLOCKED,
+                            message="MULTI_ALPHA leg factor source files are missing for declared factors",
+                            suggestion="verify the parent package factor_set contains the leg factor source assets",
+                            context={
+                                "package_id": package_key,
+                                "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                                **active_leg_context,
+                                "factor_source_dir": str(factor_source_dir),
+                                "missing_factor_samples": missing_factor_samples,
+                                "factor_names_count": len(source.factor_names),
+                            },
+                        )
+                    )
+                    checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+                    return LiveInferencePreflightResult(passed=False, checks=checks)
+                factor_summaries.append(
+                    {
+                        "leg_id": leg_slice.leg_id,
+                        "model_id": leg_slice.component.model_id,
+                        "factor_source_dir": str(factor_source_dir),
+                        "factor_names_count": len(source.factor_names),
+                        "sampled_factors": sample_factors,
+                    }
+                )
+        except DataUnavailableError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify the parent package factor_set contains every leg factor source asset",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            checks.extend(_remaining_skipped_checks(after=PREFLIGHT_CHECK_FACTOR_SOURCE))
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_FACTOR_SOURCE,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg factor source directories and sampled factors are present",
+                context={"package_id": package_key, "leg_count": len(factor_summaries), "legs": factor_summaries},
+            )
+        )
+
+        model_summaries: list[dict[str, Any]] = []
+        active_leg_context = {}
+        try:
+            for leg_slice, source in leg_sources:
+                active_leg_context = {
+                    "leg_id": leg_slice.leg_id,
+                    "model_id": leg_slice.component.model_id,
+                }
+                model_params_path, candidate_count = self._resolve_model_params_path(source, artifact_config)
+                referenced_model_modules = _require_model_code_for_pickled_local_modules(
+                    model_params_path=model_params_path,
+                    model_code_roots=[source.asset_workspace_path, model_params_path.parent],
+                    package_id=source.package_id,
+                    experiment_id=source.experiment_id,
+                    source_workspace_type=source.source_workspace_type,
+                    phase="preflight",
+                )
+                model_summaries.append(
+                    {
+                        **active_leg_context,
+                        "model_params_path": str(model_params_path),
+                        "candidate_count": candidate_count,
+                        "referenced_model_modules": referenced_model_modules,
+                    }
+                )
+        except TradingCoreError as exc:
+            checks.append(
+                LiveInferencePreflightCheck(
+                    name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                    status=PREFLIGHT_STATUS_BLOCKED,
+                    message=exc.message,
+                    suggestion="verify every MULTI_ALPHA leg has a parent-owned model weight and required model code assets",
+                    context={
+                        "package_id": package_key,
+                        "alpha_mode": AlphaMode.MULTI_ALPHA.value,
+                        **active_leg_context,
+                        **(exc.context or {}),
+                    },
+                )
+            )
+            return LiveInferencePreflightResult(passed=False, checks=checks)
+
+        checks.append(
+            LiveInferencePreflightCheck(
+                name=PREFLIGHT_CHECK_MODEL_PARAMS,
+                status=PREFLIGHT_STATUS_PASS,
+                message="MULTI_ALPHA leg model params.pkl files are locatable",
+                context={"package_id": package_key, "leg_count": len(model_summaries), "legs": model_summaries},
             )
         )
 
@@ -829,6 +1625,8 @@ class QEExperimentRuntimeAssetResolver:
         loop_id: str | None = None,
         run_id: str | None = None,
         runtime_config: dict[str, Any] | None = None,
+        manifest: StrategyPackageManifest | None = None,
+        package_id: str | None = None,
     ) -> LiveInferencePreflightResult:
         """Run preflight and raise ``LiveInferencePreflightError`` on failure.
 
@@ -844,6 +1642,8 @@ class QEExperimentRuntimeAssetResolver:
             loop_id=loop_id,
             run_id=run_id,
             runtime_config=runtime_config,
+            manifest=manifest,
+            package_id=package_id,
         )
         if result.passed:
             return result
@@ -860,6 +1660,7 @@ class QEExperimentRuntimeAssetResolver:
                 "source_id": source_id,
                 "loop_id": loop_id,
                 "run_id": run_id,
+                "package_id": package_id,
                 "preflight": result.to_dict(),
                 "blocked_check": blocked.name if blocked is not None else None,
             },
@@ -1030,6 +1831,7 @@ class QEExperimentRuntimeAssetResolver:
         source: QEExperimentRuntimeSource,
         runtime_config: dict[str, Any] | None = None,
         path_converter: Callable[[str], str] | None = None,
+        cache_namespace: str | None = None,
     ) -> PreparedInferenceWorkspace:
         config = runtime_config or {}
         artifact_config = config.get("selection_artifact_config") or config.get("selection_artifact") or {}
@@ -1049,6 +1851,9 @@ class QEExperimentRuntimeAssetResolver:
         model_source_path, model_candidate_count = self._resolve_model_params_path(source, artifact_config)
 
         cache_key = manifest_sha256[:16] if manifest_sha256 else "unfrozen_manifest"
+        namespace = _safe_cache_component(cache_namespace or "")
+        if namespace:
+            cache_key = f"{cache_key}__{namespace}"
         workspace_path = self.cache_root / package_id / cache_key
         self._reset_cache_dir(workspace_path)
         (workspace_path / "model").mkdir(parents=True, exist_ok=True)
@@ -1058,6 +1863,18 @@ class QEExperimentRuntimeAssetResolver:
         model_code_source = source.asset_workspace_path / "model.py"
         if model_code_source.exists() and model_code_source.is_file():
             shutil.copy2(model_code_source, workspace_path / "model" / "model.py")
+        self._copy_model_code_siblings(
+            model_source_path=model_source_path,
+            model_dest_dir=workspace_path / "model",
+        )
+        referenced_model_modules = _require_model_code_for_pickled_local_modules(
+            model_params_path=model_dest,
+            model_code_roots=[workspace_path / "model"],
+            package_id=source.package_id or package_id,
+            experiment_id=source.experiment_id,
+            source_workspace_type=source.source_workspace_type,
+            phase="prepare_workspace",
+        )
         dataset_processor_source = self._resolve_dataset_processor_path(
             source=source,
             model_source_path=model_source_path,
@@ -1129,7 +1946,9 @@ class QEExperimentRuntimeAssetResolver:
                     "diagnostics": {
                         "qe_experiment_id": source.experiment_id,
                         "source_workspace_path": str(source.asset_workspace_path),
-                        "source_workspace_type": "aistock_node_api_cache",
+                        "source_workspace_type": source.source_workspace_type,
+                        "package_id": source.package_id,
+                        "package_manifest_sha256": source.manifest_sha256,
                         "qe_task_id": source.qe_task_id,
                         "qe_loop_id": source.qe_loop_id,
                         "execution_node_id": source.execution_node_id,
@@ -1137,6 +1956,7 @@ class QEExperimentRuntimeAssetResolver:
                         "model_source_path": str(model_source_path),
                         "model_candidate_count": model_candidate_count,
                         "model_params_origin": source.model_params_origin,
+                        "referenced_model_modules": referenced_model_modules,
                         "dataset_processor_source_path": str(dataset_processor_source) if dataset_processor_source else None,
                     },
                 },
@@ -1521,7 +2341,11 @@ class QEExperimentRuntimeAssetResolver:
             )
         else:
             dynamic_factors = list(source.factor_names)
-            dynamic_factor_source = "qe_experiments.factor_names"
+            dynamic_factor_source = (
+                "strategy_package_manifest.factor_set"
+                if source.source_workspace_type == "strategy_package_asset_store"
+                else "qe_experiments.factor_names"
+            )
         factor_order = [*alpha158_factors, *dynamic_factors]
         if not factor_order:
             raise ArtifactGenerationFailedError(
@@ -1661,6 +2485,38 @@ class QEExperimentRuntimeAssetResolver:
             context={"path": str(path), "suffix": suffix},
         )
 
+    def _copy_model_code_siblings(self, *, model_source_path: Path, model_dest_dir: Path) -> None:
+        source_dir = model_source_path.parent.resolve(strict=False)
+        dest_root = model_dest_dir.resolve(strict=False)
+        if not source_dir.exists() or not source_dir.is_dir():
+            return
+        for source_path in sorted(source_dir.rglob("*.py")):
+            resolved_source = source_path.resolve(strict=False)
+            if source_dir not in resolved_source.parents:
+                raise ArtifactGenerationFailedError(
+                    "refusing to copy model code outside the materialized model source directory",
+                    context={"source_path": str(source_path), "model_source_dir": str(source_dir)},
+                )
+            rel_path = source_path.relative_to(source_dir)
+            if any(part in {"", ".", ".."} for part in rel_path.parts):
+                raise ArtifactGenerationFailedError(
+                    "model code relative path is unsafe for live inference workspace",
+                    context={"source_path": str(source_path), "relative_path": str(rel_path)},
+                )
+            dest_path = model_dest_dir / rel_path
+            resolved_dest = dest_path.resolve(strict=False)
+            if resolved_dest != dest_root and dest_root not in resolved_dest.parents:
+                raise ArtifactGenerationFailedError(
+                    "refusing to copy model code outside the inference workspace",
+                    context={
+                        "source_path": str(source_path),
+                        "dest_path": str(dest_path),
+                        "model_dest_dir": str(model_dest_dir),
+                    },
+                )
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, dest_path)
+
     def _extract_alpha158_aliases(self, conf_path: Path) -> list[str]:
         conf = _load_qe_conf_yaml(conf_path, purpose="alpha158 factors")
 
@@ -1673,25 +2529,7 @@ class QEExperimentRuntimeAssetResolver:
         return aliases
 
     def _find_alpha158_aliases(self, node: Any) -> list[str]:
-        if isinstance(node, dict):
-            if node.get("class") == "qlib.contrib.data.loader.Alpha158DL":
-                try:
-                    feature = node["kwargs"]["config"]["feature"]
-                    aliases = feature[1]
-                except Exception:
-                    aliases = None
-                if isinstance(aliases, list) and all(isinstance(item, str) for item in aliases):
-                    return [str(item) for item in aliases]
-            for value in node.values():
-                found = self._find_alpha158_aliases(value)
-                if found:
-                    return found
-        elif isinstance(node, list):
-            for value in node:
-                found = self._find_alpha158_aliases(value)
-                if found:
-                    return found
-        return []
+        return extract_alpha158_aliases(node)
 
     def _resolve_factor_source_dir(self, source: QEExperimentRuntimeSource) -> Path:
         candidates = [source.asset_workspace_path / "factors"]
@@ -1730,6 +2568,15 @@ class QEExperimentRuntimeAssetResolver:
     ) -> tuple[Path, int]:
         explicit = artifact_config.get("model_params_path")
         if explicit:
+            if source.source_workspace_type == "strategy_package_asset_store":
+                raise RuntimeConfigInvalidError(
+                    "frozen StrategyPackage runtime must use package-owned model assets",
+                    context={
+                        "reason_code": "strategy_package_runtime_model_override_forbidden",
+                        "package_id": source.package_id,
+                        "model_params_path": str(explicit),
+                    },
+                )
             path = Path(str(explicit))
             ensure_not_forbidden_worker_workspace_path(path, purpose="live inference explicit model_params_path")
             if not path.exists() or not path.is_file():
@@ -1915,7 +2762,8 @@ class LocalStrategyPackageInferenceProvider:
         old_strict = os.environ.get("AISTOCK_STRICT_INFERENCE")
         os.environ["AISTOCK_STRICT_INFERENCE"] = "1"
         try:
-            df_scores = InferenceEngine().run_inference(
+            engine = InferenceEngine()
+            df_scores = engine.run_inference(
                 strategy_id="",
                 version_tag="strategy_package_live",
                 trade_date=_date_to_datetime(trade_date),
@@ -1933,9 +2781,18 @@ class LocalStrategyPackageInferenceProvider:
                 os.environ.pop("AISTOCK_STRICT_INFERENCE", None)
             else:
                 os.environ["AISTOCK_STRICT_INFERENCE"] = old_strict
+        receipt = engine.last_inference_receipt
+        if not isinstance(receipt, dict):
+            raise DataUnavailableError(
+                "local live inference did not return an execution receipt",
+                context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"},
+            )
         return LiveInferenceResult(
             scores=_score_rows_from_frame(df_scores, cutoff_date or trade_date),
             metadata={"inference_backend": "local"},
+            universe_count=_required_receipt_universe_count(receipt),
+            source_read_receipts=_required_receipt_rows(receipt, "source_read_receipts"),
+            input_context=_required_receipt_object(receipt, "input_context"),
         )
 
 
@@ -2053,7 +2910,13 @@ class WslStrategyPackageInferenceProvider:
             )
         metadata = dict(payload.get("metadata") or {})
         metadata.update({"inference_backend": "wsl", "wsl_distro": self.distro, "wsl_conda_env": self.conda_env})
-        return LiveInferenceResult(scores=scores, metadata=metadata)
+        return LiveInferenceResult(
+            scores=scores,
+            metadata=metadata,
+            universe_count=_required_receipt_universe_count(payload),
+            source_read_receipts=_required_receipt_rows(payload, "source_read_receipts"),
+            input_context=_required_receipt_object(payload, "input_context"),
+        )
 
     def _build_env_exports(self) -> str:
         keys = [
@@ -2074,3 +2937,42 @@ class WslStrategyPackageInferenceProvider:
     @staticmethod
     def _quote(value: str) -> str:
         return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+def _required_receipt_universe_count(payload: dict[str, Any]) -> int:
+    value = payload.get("universe_count")
+    if isinstance(value, bool):
+        value = None
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DataUnavailableError(
+            "live inference receipt is missing an actual universe_count",
+            context={"reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE"},
+        ) from exc
+    if count < 0:
+        raise DataUnavailableError(
+            "live inference receipt has an invalid universe_count",
+            context={"reason_code": "ADVISORY_PHASE0A2C_UNIVERSE_RECEIPT_INCOMPLETE", "universe_count": count},
+        )
+    return count
+
+
+def _required_receipt_rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = payload.get(key)
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise DataUnavailableError(
+            "live inference receipt is missing source-read rows",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "field": key},
+        )
+    return [dict(item) for item in value]
+
+
+def _required_receipt_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        raise DataUnavailableError(
+            "live inference receipt is missing input context",
+            context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "field": key},
+        )
+    return dict(value)

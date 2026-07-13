@@ -1,16 +1,10 @@
-"""一次性脚本：回测口径回填/增量补齐因子缓存。
+"""Retired legacy script for historical factor-cache diagnostics.
 
-用途：
-- 扫描 rdagent_assets/qe_factors/*.py 所有因子代码（fallback 模式）
-- 或通过 --code-manifest 接收 {factor_name: code_text} JSON 文件（推荐模式）
-- 严格基于 experiment factor_data_dir 的历史 h5/parquet 文件执行 factor.py
-- 推荐模式使用原始 code_text + subprocess 执行（与回测 prepare_factors.py 完全一致）
-- 输出 single/{name}.parquet、_meta.json、_tasks/{task_id}.json、_tasks/{task_id}.failed.ndjson
-- 不走 realtime loader / DB loader 作为主计算来源
+The manual CLI entry point is disabled. Official factor-cache generation must
+use the UI/API official full-compute flow and WSL dispatch. Importable helper
+functions remain temporarily for cache-contract tests and historical diagnostics;
+they must not be used as an operator backfill path.
 
-运行：
-  python scripts/backfill_factor_cache.py --experiment-id qe_xxx --code-manifest manifest.json --workers 4
-  python scripts/backfill_factor_cache.py --experiment-id qe_xxx --resume-task-id cache_xxx --retry-failed-only --code-manifest manifest.json
 """
 from __future__ import annotations
 
@@ -27,6 +21,7 @@ import tempfile
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -36,7 +31,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend.services.quantevolver.config_composer import ConfigComposer  # noqa: E402
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window  # noqa: E402
-from backend.services.quantevolver.factor_value_pipeline import FactorComputeResult  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +38,23 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("backfill")
+LEGACY_BACKFILL_RETIRED = True
+
+
+@dataclass
+class FactorComputeResult:
+    factor_name: str
+    success: bool
+    num_rows: int = 0
+    nan_rate: float = 0.0
+    elapsed_sec: float = 0.0
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    error_short: Optional[str] = None
+    traceback_full: Optional[str] = None
+    date_range: Optional[str] = None
+    meta_entry: Optional[dict[str, Any]] = None
+    meta_as_of_date: Optional[str] = None
 
 CODE_DIR = REPO_ROOT / "rdagent_assets" / "qe_factors"
 CACHE_DIR = REPO_ROOT / "rdagent_assets" / "factor_values"
@@ -700,7 +711,13 @@ def run_plan_action(
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    raise SystemExit(
+        "scripts/backfill_factor_cache.py is retired. Use the official "
+        "factor-cache compute API / official_factor_full_compute WSL dispatch instead."
+    )
+    ap = argparse.ArgumentParser(
+        description="Legacy/manual migration tool only. Official full factor compute must use official_factor_full_compute dispatch."
+    )
     ap.add_argument("--factor", help="只回填指定因子（用于测试）")
     ap.add_argument("--factors", help="逗号分隔的因子名列表（替代 --factor）")
     ap.add_argument("--experiment-id", help="实验 ID，用于解析回测窗口和数据目录")

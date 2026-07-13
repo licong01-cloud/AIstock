@@ -1,0 +1,86 @@
+{
+  "actual": "LocalSim has _with_localsim_roll_forward_bindings, but MiniQMT has no equivalent. DB query for 2026-06-15 returned active_bindings_for_20260615_by_backend_state=[] and active_approved_bindings_for_20260615=[].",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260614_BUG-360-p0-miniqmt-scheduler-expired-daily-bindings-are-not-rolled-forward-for-u.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-360",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T17:55:13.886600Z",
+  "description": "LocalSim has _with_localsim_roll_forward_bindings, but MiniQMT has no equivalent. DB query for 2026-06-15 returned active_bindings_for_20260615_by_backend_state=[] and active_approved_bindings_for_20260615=[].",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260614-b1686cdd2400",
+      "timestamp": "2026-06-13T17:55:13.886597Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-14 readiness: /api/v1/simulation-runtime/runs?trade_date=2026-06-15 -> run_count=0; DB active bindings for 2026-06-15 -> []"
+  ],
+  "expected": "The simulation runtime scheduler must roll forward eligible LocalSim and MiniQMT daily bindings for the target trade_date without manual DB writes; new strategy packages should remain unattended-capable.",
+  "first_seen_at": "2026-06-13T17:55:13.886600Z",
+  "fix_branch": null,
+  "fix_commit": "c8712eac77c4171620e870e63fe962d1142086cc",
+  "fixed_at": "2026-06-13T18:48:07.382148Z",
+  "github_issue_number": 1062,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1062",
+  "last_seen_at": "2026-06-13T17:55:13.886600Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1063",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only DB: SELECT broker_backend, approval_state, count(*) FROM paper_v2.simulation_release_binding WHERE (effective_from IS NULL OR effective_from <= DATE '2026-06-15') AND (effective_to IS NULL OR effective_to >= DATE '2026-06-15') GROUP BY broker_backend, approval_state; plus inspect backend/services/simulation_runtime/scheduler.py roll-forward path.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][Scheduler] expired daily bindings are not rolled forward for unattended next-day simulation",
+  "trigger_condition": {
+    "fingerprint": "b1686cdd24001da5a2ab4f33",
+    "source_event_id": "FE-20260614-b1686cdd2400"
+  },
+  "validation_evidence": [
+    "ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 46 passed",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_minqmt_multi_strategy_unified.py backend/tests/simulation_runtime/test_ops_api.py -q -> 59 passed",
+    "git diff --check -> passed",
+    "python -m compileall -q backend/services/simulation_runtime backend/tests/simulation_runtime -> passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s l0 -> passed; guardrail blocking=0",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> passed; paper_v2_l3/l0/paper_v2_backend/paper_v2_data_quality/data_quality_deep successful"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

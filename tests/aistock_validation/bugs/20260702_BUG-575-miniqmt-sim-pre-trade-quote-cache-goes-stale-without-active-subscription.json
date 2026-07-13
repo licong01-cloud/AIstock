@@ -1,0 +1,90 @@
+{
+  "actual": "get_full_tick reads xtdata cache directly; without active subscription the cache can lag 400s+ and intermittent stale quotes block L2/L16. There is no probe/re-subscribe/reconnect self-heal or direct feed-health evidence before the market_data guard raises REALTIME_QUOTE_STALE.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/data_service/xtquant_adapter.py",
+    "backend/services/paper_trading_v2/market_data.py",
+    "tests/aistock_validation/bugs/20260702_BUG-575-miniqmt-sim-pre-trade-quote-cache-goes-stale-without-active-subscription.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/infra/qmt_client.py",
+    "backend/infra/realtime_quote_subscriber.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "docs/handoff/BUG-575-miniqmt-quote-feed-subscription-self-heal.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-575",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T08:02:33.557669Z",
+  "description": "get_full_tick reads xtdata cache directly; without active subscription the cache can lag 400s+ and intermittent stale quotes block L2/L16. There is no probe/re-subscribe/reconnect self-heal or direct feed-health evidence before the market_data guard raises REALTIME_QUOTE_STALE.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-f2d2d6721975",
+      "timestamp": "2026-07-02T08:02:33.557666Z"
+    }
+  ],
+  "evidence_uris": [
+    "RCA: 2026-07-02 MiniQMT L2/L16 REALTIME_QUOTE_STALE; qmt_client.py get_full_tick, xtquant_adapter.subscribe_quotes_xt, realtime_quote_subscriber.py, paper_trading_v2/market_data.py guard"
+  ],
+  "expected": "MiniQMT pre-trade quote path ensures active whole-quote subscription for requested symbols, attempts bounded re-subscribe/reconnect when returned ticks are stale or connection is invalid, exposes feed health evidence, and preserves the 300s REALTIME_QUOTE_STALE fail-closed guard.",
+  "first_seen_at": "2026-07-02T08:02:33.557669Z",
+  "fix_branch": null,
+  "fix_commit": "0ffd76d9e900dc6cfe2080b339ae7430273d0d23",
+  "fixed_at": "2026-07-02T10:00:37.480070Z",
+  "github_issue_number": 1816,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1816",
+  "last_seen_at": "2026-07-02T08:02:33.557669Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1821",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "targeted_pytest_minqmtsim_market_data_lifecycle",
+    "ruff_changed_python_files",
+    "git_diff_check",
+    "guardrail_changed_files",
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "MiniQMT SIM pre-trade quote cache goes stale without active subscription/reconnect self-heal",
+  "trigger_condition": {
+    "fingerprint": "f2d2d67219752b2b2d7b7fbb",
+    "source_event_id": "FE-20260702-f2d2d6721975"
+  },
+  "validation_evidence": [
+    "PR #1821 CI all real checks green; mergeStateStatus=CLEAN before squash merge"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

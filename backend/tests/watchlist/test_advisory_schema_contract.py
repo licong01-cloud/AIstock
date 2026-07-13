@@ -110,3 +110,14 @@ def test_advisory_recommendation_list_lifecycle_schema_contract() -> None:
     assert "ux_advisory_list_version_one_published_per_program_date" in migration
     assert "BACKFILLED_DAILY_REVIEW" in migration
     assert "not hard gates" in migration
+
+
+def test_advisory_binding_interval_comment_migration_is_comment_only() -> None:
+    migration = Path("backend/db/migrations/advisory_binding_interval_comments_20260712.sql").read_text(encoding="utf-8")
+    normalized = " ".join(migration.lower().split())
+
+    assert migration.count("COMMENT ON COLUMN app.advisory_strategy_binding_version") == 2
+    assert "inclusive lower bound" in normalized
+    assert "exclusive upper bound" in normalized
+    for prohibited in ("create table", "alter table", "insert into", "update ", "delete from", "drop "):
+        assert prohibited not in normalized

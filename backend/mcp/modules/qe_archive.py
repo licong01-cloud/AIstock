@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 QE_ARCHIVE_BACKFILL_CONFIRM = "QE_ARCHIVE_BACKFILL"
 QE_ARCHIVE_WRITE_CONFIRM = "QE_ARCHIVE_WRITE"
 QE_ARCHIVE_WORKER_CONFIRM = "QE_ARCHIVE_WORKER_RUN"
+MULTI_ALPHA_COMBINE_BACKTEST_CONFIRM = "MULTI_ALPHA_COMBINE_BACKTEST_RUN"
 
 TOOL_NAMES = (
     "qe_archive_health",
@@ -35,12 +36,23 @@ TOOL_NAMES = (
     "qe_archive_query_hyperparam_history",
     "qe_archive_query_analytics_view_status",
     "qe_archive_query_run_leaderboard",
+    "qe_archive_query_topk_quality",
     "qe_archive_query_seed_robustness",
     "qe_archive_query_factor_performance",
     "qe_archive_query_model_hyperparam_seed_perf",
     "qe_archive_query_overfit_flags",
     "qe_archive_query_promotion_candidates",
     "qe_archive_query_evolution_lineage",
+    "qe_archive_query_resource_phases",
+    "multi_alpha_orthogonality",
+    "multi_alpha_combine_preview",
+    "multi_alpha_combine_backtest_run_confirmed",
+    "multi_alpha_combine_backtest_result_get",
+    "multi_alpha_combine_backtest_list",
+    "prediction_store_get_pointer",
+    "prediction_store_pull_pred",
+    "prediction_store_pull_label",
+    "model_store_health",
 )
 TOOL_COUNT = len(TOOL_NAMES)
 
@@ -49,6 +61,8 @@ def register(registry: "ModuleRegistry") -> None:
     """Register QE Archive tools on the shared MCP gateway."""
 
     client = registry.client("qe-archive")
+    prediction_store_client = registry.client("prediction-store")
+    multi_alpha_client = registry.client("multi-alpha")
 
     def _sanitize_ids(values: list[str] | None, field_name: str) -> list[str]:
         return [registry.sanitize(value, field_name) for value in (values or []) if str(value or "").strip()]
@@ -277,11 +291,23 @@ def register(registry: "ModuleRegistry") -> None:
         min_icir: float | None = None,
         min_ir: float | None = None,
         limit: int = 20,
-        order_by: str = "cagr",
+        order_by: str = "calmar",
     ) -> Any:
         return client.get(
             "/analytics/run-leaderboard",
             params={"model_type": model_type, "min_icir": min_icir, "min_ir": min_ir, "limit": limit, "order_by": order_by},
+        )
+
+    @registry.mcp.tool(name="qe_archive_query_topk_quality")
+    def qe_archive_query_topk_quality(
+        run_id: str | None = None,
+        task_id: str | None = None,
+        k: int | None = None,
+        limit: int = 20,
+    ) -> Any:
+        return client.get(
+            "/analytics/topk-quality",
+            params={"run_id": run_id, "task_id": task_id, "k": k, "limit": limit},
         )
 
     @registry.mcp.tool(name="qe_archive_query_seed_robustness")
@@ -336,7 +362,7 @@ def register(registry: "ModuleRegistry") -> None:
         model_type: str | None = None,
         min_seed_count: int = 5,
         limit: int = 20,
-        order_by: str = "cagr_mean",
+        order_by: str = "calmar",
     ) -> Any:
         return client.get(
             "/analytics/promotion-candidates",
@@ -354,5 +380,99 @@ def register(registry: "ModuleRegistry") -> None:
             "/analytics/evolution-lineage",
             params={"task_id": task_id, "experiment_id": experiment_id, "model_type": model_type, "limit": limit},
         )
+
+    @registry.mcp.tool(name="qe_archive_query_resource_phases")
+    def qe_archive_query_resource_phases(
+        run_id: str | None = None,
+        task_id: str | None = None,
+        loop_index: int | None = None,
+        source_run_key: str | None = None,
+        limit: int = 20,
+    ) -> Any:
+        return client.get(
+            "/resource-phases",
+            params={
+                "run_id": run_id,
+                "task_id": task_id,
+                "loop_index": loop_index,
+                "source_run_key": source_run_key,
+                "limit": max(1, min(int(limit), 200)),
+            },
+        )
+
+    @registry.mcp.tool(name="multi_alpha_orthogonality")
+    def multi_alpha_orthogonality(run_ids: list[str], k: int = 25) -> Any:
+        safe_run_ids = _sanitize_ids(run_ids, "run_id")
+        bounded_k = max(1, min(int(k), 500))
+        return multi_alpha_client.get("/orthogonality", params={"run_ids": safe_run_ids, "k": bounded_k})
+
+    @registry.mcp.tool(name="multi_alpha_combine_preview")
+    def multi_alpha_combine_preview(
+        legs: list[dict[str, Any]],
+        weighting_scheme: str = "equal",
+        normalize_method: str = "zscore",
+        walk_forward: dict[str, Any] | None = None,
+        head: int = 20,
+    ) -> Any:
+        bounded_head = max(0, min(int(head), 1000))
+        return multi_alpha_client.post(
+            "/combine/preview",
+            {
+                "legs": legs,
+                "weighting_scheme": weighting_scheme,
+                "normalize_method": normalize_method,
+                "walk_forward": walk_forward,
+                "head": bounded_head,
+            },
+        )
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_run_confirmed")
+    def multi_alpha_combine_backtest_run_confirmed(
+        action: str,
+        payload: dict[str, Any],
+        confirm_run: str | None = None,
+    ) -> Any:
+        registry.confirm(confirm_run, MULTI_ALPHA_COMBINE_BACKTEST_CONFIRM, "confirm_run")
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"submit", "run"}:
+            raise ValueError("action must be 'submit' or 'run'")
+        body = dict(payload or {})
+        body["run_async"] = bool(body.get("run_async", True))
+        return multi_alpha_client.post("/combine-backtest/run", body)
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_result_get")
+    def multi_alpha_combine_backtest_result_get(run_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return multi_alpha_client.get(f"/combine-backtest/runs/{safe_run_id}")
+
+    @registry.mcp.tool(name="multi_alpha_combine_backtest_list")
+    def multi_alpha_combine_backtest_list(status: str | None = None, limit: int = 20) -> Any:
+        bounded_limit = max(1, min(int(limit), 200))
+        return multi_alpha_client.get("/combine-backtest/runs", params={"status": status, "limit": bounded_limit})
+
+    @registry.mcp.tool(name="prediction_store_get_pointer")
+    def prediction_store_get_pointer(run_id: str | None = None, experiment_id: str | None = None) -> Any:
+        if run_id:
+            safe_run_id = registry.sanitize(run_id, "run_id")
+            return prediction_store_client.get(f"/pointers/{safe_run_id}", params={"experiment_id": experiment_id})
+        if experiment_id:
+            safe_experiment_id = registry.sanitize(experiment_id, "experiment_id")
+            return prediction_store_client.get(f"/pointers/by-experiment/{safe_experiment_id}")
+        raise ValueError("run_id or experiment_id is required")
+
+    @registry.mcp.tool(name="prediction_store_pull_pred")
+    def prediction_store_pull_pred(run_id: str, head: int = 5) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        bounded_head = max(0, min(int(head), 1000))
+        return prediction_store_client.get(f"/pred/{safe_run_id}", params={"head": bounded_head})
+
+    @registry.mcp.tool(name="prediction_store_pull_label")
+    def prediction_store_pull_label(run_id: str) -> Any:
+        safe_run_id = registry.sanitize(run_id, "run_id")
+        return prediction_store_client.get(f"/label/{safe_run_id}")
+
+    @registry.mcp.tool(name="model_store_health")
+    def model_store_health() -> Any:
+        return prediction_store_client.get("/health")
 
     registry.register_tool_count("qe_archive", TOOL_COUNT)

@@ -1,0 +1,95 @@
+{
+  "actual": "UA is available but latest_summary_manifest_freshness is null and only older manual summary refs are visible.",
+  "allowed_write_scope": [
+    "scripts/code_intelligence_adapter.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260621_BUG-456-understand-anything-freshness-is-available-but-lacks-clear-latest-freshn.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "scripts/nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+    "tests/aistock_validation/bugs/20260621_BUG-454-nightly-summary-janitor-passes-unsupported-stdout-format-compact.json",
+    "tests/aistock_validation/bugs/20260621_BUG-455-codegraph-latest-freshness-artifact-keeps-stale-commit-metadata-despite.json",
+    "tests/aistock_validation/bugs/20260621_BUG-457-nightly-llm-discovery-emits-many-anomalies-but-no-high-value-issue-draft.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-456",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T15:56:23.537282Z",
+  "description": "UA is available but latest_summary_manifest_freshness is null and only older manual summary refs are visible.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-52d6b31bb1c6",
+      "timestamp": "2026-06-21T15:56:23.537276Z"
+    }
+  ],
+  "evidence_uris": [
+    "doctor h7_code_intelligence.understand_anything_status=available with latest_summary_manifest_freshness=null"
+  ],
+  "expected": "Nightly/doctor emits compact UA availability and freshness guidance that distinguishes base-current/ancestor/old summary from missing graph, without blocking issue workflow.",
+  "first_seen_at": "2026-06-21T15:56:23.537282Z",
+  "fix_branch": null,
+  "fix_commit": "a92ec1b5f794a73b61f823653cfa1e3f9834b5ca",
+  "fixed_at": "2026-06-21T17:04:22.869768Z",
+  "github_issue_number": 1410,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1410",
+  "last_seen_at": "2026-06-21T15:56:23.537282Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1414",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py doctor --skip-external --output-format full-json",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Understand Anything freshness is available but lacks clear latest freshness summary for agents",
+  "trigger_condition": {
+    "fingerprint": "52d6b31bb1c601d66f9eee3a",
+    "source_event_id": "FE-20260621-52d6b31bb1c6"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> passed (58 passed)",
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed (165 passed)",
+    "pytest backend/tests/scripts/test_nightly_bug_candidate_queue.py -q -> passed (9 passed)",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s validation_center_backend -> passed (458 passed)",
+    "workflow-smoke scripts/aistock_issue_workflow.py/scripts/code_intelligence_adapter.py/scripts/nightly_bug_candidate_queue.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "actual": "With AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS=1, existing router tests show /api/v1/qmt/virtual-strategies/orders and /orders/batch call QmtManagedOrderService directly and invoke the fake MiniQMT broker without runtime_owner/runtime_child_order_id evidence.",
+  "allowed_write_scope": [
+    "backend/routers/qmt_strategy_ledger.py",
+    "backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/tests/trading_core/test_minqmt_vnpy_shared_adapter.py",
+    "tests/aistock_validation/bugs/20260612_BUG-349-p0-miniqmt-designcompliance-qmt-strategy-ledger-managed-submit-endpoints.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-349",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T13:58:21.707464Z",
+  "description": "With AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS=1, existing router tests show /api/v1/qmt/virtual-strategies/orders and /orders/batch call QmtManagedOrderService directly and invoke the fake MiniQMT broker without runtime_owner/runtime_child_order_id evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-c82d134671b3",
+      "timestamp": "2026-06-12T13:58:21.707460Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:104-110,431-458,627-632,871-884"
+  ],
+  "expected": "Paper v2/MiniQMT product or manual submission must be runtime-owned: public qmt_strategy_ledger submit/batch routes must reject non-runtime-owned direct payloads and only allow explicit legacy diagnostics/admin compatibility with visible non-product metadata; canonical product flow must enter MiniQMTExecutionRuntime before QmtManagedOrderService.",
+  "first_seen_at": "2026-06-12T13:58:21.707464Z",
+  "fix_branch": null,
+  "fix_commit": "5df782377dc4bcdc553ffdbef23a2606e23a80da",
+  "fixed_at": "2026-06-12T15:01:38.739717Z",
+  "github_issue_number": 1035,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1035",
+  "last_seen_at": "2026-06-12T13:58:21.707464Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1030",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py::test_managed_submit_records_intent_before_broker_call backend/tests/qmt_strategy_ledger/test_router_managed_orders_guard.py::test_managed_batch_submit_returns_batch_preflight_contract -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] qmt_strategy_ledger managed submit endpoints bypass MiniQMTExecutionRuntime",
+  "trigger_condition": {
+    "fingerprint": "c82d134671b3bc29ab25a45b",
+    "source_event_id": "FE-20260612-c82d134671b3"
+  },
+  "validation_evidence": [
+    "GitHub PR #1030 checks: 16 passed / 0 failed",
+    "Targeted MiniQMT/Paper v2 pytest after rebase: 94 passed",
+    "validation_module_registry_l0 after rebase: passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

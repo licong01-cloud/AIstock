@@ -1,0 +1,4 @@
+interface:
+  display_name: "更新回测数据集"
+  short_description: "候选重建、PIT校验、资金流单位门禁与版本化部署"
+  default_prompt: "Use $update-backtest-dataset to rebuild and validate an AIstock backtest dataset to a requested cutoff date."

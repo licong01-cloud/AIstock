@@ -1,0 +1,85 @@
+{
+  "actual": "The 07:40 reject scenario produced a FATAL child_order_count drift: A ledger had 90 child orders while B ledger had 60; the same reject scenario earlier at 01:37 and 03:01 had differences=0.",
+  "allowed_write_scope": [
+    "docs/handoff/BUG-553-miniqmt-shadow-reject-child-order-count-drift.md",
+    "tests/aistock_validation/bugs/20260629_BUG-553-miniqmt-a-shadow-reject-scenario-reports-child-order-count-drift.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-553",
+  "closed_at": null,
+  "closure_requirements": [
+    "Produce the root-cause investigation report with runtime-state and source evidence.",
+    "Classify whether the drift is an A/event-loop defect or a reconciler false positive.",
+    "Do not modify MiniQMT product code in this investigation pass.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T09:17:05.308225Z",
+  "description": "Investigation-only BUG for the 2026-06-29 MiniQMT A shadow day-1 dry-run reject scenario. The 07:40 reject report produced MINIQMT_SHADOW_CHILD_ORDER_COUNT_DRIFT FATAL: A ledger had 90 child orders (60 REJECTED + 30 SUBMITTED) while B ledger had 60 all REJECTED; the same reject scenario earlier at 01:37 and 03:01 had differences=0. This workflow records root-cause evidence only and intentionally does not modify product code.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-7fd1df96c4f6",
+      "timestamp": "2026-06-29T09:17:05.308222Z"
+    },
+    {
+      "action": "investigation_scope_corrected",
+      "actor": "codex",
+      "note": "Corrected handoff path from BUG-551 typo to BUG-553 and marked this BUG as investigation-only.",
+      "timestamp": "2026-06-29T09:55:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-state.json runtime_id=mqrt_sim_c3f180d060aecb97a0fe8852; SHADOW_RECONCILIATION_REPORTED 2026-06-29 reject scenario 01:37/03:01/07:40"
+  ],
+  "expected": "Reject scenario shadow reconciliation should distinguish true A/B behavior divergence from expected event-loop retry semantics, and investigation should identify whether the 30 extra A SUBMITTED child orders are a real A bug or an over-strict reconciler count metric.",
+  "first_seen_at": "2026-06-29T09:17:05.308225Z",
+  "fix_branch": null,
+  "fix_commit": "33d2e2defeb2b6912d589afc330998009d43389e",
+  "fixed_at": "2026-06-29T11:34:43.862326Z",
+  "github_issue_number": 1734,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1734",
+  "last_seen_at": "2026-06-29T09:17:05.308225Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1736",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read F:\\Dev\\AIstock\\tmp\\miniqmt_execution_runtime\\runtime-state.json and compare events for mqrt_sim_c3f180d060aecb97a0fe8852_reject_a / _reject_b plus the three reject SHADOW_RECONCILIATION_REPORTED records.",
+  "required_verification": [
+    "git_diff_check"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT A shadow reject scenario reports child order count drift",
+  "trigger_condition": {
+    "fingerprint": "7fd1df96c4f6911c77548b56",
+    "source_event_id": "FE-20260629-7fd1df96c4f6"
+  },
+  "validation_evidence": [
+    "rtk git diff --check origin/main...HEAD -> passed",
+    "rtk python -m json.tool BUG-553 registry files -> passed",
+    "rtk python scripts/aistock_issue_workflow.py watch-ci --bug-id BUG-553 --pr-url https://github.com/licong01-cloud/AIstock/pull/1736 -> passed (20 passed, 0 failed, 0 pending)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

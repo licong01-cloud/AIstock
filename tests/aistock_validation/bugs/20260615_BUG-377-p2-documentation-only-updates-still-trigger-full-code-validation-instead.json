@@ -1,0 +1,82 @@
+{
+  "actual": "Docs-only changes can still flow through full validation and heavy workflow gates instead of a docs-lite lane.",
+  "allowed_write_scope": [
+    "scripts/ci_change_classifier.py",
+    "scripts/issue_flow.py",
+    "scripts/aistock_issue_workflow.py",
+    ".github/workflows/test.yml",
+    ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/codeql.yml",
+    "tests/aistock_validation/bugs/20260615_BUG-377-p2-documentation-only-updates-still-trigger-full-code-validation-instead.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-377",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-15T14:23:30.901321Z",
+  "description": "Docs-only changes can still flow through full validation and heavy workflow gates instead of a docs-lite lane.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260615-33259ed8ca0a",
+      "timestamp": "2026-06-15T14:23:30.901318Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Docs-only updates preserve a simple version/change record and do not require code validation, business nox, CodeQL, Semgrep, or backend/frontend tests unless the change also touches code, workflow, catalog, standard YAML, dependency, or production-sensitive paths.",
+  "first_seen_at": "2026-06-15T14:23:30.901321Z",
+  "fix_branch": null,
+  "fix_commit": "058e1aa240e6886e98381f28398cb4924f96e02d",
+  "fixed_at": "2026-06-15T16:21:37.358627Z",
+  "github_issue_number": 1114,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1114",
+  "last_seen_at": "2026-06-15T14:23:30.901321Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1120",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/ci_change_classifier.py --changed-file docs/codex_project_memory.md --repo-root F:\\Dev\\AIstock",
+  "required_verification": [
+    "docs_lite_version_record_only"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "P2: Documentation-only updates still trigger full code validation instead of a lightweight docs-lite lane",
+  "trigger_condition": {
+    "fingerprint": "33259ed8ca0a3f6d4c9fce76",
+    "source_event_id": "FE-20260615-33259ed8ca0a"
+  },
+  "validation_evidence": [
+    "gh pr checks 1120 -> 17 passed, 0 failed; docs_lite_version_record_only"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

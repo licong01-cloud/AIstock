@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from backend.db.init_research_assistant_schema_20260521 import DDL, RESEARCH_ASSISTANT_EVENT_TYPES, RESEARCH_ASSISTANT_SCHEMA_VERSION
 from backend.services.research_assistant.models import EVENT_TYPES, PROMPT_NODE_CATEGORIES
@@ -38,7 +39,7 @@ def _assert_columns(table_columns: dict[str, set[str]], kind: str, payload: dict
 def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
     sql = "\n".join(DDL)
 
-    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_memory_tree_v1_20260601"
+    assert RESEARCH_ASSISTANT_SCHEMA_VERSION == "research_assistant_phase12_skill_library_v1_20260616"
     for table in {
         "research_agent_tasks",
         "agent_task_events",
@@ -47,6 +48,11 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "research_memory_items",
         "research_memory_access_log",
         "assistant_context_packs",
+        "assistant_code_context_refs",
+        "assistant_proactive_reports",
+        "assistant_reflection_cards",
+        "assistant_prompt_lab_runs",
+        "assistant_skill_library",
         "research_memory_entities",
         "research_memory_relations",
         "research_evolution_paths",
@@ -58,7 +64,6 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_mcp_tools",
         "assistant_mcp_tool_events",
         "assistant_approval_requests",
-        "assistant_issue_candidates",
         "assistant_external_agent_sessions",
         "assistant_external_agent_events",
         "assistant_model_profiles",
@@ -78,20 +83,28 @@ def test_research_assistant_schema_contains_phase1_tables_and_gates() -> None:
         "assistant_notifications",
         "assistant_reports",
         "assistant_agenda_items",
-        "assistant_validation_discovery_reports",
         "assistant_trace_events",
+        "assistant_llm_usage_events",
     }:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in sql
 
     assert "Memory Ledger" in sql
-    assert "formal GitHub issue creation requires explicit approval and sync" in sql
+    assert "assistant_issue_candidates" not in sql
+    assert "assistant_validation_discovery_reports" not in sql
+    assert "idx_aic_status_updated" not in sql
+    assert "ck_aic_status" not in sql
     assert "CONSTRAINT ck_rat_status" in sql
     assert "CONSTRAINT ck_rmi_approval" in sql
     assert "CONSTRAINT ck_aar_status" in sql
-    assert "CONSTRAINT ck_aic_status" in sql
     assert "requires_approval BOOLEAN NOT NULL DEFAULT FALSE" in sql
     assert "COMMENT ON TABLE assistant_capabilities" in sql
     assert "COMMENT ON TABLE assistant_action_proposals" in sql
+    assert "COMMENT ON TABLE assistant_code_context_refs" in sql
+    assert "COMMENT ON TABLE assistant_proactive_reports" in sql
+    assert "COMMENT ON TABLE assistant_reflection_cards" in sql
+    assert "COMMENT ON TABLE assistant_prompt_lab_runs" in sql
+    assert "COMMENT ON TABLE assistant_skill_library" in sql
+    assert "COMMENT ON TABLE assistant_llm_usage_events" in sql
     assert "action_proposal_id TEXT PRIMARY KEY" in sql
     assert "assistant_mcp_tool_events.result_card_json" in sql
     assert "assistant_mcp_tool_events.artifact_refs" in sql
@@ -202,6 +215,58 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
         )
     _assert_columns(
         table_columns,
+        "proactive_reports",
+        {
+            "report_id": "apr_x",
+            "report_type": "morning_brief",
+            "report_date": "2099-12-31",
+            "summary_md": "summary",
+            "sections_json": {},
+            "source_refs_json": [],
+            "status": "generated",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "reflection_cards",
+        {
+            "card_id": "refcard_x",
+            "task_id": "rat_x",
+            "trigger": "failure",
+            "lesson_md": "lesson",
+            "structured_json": {},
+            "memory_ref": "mem_x",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "prompt_lab_runs",
+        {
+            "lab_run_id": "plab_x",
+            "target_prompt_key": "root.assistant",
+            "optimizer": "gepa",
+            "eval_set_ref": "eval_x",
+            "candidate_text": "candidate",
+            "judge_score_json": {},
+            "status": "candidate",
+            "approval_request_id": "appr_x",
+        },
+    )
+    _assert_columns(
+        table_columns,
+        "skill_library",
+        {
+            "skill_id": "sklib_x",
+            "skill_key": "qe.task.improvement",
+            "description": "recipe",
+            "recipe_json": {},
+            "success_count": 1,
+            "provenance_json": {},
+            "status": "draft",
+        },
+    )
+    _assert_columns(
+        table_columns,
         "action_proposals",
         {
             "action_proposal_id": "actprop_x",
@@ -270,16 +335,116 @@ def test_research_assistant_service_payloads_match_schema_columns() -> None:
     )
     _assert_columns(
         table_columns,
+        "code_context_refs",
+        {
+            "code_ref_id": "code_ref_x",
+            "task_id": "rat_x",
+            "query_scope": "path:backend/services/research_assistant/service.py",
+            "manifest_json": {},
+            "source": "codegraph",
+            "provenance_json": {"commit": "abc", "file": "backend/services/research_assistant/service.py", "symbol": "build_context_pack", "generated_at": "2099-12-31T00:00:00+00:00"},
+            "as_of": "2099-12-31T00:00:00+00:00",
+        },
+    )
+    _assert_columns(
+        table_columns,
         "approvals",
         {"approval_id": "appr_x", "status": "pending", "task_id": "rat_x", "approval_type": "issue.candidate", "risk_level": "high", "plan_digest": "digest-abcdef", "summary": "Issue", "required_confirmation_text": "APPROVE", "created_by": "assistant", "approval_context_json": {}},
     )
     _assert_columns(
         table_columns,
-        "issue_candidates",
-        {"candidate_id": "issuecand_x", "status": "needs_review", "dedupe_key": "dedupe", "github_sync_status": "not_requested", "github_sync_json": {}, "title": "Bug", "severity": "P1", "module": "research_assistant", "problem_statement": "problem", "reproduce_command": None, "evidence_refs": [], "proposed_by": "assistant"},
+        "llm_usage_events",
+        {
+            "usage_event_id": "llmu_x",
+            "trace_id": "trace_x",
+            "task_id": "rat_x",
+            "conversation_id": "conv_x",
+            "message_id": "msg_x",
+            "call_group_id": "rat_x",
+            "call_index": 1,
+            "phase": "initial_chat",
+            "component": "research_assistant.llm",
+            "provider": "deepseek",
+            "model": "deepseek/deepseek-chat",
+            "model_profile_id": "model_x",
+            "litellm_model": "deepseek/deepseek-chat",
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "reasoning_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "prompt_tokens_estimated": False,
+            "completion_tokens_estimated": False,
+            "usage_source": "provider_reported",
+            "usage_status": "recorded",
+            "usage_reason_code": "provider_usage_missing",
+            "prompt_cost_usd": "0.0001000000",
+            "completion_cost_usd": "0.0000500000",
+            "total_cost_usd": "0.0001500000",
+            "currency": "USD",
+            "cost_source": "litellm_model_cost",
+            "cost_status": "recorded",
+            "cost_reason_code": "pricing_missing",
+            "pricing_snapshot_json": {"model": "deepseek/deepseek-chat"},
+            "usage_raw_json": {"prompt_tokens": 100},
+            "request_meta_json": {"message_count": 2, "prompt_text_retained": False},
+            "response_meta_json": {"content_chars": 40, "prompt_text_retained": False},
+            "duration_ms": 1200,
+            "started_at": "2099-12-31T00:00:00+00:00",
+            "completed_at": "2099-12-31T00:00:01+00:00",
+        },
     )
     _assert_columns(
         table_columns,
         "temp_memories",
         {"temp_memory_id": "tmpmem_x", "task_id": "rat_x", "stream_id": None, "memory_type": "task_state", "content_json": {}, "content_text": "progress", "evidence_refs": [], "confidence": 0.5, "expires_at": "2099-12-31T00:00:00+00:00", "model_profile_id": "model", "created_by_model_profile_id": "model"},
     )
+
+
+def test_bug423_retire_candidate_discovery_migrations_are_explicit() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.rollback.sql").read_text(encoding="utf-8")
+
+    assert "DROP INDEX IF EXISTS idx_aic_status_updated" in forward
+    assert "DROP TABLE IF EXISTS assistant_validation_discovery_reports" in forward
+    assert "DROP TABLE IF EXISTS assistant_issue_candidates" in forward
+    assert "CASCADE" not in forward.upper()
+    assert "CREATE TABLE IF NOT EXISTS assistant_issue_candidates" in rollback
+    assert "CREATE TABLE IF NOT EXISTS assistant_validation_discovery_reports" in rollback
+    assert "CONSTRAINT ck_aic_status" in rollback
+    assert "CONSTRAINT uq_aic_dedupe" in rollback
+    assert "CREATE INDEX IF NOT EXISTS idx_aic_status_updated" in rollback
+    assert "retired by BUG-423 Phase 2" in rollback
+
+
+def test_bug423_removed_draft_tables_from_repository_contract() -> None:
+    assert "issue_candidates" not in TABLES
+    assert "validation_discovery_reports" not in TABLES
+
+
+def test_bug439_repair_capability_registry_migration_is_narrow_and_reversible() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/010_repair_capability_registry_mcp_tool_refs.rollback.sql").read_text(encoding="utf-8")
+
+    assert "UPDATE assistant_capabilities" in forward
+    assert "mcp_tool_refs IS NULL OR jsonb_typeof(mcp_tool_refs) <> 'array'" in forward
+    assert "mcp_tool_refs IS NULL OR mcp_tool_refs IN ('{}'::jsonb, 'null'::jsonb, '\"\"'::jsonb)" in forward
+    assert "mcp_tool_refs = '[]'::jsonb" in forward
+    assert "DROP" not in forward.upper()
+    assert "Capability Registry" in rollback
+    assert "UPDATE assistant_capabilities" not in rollback
+
+
+def test_llm_usage_accounting_migration_contract_and_privacy() -> None:
+    forward = Path("backend/db/migrations/ra_upgrade/011_llm_usage_accounting.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/db/migrations/ra_upgrade/011_llm_usage_accounting.rollback.sql").read_text(encoding="utf-8")
+
+    assert "CREATE TABLE IF NOT EXISTS assistant_llm_usage_events" in forward
+    assert "COMMENT ON TABLE assistant_llm_usage_events" in forward
+    assert "CREATE INDEX IF NOT EXISTS idx_aluer_completed_at" in forward
+    assert "CONSTRAINT ck_aluer_usage_status" in forward
+    assert "prompt_text" not in _table_columns(forward, "assistant_llm_usage_events")
+    assert "message_text" not in _table_columns(forward, "assistant_llm_usage_events")
+    assert "DROP TABLE IF EXISTS assistant_llm_usage_events" in rollback
+    assert "assistant_llm_usage_events" in TABLES["llm_usage_events"]["table"]

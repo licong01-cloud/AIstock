@@ -1,0 +1,135 @@
+{
+  "actual": "The same configuration surface is split across separate mcp-tools, skills, models, and settings pages, adding extra nav items after the already-approved RA frontend cleanup.",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/layout.tsx",
+    "frontend/src/app/research-assistant/settings/page.tsx",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+    "frontend/src/app/research-assistant/skills/page.tsx",
+    "frontend/src/app/research-assistant/models/page.tsx",
+    "tests/aistock_validation/bugs/20260622_BUG-482-consolidate-research-assistant-config-pages-into-settings-tabs.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/components/research-assistant/McpCatalogSection.tsx",
+    "frontend/src/components/research-assistant/SkillsSection.tsx",
+    "frontend/src/components/research-assistant/ModelRoutingSection.tsx",
+    "frontend/src/components/research-assistant/HealthSection.tsx",
+    "frontend/e2e/research-assistant-settings.spec.ts"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-482",
+  "closed_at": "2026-06-23T06:15:02Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T12:14:52.748873Z",
+  "description": "The same configuration surface is split across separate mcp-tools, skills, models, and settings pages, adding extra nav items after the already-approved RA frontend cleanup.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-ce0daee95e38",
+      "timestamp": "2026-06-22T12:14:52.748870Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope to include extracted frontend section components and a page-specific Playwright spec required by BUG-482 acceptance. Scope remains frontend-only plus BUG metadata; no backend files.",
+      "timestamp": "2026-06-23T02:50:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The Research Assistant navigation has a single 设置 entry for MCP 目录 / 技能 / 模型路由 / 健康 tabs; legacy /mcp-tools, /skills, and /models routes redirect to deep-linked settings tabs without 404; all existing functionality remains available.",
+  "first_seen_at": "2026-06-22T12:14:52.748873Z",
+  "fix_branch": "bug/BUG-482-consolidate-research-assistant-config-pages-into-20260622",
+  "fix_commit": "416e2475ed77a2cc911520dca9cb0536afad995c",
+  "fixed_at": "2026-06-23T06:12:11.291035Z",
+  "github_issue_number": 1484,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1484",
+  "last_seen_at": "2026-06-22T12:14:52.748873Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1524",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Consolidate Research Assistant config pages into settings tabs",
+  "trigger_condition": {
+    "fingerprint": "ce0daee95e3826910504ea2b",
+    "source_event_id": "FE-20260622-ce0daee95e38"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/research-assistant/layout.tsx",
+      "frontend/src/app/research-assistant/settings/page.tsx",
+      "frontend/src/app/research-assistant/mcp-tools/page.tsx",
+      "frontend/src/app/research-assistant/skills/page.tsx",
+      "frontend/src/app/research-assistant/models/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/research-assistant/settings",
+    "ui_routes": [
+      "/research-assistant/settings"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1524 required checks -> passed (34 passed, 0 failed)",
+    "rtk proxy npm exec tsc --noEmit --incremental false -> passed",
+    "rtk proxy npm run lint -> passed (existing warnings only)",
+    "rtk proxy npm run build -> passed (existing warnings only)",
+    "rtk proxy npx playwright test e2e/research-assistant-settings.spec.ts -> passed (3 passed)",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (328 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s ra_phase7_full_accept -> passed",
+    "rtk proxy git diff --check -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

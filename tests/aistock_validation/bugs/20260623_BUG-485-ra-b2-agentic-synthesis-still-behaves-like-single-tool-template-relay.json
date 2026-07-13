@@ -1,0 +1,128 @@
+{
+  "actual": "RA can stop after one semantic route/tool, return process-heavy/template-like summaries, miss QE-to-strategy-to-Paper-v2 graph relationships, and answer future-style questions without enforcing driver/scenario/risk framing.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_react_tool_loop.py",
+    "backend/tests/research_assistant/test_graph_injected_into_context.py",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "prompt_packs/research_assistant/main/pack.yaml",
+    "prompt_packs/research_assistant/main/nodes/root.assistant.md",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260623_BUG-485-ra-b2-agentic-synthesis-still-behaves-like-single-tool-template-relay.json",
+    "backend/tests/research_assistant/test_db_direct_read_parity_characterization.py",
+    "backend/tests/research_assistant/test_pipeline_source_ui_static.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-485",
+  "closed_at": "2026-06-23T04:16:53Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T17:45:00.684410Z",
+  "description": "RA can stop after one semantic route/tool, return process-heavy/template-like summaries, miss QE-to-strategy-to-Paper-v2 graph relationships, and answer future-style questions without enforcing driver/scenario/risk framing.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-6448bbc4ec9c",
+      "timestamp": "2026-06-22T17:45:00.684407Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include RA prompt pack YAML required by BUG-485 B2 design scope.",
+      "timestamp": "2026-06-22T17:49:09.416946Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include root assistant prompt node because pack.yaml stores prompt bodies in referenced node files.",
+      "timestamp": "2026-06-22T18:23:52.447047Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include prompt checksum pins updated by BUG-485 prompt pack version bump for backend parity characterization.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include retired RA pipeline UI static regression because earlier retired pages may be absent and backend validation still owns the source-boundary check.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Include stock analysis MCP regression fixtures so stricter future-answer grounding can keep legacy stock tests green without weakening guard logic.",
+      "timestamp": "2026-06-22T20:39:00.122990Z"
+    },
+    {
+      "action": "closed_after_close_sync_pr_prepared",
+      "actor": "codex",
+      "note": "Source PR #1504 merged at 729a45b7544e155a329aa83a4d669c822979a10a; GitHub Issue #1494 is closed with status:fixed; close-sync PR #1518 marks BUG-485 closed. No services started, no production DB touched, no DDL executed. Runtime backend restart remains user-owned; prompt changes can be reloaded via /config/reload.",
+      "timestamp": "2026-06-23T04:16:53Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "RA chat behaves like an analyst: selects multiple read-only tools when needed, checks graph_context first for cross-module relationship questions, synthesizes bottom-line answers in natural Chinese with inline sources/as_of and future-answer boundaries, while write actions still require approval.",
+  "first_seen_at": "2026-06-22T17:45:00.684410Z",
+  "fix_branch": "bug/BUG-485-ra-b2-agentic-synthesis-still-behaves-like-singl-20260623",
+  "fix_commit": "729a45b7544e155a329aa83a4d669c822979a10a",
+  "fixed_at": "2026-06-23T04:15:21.343072Z",
+  "github_issue_number": 1494,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1494",
+  "last_seen_at": "2026-06-22T17:45:00.684410Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1504",
+  "production_backend_dependency_gate": "pending",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Ask RA: QE成果怎么利用; compare with a multi-dimensional stock question and a future-style question.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "ra_phase2_graph_context"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA B2 agentic synthesis still behaves like single-tool template relay",
+  "trigger_condition": {
+    "fingerprint": "6448bbc4ec9ca741b75976e3",
+    "source_event_id": "FE-20260623-6448bbc4ec9c"
+  },
+  "validation_evidence": [
+    "PR #1504 required checks -> all passed",
+    "Tier2 review -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

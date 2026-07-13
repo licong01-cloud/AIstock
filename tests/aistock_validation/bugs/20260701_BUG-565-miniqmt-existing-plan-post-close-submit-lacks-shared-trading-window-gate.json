@@ -1,0 +1,109 @@
+{
+  "actual": "Existing-plan replay/retry can call submit_persisted_execution_plan with submit=True after close and post-close terminalization does not compensate prior-trade-date INTRADAY_RUNNING runs.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/orchestrator.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_tail_policy.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "tests/aistock_validation/bugs/20260701_BUG-565-miniqmt-existing-plan-post-close-submit-lacks-shared-trading-window-gate.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-565",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-30T17:54:52.875611Z",
+  "description": "Existing-plan replay/retry can call submit_persisted_execution_plan with submit=True after close and post-close terminalization does not compensate prior-trade-date INTRADAY_RUNNING runs.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260701-58d985415d53",
+      "timestamp": "2026-06-30T17:54:52.875607Z"
+    },
+    {
+      "action": "attach_rca_handoff",
+      "actor": "codex",
+      "note": "Copied rescued read-only RCA into BUG-565 worktree docs/handoff for PR evidence.",
+      "timestamp": "2026-07-01T00:00:00Z"
+    },
+    {
+      "action": "scope_real_orchestrator_file",
+      "actor": "codex",
+      "note": "SimulationLifecycleOrchestrator is implemented in lifecycle.py; keep orchestrator.py entry as original request alias and add actual file for submit gate.",
+      "timestamp": "2026-07-01T00:00:01Z"
+    },
+    {
+      "action": "scope_affected_tail_policy_regression",
+      "actor": "codex",
+      "note": "Lifecycle submit gate changes affect LocalSim tail-policy submit tests; include deterministic in-window as_of_time coverage in the same simulation_runtime regression scope.",
+      "timestamp": "2026-07-01T00:00:02Z"
+    },
+    {
+      "action": "scope_shared_orchestrator_direct_tests",
+      "actor": "codex",
+      "note": "Shared lifecycle submit gate also affects direct orchestrator submit tests; add deterministic in-window as_of_time coverage.",
+      "timestamp": "2026-07-01T00:00:03Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md"
+  ],
+  "expected": "All real broker submit paths share one scheduler-window authority and reject outside execution windows with durable evidence; side-effect-bearing historical MiniQMT active runs receive broker-authoritative terminalization after fresh reconcile.",
+  "first_seen_at": "2026-06-30T17:54:52.875611Z",
+  "fix_branch": null,
+  "fix_commit": "667b7528134c6e2d1d9ab42d4efb3c12359588c6",
+  "fixed_at": "2026-07-01T01:29:25.632459Z",
+  "github_issue_number": 1779,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1779",
+  "last_seen_at": "2026-06-30T17:54:52.875611Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1783",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "See docs/handoff/miniqmt_l2_intraday_running_stall_readonly_rootcause_2026-07-01.md",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT existing-plan post-close submit lacks shared trading-window gate plus cross-day INTRADAY_RUNNING terminalization gap",
+  "trigger_condition": {
+    "fingerprint": "58d985415d53fc28b6b8fbaa",
+    "source_event_id": "FE-20260701-58d985415d53"
+  },
+  "validation_evidence": [
+    "gh pr checks 1783 -> 17 passed, 0 failed",
+    "local targeted simulation_runtime pytest/nox/ruff/py_compile/diff-check -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

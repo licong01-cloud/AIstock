@@ -7,6 +7,12 @@ from decimal import Decimal
 import pytest
 
 from backend.services.paper_trading_v2.broker.base import OrderHandle
+from backend.services.paper_trading_v2.market_data import (
+    DailySuspendStatus,
+    DailyStStatus,
+    PreTradeTradabilityProvider,
+    quote_tradability_evidence,
+)
 from backend.services.qmt_strategy_ledger.models import (
     PositionLotRecord,
     PositionLotStatus,
@@ -17,7 +23,11 @@ from backend.services.qmt_strategy_ledger.models import (
 from backend.services.qmt_strategy_ledger.lot_availability import StaticTradingCalendarProvider
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot
+from backend.services.selection_center.models import SelectionCandidate, SignalSnapshot, TargetPosition
+from backend.services.miniqmt_execution_runtime import (
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionRuntimeClient,
+)
 from backend.services.simulation_runtime import (
     DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
     DailySelectionEvidence,
@@ -36,6 +46,34 @@ from backend.services.simulation_runtime import (
 from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide, PositionLot
+
+
+class MappingSuspendProvider:
+    def __init__(self, suspended_symbols: set[str] | None = None) -> None:
+        self.suspended_symbols = set(suspended_symbols or set())
+
+    def get_suspend_status(self, symbol: str, trade_date: date) -> DailySuspendStatus:
+        suspended = symbol in self.suspended_symbols
+        return DailySuspendStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_suspended=suspended,
+            suspend_type="S" if suspended else None,
+            source="unit_test.suspend",
+        )
+
+
+class MappingStStatusProvider:
+    def __init__(self, st_symbols: set[str] | None = None) -> None:
+        self.st_symbols = set(st_symbols or set())
+
+    def get_st_status(self, symbol: str, trade_date: date) -> DailyStStatus:
+        return DailyStStatus(
+            symbol=symbol,
+            trade_date=trade_date,
+            is_st=symbol in self.st_symbols,
+            source="unit_test.stock_st",
+        )
 
 
 def _release_and_binding(*, backend: SimulationBrokerBackend = SimulationBrokerBackend.LOCAL_SIM):
@@ -367,6 +405,121 @@ def test_execution_plan_compiler_links_release_binding_evidence_and_rule_decisio
     assert runtime_repo.get_execution_plan(persisted.plan_id).plan_hash == plan.plan_hash
 
 
+def test_b0_execution_plan_reads_quote_policy_from_immutable_policy_json_snapshot() -> None:
+    policy_json = {
+        "algo_code": "SNIPER_MINIQMT",
+        "algo_config": {
+            "price_mode": "LIMIT_TRIGGER_BY_BEST_QUOTE",
+            "timer_iterations": 1,
+            "tca": {
+                "benchmark_policy": {
+                    "benchmark_max_age_ms": 10_000,
+                    "arrival_forward_window_ms": 2_000,
+                    "clock_skew_tolerance_ms": 1_000,
+                    "benchmark_max_transport_latency_ms": 3_000,
+                    "policy_version": "miniqmt_execution_tca_benchmark_v1",
+                }
+            },
+        },
+        "bar_freq": "event",
+        "execution_level": "event_driven_tick",
+        "fallback_algo_code": None,
+        "quote_contract": {
+            "schema_version": "miniqmt_quote_contract_policy_v2",
+            "control_revision": "B0_QUOTE_V2",
+            "required_capabilities": [
+                "CALENDAR",
+                "DEPTH_UNIT_SHARES",
+                "EXCHANGE_TIMESTAMP",
+                "FIVE_LEVEL_DEPTH",
+                "RAW_PRICE_BASIS",
+                "TRADABILITY",
+            ],
+            "max_receive_age_ms": 20_000,
+            "max_source_lag_ms": 20_000,
+            "max_exchange_age_ms": 20_000,
+            "max_negative_skew_ms": 1_000,
+            "max_clock_age_divergence_ms": 1_000,
+            "max_dependency_group_skew_ms": 20_000,
+            "auction_mode": "OBSERVE_ONLY",
+        },
+        "quote_evidence": {
+            "schema_version": "miniqmt_quote_evidence_policy_v1",
+            "benchmark_policy_version": "miniqmt_execution_tca_benchmark_v1",
+            "mark_policy_version": "miniqmt_execution_tca_mark_selector_v1",
+            "markout_max_lag_ms": 10_000,
+        },
+    }
+    repo = InMemorySimulationRuntimeRepository()
+    service = StrategyRuntimeReleaseService(repository=repo)
+    policy_sha256 = canonical_json_sha256(policy_json)
+    release = service.create_release(
+        package_id="pkg_shared_decision",
+        manifest_sha256="manifest_shared_decision",
+        runtime_profile_id="runtime_profile_shared",
+        runtime_profile_version_id="runtime_profile_shared_v1",
+        runtime_profile_sha256="runtime_profile_hash_shared",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="b0-quote-v2-pilot-v1",
+        execution_policy_sha256=policy_sha256,
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        execution_policy_json=policy_json,
+        effective_from=date(2026, 5, 21),
+        effective_to=date(2026, 5, 21),
+    )
+    binding = service.create_binding(
+        strategy_id="strategy_minqmt_sim",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        broker_account_id="acct_minqmt_sim",
+        capital_allocation=100_000,
+        miniqmt_quote_control={
+            "schema_version": "miniqmt_quote_control_binding_v1",
+            "control_revision": "B0_QUOTE_V2",
+        },
+        effective_from=date(2026, 5, 21),
+        effective_to=date(2026, 5, 21),
+    )
+    evidence = _evidence(release)
+    targets = TargetPositionService().build_target_positions(
+        selection_evidence=evidence,
+        signal_snapshot=_snapshot(),
+        runtime_release=release,
+        binding=binding,
+        current_positions=_current_positions("portfolio_shared"),
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=_current_positions("portfolio_shared"),
+        target_positions=targets,
+    )
+
+    plan = ExecutionPlanCompiler().compile_plan(
+        runtime_release=release,
+        binding=binding,
+        selection_evidence=evidence,
+        order_intents=rebalance.order_intents,
+        trading_rule_decisions=rebalance.trading_rule_decisions,
+        portfolio_id="portfolio_shared",
+        execution_policy_payload=release.release_config_json["execution_policy"],
+    )
+
+    assert plan.plan_payload_json["execution_policy"]["payload"] == release.release_config_json["execution_policy"]
+    assert plan.plan_payload_json["quote_control"]["binding"] == {
+        "schema_version": "miniqmt_quote_control_binding_v1",
+        "control_revision": "B0_QUOTE_V2",
+    }
+    revision = plan.plan_payload_json["quote_control"]["revision"]
+    assert revision["execution_policy_sha256"] == policy_sha256
+    assert revision["benchmark_policy_version"] == "miniqmt_execution_tca_benchmark_v1"
+    assert revision["mark_policy_version"] == "miniqmt_execution_tca_mark_selector_v1"
+    assert len(plan.plan_payload_json["quote_control"]["assignments"]) == len(plan.intents)
+
+
 def test_execution_plan_compiler_rejects_paper_only_policy() -> None:
     release, binding = _release_and_binding()
     evidence = _evidence(release)
@@ -442,6 +595,181 @@ def test_empty_daily_signal_sells_dropped_positions_and_no_trade_is_legal() -> N
     assert persisted.plan_payload_json["intents"] == []
 
 
+def test_rebalance_blocks_suspended_or_no_quote_existing_holding_without_sell_intent() -> None:
+    release, local_binding = _release_and_binding(backend=SimulationBrokerBackend.LOCAL_SIM)
+    _, qmt_binding = _release_and_binding(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    blocked_position = {
+        "688689.SH": PositionLot(
+            portfolio_id="portfolio_shared",
+            symbol="688689.SH",
+            quantity=878,
+            available_quantity=878,
+            avg_cost=46.82,
+            trade_date=date(2026, 5, 20),
+        )
+    }
+    pre_trade = {
+        "688689.SH": {
+            "schema_version": "pre_trade_tradability_status_v1",
+            "symbol": "688689.SH",
+            "trade_date": date(2026, 5, 21).isoformat(),
+            "is_tradable": False,
+            "reason_code": "NO_TRADABLE_REALTIME_QUOTE",
+            "source": "TDX_REALTIME.batch_quote",
+            "quote_evidence": {
+                "open": 0,
+                "high": 0,
+                "low": 0,
+                "total_hand": 0,
+                "bid_price_1": 0,
+                "ask_price_1": 0,
+                "no_tradable_market": True,
+            },
+        }
+    }
+    service = RebalanceIntentService()
+
+    local_result = service.build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=local_binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[],
+        pre_trade_tradability=pre_trade,
+    )
+    qmt_result = service.build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=qmt_binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[],
+        pre_trade_tradability=pre_trade,
+    )
+
+    assert local_result.order_intents == []
+    assert qmt_result.order_intents == []
+    assert [decision.reason_code for decision in local_result.trading_rule_decisions] == ["NO_TRADABLE_REALTIME_QUOTE"]
+    assert local_result.trading_rule_decisions[0].legal_quantity == 0
+    assert local_result.trading_rule_decisions[0].price_limit_rule["pre_trade_tradability"]["quote_evidence"][
+        "no_tradable_market"
+    ] is True
+
+
+def test_pre_trade_tradability_provider_combines_suspend_d_and_realtime_quote() -> None:
+    provider = PreTradeTradabilityProvider(
+        suspend_status_provider=MappingSuspendProvider({"000002.SZ"}),
+        realtime_quote_fetcher=lambda symbols: {
+            "688689.SH": {
+                "K": {"Last": 46820, "Open": 0, "High": 0, "Low": 0},
+                "TotalHand": 0,
+                "BuyLevel": [{"Price": 0, "Number": 0}],
+                "SellLevel": [{"Price": 0, "Number": 0}],
+                "ServerTime": "2026-06-17 10:00:00",
+            },
+            "000001.SZ": {
+                "K": {"Close": 10000, "Last": 10000, "Open": 9900, "High": 10100, "Low": 9800},
+                "TotalHand": 100,
+                "BuyLevel": [{"Price": 9990, "Number": 1000}],
+                "SellLevel": [{"Price": 10000, "Number": 1000}],
+                "ServerTime": "2026-06-17 10:00:00",
+            },
+        },
+        realtime_quote_source="TDX_REALTIME.batch_quote",
+        st_status_provider=MappingStStatusProvider(),
+    )
+
+    statuses = provider.get_statuses(
+        ["688689.SH", "000002.SZ", "000001.SZ"],
+        date(2026, 6, 17),
+        require_realtime_quote=True,
+        as_of_time=datetime(2026, 6, 17, 10, 0, 30),
+    )
+
+    assert statuses["688689.SH"]["reason_code"] == "NO_TRADABLE_REALTIME_QUOTE"
+    assert statuses["000002.SZ"]["reason_code"] == "SUSPENDED_BY_SUSPEND_D"
+    assert statuses["000001.SZ"]["reason_code"] == "OK"
+    assert statuses["000001.SZ"]["is_tradable"] is True
+
+
+def test_quote_tradability_evidence_blocks_zero_ohlc_volume_and_empty_book() -> None:
+    evidence = quote_tradability_evidence(
+        symbol="688689.SH",
+        source="TDX_REALTIME.batch_quote",
+        quote={
+            "K": {"Last": 46820, "Open": 0, "High": 0, "Low": 0},
+            "TotalHand": 0,
+            "BuyLevel": [{"Price": 0, "Number": 0}],
+            "SellLevel": [{"Price": 0, "Number": 0}],
+            "ServerTime": "2026-06-17 10:00:00",
+        },
+        trade_date=date(2026, 6, 17),
+        as_of_time=datetime(2026, 6, 17, 10, 0, 30),
+        st_status_provider=MappingStStatusProvider(),
+    )
+
+    assert evidence["no_tradable_market"] is True
+    assert evidence["book_empty"] is True
+    assert evidence["ohl_zero"] is True
+    assert evidence["turnover_zero"] is True
+
+
+def test_rebalance_does_not_count_blocked_sell_proceeds_for_residual_buy() -> None:
+    release, binding = _release_and_binding(backend=SimulationBrokerBackend.LOCAL_SIM)
+    blocked_position = {
+        "688689.SH": PositionLot(
+            portfolio_id="portfolio_shared",
+            symbol="688689.SH",
+            quantity=878,
+            available_quantity=878,
+            avg_cost=46.82,
+            trade_date=date(2026, 5, 20),
+        )
+    }
+    target = TargetPosition(
+        symbol="000001.SZ",
+        target_quantity=1000,
+        target_weight=0.10,
+        reference_price=10.0,
+        score=0.99,
+        rank=1,
+        reason="daily_strategy_buy_or_retain",
+    )
+    rebalance = RebalanceIntentService().build_order_intents(
+        package_id=release.package_id,
+        portfolio_id="portfolio_shared",
+        strategy_id=binding.strategy_id,
+        trade_date=date(2026, 5, 21),
+        current_positions=blocked_position,
+        target_positions=[target],
+        pre_trade_tradability={
+            "688689.SH": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "688689.SH",
+                "trade_date": date(2026, 5, 21).isoformat(),
+                "is_tradable": False,
+                "reason_code": "SUSPENDED_BY_SUSPEND_D",
+                "source": "market.suspend_d",
+            },
+            "000001.SZ": {
+                "schema_version": "pre_trade_tradability_status_v1",
+                "symbol": "000001.SZ",
+                "trade_date": date(2026, 5, 21).isoformat(),
+                "is_tradable": True,
+                "reason_code": "OK",
+                "source": "TDX_REALTIME.batch_quote",
+            },
+        },
+    )
+
+    assert [(intent.symbol, intent.side.value) for intent in rebalance.order_intents] == [("000001.SZ", "BUY")]
+    assert {decision.symbol: decision.reason_code for decision in rebalance.trading_rule_decisions} == {
+        "000001.SZ": "OK",
+        "688689.SH": "SUSPENDED_BY_SUSPEND_D",
+    }
+
+
 class FakeLocalSimBroker:
     def __init__(self) -> None:
         self.submitted = []
@@ -464,9 +792,44 @@ class FailingLocalSimBroker:
 class FakeManagedOrderBroker:
     def __init__(self) -> None:
         self.calls = []
+        self.quotes = {
+            "000001.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 10.0,
+                "ask_price_1": 10.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 10.0,
+                "bid_volume_1": 5000,
+            },
+            "000003.SZ": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 8.0,
+                "ask_price_1": 8.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 8.0,
+                "bid_volume_1": 5000,
+            },
+            "688001.SH": {
+                "source": "MINIQMT_REALTIME.broker_quote",
+                "price": 20.0,
+                "ask_price_1": 20.0,
+                "ask_volume_1": 5000,
+                "bid_price_1": 20.0,
+                "bid_volume_1": 5000,
+            },
+        }
 
     def get_positions(self):
         return [{"stock_code": "000003.SZ", "can_sell": 1000}]
+
+    def get_orders(self, cancelable_only: bool = False):  # noqa: ARG002
+        return []
+
+    def get_trades(self):
+        return []
+
+    def get_full_tick(self, symbols):
+        return {symbol: dict(self.quotes[symbol]) for symbol in symbols if symbol in self.quotes}
 
     def place_order(self, **kwargs):
         self.calls.append(kwargs)
@@ -577,23 +940,26 @@ def test_miniqmt_execution_bridge_uses_managed_orders_and_strategy_attribution()
             repository=qmt_repo,
             broker=broker,  # type: ignore[arg-type]
             calendar_provider=calendar,
-        )
+        ),
+        runtime_client=MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=qmt_repo,
+        ),
     )
 
-    prices = {"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")}
-    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol=prices)
-    submitted = bridge.submit_plan(plan=plan, binding=binding, price_by_symbol=prices)
+    submitted = bridge.submit_event_loop_plan(plan=plan, binding=binding)
+    stored_intents = qmt_repo.list_order_intents_by_batch(submitted.batch_id or "")
 
-    assert all(item.allowed for item in preview.preflights)
     assert submitted.success is True
     assert [call["strategy_name"] for call in broker.calls] == [binding.strategy_name, binding.strategy_name]
-    assert preview.requests[0].metadata["source"] == "runtime_owned_vnpy_algo"
-    assert preview.requests[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
-    assert preview.requests[0].metadata["runtime_child_order_id"]
-    assert preview.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
+    assert all(result.preflight.allowed for result in submitted.results)
+    assert stored_intents
+    assert stored_intents[0].metadata["event_loop_submit"] is True
+    assert stored_intents[0].metadata["runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert stored_intents[0].metadata["runtime_child_order_id"]
     assert submitted.runtime_evidence is not None
     assert submitted.runtime_evidence.runtime_owner == "MiniQMTExecutionRuntime"
-    assert preview.requests[0].order_remark.startswith(binding.order_remark_prefix or "")
+    assert all(call["order_remark"].startswith(binding.order_remark_prefix or "") for call in broker.calls)
 
 
 def test_miniqmt_vnpy_bridge_marks_buy_requests_cash_shrink_eligible() -> None:
@@ -641,16 +1007,21 @@ def test_miniqmt_vnpy_bridge_marks_buy_requests_cash_shrink_eligible() -> None:
             repository=qmt_repo,
             broker=FakeManagedOrderBroker(),  # type: ignore[arg-type]
             calendar_provider=StaticTradingCalendarProvider([date(2026, 5, 20), date(2026, 5, 21)]),
-        )
+        ),
+        runtime_client=MiniQMTExecutionRuntimeClient(
+            repository=InMemoryMiniQMTExecutionRuntimeRepository(),
+            strategy_ledger_repository=qmt_repo,
+        ),
     )
 
-    preview = bridge.preview_plan(plan=plan, binding=binding, price_by_symbol={"000003.SZ": Decimal("8.00"), "688001.SH": Decimal("20.00")})
+    submitted = bridge.submit_event_loop_plan(plan=plan, binding=binding)
+    stored_intents = qmt_repo.list_order_intents_by_batch(submitted.batch_id or "")
 
-    buy_requests = [request for request in preview.requests if request.side == "BUY"]
+    buy_requests = [intent for intent in stored_intents if intent.side == "BUY"]
     assert buy_requests
-    assert all(request.metadata["miniqmt_cash_preflight_shrink_enabled"] is True for request in buy_requests)
-    assert {request.metadata["miniqmt_cash_shrink_max_overshoot_ratio"] for request in buy_requests} == {"0.02"}
-    assert {request.metadata["miniqmt_cash_shrink_max_overshoot"] for request in buy_requests} == {"10000"}
+    assert all(intent.metadata["miniqmt_cash_preflight_shrink_enabled"] is True for intent in buy_requests)
+    assert {intent.metadata["miniqmt_cash_shrink_max_overshoot_ratio"] for intent in buy_requests} == {"0.02"}
+    assert {intent.metadata["miniqmt_cash_shrink_max_overshoot"] for intent in buy_requests} == {"10000"}
 
 
 def test_lifecycle_orchestrator_builds_dual_backend_plans_from_same_evidence_and_is_idempotent() -> None:
@@ -726,7 +1097,7 @@ def test_lifecycle_no_rebalance_does_not_call_broker_and_marks_success() -> None
         portfolio_id="portfolio_shared",
     )
 
-    result = orchestrator.submit_execution_plan(build_result=build)
+    result = orchestrator.submit_execution_plan(build_result=build, as_of_time=datetime(2026, 5, 21, 10, 0))
 
     assert result.status == "NO_REBALANCE"
     assert result.intent_count == 0
@@ -750,6 +1121,7 @@ def test_lifecycle_marks_localsim_submit_exception_retryable() -> None:
         orchestrator.submit_execution_plan(
             build_result=build,
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+            as_of_time=datetime(2026, 5, 21, 10, 0),
         )
 
     latest = repo.get_simulation_daily_run(build.run.run_id)
@@ -773,6 +1145,7 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
         orchestrator.submit_execution_plan(
             build_result=build,
             local_broker=FailingLocalSimBroker(),  # type: ignore[arg-type]
+            as_of_time=datetime(2026, 5, 21, 10, 0),
         )
 
 
@@ -785,6 +1158,7 @@ def test_lifecycle_successful_localsim_retry_clears_submit_failure() -> None:
         binding=binding,
         execution_plan=build.execution_plan,
         local_broker=FakeLocalSimBroker(),  # type: ignore[arg-type]
+        as_of_time=datetime(2026, 5, 21, 10, 0),
     )
 
     latest = repo.get_simulation_daily_run(build.run.run_id)

@@ -1,0 +1,159 @@
+{
+  "actual": "Research Assistant chat page 'Phase 7 Evidence / Blockers' panel (frontend/src/app/research-assistant/chat/page.tsx:646) renders Blocker/Evidence cards with two defects. (1) Layout breaks into per-character wrapping: .ra-evidence-ref-grid (research-assistant.css:254, grid-template-columns minmax(96px,0.28fr) 1fr) starves the value column inside the narrow side panel so long text degrades to per-char break; should stack to single column (label above value) at narrow width or fix column sizing. (2) Raw JSON shown on main UI: BlockerCard.tsx and EvidenceCard.tsx render <DiagnosticLogBlock data={card}> which via AssistantShared.tsx:101 prints the whole card object as <pre class=ra-json-preview>{JSON.stringify(card,null,2)}</pre>; should remove or collapse behind a developer-details toggle and show human-readable fields in main view. Minor: provenance shows only Object.keys(...).join(', ') (key names), should show source value. NOTE: as_of showing '-' is intended honest behavior, not a bug; do not change it.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/research-assistant.css",
+    "frontend/src/components/research-assistant/BlockerCard.tsx",
+    "frontend/src/components/research-assistant/EvidenceCard.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-402",
+  "closed_at": "2026-06-22T02:16:22Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T08:12:13.445098Z",
+  "description": "Research Assistant chat page 'Phase 7 Evidence / Blockers' panel (frontend/src/app/research-assistant/chat/page.tsx:646) renders Blocker/Evidence cards with two defects. (1) Layout breaks into per-character wrapping: .ra-evidence-ref-grid (research-assistant.css:254, grid-template-columns minmax(96px,0.28fr) 1fr) starves the value column inside the narrow side panel so long text degrades to per-char break; should stack to single column (label above value) at narrow width or fix column sizing. (2) Raw JSON shown on main UI: BlockerCard.tsx and EvidenceCard.tsx render <DiagnosticLogBlock data={card}> which via AssistantShared.tsx:101 prints the whole card object as <pre class=ra-json-preview>{JSON.stringify(card,null,2)}</pre>; should remove or collapse behind a developer-details toggle and show human-readable fields in main view. Minor: provenance shows only Object.keys(...).join(', ') (key names), should show source value. NOTE: as_of showing '-' is intended honest behavior, not a bug; do not change it.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-65d1b27062d7",
+      "timestamp": "2026-06-17T08:12:13.445093Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx"
+      ],
+      "note": "BUG-402 is a pure frontend Research Assistant UI rendering fix; scope expanded from registry-only triage to the exact card and CSS files identified in the task card/context pack. AssistantShared.tsx and as_of behavior remain out of scope.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json"
+      ],
+      "timestamp": "2026-06-17T08:30:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "new_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx",
+        "frontend/tests/research-assistant/research-assistant.spec.ts"
+      ],
+      "note": "Updated Phase7 frontend acceptance to match BUG-402: diagnostic raw JSON must be available only after expanding Developer details, not visible in the default main card view.",
+      "previous_scope": [
+        "tests/aistock_validation/bugs/20260617_BUG-402-ra-phase-7-evidence-blocker-cards-render-broken-in-narrow-panel-and-dump.json",
+        "tests/aistock_validation/bugs/.bug_id_allocator.json",
+        "frontend/src/app/research-assistant/research-assistant.css",
+        "frontend/src/components/research-assistant/BlockerCard.tsx",
+        "frontend/src/components/research-assistant/EvidenceCard.tsx"
+      ],
+      "timestamp": "2026-06-17T09:10:00Z"
+    },
+    {
+      "timestamp": "2026-06-22T02:16:22Z",
+      "actor": "codex",
+      "action": "final_close_sync_metadata",
+      "note": "Post-merge aftercare: PR #1442 and close-sync PR #1445 merged; GitHub Issue #1206 is closed with status:fixed; BUG JSON marked closed with closed_at. No services started, no production DB touched, no DDL executed."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-17T08:12:13.445098Z",
+  "fix_branch": "bug/BUG-402-ra-phase7-card-render-main-20260622",
+  "fix_commit": "4d57a92937ad2876da7b17d3a40076b0d3856dfa",
+  "fixed_at": "2026-06-22T02:09:36.678519Z",
+  "github_issue_number": 1206,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1206",
+  "last_seen_at": "2026-06-17T08:12:13.445098Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1442",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA Phase 7 evidence/blocker cards render broken in narrow panel and dump raw JSON to main UI",
+  "trigger_condition": {
+    "fingerprint": "65d1b27062d7ebbfdd0fb260",
+    "source_event_id": "FE-20260617-65d1b27062d7"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/blocker",
+    "ui_routes": [
+      "/blocker"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "GitHub required checks for PR #1442 -> passed (validation_center_backend and backend matrix green)",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (306 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s ra_phase7_full_accept -> passed (backend 306 passed; phase7 4/4; RA UI 9/9; crosscheck/catalog/ownership passed)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_ready",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1445",
+  "close_sync_commit": "342a6bacaf445a7698fd0739b7d65ba55fdaf0a2"
+}

@@ -33,10 +33,15 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from backend.db.pg_pool import get_conn  # noqa: E402
 from backend.data_service import qe_data_service as qe_data  # noqa: E402
+from backend.data_service.moneyflow_contract import (  # noqa: E402
+    assert_moneyflow_frame_parity,
+    moneyflow_unit_contract_receipt,
+)
 from backend.qlib_exporter.config import IPO_FILTER_DAYS  # noqa: E402
 from backend.qlib_exporter.db_reader import DBReader  # noqa: E402
 from backend.qlib_exporter.field_map_service import export_field_map_for_snapshot  # noqa: E402
 from backend.qlib_exporter.snapshot_writer import SnapshotWriter  # noqa: E402
+from backend.services.industry_code_map import UNKNOWN_L2_CODE_ID  # noqa: E402
 
 
 DEFAULT_START = "2018-08-01"
@@ -75,6 +80,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--snapshot-id", default=DEFAULT_SNAPSHOT_ID)
     parser.add_argument("--bin-id", default=DEFAULT_BIN_ID)
     parser.add_argument("--snapshot-root", default=str(PROJECT_ROOT / "qlib_snapshots"))
+    parser.add_argument(
+        "--static-schema-source",
+        default=os.getenv("QE_STATIC_SCHEMA_SOURCE", str(STATIC_SCHEMA_SOURCE)),
+        help="Parquet file whose ordered columns define the static factor schema.",
+    )
     parser.add_argument("--bin-root", default=str(PROJECT_ROOT / "qlib_bin"))
     parser.add_argument("--csv-root", default=str(PROJECT_ROOT / "qlib_csv"))
     parser.add_argument("--rdagent-root", default=str(RDAGENT_GIT_IGNORE))
@@ -182,30 +192,37 @@ def get_h5_universe(end: date, limit: int | None = None) -> pd.DataFrame:
 def load_daily_data(pool_df: pd.DataFrame, start: date, end: date, batch_size: int) -> pd.DataFrame:
     reader = DBReader()
     frames: list[pd.DataFrame] = []
-    groups: dict[date, list[str]] = {}
+    codes = (
+        pool_df["ts_code"]
+        .dropna()
+        .map(normalize_code)
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    start_dates = {}
     for row in pool_df.itertuples(index=False):
+        code = normalize_code(row.ts_code)
         list_date = getattr(row, "list_date")
-        effective_start = start
-        if pd.notna(list_date):
-            effective_start = max(start, list_date)
-        groups.setdefault(effective_start, []).append(row.ts_code)
-
-    total_batches = sum((len(codes) + batch_size - 1) // batch_size for codes in groups.values())
-    batch_no = 0
-    for effective_start in sorted(groups):
-        codes = groups[effective_start]
-        for batch in chunked(codes, batch_size):
-            batch_no += 1
-            logging.info(
-                "Loading daily PV batch %s/%s (%s codes, start=%s)",
-                batch_no,
-                total_batches,
-                len(batch),
-                effective_start,
-            )
-            df = reader.load_qlib_daily_data(batch, effective_start, end, use_tushare_adj=True)
-            if not df.empty:
-                frames.append(df)
+        start_dates[code] = max(start, list_date) if pd.notna(list_date) else start
+    batches = list(chunked(codes, batch_size))
+    for batch_no, batch in enumerate(batches, start=1):
+        logging.info(
+            "Loading daily PV batch %s/%s (%s codes, start=%s)",
+            batch_no,
+            len(batches),
+            len(batch),
+            start,
+        )
+        df = reader.load_qlib_daily_data(
+            batch,
+            start,
+            end,
+            use_tushare_adj=True,
+            instrument_start_dates={code: start_dates[code] for code in batch},
+        )
+        if not df.empty:
+            frames.append(df)
     if not frames:
         raise RuntimeError("No daily data loaded from DB")
     daily = pd.concat(frames, axis=0).sort_index()
@@ -258,20 +275,50 @@ def write_official_all_txt(official: pd.DataFrame, path: Path, sep: str) -> None
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def read_static_schema_columns() -> list[str]:
-    if not STATIC_SCHEMA_SOURCE.exists():
-        raise FileNotFoundError(f"Baseline static_factors schema source not found: {STATIC_SCHEMA_SOURCE}")
+def read_static_schema_columns(schema_source: Path) -> list[str]:
+    if not schema_source.exists():
+        raise FileNotFoundError(
+            f"Baseline static_factors schema source not found: {schema_source}; "
+            "pass --static-schema-source or set QE_STATIC_SCHEMA_SOURCE"
+        )
     import pyarrow.parquet as pq
 
-    schema = pq.ParquetFile(STATIC_SCHEMA_SOURCE).schema_arrow
-    return [
+    schema = pq.ParquetFile(schema_source).schema_arrow
+    columns = [
         name
         for name in schema.names
         if not name.startswith("__index_level_") and name not in {"datetime", "instrument"}
     ]
+    if "l2_code_id" not in columns:
+        raise ValueError(
+            f"Static schema source is stale and lacks l2_code_id: {schema_source}"
+        )
+    return columns
 
 
-def build_aux_and_static(snapshot_dir: Path, instruments: list[str], daily_norm: pd.DataFrame, start: date, end: date) -> dict:
+def align_static_schema(static: pd.DataFrame, expected_cols: list[str]) -> pd.DataFrame:
+    aligned = static.copy()
+    for col in expected_cols:
+        if col not in aligned.columns:
+            aligned[col] = np.nan
+    aligned = aligned[expected_cols]
+    for col in aligned.columns:
+        numeric = pd.to_numeric(aligned[col], errors="coerce")
+        if col == "l2_code_id":
+            aligned[col] = numeric.fillna(UNKNOWN_L2_CODE_ID).astype("int16")
+        else:
+            aligned[col] = numeric.astype("float32")
+    return aligned
+
+
+def build_aux_and_static(
+    snapshot_dir: Path,
+    instruments: list[str],
+    daily_norm: pd.DataFrame,
+    start: date,
+    end: date,
+    static_schema_source: Path,
+) -> dict:
     logging.info("Loading auxiliary H5 datasets for %s instruments", len(instruments))
     df_db = qe_data.load_daily_basic(instruments, start, end)
     df_mf = qe_data.load_moneyflow(instruments, start, end)
@@ -325,13 +372,11 @@ def build_aux_and_static(snapshot_dir: Path, instruments: list[str], daily_norm:
             static = static.join(nxt, how="left")
     static = static.sort_index()
 
-    expected_cols = read_static_schema_columns()
-    for col in expected_cols:
-        if col not in static.columns:
-            static[col] = np.nan
-    static = static[expected_cols]
-    for col in static.columns:
-        static[col] = pd.to_numeric(static[col], errors="coerce").astype("float32")
+    expected_cols = read_static_schema_columns(static_schema_source)
+    static = align_static_schema(static, expected_cols)
+
+    # Fail before writing a candidate when alternate export paths drift in units.
+    assert_moneyflow_frame_parity(df_mf, static)
 
     parquet_path = snapshot_dir / "static_factors.parquet"
     static.to_parquet(parquet_path)
@@ -344,6 +389,7 @@ def build_aux_and_static(snapshot_dir: Path, instruments: list[str], daily_norm:
         "margin_detail_rows": int(len(df_md)),
         "static_rows": int(len(static)),
         "static_columns": int(len(static.columns)),
+        "moneyflow_unit_contract": moneyflow_unit_contract_receipt(),
     }
     del static, frames
     qe_data.clear_data_cache()
@@ -772,6 +818,14 @@ def main() -> int:
     if "candidate" not in args.snapshot_id.lower() or "candidate" not in args.bin_id.lower():
         raise ValueError("snapshot-id and bin-id must contain 'candidate'")
 
+    static_schema_source = Path(args.static_schema_source)
+    schema_columns = read_static_schema_columns(static_schema_source)
+    logging.info(
+        "Static schema preflight: source=%s columns=%s",
+        static_schema_source,
+        len(schema_columns),
+    )
+
     pool = get_h5_universe(end, args.limit_instruments)
     if pool.empty:
         raise RuntimeError("H5 universe query returned no stocks")
@@ -793,13 +847,26 @@ def main() -> int:
     writer = SnapshotWriter()
     writer.write_daily_full(args.snapshot_id, daily)
     write_data_range_all_txt(daily_norm, snapshot_dir / "instruments" / "all.txt", ",")
-    aux_stats = build_aux_and_static(snapshot_dir, instruments, daily_norm, start, end)
+    aux_stats = build_aux_and_static(
+        snapshot_dir,
+        instruments,
+        daily_norm,
+        start,
+        end,
+        static_schema_source,
+    )
+    meta_path = snapshot_dir / "meta.json"
+    snapshot_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    snapshot_meta["moneyflow_unit_contract"] = moneyflow_unit_contract_receipt()
+    meta_path.write_text(json.dumps(snapshot_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     field_map = export_field_map_for_snapshot(snapshot_id=args.snapshot_id, write_to_h5=True)
 
     official = compute_official_universe(daily_norm, pool, start, end)
     if official.empty:
         raise RuntimeError("Official IPO-filtered universe is empty")
-    official.to_csv(snapshot_dir / "metadata" / "official_universe.csv", index=False)
+    official_universe_path = snapshot_dir / "metadata" / "official_universe.csv"
+    official_universe_path.parent.mkdir(parents=True, exist_ok=True)
+    official.to_csv(official_universe_path, index=False)
     write_official_all_txt(official, snapshot_dir / "instruments" / "all.txt", ",")
     logging.info("Official IPO-filtered universe: %s instruments", len(official))
 

@@ -1,13 +1,12 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import FullPipelineDialog from "./FullPipelineDialog";
 import ManualFactorDialog from "./ManualFactorDialog";
 import IcSeriesChart from "./charts/IcSeriesChart";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const FACTOR_CACHE_DEFAULT_START = "2018-08-01";
-const FACTOR_CACHE_DEFAULT_END = "2026-04-28";
+const FACTOR_CACHE_DEFAULT_END = "2026-06-30";
 const FACTOR_CACHE_WARMUP_TOLERANCE_DAYS = 60;
 
 type FactorCacheCoverageInput = {
@@ -137,10 +136,11 @@ type Factor = {
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
-  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | "missing_meta_reconcile_required" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
   cache_hash_match?: boolean | null;
+  cache_reconcile_required?: boolean | null;
 };
 
 export type MergedFactor = {
@@ -211,10 +211,11 @@ export type MergedFactor = {
   cache_source?: string | null;
   cache_source_label?: string | null;
   cache_data_source_mode?: string | null;
-  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | null;
+  cache_coverage_status?: "covered" | "partial" | "hash_mismatch" | "no_cache" | "error" | "missing_meta_reconcile_required" | null;
   cache_status?: string | null;
   cache_size_mb?: number | null;
   cache_hash_match?: boolean | null;
+  cache_reconcile_required?: boolean | null;
 };
 
 const GRADE_COLORS: Record<string, string> = {
@@ -357,6 +358,12 @@ export default function FactorList({
     total_metrics_skipped?: number;
     fail_count?: number;
     error?: string;
+    task_id?: string;
+    dispatch_task_id?: string;
+    data_start?: string;
+    data_end?: string;
+    cache_root?: string;
+    node_id?: string | null;
     logs?: string[];
     dispatch_status?: string;
     details?: any[];
@@ -398,10 +405,7 @@ export default function FactorList({
   const [cleanupExecuteResult, setCleanupExecuteResult] = useState<{ ok: boolean; batch_id: string; disabled_count: number; by_reason: Record<string, number>; errors: string[]; rollback_sql: string } | null>(null);
 
   // 全流程批处理
-  const [pipelineOpen, setPipelineOpen] = useState(false);
   const [manualDialogOpen, setManualDialogOpen] = useState(false);
-  const [pipelineTaskIds, setPipelineTaskIds] = useState<string[]>([]);
-  const [pipelineFactorNames, setPipelineFactorNames] = useState<string[]>([]);
 
   // 因子计算日志详情
   type CalcWindow = { eval_window: string; status: string; error_message?: string | null; n_trading_days?: number | null; required_days?: number | null; data_start?: string | null; data_end?: string | null; calculated_at?: string | null };
@@ -410,24 +414,6 @@ export default function FactorList({
   const [taskCalcDetail, setTaskCalcDetail] = useState<Record<string, CalcDetail>>({});
   const [calcDetailLoading, setCalcDetailLoading] = useState<Set<string>>(new Set());
 
-  // 数据快照管理
-  type Snapshot = { data_date: string; status: string; start_date?: string; end_date?: string; instruments_count?: number; created_at?: string; realtime_rows?: number; static_rows?: number; disk_size_mb?: number };
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [snapshotCreating, setSnapshotCreating] = useState(false);
-  const [snapshotDeleting, setSnapshotDeleting] = useState<string | null>(null);
-  const [activeSnapshot, setActiveSnapshot] = useState<string>("");
-  const [newSnapshotDate, setNewSnapshotDate] = useState("");
-  const [snapshotStartDate, setSnapshotStartDate] = useState("2018-08-01");
-  const [snapshotPanelOpen, setSnapshotPanelOpen] = useState(false);
-  const [timeEstimate, setTimeEstimate] = useState<{
-    has_history: boolean;
-    stats?: { avg_sec: number; median_sec: number; p90_sec: number; max_sec: number };
-    estimate?: { factor_count: number; serial_min: number; parallel_4_min: number };
-    slowest_5?: { factor_name: string; elapsed_sec: number }[];
-  } | null>(null);
-
-  // 排序状态
   const [sortField, setSortField] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
@@ -435,9 +421,17 @@ export default function FactorList({
   type CacheStats = {
     total_cached: number; total_code_factors: number; coverage_pct: number;
     total_size_mb: number; date_range_dominant: string; active_tasks: number;
-    last_backfill?: any;
+    last_generation?: string | null;
     hash_ok: number; hash_mismatch: number; cache_error: number; no_cache: number;
-    disabled_total: number; disabled_cached: number;
+    effective_cached?: number; meta_valid_cached?: number; disk_cached_enabled?: number;
+    disk_factor_count?: number; meta_factor_count?: number; orphan_parquet_count?: number; orphan_meta_count?: number;
+    factor_parquet_count?: number; all_parquet_count?: number; all_size_mb?: number;
+    merged_panel_present?: boolean; merged_panel_size_mb?: number;
+    reconcile_required?: number; reconcile_required_sample?: string[];
+    stats_mode?: string; hash_check_enabled?: boolean; db_hash_check_skipped?: boolean; stats_cache_hit?: boolean;
+    integrity_ok?: boolean; cache_root?: string; single_dir?: string; meta_path?: string;
+    as_of_date?: string | null; data_source_mode?: string | null; window_train_start?: string | null; window_backtest_end?: string | null;
+    disabled_total: number; disabled_cached: number; disabled_disk_cached?: number;
     by_source?: Record<string, number>;
   };
   type CacheTask = {
@@ -446,15 +440,21 @@ export default function FactorList({
     started_at?: string;
     finished_at?: string;
     workers?: number;
+    batch_size?: number;
     factor_count?: number | string;
-    incremental?: boolean;
     start?: string;
     end?: string;
     error?: string;
+    dispatch_task_id?: string | null;
+    remote_task_id?: string | null;
+    node_id?: string | null;
     experiment_id?: string | null;
     strict_backtest_data?: boolean;
+    cache_source?: string | null;
+    code_source?: string | null;
     data_source_mode?: string | null;
     factor_data_dir?: string | null;
+    qlib_bin_path?: string | null;
     window_train_start?: string | null;
     window_backtest_end?: string | null;
   };
@@ -463,6 +463,22 @@ export default function FactorList({
     result?: any;
     task_state?: any;
     failed_tail?: any[];
+    dispatch_sync_error?: string | null;
+    remote_progress_status?: string | null;
+    live_progress?: {
+      status?: string;
+      total_factors?: number;
+      value_ready_count?: number;
+      completed_count?: number;
+      success_count?: number;
+      failed_count?: number;
+      active_factor_names?: string[];
+      last_event?: string;
+      updated_at?: string;
+    } | null;
+    last_progress_at?: string | null;
+    resumed_from_task_id?: string | null;
+    checkpoint?: { retry_factor_count?: number; status?: string } | null;
   };
   type RemoteNodeStats = {
     node_id: string;
@@ -477,16 +493,25 @@ export default function FactorList({
     synced?: number;
     missing?: number;
     stale?: number;
+    metadata_pending?: number;
+    local_disk_factor_count?: number;
+    local_meta_factor_count?: number;
+    local_orphan_parquet_count?: number;
+    local_orphan_meta_count?: number;
     error?: string;
   };
   type RemoteFactorStatus = {
-    status: "synced" | "missing" | "stale" | string;
+    status: "synced" | "missing" | "stale" | "metadata_pending" | string;
+    local_meta_status?: string | null;
     local_date_range?: string | null;
     remote_date_range?: string | null;
   };
   type RemoteCacheStats = {
     ok: boolean;
-    local: { cached: number; size_mb: number; cache_root?: string; meta_sha256?: string | null };
+    local: {
+      cached: number; size_mb: number; cache_root?: string; meta_sha256?: string | null;
+      disk_cached?: number; meta_cached?: number; orphan_parquet_count?: number; orphan_meta_count?: number; metadata_pending?: number;
+    };
     selected_node_id?: string | null;
     remote_nodes: RemoteNodeStats[];
     factor_status: Record<string, RemoteFactorStatus>;
@@ -503,13 +528,18 @@ export default function FactorList({
   const [cacheStartDate, setCacheStartDate] = useState(FACTOR_CACHE_DEFAULT_START);
   const [cacheEndDate, setCacheEndDate] = useState(FACTOR_CACHE_DEFAULT_END);
   const [cacheCoverageFilter, setCacheCoverageFilter] = useState("all");
-  const [cacheIncremental, setCacheIncremental] = useState(false);
   const [cacheTasks, setCacheTasks] = useState<CacheTask[]>([]);
   const [cacheTaskLoading, setCacheTaskLoading] = useState(false);
   const [selectedCacheTaskId, setSelectedCacheTaskId] = useState<string | null>(null);
   const [selectedCacheTask, setSelectedCacheTask] = useState<CacheTaskDetail | null>(null);
 
+  useEffect(() => {
+    if (cacheContext?.trainStart) setCacheStartDate(cacheContext.trainStart);
+    if (cacheContext?.backtestEnd) setCacheEndDate(cacheContext.backtestEnd);
+  }, [cacheContext?.trainStart, cacheContext?.backtestEnd]);
+
   const isSelection = mode === "selection";
+  const hasActiveCacheCompute = cacheTasks.some(task => task.status === "running" || task.status === "queued" || task.status === "paused");
   const isAlphaSourceFilter = sourceFilter === "alpha158" || sourceFilter === "alpha360";
   const shouldExcludeAlphaSources = !showAlpha && !isAlphaSourceFilter;
 
@@ -552,6 +582,10 @@ export default function FactorList({
         setCacheTasks(tasks);
         if (!selectedCacheTaskId && tasks.length > 0) {
           setSelectedCacheTaskId(tasks[0].task_id);
+        } else if (selectedCacheTaskId && !tasks.some((task: CacheTask) => task.task_id === selectedCacheTaskId)) {
+          const nextTaskId = tasks[0]?.task_id || null;
+          setSelectedCacheTaskId(nextTaskId);
+          setSelectedCacheTask(null);
         }
       }
     } catch {}
@@ -562,11 +596,20 @@ export default function FactorList({
     if (!taskId) return;
     try {
       const r = await fetch(`${API}/quantevolver/factor-cache/compute-status/${encodeURIComponent(taskId)}`);
+      if (r.status === 404) {
+        setSelectedCacheTaskId(current => current === taskId ? null : current);
+        setSelectedCacheTask(current => current?.task_id === taskId ? null : current);
+        return;
+      }
       if (!r.ok) return;
       const d = await r.json();
       setSelectedCacheTask(d);
     } catch {}
   }, []);
+
+  useEffect(() => {
+    if (selectedCacheTaskId) void fetchCacheTaskDetail(selectedCacheTaskId);
+  }, [selectedCacheTaskId, fetchCacheTaskDetail]);
 
   useEffect(() => {
     if (!isSelection) {
@@ -589,44 +632,102 @@ export default function FactorList({
     return () => clearInterval(timer);
   }, [isSelection, cacheTasks, selectedCacheTaskId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
 
-  const triggerCacheCompute = useCallback(async (
+  const submitOfficialFullCompute = useCallback(async (
     factorNames?: string[],
-    force = false,
-    options?: { resumeTaskId?: string; retryFailedOnly?: boolean }
   ) => {
     if (!cacheStartDate || !cacheEndDate) {
-      alert("请先选择开始/结束日期");
-      return;
+      throw new Error("请先选择官方缓存窗口开始/结束日期");
     }
     if (cacheStartDate > cacheEndDate) {
-      alert("开始日期不能晚于结束日期");
-      return;
+      throw new Error("开始日期不能晚于结束日期");
     }
+    const includeDisabled = Boolean(factorNames && factorNames.length > 0);
+    const body: any = {
+      workers: cacheWorkers,
+      timeout_per_factor: 1800,
+      start_date: cacheStartDate,
+      end_date: cacheEndDate,
+      include_disabled: includeDisabled,
+      strict_backtest_data: true,
+    };
+    if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
+    if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
+    const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) throw new Error(d.detail || d.error || "官方离线因子任务提交失败");
+    setSelectedCacheTaskId(d.task_id);
+    await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
+    return d;
+  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
+
+  const triggerCacheCompute = useCallback(async (
+    factorNames?: string[],
+  ) => {
     setCacheBusy(true);
     try {
-      const body: any = {
-        workers: cacheWorkers,
-        timeout_per_factor: 1800,
-        force,
-        start_date: cacheStartDate,
-        end_date: cacheEndDate,
-        incremental: !force,
-        strict_backtest_data: true,
-      };
-      if (cacheContext?.experimentId) body.experiment_id = cacheContext.experimentId;
-      if (options?.resumeTaskId) body.resume_task_id = options.resumeTaskId;
-      if (options?.retryFailedOnly) body.retry_failed_only = true;
-      if (factorNames && factorNames.length > 0) body.factor_names = factorNames;
-      const r = await fetch(`${API}/quantevolver/factor-cache/compute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const d = await r.json();
-      if (d.ok) {
-        setSelectedCacheTaskId(d.task_id);
-        await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(d.task_id)]);
-        alert(`计算任务已提交 (task_id: ${d.task_id})`);
+      const requestedNames = factorNames && factorNames.length > 0 ? factorNames : undefined;
+      const planRes = await fetch(`${API}/factor-metrics/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          factor_names: requestedNames,
+          dataset: "factor_metrics_compute",
+          options: { end_date: cacheEndDate, window_backtest_end: cacheEndDate },
+        }),
+      });
+      const plan = await planRes.json();
+      if (!planRes.ok || plan.ok === false) {
+        throw new Error(plan.detail || plan.error || "官方因子计算计划检查失败");
       }
-      else alert(d.detail || "提交失败");
+      const isSelectedScope = Boolean(requestedNames);
+      const factorCount = isSelectedScope ? requestedNames!.length : Number(plan.eligible_factor_count || 0);
+      const actionLabel = isSelectedScope
+        ? `计算选中的 ${factorCount} 个因子`
+        : `全量计算 ${factorCount} 个可用因子`;
+      const cacheWarnings = Array.isArray(plan.cache_preflight?.blockers)
+        ? plan.cache_preflight.blockers.length
+        : 0;
+      const confirmed = confirm(
+        `${actionLabel}\n` +
+        `官方窗口：${cacheStartDate} ~ ${cacheEndDate}\n` +
+        `${isSelectedScope ? "仅替换选中因子的缓存和独立指标，其他因子不变。" : "逐因子替换官方缓存并更新独立指标，不会先清空整个缓存。"}\n` +
+        `${cacheWarnings > 0 ? `当前缓存有 ${cacheWarnings} 项待刷新提示，本次计算用于修复。\n` : ""}` +
+        "确认提交正式计算任务？",
+      );
+      if (!confirmed) return;
+      const d = await submitOfficialFullCompute(requestedNames);
+      alert(`官方共用因子缓存任务已提交 (task_id: ${d.task_id})`);
     } catch (e: any) { alert(e.message); } finally { setCacheBusy(false); }
-  }, [cacheWorkers, cacheStartDate, cacheEndDate, cacheContext?.experimentId, fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail]);
+  }, [cacheStartDate, cacheEndDate, submitOfficialFullCompute]);
+
+  const retryFailedCacheTask = useCallback(async () => {
+    const task = selectedCacheTask;
+    if (!task || task.status !== "failed") return;
+    const confirmed = confirm(
+      `将严格按任务 ${task.task_id} 持久化的失败因子清单续算。\n` +
+      `不会重算已成功因子，也不会清空现有缓存。\n` +
+      `续算并行度：${cacheWorkers}\n` +
+      "确认提交失败因子续算任务？",
+    );
+    if (!confirmed) return;
+    setCacheBusy(true);
+    try {
+      const r = await fetch(`${API}/quantevolver/factor-cache/compute-status/${encodeURIComponent(task.task_id)}/retry-failed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workers: cacheWorkers }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.ok === false) throw new Error(data.detail || data.error || "失败因子续算提交失败");
+      setSelectedCacheTaskId(data.task_id);
+      await Promise.all([fetchCacheStats(), fetchRemoteStats(), fetchCacheTasks(), fetchCacheTaskDetail(data.task_id)]);
+      alert(`已提交 ${data.retry_factor_count} 个失败因子的严格续算任务 (task_id: ${data.task_id})`);
+    } catch (e: any) {
+      alert(e?.message || "失败因子续算提交失败");
+    } finally {
+      setCacheBusy(false);
+    }
+  }, [cacheWorkers, fetchCacheStats, fetchCacheTaskDetail, fetchCacheTasks, fetchRemoteStats, selectedCacheTask]);
 
   const triggerRemoteSync = useCallback(async (factorNames?: string[]) => {
     setRemoteSyncBusy(true);
@@ -721,100 +822,6 @@ export default function FactorList({
       setLocalSelectedFactors(next);
     }
   }
-
-  // ── 数据快照管理 ──
-
-  const loadSnapshots = useCallback(async () => {
-    setSnapshotLoading(true);
-    try {
-      const [snapRes, estRes] = await Promise.all([
-        fetch(`${API}/quantevolver/evolution/factor-values/snapshots`),
-        fetch(`${API}/quantevolver/evolution/factor-values/time-estimate`),
-      ]);
-      if (snapRes.ok) {
-        const data = await snapRes.json();
-        setSnapshots(data.snapshots || []);
-      }
-      if (estRes.ok) {
-        setTimeEstimate(await estRes.json());
-      }
-    } catch (e: any) {
-      console.error("加载快照列表失败:", e);
-    } finally {
-      setSnapshotLoading(false);
-    }
-  }, []);
-
-  async function createSnapshot() {
-    if (!newSnapshotDate || newSnapshotDate.length !== 8) {
-      alert("请从日历选择日期");
-      return;
-    }
-    setSnapshotCreating(true);
-    try {
-      const params = new URLSearchParams({ data_date: newSnapshotDate, start_date: snapshotStartDate });
-      const res = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/create?${params}`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = err.detail;
-        const msg = typeof detail === "string" ? detail
-          : Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ")
-          : JSON.stringify(err) || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      setNewSnapshotDate("");
-      // 轮询快照创建状态
-      const poll = async () => {
-        while (true) {
-          await new Promise(r => setTimeout(r, 3000));
-          try {
-            const st = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/status`);
-            const data = await st.json();
-            if (!data.creating) {
-              await loadSnapshots();
-              if (data.last_error) {
-                alert(`快照创建失败: ${data.last_error}`);
-              } else {
-                alert("快照创建成功!");
-              }
-              return;
-            }
-          } catch { /* 网络抖动，继续轮询 */ }
-        }
-      };
-      poll().finally(() => setSnapshotCreating(false));
-    } catch (e: any) {
-      alert(`创建快照失败: ${e.message}`);
-      setSnapshotCreating(false);
-    }
-  }
-
-  async function deleteSnapshot(dataDate: string) {
-    if (!confirm(`确认删除快照 ${dataDate}？此操作不可恢复。`)) return;
-    setSnapshotDeleting(dataDate);
-    try {
-      const res = await fetch(`${API}/quantevolver/evolution/factor-values/snapshots/${dataDate}`, { method: "DELETE" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const detail = err.detail;
-        const msg = typeof detail === "string" ? detail
-          : Array.isArray(detail) ? detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ")
-          : JSON.stringify(err) || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      if (activeSnapshot === dataDate) setActiveSnapshot("");
-      await loadSnapshots();
-    } catch (e: any) {
-      alert(`删除快照失败: ${e.message}`);
-    } finally {
-      setSnapshotDeleting(null);
-    }
-  }
-
-  // 初始加载快照列表
-  useEffect(() => { loadSnapshots(); }, [loadSnapshots]);
 
   function toggleDescription(key: string, factorName?: string, source?: string) {
     setExpandedDescriptions(prev => {
@@ -971,6 +978,7 @@ export default function FactorList({
         cache_status: f.cache_status ?? null,
         cache_size_mb: f.cache_size_mb ?? null,
         cache_hash_match: f.cache_hash_match ?? null,
+        cache_reconcile_required: f.cache_reconcile_required ?? false,
       };
     });
 
@@ -978,7 +986,7 @@ export default function FactorList({
 
     // 缓存状态后端已支持全量排序；这里保留当前页内兜底排序。
     if (sortField === "cache_status") {
-      const statusScore: Record<string, number> = { no_cache: 0, error: 0, hash_mismatch: 1, partial: 2, covered: 3, ok: 3 };
+      const statusScore: Record<string, number> = { no_cache: 0, error: 0, missing_meta_reconcile_required: 1, hash_mismatch: 1, partial: 2, covered: 3, ok: 3 };
       const cacheScore = (f: MergedFactor) => {
         if (f.cache_coverage_status) return statusScore[f.cache_coverage_status] ?? 0;
         if (!f.has_cache) return 0;
@@ -999,7 +1007,7 @@ export default function FactorList({
     }
 
     return filtered;
-  }, [factors, indSummary, categoryFilter, gradeFilter, sortField, sortOrder, cacheContext, cacheStartDate, cacheEndDate]);
+  }, [factors, indSummary, sortField, sortOrder, cacheContext, cacheStartDate, cacheEndDate]);
 
   const loadData = useCallback(async (queryOverride?: string) => {
     const requestId = ++loadDataRequestRef.current;
@@ -1098,6 +1106,26 @@ export default function FactorList({
   useEffect(() => { loadData(); loadIndSummary(); loadRatingRules(); loadRatingRuns(); }, [loadData, loadIndSummary, loadRatingRules, loadRatingRuns]);
   useEffect(() => { if (selectedRatingVersion) { loadRatingRuleDetail(selectedRatingVersion); loadRatingResultsPreview(selectedRatingVersion); } }, [selectedRatingVersion, loadRatingRuleDetail, loadRatingResultsPreview]);
 
+  const refreshCacheDisplay = useCallback(async () => {
+    await Promise.all([
+      fetchCacheStats(),
+      fetchRemoteStats(),
+      fetchCacheTasks(),
+      selectedCacheTaskId ? fetchCacheTaskDetail(selectedCacheTaskId) : Promise.resolve(),
+      loadData(),
+      loadIndSummary(),
+    ]);
+  }, [fetchCacheStats, fetchRemoteStats, fetchCacheTasks, fetchCacheTaskDetail, selectedCacheTaskId, loadData, loadIndSummary]);
+
+  useEffect(() => {
+    if (isSelection || !hasActiveCacheCompute) return;
+    const timer = setInterval(() => {
+      void loadData();
+      void loadIndSummary();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [isSelection, hasActiveCacheCompute, loadData, loadIndSummary]);
+
   // 加载 source tasks 列表
   const loadSourceTasks = useCallback(async () => {
     try {
@@ -1152,53 +1180,27 @@ export default function FactorList({
     const tasks = Array.from(selectedTasks);
     if (tasks.length === 0) return;
     setTaskResults({});
-    // 逐task反查因子名，再用unified端点统一计算
+    const officialWindow = `${cacheStartDate} ~ ${cacheEndDate}`;
+    // Each task is submitted through the official full-compute path.
     for (const tid of tasks) {
       setTaskComputing(prev => new Set(prev).add(tid));
       try {
-        // 强制快照模式检查
-        if (!activeSnapshot) {
-          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "请先选择数据快照" } }));
-          setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
-          continue;
-        }
-        // 1. 反查该task下的因子列表
         const listRes = await fetch(`${API}/rdagent/catalogs/factors?source_task_id=${encodeURIComponent(tid)}&limit=500`);
         const listData = await listRes.json();
         const factorNames = (listData.items || []).map((f: any) => f.factor_name || f.name).filter(Boolean);
         if (factorNames.length === 0) {
-          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "无因子" } }));
+          setTaskResults(prev => ({ ...prev, [tid]: { ok: false, msg: "no factors" } }));
           setTaskComputing(prev => { const n = new Set(prev); n.delete(tid); return n; });
           continue;
         }
-        // 2. 用unified端点计算指标
-        let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            factor_names: factorNames,
-            data_date: activeSnapshot,
-            include_disabled: true,
-          }),
-        });
-        if (res.status === 404) {
-          res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              factor_names: factorNames,
-              data_date: activeSnapshot,
-              all_available: false,
-            }),
-          });
-        }
-        const data = await res.json();
-        const okCount = data.db_result?.inserted || 0;
+        const data = await submitOfficialFullCompute(factorNames);
         setTaskResults(prev => ({
           ...prev,
           [tid]: {
-            ok: data.success !== false,
-            msg: data.success !== false ? `${factorNames.length}因子, ${okCount}条指标写入` : (data.error || "失败"),
+            ok: data.ok !== false,
+            msg: data.ok !== false
+              ? `${factorNames.length} factors official full-compute submitted, window ${officialWindow}`
+              : (data.error || "failed"),
           },
         }));
       } catch (e: any) {
@@ -1248,60 +1250,28 @@ export default function FactorList({
   }
 
   async function batchFetchMetrics() {
-    if (!activeSnapshot) {
-      alert("请先选择数据快照后再执行指标计算。");
-      return;
-    }
     const selectedCount = actualSelectedFactors.size;
     if (selectedCount === 0) {
-      alert("请先选择要计算指标的因子");
+      alert("Select factors before submitting official metrics compute.");
       return;
     }
     const factorNames = Array.from(actualSelectedFactors).map(k => k.split("||")[0]);
-    if (!confirm(`确定要基于快照 ${activeSnapshot} 计算选中的 ${selectedCount} 个因子指标吗？`)) return;
+    if (!confirm(`Submit ${selectedCount} factors to official full-compute for ${cacheStartDate} ~ ${cacheEndDate}? This generates the shared cache and official metrics.`)) return;
 
     setMetricsLoading(true);
     setMetricsResult(null);
     try {
-      let res = await fetch(`${API}/quantevolver/official-evaluation/compute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, include_disabled: true }),
-      });
-      if (res.status === 404) {
-        res = await fetch(`${API}/quantevolver/factors/batch-compute-metrics-unified`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ factor_names: factorNames, data_date: activeSnapshot, all_available: false }),
-        });
-      }
-      const data = await res.json();
-      if (!res.ok) {
-        setMetricsResult({
-          ...data,
-          ok: false,
-          success: false,
-          error: data.detail || data.error || `HTTP ${res.status}`,
-        });
-        return;
-      }
-      const ok = data.success === true;
-      setMetricsResult({ ...data, ok });
-      if (ok) {
-        loadData();
-        loadIndSummary();
-      }
+      const data = await submitOfficialFullCompute(factorNames);
+      setMetricsResult({ ...data, ok: data.ok !== false, success: data.ok !== false });
+      loadData();
+      loadIndSummary();
     } catch (e: any) {
-      setMetricsResult({ ok: false, success: false, error: e?.message || "指标计算失败" });
+      setMetricsResult({ ok: false, success: false, error: e?.message || "metrics compute submit failed" });
     } finally {
       setMetricsLoading(false);
       setLocalSelectedFactors(new Set());
     }
   }
-
-  useEffect(() => {
-    setPage(1);
-  }, [sourceFilter, search, categoryFilter, gradeFilter, showAlpha, sortField, sortOrder, availabilityFilter, cacheCoverageFilter, cacheStartDate, cacheEndDate]);
 
   async function batchAnalyze() {
     const selectedCount = actualSelectedFactors.size;
@@ -1926,188 +1896,48 @@ export default function FactorList({
             </section>
           )}
 
-      {/* 数据快照管理 */}
-      {!isSelection && (
-        <section style={{ background: "#fff", borderRadius: 12, padding: "12px 16px", marginBottom: 16, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>数据快照</span>
-
-            {/* 当前选中的快照 */}
-            <select
-              value={activeSnapshot}
-              onChange={e => setActiveSnapshot(e.target.value)}
-              style={{ padding: "5px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", minWidth: 160 }}
-              title="选择数据快照用于因子计算"
-            >
-              <option value="">实时数据（无快照）</option>
-              {snapshots.filter(s => s.status === "ready").map(s => (
-                <option key={s.data_date} value={s.data_date}>
-                  {s.data_date} ({s.instruments_count || "?"}只 / {s.disk_size_mb || "?"}MB)
-                </option>
-              ))}
-            </select>
-
-            {activeSnapshot ? (
-              <span style={{ fontSize: 11, color: "#059669", background: "#ecfdf5", padding: "2px 8px", borderRadius: 4 }}>
-                快照 {activeSnapshot} — 所有因子使用相同数据，可横向比对
-              </span>
-            ) : (
-              <span style={{ fontSize: 11, color: "#dc2626", background: "#fef2f2", padding: "2px 8px", borderRadius: 4 }}>
-                未选择快照 — 请先选择或创建快照后再计算因子指标
-              </span>
-            )}
-
-            <button
-              onClick={() => setSnapshotPanelOpen(!snapshotPanelOpen)}
-              style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", background: snapshotPanelOpen ? "#f3f4f6" : "#fff", cursor: "pointer" }}
-            >
-              {snapshotPanelOpen ? "收起管理" : "管理快照"}
-            </button>
-
-            <button
-              onClick={loadSnapshots}
-              disabled={snapshotLoading}
-              style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", opacity: snapshotLoading ? 0.5 : 1 }}
-            >
-              {snapshotLoading ? "刷新中..." : "刷新"}
-            </button>
-          </div>
-
-          {/* 展开的快照管理面板 */}
-          {snapshotPanelOpen && (
-            <div style={{ marginTop: 12, borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
-              {/* 创建新快照 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: "#6b7280" }}>起始日期:</span>
-                <input
-                  type="date"
-                  value={snapshotStartDate}
-                  onChange={e => setSnapshotStartDate(e.target.value)}
-                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
-                />
-                <span style={{ fontSize: 12, color: "#6b7280" }}>截止日期:</span>
-                <input
-                  type="date"
-                  value={newSnapshotDate ? `${newSnapshotDate.slice(0,4)}-${newSnapshotDate.slice(4,6)}-${newSnapshotDate.slice(6,8)}` : ""}
-                  onChange={e => setNewSnapshotDate(e.target.value.replace(/-/g, ""))}
-                  max={new Date().toISOString().split("T")[0]}
-                  style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, border: "1px solid #d1d5db", width: 140 }}
-                />
-                <button
-                  onClick={createSnapshot}
-                  disabled={snapshotCreating || !newSnapshotDate}
-                  style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "none", background: "#8b5cf6", color: "#fff", cursor: "pointer", opacity: (snapshotCreating || !newSnapshotDate) ? 0.5 : 1 }}
-                >
-                  {snapshotCreating ? "创建中..." : "创建"}
-                </button>
-                <span style={{ fontSize: 11, color: "#9ca3af" }}>首次创建需从数据库加载，约 5-8 分钟</span>
-              </div>
-
-              {/* 时间预估 */}
-              {timeEstimate?.has_history && timeEstimate.stats && timeEstimate.estimate && (
-                <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 11, color: "#6b7280", flexWrap: "wrap" }}>
-                  <span>因子计算预估: <b>{timeEstimate.estimate.factor_count}</b> 个因子</span>
-                  <span>串行 ≈ <b>{timeEstimate.estimate.serial_min}</b> 分钟</span>
-                  <span>4线程 ≈ <b>{timeEstimate.estimate.parallel_4_min}</b> 分钟</span>
-                  <span>单因子均值 <b>{timeEstimate.stats.avg_sec.toFixed(1)}s</b> / P90 <b>{timeEstimate.stats.p90_sec.toFixed(1)}s</b> / 最慢 <b>{timeEstimate.stats.max_sec.toFixed(1)}s</b></span>
-                  {timeEstimate.slowest_5 && timeEstimate.slowest_5.length > 0 && (
-                    <span title={timeEstimate.slowest_5.map(s => `${s.factor_name}: ${s.elapsed_sec.toFixed(1)}s`).join("\n")}>
-                      最慢因子: {timeEstimate.slowest_5[0].factor_name} ({timeEstimate.slowest_5[0].elapsed_sec.toFixed(1)}s)
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* 快照列表 */}
-              {snapshots.length === 0 ? (
-                <p style={{ fontSize: 12, color: "#9ca3af", margin: 0 }}>暂无快照</p>
-              ) : (
-                <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>日期</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>状态</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>股票数</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>行情行数</th>
-                      <th style={{ textAlign: "right", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>磁盘</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>创建时间</th>
-                      <th style={{ textAlign: "center", padding: "4px 8px", color: "#6b7280", fontWeight: 500 }}>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {snapshots.map(s => (
-                      <tr key={s.data_date} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                        <td style={{ padding: "6px 8px", fontWeight: activeSnapshot === s.data_date ? 600 : 400 }}>
-                          {s.data_date}
-                          {activeSnapshot === s.data_date && <span style={{ marginLeft: 6, color: "#059669", fontSize: 10 }}>当前</span>}
-                        </td>
-                        <td style={{ padding: "6px 8px" }}>
-                          <span style={{
-                            padding: "1px 6px", borderRadius: 4, fontSize: 11,
-                            background: s.status === "ready" ? "#ecfdf5" : s.status === "creating" ? "#fef3c7" : "#fef2f2",
-                            color: s.status === "ready" ? "#059669" : s.status === "creating" ? "#d97706" : "#dc2626",
-                          }}>
-                            {s.status === "ready" ? "就绪" : s.status === "creating" ? "创建中" : "异常"}
-                          </span>
-                        </td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.instruments_count?.toLocaleString() || "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.realtime_rows?.toLocaleString() || "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.disk_size_mb ? `${s.disk_size_mb} MB` : "-"}</td>
-                        <td style={{ padding: "6px 8px", fontSize: 11, color: "#6b7280" }}>{s.created_at ? new Date(s.created_at).toLocaleString("zh-CN") : "-"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "center" }}>
-                          {s.status === "ready" && (
-                            <>
-                              {activeSnapshot !== s.data_date && (
-                                <button
-                                  onClick={() => setActiveSnapshot(s.data_date)}
-                                  style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#fff", color: "#8b5cf6", cursor: "pointer", marginRight: 4 }}
-                                >
-                                  使用
-                                </button>
-                              )}
-                              <button
-                                onClick={() => deleteSnapshot(s.data_date)}
-                                disabled={snapshotDeleting === s.data_date}
-                                style={{ padding: "2px 8px", fontSize: 11, borderRadius: 4, border: "1px solid #ef4444", background: "#fff", color: "#ef4444", cursor: "pointer", opacity: snapshotDeleting === s.data_date ? 0.5 : 1 }}
-                              >
-                                {snapshotDeleting === s.data_date ? "删除中..." : "删除"}
-                              </button>
-                            </>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
       {/* 因子值缓存管理 */}
       {!isSelection && (
         <section style={{ background: "#fff", borderRadius: 12, padding: "10px 16px", marginBottom: 12, boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>因子值缓存</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: "#374151" }}>官方因子缓存（独立指标 / 相关性 / QE 回测共用）</span>
             {cacheStats ? (
               <>
                 <span style={{ fontSize: 12, color: "#6b7280" }}>
-                  启用 {cacheStats.hash_ok + cacheStats.hash_mismatch + (cacheStats.cache_error || 0)}/{cacheStats.total_code_factors}
-                  {" "}<span style={{ color: "#059669" }}>✓{cacheStats.hash_ok}</span>
-                  {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> ✗{cacheStats.cache_error}</span>}
+                  启用 {cacheStats.total_cached}/{cacheStats.total_code_factors}
+                  {" "}<span style={{ color: "#059669" }}>{cacheStats.db_hash_check_skipped ? `Meta ${cacheStats.meta_valid_cached ?? cacheStats.hash_ok}` : `OK ${cacheStats.hash_ok}`}</span>
+                  {(cacheStats.cache_error || 0) > 0 && <span style={{ color: "#dc2626" }}> 错误{cacheStats.cache_error}</span>}
                   {cacheStats.hash_mismatch > 0 && <span style={{ color: "#f59e0b" }}> △{cacheStats.hash_mismatch}</span>}
+                  {(cacheStats.reconcile_required || 0) > 0 && <span style={{ color: "#d97706" }}> 元数据待补{cacheStats.reconcile_required}</span>}
                   {cacheStats.no_cache > 0 && <span style={{ color: "#9ca3af" }}> —{cacheStats.no_cache}</span>}
                   {" "}|{" "}
                   {cacheStats.total_size_mb > 1024 ? `${(cacheStats.total_size_mb / 1024).toFixed(1)} GB` : `${cacheStats.total_size_mb} MB`} |
                   {" "}{cacheStats.date_range_dominant}
                   {cacheStats.by_source && (
-                    <> | QE回测{cacheStats.by_source.backtest || 0}</>
+                    <> | 官方缓存{cacheStats.by_source.backtest || 0}</>
                   )}
+                  {cacheStats.db_hash_check_skipped && (
+                    <> | 轻量统计</>
+                  )}
+                </span>
+                <span
+                  title={`factor parquet=${cacheStats.factor_parquet_count ?? cacheStats.disk_factor_count ?? "-"}\nall parquet=${cacheStats.all_parquet_count ?? "-"}\nmerged panel=${cacheStats.merged_panel_present ? `${cacheStats.merged_panel_size_mb ?? 0} MB` : "no"}\n_meta.json=${cacheStats.meta_factor_count ?? "-"}\norphan parquet=${cacheStats.orphan_parquet_count ?? 0}\norphan meta=${cacheStats.orphan_meta_count ?? 0}\n${cacheStats.single_dir || ""}`}
+                  style={{
+                    fontSize: 11,
+                    color: (cacheStats.orphan_parquet_count || 0) > 0 ? "#b45309" : "#64748b",
+                    background: (cacheStats.orphan_parquet_count || 0) > 0 ? "#fffbeb" : "#f8fafc",
+                    border: `1px solid ${(cacheStats.orphan_parquet_count || 0) > 0 ? "#fcd34d" : "#e5e7eb"}`,
+                    padding: "1px 6px",
+                    borderRadius: 4,
+                  }}
+                >
+                  磁盘 {cacheStats.factor_parquet_count ?? cacheStats.disk_factor_count ?? 0} / Meta {cacheStats.meta_factor_count ?? 0}
+                  {(cacheStats.orphan_parquet_count || 0) > 0 ? `｜待补元数据 ${cacheStats.orphan_parquet_count}` : ""}
+                  {cacheStats.merged_panel_present ? " | merged panel" : ""}
                 </span>
                 {cacheStats.disabled_total > 0 && (
                   <span style={{ fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>
-                    禁用 {cacheStats.disabled_cached}/{cacheStats.disabled_total}
+                    禁用 {cacheStats.disabled_disk_cached ?? cacheStats.disabled_cached}/{cacheStats.disabled_total}
                   </span>
                 )}
                 <span style={{ fontSize: 11, color: "#9ca3af" }}>
@@ -2115,13 +1945,16 @@ export default function FactorList({
                 </span>
                 {remoteStats && (
                   <span style={{ fontSize: 12, color: selectedRemoteNode?.reachable === false ? "#dc2626" : "#64748b", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
-                    WSL缓存 {remoteStats.local.cached}
+                    官方缓存节点 {remoteStats.local.disk_cached ?? remoteStats.local.cached}
+                    {remoteStats.local.meta_cached != null && <>｜Meta {remoteStats.local.meta_cached}</>}
+                    {(remoteStats.local.orphan_parquet_count || 0) > 0 && <>｜待补元数据 <span style={{ color: "#d97706" }}>{remoteStats.local.orphan_parquet_count}</span></>}
                     {selectedRemoteNode ? (
                       <>
                         {" "}｜远端 {selectedRemoteNode.display_name || selectedRemoteNode.node_id}: {selectedRemoteNode.remote_cached ?? 0}
                         {" "}｜已同步 <span style={{ color: "#059669" }}>{selectedRemoteNode.synced ?? 0}</span>
                         {(selectedRemoteNode.missing || 0) > 0 && <>｜缺失 <span style={{ color: "#d97706" }}>{selectedRemoteNode.missing}</span></>}
                         {(selectedRemoteNode.stale || 0) > 0 && <>｜过期 <span style={{ color: "#dc2626" }}>{selectedRemoteNode.stale}</span></>}
+                        {(selectedRemoteNode.metadata_pending || 0) > 0 && <>｜元数据待补 <span style={{ color: "#d97706" }}>{selectedRemoteNode.metadata_pending}</span></>}
                       </>
                     ) : "｜无远端节点"}
                   </span>
@@ -2158,7 +1991,7 @@ export default function FactorList({
                   </button>
                 </>
               ) : null}
-              <span style={{ fontSize: 11, color: "#9ca3af" }}>区间:</span>
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>官方全量数据集区间:</span>
               <input type="date" value={cacheStartDate} onChange={e => setCacheStartDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
               <span style={{ fontSize: 11, color: "#9ca3af" }}>~</span>
               <input type="date" value={cacheEndDate} onChange={e => setCacheEndDate(e.target.value)} style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }} />
@@ -2166,13 +1999,14 @@ export default function FactorList({
               <select
                 value={cacheCoverageFilter}
                 onChange={e => setCacheCoverageFilter(e.target.value)}
-                title="按所选回测区间筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
+                title="按所选官方缓存窗口筛选因子值缓存。未覆盖包含无缓存、缓存结束日期不足、起点缺口超过60天或源码hash失效。"
                 style={{ padding: "3px 6px", fontSize: 11, borderRadius: 4, border: "1px solid #d1d5db" }}
               >
                 <option value="all">全部缓存状态</option>
                 <option value="missing_range">未覆盖该区间</option>
                 <option value="covers_range">已覆盖该区间</option>
                 <option value="has_cache">已有缓存</option>
+                <option value="missing_meta_reconcile_required">待补元数据</option>
                 <option value="no_cache">无缓存</option>
                 <option value="hash_mismatch">源码变更</option>
               </select>
@@ -2182,22 +2016,12 @@ export default function FactorList({
               </select>
               <button onClick={() => triggerCacheCompute()} disabled={cacheBusy}
                 style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #059669", background: "#ecfdf5", color: "#059669", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                {cacheBusy ? "提交中..." : "仅补缺失"}
+                {cacheBusy ? "提交中..." : "全量计算独立指标并刷新官方缓存"}
               </button>
-              <button onClick={() => triggerCacheCompute(undefined, true)} disabled={cacheBusy}
-                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #8b5cf6", background: "#f5f3ff", color: "#7c3aed", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                全量重算
-              </button>
-              {selectedCacheTaskId && (
-                <button onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTaskId, retryFailedOnly: true })} disabled={cacheBusy}
-                  style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                  重试失败
-                </button>
-              )}
               {actualSelectedFactors.size > 0 && (
                 <button onClick={() => triggerCacheCompute(Array.from(actualSelectedFactors).map(k => k.split("||")[0]))} disabled={cacheBusy}
                   style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #0284c7", background: "#f0f9ff", color: "#0284c7", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}>
-                  计算选中 ({actualSelectedFactors.size})
+                  计算选中因子 ({actualSelectedFactors.size})
                 </button>
               )}
               {actualSelectedFactors.size > 0 && remoteStats?.remote_nodes?.length ? (
@@ -2206,12 +2030,15 @@ export default function FactorList({
                   同步选中
                 </button>
               ) : null}
-              <button onClick={clearAllCache}
-                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: "pointer" }}>
-                一键清空
+              <button onClick={clearAllCache} disabled={hasActiveCacheCompute} title={hasActiveCacheCompute ? "存在运行或排队的官方因子计算，禁止清空缓存" : "清空所有因子值缓存"}
+                style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #dc2626", background: "#fef2f2", color: "#dc2626", fontWeight: 600, cursor: hasActiveCacheCompute ? "not-allowed" : "pointer", opacity: hasActiveCacheCompute ? 0.5 : 1 }}>
+                清空缓存
               </button>
-              <button onClick={() => { fetchCacheStats(); fetchCacheTasks(); if (selectedCacheTaskId) fetchCacheTaskDetail(selectedCacheTaskId); }} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
+              <button onClick={() => void refreshCacheDisplay()} style={{ padding: "4px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", cursor: "pointer" }}>刷新</button>
             </div>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 11, color: "#64748b", lineHeight: 1.6 }}>
+            官方路径: <code>rdagent_assets/factor_values</code>；当前窗口 {cacheStartDate || FACTOR_CACHE_DEFAULT_START} ~ {cacheEndDate || FACTOR_CACHE_DEFAULT_END}。该缓存由 official full compute 生成，独立指标、因子相关性和 QE 回测共用。
           </div>
           {cacheTasks.length > 0 && (
             <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #eef2f7" }}>
@@ -2242,36 +2069,52 @@ export default function FactorList({
               {selectedCacheTask && (
                 <div style={{ marginTop: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: 10 }}>
                   <div style={{ fontSize: 12, color: "#475569", marginBottom: 6, lineHeight: 1.6 }}>
-                    任务 {selectedCacheTask.task_id} | 状态 {selectedCacheTask.status} | 区间 {selectedCacheTask.start} ~ {selectedCacheTask.end} | workers={selectedCacheTask.workers}
-                    {selectedCacheTask.incremental ? " | incremental" : ""}
+                    Task {selectedCacheTask.task_id} | status {selectedCacheTask.status} | window {selectedCacheTask.window_train_start || selectedCacheTask.start || "-"} ~ {selectedCacheTask.window_backtest_end || selectedCacheTask.end || "-"} | workers={selectedCacheTask.workers || "-"} | batch={selectedCacheTask.batch_size || "-"}
                     {selectedCacheTask.error ? ` | error: ${selectedCacheTask.error}` : ""}
                   </div>
                   <div style={{ fontSize: 12, color: "#374151", marginBottom: 6, lineHeight: 1.6 }}>
-                    experiment={selectedCacheTask.experiment_id || cacheContext?.experimentId || "-"} |
-                    window={selectedCacheTask.window_train_start || selectedCacheTask.start || "-"} ~ {selectedCacheTask.window_backtest_end || selectedCacheTask.end || "-"} |
-                    source={selectedCacheTask.data_source_mode || "-"}
+                    official cache | code={selectedCacheTask.code_source || "code_text"} | source={selectedCacheTask.data_source_mode || "official_offline_backtest_factor_data"} | node={selectedCacheTask.node_id || "-"}
                   </div>
+                  {selectedCacheTask.live_progress ? (() => {
+                    const progress = selectedCacheTask.live_progress;
+                    const total = progress.total_factors || 0;
+                    const completed = progress.completed_count || 0;
+                    const percent = total > 0 ? Math.min(100, Math.round(completed / total * 1000) / 10) : null;
+                    return (
+                      <div style={{ marginBottom: 8, padding: "8px 10px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", fontSize: 12, lineHeight: 1.6 }}>
+                        <div><strong>独立指标进度：</strong>{completed}/{total || "-"}{percent != null ? ` (${percent}%)` : ""}；成功 {progress.success_count || 0}，失败 {progress.failed_count || 0}，因子值已写入 {progress.value_ready_count || 0}</div>
+                        {progress.active_factor_names?.length ? <div>当前因子：{progress.active_factor_names.join(", ")}</div> : null}
+                        <div style={{ color: "#64748b" }}>最近更新：{progress.updated_at || selectedCacheTask.last_progress_at || "-"}；事件：{progress.last_event || "-"}</div>
+                        {total > 0 && <div style={{ width: "100%", height: 6, background: "#dbeafe", borderRadius: 4, overflow: "hidden", marginTop: 4 }}><div style={{ width: `${Math.min(100, completed / total * 100)}%`, height: "100%", background: "#2563eb", transition: "width 0.3s" }} /></div>}
+                      </div>
+                    );
+                  })() : selectedCacheTask.status === "running" ? (
+                    <div style={{ marginBottom: 8, padding: "6px 8px", borderRadius: 6, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", fontSize: 12 }}>
+                      当前任务尚未提供因子级 progress receipt；请以最近日志判断活动状态。远端 loop 级 0% 不能解释为未执行。
+                    </div>
+                  ) : null}
+                  {selectedCacheTask.dispatch_sync_error && (
+                    <div style={{ fontSize: 12, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 8px", marginBottom: 8 }}>
+                      dispatch/WSL 状态同步异常: {selectedCacheTask.dispatch_sync_error}
+                    </div>
+                  )}
                   {selectedCacheTask.factor_data_dir && (
                     <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6, wordBreak: "break-all" }}>
                       factor_data_dir: {selectedCacheTask.factor_data_dir}
                     </div>
                   )}
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                    <button
-                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id })}
-                      disabled={cacheBusy}
-                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
-                    >
-                      恢复未完成
-                    </button>
-                    <button
-                      onClick={() => triggerCacheCompute(undefined, false, { resumeTaskId: selectedCacheTask.task_id, retryFailedOnly: true })}
-                      disabled={cacheBusy}
-                      style={{ padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#b45309", cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
-                    >
-                      仅重试失败
-                    </button>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+                    官方路径仅通过 WSL/计算节点 dispatch 执行。失败任务可从持久化检查点精确续算，窗口整体变化时执行全量计算。
                   </div>
+                  {selectedCacheTask.status === "failed" && (
+                    <button
+                      onClick={retryFailedCacheTask}
+                      disabled={cacheBusy}
+                      style={{ marginBottom: 8, padding: "4px 10px", fontSize: 11, borderRadius: 4, border: "1px solid #b45309", background: "#fffbeb", color: "#92400e", fontWeight: 600, cursor: "pointer", opacity: cacheBusy ? 0.5 : 1 }}
+                    >
+                      {cacheBusy ? "提交中..." : "严格续算失败因子"}
+                    </button>
+                  )}
                   {selectedCacheTask.task_state && (
                     <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>
                       checkpoint: 成功 {selectedCacheTask.task_state.success_factors?.length ?? 0} |
@@ -2428,26 +2271,9 @@ export default function FactorList({
                   opacity: (metricsLoading || actualSelectedFactors.size === 0) ? 0.5 : 1,
                 }}
               >
-                {metricsLoading ? "计算中..." : `计算指标(${actualSelectedFactors.size})`}
+                {metricsLoading ? "提交中..." : `提交官方指标计算(${actualSelectedFactors.size})`}
               </button>
 
-              <button
-                onClick={() => {
-                  if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
-                  const names = Array.from(actualSelectedFactors).map(key => key.split("||")[0]);
-                  setPipelineFactorNames(names);
-                  setPipelineTaskIds([]);
-                  setPipelineOpen(true);
-                }}
-                disabled={actualSelectedFactors.size === 0 || pipelineOpen}
-                style={{
-                  padding: "6px 14px", fontSize: 12, cursor: (actualSelectedFactors.size === 0 || pipelineOpen) ? "not-allowed" : "pointer",
-                  borderRadius: 6, border: "none", background: "#7c3aed", color: "#fff", fontWeight: 600,
-                  opacity: (actualSelectedFactors.size === 0 || pipelineOpen) ? 0.5 : 1,
-                }}
-              >
-                全流程处理({actualSelectedFactors.size})
-              </button>
             </>
           )}
 
@@ -2512,8 +2338,10 @@ export default function FactorList({
           }}>
             {metricsResult.ok ? (
               <span>
-                <strong>指标获取完成：</strong>
-                新增 {metricsResult.total_metrics_inserted ?? metricsResult.db_result?.inserted ?? 0} 条，跳过 {metricsResult.total_metrics_skipped ?? metricsResult.db_result?.skipped ?? 0} 条（已存在）
+                <strong>官方 full-compute 已提交：</strong>
+                task {metricsResult.task_id || metricsResult.dispatch_task_id || "-"}，
+                窗口 {metricsResult.data_start || cacheStartDate} ~ {metricsResult.data_end || cacheEndDate}，
+                缓存 {metricsResult.cache_root || "rdagent_assets/factor_values"}
                 {(metricsResult.fail_count ?? 0) > 0 && (
                   <span style={{ color: "#b45309" }}>（{metricsResult.fail_count} 个任务失败）</span>
                 )}
@@ -2535,7 +2363,7 @@ export default function FactorList({
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <span>
-                  <strong>指标获取失败：</strong>
+                  <strong>官方 full-compute 提交失败：</strong>
                   {metricsResult.error
                     || metricsResult.details?.filter((d: any) => !d.ok).map((d: any) => d.errors?.[0]).filter(Boolean).join("; ")
                     || metricsResult.db_result?.errors?.join("; ")
@@ -2615,43 +2443,25 @@ export default function FactorList({
               style={{ padding: "3px 8px", fontSize: 10, borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>清空</button>
             <button
               onClick={computeSelectedTasksMetrics}
-              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen}
+              disabled={selectedTasks.size === 0 || taskComputing.size > 0}
               style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? "not-allowed" : "pointer",
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskComputing.size > 0 ? "not-allowed" : "pointer",
                 background: "#7c3aed", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || pipelineOpen ? 0.5 : 1,
+                opacity: selectedTasks.size === 0 || taskComputing.size > 0 ? 0.5 : 1,
               }}
             >
               {taskComputing.size > 0 ? `计算中(${taskComputing.size})...` : `计算选中Task的IC指标(${selectedTasks.size})`}
             </button>
             <button
               onClick={() => analyzeSelectedTasksFactors()}
-              disabled={selectedTasks.size === 0 || taskAnalyzing || pipelineOpen}
+              disabled={selectedTasks.size === 0 || taskAnalyzing}
               style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
+                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none", cursor: selectedTasks.size === 0 || taskAnalyzing ? "not-allowed" : "pointer",
                 background: "#2563eb", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
+                opacity: selectedTasks.size === 0 || taskAnalyzing ? 0.5 : 1,
               }}
             >
               {taskAnalyzing ? "分析中..." : `批量分析(${selectedTasks.size})`}
-            </button>
-            <button
-              onClick={() => {
-                const tasks = Array.from(selectedTasks);
-                if (tasks.length === 0) return;
-                if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
-                setPipelineTaskIds(tasks);
-                setPipelineOpen(true);
-              }}
-              disabled={selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen}
-              style={{
-                padding: "4px 12px", fontSize: 11, borderRadius: 6, border: "none",
-                cursor: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? "not-allowed" : "pointer",
-                background: "linear-gradient(135deg, #7c3aed, #2563eb)", color: "#fff", fontWeight: 600,
-                opacity: selectedTasks.size === 0 || taskComputing.size > 0 || taskAnalyzing || pipelineOpen ? 0.5 : 1,
-              }}
-            >
-              全流程处理({selectedTasks.size})
             </button>
           </div>
 
@@ -2690,24 +2500,6 @@ export default function FactorList({
                     )}
                     {computing && <span style={{ fontSize: 11, color: "#7c3aed" }}>计算中...</span>}
                     {result && <span style={{ fontSize: 11, color: result.ok ? "#059669" : "#dc2626", fontWeight: 600 }}>{result.msg}</span>}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!activeSnapshot) { alert("请先选择数据快照后再执行全流程处理。"); return; }
-                        setPipelineTaskIds([t.task_id]);
-                        setPipelineOpen(true);
-                      }}
-                      disabled={pipelineOpen}
-                      style={{
-                        padding: "2px 8px", fontSize: 10, borderRadius: 4,
-                        border: "1px solid #7c3aed", background: pipelineOpen ? "#f3f4f6" : "#faf5ff",
-                        color: pipelineOpen ? "#9ca3af" : "#7c3aed", fontWeight: 600,
-                        cursor: pipelineOpen ? "not-allowed" : "pointer",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      全流程
-                    </button>
                   </div>
                   {isExp && (
                     <div style={{ borderTop: "1px solid #e5e7eb", padding: 12, background: "#fff" }}>
@@ -2856,12 +2648,9 @@ export default function FactorList({
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("ind_annual_return")}>年化(独立){getSortIndicator("ind_annual_return")}</th>
                 <th style={{ ...thStyle, cursor: "pointer" }} onClick={() => handleSort("has_ind_metrics")}>独立指标{getSortIndicator("has_ind_metrics")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 50 }} onClick={() => handleSort("decay_status")}>衰变{getSortIndicator("decay_status")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("ind_calculated_at")}>指标计算{getSortIndicator("ind_calculated_at")}</th>
+                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} title="official full compute 生成同一份因子值缓存并写入独立指标；优先显示缓存计算时间，兼容显示独立指标时间。" onClick={() => handleSort("cache_computed_at")}>官方更新时间{getSortIndicator("cache_computed_at")}</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 110 }} onClick={() => handleSort("cache_status")}>因子值缓存{getSortIndicator("cache_status")}</th>
-                <th style={{ ...thStyle, width: 90 }}>远端同步</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_start_date")}>缓存开始{getSortIndicator("cache_start_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 90 }} onClick={() => handleSort("cache_end_date")}>缓存结束{getSortIndicator("cache_end_date")}</th>
-                <th style={{ ...thStyle, cursor: "pointer", width: 120 }} onClick={() => handleSort("cache_computed_at")}>缓存计算{getSortIndicator("cache_computed_at")}</th>
+                <th style={{ ...thStyle, width: 90 }}>远程同步</th>
                 <th style={{ ...thStyle, cursor: "pointer", width: 80 }} onClick={() => handleSort("generated_at_utc")}>入库时间{getSortIndicator("generated_at_utc")}</th>
                 <th style={thStyle}>说明</th>
               </tr>
@@ -2885,7 +2674,7 @@ export default function FactorList({
                   return !best || Math.abs(value) > Math.abs(best.value) ? { label: item.label, value } : best;
                 }, null);
                 const bestRankIcAbs = f.ind_rank_ic_best_abs ?? (bestHorizonRankIc ? Math.abs(bestHorizonRankIc.value) : null);
-                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "QE回测缓存" : "");
+                const cacheSourceLabel = f.cache_source_label || (f.cache_source === "backtest" ? "官方共用缓存" : "");
                 const cacheTitleSuffix = [
                   cacheSourceLabel ? `来源: ${cacheSourceLabel}` : null,
                   f.cache_data_source_mode ? `数据模式: ${f.cache_data_source_mode}` : null,
@@ -2895,7 +2684,38 @@ export default function FactorList({
                 const cacheTargetStart = cacheStartDate || cacheContext?.trainStart;
                 const cacheTargetEnd = cacheEndDate || cacheContext?.backtestEnd;
                 const cacheCoverageOk = factorCacheCoversRequestedWindow(f, cacheTargetStart, cacheTargetEnd);
+                const officialUpdatedAt = f.cache_computed_at || f.ind_calculated_at || null;
+                const officialUpdateTitle = [
+                  f.cache_computed_at ? `官方缓存计算: ${f.cache_computed_at}` : null,
+                  f.ind_calculated_at ? `独立指标计算: ${f.ind_calculated_at}` : null,
+                ].filter(Boolean).join("\n");
                 const remoteSyncStatus = remoteFactorStatusByName[f.factor_name];
+                const remoteNeedsMetaReconcile = Boolean(
+                  remoteSyncStatus?.local_meta_status && remoteSyncStatus.local_meta_status !== "ok"
+                );
+                const remoteSyncLabel = remoteNeedsMetaReconcile
+                  ? "待补元数据"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "已同步"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "远端过期"
+                      : remoteSyncStatus?.status === "metadata_pending"
+                        ? "待补元数据"
+                        : "未同步";
+                const remoteSyncBackground = remoteNeedsMetaReconcile
+                  ? "#fef3c7"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "#d1fae5"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "#fee2e2"
+                      : "#fef3c7";
+                const remoteSyncColor = remoteNeedsMetaReconcile
+                  ? "#d97706"
+                  : remoteSyncStatus?.status === "synced"
+                    ? "#059669"
+                    : remoteSyncStatus?.status === "stale"
+                      ? "#dc2626"
+                      : "#d97706";
 
                 return (
                   <React.Fragment key={rowKey}>
@@ -3035,11 +2855,18 @@ export default function FactorList({
                           <span style={{ color: "#d1d5db", fontSize: 9 }}>-</span>
                         )}
                       </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.ind_calculated_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.ind_calculated_at || undefined}>
-                        {f.ind_calculated_at ? f.ind_calculated_at.slice(0, 16).replace("T", " ") : "-"}
+                      <td style={{ ...tdStyle, fontSize: 10, color: officialUpdatedAt ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={officialUpdateTitle || undefined}>
+                        {officialUpdatedAt ? officialUpdatedAt.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
-                        {f.has_cache ? (
+                        {f.cache_reconcile_required || f.cache_status === "missing_meta_reconcile_required" ? (
+                          <span
+                            title={`磁盘 parquet 已存在，但 _meta.json 缺少该因子记录；需要先补齐元数据，QE 回测不会静默重算。\n大小: ${f.cache_size_mb ?? "-"} MB${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`}
+                            style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fffbeb", color: "#b45309" }}
+                          >
+                            △ 待补元数据
+                          </span>
+                        ) : f.has_cache ? (
                           f.cache_hash_match === false ? (
                             <span title={`源码已变更，缓存失效\n${f.cache_date_range}${cacheTitleSuffix ? `\n${cacheTitleSuffix}` : ""}`} style={{ padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600, background: "#fee2e2", color: "#dc2626" }}>✗ hash不匹配</span>
                           ) : (
@@ -3068,30 +2895,21 @@ export default function FactorList({
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
                         {remoteSyncStatus ? (
                           <span
-                            title={`本地: ${remoteSyncStatus.local_date_range || "-"}\n远端: ${remoteSyncStatus.remote_date_range || "-"}\n节点: ${selectedRemoteNode?.display_name || selectedRemoteNode?.node_id || "-"}`}
+                            title={`本地: ${remoteSyncStatus.local_date_range || "-"}\n远端: ${remoteSyncStatus.remote_date_range || "-"}\n元数据状态: ${remoteSyncStatus.local_meta_status || "ok"}\n节点: ${selectedRemoteNode?.display_name || selectedRemoteNode?.node_id || "-"}`}
                             style={{
                               padding: "2px 6px",
                               borderRadius: 4,
                               fontSize: 10,
                               fontWeight: 600,
-                              background: remoteSyncStatus.status === "synced" ? "#d1fae5" : remoteSyncStatus.status === "stale" ? "#fee2e2" : "#fef3c7",
-                              color: remoteSyncStatus.status === "synced" ? "#059669" : remoteSyncStatus.status === "stale" ? "#dc2626" : "#d97706",
+                              background: remoteSyncBackground,
+                              color: remoteSyncColor,
                             }}
                           >
-                            {remoteSyncStatus.status === "synced" ? "已同步" : remoteSyncStatus.status === "stale" ? "远端过期" : "未同步"}
+                            {remoteSyncLabel}
                           </span>
                         ) : (
                           <span style={{ color: "#d1d5db", fontSize: 10 }}>-</span>
                         )}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_start_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_start_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_end_date ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }}>
-                        {f.cache_end_date || "-"}
-                      </td>
-                      <td style={{ ...tdStyle, fontSize: 10, color: f.cache_computed_at ? "#64748b" : "#d1d5db", whiteSpace: "nowrap" }} title={f.cache_computed_at || undefined}>
-                        {f.cache_computed_at ? f.cache_computed_at.slice(0, 16).replace("T", " ") : "-"}
                       </td>
                       <td style={{ ...tdStyle, fontSize: 10, color: "#94a3b8", whiteSpace: "nowrap" }}>{f.generated_at_utc ? f.generated_at_utc.slice(0, 10) : "-"}</td>
                       <td style={tdStyle}>
@@ -3115,14 +2933,14 @@ export default function FactorList({
                         )}
                         {!isSelection && f.has_cache && (
                           <span
-                            onClick={(e) => { e.stopPropagation(); clearOneCache(f.factor_name); }}
-                            title="删除该因子缓存"
+                            onClick={(e) => { if (!hasActiveCacheCompute) { e.stopPropagation(); clearOneCache(f.factor_name); } }}
+                            title={hasActiveCacheCompute ? "存在运行或排队的官方因子计算，禁止删除缓存" : "删除该因子缓存"}
                             style={{
-                              color: "#b45309", cursor: "pointer", fontSize: 10,
-                              opacity: 0.7, userSelect: "none",
+                              color: "#b45309", cursor: hasActiveCacheCompute ? "not-allowed" : "pointer", fontSize: 10,
+                              opacity: hasActiveCacheCompute ? 0.5 : 0.7, userSelect: "none",
                             }}
-                            onMouseEnter={e => (e.currentTarget.style.opacity = "1")}
-                            onMouseLeave={e => (e.currentTarget.style.opacity = "0.7")}
+                            onMouseEnter={e => { if (!hasActiveCacheCompute) e.currentTarget.style.opacity = "1"; }}
+                            onMouseLeave={e => { if (!hasActiveCacheCompute) e.currentTarget.style.opacity = "0.7"; }}
                           >清缓存</span>
                         )}
                         {!isSelection && (
@@ -3147,7 +2965,7 @@ export default function FactorList({
 
                       return (
                       <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-        <td colSpan={23} style={{ padding: "0 10px 10px 10px" }}>
+        <td colSpan={22} style={{ padding: "0 10px 10px 10px" }}>
                           <div style={{
                             background: isSelection ? "#eff6ff" : "#faf5ff", borderRadius: 8, padding: "10px 14px",
                             fontSize: 12, lineHeight: 1.7, color: "#374151",
@@ -3721,24 +3539,10 @@ export default function FactorList({
         )}
       </section>}
 
-      {pipelineOpen && (
-        <FullPipelineDialog
-          open={pipelineOpen}
-          taskIds={pipelineTaskIds.length > 0 ? pipelineTaskIds : undefined}
-          factorNames={pipelineFactorNames.length > 0 ? pipelineFactorNames : undefined}
-          dataDate={activeSnapshot || undefined}
-          onClose={() => setPipelineOpen(false)}
-          onComplete={() => {
-            loadData();
-            loadSourceTasks();
-            loadIndSummary();
-          }}
-        />
-      )}
-
       <ManualFactorDialog
         open={manualDialogOpen}
-        dataDate={activeSnapshot || undefined}
+        cacheStartDate={cacheStartDate}
+        cacheEndDate={cacheEndDate}
         onClose={() => setManualDialogOpen(false)}
         onCreated={() => {
           loadData();

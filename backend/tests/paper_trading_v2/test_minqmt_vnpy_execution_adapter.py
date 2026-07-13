@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from backend.services.paper_trading_v2.broker import (
     BrokerAccountSnapshot,
     CancelAck,
@@ -13,9 +15,22 @@ from backend.services.paper_trading_v2.broker import (
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import MinuteDataSource
 from backend.services.paper_trading_v2.models import PaperPortfolio, PaperRun
+from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError, MiniQMTUnsupportedExecutionAlgoError
+from backend.services.miniqmt_execution_runtime import (
+    InMemoryMiniQMTExecutionRuntimeRepository,
+    MiniQMTExecutionRuntimeClient,
+)
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
+from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
+from backend.services.trading_core.errors import BrokerSubmitError
 from backend.services.trading_core.models import Fill, OrderIntent, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import make_paper_enabled_manifest
 from backend.tests.paper_trading_v2.test_minqmtsim_backend import TRADE_DATE, _SnapshotOnlyRepository
+
+
+@pytest.fixture(autouse=True)
+def _force_event_loop_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MINIQMT_EXECUTION_RUNTIME", "event_loop")
 
 
 class VnpyRecordingMiniQMTBroker:
@@ -147,6 +162,36 @@ class VnpyRecordingMiniQMTBroker:
         return None
 
 
+class EventLoopCallbackMiniQMTClient:
+    def __init__(self) -> None:
+        self.place_order_calls: list[dict[str, Any]] = []
+
+    def query_quote(self, symbol: str) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "source": "MINIQMT_REALTIME.broker_quote",
+            "price": 10.0,
+            "ask_price_1": 10.0,
+            "ask_volume_1": 1000,
+            "bid_price_1": 9.99,
+            "bid_volume_1": 1000,
+            "time": "20240102093105",
+        }
+
+    def get_orders(self, cancelable_only: bool = False) -> list[dict[str, Any]]:  # noqa: ARG002
+        return []
+
+    def get_trades(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_positions(self) -> list[dict[str, Any]]:
+        return []
+
+    def place_order(self, **kwargs: Any):
+        self.place_order_calls.append(dict(kwargs))
+        return 880000000 + len(self.place_order_calls), "accepted"
+
+
 def _portfolio_and_run(policy_json: dict[str, Any]):
     manifest = make_paper_enabled_manifest()
     policy = {
@@ -200,100 +245,245 @@ def _intent(
     )
 
 
-def test_minqmt_vnpy_sniper_policy_routes_child_limit_order_and_diagnostics() -> None:
-    manifest, portfolio, run, policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+def _assert_legacy_vnpy_loud_rejects(exc: BrokerSubmitError, *, broker: VnpyRecordingMiniQMTBroker) -> None:
+    assert exc.error_code == "BROKER_SUBMIT_ERROR"
+    assert exc.context["reason_code"] == "MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS"
+    assert exc.context["stage"] == "MINIQMT_COMPILER_LIFECYCLE_REJECTED"
+    assert exc.context["operation"] == "execute_paper_vnpy_intent"
+    assert broker.submitted == []
+
+
+def _seed_native_order(
+    *,
+    repo: _SnapshotOnlyRepository,
+    run: PaperRun,
+    intent: OrderIntent,
+    broker: VnpyRecordingMiniQMTBroker,
+) -> tuple[Any, str, str]:
+    order = PaperTradingDayRunner(repository=repo).oms.create_order(intent)
+    handle_id = f"handle_{intent.intent_id}"
+    native_id = f"native_{intent.intent_id}"
+    order = order.model_copy(
+        update={
+            "metadata": {
+                **dict(order.metadata or {}),
+                "broker_backend": "minqmt_sim",
+                "authority_source": "MINIQMT_NATIVE_RECONCILE_TEST_SEED",
+                "broker_handle_id": handle_id,
+                "miniqmt_order_id": native_id,
+                "strategy_name": "slot_alpha",
+                "order_remark": f"remark_{intent.intent_id}",
+            }
+        }
+    )
+    repo.save_order(run.run_id, order)
+    broker._statuses[handle_id] = OrderHandleStatus(
+        handle_id=handle_id,
+        state="pending",
+        filled_quantity=0,
+        avg_fill_price=None,
+        last_event_at=datetime(2024, 1, 2, 9, 31, tzinfo=UTC),
+        raw_status=50,
+        status_msg="reported",
+        raw={"order_status": 50, "status_msg": "reported"},
+    )
+    return order, handle_id, native_id
+
+
+def test_event_loop_route_a_submits_parent_intent_through_callback_gateway() -> None:
+    runtime_repo = InMemoryMiniQMTExecutionRuntimeRepository()
+    ledger_repo = InMemoryQmtStrategyLedgerRepository()
+    ledger_repo.create_virtual_account(
+        VirtualAccount(
+            strategy_id="strategy_event_loop",
+            strategy_name="strategy_event_loop",
+            display_name="Event loop strategy",
+            account_id="acct_event_loop",
+            mode="SIM",
+            initial_cash=Decimal("100000"),
+            cash=Decimal("100000"),
+            status=VirtualAccountStatus.ENABLED,
+        )
+    )
+    qmt_client = EventLoopCallbackMiniQMTClient()
+    client = MiniQMTExecutionRuntimeClient(
+        repository=runtime_repo,
+        strategy_ledger_repository=ledger_repo,
+        runtime_kind="event_loop",
+    )
+
+    result = client.submit_event_loop_vnpy_parent_intents(
+        parent_intents=[
+            _intent(quantity=100).model_copy(
+                update={
+                    "intent_id": "intent_event_loop_buy",
+                    "metadata": {
+                        "strategy_id": "strategy_event_loop",
+                        "strategy_name": "strategy_event_loop",
+                    },
+                }
+            )
+        ],
+        policy_context={
+            "policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}},
+            "validated_execution_policy_id": "policy_event_loop",
+            "policy_sha256": "sha_event_loop",
+        },
+        account_group_id="acct_event_loop",
+        trade_date=TRADE_DATE,
+        runtime_config_hash="runtime_hash_event_loop_route_a",
+        runtime_id="mqrt_event_loop_route_a",
+        strategy_slot_id="strategy_event_loop",
+        qmt_client=qmt_client,
+        strategy_name="strategy_event_loop",
+        order_remark_prefix="evtloop",
+        account_id="acct_event_loop",
+        source="paper_v2_event_loop_route_a_unit",
+    )
+
+    assert result.success is True
+    assert qmt_client.place_order_calls
+    runtime = runtime_repo.get_runtime("mqrt_event_loop_route_a")
+    assert runtime is not None
+    assert runtime.metadata["runtime_kind"] == "event_loop"
+    assert runtime.metadata["gateway_class"] == "QmtClientMiniQMTEventLoopGateway"
+    algo = runtime_repo.list_algo_instances("mqrt_event_loop_route_a", active_only=False)[0]
+    assert algo.metadata["event_loop_submit"] is True
+    assert algo.metadata["quote_source"] == "MINIQMT_REALTIME.broker_quote"
+    child = runtime_repo.list_child_orders("mqrt_event_loop_route_a", active_only=False)[0]
+    assert child.status.value == "SUBMITTED"
+
+
+def test_minqmt_rejects_v25_policy_before_broker_submit() -> None:
+    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker()
 
-    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=policy_context,
+    with pytest.raises(MiniQMTUnsupportedExecutionAlgoError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent()],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context={"algo_code": "V25_1_SMALL_CAP", "policy_json": {"algo_code": "V25_1_SMALL_CAP"}},
+        )
+
+    assert exc_info.value.error_code == "MINIQMT_UNSUPPORTED_EXECUTION_ALGO"
+    assert exc_info.value.context["inferred_algo_code"] == "V25_1_SMALL_CAP"
+    assert broker.submitted == []
+    assert repo.orders == []
+
+
+def test_minqmt_rejects_missing_vnpy_policy_snapshot_before_broker_submit() -> None:
+    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+    repo = _SnapshotOnlyRepository(portfolio)
+    broker = VnpyRecordingMiniQMTBroker()
+
+    with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent()],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=None,
+        )
+
+    assert exc_info.value.error_code == "EXECUTION_PATH_NOT_CANONICAL"
+    assert exc_info.value.context["payload_has_policy_json"] is False
+    assert broker.submitted == []
+    assert repo.orders == []
+
+
+@pytest.mark.parametrize(
+    ("algo_code", "algo_config"),
+    [
+        ("SNIPER_MINIQMT", {}),
+        ("BEST_LIMIT_MINIQMT", {"min_volume": 100, "max_volume": 100}),
+        ("TWAP_LITE_MINIQMT", {"time": 2, "interval": 1, "timer_iterations": 1}),
+    ],
+)
+def test_minqmt_vnpy_legacy_compiler_style_path_loud_rejects_before_broker_submit(
+    algo_code: str,
+    algo_config: dict[str, Any],
+) -> None:
+    manifest, portfolio, run, policy_context = _portfolio_and_run(
+        {"algo_code": algo_code, "algo_config": algo_config}
     )
+    repo = _SnapshotOnlyRepository(portfolio)
+    broker = VnpyRecordingMiniQMTBroker()
 
-    assert result.run.status == RunStatus.SUCCEEDED
-    assert len(broker.submitted) == 1
-    assert broker.submitted[0].order_type == OrderType.LIMIT
-    assert broker.submitted[0].limit_price == 10.0
-    assert broker.submitted[0].quantity == 200
-    assert repo.orders[0].metadata["execution_algo_code"] == "SNIPER_MINIQMT"
-    assert repo.orders[0].metadata["execution_policy_id"] == "execpol_vnpy_unit"
-    assert repo.orders[0].metadata["broker_raw_status"] == 50
-    assert repo.execution_states[0].algo_code == "SNIPER_MINIQMT"
-    assert repo.execution_states[0].algo_state["diagnostic"]["source_attribution"]["upstream_source_file"].endswith("sniper_algo.py")
-    assert any(event["event_type"] == "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED" for event in repo.events)
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=policy_context,
+        )
 
+    _assert_legacy_vnpy_loud_rejects(exc_info.value, broker=broker)
+    assert repo.orders == []
+    assert not any(event["event_type"] == "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED" for event in repo.events)
 
-def test_minqmt_vnpy_best_limit_changes_child_price_from_policy_selection() -> None:
+def test_minqmt_vnpy_best_limit_does_not_fallback_to_compiler_route() -> None:
     manifest, portfolio, run, policy_context = _portfolio_and_run(
         {"algo_code": "BEST_LIMIT_MINIQMT", "algo_config": {"min_volume": 100, "max_volume": 100}}
     )
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker()
 
-    PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.5)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=policy_context,
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.5)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=policy_context,
+        )
 
-    assert broker.submitted[0].limit_price == 9.95
-    assert repo.orders[0].metadata["execution_algo_code"] == "BEST_LIMIT_MINIQMT"
+    _assert_legacy_vnpy_loud_rejects(exc_info.value, broker=broker)
+    assert repo.orders == []
 
-
-def test_minqmt_vnpy_twap_lite_can_persist_filled_child_trade() -> None:
+def test_minqmt_vnpy_twap_lite_does_not_persist_compiler_child_trade() -> None:
     manifest, portfolio, run, policy_context = _portfolio_and_run(
         {"algo_code": "TWAP_LITE_MINIQMT", "algo_config": {"time": 2, "interval": 1, "timer_iterations": 1}}
     )
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker(filled=True)
 
-    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=policy_context,
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=policy_context,
+        )
 
-    assert len(result.fills) == 1
-    assert result.orders[0].status.value == "FILLED"
-    assert repo.fills[0]["fill"].metadata["broker_reported_commission"] == 5.0
-    assert repo.orders[0].metadata["execution_algo_code"] == "TWAP_LITE_MINIQMT"
-    quality_event = [event for event in repo.events if event["event_type"] == "MINIQMT_EXECUTION_QUALITY_REPORTED"][0]
-    quality = quality_event["context"]
-    assert quality["summary"]["broker_reported_fee_total"] == 5.0
-    assert quality["summary"]["cost_precision_counts"] == {"broker_aggregate": 1}
-    assert quality["fills"][0]["cost_reconciliation_delta"] == 0.0
-    assert repo.snapshots[0]["metadata"]["execution_quality_report"]["schema_version"].endswith("_v1")
-
+    _assert_legacy_vnpy_loud_rejects(exc_info.value, broker=broker)
+    assert repo.fills == []
+    assert repo.snapshots == []
 
 def test_minqmt_native_reconcile_applies_only_new_trade_delta_and_caps_overfill() -> None:
-    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+    _manifest, portfolio, run, _policy_context = _portfolio_and_run(
+        {"algo_code": "BEST_LIMIT_MINIQMT", "algo_config": {"min_volume": 44_000, "max_volume": 44_000}}
+    )
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker()
-    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context={"algo_code": "V25_1_SMALL_CAP", "policy_json": {"algo_code": "V25_1_SMALL_CAP"}},
+    intent = _intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000).model_copy(
+        update={"intent_id": "intent_native_delta_cap"}
     )
-    order = repo.orders[0]
-    handle_id = order.metadata["broker_handle_id"]
-    native_id = order.metadata["miniqmt_order_id"]
+    order, handle_id, native_id = _seed_native_order(repo=repo, run=run, intent=intent, broker=broker)
     existing_fill = Fill(
         fill_id="fill_minqmt_agg_existing",
         order_id=order.order_id,
@@ -320,9 +510,9 @@ def test_minqmt_native_reconcile_applies_only_new_trade_delta_and_caps_overfill(
             ],
         },
     )
-    repo.save_fill(result.run.run_id, existing_fill)
+    repo.save_fill(run.run_id, existing_fill)
     repo.save_order(
-        result.run.run_id,
+        run.run_id,
         order.model_copy(
             update={
                 "status": OrderStatus.PARTIALLY_FILLED,
@@ -374,7 +564,7 @@ def test_minqmt_native_reconcile_applies_only_new_trade_delta_and_caps_overfill(
 
     reconciled = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
         portfolio=portfolio,
-        run=result.run,
+        run=run,
         trade_date=TRADE_DATE,
         broker=broker,  # type: ignore[arg-type]
     )
@@ -396,25 +586,18 @@ def test_minqmt_native_reconcile_applies_only_new_trade_delta_and_caps_overfill(
     assert capped_event["context"]["broker_reported_fill_quantity"] == 44_000
     assert capped_event["context"]["applied_fill_quantity"] == 29_400
 
-
 def test_minqmt_native_reconcile_resets_status_only_fill_when_no_local_fill_rows() -> None:
-    manifest, portfolio, run, _policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
+    _manifest, portfolio, run, _policy_context = _portfolio_and_run(
+        {"algo_code": "BEST_LIMIT_MINIQMT", "algo_config": {"min_volume": 44_000, "max_volume": 44_000}}
+    )
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker()
-    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context={"algo_code": "V25_1_SMALL_CAP", "policy_json": {"algo_code": "V25_1_SMALL_CAP"}},
+    intent = _intent(order_type=OrderType.LIMIT, limit_price=82.33, quantity=44_000).model_copy(
+        update={"intent_id": "intent_native_status_only"}
     )
-    order = repo.orders[0]
-    handle_id = order.metadata["broker_handle_id"]
-    native_id = order.metadata["miniqmt_order_id"]
+    order, handle_id, native_id = _seed_native_order(repo=repo, run=run, intent=intent, broker=broker)
     repo.save_order(
-        result.run.run_id,
+        run.run_id,
         order.model_copy(
             update={
                 "status": OrderStatus.PARTIALLY_FILLED,
@@ -451,7 +634,7 @@ def test_minqmt_native_reconcile_resets_status_only_fill_when_no_local_fill_rows
 
     reconciled = PaperTradingDayRunner(repository=repo).reconcile_minqmt_native_run(
         portfolio=portfolio,
-        run=result.run,
+        run=run,
         trade_date=TRADE_DATE,
         broker=broker,  # type: ignore[arg-type]
     )
@@ -469,24 +652,22 @@ def test_minqmt_native_reconcile_resets_status_only_fill_when_no_local_fill_rows
     assert repeated.fills == []
     assert not any(event["event_type"] == "MINIQMT_NATIVE_RECONCILE_OVERFILL_CAPPED" for event in repo.events)
 
-
-def test_minqmt_vnpy_rejected_child_preserves_raw_status_and_status_msg() -> None:
+def test_minqmt_vnpy_rejected_child_status_does_not_mask_retired_compiler_route() -> None:
     manifest, portfolio, run, policy_context = _portfolio_and_run({"algo_code": "SNIPER_MINIQMT", "algo_config": {}})
     repo = _SnapshotOnlyRepository(portfolio)
     broker = VnpyRecordingMiniQMTBroker(status_state="rejected", reject_msg="[COUNTER][260200] insufficient buying power")
 
-    result = PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
-        portfolio=portfolio,
-        run=run,
-        manifest=manifest,
-        trade_date=TRADE_DATE,
-        intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
-        broker=broker,  # type: ignore[arg-type]
-        execution_policy_context=policy_context,
-    )
+    with pytest.raises(BrokerSubmitError) as exc_info:
+        PaperTradingDayRunner(repository=repo)._run_minqmt_sim_orders(
+            portfolio=portfolio,
+            run=run,
+            manifest=manifest,
+            trade_date=TRADE_DATE,
+            intents=[_intent(order_type=OrderType.LIMIT, limit_price=10.0)],
+            broker=broker,  # type: ignore[arg-type]
+            execution_policy_context=policy_context,
+        )
 
-    assert result.orders[0].status.value == "REJECTED"
-    assert repo.orders[0].metadata["broker_raw_status"] == 57
-    assert repo.orders[0].metadata["broker_status_msg"].startswith("[COUNTER][260200]")
-    completed = [event for event in repo.events if event["event_type"] == "MINIQMT_VNPY_STYLE_EXECUTION_COMPLETED"][0]
-    assert completed["context"]["diagnostic"]["child_orders"][0]["status"]["raw_status"] == 57
+    _assert_legacy_vnpy_loud_rejects(exc_info.value, broker=broker)
+    assert repo.orders == []
+    assert repo.fills == []

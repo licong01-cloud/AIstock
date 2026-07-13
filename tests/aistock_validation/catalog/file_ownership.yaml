@@ -77,10 +77,14 @@ rules:
       - scripts/aistock_guardrail_scan.py
       - scripts/aistock_module_ownership_scan.py
       - scripts/aistock_issue_workflow.py
+      - scripts/aistock_feature_workflow.py
       - scripts/issue_flow.py
       - scripts/code_intelligence_adapter.py
       - scripts/ci_failure_issue_summary.py
       - scripts/nightly_adaptive_scheduler.py
+      - scripts/nightly_discovery_plans.py
+      - scripts/nightly_bug_candidate_queue.py
+      - scripts/repo_hygiene_orphan_audit.py
       - scripts/validation_center_*.py
     primary_module: validation.guardrails
     impact_modules: [validation.center, validation.runner, validation.module_quality]
@@ -131,9 +135,14 @@ rules:
       - backend/tests/test_validation*.py
       - backend/tests/test_aistock_validate_*.py
       - backend/tests/test_aistock_guardrail_scan.py
+      - backend/tests/scripts/test_repo_hygiene_orphan_audit.py
+      - backend/tests/scripts/test_code_intelligence_adapter.py
       - backend/tests/scripts/test_aistock_issue_workflow.py
+      - backend/tests/scripts/test_aistock_feature_workflow.py
       - backend/tests/scripts/test_issue_flow.py
       - backend/tests/scripts/test_ci_failure_issue_summary.py
+      - backend/tests/scripts/test_nightly_discovery_*.py
+      - backend/tests/scripts/test_nightly_bug_candidate_*.py
     primary_module: tests.backend
     impact_modules: [validation.center, validation.runner, validation.coverage, validation.guardrails, validation.module_quality]
     layer: backend_test
@@ -171,17 +180,6 @@ rules:
     layer: frontend_ui
     risk_level: high
     ownership_reason: QE UI exposes experiment detail, archive, and enhanced metric workflows.
-  - rule_id: strategy_package_governance_frontend
-    priority: 80
-    include:
-      - frontend/src/app/strategy-package-governance/**
-      - frontend/src/lib/strategy-package-governance/**
-      - frontend/tests/strategy-package-governance/**
-    primary_module: strategy_package
-    impact_modules: [paper_v2, validation.center]
-    layer: frontend_ui
-    risk_level: high
-    ownership_reason: Governance UI gates strategy_package paper enablement; UI must reflect 5-evidence eligibility.
   - rule_id: market_regime_frontend
     priority: 70
     include:
@@ -217,6 +215,16 @@ rules:
     layer: product_feature
     risk_level: critical
     ownership_reason: Paper v2 controls simulated execution, positions, cash, and session state.
+  - rule_id: qmt_infra
+    priority: 85
+    include:
+      - backend/infra/qmt_client.py
+      - backend/infra/realtime_quote_subscriber.py
+    primary_module: qmt
+    impact_modules: [paper_v2]
+    layer: trading_infra
+    risk_level: critical
+    ownership_reason: MiniQMT client and realtime quote subscription infrastructure are trading-infra boundaries consumed by Paper v2.
   - rule_id: selection_center_services
     priority: 80
     include:
@@ -263,6 +271,25 @@ rules:
     layer: execution_algo
     risk_level: critical
     ownership_reason: Execution algorithms define order sizing and market-state semantics shared by QE and Paper v2.
+  - rule_id: miniqmt_quote_contract_policy
+    priority: 90
+    include:
+      - backend/miniqmt_quote_contract_config.py
+      - backend/miniqmt_quote_contract_env.py
+    primary_module: paper_v2
+    impact_modules: [platform.api, strategy_package]
+    layer: execution_policy
+    risk_level: critical
+    ownership_reason: Immutable MiniQMT quote-contract policy schema controls Phase 1 input quality and must remain isolated from broker execution and configuration UI transport.
+  - rule_id: config_manager_runtime_contract
+    priority: 90
+    include:
+      - backend/config_manager_compat.py
+    primary_module: platform.api
+    impact_modules: [paper_v2]
+    layer: platform_configuration
+    risk_level: high
+    ownership_reason: The compatibility ConfigManager is the durable configuration API boundary and must preserve registered MiniQMT quote-ingress keys during UI saves.
   - rule_id: hmm_services
     priority: 75
     include:
@@ -631,11 +658,13 @@ rules:
   - rule_id: codex_project_instructions
     priority: 85
     include:
+      - AGENTS.md
       - AGENTS.override.md
       - docs/codex_project_memory.md
       - .codex/skills/fix-aistock-issue/**
       - .codex/skills/verify-aistock-feature/**
       - .claude/commands/fix-aistock-issue.md
+      - .claude/commands/aistock-feature-workflow.md
     primary_module: docs.standards
     impact_modules: [validation.guardrails, validation.module_quality]
     layer: docs
@@ -667,6 +696,14 @@ rules:
     layer: docs
     risk_level: low
     ownership_reason: Analysis documents record quant research and experiment findings.
+  - rule_id: docs_handoff
+    priority: 50
+    include:
+      - docs/handoff/**
+    primary_module: docs.analysis
+    layer: docs
+    risk_level: low
+    ownership_reason: Handoff documents record task analysis and reviewer handoff notes.
   - rule_id: docs_operations
     priority: 50
     include:

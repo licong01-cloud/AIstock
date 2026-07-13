@@ -1,0 +1,90 @@
+{
+  "actual": "BUG-036 子项：Validation Center execution_runner 仍硬编码 F:/Dev/AIstock_worktrees 作为 workspace_path allowlist。期望：runner 继续要求 workspace_path 是本仓库已注册 git worktree，但 allowlist 应复用 AISTOCK_WORKTREE_ROOT 或从 repo root 推导，保持本机默认可用，并避免迁移/多环境时合法 worktree 被拒绝。不得放宽为任意路径；不得触碰生产端口/DB/DDL。验收：1) 默认 F:/Dev/AIstock_worktrees 行为不变；2) 设置 AISTOCK_WORKTREE_ROOT 为自定义目录时，注册 worktree 可通过 allowlist；3) allowlist 外路径仍拒绝；4) nox/pytest targeted validation 通过。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260621_BUG-438-validation-center-worktree-allowlist-must-use-configured-aistock-worktre.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/validation/execution_runner.py",
+    "backend/tests/test_validation_execution_runner.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-438",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T17:32:07.178172Z",
+  "description": "BUG-036 子项：Validation Center execution_runner 仍硬编码 F:/Dev/AIstock_worktrees 作为 workspace_path allowlist。期望：runner 继续要求 workspace_path 是本仓库已注册 git worktree，但 allowlist 应复用 AISTOCK_WORKTREE_ROOT 或从 repo root 推导，保持本机默认可用，并避免迁移/多环境时合法 worktree 被拒绝。不得放宽为任意路径；不得触碰生产端口/DB/DDL。验收：1) 默认 F:/Dev/AIstock_worktrees 行为不变；2) 设置 AISTOCK_WORKTREE_ROOT 为自定义目录时，注册 worktree 可通过 allowlist；3) allowlist 外路径仍拒绝；4) nox/pytest targeted validation 通过。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-3981998f5ffd",
+      "timestamp": "2026-06-20T17:32:07.178168Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "added_paths": [
+        "backend/services/validation/execution_runner.py",
+        "backend/tests/test_validation_execution_runner.py"
+      ],
+      "note": "BUG-438 root cause is in Validation Center execution_runner workspace allowlist; added runner and regression test files after fast-path T2 validation scope check.",
+      "timestamp": "2026-06-20T17:36:21.297007+00:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-20T17:32:07.178172Z",
+  "fix_branch": null,
+  "fix_commit": "a94d322c1a716fc20c0b6b9a17c6896ebc3fd6d4",
+  "fixed_at": "2026-06-20T18:05:42.339727Z",
+  "github_issue_number": 1354,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1354",
+  "last_seen_at": "2026-06-20T17:32:07.178172Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1356",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Validation Center worktree allowlist must use configured AISTOCK_WORKTREE_ROOT",
+  "trigger_condition": {
+    "fingerprint": "3981998f5ffd00b1b159ea02",
+    "source_event_id": "FE-20260621-3981998f5ffd"
+  },
+  "validation_evidence": [
+    "PR #1356 CI green -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_ready"
+}

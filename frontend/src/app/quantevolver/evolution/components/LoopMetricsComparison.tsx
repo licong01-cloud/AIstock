@@ -65,7 +65,7 @@ function buildRankMetrics(diagnostics: LoopDiagnostics): LoopRankMetrics {
   const pos = diagnostics.position;
 
   return {
-    cagr: metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute"]),
+    cagr: metricNumber(ar, ["cagr", "cagr_absolute", "annualized_return_absolute", "annualized_return", "annual_return"]),
     annualizedReturn: metricNumber(metrics, ["annualized_return", "ann_return"]),
     absMaxDrawdown: metricNumber(ar, ["max_drawdown", "max_drawdown_absolute"]),
     costMaxDrawdown: metricNumber(metrics, ["max_drawdown"]),
@@ -78,9 +78,16 @@ function buildRankMetrics(diagnostics: LoopDiagnostics): LoopRankMetrics {
   };
 }
 
-function hasCompleteRankMetrics(loop: any, rank: LoopRankMetrics): boolean {
+function hasCompleteRankMetrics(loop: any, rank: LoopRankMetrics, isCombine = false): boolean {
   const status = loop?.status;
   const statusEligible = !status || status === "completed";
+  if (isCombine) {
+    return (
+      statusEligible &&
+      isFiniteMetric(rank.annualizedReturn) &&
+      isFiniteMetric(rank.sharpe)
+    );
+  }
   return (
     statusEligible &&
     isFiniteMetric(rank.cagr) &&
@@ -94,8 +101,8 @@ function hasCompleteRankMetrics(loop: any, rank: LoopRankMetrics): boolean {
 }
 
 function isBetterRankCandidate(current: LoopRow, best: LoopRow): boolean {
-  const currentReturn = current.rank.cagr ?? -Infinity;
-  const bestReturn = best.rank.cagr ?? -Infinity;
+  const currentReturn = (current.rank.cagr ?? current.rank.annualizedReturn) ?? -Infinity;
+  const bestReturn = (best.rank.cagr ?? best.rank.annualizedReturn) ?? -Infinity;
   if (currentReturn !== bestReturn) return currentReturn > bestReturn;
 
   const currentDrawdown = Math.abs(current.rank.absMaxDrawdown ?? Infinity);
@@ -170,7 +177,9 @@ export default function LoopMetricsComparison({
   selectedLoopIndex,
 }: LoopMetricsComparisonProps) {
   if (!loops || loops.length === 0) return null;
-  const showAction = (taskType || sourceType || "evolution") === "evolution" && (evolutionMode || "auto") === "auto";
+  const normalizedType = taskType || sourceType || "evolution";
+  const isCombine = normalizedType === "multi_alpha_combine";
+  const showAction = normalizedType === "evolution" && (evolutionMode || "auto") === "auto";
 
   const rows: LoopRow[] = loops.map((loop, sourceIndex) => {
     const diagnostics = extractLoopDiagnostics(loop);
@@ -181,7 +190,7 @@ export default function LoopMetricsComparison({
       sourceIndex,
       diagnostics,
       rank,
-      bestEligible: hasCompleteRankMetrics(loop, rank),
+      bestEligible: hasCompleteRankMetrics(loop, rank, isCombine),
     };
   });
 
@@ -202,7 +211,7 @@ export default function LoopMetricsComparison({
       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
         <BarChart3 size={18} color="#64748b" />
         <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "#1e293b" }}>
-          Loop 指标对比
+          {isCombine ? "配置指标对比" : "Loop 指标对比"}
         </h3>
         {taskType && (
           <span style={{ fontSize: "11px", color: "#64748b", backgroundColor: "#e2e8f0", padding: "2px 8px", borderRadius: "999px" }}>
@@ -213,7 +222,7 @@ export default function LoopMetricsComparison({
           <div style={{ marginLeft: "auto", fontSize: "12px", color: "#64748b", display: "flex", alignItems: "center", gap: "4px" }}>
             <span>当前最优：</span>
             <span style={{ padding: "2px 8px", backgroundColor: "#fef3c7", color: "#d97706", borderRadius: "12px", fontSize: "11px", fontWeight: 700 }}>
-              Loop {bestLoop.loop.loop_index}
+              {isCombine ? "配置" : "Loop"} {bestLoop.loop.loop_index}
             </span>
           </div>
         )}
@@ -223,10 +232,10 @@ export default function LoopMetricsComparison({
         <table style={{ width: "100%", minWidth: showAction ? "1700px" : "1600px", borderCollapse: "collapse", fontSize: "13px" }}>
           <thead>
             <tr style={{ backgroundColor: "#f1f5f9", borderBottom: "2px solid #e5e7eb" }}>
-              <th style={thStyle}>Loop</th>
-              <th style={thStyle}>SOTA</th>
+              <th style={thStyle}>{isCombine ? "配置" : "Loop"}</th>
+              <th style={thStyle}>{isCombine ? "最优配置" : "SOTA"}</th>
               {showAction && <th style={thStyle}>动作</th>}
-              <th style={thStyle}>Loop说明</th>
+              <th style={thStyle}>{isCombine ? "配置说明" : "Loop说明"}</th>
               <th style={thStyle}>模型</th>
               <th style={thStyle}>周期</th>
               <th style={thStyle}>HMM / 快照</th>
@@ -277,7 +286,7 @@ export default function LoopMetricsComparison({
                 >
                   <td style={{ ...tdStyle, fontWeight: isBest ? 700 : 500 }}>
                     {isBest && <TrendingUp size={14} color="#16a34a" style={{ verticalAlign: "middle", marginRight: "4px" }} />}
-                    L{loop.loop_index}
+                    {isCombine ? `配置 ${loop.loop_index}` : `L${loop.loop_index}`}
                   </td>
                   <td style={tdStyle}>
                     <span style={{
@@ -356,10 +365,14 @@ export default function LoopMetricsComparison({
         </table>
       </div>
       <div style={{ marginTop: "10px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
-        持仓最小/平均/最大只从已缓存的 enhanced metrics 或已回填 holding audit 摘要读取；旧 Loop 未回填该摘要时显示 “-”，不会在页面加载时重跑实验或修改实验行为。
+        {isCombine
+          ? "配置对比仅读取 multi-alpha combine-backtest 结果表；IC/持仓类 QE 字段无组合语义时显示 “-”，不会触发重跑。"
+          : "持仓最小/平均/最大只从已缓存的 enhanced metrics 或已回填 holding audit 摘要读取；旧 Loop 未回填该摘要时显示 “-”，不会在页面加载时重跑实验或修改实验行为。"}
       </div>
       <div style={{ marginTop: "6px", color: "#64748b", fontSize: "12px", lineHeight: 1.6 }}>
-        Best-loop selection only ranks completed loops with CAGR, absolute MaxDD, Sharpe, average/max holdings, ending cash, and stock market value.
+        {isCombine
+          ? "最优配置只在 completed 配置中按 CAGR/Sharpe 评选，failed/partial_failed/running 不参评。"
+          : "Best-loop selection only ranks completed loops with CAGR, absolute MaxDD, Sharpe, average/max holdings, ending cash, and stock market value."}
       </div>
     </div>
   );

@@ -220,12 +220,6 @@ class PaperTradingV2PortfolioService:
     ) -> PaperPortfolio:
         record = self.package_repository.get(package_id)
         manifest = record.current_manifest()
-        self.asset_eligibility_service.require_eligible(record)
-        if not manifest.manifest_sha256:
-            raise PackageAssetInvalidError(
-                "paper portfolio requires frozen strategy package manifest",
-                context={"package_id": package_id},
-            )
         # R-Q9 D1/D3: validate broker_backend up-front (typed error, fail-fast).
         # Engine section 3.6.4 strong binding is re-checked inside PaperPortfolio model
         # validator; this layer additionally restricts to Paper-v2-creatable
@@ -237,6 +231,12 @@ class PaperTradingV2PortfolioService:
                     "broker_backend": broker_backend,
                     "allowed": sorted(PAPER_V2_CREATABLE_BROKER_BACKENDS),
                 },
+            )
+        self.asset_eligibility_service.require_eligible(record, broker_backend=broker_backend)
+        if not manifest.manifest_sha256:
+            raise PackageAssetInvalidError(
+                "paper portfolio requires frozen strategy package manifest",
+                context={"package_id": package_id},
             )
         assert_broker_market_source_match(broker_backend, data_source)
         # OPEN-EXT-3 stub - broker_compatibility manifest field not yet
@@ -308,50 +308,28 @@ class PaperTradingV2PortfolioService:
         search: str | None = None,
         sort_by: str = "created_at",
         sort_dir: str = "desc",
+        broker_backend: str | None = None,
     ) -> dict[str, Any]:
         if page <= 0 or page_size <= 0:
             raise DataUnavailableError(
                 "paper v2 portfolio pagination requires positive limits",
                 context={"page": page, "page_size": page_size},
             )
-        rows = self.repository.list_portfolios(limit=10_000)
-        status_filter = {str(item).strip().upper() for item in (statuses or []) if str(item).strip()}
-        if status_filter:
-            rows = [item for item in rows if item.status.value.upper() in status_filter]
-        if search and search.strip():
-            needle = search.strip().lower()
-            rows = [
-                item
-                for item in rows
-                if needle in item.portfolio_name.lower()
-                or needle in item.portfolio_id.lower()
-                or needle in item.package_id.lower()
-            ]
-        sort_keys = {
-            "portfolio_name": lambda item: item.portfolio_name.lower(),
-            "status": lambda item: item.status.value,
-            "initial_cash": lambda item: item.initial_cash,
-            "start_date": lambda item: item.start_date.isoformat(),
-            "created_at": lambda item: item.created_at,
-            "updated_at": lambda item: item.updated_at,
-        }
-        rows = sorted(rows, key=sort_keys.get(sort_by, sort_keys["created_at"]), reverse=str(sort_dir).lower() != "asc")
-        total = len(rows)
-        start = (page - 1) * page_size
-        page_rows = rows[start : start + page_size]
-        return {
-            "portfolios": [item.model_dump(mode="json") for item in page_rows],
-            "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total": total,
-                "total_pages": max(1, (total + page_size - 1) // page_size),
-                "statuses": sorted(status_filter),
-                "search": search,
-                "sort_by": sort_by,
-                "sort_dir": "asc" if str(sort_dir).lower() == "asc" else "desc",
-            },
-        }
+        list_page = getattr(self.repository, "list_portfolios_page", None)
+        if callable(list_page):
+            return list_page(
+                page=page,
+                page_size=page_size,
+                statuses=statuses,
+                search=search,
+                sort_by=sort_by,
+                sort_dir=sort_dir,
+                broker_backend=broker_backend,
+            )
+        raise DataUnavailableError(
+            "paper v2 repository does not support paginated portfolio listing",
+            context={"reason_code": "PAPER_V2_PORTFOLIO_PAGE_UNSUPPORTED"},
+        )
 
     def running_summary(
         self,
@@ -394,6 +372,9 @@ class PaperTradingV2PortfolioService:
             min_initial_cash=min_initial_cash,
             max_initial_cash=max_initial_cash,
         )
+
+    def overview_summary(self) -> dict[str, Any]:
+        return self.repository.overview_summary()
 
     def get_portfolio(self, portfolio_id: str) -> PaperPortfolio:
         return self.repository.get_portfolio(portfolio_id)

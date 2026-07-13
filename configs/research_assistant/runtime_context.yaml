@@ -38,7 +38,8 @@ budget:
   response:
     reserved_ratio: 0.10
     min_reserved_tokens: 4096
-    max_tokens: 1600
+    # DeepSeek V4 max output; provider length stops fail loud instead of returning a silent partial answer.
+    max_tokens: 384000
   overflow_action_order:
     - compact_old_history
     - retrieve_key_facts
@@ -116,8 +117,12 @@ assembly:
 trace:
   response_preview_chars: 500
 
+research_assistant:
+  guard_mode: "off"
+
 react_grounding:
-  max_tool_iterations: 4
+  # Safety cap only: the model may stop earlier once it has enough evidence.
+  max_tool_iterations: 24
   evidence_required: true
   placeholder_patterns:
     - "\bXX\b"
@@ -804,13 +809,14 @@ planner:
         - "\u5199\u5165\u5019\u9009\u8bb0\u5fc6"
         - "\u4fdd\u5b58\u9879\u76ee\u8bb0\u5fc6"
         - "memory candidate"
-      description_for_llm: "\u521b\u5efa draft memory candidate\uff0c\u6279\u51c6\u524d\u4e0d\u8fdb\u5165\u957f\u671f\u8bb0\u5fc6\u3002"
+      description_for_llm: "\u7528\u6237\u7ed9\u51fa\u660e\u786e\u8981\u957f\u671f\u8bb0\u4f4f\u7684\u5177\u4f53\u5185\u5bb9\u65f6\uff0c\u521b\u5efa draft memory candidate\uff1b\u6279\u51c6\u524d\u4e0d\u8fdb\u5165\u957f\u671f\u8bb0\u5fc6\u3002\u5982\u679c\u7528\u6237\u53ea\u662f\u8be2\u95ee\u80fd\u5426\u8bb0\u4f4f\uff0c\u5148\u7528\u4e2d\u6587\u4eba\u8bdd\u8bf4\u660e\u201c\u80fd\uff0c\u8bf7\u544a\u8bc9\u6211\u8981\u8bb0\u4ec0\u4e48\u201d\uff0c\u4e0d\u521b\u5efa\u5019\u9009\u8bb0\u5fc6\uff0c\u4e0d\u5411\u7528\u6237\u66b4\u9732 subject_key/memory_type/title \u7b49\u5185\u90e8\u5b57\u6bb5\u540d\u3002"
       risk_level: medium
       side_effect_level: draft_only
       required_confirmations: []
       preferred_model_role: primary_orchestrator
       input_slots:
-        required: [memory_type, subject_key, title]
+        required: []
+        business_required: [memory_type, subject_key, title]
       output_cards: [memory_candidate, approval_policy]
       mcp_tool_refs:
         - server_key: research-assistant
@@ -861,6 +867,27 @@ planner:
       workflow_pack_ref: rdagent.analysis
       status: approved
       source_ref: "C:/Users/lc999/.codex/skills/rdagent-task-analyzer/SKILL.md"
+    - capability_key: skill_library.reuse
+      capability_type: skill
+      title: "Skill Library gated reuse"
+      natural_language_triggers:
+        - "reuse approved skill"
+        - "skill library replay"
+        - "\u590d\u7528\u5df2\u5ba1\u6279\u6280\u80fd"
+      description_for_llm: "Reuse an approved Skill Library recipe only through Action Proposal, preflight, and approval gates; never execute draft skills directly."
+      risk_level: high
+      side_effect_level: write_nonprod
+      required_confirmations:
+        - CONFIRM_SKILL_REUSE
+      preferred_model_role: primary_orchestrator
+      input_slots:
+        required: [skill_library_ref]
+      output_cards: [skill_recipe, approval_gate, replay_evidence]
+      mcp_tool_refs: []
+      skill_refs: []
+      workflow_pack_ref: skill_library.reuse
+      status: approved
+      source_ref: "docs/architecture/research_assistant_architecture_upgrade_blueprint_20260530.md#phase-12-skill-library"
 
 execution:
   default_timeout_seconds: 60
@@ -923,6 +950,11 @@ query_limits:
   api_list_memory_items: 50
   api_list_memory_access_log: 50
   api_list_context_packs: 50
+  api_list_code_context_refs: 50
+  api_list_proactive_reports: 50
+  api_list_reflection_cards: 50
+  api_list_prompt_lab_runs: 50
+  api_list_skill_library: 50
   api_list_entities: 50
   api_list_relations: 50
   api_list_evolution_paths: 50
@@ -958,3 +990,4 @@ query_limits:
   api_list_agenda_items: 50
   api_list_validation_discovery_reports: 50
   api_list_trace_events: 50
+  api_list_llm_usage_events: 50

@@ -1,0 +1,111 @@
+{
+  "actual": "PR #1383 changed backend/services/research_assistant source and tests but PR-quality reported scope_check=missing and blocked P0/P1 evidence gate with scope_passed=false.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/declarative_config.py",
+    "backend/services/research_assistant/service.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_execution_closure.py",
+    "tests/aistock_validation/bugs/20260621_BUG-449-ra-declarative-config-memory-authority-p1-tracked-scope.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-449",
+  "close_sync_commit": "dee727ba5202d37be49398424e54ea546db2ac5b",
+  "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1397",
+  "closed_at": "2026-06-21T13:41:00.844842Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T11:07:53.506580Z",
+  "description": "PR #1383 changed backend/services/research_assistant source and tests but PR-quality reported scope_check=missing and blocked P0/P1 evidence gate with scope_passed=false.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-4f0991ecabd6",
+      "timestamp": "2026-06-21T11:07:53.506576Z"
+    },
+    {
+      "action": "scope_registration_for_pr_1383",
+      "actor": "codex",
+      "note": "Registered BUG-449 to provide explicit allowed_write_scope and validation evidence for PR #1383 PR-quality P0/P1 gate.",
+      "timestamp": "2026-06-21T11:18:00Z"
+    },
+    {
+      "action": "rebase_origin_main",
+      "actor": "codex",
+      "note": "Rebased PR branch onto origin/main 970acb82; implementation commit became 65420cd2.",
+      "timestamp": "2026-06-21T11:28:00Z"
+    },
+    {
+      "action": "closed_after_close_sync_pr_merged",
+      "actor": "codex",
+      "note": "Issue #1389 already closed with status:fixed; close-sync PR #1397 merged; BUG JSON marked closed with closed_at.",
+      "timestamp": "2026-06-21T13:41:00.844842Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/pull/1383",
+    "https://github.com/licong01-cloud/AIstock/actions/runs/27895554360/job/82546378000"
+  ],
+  "expected": "Backend source PRs for RA P1 config work carry linked GitHub issue, BUG JSON, validation evidence, production gates, and allowed_write_scope covering all changed files.",
+  "first_seen_at": "2026-06-21T11:07:53.506580Z",
+  "fix_branch": "feature/ra-declarative-config-memory-authority-p1-20260621",
+  "fix_commit": "de6a649eb97711e12d085cfe171e77bd999bd6ae",
+  "fixed_at": "2026-06-21T13:30:01.048027Z",
+  "github_issue_number": 1389,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1389",
+  "last_seen_at": "2026-06-21T11:07:53.506580Z",
+  "merge_commit": "de6a649eb97711e12d085cfe171e77bd999bd6ae",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1383",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 27895554360 --job 82546378000 --log; inspect tmp/validation/pr_quality/summary.json",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA declarative config memory authority P1 tracked scope",
+  "trigger_condition": {
+    "fingerprint": "4f0991ecabd6c0b4fb33278a",
+    "source_event_id": "FE-20260621-4f0991ecabd6"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/research_assistant/test_config_authority_characterization.py -q -> 3 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s research_assistant_backend -> 298 passed",
+    "python -m nox -s research_assistant_mcp_contract -> 38 passed",
+    "python -m nox -s ra_phase7_full_accept -> passed (PLAYWRIGHT_SKIP_WEBSERVER=1 with prestarted 3011 test frontend after webServer cleanup hang)",
+    "ruff check changed RA py files -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

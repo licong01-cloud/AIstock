@@ -1,0 +1,79 @@
+{
+  "schema_version": "aistock_qe_full_chain_validation_summary_v1",
+  "validated_at": "2026-06-20T07:12:56+08:00",
+  "window": {
+    "start": "2018-08-01",
+    "end": "2026-04-30",
+    "as_of_date": "2026-04-30"
+  },
+  "official_full_compute": {
+    "success_count": 575,
+    "fail_count": 0,
+    "total_metrics_inserted": 2875,
+    "single_parquet_count": 575,
+    "meta_factor_count": 575,
+    "orphan_parquet_count": 0,
+    "runtime_gate_status": "passed",
+    "cache_source": "official_offline_backtest_factor_data",
+    "batch_release_observed": true,
+    "single_cache_entries_after_release": 0,
+    "swap_mb": 0.0
+  },
+  "correlation_compute": {
+    "requested_factor_count": 575,
+    "success_factor_count": 574,
+    "failed_factor_count": 1,
+    "excluded_factors": {
+      "missing_from_cache": [],
+      "degenerate_nan": [],
+      "no_valid_pairs": ["quality_structure_composite"]
+    },
+    "record_count": 164429,
+    "runtime_gate_status": "passed",
+    "cache_source": "offline_research_backtest_factor_values",
+    "cache_root": "/mnt/f/Dev/AIstock/rdagent_assets/factor_values"
+  },
+  "qe_cache_hit": {
+    "gate_status": "passed",
+    "factor_count": 575,
+    "windows": [
+      {"name": "full_dataset", "start": "2018-08-01", "end": "2026-04-30", "hit_factor_count": 575, "miss_factor_count": 0},
+      {"name": "qe_subwindow_2020_2021", "start": "2020-01-01", "end": "2021-01-01", "hit_factor_count": 575, "miss_factor_count": 0},
+      {"name": "recent_backtest_slice", "start": "2025-01-01", "end": "2026-04-30", "hit_factor_count": 575, "miss_factor_count": 0}
+    ]
+  },
+  "api_readonly": {
+    "factor_cache_stats": "HTTP 200; 575 cache; window 2018-08-01~2026-04-30",
+    "correlation_cache_status": "HTTP 200; 575 cached; 0 uncached",
+    "correlation_overview": "HTTP 200; enabled total/evaluated/cached=575; correlation_computed=574"
+  },
+  "ui_readonly": {
+    "url": "http://127.0.0.1:3000/quantevolver/factor-correlation",
+    "http_status": 200,
+    "visible_checks": {
+      "enabled_575": true,
+      "computed_574": true,
+      "window_start": true,
+      "window_end": true
+    },
+    "screenshot": "tests/aistock_validation/history/qe/evidence/20260620_full_chain_validation/factor_correlation_after_bug433.png"
+  },
+  "bug433": {
+    "github_issue": "https://github.com/licong01-cloud/AIstock/issues/1333",
+    "fix_pr": "https://github.com/licong01-cloud/AIstock/pull/1334",
+    "close_sync_pr": "https://github.com/licong01-cloud/AIstock/pull/1335",
+    "fix_commit": "d393546ed9ab6a5b5f2a13e378926f16b86d96b5",
+    "status": "fixed_and_closed"
+  },
+  "legacy_path_scan": {
+    "official_correlation_qe_use_single_source": true,
+    "factor_values_realtime_consumed_by_official_paths": false,
+    "realtime_loader_remaining_scope": "non-official live/simulation transform/data-service",
+    "backfill_factor_cache_status": "retired compatibility/test legacy"
+  },
+  "production_gates": {
+    "production_ddl_gate": "noop",
+    "production_backend_dependency_gate": "noop",
+    "production_frontend_dependency_gate": "applied_and_verified"
+  }
+}

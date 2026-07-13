@@ -1,0 +1,198 @@
+{
+  "actual": "After BUG-345~BUG-351 unified MiniQMT runtime merge, repository still has old MiniQMT single-strategy/direct broker branches, worktrees, open PRs (#1017/#1020/#1026), POC artifacts, and possible legacy single-strategy code paths. Need an audited cleanup matrix before closing/deleting anything: confirm what is covered by current main, what must be migrated, what can be closed/deleted, and whether any product path can still bypass MiniQMTExecutionRuntime. Do not restart services or trigger real MiniQMT operations.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260613_BUG-354-p1-miniqmt-cleanup-legacy-single-strategy-branches-and-direct-miniqmt-pa.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/miniqmt_execution_runtime/__init__.py",
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/paper_trading_v2/execution/minqmt_live_algo_adapter.py",
+    "backend/services/paper_trading_v2/poc",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py"
+  ],
+  "assigned_agent": null,
+  "audit_matrix": {
+    "audited_at": "2026-06-13T02:42:47.648938Z",
+    "audited_branch_head": "dd4a58c6",
+    "audited_origin_main": "50924c1c",
+    "items": [
+      {
+        "current_main_gap": "MiniQMTExecutionRuntimeClient default repository is still InMemoryMiniQMTExecutionRuntimeRepository outside explicit router dependency injection.",
+        "current_status": "open_required_not_cleanup",
+        "evidence": [
+          "backend/services/miniqmt_execution_runtime/client.py:169",
+          "backend/services/paper_trading_v2/day_runner.py:220",
+          "backend/services/simulation_runtime/bridges.py:144"
+        ],
+        "item": "PR #1017 / BUG-339 durable runtime repository default",
+        "required_action": "Keep branch/PR; merge or reapply durable default before deleting old MiniQMT branches."
+      },
+      {
+        "current_main_gap": "submit_managed_vnpy_order_requests still directly invokes QmtManagedOrderService.submit_batch after request build instead of routing the broker boundary through a runtime gateway sync event.",
+        "current_status": "open_required_not_cleanup",
+        "evidence": [
+          "backend/services/miniqmt_execution_runtime/client.py:305"
+        ],
+        "item": "PR #1020 / BUG-337 runtime-owned managed submit gateway",
+        "required_action": "Keep branch/PR; merge or reapply gateway-owned submit/event sync before branch cleanup."
+      },
+      {
+        "current_main_gap": "Current order service handles SELL_PROCEEDS_REQUIRED but lacks SKIPPED_INSUFFICIENT_CAPITAL residual retry classification.",
+        "current_status": "open_required_not_cleanup",
+        "evidence": [
+          "backend/services/qmt_strategy_ledger/order_service.py:45",
+          "backend/services/simulation_runtime/scheduler.py:79"
+        ],
+        "item": "PR #1026 / BUG-338 sell-first/capacity residual retry semantics",
+        "required_action": "Keep branch/PR; merge or reapply funds-capacity residual behavior before final cleanup."
+      },
+      {
+        "current_main_gap": "No immediate product path gap uniquely tied to those old branches found; main contains later MiniQMT runtime integration, but ancestry is not merged due to squash/combined PR history.",
+        "current_status": "superseded_cleanup_candidate_after_blockers",
+        "evidence": [
+          "origin/bug/BUG-290-p0-miniqmt-phase2-miniqmtexecutionruntime-durabl-20260609",
+          "origin/bug/BUG-291-p0-miniqmt-phase3-runtime-owned-vn-py-derived-al-20260609",
+          "origin/bug/BUG-293-p0-miniqmt-phase4-paper-v2-and-simulation-runtim-20260609",
+          "main contains final integration commit 0b5f0dba / PR #861"
+        ],
+        "item": "Old remote branches BUG-290 / BUG-291 / BUG-293",
+        "required_action": "Do not delete during this audit step; close/delete only through explicit cleanup-after-merge style evidence after P0 PRs settle."
+      },
+      {
+        "current_main_gap": "Manual POC scripts include xtquant place/cancel probes and old vn.py smoke flow; no import from product path found.",
+        "current_status": "non_product_cleanup_candidate",
+        "evidence": [
+          "backend/services/paper_trading_v2/poc/step2_place_cancel.py",
+          "backend/services/paper_trading_v2/poc/step4_intraday_revalidate.py"
+        ],
+        "item": "backend/services/paper_trading_v2/poc",
+        "required_action": "Archive/remove in follow-up cleanup PR after required P0 product gaps are merged; no production runtime impact."
+      },
+      {
+        "current_main_gap": "Legacy exclusive_account strings remain for normalization/diagnostic compatibility; product order intents are rejected unless diagnostic metadata is explicit.",
+        "current_status": "guarded_compatibility_not_product_path",
+        "evidence": [
+          "backend/services/paper_trading_v2/auto_run.py:28",
+          "backend/services/paper_trading_v2/broker/minqmtsim.py:652",
+          "backend/services/paper_trading_v2/broker/minqmtsim.py:996"
+        ],
+        "item": "Legacy MiniQMTSim exclusive_account compatibility",
+        "required_action": "Keep fail-fast compatibility until P0 fixes and migration validation complete; remove only after product path proves durable/unified."
+      },
+      {
+        "current_main_gap": "No ungated public product bypass found in static audit.",
+        "current_status": "guarded_or_retired_not_cleanup_blocker",
+        "evidence": [
+          "backend/routers/qmt.py:58",
+          "backend/routers/qmt_strategy_ledger.py:263",
+          "backend/routers/qmt_strategy_ledger.py:560"
+        ],
+        "item": "Raw QMT and qmt_strategy public mutation endpoints",
+        "required_action": "Keep guard tests; no branch deletion decision depends on these endpoints."
+      }
+    ],
+    "reason_not_safe_to_delete_now": "Current main still lacks required P0 MiniQMT product fixes from PR #1017/#1020/#1026; branch cleanup must not remove those heads before their fixes are merged or explicitly superseded.",
+    "runtime_or_broker_mutation_performed": false,
+    "safe_to_delete_legacy_branches_now": false,
+    "schema_version": "aistock_bug_354_miniqmt_cleanup_audit_v1"
+  },
+  "bug_id": "BUG-354",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-13T02:23:51.383342Z",
+  "description": "After BUG-345~BUG-351 unified MiniQMT runtime merge, repository still has old MiniQMT single-strategy/direct broker branches, worktrees, open PRs (#1017/#1020/#1026), POC artifacts, and possible legacy single-strategy code paths. Need an audited cleanup matrix before closing/deleting anything: confirm what is covered by current main, what must be migrated, what can be closed/deleted, and whether any product path can still bypass MiniQMTExecutionRuntime. Do not restart services or trigger real MiniQMT operations.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260613-aef8e9fc2dd4",
+      "timestamp": "2026-06-13T02:23:51.383339Z"
+    },
+    {
+      "action": "current_state_cleanup_audit_completed",
+      "actor": "codex",
+      "note": "Confirmed BUG-354 is not a blind branch-deletion task: three open MiniQMT P0 PRs remain required, old BUG-290/291/293 branches are cleanup candidates only after blockers settle, and POC artifacts are non-product cleanup candidates.",
+      "timestamp": "2026-06-13T02:42:47.648938Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-354 2026-06-13 read-only audit: current main 50924c1c; worktree branch dd4a58c6; no runtime restart and no MiniQMT order mutation performed.",
+    "Static audit: backend/services/miniqmt_execution_runtime/client.py default MiniQMTExecutionRuntimeClient still uses InMemoryMiniQMTExecutionRuntimeRepository; product paths in day_runner.py and simulation_runtime/bridges.py construct default client.",
+    "Static audit: backend/services/miniqmt_execution_runtime/client.py submit_managed_vnpy_order_requests still calls managed_order_service.submit_batch(requests) directly; PR #1020 moves submit behind runtime gateway event sync.",
+    "Static audit: qmt_strategy_ledger/order_service.py and simulation_runtime/scheduler.py lack SKIPPED_INSUFFICIENT_CAPITAL capacity-residual retry semantics from PR #1026.",
+    "Static audit: qmt_strategy_ledger public submit/cancel endpoints are retired/fail-fast and raw qmt order endpoints require AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS; no ungated public product bypass found.",
+    "Open PR audit: #1017 BUG-339, #1020 BUG-337, #1026 BUG-338 remain OPEN and not merged into origin/main; do not close/delete these branches as stale cleanup.",
+    "Old remote branch audit: BUG-290/BUG-291/BUG-293 branches appear superseded by main integration PR #861 but remain remote-only/unmerged by ancestry because squash/merge history differs; delete only after P0 open PRs and close-sync are settled.",
+    "POC audit: backend/services/paper_trading_v2/poc contains manual xtquant/vn.py probe scripts including place/cancel examples; not imported by product path, but should be archived/removed in a later cleanup PR after runtime gaps are merged."
+  ],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-13T02:23:51.383342Z",
+  "fix_branch": null,
+  "fix_commit": "4f057f7e3374d79f8054268e9b1744d6ab372715",
+  "fixed_at": "2026-06-13T04:19:11.855376Z",
+  "github_issue_number": 1047,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1047",
+  "last_seen_at": "2026-06-13T02:42:47.648938Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1048",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][MiniQMT][Cleanup] Legacy single-strategy branches and direct MiniQMT paths need audited cleanup",
+  "trigger_condition": {
+    "fingerprint": "aef8e9fc2dd49fc377826f61",
+    "source_event_id": "FE-20260613-aef8e9fc2dd4"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 65 passed",
+    "python -m ruff check backend/services/miniqmt_execution_runtime/client.py backend/services/miniqmt_execution_runtime/repository.py backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/scheduler.py backend/tests/miniqmt_execution_runtime/test_miniqmt_runtime_restart_recovery.py backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "python -m compileall -q backend/services/miniqmt_execution_runtime backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/scheduler.py -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients ... -> workflow_gate=ready clients_ready=4/4",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed; module ownership scan files=12 mapped=12",
+    "python -m nox -s l0 -> success; guardrail scan blocking=0",
+    "python -m nox -s paper_v2_l3 -> success; paper_v2_backend 617 passed 1 skipped 2 xfailed; paper_v2_ui 25 passed 1 skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

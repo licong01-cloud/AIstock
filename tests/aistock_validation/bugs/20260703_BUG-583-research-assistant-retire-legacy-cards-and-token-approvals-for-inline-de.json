@@ -1,0 +1,157 @@
+{
+  "actual": "Legacy stateless route decisions can hard-return clarification before the agent answer; action approvals require exact confirmation tokens; action_proposals/blocker/evidence/diagnostic tables leak into the normal UI.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/**",
+    "frontend/src/app/research-assistant/**",
+    "frontend/src/components/research-assistant/**",
+    "frontend/src/lib/research-assistant/**",
+    "docs/analysis/**",
+    "backend/tests/research_assistant/**",
+    "configs/research_assistant/**",
+    "tests/aistock_validation/bugs/20260703_BUG-583-research-assistant-retire-legacy-cards-and-token-approvals-for-inline-de.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-583",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T18:34:06.002309Z",
+  "description": "Legacy stateless route decisions can hard-return clarification before the agent answer; action approvals require exact confirmation tokens; action_proposals/blocker/evidence/diagnostic tables leak into the normal UI.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260703-c4f6d35504fd",
+      "timestamp": "2026-07-02T18:34:06.002305Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant uses the history-aware agent loop as the single decision maker; clarification and action approval are returned as inline decision_request objects; natural-language or option approval resolves pending actions; side-effect tools never execute before explicit user approval; developer diagnostics are hidden by default.",
+  "first_seen_at": "2026-07-02T18:34:06.002309Z",
+  "fix_branch": null,
+  "fix_commit": "587486d4197d1d30e3108dccade32757c9edc823",
+  "fixed_at": "2026-07-03T11:45:27.712318Z",
+  "github_issue_number": 1846,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1846",
+  "last_seen_at": "2026-07-02T18:34:06.002309Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1849",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "backend/frontend contract regression: same conversation follow-up with a referent plus *_confirmed approval should not trigger hard clarification or token matching, and default chat response should omit cards/JSON unless developer_diagnostics=true.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Research Assistant retire legacy cards and token approvals for inline decisions",
+  "trigger_condition": {
+    "fingerprint": "c4f6d35504fd6a05577fbe82",
+    "source_event_id": "FE-20260703-c4f6d35504fd"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/research_assistant/**",
+      "frontend/src/app/research-assistant/**",
+      "frontend/src/components/research-assistant/**",
+      "frontend/src/lib/research-assistant/**",
+      "configs/research_assistant/**",
+      "docs/analysis/**",
+      "backend/tests/research_assistant/**"
+    ],
+    "ui_issue": true,
+    "ui_route": "/research-assistant/chat",
+    "ui_routes": [
+      "/research-assistant/chat"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1849 head 83e24178fdf61eab1cc53527ff42058656bdd7ec / merge 587486d4197d1d30e3108dccade32757c9edc823: gh pr checks passed 17 failed 0; AIstock CI, Static gate (l0 + module registry), AIstock PR Quality, CodeQL, Semgrep success."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "research_assistant",
+        "research_assistant_mcp_contract"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "35-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "research_assistant",
+          "research_assistant_mcp_contract"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "35-60%"
+    }
+  }
+}

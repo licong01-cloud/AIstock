@@ -1,0 +1,79 @@
+{
+  "actual": "_require_tdx_quote_timestamp raises REALTIME_QUOTE_TIMESTAMP_INVALID for raw timestamps like 14999733/14997767, causing LocalSIM PRE_RUN_FAILED/LOCAL_SIM_CONTEXT_UNAVAILABLE while broker_called=false.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "tests/aistock_validation/bugs/20260629_BUG-545-localsim-pre-run-rejects-tdx-realtime-compact-tick-timestamps-with-inval.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-545",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-28T18:22:22.182914Z",
+  "description": "_require_tdx_quote_timestamp raises REALTIME_QUOTE_TIMESTAMP_INVALID for raw timestamps like 14999733/14997767, causing LocalSIM PRE_RUN_FAILED/LOCAL_SIM_CONTEXT_UNAVAILABLE while broker_called=false.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-765c1ccae00d",
+      "timestamp": "2026-06-28T18:22:22.182910Z"
+    }
+  ],
+  "evidence_uris": [
+    "read-only runtime diagnosis: LocalSIM sessions simrun_e8a4660e1d808d29 and simrun_2ab92533f19a70d5 failed on 2026-06-26 with REALTIME_QUOTE_TIMESTAMP_INVALID for raw timestamps 14999733/14997767; broker_called=false"
+  ],
+  "expected": "LocalSIM market-data preflight should accept valid TDX realtime compact intraday timestamp encodings, preserve fail-fast rejection for truly malformed timestamps, and avoid marking LocalSIM sessions failed before broker submission when quotes are otherwise usable.",
+  "first_seen_at": "2026-06-28T18:22:22.182914Z",
+  "fix_branch": null,
+  "fix_commit": "c942a7438b5d512279d0158a4319bb03b6d50ff5",
+  "fixed_at": "2026-06-28T19:11:51.652456Z",
+  "github_issue_number": 1712,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1712",
+  "last_seen_at": "2026-06-28T18:22:22.182914Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1715",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "LocalSIM pre-run rejects TDX realtime compact tick timestamps with invalid minute fields",
+  "trigger_condition": {
+    "fingerprint": "765c1ccae00d5040fe507e53",
+    "source_event_id": "FE-20260629-765c1ccae00d"
+  },
+  "validation_evidence": [
+    "GitHub PR #1715 CI -> passed (17 checks)",
+    "local: pytest market_data, ruff changed files, diff-check, l0, validation_module_registry_l0, paper_v2_l3(skip UI) -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

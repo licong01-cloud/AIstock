@@ -25,6 +25,8 @@ from typing import Any, List, Optional
 import numpy as np
 import pandas as pd
 
+from .moneyflow_contract import MONEYFLOW_FACTOR_COLUMNS, derive_moneyflow_factors
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,24 +58,6 @@ REQUIRED_PRECOMPUTED_FIELDS = [
     # 价格动量
     'PriceStrength_10D',
 ]
-
-
-def _safe_div(numer: pd.Series, denom: pd.Series) -> pd.Series:
-    """安全除法，分母为0或NaN时返回NaN"""
-    denom_safe = denom.replace(0, np.nan)
-    return numer / denom_safe
-
-
-def _rolling_sum_by_instrument(s: pd.Series, window: int) -> pd.Series:
-    """按股票分组计算滚动和，保持MultiIndex对齐"""
-    if s.empty:
-        return s
-    return (
-        s.groupby(level='instrument')
-        .rolling(window=window, min_periods=window)
-        .sum()
-        .reset_index(level=0, drop=True)
-    )
 
 
 def compute_precomputed_factors(
@@ -114,9 +98,6 @@ def compute_precomputed_factors(
     else:
         df_history_aligned = df_history
 
-    # 获取行情数据中的 amount 和 volume
-    amount = df_history_aligned['amount'] if 'amount' in df_history_aligned.columns else None
-    volume = df_history_aligned['volume'] if 'volume' in df_history_aligned.columns else None
     close = df_history_aligned['close'] if 'close' in df_history_aligned.columns else None
 
     # ========== 1. 估值因子 ==========
@@ -153,76 +134,13 @@ def compute_precomputed_factors(
         df['liquidity_vol_ratio'] = df['db_volume_ratio']
         logger.debug("✓ 已计算 liquidity_vol_ratio")
 
-    # ========== 4. 资金流净值字段 ==========
-    # 对齐 generate_static_factors_bundle.py:164-179
-
-    # 全档净流入
-    if 'mf_net_amt' in df.columns:
-        df['mf_total_net_amt'] = df['mf_net_amt']
-    if 'mf_net_vol' in df.columns:
-        df['mf_total_net_vol'] = df['mf_net_vol']
-
-    # 主力净流入（大单+特大单）
-    lg_buy_amt = df.get('mf_lg_buy_amt', pd.Series(0, index=df.index))
-    lg_sell_amt = df.get('mf_lg_sell_amt', pd.Series(0, index=df.index))
-    elg_buy_amt = df.get('mf_elg_buy_amt', pd.Series(0, index=df.index))
-    elg_sell_amt = df.get('mf_elg_sell_amt', pd.Series(0, index=df.index))
-
-    lg_buy_vol = df.get('mf_lg_buy_vol', pd.Series(0, index=df.index))
-    lg_sell_vol = df.get('mf_lg_sell_vol', pd.Series(0, index=df.index))
-    elg_buy_vol = df.get('mf_elg_buy_vol', pd.Series(0, index=df.index))
-    elg_sell_vol = df.get('mf_elg_sell_vol', pd.Series(0, index=df.index))
-
-    df['mf_main_net_amt'] = (lg_buy_amt + elg_buy_amt) - (lg_sell_amt + elg_sell_amt)
-    df['mf_main_net_vol'] = (lg_buy_vol + elg_buy_vol) - (lg_sell_vol + elg_sell_vol)
-
-    # 特大单净流入
-    df['mf_elg_net_amt'] = elg_buy_amt - elg_sell_amt
-    df['mf_elg_net_vol'] = elg_buy_vol - elg_sell_vol
-
-    logger.debug("✓ 已计算资金流净值字段")
-
-    # ========== 5. 资金流强度字段 ==========
-    # 对齐 generate_static_factors_bundle.py:184-198
-
-    if amount is not None:
-        df['mf_total_net_amt_ratio'] = _safe_div(df['mf_total_net_amt'], amount)
-        df['mf_main_net_amt_ratio'] = _safe_div(df['mf_main_net_amt'], amount)
-        df['mf_elg_net_amt_ratio'] = _safe_div(df['mf_elg_net_amt'], amount)
-
-    if volume is not None:
-        df['mf_total_net_vol_ratio'] = _safe_div(df['mf_total_net_vol'], volume)
-        df['mf_main_net_vol_ratio'] = _safe_div(df['mf_main_net_vol'], volume)
-        df['mf_elg_net_vol_ratio'] = _safe_div(df['mf_elg_net_vol'], volume)
-
-    # 特大单占主力比例
-    df['mf_elg_share_in_main_amt'] = _safe_div(df['mf_elg_net_amt'], df['mf_main_net_amt'])
-    df['mf_elg_share_in_main_vol'] = _safe_div(df['mf_elg_net_vol'], df['mf_main_net_vol'])
-
-    logger.debug("✓ 已计算资金流强度字段")
-
-    # ========== 6. 滚动聚合字段（5D/20D）==========
-    # 对齐 generate_static_factors_bundle.py:200-208
-    # 关键：先求和再算比率，而不是先算比率再求和
-
-    for w in [5, 20]:
-        suffix = f'{w}d'
-
-        # 净流入金额滚动和
-        df[f'mf_total_net_amt_{suffix}'] = _rolling_sum_by_instrument(df['mf_total_net_amt'], w)
-        df[f'mf_main_net_amt_{suffix}'] = _rolling_sum_by_instrument(df['mf_main_net_amt'], w)
-        df[f'mf_elg_net_amt_{suffix}'] = _rolling_sum_by_instrument(df['mf_elg_net_amt'], w)
-
-        # 成交额滚动和（用于计算强度）
-        if amount is not None:
-            amount_w = _rolling_sum_by_instrument(amount, w)
-
-            # 强度 = 滚动净流入 / 滚动成交额（先求和再算比率）
-            df[f'mf_total_net_amt_ratio_{suffix}'] = _safe_div(df[f'mf_total_net_amt_{suffix}'], amount_w)
-            df[f'mf_main_net_amt_ratio_{suffix}'] = _safe_div(df[f'mf_main_net_amt_{suffix}'], amount_w)
-            df[f'mf_elg_net_amt_ratio_{suffix}'] = _safe_div(df[f'mf_elg_net_amt_{suffix}'], amount_w)
-
-    logger.debug("✓ 已计算滚动聚合字段")
+    # ========== 4-6. 资金流净值、强度与滚动聚合 ==========
+    # 所有离线与实时路径共用同一单位和公式契约；旧字段名保持不变。
+    if any(column in df.columns for column in MONEYFLOW_FACTOR_COLUMNS):
+        derived = derive_moneyflow_factors(df, df_history_aligned)
+        for column in derived.columns:
+            df[column] = derived[column]
+        logger.debug("✓ 已按 canonical moneyflow contract 计算资金流派生字段")
 
     # ========== 7. 价格动量字段 ==========
     if close is not None:

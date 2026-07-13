@@ -1,7 +1,11 @@
-﻿"""Persistence repositories for Paper Trading v2."""
+"""Persistence repositories for Paper Trading v2."""
 
 from __future__ import annotations
 
+import inspect
+import logging
+import sys
+import threading
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
@@ -12,7 +16,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, SessionLockTimeoutError
 from backend.services.trading_core.ledger import CashLedgerEntry
-from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, PositionLot, RunStatus
+from backend.services.trading_core.models import AccountSnapshot, Fill, Order, OrderEvent, OrderStatus, PositionLot, RunStatus
 
 from .market_data import MinuteDataSource
 from .models import (
@@ -40,7 +44,8 @@ from .models import (
 )
 from .symbol_names import PaperV2SymbolNameResolver
 
-ConnFactory = Callable[[], Iterator[Any]]
+ConnFactory = Callable[..., Iterator[Any]]
+logger = logging.getLogger("aistock.paper_v2.repository")
 
 RUNNING_SUMMARY_ACTIVE_STATUSES = (
     PortfolioStatus.RUNNING.value,
@@ -80,6 +85,101 @@ RUNNING_SUMMARY_SEARCH_COLUMNS = {
     "latest_run_trade_date": "lr.trade_date",
     "latest_run_time": "COALESCE(lr.started_at, lr.completed_at)",
 }
+OVERVIEW_PACKAGE_RETIRED_STATUS = "RETIRED"
+TERMINAL_RUN_STATUSES = {RunStatus.SUCCEEDED, RunStatus.FAILED}
+RUN_SUCCESS_TERMINAL_ORDER_STATUSES = {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
+
+
+def _terminal_run_status_values() -> tuple[str, ...]:
+    return tuple(status.value for status in TERMINAL_RUN_STATUSES)
+
+
+def _completed_at_for_run_status(status: RunStatus, current_completed_at: datetime | None) -> datetime | None:
+    return datetime.now(UTC) if status in TERMINAL_RUN_STATUSES else current_completed_at
+
+
+def _supports_conn_factory_kw(conn_factory: ConnFactory, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(conn_factory)
+    except (TypeError, ValueError):
+        return False
+    parameter = signature.parameters.get(keyword)
+    if parameter is None:
+        return any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    return parameter.kind in {
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    }
+
+
+def _commit_if_available(conn: Any) -> None:
+    commit = getattr(conn, "commit", None)
+    if callable(commit):
+        commit()
+
+
+def _rollback_if_available(conn: Any) -> None:
+    rollback = getattr(conn, "rollback", None)
+    if callable(rollback):
+        rollback()
+
+
+def _set_autocommit_if_available(conn: Any, value: bool) -> None:
+    if hasattr(conn, "autocommit"):
+        setattr(conn, "autocommit", value)
+
+
+def _run_status_transition_error(
+    *,
+    run_id: str,
+    from_status: RunStatus | str | None,
+    to_status: RunStatus,
+    stale_run_status: RunStatus | str | None = None,
+) -> InvalidStateTransitionError:
+    from_value = from_status.value if isinstance(from_status, RunStatus) else from_status
+    stale_value = stale_run_status.value if isinstance(stale_run_status, RunStatus) else stale_run_status
+    context: dict[str, Any] = {
+        "reason_code": "PAPER_V2_RUN_TERMINAL_STATE_TRANSITION_BLOCKED",
+        "run_id": run_id,
+        "from_status": from_value,
+        "to_status": to_status.value,
+    }
+    if stale_value is not None:
+        context["stale_run_status"] = stale_value
+    return InvalidStateTransitionError(
+        "paper v2 run status transition blocked by current persisted state",
+        context=context,
+    )
+
+
+def non_terminal_orders_for_run_success(orders: list[Order]) -> list[dict[str, Any]]:
+    return [
+        {
+            "order_id": order.order_id,
+            "symbol": order.symbol,
+            "status": order.status.value,
+            "quantity": order.quantity,
+            "filled_quantity": order.filled_quantity,
+            "remaining_quantity": order.remaining_quantity,
+        }
+        for order in orders
+        if order.status not in RUN_SUCCESS_TERMINAL_ORDER_STATUSES
+    ]
+
+
+def assert_orders_terminal_before_run_success(*, run_id: str, orders: list[Order]) -> None:
+    open_orders = non_terminal_orders_for_run_success(orders)
+    if open_orders:
+        raise InvalidStateTransitionError(
+            "paper v2 run cannot be marked SUCCEEDED while orders are non-terminal",
+            context={
+                "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                "run_id": run_id,
+                "open_order_count": len(open_orders),
+                "open_orders": open_orders,
+                "terminal_order_statuses": sorted(status.value for status in RUN_SUCCESS_TERMINAL_ORDER_STATUSES),
+            },
+        )
 
 
 def _broker_binding_conflicts(existing: PaperBrokerAccountBinding, candidate: PaperBrokerAccountBinding) -> bool:
@@ -133,21 +233,267 @@ class PaperTradingV2Repository:
         *,
         symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
     ) -> None:
-        self._conn_factory = conn_factory or get_conn
+        self._base_conn_factory = conn_factory or get_conn
+        self._base_conn_factory_accepts_autocommit = _supports_conn_factory_kw(self._base_conn_factory, "autocommit")
+        self._base_conn_factory_accepts_manage_transaction = _supports_conn_factory_kw(
+            self._base_conn_factory,
+            "manage_transaction",
+        )
+        self._transaction_local = threading.local()
+        self._conn_factory = self._default_conn
         self._symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver(self._conn_factory)
+
+    def _active_transaction_conn(self) -> Any | None:
+        return getattr(self._transaction_local, "conn", None)
+
+    def _set_transaction_conn(self, conn: Any) -> None:
+        self._transaction_local.conn = conn
+
+    def _clear_transaction_conn(self) -> None:
+        if hasattr(self._transaction_local, "conn"):
+            del self._transaction_local.conn
+
+    @contextmanager
+    def _default_conn(self) -> Iterator[Any]:
+        active = self._active_transaction_conn()
+        if active is not None:
+            if (
+                sys.exc_info()[0] is not None
+                and getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick"
+                and not bool(getattr(self._transaction_local, "failure_write", False))
+            ):
+                if not bool(getattr(self._transaction_local, "session_tick_rolled_back", False)):
+                    try:
+                        _rollback_if_available(active)
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED error=%s",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            "LocalSim session transaction rollback before failure persistence failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILURE_ROLLBACK_FAILED"
+                        ) from exc
+                    self._transaction_local.session_tick_rolled_back = True
+                self._transaction_local.failure_write = True
+                try:
+                    with self._base_conn_factory() as conn:
+                        yield conn
+                except Exception as exc:
+                    self._transaction_local.session_tick_failure_write_failed = True
+                    logger.error(
+                        "LocalSim session failure persistence failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_FAILURE_PERSISTENCE_FAILED error=%s",
+                        f"{type(exc).__name__}: {exc}",
+                        exc_info=True,
+                    )
+                    raise
+                finally:
+                    self._transaction_local.failure_write = False
+            else:
+                yield active
+            return
+        with self._base_conn_factory() as conn:
+            yield conn
+
+    @contextmanager
+    def _conn(self, *, autocommit: bool = True, manage_transaction: bool = False) -> Iterator[Any]:
+        active = self._active_transaction_conn()
+        if active is not None:
+            yield active
+            return
+
+        if self._base_conn_factory_accepts_autocommit:
+            kwargs = {"autocommit": autocommit}
+            if self._base_conn_factory_accepts_manage_transaction:
+                kwargs["manage_transaction"] = manage_transaction
+            with self._base_conn_factory(**kwargs) as conn:
+                yield conn
+            return
+
+        with self._base_conn_factory() as conn:
+            original_autocommit = getattr(conn, "autocommit", None)
+            _set_autocommit_if_available(conn, autocommit)
+            try:
+                yield conn
+                if not autocommit and manage_transaction:
+                    _commit_if_available(conn)
+            except Exception as exc:
+                if not autocommit and manage_transaction:
+                    try:
+                        _rollback_if_available(conn)
+                    except Exception as rollback_exc:
+                        logger.error(
+                            "Paper v2 repository rollback failed; "
+                            "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED error=%s original_error=%s",
+                            f"{type(rollback_exc).__name__}: {rollback_exc}",
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise RuntimeError(
+                            "Paper v2 repository transaction rollback failed; "
+                            "reason_code=PAPER_V2_REPOSITORY_TRANSACTION_ROLLBACK_FAILED"
+                        ) from rollback_exc
+                raise
+            finally:
+                if original_autocommit is not None:
+                    _set_autocommit_if_available(conn, bool(original_autocommit))
+
+    @contextmanager
+    def _write_conn(self) -> Iterator[Any]:
+        conn = self._active_transaction_conn()
+        if conn is not None:
+            yield conn
+            return
+        with self._conn(autocommit=False, manage_transaction=True) as own_conn:
+            yield own_conn
+
+    @contextmanager
+    def local_sim_session_transaction(self, session_id: str) -> Iterator[None]:
+        """Pin one LocalSim live tick to one DB transaction while holding its advisory lock."""
+
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "LocalSim session transaction cannot start inside an existing repository transaction",
+                context={
+                    "session_id": session_id,
+                    "reason_code": "PAPER_V2_LOCAL_SIM_TRANSACTION_CONFLICT",
+                },
+            )
+        with self._conn(autocommit=True, manage_transaction=False) as lock_conn:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
+                locked = bool(cur.fetchone()[0])
+            if not locked:
+                raise SessionLockTimeoutError(
+                    "paper v2 session is already being processed by another backend process",
+                    context={
+                        "session_id": session_id,
+                        "lock_scope": "postgres_advisory_lock",
+                        "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
+                    },
+                )
+            complete_error: BaseException | None = None
+            try:
+                with self._conn(autocommit=False, manage_transaction=True) as txn_conn:
+                    try:
+                        self._set_transaction_conn(txn_conn)
+                        self._transaction_local.transaction_scope = "local_sim_session_tick"
+                        yield
+                    except Exception as exc:
+                        logger.error(
+                            "LocalSim session transaction failed; "
+                            "reason_code=PAPER_V2_LOCAL_SIM_TRANSACTION_FAILED session_id=%s error=%s",
+                            session_id,
+                            f"{type(exc).__name__}: {exc}",
+                            exc_info=True,
+                        )
+                        raise
+            finally:
+                try:
+                    with lock_conn.cursor() as cur:
+                        cur.execute("SELECT pg_advisory_unlock(2402, hashtext(%s))", (session_id,))
+                except Exception as unlock_exc:
+                    logger.error(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED session_id=%s error=%s",
+                        session_id,
+                        f"{type(unlock_exc).__name__}: {unlock_exc}",
+                        exc_info=True,
+                    )
+                    complete_error = RuntimeError(
+                        "LocalSim session advisory lock release failed; "
+                        "reason_code=PAPER_V2_LOCAL_SIM_ADVISORY_LOCK_RELEASE_FAILED"
+                    )
+                    complete_error.__cause__ = unlock_exc
+                finally:
+                    self._clear_transaction_conn()
+                    for attr in (
+                        "transaction_scope",
+                        "session_tick_rolled_back",
+                        "session_tick_failure_write_failed",
+                        "failure_write",
+                    ):
+                        if hasattr(self._transaction_local, attr):
+                            delattr(self._transaction_local, attr)
+                if complete_error is not None:
+                    raise complete_error
+
+    def _session_uses_local_sim_transaction(self, session_id: str) -> bool:
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend, s.mode
+                    FROM paper_v2.trade_session s
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = s.portfolio_id
+                    WHERE s.session_id = %s
+                    """,
+                    (session_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return False
+        if isinstance(row, dict):
+            broker_backend = row.get("broker_backend")
+            mode = row.get("mode")
+        else:
+            broker_backend = row[0]
+            mode = row[1] if len(row) > 1 else None
+        return str(broker_backend) == "local_sim" and str(mode or "") != "REPLAY_ONLY"
+
+    def _run_broker_backend(self, run_id: str) -> str | None:
+        if getattr(self._transaction_local, "transaction_scope", None) == "local_sim_session_tick":
+            return "local_sim"
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT p.broker_backend
+                    FROM paper_v2.run r
+                    JOIN paper_v2.portfolio p ON p.portfolio_id = r.portfolio_id
+                    WHERE r.run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        if isinstance(row, dict):
+            value = row.get("broker_backend")
+        else:
+            value = row[0]
+        return str(value) if value is not None else None
 
     def _resolve_stock_names(self, symbols: list[str | None] | tuple[str | None, ...]) -> dict[str, str]:
         try:
             return self._symbol_name_resolver.resolve(symbols)
-        except Exception:
+        except Exception as exc:
             # Stock names are display/audit metadata only; trading writes must
             # never fail because a reference-table lookup failed.
+            logger.warning(
+                "Paper v2 stock name resolution failed; reason_code=PAPER_V2_STOCK_NAME_RESOLUTION_FAILED symbols=%s error=%s",
+                list(symbols),
+                f"{type(exc).__name__}: {exc}",
+                exc_info=True,
+            )
             return {}
 
     @contextmanager
     def session_tick_lock(self, session_id: str) -> Iterator[None]:
         """Hold a PostgreSQL advisory lock so multiple backend processes do not tick one session."""
 
+        if self._active_transaction_conn() is not None:
+            raise InvalidStateTransitionError(
+                "Paper v2 session tick cannot start inside an existing repository transaction",
+                context={"session_id": session_id, "reason_code": "PAPER_V2_SESSION_TICK_TRANSACTION_CONFLICT"},
+            )
+        if self._session_uses_local_sim_transaction(session_id):
+            with self.local_sim_session_transaction(session_id):
+                yield
+            return
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_try_advisory_lock(2402, hashtext(%s))", (session_id,))
@@ -155,7 +501,11 @@ class PaperTradingV2Repository:
             if not locked:
                 raise SessionLockTimeoutError(
                     "paper v2 session is already being processed by another backend process",
-                    context={"session_id": session_id, "lock_scope": "postgres_advisory_lock"},
+                    context={
+                        "session_id": session_id,
+                        "lock_scope": "postgres_advisory_lock",
+                        "reason_code": "PAPER_V2_SESSION_ADVISORY_LOCK_BUSY",
+                    },
                 )
             try:
                 yield
@@ -213,9 +563,109 @@ class PaperTradingV2Repository:
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT portfolio_id FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
-                ids = [row["portfolio_id"] for row in cur.fetchall()]
-        return [self.get_portfolio(portfolio_id) for portfolio_id in ids]
+                cur.execute("SELECT * FROM paper_v2.portfolio ORDER BY created_at DESC LIMIT %s", (limit,))
+                rows = cur.fetchall()
+        return [self._portfolio_from_row(dict(row)) for row in rows]
+
+    def list_portfolios_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        statuses: list[str] | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+        broker_backend: str | None = None,
+    ) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise DataUnavailableError(
+                "paper v2 portfolio pagination requires positive limits",
+                context={"page": page, "page_size": page_size},
+            )
+        status_values = [str(item).strip().upper() for item in (statuses or []) if str(item).strip()]
+        invalid_statuses = [item for item in status_values if item not in {status.value for status in PortfolioStatus}]
+        if invalid_statuses:
+            raise DataUnavailableError(
+                "paper v2 portfolio status filter is invalid",
+                context={"statuses": statuses, "invalid_statuses": invalid_statuses},
+            )
+        sort_columns = {
+            "portfolio_name": "portfolio_name",
+            "status": "status",
+            "initial_cash": "initial_cash",
+            "start_date": "start_date",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        }
+        normalized_sort_by = str(sort_by or "created_at").strip().lower()
+        if normalized_sort_by not in sort_columns:
+            raise DataUnavailableError(
+                "paper v2 portfolio sort field is invalid",
+                context={"sort_by": sort_by, "allowed_sort_fields": sorted(sort_columns)},
+            )
+        normalized_sort_dir = str(sort_dir or "desc").strip().lower()
+        if normalized_sort_dir not in {"asc", "desc"}:
+            raise DataUnavailableError(
+                "paper v2 portfolio sort direction is invalid",
+                context={"sort_dir": sort_dir, "allowed_sort_dirs": ["asc", "desc"]},
+            )
+
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        if status_values:
+            where_clauses.append("status = ANY(%s)")
+            params.append(status_values)
+        normalized_broker_backend = str(broker_backend or "").strip()
+        if normalized_broker_backend:
+            where_clauses.append("broker_backend = %s")
+            params.append(normalized_broker_backend)
+        normalized_search = str(search or "").strip()
+        if normalized_search:
+            where_clauses.append(
+                "(portfolio_name ILIKE %s OR portfolio_id ILIKE %s OR package_id ILIKE %s)"
+            )
+            search_like = f"%{normalized_search}%"
+            params.extend([search_like, search_like, search_like])
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        order_col = sort_columns[normalized_sort_by]
+        secondary_order_sql = (
+            "created_at DESC NULLS LAST,\n                             "
+            if normalized_sort_by != "created_at"
+            else ""
+        )
+        offset = (page - 1) * page_size
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(f"SELECT COUNT(*) AS total FROM paper_v2.portfolio {where_sql}", tuple(params))
+                total = int((cur.fetchone() or {}).get("total") or 0)
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM paper_v2.portfolio
+                    {where_sql}
+                    ORDER BY {order_col} {normalized_sort_dir.upper()} NULLS LAST,
+                             {secondary_order_sql}portfolio_id ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple(params + [page_size, offset]),
+                )
+                rows = cur.fetchall()
+        return {
+            "portfolios": [item.model_dump(mode="json") for item in (self._portfolio_from_row(dict(row)) for row in rows)],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "statuses": status_values,
+                "search": normalized_search or None,
+                "broker_backend": normalized_broker_backend or None,
+                "sort_by": normalized_sort_by,
+                "sort_dir": normalized_sort_dir,
+            },
+        }
 
     def list_running_summaries(
         self,
@@ -419,6 +869,17 @@ class PaperTradingV2Repository:
 
                 cur.execute(
                     """
+                    SELECT package_id, package_name, package_version, package_status,
+                           manifest_sha256, alpha_mode, display_name, legacy_name, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE package_id = ANY(%s)
+                    """,
+                    (sorted({row["package_id"] for row in portfolio_rows}),),
+                )
+                packages_by_id = {row["package_id"]: dict(row) for row in cur.fetchall()}
+
+                cur.execute(
+                    """
                     SELECT *
                     FROM (
                         SELECT s.*,
@@ -545,6 +1006,7 @@ class PaperTradingV2Repository:
             summaries.append(
                 {
                     "portfolio": portfolio,
+                    "package": packages_by_id.get(portfolio.package_id),
                     "latest_run": latest_runs.get(portfolio_id),
                     "latest_session": latest_sessions.get(portfolio_id),
                     "operability": _running_summary_operability(
@@ -577,6 +1039,70 @@ class PaperTradingV2Repository:
                 "search_fields": requested_search_fields,
                 "min_initial_cash": min_initial_cash,
                 "max_initial_cash": max_initial_cash,
+            },
+        }
+
+    def overview_summary(self) -> dict[str, Any]:
+        """Return Paper v2 overview counters from persisted database rows only.
+
+        This endpoint is intentionally lighter than StrategyPackage or
+        Selection Center listing APIs: it selects scalar columns and aggregate
+        counts, and must not instantiate manifests or refresh model state.
+        """
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    WITH package_counts AS (
+                        SELECT
+                            COUNT(*) AS total_packages,
+                            COUNT(*) FILTER (WHERE package_status <> %s) AS active_packages,
+                            COUNT(*) FILTER (WHERE package_status = %s) AS retired_packages
+                        FROM strategy_pkg.package
+                    ),
+                    portfolio_counts AS (
+                        SELECT
+                            COUNT(*) AS portfolio_count,
+                            COUNT(*) FILTER (WHERE status = ANY(%s)) AS active_portfolio_count
+                        FROM paper_v2.portfolio
+                    ),
+                    selection_packages AS (
+                        SELECT DISTINCT pkg.package_id
+                        FROM selection.run run
+                        CROSS JOIN LATERAL jsonb_array_elements_text(run.package_ids) AS pkg(package_id)
+                        WHERE run.status = 'SUCCEEDED'
+                    ),
+                    selection_counts AS (
+                        SELECT
+                            COUNT(*) AS package_count,
+                            COUNT(*) AS latest_selection_run_count
+                        FROM selection_packages
+                    )
+                    SELECT *
+                    FROM package_counts, portfolio_counts, selection_counts
+                    """,
+                    (
+                        OVERVIEW_PACKAGE_RETIRED_STATUS,
+                        OVERVIEW_PACKAGE_RETIRED_STATUS,
+                        [PortfolioStatus.RUNNING.value, PortfolioStatus.PAUSED.value],
+                    ),
+                )
+                summary_counts = dict(cur.fetchone() or {})
+
+        return {
+            "package_counts": {
+                "total": int(summary_counts.get("total_packages") or 0),
+                "active": int(summary_counts.get("active_packages") or 0),
+                "retired": int(summary_counts.get("retired_packages") or 0),
+            },
+            "selection_counts": {
+                "packages_with_latest_run": int(summary_counts.get("package_count") or 0),
+                "latest_run_count": int(summary_counts.get("latest_selection_run_count") or 0),
+            },
+            "portfolio_counts": {
+                "total": int(summary_counts.get("portfolio_count") or 0),
+                "active": int(summary_counts.get("active_portfolio_count") or 0),
             },
         }
 
@@ -983,21 +1509,37 @@ class PaperTradingV2Repository:
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
         updated = run.model_copy(
-            update={"status": status, "error": error, "completed_at": datetime.now(UTC) if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else run.completed_at}
+            update={"status": status, "error": error, "completed_at": _completed_at_for_run_status(status, run.completed_at)}
         )
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE paper_v2.run SET status = %s, completed_at = %s, error_json = %s WHERE run_id = %s",
+                    """
+                    UPDATE paper_v2.run
+                    SET status = %s, completed_at = %s, error_json = %s
+                    WHERE run_id = %s
+                      AND status <> ALL(%s)
+                    """,
                     (
                         updated.status.value,
                         updated.completed_at,
                         psycopg2.extras.Json(error) if error else None,
                         updated.run_id,
+                        list(_terminal_run_status_values()),
                     ),
                 )
                 if cur.rowcount != 1:
-                    raise InvalidStateTransitionError("paper run update failed", context={"run_id": run.run_id})
+                    cur.execute("SELECT status FROM paper_v2.run WHERE run_id = %s", (run.run_id,))
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id})
+                    current_status = row[0]
+                    raise _run_status_transition_error(
+                        run_id=run.run_id,
+                        from_status=current_status,
+                        to_status=status,
+                        stale_run_status=run.status,
+                    )
         return updated
 
     def update_run_runtime_config(self, run: PaperRun, runtime_config: dict[str, Any]) -> PaperRun:
@@ -1956,6 +2498,7 @@ class PaperTradingV2Repository:
                         run_id, portfolio_id, fill_id, trade_date, symbol, stock_name, side,
                         notional, fee, cash_delta, cash_after
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(run_id, fill_id) DO NOTHING
                     """,
                     (
                         run_id,
@@ -1977,7 +2520,12 @@ class PaperTradingV2Repository:
         # explicitly via now() so InMemory parity is preserved.
         now = datetime.now(UTC)
         stock_names = self._resolve_stock_names([position.symbol for position in positions])
-        with self._conn_factory() as conn:
+        conn_cm = self._conn_factory()
+        if self._active_transaction_conn() is not None:
+            conn_cm = self._write_conn()
+        elif self._base_conn_factory_accepts_autocommit and self._run_broker_backend(run_id) == "local_sim":
+            conn_cm = self._write_conn()
+        with conn_cm as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM paper_v2.positions WHERE run_id = %s", (run_id,))
                 for position in positions:
@@ -2564,6 +3112,66 @@ class InMemoryPaperTradingV2Repository:
     def list_portfolios(self, *, limit: int = 100) -> list[PaperPortfolio]:
         return list(self.portfolios.values())[:limit]
 
+    def list_portfolios_page(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        statuses: list[str] | None = None,
+        search: str | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
+        broker_backend: str | None = None,
+    ) -> dict[str, Any]:
+        if page <= 0 or page_size <= 0:
+            raise DataUnavailableError(
+                "paper v2 portfolio pagination requires positive limits",
+                context={"page": page, "page_size": page_size},
+            )
+        rows = list(self.portfolios.values())
+        status_filter = {str(item).strip().upper() for item in (statuses or []) if str(item).strip()}
+        if status_filter:
+            rows = [item for item in rows if item.status.value.upper() in status_filter]
+        normalized_broker_backend = str(broker_backend or "").strip()
+        if normalized_broker_backend:
+            rows = [item for item in rows if item.broker_backend == normalized_broker_backend]
+        if search and search.strip():
+            needle = search.strip().lower()
+            rows = [
+                item
+                for item in rows
+                if needle in item.portfolio_name.lower()
+                or needle in item.portfolio_id.lower()
+                or needle in item.package_id.lower()
+            ]
+        sort_keys = {
+            "portfolio_name": lambda item: item.portfolio_name.lower(),
+            "status": lambda item: item.status.value,
+            "initial_cash": lambda item: item.initial_cash,
+            "start_date": lambda item: item.start_date.isoformat(),
+            "created_at": lambda item: item.created_at,
+            "updated_at": lambda item: item.updated_at,
+        }
+        normalized_sort_dir = "asc" if str(sort_dir).lower() == "asc" else "desc"
+        rows = sorted(rows, key=sort_keys.get(sort_by, sort_keys["created_at"]), reverse=normalized_sort_dir != "asc")
+        total = len(rows)
+        start = (page - 1) * page_size
+        page_rows = rows[start : start + page_size]
+        return {
+            "portfolios": [item.model_dump(mode="json") for item in page_rows],
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": max(1, (total + page_size - 1) // page_size),
+                "statuses": sorted(status_filter),
+                "search": search,
+                "broker_backend": normalized_broker_backend or None,
+                "sort_by": sort_by,
+                "sort_dir": normalized_sort_dir,
+            },
+        }
+
     def list_running_summaries(
         self,
         *,
@@ -2621,6 +3229,14 @@ class InMemoryPaperTradingV2Repository:
             rows.append(
                 {
                     "portfolio": portfolio,
+                    "package": {
+                        "package_id": portfolio.package_id,
+                        "package_name": portfolio.frozen_manifest.package_name,
+                        "package_version": portfolio.frozen_manifest.package_version,
+                        "package_status": portfolio.frozen_manifest.package_status.value,
+                        "manifest_sha256": portfolio.manifest_sha256,
+                        "alpha_mode": portfolio.frozen_manifest.alpha_mode.value,
+                    },
                     "latest_run": runs[0] if runs else None,
                     "latest_session": sessions[0] if sessions else None,
                     "operability": _running_summary_operability(
@@ -2707,6 +3323,29 @@ class InMemoryPaperTradingV2Repository:
                 "search_fields": requested_search_fields,
                 "min_initial_cash": min_initial_cash,
                 "max_initial_cash": max_initial_cash,
+            },
+        }
+
+    def overview_summary(self) -> dict[str, Any]:
+        total_packages = len({portfolio.package_id for portfolio in self.portfolios.values()})
+        packages_with_portfolio = {portfolio.package_id for portfolio in self.portfolios.values()}
+        active_portfolios = {
+            PortfolioStatus.RUNNING,
+            PortfolioStatus.PAUSED,
+        }
+        return {
+            "package_counts": {
+                "total": total_packages,
+                "active": len(packages_with_portfolio),
+                "retired": 0,
+            },
+            "selection_counts": {
+                "packages_with_latest_run": 0,
+                "latest_run_count": 0,
+            },
+            "portfolio_counts": {
+                "total": len(self.portfolios),
+                "active": len([item for item in self.portfolios.values() if item.status in active_portfolios]),
             },
         }
 
@@ -2924,8 +3563,19 @@ class InMemoryPaperTradingV2Repository:
             raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run_id}) from exc
 
     def update_run_status(self, run: PaperRun, status: RunStatus, error: dict[str, Any] | None = None) -> PaperRun:
+        try:
+            current = self.runs[run.run_id]
+        except KeyError as exc:
+            raise DataUnavailableError("paper v2 run does not exist", context={"run_id": run.run_id}) from exc
+        if current.status in TERMINAL_RUN_STATUSES:
+            raise _run_status_transition_error(
+                run_id=run.run_id,
+                from_status=current.status,
+                to_status=status,
+                stale_run_status=run.status,
+            )
         updated = run.model_copy(
-            update={"status": status, "error": error, "completed_at": datetime.now(UTC) if status in {RunStatus.SUCCEEDED, RunStatus.FAILED} else run.completed_at}
+            update={"status": status, "error": error, "completed_at": _completed_at_for_run_status(status, current.completed_at)}
         )
         self.runs[run.run_id] = updated
         return updated
@@ -3407,7 +4057,10 @@ class InMemoryPaperTradingV2Repository:
         return rows[:limit]
 
     def save_cash_entry(self, run_id: str, entry: CashLedgerEntry) -> None:
-        self.cash_entries.setdefault(run_id, []).append(entry)
+        entries = self.cash_entries.setdefault(run_id, [])
+        if any(existing.fill_id == entry.fill_id for existing in entries):
+            return
+        entries.append(entry)
 
     def save_positions(self, *, run_id: str, trade_date: date, positions: list[PositionLot], prices: dict[str, float]) -> None:
         self.positions[run_id] = positions

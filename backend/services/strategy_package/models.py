@@ -1,4 +1,4 @@
-﻿"""Strategy Package manifest v1 models."""
+"""Strategy Package manifest v1 models."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ class SourceType(str, Enum):
     QE_EXPERIMENT = "qe_experiment"
     QE_EVOLUTION_LOOP = "qe_evolution_loop"
     CANDIDATE_STRATEGY_PACKAGE = "candidate_strategy_package"
+    MULTI_ALPHA_COMBINE_RUN = "multi_alpha_combine_run"
 
 
 class AlphaMode(str, Enum):
@@ -116,13 +117,55 @@ class FactorAsset(BaseModel):
     factor_id: str
     factor_name: str
     artifact_ref: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
     required: bool = True
+
+
+class ModelCodeAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    module_name: str
+    relative_path: str
+    asset_ref: str
+    sha256: str
+    size_bytes: int = Field(ge=0)
+    source_uri: str | None = None
+    required: bool = True
+
+
+class Alpha158SchemaAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    aliases: list[str] = Field(default_factory=list)
+    alias_count: int = 0
+    loader_class: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
+
+
+class RuntimeAssetManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: Literal["strategy_package_runtime_assets_v2"] = "strategy_package_runtime_assets_v2"
+    alpha158: Alpha158SchemaAsset = Field(default_factory=lambda: Alpha158SchemaAsset(enabled=False))
 
 
 class ModelAsset(BaseModel):
     model_id: str
     model_ref: str | None = None
     model_type: str | None = None
+    asset_ref: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = Field(default=None, ge=0)
+    source_uri: str | None = None
+    model_code_required: bool = False
+    model_code_assets: list[ModelCodeAsset] = Field(default_factory=list)
 
 
 class UniversePolicy(BaseModel):
@@ -244,6 +287,7 @@ class StrategyPackageManifest(BaseModel):
     alpha_combination_policy: AlphaCombinationPolicy
     factor_set: list[FactorAsset]
     model_asset: ModelAsset | list[ModelAsset]
+    runtime_assets: RuntimeAssetManifest | None = None
     source_evidence: dict[str, Any] = Field(default_factory=dict)
     backtest_context: dict[str, Any] = Field(default_factory=dict)
     strategy_config: dict[str, Any] = Field(default_factory=dict)
@@ -308,6 +352,52 @@ class StrategyPackageManifest(BaseModel):
                     + ", ".join(bound_fields)
                 )
         return self
+
+
+class StrategyPackageComponentRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int | None = None
+    parent_package_id: str
+    child_package_id: str
+    child_manifest_sha256: str
+    component_weight: float = Field(gt=0)
+    score_normalization: str = "rank"
+    position: int = Field(gt=0)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("parent_package_id", "child_package_id", "child_manifest_sha256", "score_normalization")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
+
+    @field_validator("child_manifest_sha256")
+    @classmethod
+    def _sha256_format(cls, value: str) -> str:
+        value = value.lower()
+        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise ValueError("child_manifest_sha256 must be a lowercase 64-character sha256 digest")
+        return value
+
+
+class StrategyPackageComponentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    child_package_id: str
+    component_weight: float = Field(gt=0)
+    score_normalization: str = "rank"
+    position: int = Field(gt=0)
+
+    @field_validator("child_package_id", "score_normalization")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError("field is required")
+        return value
 
 class LiveApprovalStatus(str, Enum):
     LIVE_CANDIDATE = "LIVE_CANDIDATE"
@@ -419,3 +509,4 @@ class StrategyPackageLiveApproval(BaseModel):
             if not self.retired_by or self.retired_at is None or not self.retirement_reason:
                 raise ValueError("retired live approval requires reviewer, retired_at, and retirement_reason")
         return self
+

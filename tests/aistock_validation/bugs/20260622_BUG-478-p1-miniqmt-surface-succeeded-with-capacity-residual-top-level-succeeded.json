@@ -1,0 +1,91 @@
+{
+  "actual": "scheduler.py:4661 and post-close :2300 allow a run to return top-level SUCCEEDED with terminal_capacity_residual (reason miniqmt_capacity_residual_skipped_and_reconciled); e.g. L16 today SUCCEEDED while failed_intents=28. Monitoring/acceptance that reads only top-level SUCCEEDED gets a false-positive: looks successful while many intents were skipped for capacity.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/performance.py",
+    "backend/services/simulation_runtime/ops.py",
+    "backend/services/paper_trading_v2/live_dashboard.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/tests/paper_trading_v2/test_live_dashboard.py",
+    "docs/handoff/BUG-478-analysis.md",
+    "tests/aistock_validation/bugs/20260622_BUG-478-p1-miniqmt-surface-succeeded-with-capacity-residual-top-level-succeeded.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-478",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T07:46:15.840156Z",
+  "description": "MiniQMT observability/contract gap: backend/services/simulation_runtime/scheduler.py:4661 (and post-close :2300) allow a run to return top-level SUCCEEDED when there is a terminal_capacity_residual (reason miniqmt_capacity_residual_skipped_and_reconciled). Example: today's L16 run returned SUCCEEDED while failed_intents=28. The residual handling is BY DESIGN (funds-only capacity skip + reconcile, not a run-correctness bug), but monitoring/acceptance that reads only the top-level SUCCEEDED gets a false-positive ('looks successful, actually many intents unexecuted'). FIX (observability only): expose an explicit succeeded_with_capacity_residual flag + residual/failed_intents count in (a) the run summary/result and API payload, (b) the live dashboard / performance report, (c) an alert/telemetry signal, so monitoring distinguishes clean SUCCEEDED from SUCCEEDED-with-capacity-residual. No silent masking; do not change the run's actual terminal decision. MiniQMT-scoped; LocalSim untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-923443a1aeee",
+      "timestamp": "2026-06-22T07:46:15.840152Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded scope to ops.py/API and dashboard tests because the required run summary/API observability is produced outside scheduler.py.",
+      "timestamp": "2026-06-22T16:35:00+08:00"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expose an explicit succeeded_with_capacity_residual flag + residual/failed_intents count in the run summary/API, the live dashboard / performance report, and an alert, so monitoring distinguishes clean SUCCEEDED from SUCCEEDED-with-residual. The residual handling itself is by-design (not a run-correctness bug); this is an observability/contract gap -- no silent masking. MiniQMT-scoped, LocalSim untouched.",
+  "first_seen_at": "2026-06-22T07:46:15.840156Z",
+  "fix_branch": null,
+  "fix_commit": "b009bd9c714e5a94a3e32fb67fdcbacf76f81a1f",
+  "fixed_at": "2026-06-22T10:58:08.242894Z",
+  "github_issue_number": 1467,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1467",
+  "last_seen_at": "2026-06-22T07:46:15.840156Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1474",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "scheduler.py:4661 returns SUCCEEDED for terminal_capacity_residual; today L16 run SUCCEEDED with failed_intents=28; top-level status exposes no explicit residual flag for monitoring.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P1][MiniQMT] surface succeeded_with_capacity_residual (top-level SUCCEEDED masks unexecuted intents)",
+  "trigger_condition": {
+    "fingerprint": "923443a1aeeea63f4b9412d1",
+    "source_event_id": "FE-20260622-923443a1aeee"
+  },
+  "validation_evidence": [
+    "rtk gh pr checks 1474 -> passed 17, failed 0",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix"
+}

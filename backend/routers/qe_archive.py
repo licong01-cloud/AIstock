@@ -16,13 +16,17 @@ from backend.services.qe_archive.backfill_service import (
 )
 from backend.services.qe_archive.repository import QEArchiveRepository
 from backend.services.qe_archive.worker_service import QEArchiveWorkerService, WORKER_CONFIRM_TEXT
+from backend.services.quantevolver.qe_resource_phase_service import (
+    QEResourcePhaseError,
+    QEResourcePhaseService,
+)
 
 
 router = APIRouter(prefix="/qe-archive", tags=["qe-archive"])
 
 
 class QEArchiveBackfillRequest(BaseModel):
-    source: Literal["experiment", "loop", "task", "all"] = Field(
+    source: Literal["experiment", "loop", "task", "multi-alpha", "all"] = Field(
         "loop",
         description="Source rows to backfill when explicit ids are not provided.",
     )
@@ -107,6 +111,30 @@ def get_qe_archive_health():
         "status": "success",
         "data": get_repository().get_archive_summary(),
     }
+
+
+@router.get("/resource-phases", summary="Query phase-level QE GPU/RAM resource telemetry")
+def query_qe_archive_resource_phases(
+    run_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    loop_index: int | None = Query(None, ge=1),
+    source_run_key: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+):
+    try:
+        rows = QEResourcePhaseService().list_resource_phases(
+            run_id=run_id,
+            task_id=task_id,
+            loop_index=loop_index,
+            source_run_key=source_run_key,
+            limit=limit,
+        )
+    except QEResourcePhaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason_code": exc.reason_code, "message": exc.message},
+        ) from exc
+    return {"status": "success", "data": rows, "count": len(rows)}
 
 
 @router.get("/outbox", summary="Recent QE archive outbox events")
@@ -395,7 +423,7 @@ def query_qe_archive_run_leaderboard(
     min_icir: float | None = Query(None),
     min_ir: float | None = Query(None),
     limit: int = Query(20, ge=1, le=100),
-    order_by: str = Query("cagr"),
+    order_by: str = Query("calmar"),
 ):
     return {
         "status": "success",
@@ -407,6 +435,27 @@ def query_qe_archive_run_leaderboard(
             order_by=order_by,
         ),
     }
+
+
+@router.get("/analytics/topk-quality", summary="QE archive forward-only Top-K quality analytics")
+def query_qe_archive_topk_quality(
+    run_id: str | None = Query(None),
+    task_id: str | None = Query(None),
+    k: int | None = Query(None, description="Optional K selector; currently supports 20 or 50."),
+    limit: int = Query(20, ge=1, le=100),
+):
+    try:
+        return {
+            "status": "success",
+            "data": get_repository().query_topk_quality(
+                run_id=run_id,
+                task_id=task_id,
+                k=k,
+                limit=limit,
+            ),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/analytics/seed-robustness", summary="QE archive seed robustness analytics")
@@ -486,7 +535,7 @@ def query_qe_archive_promotion_candidates(
     model_type: str | None = Query(None),
     min_seed_count: int = Query(5, ge=1, le=1000),
     limit: int = Query(20, ge=1, le=100),
-    order_by: str = Query("cagr_mean"),
+    order_by: str = Query("calmar"),
 ):
     return {
         "status": "success",

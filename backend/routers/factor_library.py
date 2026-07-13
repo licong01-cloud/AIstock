@@ -9,7 +9,12 @@ from pydantic import BaseModel, Field
 from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
+from backend.services.factor_metrics_contract import H20_METRIC_FIELDS
 from backend.services.mcp_payload_budget import artifact_ref, clamp_limit, clamp_offset, detail_ref, strip_forbidden_fields, summary_envelope
+from backend.services.strategy_package.factor_reference_guard import (
+    find_strategy_packages_referencing_factor,
+    strategy_package_references_summary,
+)
 
 router = APIRouter(prefix="/factor-library", tags=["factor-library"])
 REGISTER_FACTOR_CONFIRM = "REGISTER_FACTOR"
@@ -23,6 +28,7 @@ SUMMARY_FIELDS = [
 METRIC_FIELDS = [
     "ic_mean", "rank_ic_mean", "icir", "rank_icir", "top_excess_sharpe", "top_excess_annual_return",
     "top_max_drawdown", "coverage", "n_trading_days", "snapshot_date", "calc_batch_id",
+    *H20_METRIC_FIELDS,
 ]
 
 
@@ -160,7 +166,10 @@ def get_factor(factor_name: str, source: str | None = None) -> dict[str, Any]:
         """
         SELECT eval_window, return_horizon, universe, ic_mean, rank_ic_mean, icir, rank_icir,
                top_excess_sharpe, top_excess_annual_return, top_max_drawdown, coverage,
-               n_trading_days, snapshot_date, calc_batch_id, calculated_at
+               n_trading_days, h20_return_horizon, h20_ic_mean, h20_ic_std,
+               h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+               h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+               h20_n_obs, h20_hac_lag, snapshot_date, calc_batch_id, calculated_at
         FROM aistock_factor_metrics
         WHERE factor_name = %s AND calc_engine = %s
         ORDER BY snapshot_date DESC NULLS LAST, calculated_at DESC NULLS LAST
@@ -224,8 +233,11 @@ def get_metric_summary(factor_name: str) -> dict[str, Any]:
         """
         SELECT eval_window, return_horizon, universe, ic_mean, rank_ic_mean, icir, rank_icir,
                ic_positive_ratio, top_excess_sharpe, top_excess_annual_return, top_max_drawdown,
-               group_return_monotonicity, turnover, coverage, n_trading_days, snapshot_date,
-               calc_batch_id, calculated_at
+               group_return_monotonicity, turnover, coverage, n_trading_days,
+               h20_return_horizon, h20_ic_mean, h20_ic_std,
+               h20_rank_ic_mean, h20_rank_ic_std, h20_icir, h20_rank_icir,
+               h20_icir_hac, h20_rank_icir_hac, h20_ic_positive_ratio,
+               h20_n_obs, h20_hac_lag, snapshot_date, calc_batch_id, calculated_at
         FROM aistock_factor_metrics
         WHERE factor_name = %s AND calc_engine = %s
         ORDER BY snapshot_date DESC NULLS LAST, calculated_at DESC NULLS LAST
@@ -249,6 +261,8 @@ def get_usage_summary(factor_name: str, limit: int | None = Query(None, ge=1)) -
         """,
         (factor_name, CALC_ENGINE),
     )
+    with get_conn() as conn:
+        strategy_package_references = find_strategy_packages_referencing_factor(conn, factor_name)
     return summary_envelope(
         domain="factor_library.usage_summary",
         items=rows[:safe_limit],
@@ -257,6 +271,9 @@ def get_usage_summary(factor_name: str, limit: int | None = Query(None, ge=1)) -
         omitted_sections=["qe_archive_full_usage", "strategy_package_full_usage"],
         detail_tool="aistock-qe-archive/qe_archive_query_factor_usage",
         detail_args_hint={"factor_name": factor_name},
+        extra={
+            "strategy_package_references": strategy_package_references_summary(strategy_package_references),
+        },
     )
 
 

@@ -34,6 +34,7 @@ function PlotlyChart(props: any) {
 
 interface TrajectoryEntry {
   loop_id: number;
+  label?: string;
   ic?: number | null;
   rank_ic?: number | null;
   icir?: number | null;
@@ -45,6 +46,7 @@ interface TrajectoryEntry {
 
 interface SotaEntry {
   loop_id: number;
+  label?: string;
   ic?: number | null;
   ann_ret?: number | null;
 }
@@ -52,6 +54,7 @@ interface SotaEntry {
 interface MetricsTrajectoryChartProps {
   trajectory: TrajectoryEntry[];
   sota_history?: SotaEntry[];
+  mode?: "evolution" | "combine";
 }
 
 const LAYOUT = {
@@ -87,18 +90,21 @@ const plotStyle = { width: "100%", height: "320px", minHeight: "320px" };
 export default React.memo(function MetricsTrajectoryChart({
   trajectory,
   sota_history,
+  mode = "evolution",
 }: MetricsTrajectoryChartProps) {
   const traces = useMemo(() => {
     if (!trajectory || trajectory.length === 0) return null;
 
-    const loops = trajectory.map((t) => t.loop_id);
+    const isCombine = mode === "combine";
+    const loops = isCombine ? trajectory.map((t) => t.label || `配置 ${t.loop_id}`) : trajectory.map((t) => t.loop_id);
+    const traceMode = isCombine ? "markers" : "lines+markers";
     const result: any[] = [];
 
     const icVals = trajectory.map((t) => t.ic ?? null);
     if (icVals.some((v) => v != null)) {
       result.push({
         x: loops, y: icVals,
-        type: "scatter", mode: "lines+markers",
+        type: "scatter", mode: traceMode,
         name: "IC", yaxis: "y",
         line: { color: "#3b82f6", width: 2 },
         marker: { size: 5 },
@@ -110,7 +116,7 @@ export default React.memo(function MetricsTrajectoryChart({
     if (ricVals.some((v) => v != null)) {
       result.push({
         x: loops, y: ricVals,
-        type: "scatter", mode: "lines+markers",
+        type: "scatter", mode: traceMode,
         name: "Rank IC", yaxis: "y",
         line: { color: "#8b5cf6", width: 2 },
         marker: { size: 5 },
@@ -124,7 +130,7 @@ export default React.memo(function MetricsTrajectoryChart({
     if (retVals.some((v) => v != null)) {
       result.push({
         x: loops, y: retVals,
-        type: "scatter", mode: "lines+markers",
+        type: "scatter", mode: traceMode,
         name: "年化收益", yaxis: "y2",
         line: { color: "#10b981", width: 2, dash: "dot" },
         marker: { size: 5 },
@@ -139,7 +145,7 @@ export default React.memo(function MetricsTrajectoryChart({
     if (ddVals.some((v) => v != null)) {
       result.push({
         x: loops, y: ddVals,
-        type: "scatter", mode: "lines+markers",
+        type: "scatter", mode: traceMode,
         name: "最大回撤", yaxis: "y3",
         line: { color: "#ef4444", width: 2, dash: "dashdot" },
         marker: { size: 5, symbol: "triangle-down" },
@@ -149,10 +155,11 @@ export default React.memo(function MetricsTrajectoryChart({
 
     if (sota_history && sota_history.length > 0) {
       result.push({
-        x: sota_history.map((s) => s.loop_id),
-        y: sota_history.map((s) => s.ic ?? null),
+        x: isCombine ? sota_history.map((s) => s.label || `配置 ${s.loop_id}`) : sota_history.map((s) => s.loop_id),
+        y: isCombine ? sota_history.map((s) => s.ann_ret != null ? s.ann_ret * 100 : null) : sota_history.map((s) => s.ic ?? null),
         type: "scatter", mode: "markers",
-        name: "SOTA", yaxis: "y",
+        name: isCombine ? "最优配置" : "SOTA",
+        yaxis: isCombine ? "y2" : "y",
         marker: {
           color: "#f59e0b", size: 14,
           symbol: "star", line: { width: 1, color: "#d97706" },
@@ -162,7 +169,7 @@ export default React.memo(function MetricsTrajectoryChart({
     }
 
     return result;
-  }, [trajectory, sota_history]);
+  }, [trajectory, sota_history, mode]);
 
   if (!traces) {
     return (
@@ -175,7 +182,12 @@ export default React.memo(function MetricsTrajectoryChart({
   return (
     <PlotlyChart
       data={traces}
-      layout={LAYOUT}
+      layout={{
+        ...LAYOUT,
+        xaxis: mode === "combine"
+          ? { ...LAYOUT.xaxis, tickprefix: "", title: "配置(窗口×topk)", type: "category" }
+          : LAYOUT.xaxis,
+      }}
       config={CONFIG}
       useResizeHandler
       style={plotStyle}

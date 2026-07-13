@@ -1,0 +1,134 @@
+{
+  "actual": "repository.py:984 update_run_status issues UPDATE ... WHERE run_id=%s with no status predicate (rowcount!=1 only catches missing row), so a terminal FAILED run can be silently overwritten to SUCCEEDED via a stale-object finalize path (live_session.py:1088 TOCTOU); day_runner.py:754/1694 also mark SUCCEEDED without asserting orders are terminal.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "tests/aistock_validation/bugs/20260621_BUG-448-p1-paper-v2-run-status-transitions-must-be-sql-guarded-and-succeeded-mus.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-448-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-448",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T10:53:11.080791Z",
+  "description": "backend/services/paper_trading_v2/repository.py::update_run_status (~984) issues UPDATE paper_v2.run SET status=%s ... WHERE run_id=%s with NO current-status predicate; rowcount!=1 only detects a missing row, not an illegal transition. A terminal FAILED run can be silently overwritten to SUCCEEDED by a finalize path holding a stale in-memory run object (live_session.py:1088 only does an in-Python if run.status != FAILED TOCTOU check; live_session.py:1435/1865 call update_run_status(SUCCEEDED) unconditionally). Additionally day_runner.py:754 and :1694 mark the PaperRun SUCCEEDED from an account/position snapshot WITHOUT asserting all reconciled orders are terminal (FILLED/CANCELLED/REJECTED). Scope note: the simulation_runtime submit_result_gate is already design-compliant (success authority = ledger facts) and MUST NOT be weakened; this bug is limited to PaperRun status-write integrity on the repository/day_runner/live_session path (root-cause B).",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-b3d996d92cf5",
+      "timestamp": "2026-06-21T10:53:11.080787Z"
+    },
+    {
+      "action": "scope_expanded_for_required_handoff",
+      "actor": "codex",
+      "note": "Direct BUG-448 task instruction requires independent analysis handoff at docs/handoff/BUG-448-analysis.md before code changes; scope expanded before creating the file.",
+      "timestamp": "2026-06-21T12:56:00Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "BUG-448 fix validated in isolated worktree; PR creation pending Tier2 review.",
+      "timestamp": "2026-06-21T14:43:46.684957Z"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #1405 for Tier2 review; BUG remains open until merge/close-sync.",
+      "timestamp": "2026-06-21T14:48:20.624877Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Add a SQL status predicate (WHERE status NOT IN (SUCCEEDED,FAILED) or explicit legal-predecessor set) and raise InvalidStateTransitionError when rowcount=0; before marking SUCCEEDED assert all reconciled orders are terminal (FILLED/CANCELLED/REJECTED) or carry residual open qty into an explicit non-terminal state; must NOT weaken the already-compliant simulation_runtime submit_result_gate.",
+  "first_seen_at": "2026-06-21T10:53:11.080791Z",
+  "fix_branch": "bug/BUG-448-p1-paper-v2-run-status-transitions-must-be-sql-g-20260621",
+  "fix_commit": "e58e81afe7a5284dd0e3e10ed101d6e5a3d966fb",
+  "fixed_at": "2026-06-21T15:30:46.309228Z",
+  "github_issue_number": 1386,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1386",
+  "last_seen_at": "2026-06-21T10:53:11.080791Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1405",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read repository.py:984 update_run_status and callers day_runner.py:754/1694, live_session.py:1088/1435/1865; observe FAILED can be overwritten to SUCCEEDED and runs with open orders can be marked SUCCEEDED.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][Paper v2] run status transitions must be SQL-guarded and SUCCEEDED must require terminal orders",
+  "trigger_condition": {
+    "fingerprint": "b3d996d92cf52caa815009a5",
+    "source_event_id": "FE-20260621-b3d996d92cf5"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0",
+      "paper_v2_l3"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2"
+    ],
+    "ui_issue": false,
+    "ui_route": "/paper-v2",
+    "ui_routes": [
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": false
+  },
+  "validation_evidence": [
+    "rtk gh pr checks 1405 --repo licong01-cloud/AIstock -> 17 passed, 0 failed",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_day_runner.py backend/tests/paper_trading_v2/test_live_session.py -q -> 56 passed",
+    "rtk python -m ruff check changed files; rtk git diff --check; rtk python -m nox -s l0; rtk python -m nox -s validation_module_registry_l0; rtk cmd /c set AISTOCK_HOSTED_CI=1... paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": "BUG-448-20260621-pr-ready",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix"
+}

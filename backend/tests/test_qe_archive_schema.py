@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from backend.db.init_qe_archive_schema import (
     QE_ARCHIVE_SCHEMA_VERSION,
     iter_ddl,
     iter_qe_archive_columns,
     iter_qe_archive_tables,
 )
+from scripts.qe_archive_data_quality_smoke import _schema_version_status
 
 
 def _ddl_text() -> str:
@@ -18,6 +21,11 @@ def test_qe_archive_schema_declares_required_tables() -> None:
     required_tables = (
         "qe_archive.run",
         "qe_archive.run_source",
+        "qe_archive.multi_alpha_run",
+        "qe_archive.multi_alpha_leg",
+        "qe_archive.multi_alpha_leg_source",
+        "qe_archive.multi_alpha_scheme",
+        "qe_archive.multi_alpha_loo",
         "qe_archive.run_config",
         "qe_archive.run_reproducibility_manifest",
         "qe_archive.run_data_context",
@@ -31,6 +39,8 @@ def test_qe_archive_schema_declares_required_tables() -> None:
         "qe_archive.run_symbol_summary",
         "qe_archive.run_model_trial",
         "qe_archive.run_model_training_metric",
+        "qe_archive.run_resource_session",
+        "qe_archive.run_resource_phase",
         "qe_archive.run_position",
         "qe_archive.run_order",
         "qe_archive.run_trade",
@@ -157,8 +167,51 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 
 
 def test_qe_archive_schema_version_is_explicit() -> None:
-    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v2_20260516"
+    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v4_20260713"
     assert "qe_archive.schema_version" in _ddl_text()
+
+
+def test_qe_resource_phase_migration_has_forward_rollback_and_comments() -> None:
+    forward = Path("backend/db/migrations/add_qe_resource_phase_telemetry_20260713.sql").read_text(
+        encoding="utf-8"
+    )
+    rollback = Path(
+        "backend/db/migrations/add_qe_resource_phase_telemetry_20260713.rollback.sql"
+    ).read_text(encoding="utf-8")
+
+    for table in ("run_resource_session", "run_resource_phase"):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in forward
+        assert f"COMMENT ON TABLE qe_archive.{table}" in forward
+        assert f"DROP TABLE IF EXISTS qe_archive.{table}" in rollback
+    assert "qe_archive_v4_20260713" in forward
+    assert "qe_archive_v4_20260713" in rollback
+    assert "gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive'" in forward
+    assert "gpu_training_policy IN ('exclusive', 'parallel')" in forward
+    assert "COMMENT ON COLUMN qe_archive.run_resource_session.gpu_training_policy" in forward
+
+
+def test_qe_archive_data_quality_treats_missing_version_metadata_as_warning_when_structure_matches() -> None:
+    status, should_fail = _schema_version_status(
+        None,
+        missing_tables=[],
+        missing_table_comments=[],
+        missing_column_comments=[],
+    )
+
+    assert status == "missing_structural_match"
+    assert should_fail is False
+
+
+def test_qe_archive_data_quality_fails_missing_version_when_structure_drifts() -> None:
+    status, should_fail = _schema_version_status(
+        None,
+        missing_tables=["qe_archive.run_metric"],
+        missing_table_comments=[],
+        missing_column_comments=[],
+    )
+
+    assert status == "missing_structural_drift"
+    assert should_fail is True
 
 
 def test_qe_archive_v2_tracks_policy_ingest_history_and_backfill_lifecycle() -> None:
@@ -190,3 +243,45 @@ def test_qe_archive_every_table_and_column_has_database_comment() -> None:
 
     for table_name, column_name in iter_qe_archive_columns():
         assert f"COMMENT ON COLUMN {table_name}.{column_name} IS" in ddl
+
+def test_qe_archive_multi_alpha_phase_a_schema_contract() -> None:
+    ddl = _ddl_text()
+
+    required_fragments = (
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_run",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg_source",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_scheme",
+        "CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_loo",
+        "status IN ('succeeded','partial_failed','failed')",
+        "source_experiment_id TEXT",
+        "source_loop_index INTEGER",
+        "source_run_type TEXT",
+        "resolved BOOLEAN NOT NULL DEFAULT FALSE",
+        "resolved = TRUE AND source_experiment_id IS NOT NULL AND source_loop_id IS NOT NULL AND source_loop_index IS NOT NULL AND source_run_type IS NOT NULL",
+        "scheme_algorithm TEXT NOT NULL",
+        "weights_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+        "per_window_weights_json JSONB NOT NULL DEFAULT '[]'::jsonb",
+    )
+
+    for fragment in required_fragments:
+        assert fragment in ddl
+
+
+def test_qe_archive_multi_alpha_phase_a_migration_has_forward_rollback_comments_and_partial_failed() -> None:
+    forward = Path("backend/migrations/qe_archive_multi_alpha_phase_a_20260628.sql").read_text(encoding="utf-8")
+    rollback = Path("backend/migrations/qe_archive_multi_alpha_phase_a_20260628.rollback.sql").read_text(encoding="utf-8")
+
+    for table in (
+        "multi_alpha_run",
+        "multi_alpha_leg",
+        "multi_alpha_leg_source",
+        "multi_alpha_scheme",
+        "multi_alpha_loo",
+    ):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in forward
+        assert f"COMMENT ON TABLE qe_archive.{table}" in forward
+        assert f"DROP TABLE IF EXISTS qe_archive.{table}" in rollback
+    assert "partial_failed" in forward
+    assert "reason->>'logical_status' = 'partial_failed'" in forward
+    assert "Cannot rollback ck_macb_run_status while partial_failed rows exist" in rollback

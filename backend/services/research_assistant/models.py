@@ -35,6 +35,7 @@ EVENT_TYPES = {
     "llm_started",
     "llm_done",
     "llm_failed",
+    "llm_usage_accounting_failed",
     "action_proposed",
     "mcp_preflight_started",
     "mcp_preflight_passed",
@@ -622,6 +623,9 @@ class ChatTurnRequest(StrictModel):
     allow_execute: bool = False
     confirm_approval_id: str | None = None
     confirmation_text: str | None = None
+    decision_id: str | None = None
+    decision_option_id: str | None = None
+    developer_diagnostics: bool = False
 
     @field_validator("phase")
     @classmethod

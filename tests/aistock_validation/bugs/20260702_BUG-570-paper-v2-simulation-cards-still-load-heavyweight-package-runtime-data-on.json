@@ -1,0 +1,155 @@
+{
+  "actual": "Current pages call strategyPackageApi.list(undefined, 300), selectionCenterApi.selectablePackages(300), listPortfolios(300), load all running-summary pages, per-MiniQMT portfolio autoRunStatus, and qmt trades on first load. Backend /strategy-packages list builds full payloads with manifest/runtime_config_contract and asset_eligibility; selectable-packages expands limit*5 and calls model_state/health; listPortfoliosPage loads repository.list_portfolios(limit=10000) before filtering.",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+    "frontend/src/app/paper-v2/selection/page.tsx",
+    "frontend/src/app/paper-v2/advisory/page.tsx",
+    "frontend/src/app/paper-v2/packages/page.tsx",
+    "frontend/src/app/paper-v2/model-hmm/page.tsx",
+    "frontend/src/app/paper-v2/page.tsx",
+    "frontend/src/lib/paper-v2/api.ts",
+    "backend/routers/strategy_packages.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/repository.py",
+    "backend/routers/selection_center.py",
+    "backend/services/selection_center/service.py",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2",
+    "backend/tests/selection_center",
+    "backend/tests/strategy_package",
+    "frontend/tests/paper-v2",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260702_BUG-570-paper-v2-simulation-cards-still-load-heavyweight-package-runtime-data-on.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-570",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T01:34:57.221863Z",
+  "description": "Current pages call strategyPackageApi.list(undefined, 300), selectionCenterApi.selectablePackages(300), listPortfolios(300), load all running-summary pages, per-MiniQMT portfolio autoRunStatus, and qmt trades on first load. Backend /strategy-packages list builds full payloads with manifest/runtime_config_contract and asset_eligibility; selectable-packages expands limit*5 and calls model_state/health; listPortfoliosPage loads repository.list_portfolios(limit=10000) before filtering.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-a68ce91dae87",
+      "timestamp": "2026-07-02T01:34:57.221859Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Paper v2 card initial loads should query only data needed for visible state. Strategy package dropdowns/options must use lightweight DB projections without full manifest payloads, manifest/hash recomputation, or implicit model-state writes. Hidden details such as trades, per-portfolio auto-run status, execution policies, and model-state refreshes must be lazy or explicit. Portfolio list/search/sort/pagination should be pushed into SQL instead of loading 10k rows and filtering in Python.",
+  "first_seen_at": "2026-07-02T01:34:57.221863Z",
+  "fix_branch": null,
+  "fix_commit": "bb132110284ef98d7fa24457f2366bfd3d975deb",
+  "fixed_at": "2026-07-02T04:29:32.033154Z",
+  "github_issue_number": 1803,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1803",
+  "last_seen_at": "2026-07-02T01:34:57.221863Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1805",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /paper-v2/portfolios, /paper-v2/miniqmt-sim, /paper-v2/selection, /paper-v2/advisory, /paper-v2/packages, or /paper-v2/model-hmm and inspect initial API calls plus backend query/log timing.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "paper_v2_backend",
+    "frontend_tsc",
+    "paper_v2_ui"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 simulation cards still load heavyweight package/runtime data on page open",
+  "trigger_condition": {
+    "fingerprint": "a68ce91dae874c644600ba59",
+    "source_event_id": "FE-20260702-a68ce91dae87"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/portfolios/page.tsx",
+      "frontend/src/app/paper-v2/miniqmt-sim/page.tsx",
+      "frontend/src/app/paper-v2/selection/page.tsx",
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/app/paper-v2/packages/page.tsx",
+      "frontend/src/app/paper-v2/model-hmm/page.tsx",
+      "frontend/src/app/paper-v2/page.tsx",
+      "frontend/src/lib/paper-v2/api.ts",
+      "backend/routers/strategy_packages.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/strategy_package/repository.py",
+      "backend/routers/selection_center.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/paper_trading_v2/service.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/paper_trading_v2",
+      "backend/tests/selection_center",
+      "backend/tests/strategy_package"
+    ],
+    "ui_issue": true,
+    "ui_route": "/runtime",
+    "ui_routes": [
+      "/runtime",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "GitHub PR #1805 CI rollup CLEAN; local validation passed: ruff changed files, targeted BUG-570 pytest 6 passed, frontend tsc --noEmit, nox l0, validation_module_registry_l0, paper_v2_backend, paper_v2_l3, focused Playwright 3 passed; production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "actual": "doctor reports workflow readiness but lacks VC-only runtime guidance, leaving Codex/Claude windows to rediscover or potentially use backend.main:app.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260621_BUG-442-p1-workflow-doctor-should-recommend-validation-only-vc-runtime-instead-o.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/scripts/test_aistock_issue_workflow.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-442",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T19:15:27.489484Z",
+  "description": "doctor reports workflow readiness but lacks VC-only runtime guidance, leaving Codex/Claude windows to rediscover or potentially use backend.main:app.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-2ce11487be13",
+      "timestamp": "2026-06-20T19:15:27.489479Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Regression test required for doctor VC runtime guidance contract.",
+      "timestamp": "2026-06-20T19:16:15.406412Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-440 created backend.validation_app:app; doctor should now guide all clients to that safe entrypoint."
+  ],
+  "expected": "doctor output should include a compact Validation Center runtime safety section with safe app command backend.validation_app:app for 8011/8012 and a warning not to use backend.main:app for VC-only restarts.",
+  "first_seen_at": "2026-06-20T19:15:27.489484Z",
+  "fix_branch": null,
+  "fix_commit": "d96cb2573680abb70bf969feaa01cceb8db9c99a",
+  "fixed_at": "2026-06-20T19:27:07.541321Z",
+  "github_issue_number": 1364,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1364",
+  "last_seen_at": "2026-06-20T19:15:27.489484Z",
+  "module": "validation_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1365",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py doctor",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_center"
+  ],
+  "title": "P1: Workflow doctor should recommend validation-only VC runtime instead of backend.main on 8011/8012",
+  "trigger_condition": {
+    "fingerprint": "2ce11487be13b01c75c209b4",
+    "source_event_id": "FE-20260621-2ce11487be13"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -p no:cacheprovider -> 163 passed",
+    "python scripts/aistock_issue_workflow.py doctor --skip-external -> validation_center_runtime_safety ready",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "GitHub PR #1365 checks -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

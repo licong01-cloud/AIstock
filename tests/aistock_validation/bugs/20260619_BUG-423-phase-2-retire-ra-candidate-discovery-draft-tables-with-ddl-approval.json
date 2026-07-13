@@ -1,0 +1,160 @@
+{
+  "actual": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.",
+  "allowed_write_scope": [
+    "backend/db/init_research_assistant_schema_20260521.py",
+    "backend/services/research_assistant/repository.py",
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260619_BUG-423-phase-2-retire-ra-candidate-discovery-draft-tables-with-ddl-approval.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/analysis/ra_phase2_retire_candidate_discovery_draft_tables_20260619.md",
+    "backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.sql",
+    "backend/db/migrations/ra_upgrade/009_retire_candidate_discovery_draft_tables.rollback.sql",
+    "backend/routers/research_assistant.py",
+    "backend/mcp/modules/research_assistant.py",
+    "backend/mcp/tool_manifest.py",
+    "backend/services/research_assistant/execution.py",
+    "backend/services/research_assistant/models.py",
+    "backend/services/research_assistant/mcp_catalog_sync.py",
+    "backend/services/research_assistant/proactive_reports.py",
+    "backend/services/validation/pipeline_center.py",
+    "backend/routers/validation.py",
+    "frontend/src/lib/research-assistant/api.ts",
+    "frontend/src/app/research-assistant/issue-candidates/page.tsx",
+    "frontend/src/app/research-assistant/streams/page.tsx",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_service.py",
+    "backend/tests/research_assistant/test_schema_contract.py",
+    "backend/tests/research_assistant/test_pipeline_source_boundary.py",
+    "backend/tests/research_assistant/test_pipeline_source_ui_static.py",
+    "backend/tests/research_assistant/test_proactive_report_generation.py",
+    "backend/tests/mcp/test_research_assistant_module.py",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "backend/tests/mcp/test_profiles_registry_gateway.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-423",
+  "closed_at": "2026-06-19T18:01:41Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Phase 2 must add a positive VALIDATION_ISSUE confirmed-action proxy check or document existing code references proving confirmed writes are constrained to report_bug/mcp_github_issue_create/mcp_github_issue_sync_bug.",
+    "Phase 2 must push candidate-page search down into the Validation issue-candidate API so search does not miss candidates across pages.",
+    "Phase 2 must evaluate lazy initialization for IssueCandidateFactSource while preserving Validation/Nightly/issue workflow as the only authoritative fact source."
+  ],
+  "created_at": "2026-06-19T06:47:48.222496Z",
+  "description": "BUG-418 intentionally keeps the tables as non-authoritative draft/cache only; production DDL is out of scope for the P1 fix.\n\nAdditional non-blocking BUG-418 follow-ups now in Phase 2 scope: VALIDATION_ISSUE confirmed proxy evidence/test; Validation candidate API search pushdown; IssueCandidateFactSource lazy initialization evaluation.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260619-b5277f8cae3b",
+      "timestamp": "2026-06-19T06:47:48.222493Z"
+    },
+    {
+      "action": "phase2_scope_update",
+      "actor": "codex",
+      "note": "Added BUG-418 non-blocking Phase 2 follow-ups: VALIDATION_ISSUE confirmed proxy evidence/test, Validation candidate API search pushdown, IssueCandidateFactSource lazy init evaluation.",
+      "timestamp": "2026-06-19T07:30:45.309287Z"
+    },
+    {
+      "action": "ddl_authorized_by_user",
+      "actor": "user",
+      "note": "User explicitly authorized DDL on 2026-06-19 for BUG-423 Phase 2: direct DROP of assistant_issue_candidates and assistant_validation_discovery_reports; plan-first only in this step, no DDL execution before Tier2 approval.",
+      "timestamp": "2026-06-19T14:02:07.158012+00:00"
+    },
+    {
+      "action": "scope_expansion_plan_design",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope for plan-first design doc and anticipated Phase 2 implementation files after complete reference scan; implementation and DDL remain blocked pending Tier2 approval.",
+      "timestamp": "2026-06-19T14:02:07.158028+00:00"
+    },
+    {
+      "action": "scope_expansion_for_catalog_contract_tests",
+      "actor": "codex",
+      "note": "Expanded scope to catalog contract expectation tests because required research_assistant_backend/research_assistant_mcp_contract nox sessions exercise manifest/profile counts after retiring assistant_create_issue_candidate; product behavior unchanged.",
+      "timestamp": "2026-06-19T15:59:06.5173475Z"
+    },
+    {
+      "action": "implementation_validation_complete",
+      "actor": "codex",
+      "note": "Implemented BUG-423 Phase 2: added 009 forward/rollback migration files (not applied), removed RA draft tables from bootstrap/repository, retired create/github-sync write surfaces as no-storage/block-only, removed assistant_create_issue_candidate from MCP manifest/module/catalog/loopback exposure, added Validation candidate search pushdown and lazy IssueCandidateFactSource, and added boundary/schema/API/service/MCP/UI tests. Validation passed: l0; research_assistant_backend (276 passed); research_assistant_mcp_contract (38 passed); ra_phase7_full_accept (276 backend tests + frontend lint/build + Playwright 4+8 passed + crosscheck/catalog/ownership); validation_module_registry_l0 (8 passed); validation_center_backend (454 passed); ra_phase0_baseline (276 passed); ra_phase1_memory_tree (14 passed); git diff --check; ruff changed Python files. No DDL executed, no production DB connected, no 8001/3000/19080 services started or restarted.",
+      "timestamp": "2026-06-19T17:28:26Z"
+    },
+    {
+      "timestamp": "2026-06-19T18:01:41Z",
+      "actor": "claude",
+      "action": "tier2_passed",
+      "note": "Claude Tier2 review passed PR #1325 at commit 546ec1f0 with no blocking findings; approved merge/close-sync under no service start, no production DB, and no DDL execution constraints."
+    },
+    {
+      "timestamp": "2026-06-19T18:01:41Z",
+      "actor": "codex",
+      "action": "merged",
+      "note": "Merged PR #1325 after CI green (21 passed, 0 pending, 0 failed). Fix commit 546ec1f0; merge commit 05efcdb1e896ad82edd4ff60a44b5f75b09e31a7. production_ddl_gate remains authorized; 009 production DROP was not executed by Codex and remains user/migration-job controlled."
+    },
+    {
+      "timestamp": "2026-06-19T18:01:41Z",
+      "actor": "codex",
+      "action": "production_ddl_runbook_recorded",
+      "note": "Posted Issue #1289 close-sync runbook comment with read-only audit -> apply -> rollback steps for 009_retire_candidate_discovery_draft_tables; no production DB connection or DDL execution performed."
+    }
+  ],
+  "evidence_uris": [
+    "docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md",
+    "production_ddl_authorized_20260619"
+  ],
+  "expected": "RA candidate/discovery draft storage is retired or renamed/migrated under an approved DDL plan; Validation Center/Nightly/issue workflow remain the only candidate/discovery/GitHub/BUG JSON fact sources. Phase 2 also resolves the BUG-418 non-blocking follow-ups captured in closure_requirements.",
+  "first_seen_at": "2026-06-19T06:47:48.222496Z",
+  "fix_branch": "bug/BUG-423-phase-2-retire-ra-candidate-discovery-draft-tabl-20260619",
+  "fix_commit": "546ec1f0",
+  "fixed_at": "2026-06-19T17:57:14.577167Z",
+  "github_issue_number": 1289,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1289",
+  "last_seen_at": "2026-06-19T06:47:48.222496Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1325",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "authorized",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Review BUG-418 design docs/analysis/ra_pipeline_source_of_truth_boundary_20260619.md Phase 2 follow-up items.",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Phase 2 retire RA candidate/discovery draft tables with DDL approval",
+  "trigger_condition": {
+    "fingerprint": "b5277f8cae3b7a689213ed71",
+    "source_event_id": "FE-20260619-b5277f8cae3b"
+  },
+  "validation_evidence": [
+    "PR #1325 CI -> passed (21 passed, 0 pending, 0 failed)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "merge_commit": "05efcdb1e896ad82edd4ff60a44b5f75b09e31a7"
+}

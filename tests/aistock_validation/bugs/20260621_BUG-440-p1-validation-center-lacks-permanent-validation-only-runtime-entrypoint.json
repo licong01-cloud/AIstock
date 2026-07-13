@@ -1,0 +1,92 @@
+{
+  "actual": "Only a temporary tmp/validation/validation_only_app.py workaround exists; starting backend.main:app for VC can load production-adjacent runtime code.",
+  "allowed_write_scope": [
+    "backend/routers/validation.py",
+    "tests/aistock_validation/bugs/20260621_BUG-440-p1-validation-center-lacks-permanent-validation-only-runtime-entrypoint.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/validation_app.py",
+    "backend/tests/test_validation_only_app.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-440",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T18:30:07.085978Z",
+  "description": "Only a temporary tmp/validation/validation_only_app.py workaround exists; starting backend.main:app for VC can load production-adjacent runtime code.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-79633df31e55",
+      "timestamp": "2026-06-20T18:30:07.085975Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Permanent VC-only entrypoint requires a supported backend module and focused tests; still excludes business routers/runtime.",
+      "timestamp": "2026-06-20T18:33:13.644663Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-438 aftercare VC restart exposed backend.main:app startup side effects"
+  ],
+  "expected": "Operators and agents can start Validation Center on 8011/8012 through a supported validation-only app that exposes validation APIs but does not register QMT, Paper v2 scheduler, trading, or other business routes.",
+  "first_seen_at": "2026-06-20T18:30:07.085978Z",
+  "fix_branch": null,
+  "fix_commit": "edb2d24ef8c6dbf993970d910c47c23b2f8fcc46",
+  "fixed_at": "2026-06-20T18:47:35.425284Z",
+  "github_issue_number": 1358,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1358",
+  "last_seen_at": "2026-06-20T18:30:07.085978Z",
+  "module": "validation_center",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1359",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m uvicorn backend.main:app --host 127.0.0.1 --port 8012",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_center"
+  ],
+  "title": "P1: Validation Center lacks permanent validation-only runtime entrypoint",
+  "trigger_condition": {
+    "fingerprint": "79633df31e558eacc8af13ae",
+    "source_event_id": "FE-20260621-79633df31e55"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_validation_only_app.py backend/tests/test_validation_center_api.py -q -p no:cacheprovider -> 19 passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_center_backend -> 456 passed",
+    "GitHub PR #1359 checks -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

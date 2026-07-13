@@ -44,7 +44,10 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
   AISTOCK_GUARDRAIL_BASELINE_JSON: tests/aistock_validation/guardrails_baseline_20260511.json
   AISTOCK_SELF_HOSTED_SOURCE: F:/Dev/AIstock
+  AISTOCK_CANONICAL_ROOT: F:/Dev/AIstock
+  AISTOCK_WORKTREE_ROOT: F:/Dev/AIstock_worktrees
   AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT: F:/Dev/AIstock
+  AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env
 
 permissions:
   contents: read
@@ -229,6 +232,8 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
+            --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       # Activates the local AIstock conda env. The runner must have conda on PATH
@@ -247,6 +252,8 @@ jobs:
           }
 
       - name: nox -s paper_v2_l3
+        id: paper_v2_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s paper_v2_l3
         env:
@@ -255,16 +262,41 @@ jobs:
           PAPER_V2_E2E_ACTIVATION_DATE: '2026-06-02'
 
       - name: nox -s qe_archive_l3
+        id: qe_archive_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s qe_archive_l3
         env:
           QE_ARCHIVE_L3_SKIP_UI: '1'
 
       - name: nox -s qe_read_l3
+        id: qe_read_l3
+        continue-on-error: true
         run: |
           conda run -n AIstock python -m nox -s qe_read_l3
         env:
           QE_READ_L3_SKIP_UI: '1'
+
+      - name: Summarize Nightly L3 session results
+        if: always()
+        env:
+          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
+          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
+          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
+        run: |
+          $outDir = "tmp/validation/nightly_l3"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $rows = @(
+            [pscustomobject]@{ session = "paper_v2_l3"; result = $env:PAPER_V2_L3_RESULT },
+            [pscustomobject]@{ session = "qe_archive_l3"; result = $env:QE_ARCHIVE_L3_RESULT },
+            [pscustomobject]@{ session = "qe_read_l3"; result = $env:QE_READ_L3_RESULT }
+          )
+          $rows | ConvertTo-Json | Set-Content -Path "$outDir/session-results.json" -Encoding UTF8
+          "# Nightly L3 session results" | Set-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          foreach ($row in $rows) {
+            "- $($row.session): $($row.result)" | Add-Content -Path "$outDir/session-results.md" -Encoding UTF8
+          }
+          Get-Content -LiteralPath "$outDir/session-results.md"
 
       - name: Print validation history manifest
         if: always()
@@ -274,6 +306,32 @@ jobs:
             $count = ($files | Measure-Object).Count
             Write-Host "gate=validation_history_captured root=tests/aistock_validation/history file_count=$count manifest=omitted_on_success"
           }
+
+      - name: Upload Nightly L3 session results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Fail Nightly L3 after all sessions complete
+        if: always()
+        env:
+          PAPER_V2_L3_RESULT: ${{ steps.paper_v2_l3.outcome }}
+          QE_ARCHIVE_L3_RESULT: ${{ steps.qe_archive_l3.outcome }}
+          QE_READ_L3_RESULT: ${{ steps.qe_read_l3.outcome }}
+        run: |
+          $failed = @()
+          if ($env:PAPER_V2_L3_RESULT -eq "failure") { $failed += "paper_v2_l3" }
+          if ($env:QE_ARCHIVE_L3_RESULT -eq "failure") { $failed += "qe_archive_l3" }
+          if ($env:QE_READ_L3_RESULT -eq "failure") { $failed += "qe_read_l3" }
+          if ($failed.Count -gt 0) {
+            Write-Host "::error::Nightly L3 sessions failed after complete run: $($failed -join ', ')"
+            exit 1
+          }
+          Write-Host "Nightly L3 sessions completed without failure."
 
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
@@ -295,6 +353,8 @@ jobs:
             --dest "${env:GITHUB_WORKSPACE}" `
             --expected-commit "${env:GITHUB_SHA}" `
             --repo "${env:GITHUB_REPOSITORY}" `
+            --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
+            --github-env-file "${env:GITHUB_ENV}" `
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: nox -s paper_v2_live
@@ -316,6 +376,11 @@ jobs:
     if: github.event_name == 'schedule' || inputs.run_code_intelligence
     runs-on: [self-hosted, windows]
     timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      models: read
     defaults:
       run:
         shell: powershell
@@ -346,6 +411,43 @@ jobs:
             Get-Content -LiteralPath "$outDir/codegraph-freshness.md"
           }
 
+      - name: Build compact code intelligence refs for LLM advice
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $changedFile = "$outDir/nightly-changed-files.txt"
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --run-date $runDate `
+            --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
+            --previous-candidate-manifest "tmp/validation/nightly_failure_issue/candidate_history/latest/manifest.json" `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
+            --language zh `
+            --output "$outDir/ua-configure.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
+            --output-dir $outDir `
+            --output "$outDir/ua-summary-manifest.stdout.json"
+          conda run -n AIstock python scripts/code_intelligence_adapter.py summary `
+            --item-id "nightly-${{ github.run_id }}" `
+            --query "Nightly validation LLM scheduling impact context" `
+            --changed-files-file $changedFile `
+            --module validation `
+            --output "$outDir/code-intelligence-summary.json" `
+            --output-md "$outDir/code-intelligence-summary.md"
       - name: Build LLM triage quality smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -358,46 +460,126 @@ jobs:
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-file scripts/llm_provider_adapter.py `
             --changed-file scripts/ci_failure_issue_summary.py `
             --module validation.runner `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --output "$outDir/llm-test-plan-advice.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM test-plan advisor failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/llm_provider_adapter.py --json test-plan-advice `
-              --provider deterministic `
-              --changed-file scripts/llm_provider_adapter.py `
-              --changed-file scripts/ci_failure_issue_summary.py `
-              --module validation.runner `
-              --output "$outDir/llm-test-plan-advice.json"
+            Write-Error "LLM test-plan advisor failed while DeepSeek participation is required. See llm-test-plan-advice.json or job logs."
+            exit 1
           }
 
       - name: Build LLM nightly scheduler advice smoke
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-file scripts/llm_provider_adapter.py `
             --recent-failure-module validation.runner `
             --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-scheduler-advice.json"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM nightly scheduler advisor failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-scheduler-advice `
-              --provider deterministic `
-              --changed-file scripts/llm_provider_adapter.py `
-              --recent-failure-module validation.runner `
-              --codegraph-freshness fresh `
-              --resource-budget-seconds 900 `
-              --output "$outDir/llm-nightly-scheduler-advice.json"
+            Write-Error "LLM nightly scheduler advisor failed while DeepSeek participation is required. See llm-nightly-scheduler-advice.json or job logs."
+            exit 1
+          }
+
+      - name: Build LLM nightly discovery hypotheses
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json nightly-discovery-hypothesis `
+            --provider deepseek_api `
+            --invoke-llm `
+            --fail-on-llm-error `
+            --input-pack "$outDir/discovery-input-pack.json" `
+            --codegraph-freshness fresh `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
+            --output "$outDir/llm-hypotheses.json" `
+            --selected-plans-output "$outDir/selected-plans.json"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "LLM nightly discovery hypothesis failed while DeepSeek participation is required. See llm-hypotheses.json or job logs."
+            exit 1
+          }
+
+      - name: Run selected readonly discovery plans
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/discovery-plans" | Out-Null
+          conda run -n AIstock python scripts/nightly_discovery_plans.py --json run-selected `
+            --selected-plans "$outDir/selected-plans.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --default-plan-key validation_discovery_issue_intake_readonly `
+            --default-plan-key workflow_discovery_root_clean_guard `
+            --default-plan-key code_intelligence_discovery_affected_tests_quality `
+            --default-plan-key validation_center_discovery_run_record_integrity `
+            --default-plan-key validation_semantic_drift_discovery_readonly `
+            --output-dir "$outDir/discovery-plans"
+
+      - name: Build Nightly BugCandidate draft queue
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path "$outDir/bug-candidates" | Out-Null
+          conda run -n AIstock python scripts/nightly_bug_candidate_queue.py --json build `
+            --discovery-manifest "$outDir/discovery-plans/manifest.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --ua-manifest-json "$outDir/ua-summary-manifest.json" `
+            --existing-queue-dir "tmp/validation/nightly_failure_issue/candidate_history" `
+            --output-dir "$outDir/bug-candidates"
+
+      - name: Promote ready Nightly BugCandidates to Issue workflow
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          $manifestPath = "$outDir/bug-candidates/manifest.json"
+          if (-not (Test-Path -LiteralPath $manifestPath)) {
+            Write-Host "::warning::Nightly BugCandidate manifest missing; no issue promotion attempted."
+            exit 0
+          }
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $refs = @($manifest.issue_payload_refs)
+          if ($refs.Count -eq 0) {
+            Write-Host "gate=nightly_candidate_promotion issue_payloads=0 promoted=0"
+            exit 0
+          }
+          $extraArgs = @()
+          if ("${{ github.event_name }}" -eq "workflow_dispatch" -and "${{ inputs.llm_triage_mode }}" -eq "opt_in_auto_file" -and "${{ inputs.llm_auto_file_opt_in }}" -eq "true") {
+            $extraArgs += "--opt-in-auto-file"
+          }
+          foreach ($ref in $refs) {
+            conda run -n AIstock python scripts/aistock_issue_workflow.py promote-nightly-candidate `
+              --issue-payload "$ref" `
+              --create-registry-worktree `
+              --apply `
+              @extraArgs `
+              --output-format summary
           }
 
       - name: Build Nightly adaptive scheduler warning report
@@ -405,35 +587,40 @@ jobs:
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           $changedFile = "$outDir/nightly-changed-files.txt"
-          $changedFiles = @()
-          try {
-            $changedFiles = git diff --name-only HEAD~1 HEAD 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $changedFiles = @()
-              $global:LASTEXITCODE = 0
-            }
-          } catch {
-            $changedFiles = @()
-          }
-          $changedFiles | Set-Content -Path $changedFile -Encoding UTF8
+          $runDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")
+          conda run -n AIstock python scripts/nightly_discovery_input_pack.py `
+            --run-id "${{ github.run_id }}" `
+            --base-ref HEAD~1 `
+            --run-date $runDate `
+            --allowed-plan-key l0 `
+            --allowed-plan-key validation_module_registry_l0 `
+            --allowed-plan-key validation_catalog_integrity `
+            --allowed-plan-key validation_center_backend `
+            --allowed-plan-key validation_workflow_automation `
+            --allowed-plan-key validation_discovery_issue_intake_readonly `
+            --allowed-plan-key workflow_discovery_root_clean_guard `
+            --allowed-plan-key code_intelligence_discovery_affected_tests_quality `
+            --allowed-plan-key validation_center_discovery_run_record_integrity `
+            --allowed-plan-key validation_semantic_drift_discovery_readonly `
+            --previous-candidate-manifest "tmp/validation/nightly_failure_issue/candidate_history/latest/manifest.json" `
+            --output "$outDir/discovery-input-pack.json" `
+            --changed-files-output $changedFile
+          conda run -n AIstock python scripts/llm_provider_adapter.py --json validate-config `
+            --provider deepseek_api `
+            --require-api-key
           conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
-            --provider github_models `
+            --provider deepseek_api `
             --invoke-llm `
+            --fail-on-llm-error `
             --changed-files-file $changedFile `
             --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
             --resource-budget-seconds 900 `
             --output "$outDir/llm-nightly-adaptive-scheduler.json" `
             --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "LLM adaptive scheduler failed; retrying deterministic fallback."
-            $global:LASTEXITCODE = 0
-            conda run -n AIstock python scripts/nightly_adaptive_scheduler.py --json `
-              --provider deterministic `
-              --changed-files-file $changedFile `
-              --codegraph-freshness-json "$outDir/codegraph-freshness.json" `
-              --resource-budget-seconds 900 `
-              --output "$outDir/llm-nightly-adaptive-scheduler.json" `
-              --markdown-output "$outDir/llm-nightly-adaptive-scheduler.md"
+            Write-Error "LLM adaptive scheduler failed while DeepSeek participation is required. See llm-nightly-adaptive-scheduler.json or job logs."
+            exit 1
           }
           if (Test-Path -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md") {
             Get-Content -LiteralPath "$outDir/llm-nightly-adaptive-scheduler.md"
@@ -459,20 +646,59 @@ jobs:
             --issue-section "Failure Summary,Regression Locator,Agent Handoff,Token Policy,Production Gates" `
             --output "$outDir/llm-guarded-rollout-gate.json"
 
-      - name: Validate CI/Nightly issue workflow automation
-        run: |
-          conda run -n AIstock python -m nox -s validation_workflow_automation
-
-      - name: Build Understand Anything readiness summaries
+      - name: Build Nightly LLM design drift audit
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-configure `
-            --language zh `
-            --output "$outDir/ua-configure.stdout.json"
-          conda run -n AIstock python scripts/code_intelligence_adapter.py ua-summary-all `
+          conda run -n AIstock python scripts/nightly_design_drift_audit.py --json `
+            --provider deepseek_api `
+            --invoke-llm `
+            --fail-on-llm-error `
+            --run-id "${{ github.run_id }}" `
+            --llm-budget-tier expanded_80k_40k `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --output "$outDir/design-drift-audit.json" `
+            --markdown-output "$outDir/design-drift-audit.md"
+          if (Test-Path -LiteralPath "$outDir/design-drift-audit.md") {
+            Get-Content -LiteralPath "$outDir/design-drift-audit.md"
+          }
+
+      - name: Build Nightly LLM silent degradation audit
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/nightly_silent_degradation_audit.py --json `
+            --provider deepseek_api `
+            --invoke-llm `
+            --fail-on-llm-error `
+            --run-id "${{ github.run_id }}" `
+            --llm-budget-tier expanded_80k_40k `
+            --code-intelligence-json "$outDir/code-intelligence-summary.json" `
+            --output "$outDir/silent-degradation-audit.json" `
+            --markdown-output "$outDir/silent-degradation-audit.md"
+          if (Test-Path -LiteralPath "$outDir/silent-degradation-audit.md") {
+            Get-Content -LiteralPath "$outDir/silent-degradation-audit.md"
+          }
+
+      - name: Build Repo hygiene orphan audit
+        run: |
+          $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          conda run -n AIstock python scripts/repo_hygiene_orphan_audit.py --json `
+            --run-id "${{ github.run_id }}" `
+            --scan-mode tracked `
+            --max-seconds 300 `
             --output-dir $outDir `
-            --output "$outDir/ua-summary-manifest.stdout.json"
+            --output "$outDir/repo-hygiene-orphan-audit.json" `
+            --markdown-output "$outDir/repo-hygiene-orphan-audit.md" `
+            --csv-output "$outDir/repo-hygiene-orphan-audit.csv"
+          if (Test-Path -LiteralPath "$outDir/repo-hygiene-orphan-audit.md") {
+            Get-Content -LiteralPath "$outDir/repo-hygiene-orphan-audit.md"
+          }
+
+      - name: Validate CI/Nightly issue workflow automation
+        run: |
+          conda run -n AIstock python -m nox -s validation_workflow_automation
 
       - name: Print code intelligence graph summary manifest
         if: always()
@@ -499,6 +725,20 @@ jobs:
           if (Test-Path -LiteralPath "$outDir/code-intelligence-run-manifest.md") {
             Get-Content -LiteralPath "$outDir/code-intelligence-run-manifest.md"
           }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py llm-value-summary `
+            --artifact-dir $outDir `
+            --output "$outDir/llm-value-summary.stdout.json" `
+            --output-md "$outDir/llm-value-summary.md"
+          if (Test-Path -LiteralPath "$outDir/llm-value-summary.md") {
+            Get-Content -LiteralPath "$outDir/llm-value-summary.md"
+          }
+          conda run -n AIstock python scripts/code_intelligence_adapter.py llm-usage-summary `
+            --artifact-dir $outDir `
+            --output "$outDir/llm-usage-summary.json" `
+            --output-md "$outDir/llm-usage-summary.md"
+          if (Test-Path -LiteralPath "$outDir/llm-usage-summary.md") {
+            Get-Content -LiteralPath "$outDir/llm-usage-summary.md"
+          }
 
       - name: Upload code intelligence artifacts
         if: always()
@@ -516,11 +756,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       issues: write
       actions: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download code intelligence refs
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: code-intelligence-${{ github.run_id }}
+          path: tmp/validation/code-intelligence/${{ github.run_id }}
+        continue-on-error: true
+
+      - name: Download Nightly L3 session results
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: nightly-l3-results-${{ github.run_id }}
+          path: tmp/validation/nightly_l3/
+        continue-on-error: true
 
       - name: Compose nightly summary
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
@@ -561,6 +818,35 @@ jobs:
 
           Run: ${RUN_URL}
           EOF
+          NIGHTLY_L3_RESULTS_MD="tmp/validation/nightly_l3/session-results.md"
+          if [ -f "${NIGHTLY_L3_RESULTS_MD}" ]; then
+            cat <<EOF >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+          ## Nightly L3 Session Matrix
+
+          EOF
+            cat "${NIGHTLY_L3_RESULTS_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          fi
+          LLM_VALUE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-value-summary.md"
+          if [ -f "${LLM_VALUE_MD}" ]; then
+            cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          else
+            cat <<EOF >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+
+          ## LLM + Code Intelligence Value
+
+          - workflow_gate: \`warning\`
+          - reason: \`code intelligence artifact not downloaded\`
+
+          EOF
+          fi
+          LLM_USAGE_MD="tmp/validation/code-intelligence/${RUN_ID}/llm-usage-summary.md"
+          if [ -f "${LLM_USAGE_MD}" ]; then
+            cat "${LLM_USAGE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          fi
+          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
+          DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
+          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
@@ -609,6 +895,7 @@ jobs:
             --context-output tmp/validation/nightly_failure_issue/context-pack.json \
             --context-markdown-output tmp/validation/nightly_failure_issue/context-pack.md \
             --github-issue-payload-output tmp/validation/nightly_failure_issue/github-issue-payload.json \
+            --code-intelligence-json tmp/validation/code-intelligence/${{ github.run_id }}/code-intelligence-summary.json \
             --candidate-history-dir tmp/validation/nightly_failure_issue/candidate_history \
             "${LLM_ARGS[@]}" \
             --stdout-format compact
@@ -691,7 +978,150 @@ jobs:
                 body: payload.body.replaceAll('--issue <issue-number>', `--issue ${issueNumber}`),
               });
             }
+            fs.writeFileSync(
+              'tmp/validation/nightly_failure_issue/github-issue-number.txt',
+              `${issueNumber}\n`,
+              'utf8',
+            );
             core.info(`Nightly failure issue: #${issueNumber}`);
+
+      - name: Promote Nightly failure issue to BUG draft
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AISTOCK_CANONICAL_ROOT: ${{ github.workspace }}
+          AISTOCK_WORKTREE_ROOT: ${{ runner.temp }}/aistock_nightly_bug_worktrees
+        run: |
+          mkdir -p "${AISTOCK_WORKTREE_ROOT}"
+          ISSUE_NUMBER_FILE="tmp/validation/nightly_failure_issue/github-issue-number.txt"
+          PROMOTION_STATUS="tmp/validation/nightly_failure_issue/bug-promotion-status.txt"
+          if [ ! -f "${ISSUE_NUMBER_FILE}" ]; then
+            echo "workflow_gate=skipped reason=nightly_issue_number_missing" | tee "${PROMOTION_STATUS}"
+            exit 0
+          fi
+          ISSUE_NUMBER="$(tr -d '[:space:]' < "${ISSUE_NUMBER_FILE}")"
+          if [ -z "${ISSUE_NUMBER}" ]; then
+            echo "workflow_gate=skipped reason=nightly_issue_number_empty" | tee "${PROMOTION_STATUS}"
+            exit 0
+          fi
+          export ISSUE_NUMBER
+          PROMOTION_GATE="promoted"
+          REGISTRY_PR_STATUS="not_attempted"
+          export REGISTRY_PR_STATUS
+          if python scripts/aistock_issue_workflow.py promote-ci-issue \
+            --issue "${ISSUE_NUMBER}" \
+            --summary-json tmp/validation/nightly_failure_issue/summary.json \
+            --create-registry-worktree \
+            --apply \
+            --output tmp/validation/nightly_failure_issue/bug-promotion-full.json \
+            --output-format compact | tee tmp/validation/nightly_failure_issue/bug-promotion.json; then
+            BUG_ID="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_id') or p.get('bug_id') or '')")"
+            if [ -n "${BUG_ID}" ]; then
+              BRANCH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_worktree_plan', {}).get('branch') or '')")"
+              REGISTRY_ROOT="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_root') or '')")"
+              BUG_PATH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('bug_json_path') or '')")"
+              if [ -n "${REGISTRY_ROOT}" ] && [ -n "${BRANCH}" ]; then
+                PR_BODY="tmp/validation/nightly_failure_issue/bug-registry-pr-body.md"
+                cat > "${PR_BODY}" <<EOF
+          Nightly failure intake generated BUG draft ${BUG_ID}.
+
+          - Source issue: #${ISSUE_NUMBER}
+          - BUG JSON: \`${BUG_PATH}\`
+          - Source run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - production_ddl_gate: \`noop\`
+          - production_frontend_dependency_gate: \`noop\`
+          - production_backend_dependency_gate: \`noop\`
+
+          This PR only persists the BUG registry draft; business-module fixes still require the standard issue workflow.
+          EOF
+                if git -C "${REGISTRY_ROOT}" push origin "${BRANCH}"; then
+                  REGISTRY_PR_STATUS="branch_pushed"
+                else
+                  PUSH_EXIT="$?"
+                  PROMOTION_GATE="manual_registry_pr_required"
+                  REGISTRY_PR_STATUS="manual_required_push_failed"
+                  echo "::warning::Nightly BUG draft was generated, but GitHub Actions could not push the registry branch; manual registry handoff is required. issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} exit_code=${PUSH_EXIT}"
+                  echo "workflow_gate=manual_registry_pr_required issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} reason=branch_push_failed exit_code=${PUSH_EXIT}" | tee -a "${PROMOTION_STATUS}"
+                fi
+                if [ "${REGISTRY_PR_STATUS}" = "branch_pushed" ] && gh pr create \
+                    --repo "${{ github.repository }}" \
+                    --base main \
+                    --head "${BRANCH}" \
+                    --title "chore(nightly): register ${BUG_ID} from failure intake" \
+                    --body-file "${PR_BODY}"; then
+                  REGISTRY_PR_STATUS="created"
+                else
+                  PR_EXIT="$?"
+                  PROMOTION_GATE="manual_registry_pr_required"
+                  REGISTRY_PR_STATUS="manual_required"
+                  echo "::warning::Nightly BUG draft branch was pushed, but GitHub Actions could not create the registry PR; manual registry PR is required. issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} exit_code=${PR_EXIT}"
+                  echo "workflow_gate=manual_registry_pr_required issue=${ISSUE_NUMBER} bug=${BUG_ID} branch=${BRANCH} reason=pr_create_failed exit_code=${PR_EXIT}" | tee -a "${PROMOTION_STATUS}"
+                fi
+                export REGISTRY_PR_STATUS
+              fi
+              python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          issue = os.environ["ISSUE_NUMBER"]
+          payload = json.loads(Path("tmp/validation/nightly_failure_issue/bug-promotion-full.json").read_text(encoding="utf-8"))
+          bug_id = payload.get("submit_bug", {}).get("bug_id") or payload.get("bug_id")
+          bug_path = payload.get("submit_bug", {}).get("bug_json_path") or payload.get("bug_json_path")
+          branch = payload.get("submit_bug", {}).get("registry_worktree_plan", {}).get("branch")
+          registry_pr_status = os.environ.get("REGISTRY_PR_STATUS") or "not_attempted"
+          body_json = subprocess.check_output(
+              ["gh", "issue", "view", issue, "--json", "body"],
+              text=True,
+              encoding="utf-8",
+          )
+          body = json.loads(body_json).get("body") or ""
+          replacement = f"- BUG ID: `{bug_id}` (Nightly BUG draft generated; registry branch `{branch}`; registry_pr_status=`{registry_pr_status}`; business fix still requires standard workflow)."
+          body = body.replace(
+              "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
+              replacement,
+          )
+          if "## Nightly BUG Draft" not in body:
+              body += (
+                  "\n\n## Nightly BUG Draft\n\n"
+                  f"- BUG ID: `{bug_id}`\n"
+                  f"- BUG JSON draft: `{bug_path}`\n"
+                  f"- Registry branch: `{branch}`\n"
+                  f"- Registry PR status: `{registry_pr_status}`\n"
+                  "- Promotion source: `tmp/validation/nightly_failure_issue/bug-promotion-full.json`\n"
+              )
+          body_path = Path("tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md")
+          body_path.write_text(body, encoding="utf-8")
+          subprocess.check_call(["gh", "issue", "edit", issue, "--body-file", str(body_path)])
+          PY
+            fi
+            echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER}" | tee -a "${PROMOTION_STATUS}"
+          else
+            echo "workflow_gate=promotion_failed issue=${ISSUE_NUMBER}" | tee "${PROMOTION_STATUS}"
+            exit 1
+          fi
+
+      - name: Upload Nightly BUG promotion context
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-bug-promotion-${{ github.run_id }}
+          path: |
+            tmp/validation/nightly_failure_issue/bug-promotion*.json
+            tmp/validation/nightly_failure_issue/bug-promotion-status.txt
+            tmp/validation/nightly_failure_issue/bug-registry-pr-body.md
+            tmp/validation/nightly_failure_issue/github-issue-number.txt
+            tmp/validation/nightly_failure_issue/github-issue-body-with-bug.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Close stale Nightly failure issues after recovery
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact
 
       - name: Upload summary
         if: always()
@@ -700,5 +1130,3 @@ jobs:
           name: nightly-summary-${{ github.run_id }}
           path: tmp/validation/nightly_summary/
           if-no-files-found: ignore
-
-

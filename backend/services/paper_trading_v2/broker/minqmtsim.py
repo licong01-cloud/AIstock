@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +20,7 @@ from uuid import uuid4
 from backend.infra.qmt_client import BaseQMTClient, QMTNotAvailableError, get_qmt_client_singleton
 from backend.services.paper_trading_v2.market_data import (
     MinuteDataSource,
+    TDX_REALTIME_QUOTE_MAX_AGE,
     assert_broker_market_source_match,
 )
 from backend.services.trading_core.errors import (
@@ -62,6 +64,9 @@ _ACCOUNT_GROUP_ALIASES = frozenset({_ACCOUNT_GROUP_SLOTS, "account_group", "stra
 _EXCLUSIVE_ACCOUNT_ALIASES = frozenset({_EXCLUSIVE_ACCOUNT, _EXCLUSIVE_ACCOUNT_LEGACY, "exclusive_account_phase1"})
 _SUPPORTED_ACCOUNT_MODES = sorted(_EXCLUSIVE_ACCOUNT_ALIASES | _ACCOUNT_GROUP_ALIASES)
 _CANONICAL_RUNTIME_OWNER = "MiniQMTExecutionRuntime"
+_DISCONNECT_FREEZE_REASON_CODE = "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+_RECONNECT_RECONCILE_FAILED_REASON_CODE = "MINIQMT_BROKER_RECONNECT_RECONCILE_FAILED"
+_RECONNECTED_RECONCILED_REASON_CODE = "MINIQMT_BROKER_RECONNECTED_RECONCILED"
 
 
 class _OrderRecord:
@@ -103,10 +108,9 @@ class _OrderAttribution:
 class MiniQMTSimBackend(BrokerBackend):
     """BrokerBackend implementation for one MiniQMT simulation account.
 
-    Legacy ``exclusive_account`` keeps one strategy package per backend. The
-    unified account-group modes submit broker orders only after the intent
-    carries explicit slot attribution, so MiniQMT remains the broker authority
-    while AIstock can reconcile strategy-level virtual lots.
+    Product MiniQMT Paper v2 execution uses account-group strategy slots. The
+    legacy ``exclusive_account`` mode remains available only for read-only
+    diagnostics and must not be used as a product execution fallback.
     """
 
     backend_id: BackendId = _BACKEND_ID
@@ -149,6 +153,8 @@ class MiniQMTSimBackend(BrokerBackend):
         self._lock = threading.RLock()
         self._closed = False
         self._connected = False
+        self._disconnect_freeze: dict[str, Any] | None = None
+        self._last_disconnect_recovery: dict[str, Any] | None = None
         if auto_connect:
             self.ensure_connected()
 
@@ -255,9 +261,24 @@ class MiniQMTSimBackend(BrokerBackend):
                     miniqmt_order_id=None,
                     order_remark=order_remark,
                 )
+                freeze = self._freeze_disconnect(
+                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
+                    stage="ORDER_SUBMIT",
+                    message="MiniQMT broker disconnected during order submit; new submits are frozen until reconnect reconcile succeeds",
+                    context={
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "strategy_name": strategy_name,
+                        "order_remark": order_remark,
+                        "reason": str(exc),
+                        "native_reconcile": native_probe,
+                        **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
+                    },
+                )
                 raise BrokerConnectivityError(
                     "MiniQMT order submit failed because client is unavailable",
                     context={
+                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
                         "intent_id": intent.intent_id,
                         "portfolio_id": self._portfolio_id,
                         "package_id": self._package_id,
@@ -266,6 +287,8 @@ class MiniQMTSimBackend(BrokerBackend):
                         "order_remark": order_remark,
                         "reason": str(exc),
                         "native_reconcile": native_probe,
+                        "disconnect_freeze": freeze,
+                        "alert": _disconnect_freeze_alert(freeze),
                         **({"submit_diagnostic": submit_diagnostic} if submit_diagnostic else {}),
                     },
                 ) from exc
@@ -501,6 +524,24 @@ class MiniQMTSimBackend(BrokerBackend):
         )
         return self._find_qmt_trades(record)
 
+    def disconnect_freeze_status(self) -> dict[str, Any]:
+        """Return MiniQMT disconnect freeze telemetry for monitors/API layers."""
+
+        with self._lock:
+            freeze = deepcopy(self._disconnect_freeze)
+            recovery = deepcopy(self._last_disconnect_recovery)
+        return {
+            "schema_version": "miniqmt_disconnect_freeze_status_v1",
+            "backend_id": self.backend_id,
+            "portfolio_id": self._portfolio_id,
+            "package_id": self._package_id,
+            "account_group_id": self._account_group_id,
+            "strategy_slot_id": self._strategy_slot_id,
+            "frozen": freeze is not None,
+            "freeze": freeze,
+            "last_recovery": recovery,
+        }
+
     def subscribe_fill_callback(self, cb: Callable[[FillEvent], None]) -> SubscriptionHandle:
         self._ensure_alive()
         sub_id = f"mqsub_{uuid4().hex}"
@@ -536,20 +577,43 @@ class MiniQMTSimBackend(BrokerBackend):
         return positions
 
     def query_quote(self, symbol: str) -> dict[str, object] | None:
-        """Return L1 quote from the underlying MiniQMT client when available."""
+        """Return L1 quote from MiniQMT with active subscription/self-heal evidence."""
 
         self._ensure_alive()
         getter = getattr(self._qmt_client, "get_full_tick", None)
         if not callable(getter):
             return None
+        now = datetime.now()
         try:
-            data = getter([symbol])
+            # TDX_REALTIME_QUOTE_MAX_AGE is the shared pre-trade fail-closed threshold;
+            # keep the value unchanged while ensuring MiniQMT cache freshness before the guard.
+            data = getter(
+                [symbol],
+                ensure_subscription=True,
+                ensure_fresh=True,
+                max_age_seconds=TDX_REALTIME_QUOTE_MAX_AGE.total_seconds(),
+                trade_date=date.today(),
+                as_of_time=now,
+            )
         except QMTNotAvailableError as exc:
-            raise BrokerConnectivityError("MiniQMT quote query failed", context={"symbol": symbol, "reason": str(exc)}) from exc
+            raise BrokerConnectivityError(
+                "MiniQMT quote query failed",
+                context={
+                    "reason_code": _reason_code_from_error_text(str(exc), default="MINIQMT_REALTIME_QUOTE_FETCH_FAILED"),
+                    "symbol": symbol,
+                    "reason": str(exc),
+                    "quote_feed_health": _safe_quote_feed_health(self._qmt_client),
+                },
+            ) from exc
         except Exception as exc:
             raise BrokerConnectivityError(
                 "MiniQMT quote query failed",
-                context={"symbol": symbol, "reason": f"{type(exc).__name__}: {exc}"},
+                context={
+                    "reason_code": "MINIQMT_REALTIME_QUOTE_FETCH_FAILED",
+                    "symbol": symbol,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "quote_feed_health": _safe_quote_feed_health(self._qmt_client),
+                },
             ) from exc
         if not data:
             return None
@@ -562,7 +626,9 @@ class MiniQMTSimBackend(BrokerBackend):
                     break
         if not isinstance(row, dict):
             return None
-        return _normalize_quote_row(symbol, row)
+        normalized = normalize_miniqmt_quote_row(symbol, row)
+        normalized["quote_feed_health"] = _safe_quote_feed_health(self._qmt_client)
+        return normalized
 
     def query_position_marks(self) -> tuple[dict[str, PositionLot], dict[str, float]]:
         """Return MiniQMT-authoritative positions plus mark prices.
@@ -627,7 +693,8 @@ class MiniQMTSimBackend(BrokerBackend):
             backend_id=self.backend_id,
             max_concurrent_packages=1,
             rejection_reason_if_exceeded=(
-                "MiniQMTSim exclusive_account binds one strategy package to one MiniQMT account"
+                "MiniQMTSim exclusive_account is legacy diagnostics-only; Paper v2 product execution "
+                "requires account_group_slots and MiniQMTExecutionRuntime"
             ),
         )
 
@@ -645,10 +712,37 @@ class MiniQMTSimBackend(BrokerBackend):
 
     def _ensure_ready_for_order(self, intent: OrderIntent) -> _OrderAttribution:
         self._ensure_alive()
+        self._ensure_disconnect_freeze_recovered_or_raise(intent=intent)
         if not self._connected:
-            self.ensure_connected()
+            try:
+                self.ensure_connected()
+            except BrokerConnectivityError as exc:
+                freeze = self._freeze_disconnect(
+                    reason_code=_DISCONNECT_FREEZE_REASON_CODE,
+                    stage="SUBMIT_PREFLIGHT_CONNECT",
+                    message="MiniQMT broker disconnected before order submit; new submits are frozen until reconnect reconcile succeeds",
+                    context={
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "reason": str(exc),
+                        "broker_error": exc.to_dict() if hasattr(exc, "to_dict") else None,
+                    },
+                )
+                raise BrokerConnectivityError(
+                    "MiniQMT broker submit is frozen because pre-submit connection probe failed",
+                    context={
+                        "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
+                        "backend_id": self.backend_id,
+                        "portfolio_id": self._portfolio_id,
+                        "package_id": self._package_id,
+                        "intent_id": intent.intent_id,
+                        "disconnect_freeze": freeze,
+                        "alert": _disconnect_freeze_alert(freeze),
+                    },
+                ) from exc
         if not self._is_legacy_account_mode:
             return self._account_group_attribution(intent)
+        _reject_legacy_product_order_intent(intent, portfolio_id=self._portfolio_id, package_id=self._package_id)
         if intent.portfolio_id != self._portfolio_id:
             raise BrokerSubmitError(
                 "OrderIntent.portfolio_id does not match MiniQMTSim binding",
@@ -718,6 +812,147 @@ class MiniQMTSimBackend(BrokerBackend):
             account_group_id=account_group_id,
             strategy_slot_id=strategy_slot_id,
         )
+
+    def _ensure_disconnect_freeze_recovered_or_raise(self, *, intent: OrderIntent | None = None) -> None:
+        with self._lock:
+            freeze = deepcopy(self._disconnect_freeze)
+        if freeze is None:
+            return
+        recovery = self._attempt_disconnect_recovery(trigger="submit_preflight", intent=intent)
+        if recovery.get("recovered") is True:
+            return
+        active_freeze = self.disconnect_freeze_status()["freeze"] or freeze
+        raise BrokerConnectivityError(
+            "MiniQMT broker submit is frozen after disconnect until reconnect reconcile succeeds",
+            context={
+                "reason_code": str(recovery.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
+                "backend_id": self.backend_id,
+                "portfolio_id": self._portfolio_id,
+                "package_id": self._package_id,
+                "account_group_id": self._account_group_id,
+                "strategy_slot_id": self._strategy_slot_id,
+                "intent_id": intent.intent_id if intent is not None else None,
+                "disconnect_freeze": active_freeze,
+                "recovery": recovery,
+                "alert": _disconnect_freeze_alert(active_freeze),
+                "next_action": (
+                    "restore MiniQMT connectivity, then rerun submit; the adapter will query broker "
+                    "orders and trades before clearing the freeze"
+                ),
+            },
+        )
+
+    def _freeze_disconnect(
+        self,
+        *,
+        reason_code: str,
+        stage: str,
+        message: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        freeze = {
+            "schema_version": "miniqmt_disconnect_freeze_v1",
+            "reason_code": reason_code,
+            "stage": stage,
+            "message": message,
+            "backend_id": self.backend_id,
+            "portfolio_id": self._portfolio_id,
+            "package_id": self._package_id,
+            "account_group_id": self._account_group_id,
+            "strategy_slot_id": self._strategy_slot_id,
+            "observed_at": datetime.now(UTC).isoformat(),
+            "context": deepcopy(context),
+            "recovered": False,
+        }
+        with self._lock:
+            self._connected = False
+            self._disconnect_freeze = freeze
+        return deepcopy(freeze)
+
+    def _attempt_disconnect_recovery(self, *, trigger: str, intent: OrderIntent | None = None) -> dict[str, Any]:
+        attempted_at = datetime.now(UTC).isoformat()
+        try:
+            status = self._qmt_client.status()
+            status_payload = _status_to_dict(status)
+            if not bool(getattr(status, "connected", False)):
+                connector = getattr(self._qmt_client, "connect", None)
+                connect_payload: dict[str, Any] | None = None
+                if callable(connector):
+                    ok, message = connector()
+                    connect_payload = {"ok": bool(ok), "message": str(message or "")}
+                    status = self._qmt_client.status()
+                    status_payload = _status_to_dict(status)
+                if not bool(getattr(status, "connected", False)):
+                    return self._record_disconnect_recovery(
+                        {
+                            "schema_version": "miniqmt_disconnect_recovery_v1",
+                            "recovered": False,
+                            "reason_code": _DISCONNECT_FREEZE_REASON_CODE,
+                            "stage": "BROKER_STILL_DISCONNECTED",
+                            "trigger": trigger,
+                            "intent_id": intent.intent_id if intent is not None else None,
+                            "attempted_at": attempted_at,
+                            "status": status_payload,
+                            "connect_attempt": connect_payload,
+                            "next_action": "restart or reconnect MiniQMT before retrying submit",
+                        }
+                    )
+            mode = str(getattr(status, "mode", "") or "").upper()
+            if mode != "SIM":
+                return self._record_disconnect_recovery(
+                    {
+                        "schema_version": "miniqmt_disconnect_recovery_v1",
+                        "recovered": False,
+                        "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
+                        "stage": "BROKER_MODE_INVALID",
+                        "trigger": trigger,
+                        "intent_id": intent.intent_id if intent is not None else None,
+                        "attempted_at": attempted_at,
+                        "status": status_payload,
+                        "mode": mode,
+                    }
+                )
+            orders = self._qmt_client.get_orders(cancelable_only=False) or []
+            trades = self._qmt_client.get_trades() or []
+        except Exception as exc:  # noqa: BLE001 - recovery failure is returned loudly to the caller.
+            return self._record_disconnect_recovery(
+                {
+                    "schema_version": "miniqmt_disconnect_recovery_v1",
+                    "recovered": False,
+                    "reason_code": _RECONNECT_RECONCILE_FAILED_REASON_CODE,
+                    "stage": "RECONNECT_RECONCILE_FAILED",
+                    "trigger": trigger,
+                    "intent_id": intent.intent_id if intent is not None else None,
+                    "attempted_at": attempted_at,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                    "next_action": "fix broker order/trade query connectivity before retrying submit",
+                }
+            )
+        recovery = {
+            "schema_version": "miniqmt_disconnect_recovery_v1",
+            "recovered": True,
+            "reason_code": _RECONNECTED_RECONCILED_REASON_CODE,
+            "stage": "RECONNECTED_RECONCILED",
+            "trigger": trigger,
+            "intent_id": intent.intent_id if intent is not None else None,
+            "attempted_at": attempted_at,
+            "status": status_payload,
+            "orders_snapshot_count": len(orders),
+            "trades_snapshot_count": len(trades),
+            "cleared_at": datetime.now(UTC).isoformat(),
+        }
+        with self._lock:
+            self._connected = True
+            self._disconnect_freeze = None
+            self._last_disconnect_recovery = recovery
+        return deepcopy(recovery)
+
+    def _record_disconnect_recovery(self, recovery: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            self._connected = False
+            self._last_disconnect_recovery = deepcopy(recovery)
+        return deepcopy(recovery)
 
     def _record_for(self, handle: OrderHandle) -> _OrderRecord:
         if handle.backend_id != self.backend_id:
@@ -992,6 +1227,26 @@ def _enforce_runtime_owned_account_group_intent(intent: OrderIntent) -> None:
     )
 
 
+def _reject_legacy_product_order_intent(intent: OrderIntent, *, portfolio_id: str, package_id: str) -> None:
+    metadata = intent.metadata or {}
+    if metadata.get("legacy_minqmt_diagnostic_order") is True:
+        return
+    raise BrokerSubmitError(
+        "MiniQMTSim exclusive_account order submission is not a canonical Paper v2 MiniQMT product path",
+        context={
+            "intent_id": intent.intent_id,
+            "intent_portfolio_id": intent.portfolio_id,
+            "backend_portfolio_id": portfolio_id,
+            "intent_package_id": intent.package_id,
+            "backend_package_id": package_id,
+            "account_mode": _EXCLUSIVE_ACCOUNT,
+            "required_account_mode": _ACCOUNT_GROUP_SLOTS,
+            "required_runtime_owner": _CANONICAL_RUNTIME_OWNER,
+            "error_code": "EXECUTION_PATH_NOT_CANONICAL",
+        },
+    )
+
+
 def _order_remark(*, portfolio_id: str, package_id: str, intent_id: str) -> str:
     payload = {"portfolio_id": portfolio_id, "package_id": package_id, "intent_id": intent_id}
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -1044,6 +1299,22 @@ def _status_to_dict(value: Any | None) -> dict[str, Any] | None:
     return {"repr": repr(value)}
 
 
+def _disconnect_freeze_alert(freeze: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": "simulation_runtime_alert_v1",
+        "reason_code": str(freeze.get("reason_code") or _DISCONNECT_FREEZE_REASON_CODE),
+        "severity": "P1",
+        "message": "MiniQMT broker submit is frozen after disconnect; reconnect reconcile is required before new submits",
+        "source": "MiniQMTSimBackend",
+        "backend_id": freeze.get("backend_id"),
+        "portfolio_id": freeze.get("portfolio_id"),
+        "package_id": freeze.get("package_id"),
+        "account_group_id": freeze.get("account_group_id"),
+        "strategy_slot_id": freeze.get("strategy_slot_id"),
+        "observed_at": freeze.get("observed_at"),
+    }
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         return int(value)
@@ -1064,6 +1335,24 @@ def _decimal_from_optional(value: Any) -> Decimal | None:
     parsed = _decimal_from_any(value)
     return parsed if parsed > 0 else None
 
+
+
+def _reason_code_from_error_text(value: str, *, default: str) -> str:
+    prefix = str(value or "").split(":", 1)[0].strip()
+    if prefix.startswith("MINIQMT_") or prefix.startswith("REALTIME_QUOTE_"):
+        return prefix
+    return default
+
+
+def _safe_quote_feed_health(qmt_client: Any) -> dict[str, Any] | None:
+    getter = getattr(qmt_client, "get_realtime_quote_health", None)
+    if not callable(getter):
+        return None
+    try:
+        payload = getter()
+    except Exception:  # noqa: BLE001 - health evidence must not mask quote result.
+        return {"status": "health_unavailable", "reason_code": "MINIQMT_QUOTE_HEALTH_UNAVAILABLE"}
+    return dict(payload) if isinstance(payload, dict) else None
 
 def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
     for key in ("current_price", "last_price", "market_price"):
@@ -1091,10 +1380,10 @@ def _position_mark_price(row: dict[str, Any], *, quantity: int) -> float | None:
     return None
 
 
-__all__ = ["MiniQMTSimBackend"]
+__all__ = ["MiniQMTSimBackend", "normalize_miniqmt_quote_row"]
 
 
-def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
+def normalize_miniqmt_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
     def first(keys: tuple[str, ...], default: object = None) -> object:
         for key in keys:
             value = row.get(key)
@@ -1102,23 +1391,32 @@ def _normalize_quote_row(symbol: str, row: dict[str, Any]) -> dict[str, object]:
                 return value
         return default
 
-    bid_prices = first(("bidPrice", "bid_price", "bidPrice1", "bid"), [])
-    ask_prices = first(("askPrice", "ask_price", "askPrice1", "ask"), [])
-    bid_volumes = first(("bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
-    ask_volumes = first(("askVol", "ask_volume", "askVol1", "askVolume"), [])
+    bid_prices = first(("bid_price_1", "bidPrice", "bid_price", "bidPrice1", "bid"), [])
+    ask_prices = first(("ask_price_1", "askPrice", "ask_price", "askPrice1", "ask"), [])
+    bid_volumes = first(("bid_volume_1", "bidVol", "bid_volume", "bidVol1", "bidVolume"), [])
+    ask_volumes = first(("ask_volume_1", "askVol", "ask_volume", "askVol1", "askVolume"), [])
 
     def level(value: object) -> object:
         if isinstance(value, (list, tuple)) and value:
             return value[0]
         return value
 
+    raw = row.get("raw")
     normalized = {
         "symbol": symbol,
+        "price_basis": "yuan",
         "bid_price_1": level(bid_prices),
         "ask_price_1": level(ask_prices),
         "bid_volume_1": level(bid_volumes),
         "ask_volume_1": level(ask_volumes),
+        "lastPrice": first(("lastPrice", "last_price", "price", "close", "last"), None),
+        "pre_close": first(("pre_close", "preClose", "preclose", "lastClose", "last_close"), None),
+        "open": first(("open", "openPrice", "open_price"), None),
+        "high": first(("high", "highPrice", "high_price"), None),
+        "low": first(("low", "lowPrice", "low_price"), None),
+        "volume": first(("volume", "vol", "totalVolume", "TotalHand", "total_hand"), None),
+        "amount": first(("amount", "turnover", "totalAmount", "Amount"), None),
         "time": first(("time", "timetag", "datetime"), None),
-        "raw": dict(row),
+        "raw": dict(raw) if isinstance(raw, dict) else dict(row),
     }
     return normalized

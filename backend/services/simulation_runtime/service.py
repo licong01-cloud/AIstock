@@ -157,6 +157,7 @@ class StrategyRuntimeReleaseService:
         order_remark_prefix: str | None = None,
         approval_state: SimulationBindingApprovalState = SimulationBindingApprovalState.DRAFT,
         binding_metadata: dict[str, Any] | None = None,
+        miniqmt_quote_control: dict[str, Any] | None = None,
         effective_from: date | None = None,
         effective_to: date | None = None,
         created_by: str | None = None,
@@ -184,6 +185,18 @@ class StrategyRuntimeReleaseService:
             "approval_state": approval_state.value,
             "metadata": metadata,
         }
+        if miniqmt_quote_control is not None:
+            if backend != SimulationBrokerBackend.MINIQMT_SIM:
+                raise RuntimeConfigInvalidError(
+                    "miniqmt_quote_control is valid only for MiniQMT SIM bindings",
+                    context={"broker_backend": backend.value, "strategy_id": strategy_id},
+                )
+            from backend.services.miniqmt_execution_runtime.b0_quote_v2 import QuoteControlBindingV1
+
+            parsed_quote_control = QuoteControlBindingV1.from_binding_config(
+                {"miniqmt_quote_control": miniqmt_quote_control}
+            )
+            binding_config["miniqmt_quote_control"] = parsed_quote_control.canonical_payload()
         if normalized_account_group_id is not None:
             binding_config["account_group_id"] = normalized_account_group_id
         if normalized_strategy_slot_id is not None:

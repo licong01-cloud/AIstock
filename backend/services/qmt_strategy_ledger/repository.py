@@ -7,6 +7,7 @@ not connect to MiniQMT, submit orders, cancel orders, or run schema DDL.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -18,6 +19,13 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.tca_sidecar import (
+    TCA_OBSERVATION_KEY,
+    CaptureMergeOutcome,
+    merge_parent_first_write,
+    new_batch_tca_sidecar,
+    preserve_tca_sidecar,
+)
 
 from .models import (
     BUY_ORDER_TYPE,
@@ -49,6 +57,10 @@ from .models import (
     VirtualAccount,
     VirtualAccountStatus,
 )
+from .tca_models import TcaTradeObservationOutcome, build_trade_observation
+from .tca_repository import ExecutionTradeObservationRepository
+
+logger = logging.getLogger(__name__)
 
 ConnFactory = Callable[[], Iterator[Any]]
 
@@ -492,7 +504,16 @@ class QmtStrategyLedgerRepository:
                         requested_by = EXCLUDED.requested_by,
                         request_json = EXCLUDED.request_json,
                         result_json = EXCLUDED.result_json,
-                        metadata = EXCLUDED.metadata,
+                        metadata = CASE
+                            WHEN qmt_strategy.order_batch.metadata ? 'tca_observation_v1'
+                            THEN jsonb_set(
+                                EXCLUDED.metadata,
+                                ARRAY['tca_observation_v1'],
+                                qmt_strategy.order_batch.metadata -> 'tca_observation_v1',
+                                TRUE
+                            )
+                            ELSE EXCLUDED.metadata
+                        END,
                         submitted_at = EXCLUDED.submitted_at,
                         completed_at = EXCLUDED.completed_at
                     """,
@@ -512,6 +533,90 @@ class QmtStrategyLedgerRepository:
                     ),
                 )
         return batch
+
+    def merge_order_batch_tca_capture_sidecar(
+        self,
+        *,
+        batch_id: str,
+        logical_tca_scope_hash: str,
+        parent_intent_id: str,
+        arrival_capture: dict[str, Any] | None = None,
+        eligibility_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+    ) -> CaptureMergeOutcome:
+        """CAS-merge one batch-side TCA observation without changing batch state."""
+
+        if sum(value is not None for value in (arrival_capture, eligibility_capture, capture_error)) != 1:
+            raise ValueError("exactly one order-batch TCA capture mutation is required")
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT metadata FROM qmt_strategy.order_batch WHERE batch_id = %s FOR UPDATE",
+                        (batch_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        conn.rollback()
+                        return CaptureMergeOutcome.NOT_FOUND
+                    metadata = dict(row.get("metadata") or {})
+                    existing = metadata.get(TCA_OBSERVATION_KEY)
+                    if existing is None:
+                        sidecar = new_batch_tca_sidecar(
+                            batch_id=batch_id,
+                            logical_tca_scope_hash=logical_tca_scope_hash,
+                        )
+                    elif not isinstance(existing, dict):
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    else:
+                        sidecar = dict(existing)
+                        if (
+                            sidecar.get("capture_batch_id") != batch_id
+                            or sidecar.get("logical_tca_scope_hash") != logical_tca_scope_hash
+                        ):
+                            conn.rollback()
+                            return CaptureMergeOutcome.IDENTITY_DRIFT
+                    if arrival_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="arrival_capture_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=arrival_capture,
+                        )
+                    elif eligibility_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="managed_preflight_eligibility_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=eligibility_capture,
+                        )
+                    else:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_errors",
+                            parent_intent_id=parent_intent_id,
+                            value=capture_error or {},
+                        )
+                    if outcome == CaptureMergeOutcome.CONFLICT:
+                        conn.rollback()
+                        return outcome
+                    metadata[TCA_OBSERVATION_KEY] = sidecar
+                    cur.execute(
+                        "UPDATE qmt_strategy.order_batch SET metadata = %s WHERE batch_id = %s",
+                        (_json(metadata), batch_id),
+                    )
+                conn.commit()
+                return outcome
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
 
     def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
         with self._conn_factory() as conn:
@@ -720,6 +825,70 @@ class QmtStrategyLedgerRepository:
                 )
         return order
 
+    def get_order_ledger(self, account_id: str, qmt_order_id: str) -> OrderLedgerRecord | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT intent_id, strategy_id, strategy_name,
+                           qmt_order_id, qmt_order_sysid, symbol,
+                           order_type, order_volume, traded_volume,
+                           order_status, account_id, trade_date,
+                           price_type, price, traded_price,
+                           status_msg, order_remark, raw_json,
+                           last_synced_at
+                    FROM qmt_strategy.order_ledger
+                    WHERE account_id = %s AND qmt_order_id = %s
+                    """,
+                    (account_id, qmt_order_id),
+                )
+                row = cur.fetchone()
+        return _row_to_order_ledger(dict(row)) if row else None
+
+    def list_order_ledger(
+        self,
+        *,
+        account_id: str | None = None,
+        trade_date: date | None = None,
+        strategy_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[OrderLedgerRecord]:
+        joins = []
+        where = []
+        params: list[Any] = []
+        if account_id is not None:
+            where.append("ledger.account_id = %s")
+            params.append(account_id)
+        if trade_date is not None:
+            where.append("ledger.trade_date = %s")
+            params.append(trade_date)
+        if strategy_id is not None:
+            where.append("ledger.strategy_id = %s")
+            params.append(strategy_id)
+        if batch_id is not None:
+            joins.append("JOIN qmt_strategy.order_intent intent ON intent.intent_id = ledger.intent_id")
+            where.append("intent.batch_id = %s")
+            params.append(batch_id)
+        query = """
+            SELECT ledger.intent_id, ledger.strategy_id, ledger.strategy_name,
+                   ledger.qmt_order_id, ledger.qmt_order_sysid, ledger.symbol,
+                   ledger.order_type, ledger.order_volume, ledger.traded_volume,
+                   ledger.order_status, ledger.account_id, ledger.trade_date,
+                   ledger.price_type, ledger.price, ledger.traded_price,
+                   ledger.status_msg, ledger.order_remark, ledger.raw_json,
+                   ledger.last_synced_at
+            FROM qmt_strategy.order_ledger ledger
+        """
+        if joins:
+            query += "\n" + "\n".join(joins)
+        if where:
+            query += "\nWHERE " + " AND ".join(where)
+        query += "\nORDER BY ledger.trade_date, ledger.qmt_order_id"
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(query, tuple(params))
+                return [_row_to_order_ledger(dict(row)) for row in cur.fetchall()]
+
     def append_order_status_event(self, event: OrderStatusEventRecord) -> OrderStatusEventRecord:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
@@ -845,8 +1014,9 @@ class QmtStrategyLedgerRepository:
             INSERT INTO qmt_strategy.trade_ledger (
                 trade_id, intent_id, strategy_id, qmt_order_id, qmt_order_sysid,
                 symbol, side, price, quantity, amount, commission, trade_date,
-                account_id, trade_time, order_remark, raw_json
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                account_id, trade_time, order_remark, raw_json, first_ingest_source,
+                first_ingested_at, canonical_trade_fact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             {conflict_clause}
             """,
             (
@@ -866,9 +1036,68 @@ class QmtStrategyLedgerRepository:
                 trade.trade_time,
                 trade.order_remark,
                 _json(trade.raw_json),
+                trade.first_ingest_source,
+                trade.first_ingested_at,
+                trade.canonical_trade_fact_sha256,
             ),
         )
-        return cur.fetchone() is not None
+        inserted = cur.fetchone() is not None
+        if trade.first_ingest_source is not None:
+            self._persist_tca_trade_observation_with_cursor(cur, trade)
+        return inserted
+
+    @staticmethod
+    def _persist_tca_trade_observation_with_cursor(cur: Any, trade: TradeLedgerRecord) -> None:
+        """Persist observation behind a savepoint so evidence failure never changes broker settlement."""
+
+        if trade.first_ingested_at is None or trade.canonical_trade_fact_sha256 is None:
+            logger.error(
+                "TCA prospective trade provenance is incomplete; reason_code=ADAPTIVE_IS_TCA_TRADE_PROVENANCE_INCOMPLETE, "
+                "stage=trade_ledger_ingest, trade_id=%s, ingest_source=%s",
+                trade.trade_id,
+                trade.first_ingest_source,
+            )
+            return
+        savepoint = f"tca_obs_{sha1(trade.trade_id.encode('utf-8')).hexdigest()[:12]}"
+        cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            observation = build_trade_observation(
+                account_id=trade.account_id,
+                trade_date=trade.trade_date,
+                trade_id=trade.trade_id,
+                intent_id=trade.intent_id,
+                qmt_order_id=trade.qmt_order_id,
+                child_order_id=str(trade.raw_json.get("runtime_child_order_id") or "") or None,
+                symbol=trade.symbol,
+                side=trade.side,
+                ingest_source=trade.first_ingest_source,
+                observed_at=trade.first_ingested_at,
+                broker_trade_time=trade.trade_time,
+                price=trade.price,
+                quantity=trade.quantity,
+                commission=trade.commission,
+                raw_payload=trade.raw_json,
+            )
+            outcome = ExecutionTradeObservationRepository().record_observation(cursor=cur, observation=observation)
+            if outcome in {
+                TcaTradeObservationOutcome.CANONICAL_CONFLICT,
+                TcaTradeObservationOutcome.TRADE_TIME_CONFLICT,
+            }:
+                logger.error(
+                    "TCA trade evidence conflict persisted; reason_code=ADAPTIVE_IS_TCA_TRADE_EVIDENCE_CONFLICT, "
+                    "stage=trade_ledger_ingest, trade_id=%s, outcome=%s",
+                    trade.trade_id,
+                    outcome.value,
+                )
+            cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+        except Exception:
+            cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            logger.exception(
+                "TCA trade observation failed without changing broker settlement; "
+                "reason_code=ADAPTIVE_IS_TCA_OBSERVATION_WRITE_FAILED, stage=trade_ledger_ingest, trade_id=%s",
+                trade.trade_id,
+            )
 
     def _insert_position_lot_with_cursor(self, cur: Any, lot: PositionLotRecord, *, ignore_conflict: bool) -> bool:
         if lot.available_quantity > lot.remaining_quantity:
@@ -1192,6 +1421,83 @@ class QmtStrategyLedgerRepository:
                 )
                 rows = cur.fetchall()
         return [_row_to_reconciliation_issue(row) for row in rows]
+
+    def append_open_tca_conflicts_to_reconciliation(
+        self,
+        *,
+        run_id: str,
+        account_id: str,
+        trade_date: date,
+    ) -> tuple[ReconciliationIssueRecord, ...]:
+        """Map every OPEN TCA conflict head into one formal reconciliation run."""
+
+        mapped: list[ReconciliationIssueRecord] = []
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT c.*
+                    FROM qmt_strategy.execution_tca_trade_conflict c
+                    LEFT JOIN qmt_strategy.execution_tca_trade_conflict successor
+                      ON successor.supersedes_conflict_fact_id = c.trade_conflict_fact_id
+                    WHERE c.account_id = %s AND c.trade_date = %s
+                      AND c.conflict_status = 'OPEN'
+                      AND successor.trade_conflict_fact_id IS NULL
+                    ORDER BY c.trade_id, c.conflict_series_key, c.conflict_generation
+                    FOR UPDATE OF c
+                    """,
+                    (account_id, trade_date),
+                )
+                for conflict in cur.fetchall():
+                    issue_type = (
+                        "TRADE_KEY_CONFLICT"
+                        if conflict["conflict_type"] == "CORE_FACT"
+                        else "TRADE_TIME_CONFLICT"
+                    )
+                    issue = ReconciliationIssueRecord(
+                        issue_id=_stable_id("qmtissue", run_id, conflict["trade_conflict_fact_id"]),
+                        run_id=run_id,
+                        issue_type=issue_type,
+                        severity="ERROR",
+                        message="MiniQMT TCA trade evidence conflict blocks FINAL execution-cost evidence",
+                        trade_id=conflict["trade_id"],
+                        context={
+                            "reason_code": f"ADAPTIVE_IS_TCA_{issue_type}",
+                            "stage": "reconciliation_trade_conflict_mapping",
+                            "trade_conflict_fact_id": conflict["trade_conflict_fact_id"],
+                            "conflict_series_key": conflict["conflict_series_key"],
+                            "conflict_generation": conflict["conflict_generation"],
+                            "existing_ingest_source": conflict["existing_ingest_source"],
+                            "incoming_ingest_source": conflict["incoming_ingest_source"],
+                            "existing_canonical_sha256": conflict["existing_canonical_sha256"],
+                            "incoming_canonical_sha256": conflict["incoming_canonical_sha256"],
+                            "existing_timing_sha256": conflict["existing_timing_sha256"],
+                            "incoming_timing_sha256": conflict["incoming_timing_sha256"],
+                        },
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO qmt_strategy.reconciliation_issue (
+                            issue_id, run_id, strategy_id, symbol, qmt_order_id, trade_id,
+                            issue_type, severity, message, context
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (issue_id) DO NOTHING
+                        """,
+                        (
+                            issue.issue_id,
+                            issue.run_id,
+                            issue.strategy_id,
+                            issue.symbol,
+                            issue.qmt_order_id,
+                            issue.trade_id,
+                            issue.issue_type,
+                            issue.severity,
+                            issue.message,
+                            _json(issue.context),
+                        ),
+                    )
+                    mapped.append(issue)
+        return tuple(mapped)
 
     def upsert_unattributed_order(self, record: UnattributedOrderRecord) -> UnattributedOrderRecord:
         with self._conn_factory() as conn:
@@ -1559,8 +1865,66 @@ class InMemoryQmtStrategyLedgerRepository:
 
     def upsert_order_batch(self, batch: OrderBatchRecord) -> OrderBatchRecord:
         _validate_order_batch(batch)
+        existing = self._order_batches.get(batch.batch_id)
+        if existing is not None:
+            batch = replace(
+                batch,
+                metadata=preserve_tca_sidecar(existing.metadata or {}, batch.metadata or {}),
+            )
         self._order_batches[batch.batch_id] = batch
         return batch
+
+    def merge_order_batch_tca_capture_sidecar(
+        self,
+        *,
+        batch_id: str,
+        logical_tca_scope_hash: str,
+        parent_intent_id: str,
+        arrival_capture: dict[str, Any] | None = None,
+        eligibility_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+    ) -> CaptureMergeOutcome:
+        if sum(value is not None for value in (arrival_capture, eligibility_capture, capture_error)) != 1:
+            raise ValueError("exactly one order-batch TCA capture mutation is required")
+        batch = self._order_batches.get(batch_id)
+        if batch is None:
+            return CaptureMergeOutcome.NOT_FOUND
+        metadata = dict(batch.metadata or {})
+        existing = metadata.get(TCA_OBSERVATION_KEY)
+        if existing is None:
+            sidecar = new_batch_tca_sidecar(batch_id=batch_id, logical_tca_scope_hash=logical_tca_scope_hash)
+        elif not isinstance(existing, dict):
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        else:
+            sidecar = dict(existing)
+            if sidecar.get("capture_batch_id") != batch_id or sidecar.get("logical_tca_scope_hash") != logical_tca_scope_hash:
+                return CaptureMergeOutcome.IDENTITY_DRIFT
+        if arrival_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="arrival_capture_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=arrival_capture,
+            )
+        elif eligibility_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="managed_preflight_eligibility_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=eligibility_capture,
+            )
+        else:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_errors",
+                parent_intent_id=parent_intent_id,
+                value=capture_error or {},
+            )
+        if outcome == CaptureMergeOutcome.CONFLICT:
+            return outcome
+        metadata[TCA_OBSERVATION_KEY] = sidecar
+        self._order_batches[batch_id] = replace(batch, metadata=metadata)
+        return outcome
 
     def get_order_batch(self, batch_id: str) -> OrderBatchRecord | None:
         return self._order_batches.get(batch_id)
@@ -1633,6 +1997,33 @@ class InMemoryQmtStrategyLedgerRepository:
     def upsert_order_ledger(self, order: OrderLedgerRecord) -> OrderLedgerRecord:
         self._order_ledgers[(order.account_id, order.qmt_order_id)] = order
         return order
+
+    def get_order_ledger(self, account_id: str, qmt_order_id: str) -> OrderLedgerRecord | None:
+        return self._order_ledgers.get((account_id, qmt_order_id))
+
+    def list_order_ledger(
+        self,
+        *,
+        account_id: str | None = None,
+        trade_date: date | None = None,
+        strategy_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[OrderLedgerRecord]:
+        records = list(self._order_ledgers.values())
+        if account_id is not None:
+            records = [record for record in records if record.account_id == account_id]
+        if trade_date is not None:
+            records = [record for record in records if record.trade_date == trade_date]
+        if strategy_id is not None:
+            records = [record for record in records if record.strategy_id == strategy_id]
+        if batch_id is not None:
+            intent_ids = {
+                intent.intent_id
+                for intent in self._order_intents.values()
+                if intent.batch_id == batch_id
+            }
+            records = [record for record in records if record.intent_id in intent_ids]
+        return sorted(records, key=lambda record: (record.trade_date, record.qmt_order_id))
 
     def append_order_status_event(self, event: OrderStatusEventRecord) -> OrderStatusEventRecord:
         self._order_status_events.setdefault(event.event_id, event)
@@ -1841,6 +2232,16 @@ class InMemoryQmtStrategyLedgerRepository:
     def list_reconciliation_issues(self, run_id: str) -> list[ReconciliationIssueRecord]:
         issues = [issue for issue in self._reconciliation_issues.values() if issue.run_id == run_id]
         return sorted(issues, key=lambda issue: (issue.created_at, issue.issue_id))
+
+    def append_open_tca_conflicts_to_reconciliation(
+        self,
+        *,
+        run_id: str,
+        account_id: str,
+        trade_date: date,
+    ) -> tuple[ReconciliationIssueRecord, ...]:
+        _ = (run_id, account_id, trade_date)
+        return ()
 
     def upsert_unattributed_order(self, record: UnattributedOrderRecord) -> UnattributedOrderRecord:
         key = (record.account_id, record.trade_date, record.qmt_order_id)
@@ -2191,6 +2592,30 @@ def _row_to_order_intent(row: dict[str, Any]) -> OrderIntentRecord:
         created_at=row["created_at"],
         submitted_at=row["submitted_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _row_to_order_ledger(row: dict[str, Any]) -> OrderLedgerRecord:
+    return OrderLedgerRecord(
+        intent_id=row["intent_id"],
+        strategy_id=row["strategy_id"],
+        strategy_name=row["strategy_name"],
+        qmt_order_id=row["qmt_order_id"],
+        qmt_order_sysid=row["qmt_order_sysid"],
+        symbol=row["symbol"],
+        order_type=row["order_type"],
+        order_volume=row["order_volume"],
+        traded_volume=row["traded_volume"],
+        order_status=row["order_status"],
+        account_id=row["account_id"],
+        trade_date=row["trade_date"],
+        price_type=row["price_type"],
+        price=row["price"],
+        traded_price=row["traded_price"],
+        status_msg=row["status_msg"] or "",
+        order_remark=row["order_remark"] or "",
+        raw_json=row["raw_json"] or {},
+        last_synced_at=row["last_synced_at"],
     )
 
 

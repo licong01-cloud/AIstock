@@ -1,0 +1,96 @@
+{
+  "actual": "live_session.py advances save_order_execution_state (1715, bar cursor) BEFORE save_cash_entry (1749), so a crash between them leaves bars marked processed but cash never debited (permanent under-charge); a no-fill/hold day raises and _mark_run_failed flips run AND portfolio to FAILED (1830/1892) instead of NO_REBALANCE; a non-retryable TDX tick error re-raises leaving the run RUNNING (148/382) with no LocalSim cutoff terminalizer.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/live_session.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "tests/aistock_validation/bugs/20260622_BUG-464-p0-paper-v2-localsim-live-tick-persist-ordering-atomicity-no-fill-no-reb.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-464",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T19:10:19.305860Z",
+  "description": "[LocalSim L3 / DEPENDS ON L1 BUG-462] live_session.py: (a) save_order_execution_state (1715, bar cursor) is persisted BEFORE save_cash_entry (1749) under autocommit -> a crash between them advances the bar cursor (bars never reprocessed) while the cash debit is never written = permanent under-charge / NAV overstatement. (b) a no-fill/hold day raises and _mark_run_failed flips run AND portfolio to FAILED (1830/1892) instead of NO_REBALANCE/SUCCEEDED (simulation_runtime path already models no_rebalance as success). (c) a non-retryable TDX tick error re-raises leaving the PaperRun RUNNING (148/382) with no LocalSim cutoff terminalizer. FIX (build on L1 transaction): make the cursor advance commit atomically with the cash/position effect; model a no-fill/no-actionable-intent day as SUCCEEDED/NO_REBALANCE without failing the portfolio; on terminal TDX tick failure mark the run FAILED before propagating + add a LocalSim post-cutoff terminalize. Must NOT weaken BUG-448 status guards. MiniQMT untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-c91192787253",
+      "timestamp": "2026-06-21T19:10:19.305855Z"
+    },
+    {
+      "action": "independent_analysis_completed",
+      "actor": "codex-l3",
+      "note": "Current main already has L1 LocalSim session transaction; live_session still needed valid no-candidate/no-position NO_REBALANCE success and post-close TDX fetch failure terminal run marking. MiniQMT untouched.",
+      "timestamp": "2026-06-22T11:28:13Z"
+    },
+    {
+      "action": "validation_evidence_synced",
+      "actor": "codex-l3",
+      "note": "BUG-464 LocalSim live_session fixes validated locally; PR creation pending Tier2 review.",
+      "timestamp": "2026-06-22T11:28:13Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Persist so the cursor advance commits atomically with the cash/position effect (use L1 transaction); model a no-fill/no-actionable-intent day as SUCCEEDED/NO_REBALANCE (do not fail the portfolio); on terminal TDX tick failure mark the run FAILED before propagating + add a LocalSim post-cutoff terminalizer. Depends on L1. MiniQMT untouched.",
+  "first_seen_at": "2026-06-21T19:10:19.305860Z",
+  "fix_branch": "bug/BUG-464-p0-paper-v2-localsim-live-tick-persist-ordering-20260622",
+  "fix_commit": "a72b2f548351e300a40fbe35a4a2eaef3a08f315",
+  "fixed_at": "2026-06-22T12:19:16.743714Z",
+  "github_issue_number": 1429,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1429",
+  "last_seen_at": "2026-06-21T19:10:19.305860Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1481",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect live_session.py:1715 vs 1749 ordering; 1830 not fills -> _mark_run_failed; 1892 portfolio FAILED; 148/382 tick terminal path.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][LocalSim] live-tick persist ordering atomicity + no-fill=NO_REBALANCE + TDX tick terminalize (depends on L1)",
+  "trigger_condition": {
+    "fingerprint": "c91192787253fa2599f8e8a8",
+    "source_event_id": "FE-20260622-c91192787253"
+  },
+  "validation_evidence": [
+    "rtk gh pr checks 1481 -> 17 passed, 0 failed",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_live_session.py -q -> 28 passed",
+    "rtk python -m ruff check backend/services/paper_trading_v2/live_session.py backend/tests/paper_trading_v2/test_live_session.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": "BUG-464-L3-local-20260622",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "validation_passed"
+}

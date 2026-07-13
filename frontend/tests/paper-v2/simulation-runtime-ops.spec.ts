@@ -9,6 +9,8 @@ const LOCAL_RUN_ID = "simrun_local_20260521";
 const QMT_RUN_ID = "simrun_miniqmt_20260521";
 const LOCAL_PLAN_ID = "plan_local_20260521";
 const QMT_PLAN_ID = "plan_miniqmt_20260521";
+const QMT_PORTFOLIO_ID = "portfolio_qmt_ops";
+const QMT_ALPHA_BOOK_ID = "alpha_book_miniqmt_ops_20260521";
 
 const schedulerPayload = {
   ok: true,
@@ -111,6 +113,7 @@ const qmtRun = {
       runtime_evidence: {
         runtime_id: "mqrt_sim_qmt_ops_runtime",
         runtime_owner: "MiniQMTExecutionRuntime",
+        alpha_signal_book_id: QMT_ALPHA_BOOK_ID,
       },
     },
   },
@@ -119,6 +122,41 @@ const qmtRun = {
   fills: [{ source: "miniqmt_sync_summary", trades_seen: 1, cash_entries_appended: 1 }],
   errors: [],
   audit: { created_at: "2026-05-21T09:26:00Z", updated_at: "2026-05-21T09:27:00Z" },
+  display: {
+    account_slot_label: "MiniQMT 62266303 SIM / MiniQMT Ops",
+    broker_label: "MiniQMT 模拟盘",
+    strategy_label: "MiniQMT Ops",
+  },
+};
+
+const qmtPortfolio = {
+  portfolio_id: QMT_PORTFOLIO_ID,
+  portfolio_name: "MiniQMT Ops 模拟盘",
+  package_id: "pkg_ops",
+  manifest_sha256: "manifest_qmt_hash",
+  status: "READY",
+  broker_backend: "minqmt_sim",
+  data_source: "MINIQMT_REALTIME",
+  initial_cash: 100000,
+  auto_run_enabled: true,
+  auto_run_config: {
+    account_group_id: "ag_minqmt_62266303_sim",
+    strategy_slot_id: "slot_strategy_miniqmt_ops",
+  },
+  auto_run: {
+    binding: {
+      account_group_id: "ag_minqmt_62266303_sim",
+      strategy_slot_id: "slot_strategy_miniqmt_ops",
+    },
+  },
+};
+
+const strategyPackage = {
+  package_id: "pkg_ops",
+  package_name: "MiniQMT Ops Package",
+  package_status: "ACTIVE",
+  manifest_sha256: "manifest_qmt_hash",
+  asset_eligibility: { eligible: true },
 };
 
 const plans = {
@@ -235,6 +273,86 @@ function listPayload(runs: MockRun[]) {
 
 async function mockApi(page: Page) {
   const writeMethods: string[] = [];
+  const requestLog: string[] = [];
+  await page.route("**/api/v1/qmt/status", async (route) => {
+    requestLog.push("GET /api/v1/qmt/status");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        enabled: true,
+        connected: false,
+        mode: "SIM",
+        account_id: "62266303",
+        provider: "xtquant",
+        client_class: "MiniQMTGateway",
+      }),
+    });
+  });
+  await page.route("**/api/v1/paper-v2/portfolios?*", async (route) => {
+    const url = new URL(route.request().url());
+    requestLog.push(`GET /api/v1/paper-v2/portfolios?${url.searchParams.toString()}`);
+    expect(url.searchParams.get("broker_backend")).toBe("minqmt_sim");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ portfolios: [qmtPortfolio] }),
+    });
+  });
+  await page.route("**/api/v1/paper-v2/portfolios/*/auto-run/status", async (route) => {
+    requestLog.push("GET /api/v1/paper-v2/portfolios/*/auto-run/status");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        auto_run: {
+          portfolio_id: QMT_PORTFOLIO_ID,
+          enabled: true,
+          next_plan: "09:25 MiniQMT SIM",
+          binding: {
+            account_group_id: "ag_minqmt_62266303_sim",
+            strategy_slot_id: "slot_strategy_miniqmt_ops",
+          },
+        },
+      }),
+    });
+  });
+  await page.route("**/api/v1/paper-v2/session-scheduler/bootstrap-status", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        bootstrap: {
+          scheduler: { running: false, interval_seconds: 30, last_run_at: null },
+          scheduler_autostart_env: false,
+          scheduler_env_raw: "0",
+          auto_run: { env_enabled: false, bootstrap_missing_session: 0 },
+        },
+      }),
+    }),
+  );
+  await page.route("**/api/v1/strategy-packages?*", async (route) => {
+    const url = new URL(route.request().url());
+    requestLog.push(`GET /api/v1/strategy-packages?${url.searchParams.toString()}`);
+    expect(url.searchParams.get("view")).toBe("summary");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ packages: [strategyPackage] }),
+    });
+  });
+  await page.route("**/api/v1/strategy-packages/*/execution-policies", async (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ execution_policies: [] }),
+    }),
+  );
+  await page.route("**/api/ingestion/alerts/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const data = path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] };
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+  });
   await page.route("**/api/v1/simulation-runtime/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -318,12 +436,18 @@ async function mockApi(page: Page) {
       if (body.runtime_id !== "mqrt_sim_qmt_ops_runtime") {
         return respond({ detail: { error_code: "MINIQMT_RUNTIME_ID_NOT_FROM_EVIDENCE" } }, 422);
       }
+      if (body.requested_by !== "paper-v2-miniqmt-sim-ui") {
+        return respond({ detail: { error_code: "MINIQMT_OPERATOR_REQUESTED_BY_MISMATCH" } }, 422);
+      }
+      if (body.alpha_signal_book_id) {
+        return respond({ detail: { error_code: "MINIQMT_OPERATOR_UNEXPECTED_ALPHA_BOOK" } }, 422);
+      }
       return respond(operatorCommandPayload);
     }
 
     return respond({ detail: `unexpected simulation-runtime route: ${path}` }, 404);
   });
-  return writeMethods;
+  return { writeMethods, requestLog };
 }
 
 test("simulation runtime ops page displays controlled scheduler, provider, shared run trace, and filters", async ({ page }) => {
@@ -337,10 +461,11 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   page.on("response", (response) => {
     if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
   });
-  const writeMethods = await mockApi(page);
+  const { writeMethods } = await mockApi(page);
 
   await page.goto("/paper-v2/simulation-runtime");
 
+  await expect(page.locator('a[href="/paper-v2/settings"]')).toHaveCount(0);
   await expect(page.getByTestId("sim-runtime-total-runs")).toBeVisible();
   await expect(page.getByTestId("sim-runtime-total-runs")).toContainText("2");
   await expect(page.getByTestId("sim-runtime-local-count")).toContainText("1");
@@ -351,11 +476,16 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByText("execution_plan")).toBeVisible();
   await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("ENABLED");
   await expect(page.getByTestId("sim-runtime-provider-mode")).toContainText("production");
+  await expect(page.getByTestId("sim-runtime-operator-command-panel")).toHaveCount(0);
+  await expect(page.getByText("MiniQMT Operator Command")).toHaveCount(0);
 
-  await expect(page.getByText("strategy_local_ops", { exact: true })).toBeVisible();
-  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("ag_minqmt_62266303_sim");
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("slot_strategy_miniqmt_ops");
+  await expect(page.getByText("策略实例：Local Ops")).toBeVisible();
+  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
+  await expect(page.getByText("选出 2 只候选").first()).toBeVisible();
+  await expect(page.getByText("交易意图 2 / 已提交 0 / 失败 0")).toBeVisible();
+  await expect(page.getByText("交易意图 2 / 已提交 2 / 失败 0")).toBeVisible();
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT 62266303 SIM");
+  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT Ops");
   await page.getByTestId(`sim-runtime-run-detail-${LOCAL_RUN_ID}`).click();
   await expect(page.getByTestId("sim-runtime-selected-run-id")).toContainText(LOCAL_RUN_ID);
   await expect(page.getByTestId("sim-runtime-selected-evidence-id")).toContainText("dse_local_ops");
@@ -366,8 +496,8 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   await expect(page.getByTestId("sim-runtime-selected-order-fill-errors")).toContainText("orders");
 
   await page.getByTestId("sim-runtime-backend-filter").selectOption("minqmt_sim");
-  await expect(page.getByText("strategy_miniqmt_ops", { exact: true })).toBeVisible();
-  await expect(page.getByText("strategy_local_ops", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
+  await expect(page.getByText("策略实例：Local Ops")).toHaveCount(0);
 
   expect(writeMethods).toEqual([]);
   expect(pageErrors).toEqual([]);
@@ -375,7 +505,7 @@ test("simulation runtime ops page displays controlled scheduler, provider, share
   expect(badResponses).toEqual([]);
 });
 
-test("simulation runtime ops page submits MiniQMT operator command only after explicit selection and confirmation", async ({ page }) => {
+test("MiniQMT sim page hosts controlled operator command with Chinese labels and second confirmation", async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   const badResponses: string[] = [];
@@ -386,19 +516,36 @@ test("simulation runtime ops page submits MiniQMT operator command only after ex
   page.on("response", (response) => {
     if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
   });
-  const writeMethods = await mockApi(page);
+  const { writeMethods, requestLog } = await mockApi(page);
 
-  await page.goto("/paper-v2/simulation-runtime");
-  await expect(page.getByTestId("sim-runtime-operator-command-panel")).toBeVisible();
-  await expect(page.getByTestId("sim-runtime-operator-submit")).toBeDisabled();
+  await page.goto("/paper-v2/miniqmt-sim");
+  await expect(page.getByTestId("miniqmt-operator-command-panel")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "MiniQMT 模拟盘受控操作" })).toBeVisible();
+  await expect(page.getByTestId("miniqmt-operator-command-type")).toContainText("撤销全部未成交委托");
+  await expect(page.getByTestId("miniqmt-operator-command-type")).toContainText("清空全部持仓");
+  await expect(page.getByTestId("miniqmt-operator-command-type")).not.toContainText("CANCEL_ALL_OPEN_ORDERS");
+  await expect(page.getByText("confirm_text")).toHaveCount(0);
+  await expect(page.getByTestId("miniqmt-operator-alpha-book")).toHaveCount(0);
+  await expect(page.getByTestId("miniqmt-operator-submit")).toBeDisabled();
+  expect(requestLog.some((item) => item.includes("view=summary"))).toBe(true);
+  expect(requestLog.some((item) => item.includes("broker_backend=minqmt_sim"))).toBe(true);
+  expect(requestLog.some((item) => item.includes("qmt/trades"))).toBe(false);
 
-  await page.getByTestId(`sim-runtime-run-detail-${QMT_RUN_ID}`).click();
-  await expect(page.getByTestId("sim-runtime-operator-selected-run")).toContainText(QMT_RUN_ID);
-  await page.getByTestId("sim-runtime-operator-reason").fill("ui operator regression");
-  await page.getByTestId("sim-runtime-operator-confirm").fill("EXECUTE CANCEL_ALL_OPEN_ORDERS");
-  await page.getByTestId("sim-runtime-operator-submit").click();
+  await expect(page.getByTestId("miniqmt-operator-selected-run")).toContainText(QMT_RUN_ID);
+  await page.getByTestId("miniqmt-operator-command-type").selectOption("REPLACE_ALPHA_SIGNAL_BOOK");
+  await expect(page.getByTestId("miniqmt-operator-alpha-book")).toBeVisible();
+  await expect(page.getByTestId("miniqmt-operator-alpha-book")).toContainText(QMT_ALPHA_BOOK_ID);
+  await page.getByTestId("miniqmt-operator-command-type").selectOption("CANCEL_ALL_OPEN_ORDERS");
+  await expect(page.getByTestId("miniqmt-operator-alpha-book")).toHaveCount(0);
 
-  await expect(page.getByTestId("sim-runtime-operator-result")).toContainText("EXECUTED");
+  await page.getByTestId("miniqmt-operator-reason").fill("ui operator regression");
+  await page.getByTestId("miniqmt-operator-submit").click();
+  await expect(page.getByTestId("miniqmt-operator-confirm-dialog")).toBeVisible();
+  expect(writeMethods).toEqual([]);
+
+  await page.getByTestId("miniqmt-operator-confirm-submit").click();
+
+  await expect(page.getByTestId("miniqmt-operator-result")).toContainText("EXECUTED");
   expect(writeMethods).toEqual(["POST /api/v1/simulation-runtime/miniqmt/operator-commands"]);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);

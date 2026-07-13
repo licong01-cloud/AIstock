@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -45,6 +44,7 @@ class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     val_ratio: float = 0.2
     per_stock_mode: str = "FULL_LSTM"
+    ltr_loss_mode: str = "mse"
 
 
 class LSTMDataset(Dataset):
@@ -88,6 +88,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10, help="training epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="learning rate")
     parser.add_argument("--device", type=str, default=None, help="override device, e.g. cpu / cuda")
+    parser.add_argument("--ltr-loss-mode", type=str, default="mse", help="LTR loss mode; only mse is supported here")
     parser.add_argument("--config", type=str, default=None, help="extra JSON config snapshot (optional)")
     return parser.parse_args()
 
@@ -103,6 +104,16 @@ def _load_extra_config(config_str: Optional[str]) -> Dict[str, Any]:
         return json.loads(config_str)
     except Exception:
         return {"raw": config_str}
+
+
+def _reject_unsupported_ltr_for_per_stock(*, symbol: str, seq_len: int, requested_loss: str) -> None:
+    if requested_loss == "mse":
+        return
+    raise ValueError(
+        "reason_code=ltr_per_stock_not_supported: "
+        "listwise LTR requires cross-sectional date query groups; per-stock training cannot provide them; "
+        f"symbol={symbol}; seq_len={seq_len}; requested_loss={requested_loss}"
+    )
 
 
 def _build_sequences(df: pd.DataFrame, seq_len: int) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
@@ -291,6 +302,17 @@ def main() -> None:
     ts_code = args.symbol
     start = _to_dt(args.start)
     end = _to_dt(args.end)
+    extra_cfg = _load_extra_config(args.config)
+    requested_ltr_loss_mode = (
+        args.ltr_loss_mode
+        if args.ltr_loss_mode != "mse"
+        else str(extra_cfg.get("ltr_loss_mode", "mse"))
+    )
+    _reject_unsupported_ltr_for_per_stock(
+        symbol=ts_code,
+        seq_len=args.seq_len,
+        requested_loss=requested_ltr_loss_mode,
+    )
 
     train_cfg = TrainConfig(
         seq_len=args.seq_len,
@@ -300,8 +322,8 @@ def main() -> None:
         epochs=args.epochs,
         lr=args.lr,
         device=args.device or ("cuda" if torch.cuda.is_available() else "cpu"),
+        ltr_loss_mode=requested_ltr_loss_mode,
     )
-    extra_cfg = _load_extra_config(args.config)
 
     print(f"[INFO] training LSTM_PER_STOCK for {ts_code} on device={train_cfg.device}")
 

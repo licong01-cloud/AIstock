@@ -68,6 +68,8 @@ def register(registry: "ModuleRegistry") -> None:
 
     @registry.mcp.tool(name="factor_library_get_metric_summary")
     def factor_library_get_metric_summary(factor_name: str) -> Any:
+        """Read 1d metrics plus nullable h20/HAC companion fields for one factor."""
+
         return client.get(f"/factors/{_fragment(registry, factor_name, 'factor_name')}/metric-summary")
 
     @registry.mcp.tool(name="factor_library_get_usage_summary")

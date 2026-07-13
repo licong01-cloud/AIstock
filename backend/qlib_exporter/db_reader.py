@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """从本地数据库读取行情数据的工具.
 
 数据导出策略：
@@ -13,22 +11,26 @@ from __future__ import annotations
 - 分钟线数据（股票）
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import date, datetime, timedelta
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.data_service.moneyflow_contract import normalize_tushare_moneyflow_units
+from backend.services.industry_code_map import (
+    UNKNOWN_L2_CODE_ID,
+    encode_l2_codes,
+    load_sw_l2_code_map,
+)
 
 from .config import (
-    ADJ_FACTOR_TABLE,
     DAILY_RAW_TABLE,
-    FACTOR_DATA_TABLE,
-    FIELD_MAPPING_DB_DAILY,
     FIELD_MAPPING_DB_MINUTE,
-    FIELD_MAPPING_FACTOR,
     INDEX_BASIC_TABLE,
     INDEX_DAILY_TABLE,
     INDEX_DAILY_TDX_TABLE,
@@ -39,6 +41,25 @@ from .config import (
     PRICE_UNIT_DIVISOR,
 )
 from .adj_factor_provider import AdjFactorProvider
+
+
+def _filter_instrument_start_dates(
+    price_df: pd.DataFrame,
+    instrument_start_dates: Mapping[str, date] | None,
+) -> pd.DataFrame:
+    """Drop source rows earlier than each instrument's admissible start date."""
+
+    if price_df.empty or not instrument_start_dates:
+        return price_df
+    starts = {
+        str(code).strip().upper(): pd.Timestamp(start_date).date()
+        for code, start_date in instrument_start_dates.items()
+        if start_date is not None
+    }
+    row_starts = price_df["ts_code"].astype(str).str.strip().str.upper().map(starts)
+    trade_dates = pd.to_datetime(price_df["trade_date"], errors="coerce").dt.date
+    keep = row_starts.isna() | (trade_dates >= row_starts)
+    return price_df.loc[keep].copy()
 
 
 class DBReader:
@@ -980,6 +1001,7 @@ class DBReader:
         start: date,
         end: date,
         use_tushare_adj: bool = True,
+        instrument_start_dates: Mapping[str, date] | None = None,
     ) -> pd.DataFrame:
         """加载 Qlib 格式日线数据.
 
@@ -997,6 +1019,7 @@ class DBReader:
             start: 开始日期
             end: 结束日期
             use_tushare_adj: 是否使用 Tushare 复权因子（当本地无数据时）
+            instrument_start_dates: 可选的逐股票最早有效日期；在复权合并前过滤更早源记录
 
         Returns:
             符合 Qlib 格式的 DataFrame
@@ -1027,6 +1050,7 @@ class DBReader:
         with get_conn() as conn:
             price_df = pd.read_sql(sql, conn, params=params)
 
+        price_df = _filter_instrument_start_dates(price_df, instrument_start_dates)
         if price_df.empty:
             return pd.DataFrame()
 
@@ -1316,36 +1340,8 @@ class DBReader:
         if df.empty:
             return df
 
-        # 单位转换：手 -> 股，万元 -> 元
-        vol_cols = [
-            "buy_sm_vol",
-            "sell_sm_vol",
-            "buy_md_vol",
-            "sell_md_vol",
-            "buy_lg_vol",
-            "sell_lg_vol",
-            "buy_elg_vol",
-            "sell_elg_vol",
-            "net_mf_vol",
-        ]
-        amt_cols = [
-            "buy_sm_amount",
-            "sell_sm_amount",
-            "buy_md_amount",
-            "sell_md_amount",
-            "buy_lg_amount",
-            "sell_lg_amount",
-            "buy_elg_amount",
-            "sell_elg_amount",
-            "net_mf_amount",
-        ]
-
-        for col in vol_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce") * 100.0
-        for col in amt_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce") * 10000.0
+        # Source DB keeps Tushare units (hand/10k CNY); all consumers use share/CNY.
+        df = normalize_tushare_moneyflow_units(df, copy=False)
 
         # 构造 MultiIndex (datetime, instrument)
         # 直接使用 ts_code 作为 instrument，保证与日线 / bin 中使用的代码格式一致（000001.SZ/600000.SH）。
@@ -1399,7 +1395,7 @@ class DBReader:
 
         返回 DataFrame:
         - Index: MultiIndex (datetime, instrument)
-        - Columns: sw2_* 系列 22 列, float32
+        - Columns: sw2_* 22 numeric float32 columns plus int l2_code_id
         """
         exchange_conds = []
         if exchanges:
@@ -1447,9 +1443,19 @@ class DBReader:
             SELECT
                 sd.trade_date,
                 sd.ts_code,
+                ind.l2_code,
                 {col_list}
             FROM market.sector_data sd
             INNER JOIN market.stock_basic s ON sd.ts_code = s.ts_code
+            LEFT JOIN LATERAL (
+                SELECT l2_code
+                FROM market.sw_index_member m
+                WHERE m.ts_code = sd.ts_code
+                  AND m.in_date <= sd.trade_date
+                  AND (m.out_date IS NULL OR m.out_date >= sd.trade_date)
+                ORDER BY m.in_date DESC NULLS LAST, m.out_date DESC NULLS LAST
+                LIMIT 1
+            ) ind ON TRUE
             WHERE sd.trade_date >= '{start.isoformat()}'
               AND sd.trade_date <= '{end.isoformat()}'
               AND {where_clause}{ts_code_filter}
@@ -1461,6 +1467,7 @@ class DBReader:
                 cur.execute(sql)
                 rows = cur.fetchall()
                 colnames = [desc[0] for desc in cur.description]
+            l2_code_map = load_sw_l2_code_map(conn)
         df = pd.DataFrame(rows, columns=colnames)
 
         if df.empty:
@@ -1473,8 +1480,36 @@ class DBReader:
 
         # 仅保留 sw2_* 列，统一为 float32
         result = df[sw2_cols].astype("float32")
+        result["l2_code_id"] = np.asarray(
+            encode_l2_codes(df["l2_code"].tolist(), l2_code_map),
+            dtype=np.int16,
+        )
         result = result.sort_index()
+        self._warn_low_l2_code_coverage(result)
         return result
+
+    def _warn_low_l2_code_coverage(self, df: pd.DataFrame) -> None:
+        if df.empty or "l2_code_id" not in df.columns:
+            return
+        coverage = df["l2_code_id"].ne(UNKNOWN_L2_CODE_ID).groupby(level="datetime").agg(["sum", "count"])
+        for dt_value, row in coverage.iterrows():
+            total = int(row["count"])
+            matched = int(row["sum"])
+            if total <= 0:
+                continue
+            ratio = matched / total
+            if ratio < 0.90:
+                missing = total - matched
+                label = dt_value.date().isoformat() if hasattr(dt_value, "date") else str(dt_value)
+                self.logger.warning(
+                    "sector_data_l2_code_id_coverage_below_threshold "
+                    "reason_code=sector_data_l2_code_id_low_coverage "
+                    "trade_date=%s coverage=%.4f missing_count=%d total_count=%d",
+                    label,
+                    ratio,
+                    missing,
+                    total,
+                )
 
     def get_moneyflow_ts_codes(
         self,

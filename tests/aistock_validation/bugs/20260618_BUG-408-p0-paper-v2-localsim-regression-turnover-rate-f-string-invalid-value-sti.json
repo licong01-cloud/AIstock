@@ -1,0 +1,82 @@
+{
+  "actual": "LocalSim marks simrun_02793cc251b81093 FAILED_RETRYABLE because V25 day_features rejects turnover_rate_f as invalid for 000736.SZ during TDX_REALTIME execution even after BUG-399 fix.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/day_features.py",
+    "backend/tests/paper_trading_v2/test_v25_day_features.py",
+    "tests/aistock_validation/bugs/20260617_BUG-399-p0-paper-v2-localsim-tdx-realtime-v25-day-features-fails-on-non-finite-t.json",
+    "tests/aistock_validation/bugs/20260618_BUG-408-p0-paper-v2-localsim-regression-turnover-rate-f-string-invalid-value-sti.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-408",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-18T03:19:50.964198Z",
+  "description": "LocalSim marks simrun_02793cc251b81093 FAILED_RETRYABLE because V25 day_features rejects turnover_rate_f as invalid for 000736.SZ during TDX_REALTIME execution even after BUG-399 fix.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260618-bdcf28e4047c",
+      "timestamp": "2026-06-18T03:19:50.964194Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-18 10:50 +08 live API check: LocalSim simrun_02793cc251b81093 FAILED_RETRYABLE; first error LOCAL_SIM_SUBMIT_FAILED; context symbol=000736.SZ source=TDX_REALTIME cause=V25 day_features turnover_rate_f is invalid. Related closed BUG-399 GitHub #1196 / PR #1199."
+  ],
+  "expected": "LocalSim V25 day_features must consistently repair non-finite or DB string NaN turnover_rate_f using finite turnover_rate when authoritative and finite, with audited field_repair evidence and no silent zero/default fallback; malformed non-numeric values must still fail fast with actionable context. BUG-399 regression coverage must include string/Decimal NaN forms observed from DB/psycopg runtime.",
+  "first_seen_at": "2026-06-18T03:19:50.964198Z",
+  "fix_branch": null,
+  "fix_commit": "dd786bfc70366fde7ee0afe248e0e4c000ea57d6",
+  "fixed_at": "2026-06-18T05:00:45.247421Z",
+  "github_issue_number": 1223,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1223",
+  "last_seen_at": "2026-06-18T03:19:50.964198Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1224",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs/simrun_02793cc251b81093 shows LOCAL_SIM_SUBMIT_FAILED with cause V25 day_features turnover_rate_f is invalid",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "regression",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][LocalSim][Regression] turnover_rate_f string/invalid value still blocks unattended simulation after BUG-399",
+  "trigger_condition": {
+    "fingerprint": "bdcf28e4047c1f0d2ce27cb3",
+    "source_event_id": "FE-20260618-bdcf28e4047c"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/paper_trading_v2/test_v25_day_features.py -q -> 11 passed",
+    "python -m nox -s l0 validation_module_registry_l0 -> l0 success; validation_module_registry_l0 8 passed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 -> success; paper_v2_backend 630 passed, 1 skipped, 2 xfailed; paper_v2_data_quality PASS with existing nonblocking legacy ledger WARN; data_quality_deep 10 passed, 21 skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -71,8 +71,7 @@ export default function PaperV2SelectionPage() {
   const [selectedRuns, setSelectedRuns] = useState<Record<string, boolean>>({});
   const [runPage, setRunPage] = useState(1);
   const [runPagination, setRunPagination] = useState<JsonObject>({ page: 1, page_size: 20, total: 0, total_pages: 1 });
-  const [weights, setWeights] = useState<Record<string, number>>({});
-  const [mode, setMode] = useState<SelectionMode>("single_package");
+  const mode: SelectionMode = "single_package";
   const [tradeDate, setTradeDate] = useState(todayIso());
   const [pitMode, setPitMode] = useState("PREVIOUS_TRADING_DAY_CLOSE");
   const [pitContext, setPitContext] = useState<JsonObject | null>(null);
@@ -96,21 +95,22 @@ export default function PaperV2SelectionPage() {
   const [error, setError] = useState<unknown>(null);
 
   const selectedPackages = useMemo(() => packages.filter((item) => selected[item.package_id]), [packages, selected]);
-  const sourceRunIds = useMemo(() => runs.filter((item) => selectedRuns[item.run_id]).map((item) => item.run_id), [runs, selectedRuns]);
-  const singlePackageMode = mode === "single_package";
+  const selectedHistoryRunIds = useMemo(
+    () => Object.entries(selectedRuns).filter(([, checked]) => checked).map(([runId]) => runId),
+    [selectedRuns],
+  );
   const selectedPackageName = selectedPackages[0]?.package_name || "策略包";
   const loadPackages = useCallback(async () => {
     setLoading(true);
     setError(null);
     const tasks = [
-      selectionCenterApi.selectablePackages(300).then((rows) => {
+      selectionCenterApi.selectablePackages(100, "summary").then((rows) => {
         setPackages(rows);
-        setWeights((prev) => Object.fromEntries(rows.map((item) => [item.package_id, prev[item.package_id] ?? 1])));
         const firstPackageId = rows[0]?.package_id;
-        setSelected((prev) => Object.fromEntries(rows.map((item) => [
-          item.package_id,
-          Boolean(prev[item.package_id] ?? item.package_id === firstPackageId),
-        ])));
+        setSelected((prev) => {
+          const keptPackageId = rows.find((item) => prev[item.package_id])?.package_id || firstPackageId;
+          return Object.fromEntries(rows.map((item) => [item.package_id, item.package_id === keptPackageId]));
+        });
       }),
       selectionCenterApi.listRunsPage({ page: runPage, pageSize: 20 }).then((runRows) => {
         setRuns(runRows.runs);
@@ -160,22 +160,8 @@ export default function PaperV2SelectionPage() {
     return () => { alive = false; };
   }, [pitMode, tradeDate]);
 
-  function updateMode(nextMode: SelectionMode) {
-    setMode(nextMode);
-    if (nextMode !== "single_package") return;
-    setSelected((prev) => {
-      const firstSelected = packages.find((item) => prev[item.package_id]);
-      const keep = firstSelected?.package_id || packages[0]?.package_id;
-      return Object.fromEntries(packages.map((item) => [item.package_id, item.package_id === keep]));
-    });
-  }
-
-  function updatePackageSelection(packageId: string, checked: boolean) {
-    if (singlePackageMode && checked) {
-      setSelected(Object.fromEntries(packages.map((item) => [item.package_id, item.package_id === packageId])));
-      return;
-    }
-    setSelected((prev) => ({ ...prev, [packageId]: checked }));
+  function updatePackageSelection(packageId: string) {
+    setSelected(Object.fromEntries(packages.map((item) => [item.package_id, item.package_id === packageId])));
   }
 
   function runtimeConfig(): JsonObject {
@@ -204,9 +190,6 @@ export default function PaperV2SelectionPage() {
       runtime_profile: runtimeProfile,
       industry_blacklist_trace: selectedIndustryTrace(industryBlacklist),
     };
-    if (mode === "weighted_fusion") {
-      config.package_weights = Object.fromEntries(selectedPackages.map((item) => [item.package_id, weights[item.package_id] ?? 1]));
-    }
     return config;
   }
 
@@ -233,31 +216,8 @@ export default function PaperV2SelectionPage() {
           : `本次选股将由后端官方交易日服务自动解析 ${tradeDate} 的上一交易日 PIT 截止日；如果交易日历缺失，本次 run 会失败并给出诊断，但不会禁用策略包。是否继续？`;
         if (!window.confirm(pitMessage)) return;
       }
-      if (singlePackageMode && packageIds.length !== 1) throw new Error("单策略包模式必须且只能选择一个 StrategyPackage。");
-      if (!singlePackageMode && packageIds.length < 2) throw new Error("多策略包聚合至少需要两个 StrategyPackage。");
+      if (packageIds.length !== 1) throw new Error("Selection Center 手工入口只允许选择一个 StrategyPackage；组合 alpha 请先用 from-multi-alpha-combine-run 生成已验证的多Alpha策略包。");
       const next = await selectionCenterApi.runSelection({ package_ids: packageIds, trade_date: tradeDate, data_source: dataSource, mode, runtime_config: runtimeConfig() });
-      await hydrateRun(next);
-      setRunPage(1);
-      const pageRows = await selectionCenterApi.listRunsPage({ page: 1, pageSize: 20 });
-      setRuns(pageRows.runs);
-      setRunPagination(pageRows.pagination);
-    } catch (exc) {
-      setError(exc);
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  async function aggregateSelectedRuns() {
-    setRunning(true);
-    setError(null);
-    setRun(null);
-    setExcluded(null);
-    setWatchlistResult(null);
-    try {
-      if (sourceRunIds.length < 2) throw new Error("请至少选择两个已完成的单策略包选股记录进行聚合。");
-      if (mode === "single_package") throw new Error("聚合已有选股记录必须选择交集、并集或加权融合模式。");
-      const next = await selectionCenterApi.aggregateRuns({ source_run_ids: sourceRunIds, mode, runtime_config: runtimeConfig() });
       await hydrateRun(next);
       setRunPage(1);
       const pageRows = await selectionCenterApi.listRunsPage({ page: 1, pageSize: 20 });
@@ -303,7 +263,8 @@ export default function PaperV2SelectionPage() {
     setTdxSyncResult(null);
     setError(null);
     try {
-      const catName = watchlistCategoryName || watchlistResult.category_name;
+      const catName = watchlistCategoryName || String((watchlistResult as JsonObject).category_name || "");
+      if (!catName) throw new Error("缺少自选股票池分类名称，无法同步通达信自选。");
       const result = await advisoryApi.tdxSyncFromCategory(catName);
       setTdxSyncResult({ display_name: result.display_name, count: result.count });
     } catch (exc) {
@@ -314,7 +275,7 @@ export default function PaperV2SelectionPage() {
   }
 
   async function deleteSelectedRuns() {
-    const ids = Object.entries(selectedRuns).filter(([, checked]) => checked).map(([id]) => id);
+    const ids = selectedHistoryRunIds;
     if (!ids.length) return;
     if (!window.confirm(`确认删除 ${ids.length} 条历史选股记录？已加入自选股票池的股票不受影响。`)) return;
     setRunning(true);
@@ -337,7 +298,6 @@ export default function PaperV2SelectionPage() {
   }
 
   const excludedFlat = Object.entries(excluded || {}).flatMap(([packageId, rows]) => rows.map((row) => ({ packageId, row: row as JsonObject })));
-  const aggregateEnabled = !running && mode !== "single_package" && sourceRunIds.length >= 2;
   const resultRows = run?.aggregate_results || [];
   const visibleResultRows = resultRows.slice(0, topK);
   const runPageSize = 20;
@@ -377,21 +337,20 @@ export default function PaperV2SelectionPage() {
             rows={packages}
             empty="No asset-eligible StrategyPackage. Create a QE package and pass asset checks first."
             columns={[
-              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="checkbox" checked={Boolean(selected[row.package_id])} onChange={(event) => updatePackageSelection(row.package_id, event.target.checked)} /> },
+              { key: "pick", header: "选择", render: (row) => <input data-testid={`selection-package-${row.package_id}`} type="radio" name="selection-package" checked={Boolean(selected[row.package_id])} onChange={() => updatePackageSelection(row.package_id)} /> },
               { key: "name", header: "策略包", render: (row) => <><strong>{row.package_name}</strong><br /><span className="pv2-muted pv2-mono">{shortHash(row.package_id, 7)}</span></> },
               { key: "status", header: "状态", render: (row) => <StatusBadge status={row.package_status} /> },
               { key: "health", header: "Runtime diagnostics", render: (row) => <><StatusBadge status={packageHealthStatus(row)} /><br /><span className="pv2-muted">{packageHealthHint(row)}</span></> },
               { key: "annual", header: "年化", render: (row) => formatPercent(row.metrics_summary?.annual_return) },
               { key: "ic", header: "IC", render: (row) => formatPercent(row.metrics_summary?.ic) },
               { key: "model", header: "模型", render: (row) => <StatusBadge status={String(row.model_state?.staleness_status || "unknown")} /> },
-              { key: "weight", header: "权重", render: (row) => <input className="pv2-input" data-testid={`selection-weight-${row.package_id}`} type="number" step="0.1" value={weights[row.package_id] ?? 1} disabled={mode !== "weighted_fusion"} onChange={(event) => setWeights((prev) => ({ ...prev, [row.package_id]: Number(event.target.value) }))} /> },
             ]}
           />
         </SectionCard>
 
         <SectionCard title="选股控制" eyebrow="StrategyPackage 权威推理" action={<button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新策略包</button>}>
           <div className="pv2-form-grid">
-            <div className="pv2-field"><label>模式</label><select className="pv2-select" data-testid="selection-mode" value={mode} onChange={(event) => updateMode(event.target.value as SelectionMode)}><option value="single_package">单策略包</option><option value="weighted_fusion">加权融合</option><option value="intersection">交集</option><option value="union">并集</option></select></div>
+            <div className="pv2-field"><label>模式</label><div className="pv2-chip" data-testid="selection-mode-fixed">单策略包</div></div>
             <div className="pv2-field"><label>交易日期</label><input className="pv2-input" data-testid="selection-trade-date" type="date" value={tradeDate} onChange={(event) => setTradeDate(event.target.value)} /></div>
             <div className="pv2-field"><label>时点口径</label><select className="pv2-select" data-testid="selection-pit-mode" value={pitMode} onChange={(event) => setPitMode(event.target.value)}><option value="PREVIOUS_TRADING_DAY_CLOSE">前一交易日收盘数据</option><option value="NONE">诊断：不强制截止日</option></select></div>
             <div className="pv2-field"><label>因子/选股数据源</label><select className="pv2-select" data-testid="selection-data-source" value={dataSource} onChange={(event) => setDataSource(event.target.value as SelectionDataSource)}><option value="DB_HISTORICAL">DB_HISTORICAL 权威历史/PIT选股数据</option></select></div>
@@ -406,6 +365,9 @@ export default function PaperV2SelectionPage() {
           ) : (
             <NoticePanel title="诊断模式" tone="warning">当前不强制前一交易日 cutoff，仅用于排查历史 artifact；正式选股和模拟盘应使用前一交易日收盘口径。</NoticePanel>
           )}
+          <NoticePanel title="组合 alpha 路径" tone="info">
+            Selection Center 手工入口只运行一个 StrategyPackage；多个 alpha 的组合请先使用 from-multi-alpha-combine-run 生成已验证、已冻结、可复现的多Alpha策略包，再在这里按单包选股。
+          </NoticePanel>
           <div className="pv2-card" style={{ marginTop: 14 }}>
             <div className="pv2-row-actions">
               <label className="pv2-chip"><input data-testid="selection-hmm-enabled" type="checkbox" checked={hmmEnabled} onChange={(event) => setHmmEnabled(event.target.checked)} /> 启用 HMM</label>
@@ -429,8 +391,6 @@ export default function PaperV2SelectionPage() {
           <button className="pv2-button-primary" data-testid="selection-run" disabled={running} onClick={runSelection} type="button">{running ? "运行中..." : "运行选股"}</button>
         </SectionCard>
       </div>
-
-      {mode !== "single_package" ? <NoticePanel title="多策略包边界" tone="warning">多策略包当前只用于统一选股研究；不能直接创建模拟盘执行组合。</NoticePanel> : null}
 
       <SectionCard title="选股结果" eyebrow={run ? selectionRunLabel(run) : "尚未运行"} action={<div className="pv2-row-actions"><a className="pv2-button-ghost" data-testid="selection-create-advisory" href={run ? `/paper-v2/advisory?selection_run_id=${encodeURIComponent(run.run_id)}&package_ids=${encodeURIComponent(run.package_ids.join(","))}` : "/paper-v2/advisory"}>创建荐股任务</a><button className="pv2-button" data-testid="selection-add-watchlist" onClick={addToWatchlist} disabled={!run || !resultRows.length} type="button">一键加入自选股票池</button>{tdxAvailable && <button className="pv2-button" data-testid="selection-tdx-sync" onClick={syncToTdx} disabled={!watchlistResult || tdxSyncing} type="button">📡 加入通达信自选</button>}</div>}>
         <div className="pv2-form-grid" style={{ marginBottom: 12 }}>
@@ -503,20 +463,19 @@ export default function PaperV2SelectionPage() {
         </SectionCard>
       </div>
 
-      <SectionCard title="历史选股记录与动态聚合" eyebrow="点击记录可显示结果">
+      <SectionCard title="历史选股记录" eyebrow="点击记录可显示结果；历史多包/aggregate run 只读保留">
         <div className="pv2-row-actions" style={{ marginBottom: 12 }}>
           <button className="pv2-button" onClick={loadPackages} disabled={loading} type="button">刷新记录</button>
           <button className="pv2-button" data-testid="selection-history-select-page" onClick={() => setCurrentPageRunSelection(true)} disabled={!visibleRunIds.length || allVisibleRunsSelected} type="button">全选本页</button>
           <button className="pv2-button-ghost" data-testid="selection-history-clear-page" onClick={() => setCurrentPageRunSelection(false)} disabled={!selectedVisibleRunCount} type="button">取消本页</button>
-          <button className="pv2-button-primary" data-testid="selection-aggregate-runs" onClick={aggregateSelectedRuns} disabled={!aggregateEnabled} type="button">聚合已选股票</button>
-          <button className="pv2-button-danger" data-testid="selection-delete-runs" onClick={deleteSelectedRuns} disabled={running || !sourceRunIds.length} type="button">删除选中 {sourceRunIds.length || ""}</button>
-          <span className="pv2-muted">本页已选 {selectedVisibleRunCount}/{visibleRunIds.length}；合计已选 {sourceRunIds.length} 条</span>
+          <button className="pv2-button-danger" data-testid="selection-delete-runs" onClick={deleteSelectedRuns} disabled={running || !selectedHistoryRunIds.length} type="button">删除选中 {selectedHistoryRunIds.length || ""}</button>
+          <span className="pv2-muted">本页已选 {selectedVisibleRunCount}/{visibleRunIds.length}；合计已选 {selectedHistoryRunIds.length} 条</span>
         </div>
         <PaperTable
           rows={visibleRuns}
           empty="暂无选股运行。"
           columns={[
-            { key: "pick", header: "聚合", render: (row) => <input data-testid={`selection-run-checkbox-${row.run_id}`} type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
+            { key: "pick", header: "批量", render: (row) => <input data-testid={`selection-run-checkbox-${row.run_id}`} type="checkbox" checked={Boolean(selectedRuns[row.run_id])} onChange={(event) => setSelectedRuns((prev) => ({ ...prev, [row.run_id]: event.target.checked }))} /> },
             { key: "run", header: "运行记录", render: (row) => <button className="pv2-link-button" onClick={() => showHistoryRun(row.run_id)} type="button">{runLabel(row)}</button> },
             { key: "status", header: "状态", render: (row) => <StatusBadge status={row.status || "unknown"} /> },
             { key: "source", header: "数据源", render: (row) => dataSourceLabel(row.data_source) },

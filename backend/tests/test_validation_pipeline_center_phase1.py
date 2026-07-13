@@ -127,7 +127,7 @@ class _FakeModuleRegistry:
         return [SimpleNamespace(module_id="validation.center"), SimpleNamespace(module_id="validation.runner")]
 
 
-def _service(repo_root: Path | None = None) -> ValidationPipelineCenterService:
+def _service(repo_root: Path | None = None, extra_bugs: list[dict] | None = None) -> ValidationPipelineCenterService:
     return ValidationPipelineCenterService(
         repo_root=repo_root,
         history_store=_FakeHistoryStore(),
@@ -152,7 +152,7 @@ def _service(repo_root: Path | None = None) -> ValidationPipelineCenterService:
                     "status": "detected",
                     "allowed_write_scope": [],
                 },
-            ],
+            ] + list(extra_bugs or []),
             findings=[
                 {
                     "finding_id": "legacy_1",
@@ -277,6 +277,203 @@ def test_issue_candidate_queue_reads_persisted_history_without_tmp(tmp_path: Pat
     assert item["source_type"] == "ci_candidate_history"
     assert item["run_count"] == 2
     assert item["source_path"] == "tests/aistock_validation/history/issue_candidates/nightly/ci-abc123.json"
+
+
+def test_issue_candidate_queue_reads_nightly_bug_candidate_artifacts(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "bug-candidates"
+    queue_dir.mkdir(parents=True)
+    candidate_payload = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-abc123",
+        "title": "Nightly root clean guard detected dirty path",
+        "source_plan_key": "nightly_root_clean_guard",
+        "module": "validation.runner",
+        "severity": "P1",
+        "status": "draft",
+        "confidence": 0.91,
+        "summary": "Nightly found a root pollution candidate.",
+        "llm_hypothesis": "DeepSeek suggested the root clean guard after graph freshness changed.",
+        "expected": "Nightly should keep the root checkout clean.",
+        "actual": "A generated file appeared under the root checkout.",
+        "verification_result": "workflow_discovery_root_clean_guard reproduced the dirty path.",
+        "reproduce": ["python -m nox -s nightly_root_clean_guard"],
+        "fingerprint": "nc-abc123",
+        "dedupe_fingerprint": "nc-abc123",
+        "evidence_refs": ["scripts/nightly_bug_candidate_queue.py"],
+        "suggested_validation": ["python -m nox -s nightly_bug_candidate_queue"],
+        "allowed_write_scope": ["scripts/nightly_bug_candidate_queue.py"],
+        "codegraph_refs": ["tmp/validation/code-intelligence/codegraph-freshness.json"],
+        "ua_refs": ["tmp/validation/code-intelligence/ua-summary-manifest.json"],
+        "github_issue_payload_ref": "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-abc123.json",
+        "promotion_mode": "deterministic_quality_gate",
+        "llm_enhancement_opt_in": False,
+        "active_discovery_reason": "root cleanliness regression",
+        "quality_gate": {
+            "workflow_gate": "ready",
+            "issue_payload_ready": True,
+            "auto_submit_allowed": False,
+            "reasons": [],
+        },
+    }
+    issue_payload = {
+        "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
+        "title": "[P1] Nightly root clean guard detected dirty path",
+        "candidate": {
+            "candidate_id": "NC-20260618-abc123",
+            "module": "validation.runner",
+            "severity": "P1",
+            "status": "draft",
+            "fingerprint": "nc-abc123",
+        },
+        "dedupe": {"fingerprint": "nc-abc123", "marker": "<!-- aistock-nightly-bug-candidate:nc-abc123 -->"},
+    }
+    (queue_dir / "candidate.json").write_text(json.dumps(candidate_payload), encoding="utf-8")
+    (queue_dir / "issue-payload.json").write_text(json.dumps(issue_payload), encoding="utf-8")
+
+    payload = _service(repo_root=tmp_path).issue_candidates(page=1, page_size=10)
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["candidate_id"] == "NC-20260618-abc123"
+    assert item["source_type"] == "nightly_bug_candidate"
+    assert item["fingerprint"] == "nc-abc123"
+    assert item["recommended_validation"] == ["python -m nox -s nightly_bug_candidate_queue"]
+    assert item["allowed_write_scope"] == ["scripts/nightly_bug_candidate_queue.py"]
+    assert item["issue_payload_ready"] is True
+    assert item["quality_gate_state"] == "ready"
+    assert item["why_not_submitted"] == "awaiting_operator_promotion / auto_submit_disabled"
+    assert item["codegraph_refs"] == ["tmp/validation/code-intelligence/codegraph-freshness.json"]
+    assert item["ua_refs"] == ["tmp/validation/code-intelligence/ua-summary-manifest.json"]
+    assert item["expected"] == "Nightly should keep the root checkout clean."
+    assert item["actual"] == "A generated file appeared under the root checkout."
+    assert item["llm_hypothesis"] == "DeepSeek suggested the root clean guard after graph freshness changed."
+    assert item["verification_result"] == "workflow_discovery_root_clean_guard reproduced the dirty path."
+    assert item["promotion_mode"] == "deterministic_quality_gate"
+    assert item["llm_enhancement_opt_in"] is False
+    assert item["active_discovery_reason"] == "root cleanliness regression"
+    assert len(item["source_paths"]) == 2
+
+
+def test_issue_candidate_queue_reads_code_intelligence_bug_candidate_artifacts(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "9001" / "bug-candidates"
+    candidate_dir = queue_dir / "candidates"
+    payload_dir = queue_dir / "issue-payloads"
+    candidate_dir.mkdir(parents=True)
+    payload_dir.mkdir(parents=True)
+    candidate = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-ready",
+        "source_plan_key": "nightly_validation_api_probe",
+        "title": "Validation API probe found stale plan catalog",
+        "module": "validation.center",
+        "severity": "P1",
+        "status": "draft",
+        "confidence": 0.94,
+        "summary": "DeepSeek hypothesis was confirmed by the validation probe.",
+        "expected": "Validation Center should load the requested plan catalog.",
+        "actual": "The API returned plan not found.",
+        "reproduce": ["python -m nox -s validation_center_backend"],
+        "fingerprint": "nc-ready",
+        "dedupe_fingerprint": "nc-ready",
+        "evidence_refs": ["tmp/validation/code-intelligence/9001/discovery-results.json"],
+        "suggested_validation": ["python -m nox -s validation_center_backend"],
+        "allowed_write_scope": ["backend/services/validation/pipeline_center.py"],
+        "codegraph_refs": ["tmp/validation/code-intelligence/9001/codegraph-freshness.json"],
+        "ua_refs": ["tmp/validation/code-intelligence/9001/ua-summary-manifest.json"],
+        "github_issue_payload_ref": "tmp/validation/code-intelligence/9001/bug-candidates/issue-payloads/NC-20260618-ready.json",
+        "quality_gate": {"workflow_gate": "ready", "issue_payload_ready": True, "auto_submit_allowed": False, "reasons": []},
+    }
+    issue_payload = {
+        "schema_version": "aistock_bug_candidate_github_issue_payload_v1",
+        "candidate": candidate,
+        "auto_submit_allowed": False,
+        "dedupe": {"fingerprint": "nc-ready", "marker": "<!-- aistock-nightly-bug-candidate:nc-ready -->"},
+    }
+    (candidate_dir / "NC-20260618-ready.json").write_text(json.dumps(candidate), encoding="utf-8")
+    (payload_dir / "NC-20260618-ready.json").write_text(json.dumps(issue_payload), encoding="utf-8")
+
+    service = _service(
+        repo_root=tmp_path,
+        extra_bugs=[
+            {
+                "bug_id": "BUG-999",
+                "title": "Validation API probe found stale plan catalog",
+                "module": "validation.center",
+                "severity": "P1",
+                "status": "verified",
+                "github_issue_number": 1250,
+                "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1250",
+            }
+        ],
+    )
+    payload = service.issue_candidates(page=1, page_size=10)
+    summary = service.issue_candidate_summary()
+
+    assert payload["total"] == 1
+    item = payload["items"][0]
+    assert item["source_type"] == "nightly_bug_candidate"
+    assert item["source_plan_key"] == "nightly_validation_api_probe"
+    assert item["confidence"] == 0.94
+    assert item["issue_payload_ready"] is True
+    assert item["github_issue_payload_ref"].endswith("issue-payloads/NC-20260618-ready.json")
+    assert item["why_not_submitted"] == "awaiting_operator_promotion / auto_submit_disabled"
+    assert item["codegraph_refs"] == ["tmp/validation/code-intelligence/9001/codegraph-freshness.json"]
+    assert item["ua_refs"] == ["tmp/validation/code-intelligence/9001/ua-summary-manifest.json"]
+    assert summary["nightly_candidate_count"] == 1
+    assert summary["issue_payload_ready_count"] == 1
+    assert summary["draft_count"] == 1
+    assert summary["no_submit_reason_counts"] == {"auto_submit_disabled": 1, "awaiting_operator_promotion": 1}
+    assert summary["outcome_metrics"]["promoted_issue_count"] == 0
+    assert summary["outcome_metrics"]["confirmed_issue_count"] == 0
+
+
+def test_issue_candidate_summary_reports_discovery_outcomes(tmp_path: Path) -> None:
+    queue_dir = tmp_path / "tmp" / "validation" / "code-intelligence" / "9002" / "bug-candidates"
+    queue_dir.mkdir(parents=True)
+    candidate = {
+        "schema_version": "aistock_bug_candidate_v1",
+        "candidate_id": "NC-20260618-promoted",
+        "source_plan_key": "workflow_discovery_root_clean_guard",
+        "title": "Root dirty file was promoted",
+        "module": "validation.runner",
+        "severity": "P1",
+        "status": "draft",
+        "confidence": 0.95,
+        "summary": "A real workflow issue was found and fixed.",
+        "expected": "Root stays clean.",
+        "actual": "Root became dirty.",
+        "reproduce": ["python -m nox -s workflow_discovery_root_clean_guard"],
+        "fingerprint": "nc-promoted",
+        "dedupe_fingerprint": "nc-promoted",
+        "evidence_refs": ["tmp/validation/code-intelligence/9002/root-clean.json"],
+        "suggested_validation": ["python -m nox -s validation_workflow_automation"],
+        "allowed_write_scope": ["scripts/aistock_issue_workflow.py"],
+        "github_issue_number": 1251,
+        "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1251",
+        "quality_gate": {"workflow_gate": "ready", "issue_payload_ready": True, "auto_submit_allowed": False, "reasons": []},
+    }
+    (queue_dir / "candidate.json").write_text(json.dumps(candidate), encoding="utf-8")
+
+    summary = _service(
+        repo_root=tmp_path,
+        extra_bugs=[
+            {
+                "bug_id": "BUG-998",
+                "title": "Root dirty file was promoted",
+                "module": "validation.runner",
+                "severity": "P1",
+                "status": "closed",
+                "github_issue_number": 1251,
+                "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1251",
+            }
+        ],
+    ).issue_candidate_summary()
+
+    assert summary["outcome_metrics"]["candidate_count"] == 1
+    assert summary["outcome_metrics"]["promoted_issue_count"] == 1
+    assert summary["outcome_metrics"]["confirmed_issue_count"] == 1
+    assert summary["outcome_metrics"]["confirmation_rate"] == 1.0
+    assert "confirmed_nightly_issue" in summary["reason_codes"]
 
 
 def test_phase1_cards_include_all_top_navigation_domains() -> None:

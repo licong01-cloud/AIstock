@@ -19,7 +19,6 @@ TOOL_NAMES = (
     "assistant_build_context_pack",
     "assistant_list_mcp_tools",
     "assistant_preflight_mcp_tool",
-    "assistant_create_issue_candidate",
     "assistant_list_approvals",
     "assistant_create_temp_memory",
 )
@@ -117,12 +116,6 @@ def register(registry: "ModuleRegistry") -> None:
         """Run a backend preflight for a registered MCP tool."""
 
         return client.post("/mcp/preflight", payload)
-
-    @registry.mcp.tool(name="assistant_create_issue_candidate")
-    def assistant_create_issue_candidate(payload: dict[str, Any]) -> Any:
-        """Create a candidate issue only; formal GitHub issue creation is approval-gated."""
-
-        return client.post("/issue-candidates", payload)
 
     @registry.mcp.tool(name="assistant_list_approvals")
     def assistant_list_approvals(

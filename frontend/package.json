@@ -12,6 +12,7 @@
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
     "@assistant-ui/react": "^0.14.7",
+    "@babel/runtime": "^7.29.7",
     "@monaco-editor/react": "^4.6.0",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.8",
@@ -19,6 +20,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@xyflow/react": "^12.11.1",
     "antd": "^6.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

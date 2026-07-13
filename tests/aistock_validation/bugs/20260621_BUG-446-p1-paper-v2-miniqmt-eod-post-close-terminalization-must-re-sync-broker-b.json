@@ -1,0 +1,111 @@
+{
+  "actual": "Order open at submit but filled intraday is judged FAILED_TERMINAL at close because open_order_count>0 from submit-time evidence.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260621_BUG-446-p1-paper-v2-miniqmt-eod-post-close-terminalization-must-re-sync-broker-b.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-446-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-446",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T10:46:04.876184Z",
+  "description": "backend/services/simulation_runtime/scheduler.py::_post_close_terminalize_miniqmt_run (~2160) decides the end-of-day terminal status of a MiniQMT run using ONLY the open_order_evidence/submit_result_gate written into run.run_payload_json at submit-time reconcile, and _miniqmt_post_close_terminal_status (~2213) keys on that stale open_order_count. The post-close path never calls _sync_miniqmt_snapshot or a fresh broker open-order/trade query before deciding. Consequence: an order open at submit but FILLED later in the trading day is still terminalized FAILED_TERMINAL because stale evidence shows open_order_count>0, contradicting actual broker fills (residual root-cause class of BUG-369/396/414). Design miniqmt_unified_vnpy_execution_runtime_design_20260608.md (4.1 durable event loop / OMS ledger as source of truth; 6.2 reconcile-success-must-not-overwrite-failure) requires terminal decisions to use fresh broker/ledger facts, not submit-time snapshots.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-d6bea42626c1",
+      "timestamp": "2026-06-21T10:46:04.876180Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/BUG-446-analysis.md"
+  ],
+  "expected": "Before post-close terminalization the run MUST re-reconcile from fresh broker facts (_sync_miniqmt_snapshot + recomputed open-order evidence, or reuse _reconcile_after_submit); terminal status reflects end-of-day broker state; filled orders are never marked FAILED_TERMINAL; include reconcile audit (as_of/source); no silent fallback to stale payload.",
+  "first_seen_at": "2026-06-21T10:46:04.876184Z",
+  "fix_branch": "bug/BUG-446-p1-paper-v2-miniqmt-eod-post-close-terminalizati-20260622",
+  "fix_commit": "eced67a75fa473b64737e51f76db3cf1fd972154",
+  "fixed_at": "2026-06-21T16:55:05.425830Z",
+  "github_issue_number": 1384,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1384",
+  "last_seen_at": "2026-06-21T10:46:04.876184Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1413",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read backend/services/simulation_runtime/scheduler.py::_post_close_terminalize_miniqmt_run(~2160) and _miniqmt_post_close_terminal_status(~2213); confirm no _sync_miniqmt_snapshot or broker open-order query before the terminal decision.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P1][Paper v2][MiniQMT] EOD post-close terminalization must re-sync broker before deciding terminal status",
+  "trigger_condition": {
+    "fingerprint": "d6bea42626c1e2571d91f7c6",
+    "source_event_id": "FE-20260621-d6bea42626c1"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0",
+      "paper_v2_l3"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": "/services/simulation_runtime/scheduler.py::_post_close_terminalize_miniqmt_run",
+    "ui_routes": [
+      "/services/simulation_runtime/scheduler.py::_post_close_terminalize_miniqmt_run"
+    ],
+    "visual_acceptance_required": false
+  },
+  "validation_evidence": [
+    "rtk python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 66 passed",
+    "rtk python -m ruff check backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed; rtk python -m json.tool BUG JSON -> passed; rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix"
+}

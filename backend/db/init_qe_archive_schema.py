@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - direct script execution convenience.
     from backend.db.pg_pool import get_conn
 
 
-QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v2_20260516"
+QE_ARCHIVE_SCHEMA_VERSION = "qe_archive_v4_20260713"
 
 
 BASE_DDL: list[str] = [
@@ -67,7 +67,7 @@ BASE_DDL: list[str] = [
         source_updated_at TIMESTAMPTZ,
         CONSTRAINT uq_qear_run_logical_attempt UNIQUE (logical_experiment_id, attempt_no),
         CONSTRAINT ck_qear_run_status CHECK (
-            status IN ('pending','running','completed','failed','interrupted','partial_archived','archived')
+            status IN ('pending','running','completed','failed','interrupted','partial_archived','archived','succeeded','partial_failed')
         )
     )
     """,
@@ -86,6 +86,128 @@ BASE_DDL: list[str] = [
         ON qe_archive.run(model_family, model_type, label_horizon, freq, completed_at DESC)
     """,
     "CREATE INDEX IF NOT EXISTS idx_qear_run_factor_hash ON qe_archive.run(factor_set_hash, completed_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_run_type_status ON qe_archive.run(run_type, source_system, status)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_run (
+        run_id TEXT PRIMARY KEY REFERENCES qe_archive.run(run_id) ON DELETE CASCADE,
+        roster_hash TEXT NOT NULL,
+        oos_start DATE NOT NULL,
+        oos_end DATE NOT NULL,
+        normalize_method TEXT NOT NULL,
+        walk_forward_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        baseline_leg_id TEXT,
+        leg_count INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        logical_status TEXT,
+        reason_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source_created_at TIMESTAMPTZ,
+        archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT ck_qear_macb_run_window CHECK (oos_end >= oos_start),
+        CONSTRAINT ck_qear_macb_run_status CHECK (status IN ('succeeded','partial_failed','failed')),
+        CONSTRAINT ck_qear_macb_run_logical_status CHECK (logical_status IS NULL OR logical_status IN ('succeeded','partial_failed','failed')),
+        CONSTRAINT ck_qear_macb_run_leg_count CHECK (leg_count >= 0),
+        CONSTRAINT ck_qear_macb_run_walk_forward_json CHECK (jsonb_typeof(walk_forward_json) = 'object'),
+        CONSTRAINT ck_qear_macb_run_reason_json CHECK (jsonb_typeof(reason_json) = 'object')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_run_roster ON qe_archive.multi_alpha_run(roster_hash, oos_start, oos_end)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_run_status ON qe_archive.multi_alpha_run(status, archived_at DESC)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg (
+        run_id TEXT NOT NULL REFERENCES qe_archive.multi_alpha_run(run_id) ON DELETE CASCADE,
+        leg_id TEXT NOT NULL,
+        leg_order INTEGER NOT NULL,
+        seed_run_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        factor_set_hash TEXT,
+        factor_names JSONB NOT NULL DEFAULT '[]'::jsonb,
+        factor_count INTEGER NOT NULL DEFAULT 0,
+        model_type TEXT,
+        model_family TEXT,
+        freq TEXT,
+        label_horizon INTEGER,
+        seed_count INTEGER NOT NULL DEFAULT 0,
+        source_run_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+        provenance_complete BOOLEAN NOT NULL DEFAULT FALSE,
+        PRIMARY KEY (run_id, leg_id),
+        CONSTRAINT ck_qear_macb_leg_order CHECK (leg_order >= 0),
+        CONSTRAINT ck_qear_macb_leg_seed_run_ids CHECK (jsonb_typeof(seed_run_ids) = 'array'),
+        CONSTRAINT ck_qear_macb_leg_factor_names CHECK (jsonb_typeof(factor_names) = 'array'),
+        CONSTRAINT ck_qear_macb_leg_factor_count CHECK (factor_count >= 0),
+        CONSTRAINT ck_qear_macb_leg_seed_count CHECK (seed_count >= 0),
+        CONSTRAINT ck_qear_macb_leg_source_run_meta CHECK (jsonb_typeof(source_run_meta) = 'object')
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_leg_factor_hash ON qe_archive.multi_alpha_leg(factor_set_hash)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_leg_source (
+        run_id TEXT NOT NULL,
+        leg_id TEXT NOT NULL,
+        source_seq INTEGER NOT NULL,
+        seed_ref TEXT NOT NULL,
+        seed_ref_kind TEXT NOT NULL,
+        source_experiment_id TEXT,
+        source_task_id TEXT,
+        source_loop_id TEXT,
+        source_loop_index INTEGER,
+        source_run_type TEXT,
+        source_model_type TEXT,
+        source_factor_set_hash TEXT,
+        resolved BOOLEAN NOT NULL DEFAULT FALSE,
+        resolve_method TEXT NOT NULL,
+        resolve_note TEXT,
+        PRIMARY KEY (run_id, leg_id, source_seq),
+        FOREIGN KEY (run_id, leg_id) REFERENCES qe_archive.multi_alpha_leg(run_id, leg_id) ON DELETE CASCADE,
+        CONSTRAINT ck_qear_macb_leg_source_seq CHECK (source_seq >= 1),
+        CONSTRAINT ck_qear_macb_leg_source_kind CHECK (seed_ref_kind IN ('archive_run_id','evolution_loop_id','unknown')),
+        CONSTRAINT ck_qear_macb_leg_source_resolved CHECK (
+            (resolved = TRUE AND source_experiment_id IS NOT NULL AND source_loop_id IS NOT NULL AND source_loop_index IS NOT NULL AND source_run_type IS NOT NULL)
+            OR (resolved = FALSE AND resolve_note IS NOT NULL)
+        )
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_leg_source_exp_loop ON qe_archive.multi_alpha_leg_source(source_experiment_id, source_loop_id, source_loop_index)",
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_leg_source_seed ON qe_archive.multi_alpha_leg_source(seed_ref)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_scheme (
+        run_id TEXT NOT NULL REFERENCES qe_archive.multi_alpha_run(run_id) ON DELETE CASCADE,
+        weighting_scheme TEXT NOT NULL,
+        scheme_algorithm TEXT NOT NULL,
+        weights_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+        per_window_weights_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        cagr DOUBLE PRECISION,
+        max_drawdown DOUBLE PRECISION,
+        sharpe DOUBLE PRECISION,
+        calmar DOUBLE PRECISION,
+        topk_return_20 DOUBLE PRECISION,
+        topk_hit_rate_20 DOUBLE PRECISION,
+        turnover DOUBLE PRECISION,
+        vs_baseline_sharpe_delta DOUBLE PRECISION,
+        vs_baseline_calmar_delta DOUBLE PRECISION,
+        pred_persisted BOOLEAN NOT NULL DEFAULT FALSE,
+        skipped BOOLEAN NOT NULL DEFAULT FALSE,
+        skipped_reason TEXT,
+        is_best BOOLEAN NOT NULL DEFAULT FALSE,
+        PRIMARY KEY (run_id, weighting_scheme),
+        CONSTRAINT ck_qear_macb_scheme_weights_json CHECK (jsonb_typeof(weights_json) = 'object'),
+        CONSTRAINT ck_qear_macb_scheme_window_weights_json CHECK (jsonb_typeof(per_window_weights_json) = 'array'),
+        CONSTRAINT ck_qear_macb_scheme_skip_reason CHECK ((skipped = FALSE) OR skipped_reason IS NOT NULL)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_scheme_best ON qe_archive.multi_alpha_scheme(is_best, sharpe DESC NULLS LAST)",
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.multi_alpha_loo (
+        run_id TEXT NOT NULL,
+        weighting_scheme TEXT NOT NULL,
+        dropped_leg_id TEXT NOT NULL,
+        marginal_cagr DOUBLE PRECISION,
+        marginal_sharpe DOUBLE PRECISION,
+        marginal_calmar DOUBLE PRECISION,
+        PRIMARY KEY (run_id, weighting_scheme, dropped_leg_id),
+        FOREIGN KEY (run_id, weighting_scheme) REFERENCES qe_archive.multi_alpha_scheme(run_id, weighting_scheme) ON DELETE CASCADE,
+        FOREIGN KEY (run_id, dropped_leg_id) REFERENCES qe_archive.multi_alpha_leg(run_id, leg_id) ON DELETE CASCADE
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_qear_macb_loo_leg ON qe_archive.multi_alpha_loo(run_id, dropped_leg_id)",
     """
     CREATE TABLE IF NOT EXISTS qe_archive.run_source (
         id BIGSERIAL PRIMARY KEY,
@@ -470,6 +592,94 @@ BASE_DDL: list[str] = [
         ON qe_archive.run_model_training_metric(run_id, metric_key, split_name, epoch, step)
     """,
     """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_resource_session (
+        session_id TEXT PRIMARY KEY,
+        source_run_key TEXT NOT NULL,
+        attempt_no INTEGER NOT NULL,
+        task_id TEXT NOT NULL,
+        loop_id TEXT NOT NULL,
+        loop_index INTEGER NOT NULL,
+        node_id TEXT NOT NULL,
+        archive_run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE SET NULL,
+    token_sha256 TEXT NOT NULL,
+    phase_pipeline_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive',
+    current_phase TEXT NOT NULL DEFAULT 'created',
+        last_sequence_no INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'reserved',
+        gpu_phase_released_at TIMESTAMPTZ,
+        terminal_reason_code TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ,
+        CONSTRAINT uq_qear_resource_session_attempt UNIQUE (source_run_key, attempt_no),
+    CONSTRAINT ck_qear_resource_session_status CHECK (
+        status IN ('reserved', 'running', 'completed', 'failed', 'cancelled')
+    ),
+    CONSTRAINT ck_qear_resource_session_gpu_policy CHECK (
+        gpu_training_policy IN ('exclusive', 'parallel')
+    )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_session_task_loop
+        ON qe_archive.run_resource_session(task_id, loop_index, attempt_no DESC)
+    """,
+    """
+CREATE INDEX IF NOT EXISTS idx_qear_resource_session_node_phase
+ON qe_archive.run_resource_session(node_id, gpu_training_policy, status, current_phase)
+        WHERE phase_pipeline_enabled = TRUE
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_session_archive_run
+        ON qe_archive.run_resource_session(archive_run_id)
+        WHERE archive_run_id IS NOT NULL
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS qe_archive.run_resource_phase (
+        id BIGSERIAL PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES qe_archive.run_resource_session(session_id) ON DELETE CASCADE,
+        source_run_key TEXT NOT NULL,
+        sequence_no INTEGER NOT NULL,
+        phase TEXT NOT NULL,
+        phase_status TEXT NOT NULL,
+        started_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ,
+        duration_seconds DOUBLE PRECISION,
+        sample_count INTEGER,
+        process_rss_peak_bytes BIGINT,
+        process_vm_hwm_peak_bytes BIGINT,
+        gpu_device_index INTEGER,
+        gpu_name TEXT,
+        gpu_memory_used_peak_bytes BIGINT,
+        gpu_process_memory_peak_bytes BIGINT,
+        gpu_utilization_avg_pct DOUBLE PRECISION,
+        gpu_utilization_peak_pct DOUBLE PRECISION,
+        cuda_allocated_peak_bytes BIGINT,
+        cuda_reserved_peak_bytes BIGINT,
+        cuda_allocated_end_bytes BIGINT,
+        cuda_reserved_end_bytes BIGINT,
+        resident_requested BOOLEAN,
+        resident_active BOOLEAN,
+        resident_fallback BOOLEAN,
+        fallback_reason_code TEXT,
+        release_check_passed BOOLEAN,
+        reason_code TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+        event_sha256 TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_qear_resource_phase_sequence UNIQUE (session_id, sequence_no)
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_phase_source
+        ON qe_archive.run_resource_phase(source_run_key, sequence_no)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_qear_resource_phase_reason
+        ON qe_archive.run_resource_phase(reason_code, created_at DESC)
+    """,
+    """
     CREATE TABLE IF NOT EXISTS qe_archive.run_position (
         id BIGSERIAL PRIMARY KEY,
         run_id TEXT NOT NULL REFERENCES qe_archive.run(run_id) ON DELETE CASCADE,
@@ -844,6 +1054,11 @@ TABLE_COMMENTS: dict[str, str] = {
     "qe_archive.schema_version": "Applied QE archive schema versions and bootstrap metadata.",
     "qe_archive.run": "Canonical archive row for one QE experiment attempt or evolution loop.",
     "qe_archive.run_source": "External source identifiers and recorder links for an archived QE run.",
+    "qe_archive.multi_alpha_run": "Archived multi-alpha combine-backtest run header and roster-level configuration snapshot.",
+    "qe_archive.multi_alpha_leg": "Materialized per-leg snapshot for multi-alpha combine-backtest provenance and replay.",
+    "qe_archive.multi_alpha_leg_source": "Per-seed precise provenance from a multi-alpha leg to QE experiment, loop, and run coordinates.",
+    "qe_archive.multi_alpha_scheme": "Per-weighting-scheme weights, rolling weights, metrics, and baseline deltas for a multi-alpha run.",
+    "qe_archive.multi_alpha_loo": "Leave-one-out marginal contribution metrics for multi-alpha weighting schemes.",
     "qe_archive.run_config": "Reproducibility critical canonical and raw configuration for a QE run.",
     "qe_archive.run_reproducibility_manifest": "Full reproducibility manifest, hashes, environment versions, artifacts, and gaps.",
     "qe_archive.run_data_context": "Data universe, date windows, benchmark, PIT, cost, and tradability context for a run.",
@@ -1209,6 +1424,49 @@ COMMON_COLUMN_COMMENTS: dict[str, str] = {
     "failed_count": "Number of source candidates that failed archive processing.",
     "last_cursor": "Resume cursor or processing checkpoint for a backfill run.",
     "item_id": "Backfill item identifier for a source candidate.",
+    "roster_hash": "Deterministic hash of the multi-alpha roster used to build the combine-backtest run.",
+    "oos_start": "First out-of-sample trade date covered by the combine-backtest run.",
+    "oos_end": "Last out-of-sample trade date covered by the combine-backtest run.",
+    "normalize_method": "Score normalization method used before multi-alpha combination.",
+    "walk_forward_json": "Walk-forward weighting configuration such as window, min_periods, and expanding mode.",
+    "baseline_leg_id": "Optional leg id used as the baseline for scheme delta metrics.",
+    "leg_count": "Number of legs in the archived multi-alpha roster.",
+    "logical_status": "Business logical status preserved separately from legacy storage mappings.",
+    "reason_json": "Terminal reason and failure details copied from the source combine-backtest run.",
+    "leg_id": "Stable leg identifier within one multi-alpha combine-backtest roster.",
+    "leg_order": "Deterministic zero-based order of the leg within the source roster.",
+    "seed_run_ids": "Original seed run identifiers used to build this leg.",
+    "factor_names": "Ordered factor names materialized for this leg when available.",
+    "seed_count": "Number of seed run identifiers listed for this leg.",
+    "source_run_meta": "JSON snapshot of resolved seed metadata, unresolved reasons, and leg metadata.",
+    "provenance_complete": "Whether every seed source was resolved and required leg metadata was materialized.",
+    "source_seq": "One-based source sequence within a leg's seed list.",
+    "seed_ref": "Original seed reference string from the source roster.",
+    "seed_ref_kind": "Parsed seed reference kind: archive_run_id, evolution_loop_id, or unknown.",
+    "source_experiment_id": "Resolved QE experiment id for this seed source.",
+    "source_task_id": "Resolved QE evolution task id for this seed source when applicable.",
+    "source_loop_id": "Resolved QE loop id for this seed source when applicable.",
+    "source_loop_index": "Resolved QE loop index for this seed source when applicable.",
+    "source_run_type": "Resolved QE archive run type, such as evolution_loop or single_experiment.",
+    "source_model_type": "Resolved model type copied from the source QE run.",
+    "source_factor_set_hash": "Resolved factor set hash copied from the source QE run.",
+    "resolved": "Whether the seed reference was resolved to precise QE coordinates.",
+    "resolve_method": "Resolution method used for the seed reference.",
+    "resolve_note": "Resolution note or explicit unresolved reason.",
+    "weighting_scheme": "Source weighting scheme identifier for multi-alpha combination.",
+    "scheme_algorithm": "Human-meaningful algorithm family for the weighting scheme.",
+    "weights_json": "Static leg weight payload for the weighting scheme.",
+    "per_window_weights_json": "Rolling or per-window weight trajectory payload for the weighting scheme.",
+    "vs_baseline_sharpe_delta": "Sharpe difference versus the configured baseline leg.",
+    "vs_baseline_calmar_delta": "Calmar difference versus the configured baseline leg.",
+    "pred_persisted": "Whether the combined prediction artifact was persisted by the source run.",
+    "skipped": "Whether this scheme was explicitly skipped or failed before metrics were available.",
+    "skipped_reason": "Explicit reason for a skipped multi-alpha scheme.",
+    "is_best": "Whether this scheme is the best non-skipped scheme selected for the run.",
+    "dropped_leg_id": "Leg id dropped for leave-one-out marginal contribution measurement.",
+    "marginal_cagr": "CAGR marginal contribution versus the full scheme.",
+    "marginal_sharpe": "Sharpe marginal contribution versus the full scheme.",
+    "marginal_calmar": "Calmar marginal contribution versus the full scheme.",
     "operator": "Operator or service identity for a bootstrap marker.",
 }
 

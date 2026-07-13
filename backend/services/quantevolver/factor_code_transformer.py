@@ -25,6 +25,7 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 
 logger = logging.getLogger("aistock.factor_code_transformer")
+NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT = "non_official_live_transformation"
 
 
 @dataclass
@@ -43,7 +44,7 @@ import os
 import numpy as np
 import pandas as pd
 
-# ── 实时数据加载器（由AIstock因子改造系统注入）──
+# Non-official live/simulation loader injected by AIstock factor transformation.
 try:
     from backend.data_service.realtime_factor_data_loader import RealtimeFactorDataLoader as _RFDLoader
     _REALTIME_LOADER = _RFDLoader()
@@ -69,7 +70,15 @@ _STATIC_FACTORS_LOADER = _StaticFactorsLoader()
 
 
 class FactorCodeTransformer:
-    """因子代码规则转换器"""
+    """Non-official live/simulation factor-code transformer."""
+
+    def __init__(self, usage_context: str):
+        if usage_context != NON_OFFICIAL_LIVE_TRANSFORMATION_CONTEXT:
+            raise ValueError(
+                "FactorCodeTransformer is live-only and cannot be used by official "
+                "independent metrics, correlation, or QE backtest cache paths."
+            )
+        self.usage_context = usage_context
 
     QLIB_FIELDS = [
         "open", "close", "high", "low", "volume", "amount", "factor",
@@ -99,7 +108,7 @@ class FactorCodeTransformer:
             warnings.extend(sw)
             if "_REALTIME_LOADER" not in code and "RealtimeFactorDataLoader" not in code:
                 code = LOADER_IMPORT_HEADER + "\n" + code
-                changes.append("注入 RealtimeFactorDataLoader 导入头")
+                changes.append("注入非官方 live-only RealtimeFactorDataLoader 导入头")
             else:
                 changes.append("数据加载器头部已存在，跳过注入")
             code = self._add_transformation_marker(code, factor_name)
@@ -194,7 +203,6 @@ class FactorCodeTransformer:
 
         changes = []
         lines = code.split('\n')
-        func_start_line = match.start()
         func_indent = len(match.group(0)) - len(match.group(0).lstrip())
         # 如果匹配行有缩进（嵌套函数），取其缩进级别
         match_line = code[:match.start()].count('\n')  # 行号
@@ -414,7 +422,7 @@ class FactorCodeTransformer:
     # ── 数据加载替换 ──────────────────────────────────────────────────
 
     def _replace_data_loads(self, code: str, factor_name: str):
-        """替换各种数据文件读取为实时加载器调用
+        """替换各种数据文件读取为非官方 live/simulation 加载器调用
 
         支持的文件类型：
         - daily_pv.h5 → _REALTIME_LOADER（OHLCV 行情数据）
@@ -441,12 +449,12 @@ class FactorCodeTransformer:
             changes.append(f"替换 pd.read_hdf(.*daily_pv.h5) -> _REALTIME_LOADER.load() (变量: {var})")
             lines = [
                 f"{var} = _REALTIME_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f'    fields=["open", "close", "high", "low", "volume", "amount", "factor"],',
-                f'    adjust="qfq",',
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                '    fields=["open", "close", "high", "low", "volume", "amount", "factor"],',
+                '    adjust="qfq",',
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -463,12 +471,12 @@ class FactorCodeTransformer:
             var = m.group(2)
             changes.append(f"替换 pd.read_hdf(.*daily_basic.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] daily_basic.h5 -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] daily_basic.h5 -> _STATIC_FACTORS_LOADER.load()",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -485,12 +493,12 @@ class FactorCodeTransformer:
             var = m.group(2)
             changes.append(f"替换 pd.read_hdf(.*sector_data.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] sector_data.h5 -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] sector_data.h5 -> _STATIC_FACTORS_LOADER.load()",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -507,12 +515,12 @@ class FactorCodeTransformer:
             var = m.group(2)
             changes.append(f"替换 pd.read_hdf(.*margin_detail.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] margin_detail.h5 -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] margin_detail.h5 -> _STATIC_FACTORS_LOADER.load()",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -529,12 +537,12 @@ class FactorCodeTransformer:
             var = m.group(2)
             changes.append(f"替换 pd.read_hdf(.*moneyflow.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] moneyflow.h5 -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] moneyflow.h5 -> _STATIC_FACTORS_LOADER.load()",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -551,12 +559,12 @@ class FactorCodeTransformer:
             var = m.group(2)
             changes.append(f"替换 pd.read_hdf(.*cyq_perf.h5) -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] cyq_perf.h5 -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] cyq_perf.h5 -> _STATIC_FACTORS_LOADER.load()",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
             return "\n".join(indent + ln for ln in lines)
@@ -576,17 +584,17 @@ class FactorCodeTransformer:
             cols_expr = m.group(3) if m.group(3) else "[]"
             changes.append(f"替换 pd.read_parquet('static_factors.parquet') -> _STATIC_FACTORS_LOADER.load() (变量: {var})")
             lines = [
-                f"# [TRANSFORMED] static_factors.parquet -> _STATIC_FACTORS_LOADER.load()",
+                "# [TRANSFORMED] static_factors.parquet -> _STATIC_FACTORS_LOADER.load()",
                 f"_static_cols = {cols_expr}",
                 f"{var} = _STATIC_FACTORS_LOADER.load(",
-                f"    instruments=instruments,",
-                f"    start_date=start_date,",
-                f"    end_date=end_date,",
-                f"    columns=_static_cols if _static_cols else None,",
-                f")",
+                "    instruments=instruments,",
+                "    start_date=start_date,",
+                "    end_date=end_date,",
+                "    columns=_static_cols if _static_cols else None,",
+                ")",
                 f"{var} = {var}.sort_index()",
             ]
-            return "\n".join(indent + l for l in lines)
+            return "\n".join(indent + line for line in lines)
         new_code = static_parquet_re.sub(_replace_static_parquet, new_code)
 
         # ── 替换 result_df.to_hdf('result.h5', ...) 或表达式路径 → 注释掉 ──
@@ -621,12 +629,12 @@ class FactorCodeTransformer:
         # 替换 $ 前缀列名：改造后数据接口返回的列名无 $ 前缀
         # 覆盖所有字符串上下文：df['$close']、fields=['$close']、"$close" 等
         dollar_fields = ["open", "close", "high", "low", "volume", "amount", "factor", "vwap"]
-        for field in dollar_fields:
+        for dollar_field in dollar_fields:
             # 匹配引号内的 $field（单引号或双引号）
-            pattern = re.compile(rf"""(?<=['"])\${field}(?=['",\]\)])""")
+            pattern = re.compile(rf"""(?<=['"])\${dollar_field}(?=['",\]\)])""")
             if pattern.search(new_code):
-                new_code = pattern.sub(field, new_code)
-                changes.append(f"替换列名 ${field} -> {field}")
+                new_code = pattern.sub(dollar_field, new_code)
+                changes.append(f"替换列名 ${dollar_field} -> {dollar_field}")
 
         # ── 清理 DATA_DIR / Path(__file__) 残留引用 ──
         # 移除模块级 DATA_DIR = Path(__file__).resolve().parent.parent 定义
@@ -740,11 +748,11 @@ class FactorCodeTransformer:
 
         # 6. 检测 $ 前缀残留（LLM 可能重新引入）
         dollar_fields = ["open", "close", "high", "low", "volume", "amount", "factor"]
-        for field in dollar_fields:
-            pat = re.compile(rf"""(?<=['"])\${field}(?=['",\]\)])""")
+        for dollar_field in dollar_fields:
+            pat = re.compile(rf"""(?<=['"])\${dollar_field}(?=['",\]\)])""")
             if pat.search(new_code):
-                new_code = pat.sub(field, new_code)
-                removals.append(f"清理 LLM 重新引入的 ${field} 前缀")
+                new_code = pat.sub(dollar_field, new_code)
+                removals.append(f"清理 LLM 重新引入的 ${dollar_field} 前缀")
 
         # 7. 清理多余空行（连续超过2个空行合并为2个）
         new_code = re.sub(r"\n{4,}", "\n\n\n", new_code)
@@ -980,7 +988,7 @@ class FactorCodeTransformer:
             f"# Factor: {factor_name}\n"
             f"# Transformed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"# Original: RDAgent generated code (QLib H5 dependency)\n"
-            f"# Transformed: Direct database access via RealtimeFactorDataLoader\n"
+            f"# Transformed: Non-official live/simulation access via RealtimeFactorDataLoader\n"
             f"# ============================================================\n"
         )
         return marker + code

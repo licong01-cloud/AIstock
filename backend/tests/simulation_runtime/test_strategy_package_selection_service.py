@@ -6,6 +6,11 @@ from datetime import date
 import pytest
 
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
+from backend.services.selection_center.prospective_evidence import (
+    EvidenceCaptureMode,
+    ProspectiveSelectionContext,
+    REASON_HISTORICAL_RESEARCH_ONLY,
+)
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.runtime_profile import runtime_profile_config_sha256, validate_runtime_profile_binding
 from backend.services.selection_center.service import SelectionCenterService
@@ -353,6 +358,29 @@ def test_strategy_package_selection_service_rejects_trading_and_broker_fields(ba
             data_source="DB_HISTORICAL",
             runtime_config=bad_runtime_config,
         )
+
+
+def test_prospective_advisory_selection_rejects_non_historical_data_before_inference() -> None:
+    package_repo, _artifact_repo, manifest, runtime = _package_with_artifact(
+        [{"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0}]
+    )
+    runtime_repo = InMemorySimulationRuntimeRepository()
+    context = ProspectiveSelectionContext(
+        capture_mode=EvidenceCaptureMode.PROSPECTIVE,
+        execution_origin="ADVISORY_RUN",
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError) as excinfo:
+        _selection_service(package_repo, runtime, runtime_repo).run_selection(
+            package_ids=[manifest.package_id],
+            mode=SelectionMode.SINGLE_PACKAGE,
+            trade_date=date(2024, 1, 2),
+            data_source="MINIQMT_REALTIME",
+            runtime_config=_runtime_config(),
+            prospective_context=context,
+        )
+
+    assert excinfo.value.context["reason_code"] == REASON_HISTORICAL_RESEARCH_ONLY
 
 
 def test_selection_center_uses_shared_selection_evidence_service() -> None:

@@ -10,21 +10,24 @@ QuantEvolver Phase 2: ConfigComposer（配置组装器）
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
-import hashlib
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
 from ...db.pg_pool import get_conn
+from ...data_service.moneyflow_contract import MONEYFLOW_UNIT_CONTRACT_VERSION
 from ..strategy_package.workspace_policy import (
     ensure_aistock_artifact_path,
     ensure_not_forbidden_worker_workspace_path,
 )
+from .callback_urls import build_aistock_callback_base_url
 from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
@@ -33,6 +36,228 @@ logger = logging.getLogger("aistock.quantevolver.config_composer")
 
 
 AISTOCK_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_GENERAL_PTNN_MODEL_CLASSES = {"GeneralPTNN", "AIStockGeneralPTNNLTR"}
+_GATS_MODEL_CLASSES = {"GATs", "EfficientGATs"}
+_CUDA_EXPANDABLE_SEGMENTS_ENV = "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+_CPU_ONLY_QE_NODE_IDS = {"rdagent-node1"}
+_GENERAL_PTNN_LTR_HP_KEYS = {
+    "ltr_loss_mode",
+    "topk_train_k",
+    "ltr_temperature",
+    "ltr_gate_temperature",
+    "ltr_relevance_mode",
+    "ltr_relevance_bins",
+    "ltr_min_group_size",
+    "ltr_fail_on_degenerate_group",
+}
+
+
+def _bool_param(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
+    normalized = str(node_id or "").strip().lower()
+    return normalized not in _CPU_ONLY_QE_NODE_IDS
+
+
+def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: str) -> Optional[Dict[str, Any]]:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"reason_code={reason_code}: {field_name} must be a JSON object or null, got invalid JSON"
+            ) from exc
+        if parsed is None:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(
+        f"reason_code={reason_code}: {field_name} must be a JSON object or null, "
+        f"got {type(value).__name__}"
+    )
+
+
+def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    raw_mode = params.get("ltr_loss_mode")
+    if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
+        return True
+    raw_loss = params.get("loss")
+    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+
+
+def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"reason_code={reason_code}: {name} must be a positive integer, got {value!r}") from exc
+    if parsed <= 0:
+        raise ValueError(f"reason_code={reason_code}: {name} must be a positive integer, got {value!r}")
+    return parsed
+
+
+def _validate_positive_float_param(value: Any, *, name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}"
+        ) from exc
+    if parsed <= 0:
+        raise ValueError(f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}")
+    return parsed
+
+
+def _finalize_general_ptnn_ltr_routing(
+    *,
+    model_class: str,
+    model_module: str,
+    model_kwargs: Dict[str, Any],
+    model_dataset_cls: str,
+    model_name: str,
+) -> tuple[str, str, Dict[str, Any]]:
+    """Switch opt-in GeneralPTNN listwise requests to the AIstock LTR adapter."""
+
+    if model_class not in _GENERAL_PTNN_MODEL_CLASSES:
+        return model_class, model_module, model_kwargs
+
+    updated_kwargs = dict(model_kwargs)
+    requested_mode = str(updated_kwargs.get("ltr_loss_mode") or updated_kwargs.get("loss") or "mse").strip()
+    if updated_kwargs.get("loss") == "approx_ndcg_at_k":
+        requested_mode = "approx_ndcg_at_k"
+    if requested_mode not in {"mse", "approx_ndcg_at_k"}:
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_loss_mode: "
+            f"model={model_name} requested unsupported ltr_loss_mode={requested_mode!r}"
+        )
+
+    if requested_mode == "mse":
+        updated_kwargs["loss"] = "mse"
+        for ltr_key in _GENERAL_PTNN_LTR_HP_KEYS:
+            updated_kwargs.pop(ltr_key, None)
+        return "GeneralPTNN", "qlib.contrib.model.pytorch_general_nn", updated_kwargs
+
+    if model_dataset_cls != "TSDatasetH":
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_requires_timeseries_dataset: "
+            f"model={model_name} requested ltr_loss_mode={requested_mode!r} with dataset={model_dataset_cls}"
+        )
+
+    updated_kwargs["ltr_loss_mode"] = "approx_ndcg_at_k"
+    updated_kwargs["loss"] = "approx_ndcg_at_k"
+    updated_kwargs["topk_train_k"] = _validate_positive_int_param(
+        updated_kwargs.get("topk_train_k", 25),
+        name="topk_train_k",
+        reason_code="general_ptnn_ltr_invalid_topk_train_k",
+    )
+    updated_kwargs["ltr_temperature"] = _validate_positive_float_param(
+        updated_kwargs.get("ltr_temperature", 1.0),
+        name="ltr_temperature",
+    )
+    updated_kwargs["ltr_gate_temperature"] = _validate_positive_float_param(
+        updated_kwargs.get("ltr_gate_temperature", 1.0),
+        name="ltr_gate_temperature",
+    )
+    updated_kwargs["ltr_relevance_mode"] = updated_kwargs.get("ltr_relevance_mode", "cross_section_quantile")
+    if updated_kwargs["ltr_relevance_mode"] != "cross_section_quantile":
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_loss_mode: "
+            f"model={model_name} requested unsupported ltr_relevance_mode={updated_kwargs['ltr_relevance_mode']!r}"
+        )
+    updated_kwargs["ltr_relevance_bins"] = _validate_positive_int_param(
+        updated_kwargs.get("ltr_relevance_bins", 5),
+        name="ltr_relevance_bins",
+        reason_code="general_ptnn_ltr_invalid_relevance_bins",
+    )
+    if int(updated_kwargs["ltr_relevance_bins"]) < 2:
+        raise ValueError(
+            "reason_code=general_ptnn_ltr_invalid_relevance_bins: "
+            f"ltr_relevance_bins must be >= 2, got {updated_kwargs['ltr_relevance_bins']!r}"
+        )
+    updated_kwargs["ltr_min_group_size"] = _validate_positive_int_param(
+        updated_kwargs.get("ltr_min_group_size", updated_kwargs["topk_train_k"]),
+        name="ltr_min_group_size",
+        reason_code="general_ptnn_ltr_invalid_topk_train_k",
+    )
+    updated_kwargs["ltr_fail_on_degenerate_group"] = _bool_param(
+        updated_kwargs.get("ltr_fail_on_degenerate_group", True)
+    )
+    if not updated_kwargs["ltr_fail_on_degenerate_group"]:
+        raise ValueError(
+            "reason_code=ltr_degenerate_relevance: "
+            "ltr_fail_on_degenerate_group=false is not supported for QE listwise LTR"
+        )
+    logger.info(
+        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR topk_train_k=%s relevance_bins=%s",
+        model_name,
+        updated_kwargs["topk_train_k"],
+        updated_kwargs["ltr_relevance_bins"],
+    )
+    return "AIStockGeneralPTNNLTR", "aistock_models.general_ptnn_ltr", updated_kwargs
+
+
+def _conf_uses_general_ptnn_ltr_adapter(conf_yaml: str) -> bool:
+    return "module_path: aistock_models.general_ptnn_ltr" in conf_yaml
+
+
+def _conf_uses_efficient_gats_adapter(conf_yaml: str) -> bool:
+    return "module_path: aistock_models.efficient_gats" in conf_yaml
+
+
+def _conf_uses_workspace_aistock_model(conf_yaml: str) -> bool:
+    return _conf_uses_general_ptnn_ltr_adapter(conf_yaml) or _conf_uses_efficient_gats_adapter(conf_yaml)
+
+
+def _general_ptnn_ltr_adapter_sources() -> dict[str, Path]:
+    package_dir = AISTOCK_PROJECT_ROOT / "aistock_models" / "aistock_models"
+    sources = {
+        "aistock_models/__init__.py": package_dir / "__init__.py",
+        "aistock_models/general_ptnn_ltr.py": package_dir / "general_ptnn_ltr.py",
+    }
+    missing = [str(path) for path in sources.values() if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "reason_code=general_ptnn_ltr_adapter_missing: "
+            f"required adapter source files are missing: {missing}"
+        )
+    return sources
+
+
+def _workspace_aistock_model_sources(conf_yaml: str) -> dict[str, Path]:
+    package_dir = AISTOCK_PROJECT_ROOT / "aistock_models" / "aistock_models"
+    sources: dict[str, Path] = {}
+    if _conf_uses_general_ptnn_ltr_adapter(conf_yaml):
+        sources.update(_general_ptnn_ltr_adapter_sources())
+    if _conf_uses_efficient_gats_adapter(conf_yaml):
+        sources.update(
+            {
+                "aistock_models/__init__.py": package_dir / "__init__.py",
+                "aistock_models/efficient_gats.py": package_dir / "efficient_gats.py",
+                "aistock_models/gats_industry_provider.py": package_dir / "gats_industry_provider.py",
+            }
+        )
+    missing = [str(path) for path in sources.values() if not path.exists()]
+    if missing:
+        raise RuntimeError(
+            "reason_code=aistock_model_adapter_missing: "
+            f"required adapter source files are missing: {missing}"
+        )
+    return sources
 
 
 def _win_to_wsl_guess(path: Path) -> str:
@@ -42,12 +267,15 @@ def _win_to_wsl_guess(path: Path) -> str:
     return text
 
 
-def _is_realtime_factor_cache_path(path_value: Optional[str]) -> bool:
-    """Return True when a cache path points anywhere under factor_values_realtime."""
+def _is_official_factor_cache_path_shape(path_value: Optional[str]) -> bool:
+    """Return True for the official factor_values cache root or its single subdir."""
     if not path_value:
         return False
     normalized = str(path_value).strip().strip("\"'").replace("\\", "/").rstrip("/")
-    return any(part.lower() == "factor_values_realtime" for part in normalized.split("/") if part)
+    parts = [part.lower() for part in normalized.split("/") if part]
+    if parts and parts[-1] == "single":
+        parts = parts[:-1]
+    return bool(parts) and parts[-1] == "factor_values"
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -120,10 +348,10 @@ def _qe_experiment_dir(experiment_name: str) -> Path:
 #
 # `test_end` is the last day used by the data handler/signals.  Qlib daily
 # portfolio simulation needs one following calendar row, so the default
-# portfolio backtest stops at 2026-04-27 while the provider still contains
-# 2026-04-28 for signal/price lookups.
-QE_DEFAULT_SIGNAL_END = "2026-04-28"
-QE_DEFAULT_BACKTEST_END = "2026-04-27"
+# portfolio backtest stops at 2026-06-29 while the provider still contains
+# 2026-06-30 for signal/price lookups.
+QE_DEFAULT_SIGNAL_END = "2026-06-30"
+QE_DEFAULT_BACKTEST_END = "2026-06-29"
 
 RDAGENT_DEFAULT_DATA_SPLIT = {
     "train_start": "2018-08-01",
@@ -136,10 +364,11 @@ RDAGENT_DEFAULT_DATA_SPLIT = {
 }
 
 _LEGACY_QE_DEFAULT_SPLIT_MARKERS = (
-    # Old QE UI/system defaults before the 2026-04-28 data refresh.  When a
+    # Old QE UI/system defaults before the 2026-06-30 data refresh.  When a
     # caller sends this exact default split without an intentional override,
     # upgrade it so new single/evolution/strategy/custom runs do not require
     # manual date edits.
+    {"test_end": "2026-04-28", "backtest_end": "2026-04-27"},
     {"test_end": "2026-03-10", "backtest_end": None},
     {"test_end": "2026-03-10", "backtest_end": "2026-03-09"},
     {"test_end": "2025-12-01", "backtest_end": None},
@@ -254,8 +483,8 @@ class ConfigComposer:
         """Ensure every QE path has a safe portfolio backtest end.
 
         Qlib daily backtest reads calendar[index+1].  With the official data
-        currently ending on 2026-04-28, the safe default portfolio end is
-        2026-04-27.  Data/signal coverage still uses `test_end`.
+        currently ending on 2026-06-30, the safe default portfolio end is
+        2026-06-29.  Data/signal coverage still uses `test_end`.
         """
         if not data_split.get("test_end"):
             return
@@ -326,7 +555,7 @@ class ConfigComposer:
                 cur.execute(
                     "SELECT workspace_base, factor_data_dir, qlib_data_path, "
                     "       qlib_minute_path, qlib_rdagent_root, factor_cache_dir, "
-                    "       api_base_url, ssh_user "
+                    "       api_base_url, ssh_user, callback_url "
                     "FROM infra.compute_nodes WHERE node_id = %s",
                     (node_id,),
                 )
@@ -360,7 +589,40 @@ class ConfigComposer:
             "qlib_minute_path": row[3],
             "qlib_rdagent_root": row[4],
             "factor_cache_dir": factor_cache_dir,
+            "callback_url": row[8],
         }
+
+    def _prediction_store_base_url(
+        self,
+        *,
+        node_id: Optional[str] = None,
+        node_callback_url: Optional[str] = None,
+        full_callback_url: Optional[str] = None,
+    ) -> Optional[str]:
+        explicit_base = (os.getenv("AISTOCK_PREDICTION_STORE_BASE_URL") or "").strip()
+        if explicit_base:
+            return build_aistock_callback_base_url(
+                full_callback_url=explicit_base,
+                node_id=node_id,
+            )
+
+        remote_node = bool(node_id and node_id != "wsl2-5080")
+        callback_base_configured = any(
+            (os.getenv(name) or "").strip()
+            for name in (
+                "AISTOCK_QE_CALLBACK_BASE_URL",
+                "AISTOCK_BACKEND_CALLBACK_BASE_URL",
+                "AISTOCK_BACKEND_BASE_URL",
+            )
+        )
+        if full_callback_url or node_callback_url or remote_node or callback_base_configured:
+            return build_aistock_callback_base_url(
+                full_callback_url=full_callback_url,
+                node_id=node_id,
+                node_callback_url=node_callback_url,
+                require_env_base=remote_node and not (full_callback_url or node_callback_url),
+            )
+        return None
 
     def _generate_unique_experiment_id(self) -> str:
         """生成基于日期时间的唯一实验ID，格式: qe_YYYYMMDD_HHMMSS"""
@@ -1187,6 +1449,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1389,6 +1653,12 @@ class ConfigComposer:
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        uploader_src = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_src.exists():
+            shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
+        resource_helper_src = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_src.exists():
+            shutil.copy2(resource_helper_src, exp_dir / "qe_runtime_resource.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace（qrun_limit.py 同样需要）
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
@@ -1399,6 +1669,12 @@ class ConfigComposer:
         # 如果模型使用自定义源码，写入实验目录（model.py + model_cls导出）
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
+                target = exp_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(source_path, target)
 
         # 如果策略使用自定义源码，复制到实验目录
         if strategy_info and strategy_info.get("source_code"):
@@ -1409,12 +1685,16 @@ class ConfigComposer:
 
         # 生成WSL命令（直接使用 qe_workspace WSL路径）
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
+        prediction_store_base_url = self._prediction_store_base_url()
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            prediction_store_base_url=prediction_store_base_url,
+            factor_data_dir=factor_data_dir,
         )
 
         # 保存实验记录到数据库
@@ -1464,7 +1744,14 @@ class ConfigComposer:
         execution_algo_params: Optional[Dict[str, Any]] = None,
         strategy_params: Optional[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        task_id: Optional[str] = None,
+        loop_index: Optional[int] = None,
         train_only: bool = False,
+        resource_session_id: Optional[str] = None,
+        resource_source_run_key: Optional[str] = None,
+        resource_session_token: Optional[str] = None,
+        phase_pipeline_enabled: bool = False,
     ) -> Dict[str, Any]:
         """组装实验配置到内存字典，不写入磁盘。
 
@@ -1495,6 +1782,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # ── 获取因子 / 模型 / 策略信息 ──
         factors_info = self._get_factors_info(factor_names, factor_sources)
@@ -1562,6 +1851,14 @@ class ConfigComposer:
         qlib_data_path = rdagent_cfg.get("qlib_data_path", QLIB_DATA_PATH_WSL)
         factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
         qlib_minute_path = rdagent_cfg.get("qlib_minute_path", QLIB_MINUTE_PATH_WSL)
+        prediction_store_base_url = self._prediction_store_base_url(
+            node_id=node_id,
+            node_callback_url=rdagent_cfg.get("callback_url"),
+            full_callback_url=callback_url,
+        )
+        prediction_store_run_key = (
+            f"{task_id}_L{loop_index}" if task_id and loop_index is not None else None
+        )
 
         # ── 生成各文件内容到 dict ──
         experiment_files: Dict[str, str] = {}
@@ -1680,6 +1977,21 @@ class ConfigComposer:
         qrun_limit_path = scripts_dir / "qrun_limit.py"
         if qrun_limit_path.exists():
             experiment_files["qrun_limit.py"] = qrun_limit_path.read_text(encoding="utf-8")
+        uploader_path = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_path.exists():
+            experiment_files["qe_prediction_store_client.py"] = uploader_path.read_text(encoding="utf-8")
+        resource_helper_path = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_path.exists():
+            experiment_files["qe_runtime_resource.py"] = resource_helper_path.read_text(encoding="utf-8")
+        if resource_session_token:
+            experiment_files["qe_resource_session_secret.json"] = json.dumps(
+                {
+                    "session_id": resource_session_id,
+                    "source_run_key": resource_source_run_key,
+                    "token": resource_session_token,
+                },
+                ensure_ascii=False,
+            )
         if backtest_freq != "day" or bool((custom_params or {}).get("_seed_ensemble_config")):
             minute_path = scripts_dir / "qrun_limit_minute.py"
             if minute_path.exists():
@@ -1711,6 +2023,9 @@ class ConfigComposer:
         # 5) model.py（自定义模型）
         if model_info and model_info.get("code_text"):
             experiment_files["model.py"] = self._build_model_py_content(model_info)
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
+                experiment_files[rel_path] = source_path.read_text(encoding="utf-8")
 
         # 6) custom_strategy.py（自定义策略）
         if strategy_info and strategy_info.get("source_code"):
@@ -1727,23 +2042,44 @@ class ConfigComposer:
         _, auto_core_parts = self._build_auto_wsl_command_parts(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml),
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path,
             has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             mode="auto",
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
 
         # ── 保存 DB 记录（不写文件） ──
@@ -2237,6 +2573,8 @@ class ConfigComposer:
         self._validate_data_split(data_split)
         self._ensure_backtest_end(data_split)
         self._validate_historical_stock_pool_window(custom_params, data_split)
+        rdagent_cfg = self._fetch_workspace_config()
+        factor_data_dir = rdagent_cfg.get("factor_data_dir", RDAGENT_FACTOR_DATA_WSL)
 
         # 获取因子信息
         factors_info = self._get_factors_info(factor_names)
@@ -2375,6 +2713,12 @@ class ConfigComposer:
         qrun_limit_src = scripts_dir / "qrun_limit.py"
         if qrun_limit_src.exists():
             shutil.copy2(qrun_limit_src, exp_dir / "qrun_limit.py")
+        uploader_src = scripts_dir / "qe_prediction_store_client.py"
+        if uploader_src.exists():
+            shutil.copy2(uploader_src, exp_dir / "qe_prediction_store_client.py")
+        resource_helper_src = scripts_dir / "qe_runtime_resource.py"
+        if resource_helper_src.exists():
+            shutil.copy2(resource_helper_src, exp_dir / "qe_runtime_resource.py")
         # benchmark parquet 也复制到日线实验的 qe_workspace
         bench_src = scripts_dir / "benchmark_sh000300.parquet"
         if bench_src.exists():
@@ -2385,6 +2729,11 @@ class ConfigComposer:
         # 如果模型使用自定义源码
         if model_info and model_info.get("code_text"):
             self._write_custom_model(exp_dir, model_info)
+        if _conf_uses_workspace_aistock_model(conf_yaml):
+            for rel_path, source_path in _workspace_aistock_model_sources(conf_yaml).items():
+                target = exp_dir / rel_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target)
 
         # 如果策略使用自定义源码
         if strategy_info and strategy_info.get("source_code"):
@@ -2395,12 +2744,16 @@ class ConfigComposer:
 
         # 生成WSL命令
         wsl_path = f"{QE_WORKSPACE_WSL}/{experiment_name}"
+        prediction_store_base_url = self._prediction_store_base_url()
+        needs_workspace_pythonpath = bool(model_info and model_info.get("code_text")) or _conf_uses_workspace_aistock_model(conf_yaml)
         wsl_command = self._generate_wsl_command(
             wsl_path, has_custom_factors=has_custom_factors,
-            use_custom_model=bool(model_info and model_info.get("code_text")),
+            use_custom_model=needs_workspace_pythonpath,
             model_type_tag=model_type_tag if model_info and model_info.get("code_text") else None,
             backtest_freq=backtest_freq,
             seed_ensemble_enabled=bool((custom_params or {}).get("_seed_ensemble_config")),
+            prediction_store_base_url=prediction_store_base_url,
+            factor_data_dir=factor_data_dir,
         )
 
         # 更新数据库中的WSL命令和状态
@@ -2509,6 +2862,20 @@ class ConfigComposer:
                     "persistent_workers": False,
                     "pt_model_uri": "model.model_cls",
                 }
+                if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
+                    model_kwargs.update(
+                        {
+                            "ltr_loss_mode": thp.get("ltr_loss_mode", "approx_ndcg_at_k"),
+                            "loss": thp.get("loss", "approx_ndcg_at_k"),
+                            "topk_train_k": thp.get("topk_train_k", 25),
+                            "ltr_temperature": thp.get("ltr_temperature", 1.0),
+                            "ltr_gate_temperature": thp.get("ltr_gate_temperature", 1.0),
+                            "ltr_relevance_mode": thp.get("ltr_relevance_mode", "cross_section_quantile"),
+                            "ltr_relevance_bins": thp.get("ltr_relevance_bins", 5),
+                            "ltr_min_group_size": thp.get("ltr_min_group_size", thp.get("topk_train_k", 25)),
+                            "ltr_fail_on_degenerate_group": thp.get("ltr_fail_on_degenerate_group", True),
+                        }
+                    )
 
                 # 快速训练模式：训练时间缩短到20%
                 if quick_train:
@@ -2601,6 +2968,58 @@ class ConfigComposer:
                     if isinstance(hp, str):
                         hp = json.loads(hp)
                     model_kwargs.update(hp)
+            elif "GATS" in model_type:
+                # Qlib GATs is a full Model implementation with its own fit/predict
+                # and DailyBatchSampler. Route all constructor params directly to
+                # GATs kwargs; do not wrap it with GeneralPTNN or pt_model_kwargs.
+                model_config = (
+                    _coerce_optional_json_object(
+                        model_info.get("model_config"),
+                        field_name="model_config",
+                        reason_code="gats_model_config_invalid",
+                    )
+                    or {}
+                )
+                model_class = str(model_config.get("class") or "GATs")
+                model_module = str(model_config.get("module_path") or "qlib.contrib.model.pytorch_gats_ts")
+                if model_class not in _GATS_MODEL_CLASSES:
+                    raise ValueError(
+                        "reason_code=gats_model_class_invalid: "
+                        f"model_config.class={model_class!r} is not a supported GATs class"
+                    )
+                model_dataset_cls = "TSDatasetH"
+                model_step_len = 20
+                model_kwargs = {
+                    "d_feat": 20,
+                    "hidden_size": 64,
+                    "num_layers": 2,
+                    "dropout": 0.0,
+                    "n_epochs": 200,
+                    "lr": 1e-3,
+                    "metric": "loss",
+                    "early_stop": 20,
+                    "loss": "mse",
+                    "base_model": "GRU",
+                    "optimizer": "adam",
+                    "GPU": 0,
+                    "n_jobs": 2,
+                }
+                training_hp = model_info.get("model_training_hyperparameters")
+                if training_hp:
+                    if isinstance(training_hp, str):
+                        training_hp = json.loads(training_hp)
+                    for key in ("lr", "weight_decay"):
+                        if key in training_hp and isinstance(training_hp[key], str):
+                            training_hp[key] = float(training_hp[key])
+                    model_kwargs.update(training_hp)
+                hp = model_info.get("model_hyperparameters")
+                if hp:
+                    if isinstance(hp, str):
+                        hp = json.loads(hp)
+                    for key in ("lr", "weight_decay"):
+                        if key in hp and isinstance(hp[key], str):
+                            hp[key] = float(hp[key])
+                    model_kwargs.update(hp)
             elif "PTNN" in model_type or "NN" in model_type:
                 # 无源代码的 GeneralPTNN：必须在 model_hyperparameters 中提供 pt_model_uri
                 model_class = "GeneralPTNN"
@@ -2629,7 +3048,17 @@ class ConfigComposer:
                         training_hp["lr"] = float(training_hp["lr"])
                     if "weight_decay" in training_hp and isinstance(training_hp["weight_decay"], str):
                         training_hp["weight_decay"] = float(training_hp["weight_decay"])
-                    model_kwargs.update(training_hp)
+                    # Architecture params (d_feat/hidden_size/num_layers/dropout) belong in
+                    # pt_model_kwargs and are provided authoritatively via model_hyperparameters
+                    # below. Some seeds (e.g. __seed_GRU2_default_v1__, __seed_ALSTM_sector_v1__)
+                    # mistakenly stored dropout in model_training_hyperparameters; merging it into
+                    # GeneralPTNN top-level kwargs raised "GeneralPTNN.__init__() got an unexpected
+                    # keyword argument 'dropout'". Drop arch keys from this trainer-level merge so
+                    # they cannot leak to GeneralPTNN. Same class as BUG-592; refs BUG-606.
+                    _ptnn_arch_keys = {"d_feat", "hidden_size", "num_layers", "dropout"}
+                    model_kwargs.update(
+                        {k: v for k, v in training_hp.items() if k not in _ptnn_arch_keys}
+                    )
 
                 hp = model_info.get("model_hyperparameters")
                 if hp:
@@ -2642,15 +3071,35 @@ class ConfigComposer:
                         hp["weight_decay"] = float(hp["weight_decay"])
 
                     pt_model_uri = hp.get("pt_model_uri")
+                    # GeneralPTNN.__init__ (and the LTR adapter) accept only trainer-level
+                    # params; every other hyperparameter is an architecture param for the
+                    # underlying nn.Module and MUST be routed through pt_model_kwargs.
+                    # Previously only the GRU/LSTM arch keys were routed, so Transformer
+                    # arch params (d_model/nhead/dim_feedforward) leaked into GeneralPTNN
+                    # top-level kwargs and raised TypeError. Route by trainer allowlist so
+                    # any built-in nn.Module's arch params pass through. Refs BUG-592.
+                    _general_ptnn_trainer_keys = {
+                        "n_epochs", "lr", "metric", "batch_size", "early_stop", "loss",
+                        "weight_decay", "optimizer", "n_jobs", "GPU", "seed", "use_amp",
+                        "gradient_accumulation_steps", "pin_memory", "prefetch_factor",
+                        "persistent_workers",
+                    } | _GENERAL_PTNN_LTR_HP_KEYS
                     pt_model_kwargs = {}
+                    # Keep legacy arch-key ordering first so existing GRU/LSTM/ALSTM
+                    # conf.yaml stays byte-stable (no regression).
                     for arch_key in ("d_feat", "hidden_size", "num_layers", "dropout"):
                         if arch_key in hp:
                             pt_model_kwargs[arch_key] = hp[arch_key]
 
                     for key, value in hp.items():
-                        if key in {"pt_model_uri", "d_feat", "hidden_size", "num_layers", "dropout"}:
+                        if key == "pt_model_uri" or key in pt_model_kwargs:
                             continue
-                        model_kwargs[key] = value
+                        if key in _general_ptnn_trainer_keys:
+                            model_kwargs[key] = value
+                        else:
+                            # Architecture param for the nn.Module (e.g. Transformer
+                            # d_model/nhead) -> pt_model_kwargs, not GeneralPTNN top-level.
+                            pt_model_kwargs[key] = value
 
                     if pt_model_uri:
                         model_kwargs["pt_model_uri"] = pt_model_uri
@@ -2778,8 +3227,8 @@ class ConfigComposer:
         # ── 模型超参键白名单（始终可用，供策略安全过滤引用） ──
         _PTNN_HP_KEYS = {
             "n_epochs", "lr", "early_stop", "batch_size", "weight_decay",
-            "optimizer",
-        }
+            "optimizer", "loss",
+        } | _GENERAL_PTNN_LTR_HP_KEYS
         # NOTE: hidden_size, num_layers, dropout 是模型架构参数，属于 pt_model_kwargs，
         # 由模型源码 (model.py) 硬编码，不能作为 GeneralPTNN.__init__() 的顶层参数传入。
         _SEED_ALIAS_KEYS = {"random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"}
@@ -2802,6 +3251,16 @@ class ConfigComposer:
         }
         _LINEAR_HP_KEYS = {
             "estimator", "alpha",
+        }
+        _GATS_HP_KEYS = {
+            "d_feat", "hidden_size", "num_layers", "dropout", "n_epochs", "lr",
+            "metric", "early_stop", "loss", "base_model", "model_path",
+            "optimizer", "GPU", "n_jobs", "seed", "batch_size",
+            "weight_decay", "gpu_resident", "gpu_resident_shuffle_days",
+            "gpu_resident_vram_margin_bytes",
+            "gpu_resident_working_memory_multiplier",
+            "gats_adjacency_mode", "gats_industry_gamma_init",
+            "gats_industry_embedding", "gats_industry_embedding_dim",
         }
         _NON_STRATEGY_PARAMS = {
             "disable_alpha158", "disable_alpha360", "use_custom_model",
@@ -2845,12 +3304,12 @@ class ConfigComposer:
             "suspend_filter_file",
             "suspend_filter_strict",
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
-        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS
+        } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _GATS_HP_KEYS
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
             hp_keys = set()
-            if model_class in ("GeneralPTNN",):
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 hp_keys = _PTNN_HP_KEYS
             elif model_class in ("LGBModel",):
                 hp_keys = _LGB_HP_KEYS
@@ -2862,6 +3321,8 @@ class ConfigComposer:
                 hp_keys = _TABPFN_HP_KEYS
             elif model_class in ("LinearModel",):
                 hp_keys = _LINEAR_HP_KEYS
+            elif model_class in _GATS_MODEL_CLASSES:
+                hp_keys = _GATS_HP_KEYS
             # 也包括有自定义代码的 PTNN 模型
             if use_custom_model and model_type_tag in ("TimeSeries", "Tabular"):
                 hp_keys = hp_keys | _PTNN_HP_KEYS
@@ -2871,7 +3332,7 @@ class ConfigComposer:
                 if key in custom_params:
                     val = custom_params[key]
                     # 确保 GeneralPTNN 的 lr 和 weight_decay 是数值类型
-                    if model_class == "GeneralPTNN" and key in ("lr", "weight_decay") and isinstance(val, str):
+                    if model_class in (_GENERAL_PTNN_MODEL_CLASSES | _GATS_MODEL_CLASSES) and key in ("lr", "weight_decay") and isinstance(val, str):
                         val = float(val)
                     model_hp_overrides[key] = val
             if model_hp_overrides:
@@ -2891,6 +3352,27 @@ class ConfigComposer:
             if set(custom_params.keys()) - set(filtered_params.keys()):
                 logger.info(f"策略参数过滤: 移除非策略参数 {set(custom_params.keys()) - set(filtered_params.keys())}")
             strategy_kwargs.update(filtered_params)
+
+        model_name_for_ltr = str((model_info or {}).get("model_name") or (model_info or {}).get("model_id") or model_class)
+        model_class, model_module, model_kwargs = _finalize_general_ptnn_ltr_routing(
+            model_class=model_class,
+            model_module=model_module,
+            model_kwargs=model_kwargs,
+            model_dataset_cls=model_dataset_cls,
+            model_name=model_name_for_ltr,
+        )
+        if _requests_general_ptnn_ltr(custom_params) and (
+            model_class != "AIStockGeneralPTNNLTR"
+            or model_module != "aistock_models.general_ptnn_ltr"
+            or model_kwargs.get("ltr_loss_mode") != "approx_ndcg_at_k"
+        ):
+            raise ValueError(
+                "reason_code=ltr_loss_mode_injection_failed: "
+                "custom_params requested GeneralPTNN LTR but composed model did not route to "
+                "AIStockGeneralPTNNLTR; set custom_evo loop.model_params.ltr_loss_mode for a "
+                "TimeSeries GeneralPTNN model. "
+                f"model_class={model_class!r} model_module={model_module!r}"
+            )
 
         strategy_kwargs["signal"] = "<PRED>"
 
@@ -3331,7 +3813,7 @@ class ConfigComposer:
         if model_kwargs:
             lines.append("        kwargs:")
             pt_model_kwargs = None
-            if model_class == "GeneralPTNN":
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 pt_model_kwargs = model_kwargs.get("pt_model_kwargs")
                 if pt_model_kwargs is not None:
                     pt_model_kwargs = dict(pt_model_kwargs)
@@ -3341,12 +3823,14 @@ class ConfigComposer:
                 if k == "pt_model_kwargs":
                     continue
                 # pt_model_kwargs 使用Jinja2模板变量，与RDAgent一致
-                if k == "pt_model_uri":
+                if model_class in _GATS_MODEL_CLASSES and model_dataset_cls == "TSDatasetH" and k == "d_feat":
+                    lines.append(f"            {k}: {{{{ num_features }}}}")
+                elif k == "pt_model_uri":
                     lines.append(f"            {k}: {v}")
                 else:
                     lines.append(f"            {k}: {v}")
             # 自定义模型和内置 PTNN 模型都需要 pt_model_kwargs
-            if model_class == "GeneralPTNN":
+            if model_class in _GENERAL_PTNN_MODEL_CLASSES:
                 if pt_model_kwargs is None and use_custom_model:
                     pt_model_kwargs = {"num_features": "{{ num_features }}"}
                     if model_type_tag == "TimeSeries":
@@ -3367,7 +3851,7 @@ class ConfigComposer:
                     lines.append('            }')
 
         # 数据集配置
-        if model_class == "GeneralPTNN":
+        if model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES:
             lines.append("    dataset:")
             lines.append(f'        class: {model_dataset_cls}')
             lines.append("        module_path: qlib.data.dataset")
@@ -3389,7 +3873,7 @@ class ConfigComposer:
         lines.append(f"                train: [{data_split['train_start']}, {data_split['train_end']}]")
         lines.append(f"                valid: [{data_split['valid_start']}, {data_split['valid_end']}]")
         lines.append(f"                test: [{data_split['test_start']}, {data_split['test_end']}]")
-        if model_class == "GeneralPTNN" and model_step_len:
+        if (model_class in _GENERAL_PTNN_MODEL_CLASSES or model_class in _GATS_MODEL_CLASSES) and model_step_len:
             lines.append(f"            step_len: {model_step_len}")
 
         # record
@@ -3551,15 +4035,17 @@ class ConfigComposer:
         lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
         lines.append("import hashlib")
         lines.append("import json as _json")
-        lines.append("def _is_forbidden_factor_cache_path(path_value):")
+        lines.append("def _is_official_factor_cache_path_shape(path_value):")
         lines.append("    _parts = [p.lower() for p in re.split(r'[/\\\\]+', str(path_value).strip().strip(\"\\\"'\").rstrip('/\\\\')) if p]")
-        lines.append("    return 'factor_values_realtime' in _parts")
+        lines.append("    if _parts and _parts[-1] == 'single':")
+        lines.append("        _parts = _parts[:-1]")
+        lines.append("    return bool(_parts) and _parts[-1] == 'factor_values'")
         lines.append("")
         lines.append("RAW_FACTOR_CACHE_DIR = os.environ.get('FACTOR_CACHE_DIR', '')")
         lines.append("if RAW_FACTOR_CACHE_DIR:")
         lines.append(r"    _cache_base = RAW_FACTOR_CACHE_DIR.rstrip('/\\')")
-        lines.append("    if _is_forbidden_factor_cache_path(_cache_base):")
-        lines.append("        raise RuntimeError('QE backtest must not use factor_values_realtime as FACTOR_CACHE_DIR')")
+        lines.append("    if not _is_official_factor_cache_path_shape(_cache_base):")
+        lines.append("        raise RuntimeError('QE backtest FACTOR_CACHE_DIR must point to official factor_values cache root or its single subdirectory')")
         lines.append("    if os.path.basename(_cache_base) == 'single':")
         lines.append("        FACTOR_CACHE_SINGLE_DIR = _cache_base")
         lines.append("        FACTOR_CACHE_META = os.path.join(os.path.dirname(_cache_base), '_meta.json')")
@@ -3616,58 +4102,138 @@ class ConfigComposer:
         lines.append("    return ''")
         lines.append("")
         lines.append("")
-        lines.append("def _try_cache_hit(factor_name, factor_code):")
-        lines.append("    \"\"\"尝试从缓存读取因子值。命中返回 DataFrame，否则返回 None。\"\"\"")
-        lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
-        lines.append("        return None")
-        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
-
-        lines.append("    if not os.path.exists(cache_path) or not FACTOR_CACHE_META or not os.path.exists(FACTOR_CACHE_META):")
-        lines.append("        return None")
-        lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
-        lines.append("    try:")
+        lines.append('def _official_cache_miss_reasons():')
+        lines.append('    return {')
+        lines.append("        'missing_from_cache': [],")
+        lines.append("        'missing_meta': [],")
+        lines.append("        'missing_meta_reconcile_required': [],")
+        lines.append("        'as_of_date_mismatch': [],")
+        lines.append("        'window_not_covered': [],")
+        lines.append("        'universe_mismatch': [],")
+        lines.append("        'index_policy_mismatch': [],")
+        lines.append("        'hash_mismatch': [],")
+        lines.append("        'data_contract_mismatch': [],")
+        lines.append("        'schema_invalid': [],")
+        lines.append('    }')
+        lines.append('')
+        lines.append('')
+        lines.append('def _validate_official_cache_hit_contract(factor_name, factor_code):')
+        lines.append("    cache_root = os.path.dirname(FACTOR_CACHE_SINGLE_DIR) if FACTOR_CACHE_SINGLE_DIR else ''")
+        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet') if FACTOR_CACHE_SINGLE_DIR else ''")
+        lines.append('    miss_reasons = _official_cache_miss_reasons()')
+        lines.append('    top_level_errors = []')
+        lines.append('    contract = {')
+        lines.append("        'schema_version': 'official_factor_cache_hit_validation_v1',")
+        lines.append("        'gate_status': 'failed',")
+        lines.append("        'official_cache_hit': False,")
+        lines.append("        'factor_name': factor_name,")
+        lines.append("        'cache_root': cache_root,")
+        lines.append("        'single_dir': FACTOR_CACHE_SINGLE_DIR,")
+        lines.append("        'meta_path': FACTOR_CACHE_META,")
+        lines.append("        'start_date': TRAIN_START,")
+        lines.append("        'end_date': TEST_END,")
+        lines.append("        'expected_as_of_date': TEST_END,")
+        lines.append(f"        'expected_moneyflow_unit_contract_version': '{MONEYFLOW_UNIT_CONTRACT_VERSION}',")
+        lines.append("        'requested_factor_count': 1,")
+        lines.append("        'hit_factor_count': 0,")
+        lines.append("        'miss_factor_count': 1,")
+        lines.append("        'hit_factors': [],")
+        lines.append("        'miss_factors': [factor_name],")
+        lines.append("        'miss_reasons': miss_reasons,")
+        lines.append("        'top_level_errors': top_level_errors,")
+        lines.append('    }')
+        lines.append('    if not FACTOR_CACHE_SINGLE_DIR:')
+        lines.append("        top_level_errors.append('cache_dir_missing')")
+        lines.append('        return contract')
+        lines.append('    if not _is_official_factor_cache_path_shape(FACTOR_CACHE_SINGLE_DIR):')
+        lines.append("        top_level_errors.append('non_official_cache_root')")
+        lines.append('        return contract')
+        lines.append('    if not os.path.exists(cache_path):')
+        lines.append("        miss_reasons['missing_from_cache'].append(factor_name)")
+        lines.append('        return contract')
+        lines.append('    if not FACTOR_CACHE_META or not os.path.exists(FACTOR_CACHE_META):')
+        lines.append("        miss_reasons['missing_meta'].append(factor_name)")
+        lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
+        lines.append('        return contract')
+        lines.append('    try:')
         lines.append("        with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
-        lines.append("            meta = _json.load(_meta_f)")
-        lines.append("    except Exception as e:")
+        lines.append('            meta = _json.load(_meta_f)')
+        lines.append('    except Exception as e:')
         lines.append("        logger.warning(f'  {factor_name}: cache meta read failed: {e}')")
-        lines.append("        return None")
-        lines.append("    entry = meta.get('factors', {}).get(factor_name, {})")
-        lines.append("    data_mode = entry.get('data_source_mode')")
-        lines.append("    if data_mode and data_mode != 'backtest_factor_data_dir':")
+        lines.append("        miss_reasons['missing_meta'].append(factor_name)")
+        lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
+        lines.append('        return contract')
+        lines.append(f"    expected_data_contract = '{MONEYFLOW_UNIT_CONTRACT_VERSION}'")
+        lines.append("    cached_data_contract = meta.get('moneyflow_unit_contract_version')")
+        lines.append("    contract['moneyflow_unit_contract_version'] = cached_data_contract")
+        lines.append('    if cached_data_contract != expected_data_contract:')
+        lines.append("        logger.info(f'  {factor_name}: moneyflow data contract mismatch ({cached_data_contract} vs {expected_data_contract})')")
+        lines.append("        miss_reasons['data_contract_mismatch'].append(factor_name)")
+        lines.append("    entry = meta.get('factors', {}).get(factor_name)")
+        lines.append('    if not isinstance(entry, dict):')
+        lines.append("        miss_reasons['missing_meta'].append(factor_name)")
+        lines.append("        miss_reasons['missing_meta_reconcile_required'].append(factor_name)")
+        lines.append('        return contract')
+        lines.append("    data_mode = entry.get('data_source_mode') or meta.get('data_source_mode') or meta.get('source_system')")
+        lines.append("    allowed_modes = {'backtest_factor_data_dir', 'official_offline_backtest_factor_data'}")
+        lines.append('    if data_mode and data_mode not in allowed_modes:')
         lines.append("        logger.info(f'  {factor_name}: cache data mode mismatch ({data_mode})')")
-        lines.append("        return None")
-        lines.append("    expected_universe = _expected_universe_meta()")
-        lines.append("    universe_mismatch = _cache_universe_mismatch(entry, expected_universe)")
-        lines.append("    if universe_mismatch:")
+        lines.append("        miss_reasons['schema_invalid'].append(factor_name)")
+        lines.append('    expected_universe = _expected_universe_meta()')
+        lines.append('    universe_mismatch = _cache_universe_mismatch(entry, expected_universe)')
+        lines.append('    if universe_mismatch:')
         lines.append("        logger.info(f'  {factor_name}: cache universe mismatch ({universe_mismatch})')")
-        lines.append("        return None")
-        lines.append("    cached_hash = entry.get('source_hash_raw')")
-        lines.append("    if cached_hash != code_hash:")
+        lines.append("        if universe_mismatch == 'index_policy':")
+        lines.append("            miss_reasons['index_policy_mismatch'].append(factor_name)")
+        lines.append('        else:')
+        lines.append("            miss_reasons['universe_mismatch'].append(factor_name)")
+        lines.append('    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]')
+        lines.append("    cached_hash = entry.get('source_hash_raw') or entry.get('code_hash')")
+        lines.append("    contract['expected_code_hashes'] = {factor_name: code_hash}")
+        lines.append('    if cached_hash != code_hash:')
         lines.append("        logger.info(f'  {factor_name}: cache hash mismatch (cached={cached_hash}, current={code_hash})')")
-        lines.append("        return None")
+        lines.append("        miss_reasons['hash_mismatch'].append(factor_name)")
         lines.append("    cached_range = entry.get('date_range', '')")
+        lines.append("    contract['date_range'] = cached_range")
         lines.append("    if '~' not in cached_range:")
-        lines.append("        return None")
-        lines.append("    c_start, c_end = cached_range.split('~')")
-        lines.append("    # 允许时序因子 lookback/warm-up 缺口：优先使用缓存记录的请求窗口判断。")
-        lines.append("    _LOOKBACK_TOLERANCE_DAYS = 60")
-        lines.append("    _ts = pd.Timestamp(TRAIN_START)")
-        lines.append("    _window_start = entry.get('window_train_start')")
-        lines.append("    if _window_start:")
-        lines.append("        _gap_ok = pd.Timestamp(_window_start) <= _ts")
-        lines.append("    else:")
-        lines.append("        _gap_ok = (pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True")
-        lines.append("    if (not _gap_ok) or c_end < TEST_END:")
-        lines.append("        logger.info(f'  {factor_name}: cache date insufficient ({cached_range} vs {TRAIN_START}~{TEST_END})')")
-        lines.append("        return None")
-        lines.append("    # 命中")
-        lines.append("    df = pd.read_parquet(cache_path)")
-        lines.append("    dates = df.index.get_level_values(0)")
-        lines.append("    df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]")
+        lines.append("        miss_reasons['schema_invalid'].append(factor_name)")
+        lines.append('    else:')
+        lines.append("        c_start, c_end = cached_range.split('~')")
+        lines.append('        _LOOKBACK_TOLERANCE_DAYS = 60')
+        lines.append('        _ts = pd.Timestamp(TRAIN_START)')
+        lines.append("        _window_start = entry.get('window_train_start')")
+        lines.append('        if _window_start:')
+        lines.append('            _gap_ok = pd.Timestamp(_window_start) <= _ts')
+        lines.append('        else:')
+        lines.append('            _gap_ok = (pd.Timestamp(c_start) - _ts).days <= _LOOKBACK_TOLERANCE_DAYS if c_start > TRAIN_START else True')
+        lines.append('        if (not _gap_ok) or c_end < TEST_END:')
+        lines.append("            logger.info(f'  {factor_name}: cache date insufficient ({cached_range} vs {TRAIN_START}~{TEST_END})')")
+        lines.append("            miss_reasons['window_not_covered'].append(factor_name)")
+        lines.append("        if entry.get('as_of_date') and pd.Timestamp(entry.get('as_of_date')) < pd.Timestamp(TEST_END):")
+        lines.append("            miss_reasons['as_of_date_mismatch'].append(factor_name)")
+        lines.append('    miss_factor_names = sorted({name for names in miss_reasons.values() for name in names})')
+        lines.append('    if not top_level_errors and not miss_factor_names:')
+        lines.append("        contract.update({'gate_status': 'passed', 'official_cache_hit': True, 'hit_factor_count': 1, 'miss_factor_count': 0, 'hit_factors': [factor_name], 'miss_factors': []})")
+        lines.append('    return contract')
+        lines.append('')
+        lines.append('')
+        lines.append('def _try_cache_hit(factor_name, factor_code):')
+        lines.append('    """Load a factor only when the official cache-hit contract passes."""')
+        lines.append('    contract = _validate_official_cache_hit_contract(factor_name, factor_code)')
+        lines.append('    logger.info(f\'  {factor_name}: cache contract {contract["schema_version"]} gate={contract["gate_status"]}\')')
+        lines.append("    if not contract.get('official_cache_hit'):")
+        lines.append('        logger.info(f\'  {factor_name}: cache miss reasons={contract.get("miss_reasons")} top_errors={contract.get("top_level_errors")}\')')
+        lines.append("        if contract.get('miss_reasons', {}).get('missing_meta_reconcile_required'):")
+        lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + _json.dumps(contract, ensure_ascii=False, default=str))")
+        lines.append('        return None')
+        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append('    df = pd.read_parquet(cache_path)')
+        lines.append('    dates = df.index.get_level_values(0)')
+        lines.append('    df = df[(dates >= pd.Timestamp(TRAIN_START)) & (dates <= pd.Timestamp(TEST_END))]')
         lines.append("    if 'value' in df.columns:")
         lines.append("        df = df.rename(columns={'value': factor_name})")
-        lines.append("    logger.info(f'  {factor_name}: CACHE HIT ({len(df)} rows, {cached_range})')")
-        lines.append("    return df")
+        lines.append('    logger.info(f\'  {factor_name}: CACHE HIT ({len(df)} rows, {contract.get("date_range")})\')')
+        lines.append('    return df')
         lines.append("")
         lines.append("")
         lines.append("def _write_cache(factor_name, factor_code, result_df):")
@@ -4080,6 +4646,20 @@ class ConfigComposer:
                 "weight_decay": 1e-4,
             },
         },
+        "__builtin_Transformer__": {
+            "model_name": "Transformer", "model_type": "PTNN",
+            "default_dataset_type": "TSDatasetH",
+            "default_hyperparameters": {
+                "pt_model_uri": "qlib.contrib.model.pytorch_transformer_ts.Transformer",
+                "d_feat": 20, "d_model": 64, "nhead": 4, "num_layers": 2,
+                "dropout": 0.1,
+            },
+            "default_training_hyperparameters": {
+                "n_epochs": 100, "lr": 2e-4,
+                "early_stop": 15, "batch_size": 2048,
+                "weight_decay": 1e-4,
+            },
+        },
         "__builtin_Ridge__": {
             "model_name": "Ridge", "model_type": "LINEAR",
             "default_dataset_type": "DatasetH",
@@ -4103,6 +4683,7 @@ class ConfigComposer:
                 cur.execute("""
                     SELECT model_id, model_name, model_type,
                            model_hyperparameters, model_training_hyperparameters,
+                           model_config,
                            ic, annualized_return, is_sota,
                            code_text
                     FROM aistock_model_catalog
@@ -4128,8 +4709,15 @@ class ConfigComposer:
                 "annualized_return": None,
                 "is_sota": False,
                 "code_text": None,
+                "model_config": None,
                 "default_dataset_type": builtin.get("default_dataset_type"),
             }
+
+        catalog_row["model_config"] = _coerce_optional_json_object(
+            catalog_row.get("model_config"),
+            field_name="model_config",
+            reason_code="model_config_invalid",
+        )
 
         # 3. catalog 命中：补充 builtin default 作为 fallback（仅当对应字段为空）
         # 通过 model_name 匹配最接近的 builtin
@@ -4217,7 +4805,17 @@ class ConfigComposer:
         backtest_freq: str = "1min",
         train_only: bool = False,
         factor_cache_dir: Optional[str] = None,
+        factor_data_dir: Optional[str] = None,
         seed_ensemble_enabled: bool = False,
+        node_id: Optional[str] = None,
+        prediction_store_base_url: Optional[str] = None,
+        prediction_store_run_key: Optional[str] = None,
+        task_id: Optional[str] = None,
+        loop_index: Optional[int] = None,
+        resource_session_id: Optional[str] = None,
+        resource_source_run_key: Optional[str] = None,
+        resource_session_token: Optional[str] = None,
+        phase_pipeline_enabled: bool = False,
     ) -> tuple[list[str], list[str]]:
         """构造 auto 模式命令片段。
 
@@ -4242,19 +4840,54 @@ class ConfigComposer:
         elif has_custom_factors:
             env_lines.append("# num_features 将在 qrun 时由 conf.yaml Jinja2 模板自动计算")
 
+        if node_id:
+            quoted_node = shlex.quote(str(node_id))
+            env_lines.append(f"export AISTOCK_NODE_ID={quoted_node}")
+            env_lines.append(f"export QE_NODE_ID={quoted_node}")
+        if prediction_store_base_url:
+            env_lines.append(
+                f"export AISTOCK_PREDICTION_STORE_BASE_URL={shlex.quote(prediction_store_base_url)}"
+            )
+        if prediction_store_run_key:
+            env_lines.append(f"export AISTOCK_PREDICTION_STORE_RUN_KEY={shlex.quote(prediction_store_run_key)}")
+            env_lines.append(f"export QE_ARCHIVE_RUN_ID={shlex.quote(prediction_store_run_key)}")
+        if task_id:
+            env_lines.append(f"export QE_TASK_ID={shlex.quote(str(task_id))}")
+        if loop_index is not None:
+            loop_index_text = str(int(loop_index))
+            env_lines.append(f"export QE_LOOP_INDEX={loop_index_text}")
+            env_lines.append(f"export QE_LOOP_ID=Loop{loop_index_text}")
+        resource_values = (
+            resource_session_id,
+            resource_source_run_key,
+            resource_session_token,
+        )
+        if any(resource_values) and not all(resource_values):
+            raise ValueError("QE resource session env requires id, source_run_key, and token together")
+        if resource_session_id:
+            env_lines.append(f"export QE_RESOURCE_SESSION_ID={shlex.quote(resource_session_id)}")
+            env_lines.append(f"export QE_RESOURCE_SOURCE_RUN_KEY={shlex.quote(resource_source_run_key)}")
+        if phase_pipeline_enabled:
+            if not resource_session_id:
+                raise ValueError("QE phase pipeline requires a persisted resource session")
+            env_lines.append("export QE_PHASE_PIPELINE_ENABLED=1")
+        effective_factor_data_dir = str(factor_data_dir or RDAGENT_FACTOR_DATA_WSL or "").strip()
+        if effective_factor_data_dir:
+            env_lines.append(f"export RDAGENT_FACTOR_DATA_WSL={shlex.quote(effective_factor_data_dir)}")
+
         # 因子缓存目录：QE 回测只允许 backtest factor_values，不能继承或指向 realtime 缓存。
         if factor_cache_dir:
-            if _is_realtime_factor_cache_path(factor_cache_dir):
+            if not _is_official_factor_cache_path_shape(factor_cache_dir):
                 raise ValueError(
-                    "QE backtest factor_cache_dir must not point to factor_values_realtime"
+                    "QE backtest factor_cache_dir must point to official factor_values cache root or its single subdirectory"
                 )
             # 远端节点：直接使用配置的绝对路径
             env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_dir}"')
         else:
             # 本地节点：强制使用 Windows 路径转换后的 QE 回测缓存，覆盖任何继承环境变量。
             factor_cache_wsl = self._windows_to_wsl_path(str(FACTOR_CACHE_ROOT_WIN))
-            if _is_realtime_factor_cache_path(factor_cache_wsl):
-                raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN resolves to factor_values_realtime")
+            if not _is_official_factor_cache_path_shape(factor_cache_wsl):
+                raise RuntimeError("QE backtest FACTOR_CACHE_ROOT_WIN must resolve to official factor_values cache root")
             env_lines.append(f'export FACTOR_CACHE_DIR="{factor_cache_wsl}"')
         env_lines.append('export FACTOR_CACHE_DATA_MODE="backtest_factor_data_dir"')
 
@@ -4271,9 +4904,13 @@ class ConfigComposer:
             "export MALLOC_ARENA_MAX=4",
             "export PYTHONUNBUFFERED=1",
         ]
+        if _is_gpu_qe_node(node_id):
+            core_parts.append(_CUDA_EXPANDABLE_SEGMENTS_ENV)
         if train_only:
             core_parts.append("export TRAIN_ONLY=1")
         core_parts.extend([line for line in env_lines if line and not line.startswith("#")])
+        if resource_session_id:
+            core_parts.append("chmod 600 qe_resource_session_secret.json")
         core_parts.append(link_data_cmd)
         if has_custom_factors:
             core_parts.append("python prepare_factors.py")
@@ -4293,7 +4930,17 @@ class ConfigComposer:
                               backtest_freq: str = "1min",
                               train_only: bool = False,
                               factor_cache_dir: Optional[str] = None,
-                              seed_ensemble_enabled: bool = False) -> str:
+                              factor_data_dir: Optional[str] = None,
+                              seed_ensemble_enabled: bool = False,
+                              node_id: Optional[str] = None,
+                              prediction_store_base_url: Optional[str] = None,
+                              prediction_store_run_key: Optional[str] = None,
+                              task_id: Optional[str] = None,
+                              loop_index: Optional[int] = None,
+                              resource_session_id: Optional[str] = None,
+                              resource_source_run_key: Optional[str] = None,
+                              resource_session_token: Optional[str] = None,
+                              phase_pipeline_enabled: bool = False) -> str:
         """生成WSL执行命令。
 
         Args:
@@ -4310,7 +4957,17 @@ class ConfigComposer:
             backtest_freq=backtest_freq,
             train_only=train_only,
             factor_cache_dir=factor_cache_dir,
+            factor_data_dir=factor_data_dir,
             seed_ensemble_enabled=seed_ensemble_enabled,
+            node_id=node_id,
+            prediction_store_base_url=prediction_store_base_url,
+            prediction_store_run_key=prediction_store_run_key,
+            task_id=task_id,
+            loop_index=loop_index,
+            resource_session_id=resource_session_id,
+            resource_source_run_key=resource_source_run_key,
+            resource_session_token=resource_session_token,
+            phase_pipeline_enabled=phase_pipeline_enabled,
         )
         env_block = "\n".join(env_lines)
 
@@ -4379,6 +5036,9 @@ QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py
 
 cd {wsl_path}
 conda activate rdagent-gpu
+
+# 设置环境变量
+{env_block}
 
 {_link_data_manual}
 

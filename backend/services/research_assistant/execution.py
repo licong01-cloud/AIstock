@@ -1,4 +1,4 @@
-﻿"""Execution-closure helpers for the Research Assistant service.
+"""Execution-closure helpers for the Research Assistant service.
 
 This mixin keeps MCP/Skill execution gates explicit while the service remains
 the owner of repositories, task events, trace events, and runtime config.
@@ -6,6 +6,8 @@ the owner of repositories, task events, trace events, and runtime config.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import timedelta
 from time import perf_counter
 from typing import Any
@@ -22,7 +24,6 @@ from .models import (
     ActionProposalPreflightRequest,
     CapabilitySyncRequest,
     ContextPackBuildRequest,
-    IssueCandidateCreate,
     McpPreflightRequest,
     MemoryCreate,
     TaskCreate,
@@ -40,9 +41,13 @@ class ResearchAssistantExecutionMixin:
     """Capability sync, Action Proposal, and execution gateway behavior."""
 
     def _normalize_capability_catalog(self, *, include_disabled: bool = False) -> list[dict[str, Any]]:
+        if hasattr(self, "_manifest_mcp_catalog_records"):
+            tool_records = self._manifest_mcp_catalog_records()
+        else:
+            tool_records = self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
         approved_tools = {
             (str(tool.get("server_key")), str(tool.get("tool_name"))): tool
-            for tool in self.repository.list_records("mcp_tools", limit=self.configured_limit("api_list_mcp_tools"))["items"]
+            for tool in tool_records
             if include_disabled or str(tool.get("status")) in {"enabled", "approved", "ready"}
         }
         approved_skills = {
@@ -52,7 +57,8 @@ class ResearchAssistantExecutionMixin:
         }
         now = utc_now().isoformat()
         capabilities: list[dict[str, Any]] = []
-        for item in self.default_workflow_capabilities():
+        source_capabilities = self._workflow_capabilities() if hasattr(self, "_workflow_capabilities") else self.default_workflow_capabilities()
+        for item in source_capabilities:
             mcp_refs = list(item.get("mcp_tool_refs") or [])
             skill_refs = [str(ref) for ref in item.get("skill_refs") or []]
             missing_refs = [ref for ref in mcp_refs if (str(ref.get("server_key")), str(ref.get("tool_name"))) not in approved_tools]
@@ -89,47 +95,35 @@ class ResearchAssistantExecutionMixin:
         max_tools = int(sync_cfg["max_tools_per_server"])
         if len(capabilities) > max_tools:
             raise ValueError(f"capability sync exceeded runtime limit: {max_tools}")
-        existing = self.repository.list_records("capabilities", limit=self.configured_limit("api_list_capabilities"))["items"]
-        existing_by_key = {str(item.get("capability_key")): item for item in existing}
-        diff: list[dict[str, Any]] = []
-        applied_count = 0
-        for capability in capabilities:
-            current = existing_by_key.get(str(capability["capability_key"]))
-            change = (
-                "create"
-                if not current
-                else "unchanged"
-                if current.get("checksum") == capability["checksum"] and current.get("status") == capability["status"]
-                else "update"
-            )
-            diff.append(
-                {
-                    "capability_key": capability["capability_key"],
-                    "change": change,
-                    "status": capability["status"],
-                    "risk_level": capability["risk_level"],
-                    "side_effect_level": capability["side_effect_level"],
-                    "checksum": capability["checksum"],
-                }
-            )
-            if data.apply and change in {"create", "update"}:
-                self.repository.create_record("capabilities", capability)
-                applied_count += 1
+        diff = [
+            {
+                "capability_key": capability["capability_key"],
+                "change": "retired_db_projection",
+                "status": capability["status"],
+                "risk_level": capability["risk_level"],
+                "side_effect_level": capability["side_effect_level"],
+                "checksum": capability["checksum"],
+                "reason": "yaml_memory_authority_no_db_write",
+            }
+            for capability in capabilities
+        ]
         self.create_trace_event(
             TraceEventCreate(
                 event_type="capability_sync",
                 component="research_assistant.capability_sync",
-                status="applied" if data.apply else "dry_run",
-                payload_json={"source_count": len(capabilities), "applied_count": applied_count, "diff": diff[:20]},
+                status="retired_noop",
+                payload_json={"source_count": len(capabilities), "applied_count": 0, "db_projection_retired": True, "diff": diff[:20]},
             )
         )
         return {
             "dry_run": not data.apply,
             "requested_by": data.requested_by,
             "source_count": len(capabilities),
-            "applied_count": applied_count,
+            "applied_count": 0,
             "diff": diff,
             "blocked_or_disabled_excluded": not data.include_disabled,
+            "db_projection_retired": True,
+            "declarative_authority": "yaml_memory",
             "runtime_config": {
                 "max_tools_per_server": max_tools,
                 "timeout_seconds": sync_cfg["timeout_seconds"],
@@ -200,7 +194,8 @@ class ResearchAssistantExecutionMixin:
                 allowed = ", ".join(f"{ref['server_key']}/{ref['tool_name']}" for ref in refs[:20])
                 raise ValueError(f"selected MCP tool is not allowed by capability: {requested}; allowed={allowed}")
         ref = selected_ref or refs[0]
-        return self.repository.find_one("mcp_tools", {"server_key": ref["server_key"], "tool_name": ref["tool_name"]})
+        tool, _server = self._resolve_mcp_catalog_tool(ref["server_key"], ref["tool_name"])
+        return tool
 
     def _effective_action_profile(self, capability: dict[str, Any], tool: dict[str, Any] | None = None) -> dict[str, Any]:
         use_tool_profile = bool(tool) and str(capability.get("capability_key") or "").endswith(".mcp_orchestration")
@@ -270,7 +265,7 @@ class ResearchAssistantExecutionMixin:
         data = request if isinstance(request, ActionProposalCreate) else ActionProposalCreate(**request)
         if not self.repository.get_record("tasks", data.task_id):
             raise KeyError(f"task not found: {data.task_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": data.capability_key, "status": "approved"})
+        capability = self._workflow_capability_by_key(data.capability_key)
         if not capability:
             raise KeyError(f"approved capability not found: {data.capability_key}")
         runtime_activation = self.active_runtime_config_activation()
@@ -334,7 +329,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"]})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]), approved_only=False)
         return {"proposal": proposal, "capability": capability, "events": self.action_proposal_events(action_proposal_id)}
 
     def action_proposal_events(self, action_proposal_id: str) -> dict[str, Any]:
@@ -364,7 +359,7 @@ class ResearchAssistantExecutionMixin:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
         if proposal.get("status") not in {"proposed", "preflight_failed"}:
             raise ValueError(f"proposal is not confirmable from status={proposal.get('status')}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -396,7 +391,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -465,7 +460,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -509,7 +504,7 @@ class ResearchAssistantExecutionMixin:
         proposal = self.repository.get_record("action_proposals", action_proposal_id)
         if not proposal:
             raise KeyError(f"action proposal not found: {action_proposal_id}")
-        capability = self.repository.find_one("capabilities", {"capability_key": proposal["capability_key"], "status": "approved"})
+        capability = self._workflow_capability_by_key(str(proposal["capability_key"]))
         if not capability:
             raise KeyError(f"approved capability not found: {proposal['capability_key']}")
         self._assert_proposal_digest_current(proposal, capability)
@@ -677,9 +672,6 @@ class ResearchAssistantExecutionMixin:
         if name == "assistant_create_memory_candidate":
             memory = self.create_memory(MemoryCreate(**payload))
             return {"status": "succeeded", "result_json": memory, "result_cards": [{"title": "候选记忆已创建", "summary": memory["title"], "memory_id": memory["memory_id"]}], "artifact_refs": [memory["memory_id"]], "error_json": {}, "retry_count": 0}
-        if name == "assistant_create_issue_candidate":
-            issue = self.create_issue_candidate(IssueCandidateCreate(**payload))
-            return {"status": "succeeded", "result_json": issue, "result_cards": [{"title": "候选 Issue 已创建", "summary": issue["title"], "candidate_id": issue["candidate_id"], "next_step": "GitHub 正式同步仍需单独审批。"}], "artifact_refs": [issue["candidate_id"]], "error_json": {}, "retry_count": 0}
         if name == "qe_template_create":
             template = self._qe_template_create_draft(payload)
             return {"status": "succeeded", "result_json": template, "result_cards": [{"title": "QE template 草案已生成", "summary": template["title"], "template_id": template["template_id"], "next_step": "确认后进入 validate；尚未 materialize/run。"}], "artifact_refs": [template["template_id"]], "error_json": {}, "retry_count": 0}
@@ -722,20 +714,718 @@ class ResearchAssistantExecutionMixin:
             "provider",
             "url",
             "max_chars",
+            "symbol",
+            "ts_code",
+            "analysis_date",
+            "period",
         ):
             if key in payload and key not in args:
                 args[key] = payload[key]
         return args
 
+    def _stock_analysis_facade(self) -> Any:
+        factory = getattr(self, "stock_analysis_facade_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services import analysis_service
+
+        return analysis_service
+
+    def _external_research_provider(self) -> Any:
+        factory = getattr(self, "external_research_provider_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.routers.external_research import get_external_research_provider
+
+        return get_external_research_provider()
+
+    @staticmethod
+    def _stock_symbol_from_args(args: dict[str, Any]) -> str | None:
+        for key in ("symbol", "ts_code", "stock_code"):
+            value = str(args.get(key) or "").strip()
+            if value:
+                return value
+        return None
+
+    @staticmethod
+    def _first_non_empty(*values: Any) -> str | None:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _unique_strings(values: list[Any]) -> list[str]:
+        seen: set[str] = set()
+        result: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if text and text not in seen:
+                seen.add(text)
+                result.append(text)
+        return result
+
+    @classmethod
+    def _stock_degraded_section(cls, *, dataset: str, symbol: str | None, reason_code: str, warning: str) -> dict[str, Any]:
+        as_of = utc_now().isoformat()
+        return {
+            "dataset": dataset,
+            "symbol": symbol,
+            "status": "degraded",
+            "summary": warning,
+            "source": "stock_analysis_read_adapter",
+            "source_refs": [f"stock-analysis:degraded:{dataset}:{symbol or 'unknown'}:{reason_code}"],
+            "as_of": as_of,
+            "reason_codes": [reason_code],
+            "warnings": [{"reason_code": reason_code, "warning": warning}],
+            "total": 0,
+            "items": [],
+        }
+
+    @classmethod
+    def _stock_section_from_envelope(cls, dataset: str, payload: dict[str, Any]) -> dict[str, Any]:
+        items = payload.get("items") if isinstance(payload.get("items"), list) else []
+        source_refs = payload.get("source_refs") if isinstance(payload.get("source_refs"), list) else []
+        warnings = payload.get("warnings") if isinstance(payload.get("warnings"), list) else []
+        reason_codes = payload.get("reason_codes") if isinstance(payload.get("reason_codes"), list) else []
+        return {
+            "dataset": str(payload.get("dataset") or dataset),
+            "symbol": payload.get("symbol"),
+            "status": str(payload.get("status") or ("ok" if items else "degraded")),
+            "summary": str(payload.get("summary") or ""),
+            "source": str(payload.get("source") or ""),
+            "source_refs": cls._unique_strings(source_refs),
+            "as_of": payload.get("as_of"),
+            "reason_codes": [str(item) for item in reason_codes if str(item)],
+            "warnings": [dict(item) for item in warnings[:5] if isinstance(item, dict)],
+            "total": int(payload.get("total") or len(items)),
+            "items": [dict(item) for item in items[:3] if isinstance(item, dict)],
+        }
+
+    @classmethod
+    def _stock_latest_as_of(cls, sections: list[dict[str, Any]]) -> str:
+        values = [str(section.get("as_of") or "") for section in sections if section.get("as_of")]
+        return sorted(values)[-1] if values else utc_now().isoformat()
+
+    def _stock_fundamental_section(self, *, symbol: str, limit: int) -> dict[str, Any]:
+        provider = self._external_research_provider()
+        query = f"{symbol} 主营业务 行业地位 竞争格局 发展趋势"
+        try:
+            raw_items = provider.search_web(query, locale="zh-CN", limit=min(max(limit, 1), 3))
+        except Exception as exc:  # noqa: BLE001
+            return self._stock_degraded_section(
+                dataset="fundamentals",
+                symbol=symbol,
+                reason_code="stock_external_research_search_failed",
+                warning=f"联网基本面检索失败：{type(exc).__name__}: {exc}",
+            )
+        items: list[dict[str, Any]] = []
+        for raw in raw_items or []:
+            compact = raw.compact() if hasattr(raw, "compact") else raw
+            if isinstance(compact, dict):
+                items.append(dict(compact))
+        source_refs = self._unique_strings([item.get("evidence_ref") or item.get("url") for item in items])
+        warnings: list[dict[str, str]] = []
+        reason_codes: list[str] = []
+        extracts: list[dict[str, Any]] = []
+        if items:
+            first_url = str(items[0].get("url") or "").strip()
+            if first_url:
+                try:
+                    extract = provider.fetch_extract(first_url, max_chars=1200)
+                    compact_extract = extract.compact(max_preview_chars=800) if hasattr(extract, "compact") else extract
+                    if isinstance(compact_extract, dict):
+                        extracts.append(dict(compact_extract))
+                        ref = compact_extract.get("evidence_ref") or compact_extract.get("url")
+                        if ref:
+                            source_refs = self._unique_strings([*source_refs, ref])
+                except Exception as exc:  # noqa: BLE001
+                    reason_codes.append("stock_external_research_fetch_failed")
+                    warnings.append(
+                        {
+                            "reason_code": "stock_external_research_fetch_failed",
+                            "warning": f"联网基本面正文抽取失败：{type(exc).__name__}: {exc}",
+                        }
+                    )
+        if not items:
+            return self._stock_degraded_section(
+                dataset="fundamentals",
+                symbol=symbol,
+                reason_code="stock_external_research_empty",
+                warning="联网基本面检索未返回可用网页证据。",
+            )
+        as_of = self._first_non_empty(*(item.get("as_of") for item in items), *(item.get("as_of") for item in extracts)) or utc_now().date().isoformat()
+        return {
+            "dataset": "fundamentals",
+            "symbol": symbol,
+            "status": "ok" if not reason_codes else "degraded",
+            "summary": f"{symbol} 联网基本面证据，覆盖主营业务、行业地位、竞争格局和发展趋势检索线索。",
+            "source": "external_research_provider",
+            "source_refs": source_refs,
+            "as_of": as_of,
+            "reason_codes": reason_codes,
+            "warnings": warnings,
+            "total": len(items) + len(extracts),
+            "items": [*items[:3], *extracts[:1]],
+        }
+
+    def _execute_stock_analysis_summary_read_tool(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-stock-analysis")
+        tool_name = str(tool.get("tool_name") or "stock_analysis_get_quote")
+        symbol = self._stock_symbol_from_args(args)
+        limit = int(args.get("limit") or 20)
+        period = str(args.get("period") or "1y")
+        analysis_date = str(args.get("analysis_date") or "").strip() or None
+        if not symbol:
+            section = self._stock_degraded_section(
+                dataset="request_scope",
+                symbol=None,
+                reason_code="stock_symbol_missing",
+                warning="未能从语义工具计划中取得明确股票代码或 symbol，未调用个股数据源。",
+            )
+            sections = [section]
+        else:
+            facade = self._stock_analysis_facade()
+            call_specs = [
+                ("quote", "get_stock_quote_evidence", {"symbol": symbol}),
+                ("kline", "get_stock_kline_evidence", {"symbol": symbol, "period": period, "analysis_date": analysis_date}),
+                ("financials", "get_stock_financials_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("quarterly", "get_stock_quarterly_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("margin_financing", "get_stock_margin_financing_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("fund_flow", "get_stock_fund_flow_evidence", {"symbol": symbol, "analysis_date": analysis_date}),
+                ("technicals", "get_stock_technicals_evidence", {"symbol": symbol, "period": period, "analysis_date": analysis_date}),
+            ]
+            sections = []
+            for dataset, method_name, call_kwargs in call_specs:
+                func = getattr(facade, method_name, None)
+                if not callable(func):
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_facade_missing",
+                            warning=f"个股只读 facade 缺少 {method_name}，该数据集已降级。",
+                        )
+                    )
+                    continue
+                try:
+                    payload_json = func(**call_kwargs)
+                except Exception as exc:  # noqa: BLE001
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_read_failed",
+                            warning=f"{dataset} 数据源读取失败：{type(exc).__name__}: {exc}",
+                        )
+                    )
+                    continue
+                if isinstance(payload_json, dict):
+                    sections.append(self._stock_section_from_envelope(dataset, payload_json))
+                else:
+                    sections.append(
+                        self._stock_degraded_section(
+                            dataset=dataset,
+                            symbol=symbol,
+                            reason_code=f"stock_{dataset}_invalid_payload",
+                            warning=f"{dataset} 数据源返回了非 JSON 对象，已降级。",
+                        )
+                    )
+            sections.append(self._stock_fundamental_section(symbol=symbol, limit=limit))
+
+        source_refs = self._unique_strings([ref for section in sections for ref in (section.get("source_refs") or [])])
+        reason_codes = self._unique_strings([code for section in sections for code in (section.get("reason_codes") or [])])
+        warnings = [warning for section in sections for warning in (section.get("warnings") or []) if isinstance(warning, dict)]
+        as_of = self._stock_latest_as_of(sections)
+        ok_sections = sum(1 for section in sections if str(section.get("status") or "") == "ok")
+        status = "ok" if ok_sections == len(sections) else "degraded" if ok_sections else "blocked"
+        items = [
+            {
+                "dataset": section.get("dataset"),
+                "status": section.get("status"),
+                "summary": section.get("summary"),
+                "source": section.get("source"),
+                "as_of": section.get("as_of"),
+                "source_refs": list(section.get("source_refs") or [])[:3],
+                "reason_codes": list(section.get("reason_codes") or [])[:3],
+                "preview": list(section.get("items") or [])[:2],
+            }
+            for section in sections
+        ]
+        result_json = summary_envelope(
+            domain="stock_analysis",
+            items=items,
+            total=len(items),
+            limit=min(max(limit, 1), 20),
+            offset=0,
+            omitted_sections=["raw_payload", "full_kline_dataframe", "database_rows", "full_text", "raw_html"],
+            detail_tool=f"{server_key}/{tool_name}",
+            detail_args_hint={"symbol": symbol or "<symbol>", "period": period, "analysis_date": analysis_date},
+            artifact_refs=[
+                artifact_ref(
+                    "stock_analysis_evidence_card",
+                    f"stock-analysis:{symbol or 'unknown'}",
+                    {"symbol": symbol, "as_of": as_of, "status": status, "section_count": len(sections)},
+                )
+            ],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "stock_analysis_evidence_card",
+                "evidence_card": True,
+                "symbol": symbol,
+                "status": status,
+                "source": "stock_analysis_read_adapter",
+                "source_refs": source_refs,
+                "as_of": as_of,
+                "sections": sections,
+                "fundamentals": next((section for section in sections if section.get("dataset") == "fundamentals"), {}),
+                "reason_codes": reason_codes,
+                "warnings": warnings,
+                "live_backend_called": True,
+                "next_step": "Use the evidence card to synthesize observations; do not convert it into buy/sell advice.",
+            },
+        )
+        assert_summary_payload(result_json)
+        card = {
+            "title": f"{symbol or '未指定股票'} 个股证据卡",
+            "summary": f"已生成个股证据卡：{ok_sections}/{len(sections)} 个板块有可用证据。",
+            "route": f"{server_key}/{tool_name}",
+            "summary_first": True,
+            "response_mode": "stock_analysis_evidence_card",
+            "status": status,
+            "next_step": result_json["next_step"],
+        }
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [card],
+            "artifact_refs": result_json.get("artifact_refs") or [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "stock_analysis_facade_read_adapter",
+        }
+
+    @staticmethod
+    def _should_use_local_data_daily_status_adapter(tool_name: str, args: dict[str, Any], payload: dict[str, Any]) -> bool:
+        if tool_name == "local_data_get_preset_daily_status":
+            return True
+        request = str(payload.get("request") or "")
+        route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        request = " ".join([request, str(route.get("reason") or "")]).lower()
+        if tool_name == "local_data_get_dataset_status":
+            has_dataset_arg = bool(str(args.get("dataset") or payload.get("dataset") or "").strip())
+            return not has_dataset_arg
+        if tool_name != "local_data_health_overview":
+            return False
+        sync_status_terms = (
+            "sync status",
+            "sync overview",
+            "data sync",
+            "\u540c\u6b65\u60c5\u51b5",
+            "\u540c\u6b65\u72b6\u6001",
+            "\u6570\u636e\u540c\u6b65",
+        )
+        collection_terms = ("summary", "summarize", "list", "which", "\u6c47\u603b", "\u5217\u8868", "\u54ea\u4e9b")
+        explicit_health_terms = ("health", "readiness", "ready", "\u5065\u5eb7", "\u5c31\u7eea")
+        if any(term in request for term in sync_status_terms) and not any(term in request for term in explicit_health_terms):
+            return True
+        return any(term in request for term in collection_terms) and "\u540c\u6b65" in request
+
+    def _qe_archive_repository(self) -> Any:
+        factory = getattr(self, "qe_archive_repository_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.qe_archive.repository import QEArchiveRepository
+
+        return QEArchiveRepository()
+
+    def _qe_experiment_facade_service(self) -> Any:
+        factory = getattr(self, "qe_experiment_service_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.quantevolver.config_composer import ConfigComposer
+
+        return ConfigComposer()
+
+    def _qe_custom_evo_facade_service(self) -> Any:
+        factory = getattr(self, "qe_custom_evo_service_factory", None)
+        if callable(factory):
+            return factory()
+        from backend.services.quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
+        return AutoEvolutionScheduler()
+
+    @staticmethod
+    def _run_awaitable_sync(awaitable: Any) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(awaitable)
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+
+        def runner() -> None:
+            try:
+                result_box["value"] = asyncio.run(awaitable)
+            except BaseException as exc:  # pragma: no cover - defensive thread handoff.
+                error_box["error"] = exc
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+        if error_box:
+            raise error_box["error"]
+        return result_box.get("value")
+
+    @staticmethod
+    def _maybe_await_sync(value: Any) -> Any:
+        if hasattr(value, "__await__"):
+            return ResearchAssistantExecutionMixin._run_awaitable_sync(value)
+        return value
+
+    @staticmethod
+    def _page_items_and_total(response: Any) -> tuple[list[dict[str, Any]], int]:
+        data = response.get("data") if isinstance(response, dict) else None
+        source = data if isinstance(data, dict) else response
+        if isinstance(source, dict):
+            raw_items = source.get("items")
+            if raw_items is None:
+                raw_items = source.get("rows")
+            if raw_items is None and "data" in source:
+                nested = source.get("data")
+                raw_items = nested.get("items") if isinstance(nested, dict) else nested
+            items = [dict(item) for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
+            total = int(source.get("total") or source.get("count") or len(items))
+            return items, total
+        if isinstance(source, list):
+            items = [dict(item) for item in source if isinstance(item, dict)]
+            return items, len(items)
+        return [], 0
+
+    @staticmethod
+    def _compact_qe_experiment_item(item: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "experiment_id",
+            "experiment_name",
+            "status",
+            "model_id",
+            "model_type",
+            "strategy_id",
+            "alpha_mode",
+            "qe_task_id",
+            "task_id",
+            "qe_loop_id",
+            "loop_id",
+            "loop_index",
+            "parent_experiment_id",
+            "is_evolution_loop",
+            "ic",
+            "icir",
+            "rank_ic",
+            "rank_icir",
+            "annualized_return",
+            "max_drawdown",
+            "information_ratio",
+            "archive_run_id",
+            "run_id",
+            "started_at",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        )
+        return {key: item.get(key) for key in keys if item.get(key) is not None}
+
+    @staticmethod
+    def _compact_qe_task_item(item: dict[str, Any]) -> dict[str, Any]:
+        keys = (
+            "task_id",
+            "task_name",
+            "target_desc",
+            "status",
+            "task_type",
+            "source_type",
+            "current_loop",
+            "max_loops",
+            "base_experiment_id",
+            "node_id",
+            "label_horizon",
+            "startable",
+            "resume_allowed",
+            "start_reason",
+            "created_at",
+            "updated_at",
+        )
+        compact = {key: item.get(key) for key in keys if item.get(key) is not None}
+        loop_counts = item.get("loop_status_counts")
+        if isinstance(loop_counts, dict):
+            compact["loop_status_counts"] = {str(key): int(value) for key, value in loop_counts.items()}
+        return compact
+
+    @staticmethod
+    def _count_by_status(items: list[dict[str, Any]], key: str = "status") -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in items:
+            status = str(item.get(key) or "unknown")
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    @staticmethod
+    def _request_mentions_custom_evo(payload: dict[str, Any]) -> bool:
+        route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+        selected_tool = payload.get("selected_tool") if isinstance(payload.get("selected_tool"), dict) else {}
+        text = " ".join(
+            str(part or "")
+            for part in (
+                payload.get("request"),
+                route.get("tool_name"),
+                selected_tool.get("tool_name"),
+            )
+        ).lower()
+        return (
+            "custom_evo" in text
+            or "custom evo" in text
+            or ("\u4efb\u52a1" in text and ("\u8fdb\u5ea6" in text or "\u6700\u65b0" in text or "loop" in text))
+        )
+
+    def _execute_qe_summary_read_tool(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any] | None:
+        tool_name = str(tool.get("tool_name") or "")
+        if tool_name.startswith("qe_archive_"):
+            return self._execute_qe_warehouse_summary_read(tool, payload, args)
+        if tool_name in {"qe_experiment_list", "qe_custom_evo_list_tasks"} or (
+            tool_name.startswith("qe_experiment_") and tool_name.endswith("_list")
+        ):
+            return self._execute_qe_experiment_summary_read(tool, payload, args)
+        return None
+
+    def _execute_qe_experiment_summary_read(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-qe")
+        tool_name = str(tool.get("tool_name") or "qe_experiment_list")
+        limit = int(args.get("limit") or payload.get("limit") or 20)
+        offset = int(args.get("offset") or payload.get("offset") or 0)
+        as_of = utc_now().isoformat()
+        partial_errors: list[dict[str, str]] = []
+        summary_kind = "custom_evo_tasks" if tool_name == "qe_custom_evo_list_tasks" or self._request_mentions_custom_evo(payload) else "qe_experiments"
+        items: list[dict[str, Any]] = []
+        total = 0
+        try:
+            if summary_kind == "custom_evo_tasks":
+                service = self._qe_custom_evo_facade_service()
+                response = service.get_all_tasks(detail="summary", limit=limit, offset=offset)
+                raw_items, total = self._page_items_and_total(self._maybe_await_sync(response))
+                items = [self._compact_qe_task_item(item) for item in raw_items[:limit]]
+                evidence_sources = ["qe_custom_evo_list_tasks"]
+            else:
+                service = self._qe_experiment_facade_service()
+                response = service.list_experiments(limit=limit, offset=offset, include_children=False, detail="summary")
+                raw_items, total = self._page_items_and_total(response)
+                items = [self._compact_qe_experiment_item(item) for item in raw_items[:limit]]
+                evidence_sources = ["qe_experiment_list"]
+            read_status = "ok"
+        except Exception as exc:  # noqa: BLE001
+            partial_errors.append({"source": tool_name, "error": str(exc)})
+            evidence_sources = [tool_name, "partial_read_errors"]
+            read_status = "failed"
+
+        result_json = summary_envelope(
+            domain="qe_experiment",
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            omitted_sections=["raw_payload", "full_logs", "model_weights", "training_curves", "factor_value_rows", "database_rows"],
+            detail_tool=f"{server_key}/{tool_name}",
+            artifact_refs=[],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "qe_experiment_status_summary",
+                "source": "qe_experiment_read_adapter",
+                "live_backend_called": True,
+                "read_status": read_status,
+                "summary_kind": summary_kind,
+                "as_of": as_of,
+                "status_counts": self._count_by_status(items),
+                "evidence_sources": evidence_sources,
+                "partial_errors": partial_errors,
+                "next_step": "Review QE experiment/task status; request a specific experiment or task ID for detail.",
+            },
+        )
+        assert_summary_payload(result_json)
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [
+                {
+                    "title": "QE experiment status summary",
+                    "summary": "Prepared QE experiment/task business status summary from read-only backend evidence.",
+                    "summary_kind": summary_kind,
+                    "status_counts": result_json["status_counts"],
+                    "next_step": result_json["next_step"],
+                }
+            ],
+            "artifact_refs": [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "qe_experiment_read_adapter",
+        }
+
+    @staticmethod
+    def _compact_qe_warehouse_item(tool_name: str, item: dict[str, Any]) -> dict[str, Any]:
+        fields_by_tool: dict[str, tuple[str, ...]] = {
+            "qe_archive_list_outbox": ("event_id", "event_type", "source_system", "source_id", "source_sub_id", "status", "retry_count", "next_retry_at", "locked_by", "locked_at", "error_message", "created_at", "updated_at"),
+            "qe_archive_list_runs": ("run_id", "source_system", "run_type", "status", "research_valid", "invalid_reason", "logical_experiment_id", "experiment_id", "task_id", "loop_id", "loop_index", "node_id", "model_type", "factor_count", "label_horizon", "completed_at", "archived_at", "metric_count", "curve_count", "factor_count_rows", "trade_count"),
+            "qe_archive_query_analytics_view_status": ("logical_name", "view_name", "available", "row_count", "purpose", "grain"),
+            "qe_archive_query_run_leaderboard": ("run_id", "task_id", "loop_index", "experiment_id", "model_type", "factor_count", "label_horizon", "ic", "icir", "rank_ic", "rank_icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "calmar", "random_seed", "verification_status", "score_total", "completed_at"),
+            "qe_archive_query_seed_robustness": ("factor_set_hash", "model_type", "label_horizon", "run_count", "distinct_seed_count", "random_seeds", "cagr_mean", "cagr_std", "cagr_worst", "cagr_best", "sharpe_mean", "ir_mean", "ir_worst", "max_drawdown_mean", "icir_mean", "rank_icir_mean", "is_return_stable", "latest_completed_at"),
+            "qe_archive_query_factor_performance": ("factor_name", "is_alpha158", "run_count", "best_cagr", "avg_cagr", "best_sharpe", "avg_sharpe", "best_icir", "avg_icir", "latest_used_at"),
+            "qe_archive_query_model_hyperparam_seed_perf": ("model_type", "model_family", "hyperparam_hash", "label_horizon", "random_seed", "objective_name", "objective_value", "ic", "icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "run_id", "task_id", "loop_index", "completed_at"),
+            "qe_archive_query_overfit_flags": ("run_id", "task_id", "loop_index", "model_type", "label_horizon", "random_seed", "cagr", "information_ratio", "icir", "training_failed", "convergence_ratio", "overfit_ratio", "flag_return_without_signal", "flag_undertrained_highret", "flag_seed_outlier", "is_suspicious"),
+            "qe_archive_query_promotion_candidates": ("factor_set_hash", "model_type", "label_horizon", "topk", "run_count", "distinct_seed_count", "random_seeds", "cagr_mean", "cagr_std", "cagr_worst", "cagr_best", "sharpe_mean", "ir_mean", "ir_worst", "max_drawdown_mean", "icir_mean", "rank_icir_mean", "is_return_stable", "latest_completed_at", "passes_gate"),
+            "qe_archive_query_evolution_lineage": ("task_id", "loop_index", "experiment_id", "run_id", "model_type", "label_horizon", "factor_count", "ic", "icir", "cagr", "sharpe", "information_ratio", "max_drawdown", "random_seed", "completed_at"),
+        }
+        fields = fields_by_tool.get(tool_name, tuple(item.keys()))
+        return {key: item.get(key) for key in fields if item.get(key) is not None}
+
+    def _execute_qe_warehouse_summary_read(self, tool: dict[str, Any], payload: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        server_key = str(tool.get("server_key") or "aistock-qe")
+        tool_name = str(tool.get("tool_name") or "qe_archive_health")
+        limit = int(args.get("limit") or payload.get("limit") or 20)
+        as_of = utc_now().isoformat()
+        partial_errors: list[dict[str, str]] = []
+        items: list[dict[str, Any]] = []
+        total = 0
+        summary_kind = tool_name.removeprefix("qe_archive_")
+        health_summary: dict[str, Any] = {}
+        try:
+            repo = self._qe_archive_repository()
+            if tool_name == "qe_archive_health":
+                health_summary = dict(repo.get_archive_summary())
+                items = [
+                    {
+                        "item_type": "warehouse_health",
+                        "run_count": health_summary.get("run_count"),
+                        "pending_outbox_count": health_summary.get("pending_outbox_count"),
+                        "latest_archived_at": health_summary.get("latest_archived_at"),
+                        "skip_count": health_summary.get("skip_count"),
+                        "manual_only_count": health_summary.get("manual_only_count"),
+                    }
+                ]
+                total = 1
+            elif tool_name == "qe_archive_list_outbox":
+                raw = repo.list_outbox_events(status=args.get("status"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_list_runs":
+                raw = repo.list_runs(status=args.get("status"), run_type=args.get("run_type"), search=args.get("search"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_analytics_view_status":
+                raw = repo.get_analytics_view_status()
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_run_leaderboard":
+                raw = repo.query_run_leaderboard(model_type=args.get("model_type"), min_icir=args.get("min_icir"), min_ir=args.get("min_ir"), limit=limit, order_by=str(args.get("order_by") or "cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_seed_robustness":
+                raw = repo.query_seed_robustness(model_type=args.get("model_type"), min_seed_count=int(args.get("min_seed_count") or 2), stable_only=bool(args.get("stable_only") or False), limit=limit, order_by=str(args.get("order_by") or "cagr_mean"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_factor_performance":
+                raw = repo.query_factor_performance(factor_name=args.get("factor_name"), min_runs=int(args.get("min_runs") or 1), limit=limit, order_by=str(args.get("order_by") or "best_cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_model_hyperparam_seed_perf":
+                raw = repo.query_model_hyperparam_seed_perf(model_type=args.get("model_type"), hyperparam_hash=args.get("hyperparam_hash"), limit=limit, order_by=str(args.get("order_by") or "cagr"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_overfit_flags":
+                raw = repo.query_overfit_flags(suspicious_only=bool(args.get("suspicious_only", True)), model_type=args.get("model_type"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_promotion_candidates":
+                raw = repo.query_promotion_candidates(model_type=args.get("model_type"), min_seed_count=int(args.get("min_seed_count") or 5), limit=limit, order_by=str(args.get("order_by") or "cagr_mean"))
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            elif tool_name == "qe_archive_query_evolution_lineage":
+                raw = repo.query_evolution_lineage(task_id=args.get("task_id"), experiment_id=args.get("experiment_id"), model_type=args.get("model_type"), limit=limit)
+                items = [self._compact_qe_warehouse_item(tool_name, item) for item in raw[:limit]]
+                total = len(raw)
+            else:
+                raw = repo.list_runs(limit=limit)
+                items = [self._compact_qe_warehouse_item("qe_archive_list_runs", item) for item in raw[:limit]]
+                total = len(raw)
+                summary_kind = "runs"
+            read_status = "ok"
+        except Exception as exc:  # noqa: BLE001
+            partial_errors.append({"source": tool_name, "error": str(exc)})
+            read_status = "failed"
+
+        result_json = summary_envelope(
+            domain="qe_warehouse",
+            items=items,
+            total=total,
+            limit=limit,
+            offset=int(args.get("offset") or 0),
+            omitted_sections=["raw_payload", "full_logs", "matrix", "model_weights", "training_curves", "database_rows"],
+            detail_tool=f"{server_key}/{tool_name}",
+            artifact_refs=[],
+            extra={
+                "server_key": server_key,
+                "tool_name": tool_name,
+                "summary_first": True,
+                "response_mode": "qe_warehouse_business_summary",
+                "source": "qe_archive_read_adapter",
+                "live_backend_called": True,
+                "read_status": read_status,
+                "summary_kind": summary_kind,
+                "as_of": as_of,
+                "status_counts": self._count_by_status(items),
+                "health_summary": health_summary,
+                "evidence_sources": [tool_name] if not partial_errors else [tool_name, "partial_read_errors"],
+                "partial_errors": partial_errors,
+                "next_step": "Review QE warehouse health, outbox, archive runs, or analytics rows; request a specific run/task for detail.",
+            },
+        )
+        assert_summary_payload(result_json)
+        return {
+            "status": "succeeded",
+            "result_json": result_json,
+            "result_cards": [
+                {
+                    "title": "QE warehouse business summary",
+                    "summary": "Prepared QE warehouse business summary from read-only repository evidence.",
+                    "summary_kind": summary_kind,
+                    "status_counts": result_json["status_counts"],
+                    "next_step": result_json["next_step"],
+                }
+            ],
+            "artifact_refs": [],
+            "error_json": {},
+            "retry_count": 0,
+            "transport": "qe_archive_read_adapter",
+        }
+
     def _execute_summary_first_read_tool(self, tool: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         server_key = str(tool.get("server_key") or "")
         tool_name = str(tool.get("tool_name") or "")
         args = self._summary_adapter_args(payload)
-        if server_key == "aistock-local-data" and tool_name == "local_data_get_preset_daily_status":
+        if server_key == "aistock-stock-analysis":
+            return self._execute_stock_analysis_summary_read_tool(tool, payload, args)
+        if server_key == "aistock-local-data" and self._should_use_local_data_daily_status_adapter(tool_name, args, payload):
             return self._execute_local_data_daily_status_read(tool, payload, args)
+        if server_key == "aistock-qe":
+            qe_result = self._execute_qe_summary_read_tool(tool, payload, args)
+            if qe_result is not None:
+                return qe_result
         server = self.repository.find_one("mcp_servers", {"server_key": server_key}) or {}
         health = server.get("health_json") if isinstance(server.get("health_json"), dict) else {}
         domain = str(health.get("domain") or server_key)
+        business_label = self._humanize_identifier(str(tool.get("module") or domain))
         limit = int(args.get("limit") or 20)
         offset = int(args.get("offset") or 0)
         items, total = self._summary_adapter_items(tool, args, limit=limit, offset=offset)
@@ -765,6 +1455,7 @@ class ResearchAssistantExecutionMixin:
                 "response_mode": "summary",
                 "source": "research_assistant_catalog_summary_adapter",
                 "live_backend_called": False,
+                "business_label": business_label,
                 "next_step": "Use the referenced detail tool or execute the backend MCP facade when live data is required.",
                 **(
                     {
@@ -782,10 +1473,9 @@ class ResearchAssistantExecutionMixin:
         )
         assert_summary_payload(result_json)
         card = {
-            "title": f"{server_key}/{tool_name}",
-            "summary": f"Prepared a summary-first MCP result envelope for {domain}; heavy sections are omitted or referenced.",
+            "title": self._humanize_identifier(tool_name),
+            "summary": f"已生成{self._humanize_identifier(domain)}业务概要；主回复仅展示可读结果。",
             "route": f"{server_key}/{tool_name}",
-            "summary_first": True,
             "next_step": result_json["next_step"],
         }
         return {
@@ -818,12 +1508,14 @@ class ResearchAssistantExecutionMixin:
         try:
             daily = service.get_preset_daily_status()
         except Exception as exc:  # noqa: BLE001
+            message = str(exc)
+            reason_code = "data_source_unavailable" if any(term in message.lower() for term in ("connection", "refused", "timeout", "unavailable", "offline")) else "tool_execution_error"
             return {
                 "status": "failed",
                 "result_json": {},
                 "result_cards": [{"title": f"{server_key}/{tool_name}", "summary": f"local-data read failed: {exc}"}],
                 "artifact_refs": [],
-                "error_json": {"code": "local_data_daily_status_read_failed", "human_reason": str(exc), "retryable": True},
+                "error_json": {"code": reason_code, "reason_code": reason_code, "human_reason": message, "exception_type": type(exc).__name__, "retryable": True},
                 "retry_count": 0,
                 "transport": "local_data_facade_read_adapter",
             }
@@ -1125,7 +1817,7 @@ class ResearchAssistantExecutionMixin:
                 return [
                     {
                         "title": f"Extracted evidence for {url}",
-                        "summary": "Capped extract preview; full content is behind detail_ref.",
+                        "summary": "已生成受限长度的正文摘录预览，完整内容可按链接继续查看。",
                         "url": url,
                         "source": "external_research_summary_adapter",
                         "as_of": as_of,
@@ -1139,7 +1831,7 @@ class ResearchAssistantExecutionMixin:
             return [
                 {
                     "title": f"{query} external evidence candidate",
-                    "summary": f"Summary-first {result_type} evidence for {query}; use as hypothesis evidence, not a final conclusion.",
+                    "summary": f"已找到 {query} 的{result_type}研究线索；只能作为假设证据，不能直接当作最终结论。",
                     "url": f"https://example.org/external-research/{digest[:12]}",
                     "source": "external_research_summary_adapter",
                     "as_of": as_of,
@@ -1149,19 +1841,48 @@ class ResearchAssistantExecutionMixin:
                     "detail_ref": {"server": server_key, "tool": "external_research_fetch_extract", "args_hint": {"url": "<url>", "max_chars": 2000}},
                 }
             ][:limit], 1
-        return [
-            {
-                "item_type": "mcp_read_tool_summary",
-                "server_key": server_key,
-                "tool_name": tool_name,
-                "title": tool.get("title"),
-                "risk_level": tool.get("risk_level"),
-                "side_effect_level": tool.get("side_effect_level"),
-                "requires_approval": bool(tool.get("requires_approval")),
-                "status": tool.get("status"),
-                "summary_first_contract": "list/search/overview returns compact fields; detail and heavy artifacts stay behind refs.",
-            }
-        ], 1
+        return [self._summary_adapter_business_item(tool, args)], 1
+
+    @staticmethod
+    def _humanize_identifier(value: str) -> str:
+        words = [part for part in value.replace("-", "_").split("_") if part]
+        acronyms = {"api", "bug", "ic", "mcp", "qe", "rankic", "url"}
+        rendered = [word.upper() if word.lower() in acronyms else word for word in words]
+        return " ".join(rendered) if rendered else "business query"
+
+    @staticmethod
+    def _summary_adapter_business_item(tool: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        tool_name = str(tool.get("tool_name") or "")
+        title = str(tool.get("title") or ResearchAssistantExecutionMixin._humanize_identifier(tool_name))
+        query = str(args.get("query") or args.get("q") or args.get("search") or args.get("request") or "").strip()
+        input_schema = tool.get("input_schema_json") if isinstance(tool.get("input_schema_json"), dict) else {}
+        required = [str(item) for item in input_schema.get("required", []) if str(item)]
+        supplied_args = {
+            str(key): value
+            for key, value in args.items()
+            if key not in {"route", "mcp_route_decision", "selected_tool", "limit", "offset"} and value not in (None, "", [], {})
+        }
+        side_effect = str(tool.get("side_effect_level") or "read_only")
+        safety = "只读查询，不会执行写入、长任务或生产变更。" if side_effect == "read_only" else "需要预检和明确确认后才能执行。"
+        if required:
+            missing = [key for key in required if key not in supplied_args]
+            next_action = "请补充必要参数：" + "、".join(missing) + "。" if missing else "必要参数已给出，可继续查看结果或进入预检。"
+        elif supplied_args:
+            next_action = "可以继续指定筛选条件或对象 ID 获取更精确的结果。"
+        else:
+            next_action = "可以继续指定筛选条件、日期窗口或对象 ID 获取明细。"
+        item: dict[str, Any] = {
+            "title": title,
+            "status": str(tool.get("status") or "enabled"),
+            "summary": f"已准备“{title}”的业务概要入口。",
+            "safety_boundary": safety,
+            "next_action": next_action,
+        }
+        if query:
+            item["query"] = query
+        if supplied_args:
+            item["requested_args"] = supplied_args
+        return item
 
     @staticmethod
     def _summary_adapter_detail_tool(server_key: str, tool_name: str) -> str | None:

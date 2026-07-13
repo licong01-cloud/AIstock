@@ -1,0 +1,99 @@
+{
+  "actual": "trading_core/ledger.py keeps cash/notional/fee in float with a 1e-8 epsilon overdraft guard (drift on 8-figure accounts), applies the 5-yuan min commission per fill (live produces many fills per order -> N x 5 overcharge), and enforces no board-lot (100 shares) at apply_fill.",
+  "allowed_write_scope": [
+    "backend/services/trading_core/ledger.py",
+    "backend/tests/paper_trading_v2/test_localsim_backend.py",
+    "tests/aistock_validation/bugs/20260622_BUG-465-p1-paper-v2-localsim-inmemoryledger-decimal-money-math-per-order-min-com.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-465-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-465",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T19:11:16.522175Z",
+  "description": "[LocalSim L4] trading_core/ledger.py InMemoryLedger: (a) cash/notional/fee are float with a 1e-8 epsilon overdraft guard (115) -> drift accumulates in the authoritative carried-forward cash_after on 8-figure accounts and the epsilon masks small overdrafts / rejects valid boundary orders. (b) the 5-yuan minimum commission is applied per Fill (32), but the live path produces many fills per order across minute bars -> up to N x 5 overcharge vs the real per-ORDER A-share minimum. (c) no board-lot (100-share) enforcement at apply_fill. FIX: move cash/notional/fee to Decimal with explicit quantization and drop the 1e-8 epsilon; apply the min commission per order (incremental = max(0, order_min_or_rate_so_far - already_charged)); enforce 100-share board-lot at apply_fill (odd-lot only for full-position sells), fail loud otherwise. MiniQMT untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-a75fc7b4f7fe",
+      "timestamp": "2026-06-21T19:11:16.522170Z"
+    },
+    {
+      "action": "scope_expanded_for_required_handoff",
+      "actor": "codex",
+      "note": "Direct lane instruction required independent analysis handoff at docs/handoff/BUG-465-analysis.md before code changes; scope expanded before creating the file.",
+      "timestamp": "2026-06-21T21:47:25.587898Z"
+    },
+    {
+      "action": "validation_passed",
+      "actor": "codex",
+      "note": "BUG-465 LocalSim Decimal money math, per-order minimum commission, and board-lot guardrails validated in isolated worktree.",
+      "timestamp": "2026-06-21T21:47:25.587898Z"
+    },
+    {
+      "action": "pr_opened",
+      "actor": "codex",
+      "note": "Opened PR #1443 for Tier2 review; no merge performed by this lane.",
+      "timestamp": "2026-06-21T21:47:25.587898Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/handoff/BUG-465-analysis.md"
+  ],
+  "expected": "Move InMemoryLedger cash/notional/fee to Decimal with explicit quantization and drop the 1e-8 epsilon; apply the min commission per ORDER not per fill; enforce 100-share board-lot at apply_fill (odd-lot only for full-position sells), fail loud otherwise. MiniQMT untouched.",
+  "first_seen_at": "2026-06-21T19:11:16.522175Z",
+  "fix_branch": "bug/BUG-465-p1-paper-v2-localsim-inmemoryledger-decimal-mone-20260622",
+  "fix_commit": "84004919c1521399d9a97ab5e57b036def2db3fd",
+  "fixed_at": "2026-06-22T08:20:41.177552Z",
+  "github_issue_number": 1430,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1430",
+  "last_seen_at": "2026-06-21T19:11:16.522175Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1443",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect trading_core/ledger.py float math + 1e-8 guard + per-fill min_cost; no board-lot check.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][Paper v2][LocalSim] InMemoryLedger Decimal money math + per-order min commission + board-lot enforcement",
+  "trigger_condition": {
+    "fingerprint": "a75fc7b4f7fe15cdc3d89f6d",
+    "source_event_id": "FE-20260622-a75fc7b4f7fe"
+  },
+  "validation_evidence": [
+    "gh pr checks 1443 -> 17 passed, 0 failed"
+  ],
+  "verification_run_id": "BUG-465-20260622-pr-ready",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix"
+}

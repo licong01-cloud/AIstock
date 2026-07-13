@@ -29,27 +29,40 @@ def save_env_config(payload: Dict[str, Any]) -> Dict[str, Any]:
     Expected payload shape: {KEY: VALUE, ...} or {"config": {KEY: VALUE}}.
     """
 
-    data = payload.get("config") if isinstance(payload.get("config"), dict) else payload
-    if not isinstance(data, dict):
+    if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
+    if "config" in payload:
+        data = payload["config"]
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=400, detail="Invalid payload")
+    else:
+        data = payload
 
     # Normalise all values to strings
     normalized: Dict[str, str] = {}
     for key, value in data.items():
+        normalized_key = str(key)
         if value is None:
-            normalized[key] = ""
+            normalized[normalized_key] = ""
         elif isinstance(value, bool):
-            normalized[key] = "true" if value else "false"
+            normalized[normalized_key] = "true" if value else "false"
         else:
-            normalized[key] = str(value)
+            normalized[normalized_key] = str(value)
 
     ok, msg = config_manager.validate_config(normalized)
     if not ok:
         raise HTTPException(status_code=400, detail=msg)
 
-    if not config_manager.write_env(normalized):
+    try:
+        saved = config_manager.write_env(normalized)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not saved:
         raise HTTPException(status_code=500, detail="保存配置失败，请检查服务器日志")
 
-    config_manager.reload_config()
+    try:
+        config_manager.reload_config()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return {"ok": True, "message": msg}

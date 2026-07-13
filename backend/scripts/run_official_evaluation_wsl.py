@@ -26,6 +26,10 @@ if str(REPO_ROOT) not in sys.path:
 from backend.services.quantevolver.factor_official_evaluation_service import (  # noqa: E402
     FactorOfficialEvaluationService,
 )
+from backend.services.quantevolver.official_factor_batch_compute_service import (  # noqa: E402
+    OfficialFactorBatchComputeService,
+)
+from backend.services.quantevolver.wsl_runtime_guard import assert_wsl_runtime  # noqa: E402
 
 
 def _emit(obj: dict) -> None:
@@ -39,7 +43,13 @@ def main() -> int:
 
     payload_path = Path(sys.argv[1])
     try:
+        assert_wsl_runtime("run_official_evaluation_wsl")
         payload = json.loads(payload_path.read_text(encoding="utf-8"))
+        if payload.get("task_type") == "official_factor_full_compute" or payload.get("handler_task_type") == "official_factor_full_compute":
+            result = OfficialFactorBatchComputeService().compute(payload)
+            _emit({"type": "result", "data": result})
+            return 0 if result.get("success") else 1
+
         svc = FactorOfficialEvaluationService()
         result = svc._compute_local(
             factor_names=payload.get("factor_names"),

@@ -21,6 +21,7 @@ class McpDomain(str, Enum):
     STRATEGY_GOVERNANCE = "strategy_governance"
     EXECUTION_POLICY = "execution_policy"
     EXTERNAL_RESEARCH = "external_research"
+    STOCK_ANALYSIS = "stock_analysis"
     GENERAL = "general"
 
 
@@ -183,7 +184,13 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         risk_policy="readiness_plan_confirmed_promotion_retirement",
         summary_zh="StrategyPackage governance, health, Selection/Paper readiness, promotion and retirement",
         synonyms=("strategy governance", "strategy package", "strategy library", "selection readiness", "paper readiness", "paper v2", "promotion", "retirement", "strategy health", "策略库", "策略包", "策略治理", "选股就绪", "模拟盘就绪", "晋升策略", "退役策略", "celue ku", "package health"),
-        read_tools=("strategy_governance_list_packages", "strategy_governance_get_package", "strategy_governance_get_health"),
+        read_tools=(
+            "strategy_governance_list_packages",
+            "strategy_governance_get_package",
+            "strategy_governance_get_health",
+            "strategy_governance_get_selection_readiness",
+            "strategy_governance_get_paper_readiness",
+        ),
         plan_tools=("strategy_governance_plan_promotion", "strategy_governance_plan_retirement"),
         confirmed_tools=("strategy_governance_promote_confirmed", "strategy_governance_retire_confirmed"),
         prompt_key="domain.strategy_governance",
@@ -235,6 +242,58 @@ DOMAIN_SPECS: dict[McpDomain, DomainSpec] = {
         plan_tools=("external_research_save_evidence",),
         confirmed_tools=(),
         prompt_key="domain.external_research",
+    ),
+    McpDomain.STOCK_ANALYSIS: DomainSpec(
+        domain=McpDomain.STOCK_ANALYSIS,
+        intent_value="stock_analysis_request",
+        server_key="aistock-stock-analysis",
+        default_tool="stock_analysis_get_quote",
+        risk_policy="read_only_stock_data_then_external_evidence",
+        summary_zh="Individual stock quote, kline, financial, fund-flow, margin, technical and external-fundamental evidence cards",
+        synonyms=(
+            "stock analysis",
+            "individual stock",
+            "stock evidence",
+            "stock evidence card",
+            "quote",
+            "kline",
+            "financials",
+            "fund flow",
+            "margin financing",
+            "technicals",
+            "个股",
+            "股票分析",
+            "证据卡",
+            "行情",
+            "K线",
+            "财务",
+            "资金流",
+            "融资融券",
+            "技术指标",
+            "主营业务",
+            "行业地位",
+            "竞争格局",
+            "发展趋势",
+            "基本情况",
+            "近期走势",
+            "走势",
+            "未来趋势",
+            "全方位分析",
+        ),
+        read_tools=(
+            "stock_analysis_get_quote",
+            "stock_analysis_get_kline",
+            "stock_analysis_get_financials",
+            "stock_analysis_get_quarterly",
+            "stock_analysis_get_margin_financing",
+            "stock_analysis_get_fund_flow",
+            "stock_analysis_get_technicals",
+            "external_research_search_web",
+            "external_research_fetch_extract",
+        ),
+        plan_tools=(),
+        confirmed_tools=(),
+        prompt_key="domain.stock_analysis",
     ),
 }
 

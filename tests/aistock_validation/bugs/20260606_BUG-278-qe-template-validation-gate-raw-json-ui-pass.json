@@ -1,14 +1,4 @@
 {
-  "bug_id": "BUG-278",
-  "title": "QE template validation gate lets incomplete raw-JSON pending-task UI pass",
-  "description": "GitHub Issue #115 was originally titled BUG-087, but local BUG-087 is already fixed for a different MiniQMT daily-selection lifecycle issue. This record preserves the real open QE template validation/UI completeness bug under a new unique BUG ID.",
-  "module": "qe",
-  "severity": "P1",
-  "risk_area": "validation_gap",
-  "github_issue_number": 115,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/115",
-  "reproduce_command": "Review QE template pending UI and validation coverage for raw JSON reliance, complete structured fields, delete coverage, and full experiment/task identifiers.",
-  "expected": "QE template UI and L3 validation fail when the pending-template workflow lacks structured configuration UI, delete coverage, or complete operator identifiers.",
   "actual": "Current validation can pass with raw JSON-centric or incomplete pending-template operator coverage.",
   "allowed_write_scope": [
     "backend/tests/qe_templates/",
@@ -18,46 +8,63 @@
     "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/bugs/20260606_BUG-278-qe-template-validation-gate-raw-json-ui-pass.json"
   ],
-  "required_verification": [
-    "l0",
-    "validation_catalog_integrity",
-    "frontend_targeted_template_ui_validation"
-  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-278",
+  "closed_at": null,
   "closure_requirements": [
     "Playwright or equivalent UI validation rejects raw JSON as the full editor path.",
     "Structured configuration fields and custom_evo loop editing are covered without raw JSON dependency.",
     "Delete button/API behavior is covered after BUG-277 or in the same compatible batch.",
     "Main list/detail page expose complete operator identifiers and review context."
   ],
+  "created_at": "2026-06-06T06:26:19Z",
+  "description": "GitHub Issue #115 was originally titled BUG-087, but local BUG-087 is already fixed for a different MiniQMT daily-selection lifecycle issue. This record preserves the real open QE template validation/UI completeness bug under a new unique BUG ID.",
+  "events": [
+    {
+      "action": "github_registry_renumber",
+      "actor": "codex",
+      "note": "Renumbered GitHub Issue #115 from BUG-087 to BUG-278 because the previous BUG ID already exists locally with a different fixed issue.",
+      "timestamp": "2026-06-06T06:26:19Z"
+    }
+  ],
   "evidence_uris": [
     "GitHub Issue #115",
     "rg search found supersede-only current behavior on 2026-06-06"
   ],
-  "previous_conflicting_bug_id": "BUG-087",
-  "schema_version": "aistock_validation_bug_v1",
-  "status": "open",
-  "created_at": "2026-06-06T06:26:19Z",
+  "expected": "QE template UI and L3 validation fail when the pending-template workflow lacks structured configuration UI, delete coverage, or complete operator identifiers.",
   "first_seen_at": "2026-06-06T06:26:19Z",
-  "last_seen_at": "2026-06-06T06:26:19Z",
-  "fixed_at": null,
-  "closed_at": null,
-  "assigned_agent": null,
   "fix_branch": null,
-  "fix_commit": null,
-  "pr_url": null,
+  "fix_commit": "1054023397873ddd396b5a0d17d96e87b4d0e86c",
+  "fixed_at": "2026-06-21T18:38:10.597898Z",
+  "github_issue_number": 115,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/115",
+  "last_seen_at": "2026-06-06T06:26:19Z",
+  "module": "qe",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/810",
+  "previous_conflicting_bug_id": "BUG-087",
+  "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "production_backend_dependency_gate": "noop",
+  "reproduce_command": "Review QE template pending UI and validation coverage for raw JSON reliance, complete structured fields, delete coverage, and full experiment/task identifiers.",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity",
+    "frontend_targeted_template_ui_validation"
+  ],
+  "risk_area": "validation_gap",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
   "suspected_modules": [
     "backend/services/qe_templates",
     "frontend/src/app/quantevolver/templates"
   ],
-  "events": [
-    {
-      "timestamp": "2026-06-06T06:26:19Z",
-      "actor": "codex",
-      "action": "github_registry_renumber",
-      "note": "Renumbered GitHub Issue #115 from BUG-087 to BUG-278 because the previous BUG ID already exists locally with a different fixed issue."
-    }
+  "title": "QE template validation gate lets incomplete raw-JSON pending-task UI pass",
+  "validation_evidence": [
+    "python -m pytest F:/Dev/AIstock/backend/tests/qe_templates/test_template_validator.py -q -p no:cacheprovider -> 16 passed",
+    "npm run test:e2e -- tests/qe-templates -> 4 passed",
+    "python -m nox -f F:/Dev/AIstock/noxfile.py -s validation_catalog_integrity -> passed",
+    "python -m nox -f F:/Dev/AIstock/noxfile.py -s l0 -> passed",
+    "python -m nox -f F:/Dev/AIstock/noxfile.py -s qe_template_ui -- 8011 3011 -> blocked by unrelated Research Assistant TS2322 in frontend/tests/research-assistant/phase5-mcp-gateway-ui.spec.ts"
   ]
 }

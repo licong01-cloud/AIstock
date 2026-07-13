@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, PlainTextResponse
 import io
 from urllib.parse import quote
 
+from ..services import analysis_service as analysis_service_module
 from ..services.analysis_service import (
     analyze_stock,
     analyze_stock_trend,
@@ -33,6 +34,10 @@ from ..models.analysis import (
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+
+def get_stock_analysis_evidence_service():
+    return analysis_service_module
 
 
 @router.post("/stock", response_model=StockAnalysisResponse, summary="股票分析（多智能体）")
@@ -71,6 +76,41 @@ def stock_quote_endpoint(symbol: str) -> StockQuote:
     """
 
     return get_realtime_quote(symbol)
+
+
+@router.get("/stock/evidence/quote/{symbol}", summary="个股行情证据卡（只读）")
+def stock_quote_evidence_endpoint(symbol: str, service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_quote_evidence(symbol)
+
+
+@router.get("/stock/evidence/kline/{symbol}", summary="个股K线证据卡（只读）")
+def stock_kline_evidence_endpoint(symbol: str, period: str = Query("1y"), analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_kline_evidence(symbol, period=period, analysis_date=analysis_date)
+
+
+@router.get("/stock/evidence/financials/{symbol}", summary="个股财务摘要证据卡（只读）")
+def stock_financials_evidence_endpoint(symbol: str, analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_financials_evidence(symbol, analysis_date=analysis_date)
+
+
+@router.get("/stock/evidence/quarterly/{symbol}", summary="个股季报证据卡（只读）")
+def stock_quarterly_evidence_endpoint(symbol: str, analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_quarterly_evidence(symbol, analysis_date=analysis_date)
+
+
+@router.get("/stock/evidence/margin-financing/{symbol}", summary="个股融资融券证据卡（只读）")
+def stock_margin_financing_evidence_endpoint(symbol: str, analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_margin_financing_evidence(symbol, analysis_date=analysis_date)
+
+
+@router.get("/stock/evidence/fund-flow/{symbol}", summary="个股资金流向证据卡（只读）")
+def stock_fund_flow_evidence_endpoint(symbol: str, analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_fund_flow_evidence(symbol, analysis_date=analysis_date)
+
+
+@router.get("/stock/evidence/technicals/{symbol}", summary="个股技术指标证据卡（只读）")
+def stock_technicals_evidence_endpoint(symbol: str, period: str = Query("1y"), analysis_date: str | None = Query(None), service=Depends(get_stock_analysis_evidence_service)) -> dict:
+    return service.get_stock_technicals_evidence(symbol, period=period, analysis_date=analysis_date)
 
 
 @router.post(

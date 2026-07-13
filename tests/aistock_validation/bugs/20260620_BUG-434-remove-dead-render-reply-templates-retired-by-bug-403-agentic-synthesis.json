@@ -1,0 +1,139 @@
+{
+  "actual": "Claude Tier2 复审记录旧业务模板已 dead，代码中仍残留待清理。",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260620_BUG-434-remove-dead-render-reply-templates-retired-by-bug-403-agentic-synthesis.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-434",
+  "closed_at": "2026-06-20T14:29:18Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T04:55:48.460160Z",
+  "description": "Claude Tier2 复审记录旧业务模板已 dead，代码中仍残留待清理。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260620-68c943c96587",
+      "timestamp": "2026-06-20T04:55:48.460156Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "added_scope": [
+        "backend/tests/research_assistant/test_service.py"
+      ],
+      "note": "Add backend/tests/research_assistant/test_service.py for BUG-434 regression updates proving the four BUG-403 business modes still use agentic/LLM synthesis after deleting statically unreachable render templates; product scope remains service.py only.",
+      "timestamp": "2026-06-20T05:04:17.673331Z"
+    },
+    {
+      "action": "implementation_validation",
+      "actor": "codex",
+      "ddl_touched": false,
+      "deleted_helpers": [
+        "_stock_missing_data_source_notice",
+        "_format_metric_bits",
+        "_format_numeric_metric",
+        "_qe_leaderboard_display_name",
+        "QE_BUSINESS_RESPONSE_MODES"
+      ],
+      "deleted_renderers": [
+        "_render_stock_analysis_evidence_card_reply",
+        "_render_local_data_daily_status_reply",
+        "_render_qe_run_leaderboard_reply",
+        "_render_qe_experiment_status_reply",
+        "_render_compact_business_item",
+        "_render_qe_warehouse_business_reply"
+      ],
+      "note": "Implementation complete: removed statically unreachable BUG-403 retired business reply templates and helpers from service.py; preserved error/safe-preflight/generic renderers; added regression test that local_data/qe_experiment/qe_warehouse/stock business modes keep model-synthesized replies and removed renderers are absent. Validation: targeted pytest 5 passed, test_service.py 75 passed, nox l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed + Playwright 4+8 passed + crosscheck/catalog/ownership passed, git diff --check passed, ruff passed. No production services, production DB, or DDL touched.",
+      "production_db_touched": false,
+      "production_runtime_touched": false,
+      "timestamp": "2026-06-20T07:34:27.898168Z"
+    },
+    {
+      "action": "post_rebase_validation",
+      "actor": "codex",
+      "base_commit": "27c089d4",
+      "ddl_touched": false,
+      "note": "Rebased BUG-434 branch onto latest origin/main 27c089d4; reran required validations successfully: l0 passed, research_assistant_backend 284 passed, research_assistant_mcp_contract 38 passed, validation_module_registry_l0 8 passed, ra_phase7_full_accept passed with backend 284 passed plus Playwright 4+8 passed plus crosscheck/catalog/ownership passed; git diff --check and ruff passed. Test port 3011 was used only by nox Playwright and left with no listener; no production services, production DB, or DDL touched.",
+      "production_db_touched": false,
+      "production_runtime_touched": false,
+      "timestamp": "2026-06-20T07:59:56.434649Z"
+    },
+    {
+      "action": "close_sync_metadata_finalized",
+      "actor": "codex",
+      "timestamp": "2026-06-20T14:40:15.655996Z",
+      "note": "Finalized BUG-434 close-sync metadata after PR #1348 and close-sync PR #1350 were merged. PR #1348 Tier2-reviewed commit 181f70fb was rebased to head 035982d49 before merge; source merge commit is 933a4a24. GitHub Issue #1338 is closed with status:fixed. No services started, no production DB touched, no DDL executed.",
+      "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1348",
+      "close_sync_pr_url": "https://github.com/licong01-cloud/AIstock/pull/1350",
+      "tier2_commit": "181f70fb",
+      "post_rebase_fix_commit": "035982d49f352283eeb839e01d435447df37a255",
+      "merge_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9",
+      "close_sync_merge_commit": "a578eb17a6939c87a23d283cefeb692a8595be15",
+      "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
+      "production_runtime_touched": false,
+      "production_db_touched": false,
+      "ddl_touched": false
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "四个业务模式继续走 agentic/LLM synthesis；静态不可达的旧业务模板被删除且无悬挂引用；错误/运行时兜底模板保留。",
+  "first_seen_at": "2026-06-20T04:55:48.460160Z",
+  "fix_branch": "bug/BUG-434-remove-dead-render-reply-templates-retired-by-bu-20260620",
+  "fix_commit": "035982d49f352283eeb839e01d435447df37a255",
+  "fixed_at": "2026-06-20T14:29:44.879810Z",
+  "github_issue_number": 1338,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1338",
+  "last_seen_at": "2026-06-20T04:55:48.460160Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1348",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Remove dead _render_*reply templates retired by BUG-403 agentic synthesis",
+  "trigger_condition": {
+    "fingerprint": "68c943c96587821727ab3fbb",
+    "source_event_id": "FE-20260620-68c943c96587"
+  },
+  "validation_evidence": [
+    "PR #1348 CI after rebase to origin/main b9a1e0fb: all required checks success; only docs-lite/workflow/validation LLM jobs skipped by CI design"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "merge_commit": "933a4a24cebc75962090cdca2d671bdf870dfbe9"
+}

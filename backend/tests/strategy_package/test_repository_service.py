@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime, timezone
 
 import psycopg2
-from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.manifest import compute_manifest_json_sha256, freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
 from backend.services.strategy_package.models import LiveApprovalStatus, PackageStatus, StrategyPackageLiveApproval
@@ -19,6 +19,7 @@ from backend.services.strategy_package.validation_run import (
 )
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_multi_alpha_live_selection import _make_parent
 
 import pytest
 
@@ -117,13 +118,24 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
     repo.mark_paper_portfolio_created(saved.package_id, "paper_1")
 
     assert saved.manifest_sha256 == manifest.manifest_sha256
-    assert selected.package_status == PackageStatus.BACKTEST_APPROVED
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert selected.package_status == PackageStatus.SELECTION_ENABLED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
     assert repo.get(saved.package_id).paper_portfolio_count == 1
     assert [event.reason for event in repo.list_status_events(saved.package_id)] == [
         "package_created",
+        "enable_selection",
+        "enable_paper",
         "paper_portfolio_created",
     ]
+    lifecycle_events = repo.list_status_events(saved.package_id)
+    assert (lifecycle_events[1].from_status, lifecycle_events[1].to_status) == (
+        PackageStatus.BACKTEST_APPROVED,
+        PackageStatus.SELECTION_ENABLED,
+    )
+    assert (lifecycle_events[2].from_status, lifecycle_events[2].to_status) == (
+        PackageStatus.SELECTION_ENABLED,
+        PackageStatus.PAPER_ENABLED,
+    )
 
 
 def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
@@ -137,7 +149,30 @@ def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
 
     paper = service.enable_paper(manifest.package_id)
 
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+
+
+def test_enable_paper_rejects_draft_direct_transition_with_context() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.DRAFT})
+    )
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    with pytest.raises(InvalidStateTransitionError) as exc_info:
+        service.enable_paper(manifest.package_id)
+
+    err = exc_info.value
+    assert err.context["package_id"] == manifest.package_id
+    assert err.context["from_status"] == PackageStatus.DRAFT.value
+    assert err.context["to_status"] == PackageStatus.PAPER_ENABLED.value
+    assert err.context["allowed_from"] == [
+        PackageStatus.BACKTEST_APPROVED.value,
+        PackageStatus.SELECTION_ENABLED.value,
+    ]
+    assert repo.get(manifest.package_id).package_status == PackageStatus.DRAFT
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)] == ["package_created"]
 
 
 def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
@@ -155,8 +190,8 @@ def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
     assert governance["live_strict_ready"] is False
     assert governance["does_not_block_paper_simulation"] is True
     assert "protected_asset_ledger_missing" in governance["blockers"]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
-    assert [event.reason for event in repo.list_status_events(manifest.package_id)][-1] == "package_created"
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
+    assert [event.reason for event in repo.list_status_events(manifest.package_id)][-1] == "enable_paper"
 
 
 def test_paper_simulation_admission_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,7 +238,7 @@ def test_enable_paper_allows_missing_original_fixed_weight_retest_as_warning() -
 
     assert admission["paper_simulation_allowed"] is True
     assert "live_strict_governance:original_fixed_weight_retest_missing_passed_run_for_current_manifest" in admission["warnings"]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_intent() -> None:
@@ -243,7 +278,7 @@ def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_
             "created_by": "unit_test",
         }
     ]
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
@@ -274,7 +309,7 @@ def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> No
     assert original_retest["same_manifest_run_count"] == 0
     assert original_retest["observed_original_fixed_weight_runs"] == []
     assert context["does_not_block_paper_simulation"] is True
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:
@@ -317,7 +352,7 @@ def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() 
 
     assert report["original_fixed_weight_retest"]["matching_passed_run_id"] == passed.validation_run_id
     assert report["original_fixed_weight_retest"]["same_manifest_run_count"] == 101
-    assert paper.package_status == PackageStatus.BACKTEST_APPROVED
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
 
 
 def test_qe_source_payload_warns_on_malformed_result_metrics(caplog: pytest.LogCaptureFixture) -> None:
@@ -468,6 +503,23 @@ def test_postgres_repository_commits_status_transition_atomically(monkeypatch) -
 def manifest_to_record(manifest):
     saved = InMemoryStrategyPackageRepository().save_manifest(manifest)
     return saved
+
+
+def _legacy_schema_manifest_sha(record) -> str:
+    payload = record.current_manifest().model_dump(mode="json")
+    for key in ("source_evidence", "backtest_context"):
+        if payload.get(key) == {}:
+            payload.pop(key)
+    return compute_manifest_json_sha256(payload)
+
+
+def _force_schema_evolution_hash_drift(repo: InMemoryStrategyPackageRepository, package_id: str) -> tuple[str, str]:
+    record = repo.records[package_id]
+    current_hash = record.manifest_sha256
+    legacy_hash = _legacy_schema_manifest_sha(record)
+    assert legacy_hash != current_hash, "fixture must emulate pre-source_evidence/backtest_context schema hash"
+    repo.records[package_id] = record.model_copy(update={"manifest_sha256": legacy_hash})
+    return legacy_hash, current_hash
 
 
 def test_strategy_package_repository_rejects_silent_manifest_replacement() -> None:
@@ -663,7 +715,7 @@ def test_strategy_package_execution_policy_stores_unregistered_algo_as_runtime_c
     assert policy.paper_enabled is False
 
 
-def test_asset_eligibility_accepts_legacy_paper_status_as_non_gate_metadata() -> None:
+def test_asset_eligibility_accepts_paper_status_as_formal_lifecycle_state() -> None:
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
     record = repo.save_manifest(manifest)
@@ -673,7 +725,7 @@ def test_asset_eligibility_accepts_legacy_paper_status_as_non_gate_metadata() ->
 
     assert result.eligible is True
     assert result.legacy_status == PackageStatus.PAPER_ENABLED.value
-    assert result.legacy_status_normalized_to == PackageStatus.BACKTEST_APPROVED.value
+    assert result.legacy_status_normalized_to == PackageStatus.PAPER_ENABLED.value
     assert result.blockers == []
 
 
@@ -877,7 +929,7 @@ def test_list_quarantines_corrupt_manifest_hash():
     repo.save_manifest(m1)
     repo.save_manifest(m2)
     # Corrupt the stored hash for pkg-bad
-    repo.records["pkg-bad"] = repo.records["pkg-bad"].model_copy(update={"manifest_sha256": "00badhash"})
+    repo.records["pkg-bad"] = repo.records["pkg-bad"].model_copy(update={"manifest_sha256": "0" * 64})
     records = repo.list()
     pkg_ids = [r.package_id for r in records]
     assert "pkg-ok" in pkg_ids
@@ -890,7 +942,7 @@ def test_get_still_raises_on_corrupt_manifest_hash():
     repo = InMemoryStrategyPackageRepository()
     m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(m)
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "0" * 64})
     # InMemory repo is lenient on get() (test double); PostgreSQL validates via _record_from_row.
     # The validate_manifest_integrity() method covers drift detection for both.
     report = repo.validate_manifest_integrity()
@@ -898,14 +950,16 @@ def test_get_still_raises_on_corrupt_manifest_hash():
     assert report["drifted"][0]["package_id"] == "pkg"
 
 
-def test_validate_manifest_integrity_reports_drift():
-    """validate_manifest_integrity detects hash drift."""
+def test_validate_manifest_integrity_classifies_safe_schema_evolution_drift():
+    """validate_manifest_integrity marks model-default drift as A-class repairable."""
     repo = InMemoryStrategyPackageRepository()
     for i in range(3):
         m = freeze_manifest(make_manifest().model_copy(update={"package_id": f"pkg-{i}", "package_name": f"pkg-{i}"}))
         repo.save_manifest(m)
-    repo.records["pkg-0"] = repo.records["pkg-0"].model_copy(update={"manifest_sha256": "deadbeef"})
+    legacy_hash, _current_hash = _force_schema_evolution_hash_drift(repo, "pkg-0")
+
     report = repo.validate_manifest_integrity()
+
     assert report["total_scanned"] == 3
     assert report["clean_count"] == 2
     assert report["drifted_count"] == 1
@@ -917,18 +971,105 @@ def test_validate_manifest_integrity_reports_drift():
         "blocks_detail_endpoint": True,
         "excluded_from_package_list": True,
     }
-    assert drift["repair_plan"] == {
-        "recommended_action": "repair_manifest_hash",
-        "mutates_manifest_json": False,
-        "requires_operator_confirmation": True,
-        "confirm_stored_sha256": "deadbeef",
-        "confirm_computed_sha256": drift["computed_sha256"],
-        "rollback_restore": {
-            "field": "strategy_pkg.package.manifest_sha256",
-            "restore_value": "deadbeef",
-            "audit_event_reason": "manifest_hash_repaired",
-        },
+    plan = drift["repair_plan"]
+    assert plan["recommended_action"] == "repair_manifest_hash"
+    assert plan["mutates_manifest_json"] is False
+    assert plan["requires_operator_confirmation"] is True
+    assert plan["confirm_stored_sha256"] == legacy_hash
+    assert plan["confirm_computed_sha256"] == drift["computed_sha256"]
+    assert plan["confirm_repair_classification"] == "A_schema_evolution_stale_hash"
+    assert plan["classification"]["repair_allowed"] is True
+    assert plan["classification"]["stored_equals_raw_manifest_json"] is True
+    assert plan["classification"]["missing_current_model_default_keys"] == [
+        "backtest_context",
+        "source_evidence",
+    ]
+    assert plan["rollback_restore"] == {
+        "field": "strategy_pkg.package.manifest_sha256",
+        "restore_value": legacy_hash,
+        "audit_event_reason": "manifest_hash_repaired",
     }
+
+
+def test_validate_manifest_integrity_blocks_dirty_manifest_json_repair():
+    """B-class drift is reported but never recommended for automatic repair."""
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "pkg"}))
+    repo.save_manifest(manifest)
+    dirty_hash = "d" * 64
+    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": dirty_hash})
+
+    report = repo.validate_manifest_integrity()
+
+    plan = report["drifted"][0]["repair_plan"]
+    assert plan["recommended_action"] == "quarantine_manual_review"
+    assert plan["classification"]["classification"] == "B_manifest_json_dirty_or_unknown"
+    assert plan["classification"]["repair_allowed"] is False
+    assert plan["classification"]["stored_equals_raw_manifest_json"] is False
+
+
+def test_validate_manifest_integrity_blocks_invalid_manifest_json_repair():
+    """Invalid manifest_json drift includes an explicit quarantine repair plan."""
+
+    repo = StrategyPackageRepository()
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def execute(self, _sql, _params=None):  # noqa: ANN001
+            return None
+
+        def fetchall(self):
+            return [
+                {
+                    "package_id": "pkg-invalid",
+                    "package_name": "pkg-invalid",
+                    "package_version": "1.0.0",
+                    "source_type": "qe_experiment",
+                    "source_id": "qe_invalid",
+                    "loop_id": None,
+                    "run_id": None,
+                    "package_status": "BACKTEST_APPROVED",
+                    "manifest_json": {"package_id": "pkg-invalid"},
+                    "manifest_sha256": "a" * 64,
+                    "alpha_mode": "single_alpha",
+                    "signal_domain": None,
+                    "display_name": "pkg-invalid",
+                    "legacy_name": None,
+                    "data_vintage": None,
+                    "prediction_ref_uri": None,
+                    "prediction_ref_sha256": None,
+                    "model_artifact_uri": None,
+                    "model_artifact_sha256": None,
+                    "paper_portfolio_count": 0,
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            ]
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+        def cursor(self, *args, **kwargs):  # noqa: ANN001
+            return Cursor()
+
+    repo._conn_factory = lambda: Conn()  # noqa: SLF001
+
+    report = repo.validate_manifest_integrity()
+
+    assert report["drifted_count"] == 1
+    plan = report["drifted"][0]["repair_plan"]
+    assert plan["recommended_action"] == "quarantine_manual_review"
+    assert plan["classification"]["classification"] == "B_manifest_json_invalid_or_unknown"
+    assert plan["classification"]["repair_allowed"] is False
 
 
 def test_validate_manifest_integrity_clean_when_all_match():
@@ -944,35 +1085,66 @@ def test_validate_manifest_integrity_clean_when_all_match():
     assert report["drifted"] == []
 
 
-def test_repair_manifest_hash_fixes_drift():
-    """repair_manifest_hash updates the stored hash to the correct value."""
+def test_validate_manifest_integrity_clean_for_15_packages_with_multi_alpha_signal_evidence() -> None:
+    """New signal_admission evidence must not create manifest hash drift across package lists."""
+    repo = InMemoryStrategyPackageRepository()
+    for i in range(14):
+        manifest = freeze_manifest(
+            make_manifest().model_copy(update={"package_id": f"pkg-hash-{i}", "package_name": f"pkg-hash-{i}"})
+        )
+        repo.save_manifest(manifest)
+
+    _parent_repo, parent = _make_parent(live_weight_policy=True)
+    parent_manifest = parent.current_manifest()
+    assert "signal_admission" in parent_manifest.source_evidence["multi_alpha"]
+    repo.save_manifest(
+        freeze_manifest(
+            parent_manifest.model_copy(
+                update={
+                    "package_id": "pkg-ma-signal-hash-stable",
+                    "package_name": "pkg-ma-signal-hash-stable",
+                    "manifest_sha256": None,
+                }
+            )
+        )
+    )
+
+    report = repo.validate_manifest_integrity()
+
+    assert report["total_scanned"] == 15
+    assert report["clean_count"] == 15
+    assert report["drifted_count"] == 0
+    assert report["drifted"] == []
+
+
+def test_repair_manifest_hash_fixes_a_class_drift():
+    """repair_manifest_hash updates only A-class schema-evolution hash drift."""
     repo = InMemoryStrategyPackageRepository()
     m = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(m)
-    correct_hash = m.manifest_sha256
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
-    # Before repair: integrity check should report drift
+    legacy_hash, correct_hash = _force_schema_evolution_hash_drift(repo, "pkg")
     report_before = repo.validate_manifest_integrity()
     assert report_before["drifted_count"] == 1
+
     repaired = repo.repair_manifest_hash(
         "pkg",
         operator="test_runner",
-        confirm_stored_sha256="00badhash",
+        confirm_stored_sha256=legacy_hash,
         confirm_computed_sha256=correct_hash,
     )
+
     assert repaired.manifest_sha256 == correct_hash
-    # After repair: get() should succeed
     after = repo.get("pkg")
     assert after.manifest_sha256 == correct_hash
-    # Audit event recorded
     repair_events = [e for e in repo.events if e.reason == "manifest_hash_repaired"]
     assert len(repair_events) == 1
     assert repair_events[0].context["operator"] == "test_runner"
-    assert repair_events[0].context["old_manifest_sha256"] == "00badhash"
+    assert repair_events[0].context["old_manifest_sha256"] == legacy_hash
     assert repair_events[0].context["new_manifest_sha256"] == correct_hash
+    assert repair_events[0].context["repair_classification"] == "A_schema_evolution_stale_hash"
     assert repair_events[0].context["rollback_restore"] == {
         "field": "strategy_pkg.package.manifest_sha256",
-        "restore_value": "00badhash",
+        "restore_value": legacy_hash,
     }
 
 
@@ -981,15 +1153,135 @@ def test_repair_manifest_hash_requires_explicit_confirmation():
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg", "package_name": "test"}))
     repo.save_manifest(manifest)
-    correct_hash = manifest.manifest_sha256
-    repo.records["pkg"] = repo.records["pkg"].model_copy(update={"manifest_sha256": "00badhash"})
+    legacy_hash, correct_hash = _force_schema_evolution_hash_drift(repo, "pkg")
 
     with pytest.raises(InvalidStateTransitionError) as exc_info:
         repo.repair_manifest_hash("pkg", operator="test_runner")
 
     assert exc_info.value.context["package_id"] == "pkg"
-    assert exc_info.value.context["stored_sha256"] == "00badhash"
+    assert exc_info.value.context["stored_sha256"] == legacy_hash
     assert exc_info.value.context["computed_sha256"] == correct_hash
-    assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == "00badhash"
-    assert repo.records["pkg"].manifest_sha256 == "00badhash"
+    assert exc_info.value.context["repair_plan"]["rollback_restore"]["restore_value"] == legacy_hash
+    assert repo.records["pkg"].manifest_sha256 == legacy_hash
 
+
+
+def test_strategy_package_summary_listing_omits_heavy_manifest_and_runtime_contract() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg_summary", "package_name": "summary"}))
+    repo.save_manifest(manifest)
+    service = StrategyPackageService(repository=repo)
+
+    rows = service.list_package_summaries(limit=10)
+
+    assert rows[0]["package_id"] == "pkg_summary"
+    assert rows[0]["metrics_summary"]["package_id"] == "pkg_summary"
+    assert rows[0]["asset_eligibility"] == {"eligible": True, "summary_only": True, "blockers": []}
+    assert "manifest" not in rows[0]
+    assert "runtime_config_contract" not in rows[0]
+
+
+def test_strategy_package_summary_listing_treats_new_multi_alpha_signal_evidence_as_eligible() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=10)
+    row = next(item for item in rows if item["package_id"] == parent.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is True
+    assert row["asset_eligibility"]["blockers"] == []
+    assert row["asset_eligibility"].get("warnings") in (None, [])
+
+
+def test_strategy_package_summary_listing_keeps_unknown_multi_alpha_blocker_hard_blocked() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    source_evidence["multi_alpha"]["paper_admission"] = {
+        "eligible": False,
+        "blocking": ["multi_alpha_runtime_not_validated_until_dry_run", "unsupported_multi_alpha_policy"],
+    }
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_unknown_summary_blocker",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_unknown_manifest_blocker"]
+    assert row["asset_eligibility"]["warnings"] == ["multi_alpha_legacy_paper_dry_run_blocker_superseded"]
+
+
+def test_strategy_package_summary_listing_rejects_incomplete_signal_evidence_marker() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    signal_admission = dict(source_evidence["multi_alpha"]["signal_admission"])
+    signal_admission["persisted_for_hot_path"] = False
+    source_evidence["multi_alpha"]["signal_admission"] = signal_admission
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_bad_signal_summary",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_admission_not_validated"]
+
+
+def test_strategy_package_summary_listing_rejects_legacy_structural_leg_mismatch() -> None:
+    repo, parent = _make_parent(live_weight_policy=True)
+    manifest = parent.manifest
+    source_evidence = dict(manifest.source_evidence)
+    source_evidence["multi_alpha"] = dict(source_evidence["multi_alpha"])
+    source_evidence["multi_alpha"].pop("signal_admission", None)
+    source_evidence["multi_alpha"]["legs"] = [dict(item) for item in source_evidence["multi_alpha"]["legs"]]
+    source_evidence["multi_alpha"]["legs"][0]["leg_id"] = "unexpected_leg"
+    updated = freeze_manifest(
+        manifest.model_copy(
+            update={
+                "package_id": f"{parent.package_id}_bad_legacy_summary",
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+    repo.save_manifest(updated)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=20)
+    row = next(item for item in rows if item["package_id"] == updated.package_id)
+
+    assert row["asset_eligibility"]["eligible"] is False
+    assert row["asset_eligibility"]["blockers"] == ["multi_alpha_signal_selection_artifact_unavailable"]
+
+
+def test_strategy_package_summary_listing_does_not_hash_quarantine(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = freeze_manifest(make_manifest().model_copy(update={"package_id": "pkg_no_hash_on_list"}))
+    repo.save_manifest(manifest)
+
+    def fail_hash(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("summary listing must not compute manifest hash")
+
+    monkeypatch.setattr("backend.services.strategy_package.repository.compute_manifest_sha256", fail_hash)
+
+    rows = StrategyPackageService(repository=repo).list_package_summaries(limit=10)
+
+    assert rows[0]["package_id"] == "pkg_no_hash_on_list"

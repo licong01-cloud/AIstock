@@ -1,0 +1,86 @@
+{
+  "actual": "All evidence guard checks are strict by default and may discard full answers; there is no hot reloadable mode switch or annotate mode.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/react_grounding.py",
+    "backend/services/research_assistant/service.py",
+    "configs/research_assistant/runtime_context.yaml",
+    "backend/tests/research_assistant/test_react_grounding.py",
+    "backend/tests/research_assistant/test_service.py",
+    "tests/aistock_validation/bugs/20260701_BUG-568-ra-evidence-guard-needs-hot-reloadable-guard-mode-off-annotate-strict.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_external_research_react_consumption.py",
+    "backend/tests/research_assistant/test_natural_language_mcp_routing.py",
+    "backend/tests/research_assistant/test_stock_analysis_mcp.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-568",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-01T09:08:24.494634Z",
+  "description": "All evidence guard checks are strict by default and may discard full answers; there is no hot reloadable mode switch or annotate mode.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260701-b00425022186",
+      "timestamp": "2026-07-01T09:08:24.494630Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "guard_mode=off returns model answer without answer-level blocking; annotate preserves answer with Chinese warnings for soft guard reasons; strict preserves existing behavior; invalid config fails closed to strict with warning; write side-effect approval gates remain unchanged.",
+  "first_seen_at": "2026-07-01T09:08:24.494634Z",
+  "fix_branch": null,
+  "fix_commit": "3fa86745",
+  "fixed_at": "2026-07-01T13:56:11.554998Z",
+  "github_issue_number": 1793,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1793",
+  "last_seen_at": "2026-07-01T09:08:24.494634Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1796",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "ra_phase0_baseline",
+    "ra_phase5_agent_teams",
+    "research_assistant_backend",
+    "ra_phase7_full_accept",
+    "research_assistant_mcp_contract"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA evidence guard needs hot reloadable guard_mode off annotate strict",
+  "trigger_condition": {
+    "fingerprint": "b004250221863c55e4f296c2",
+    "source_event_id": "FE-20260701-b00425022186"
+  },
+  "validation_evidence": [
+    "test_react_grounding.py 37 passed; test_service.py 135 passed; research_assistant_backend 430 passed; research_assistant_mcp_contract 38 passed; ra_phase7_full_accept green; CI 17/17 passed; Tier2 diff review PASS (write-approval gate preserved under guard_mode=off)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -20,6 +20,12 @@ COMMON_ENV = {
     "PYTHONIOENCODING": "utf-8",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
+VALIDATION_ENV_FILE_DENYLIST = {
+    "MINIQMT_EXECUTION_RUNTIME",
+}
+VALIDATION_RUNTIME_DEFAULTS = {
+    "MINIQMT_EXECUTION_RUNTIME": "event_loop",
+}
 
 nox.options.reuse_existing_virtualenvs = True
 nox.options.sessions = ["l0"]
@@ -58,6 +64,8 @@ def _load_validation_env_file() -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
+        if key in VALIDATION_ENV_FILE_DENYLIST:
+            continue
         if key and not os.environ.get(key):
             os.environ[key] = value.strip().strip('"').strip("'")
 
@@ -66,6 +74,7 @@ def _env(extra: dict[str, str] | None = None) -> dict[str, str]:
     _load_validation_env_file()
     env = os.environ.copy()
     env.update(COMMON_ENV)
+    env.update(VALIDATION_RUNTIME_DEFAULTS)
     if extra:
         env.update(extra)
     return env
@@ -383,6 +392,7 @@ def l0(session: nox.Session) -> None:
         "scripts/aistock_module_ownership_scan.py",
         "scripts/issue_flow.py",
         "scripts/aistock_issue_workflow.py",
+        "scripts/aistock_feature_workflow.py",
         "scripts/ci_failure_issue_summary.py",
         "scripts/validation_center_readonly_smoke.py",
         "scripts/aistock_data_quality_smoke.py",
@@ -408,6 +418,7 @@ def l0(session: nox.Session) -> None:
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_feature_workflow.py",
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/services/validation/plan_catalog.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",
@@ -443,6 +454,8 @@ def l0(session: nox.Session) -> None:
         *scan_paths,
         "--fail-on",
         "HIGH",
+        "--output-json",
+        "tmp/validation/guardrails/verify_skill_l0_paths.json",
         external=True,
     )
     session.run(
@@ -2210,7 +2223,9 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "backend/services/validation/file_ownership.py",
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_ui_target_catalog.py",
+        "backend/tests/scripts/test_aistock_feature_workflow.py",
         "scripts/aistock_module_ownership_scan.py",
+        "scripts/aistock_feature_workflow.py",
         "tests/aistock_validation/catalog/module_registry.yaml",
         "tests/aistock_validation/catalog/file_ownership.yaml",
         "noxfile.py",
@@ -2227,6 +2242,7 @@ def validation_module_registry_l0(session: nox.Session) -> None:
         "backend/services/validation/file_ownership.py",
         "backend/services/validation/ui_target_catalog.py",
         "scripts/aistock_module_ownership_scan.py",
+        "scripts/aistock_feature_workflow.py",
         external=True,
     )
     _run_pytest(
@@ -2287,6 +2303,9 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "scripts/aistock_issue_workflow.py",
         "scripts/llm_provider_adapter.py",
         "scripts/nightly_adaptive_scheduler.py",
+        "scripts/nightly_discovery_plans.py",
+        "scripts/nightly_bug_candidate_queue.py",
+        "scripts/nightly_active_discovery_summary.py",
         external=True,
     )
     _run_pytest(
@@ -2294,6 +2313,9 @@ def validation_workflow_automation(session: nox.Session) -> None:
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/tests/scripts/test_aistock_issue_workflow.py",
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/scripts/test_nightly_discovery_plans.py",
+        "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+        "backend/tests/scripts/test_nightly_active_discovery_summary.py",
         "backend/tests/scripts/test_llm_provider_adapter.py",
         "-q",
         "-p",
@@ -2325,6 +2347,93 @@ def validation_workflow_automation(session: nox.Session) -> None:
         str(out_dir / "nightly-adaptive-scheduler.json"),
         "--markdown-output",
         str(out_dir / "nightly-adaptive-scheduler.md"),
+        external=True,
+    )
+
+
+def _run_nightly_discovery_plan(session: nox.Session, plan_key: str) -> None:
+    out_dir = ROOT / "tmp" / "validation" / "nightly_discovery_plans"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "scripts/nightly_discovery_plans.py",
+        "--json",
+        "run",
+        "--plan-key",
+        plan_key,
+        "--output",
+        str(out_dir / f"{plan_key}.json"),
+        external=True,
+    )
+
+
+@nox.session(venv_backend="none")
+def validation_discovery_issue_intake_readonly(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for issue intake quality."""
+    _run_nightly_discovery_plan(session, "validation_discovery_issue_intake_readonly")
+
+
+@nox.session(venv_backend="none")
+def workflow_discovery_root_clean_guard(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for unexpected root dirty paths."""
+    _run_nightly_discovery_plan(session, "workflow_discovery_root_clean_guard")
+
+
+@nox.session(venv_backend="none")
+def code_intelligence_discovery_affected_tests_quality(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for CodeGraph affected-test quality."""
+    _run_nightly_discovery_plan(session, "code_intelligence_discovery_affected_tests_quality")
+
+
+@nox.session(venv_backend="none")
+def validation_center_discovery_run_record_integrity(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for validation history records."""
+    _run_nightly_discovery_plan(session, "validation_center_discovery_run_record_integrity")
+
+
+@nox.session(venv_backend="none")
+def validation_semantic_drift_discovery_readonly(session: nox.Session) -> None:
+    """Run readonly active-discovery checks for semantic drift signals."""
+    _run_nightly_discovery_plan(session, "validation_semantic_drift_discovery_readonly")
+
+
+@nox.session(venv_backend="none")
+def nightly_bug_candidate_queue(session: nox.Session) -> None:
+    """Validate Nightly BugCandidate draft queue and quality gate artifacts."""
+    out_dir = ROOT / "tmp" / "validation" / "nightly_bug_candidate_queue"
+    discovery_dir = out_dir / "discovery"
+    queue_dir = out_dir / "queue"
+    discovery_dir.mkdir(parents=True, exist_ok=True)
+    session.run(
+        sys.executable,
+        "scripts/nightly_discovery_plans.py",
+        "--json",
+        "run-selected",
+        "--output-dir",
+        str(discovery_dir),
+        "--default-plan-key",
+        "validation_discovery_issue_intake_readonly",
+        "--default-plan-key",
+        "workflow_discovery_root_clean_guard",
+        "--default-plan-key",
+        "code_intelligence_discovery_affected_tests_quality",
+        "--default-plan-key",
+        "validation_center_discovery_run_record_integrity",
+        "--default-plan-key",
+        "validation_semantic_drift_discovery_readonly",
+        external=True,
+    )
+    session.run(
+        sys.executable,
+        "scripts/nightly_bug_candidate_queue.py",
+        "--json",
+        "build",
+        "--discovery-manifest",
+        str(discovery_dir / "manifest.json"),
+        "--output-dir",
+        str(queue_dir),
+        "--existing-queue-dir",
+        str(ROOT / "tmp" / "validation" / "nightly_failure_issue" / "candidate_history"),
         external=True,
     )
 
@@ -3054,73 +3163,6 @@ def rl_execution_ui(session: nox.Session) -> None:
     finally:
         os.chdir(old_cwd)
 
-
-@nox.session(venv_backend="none")
-def strategy_package_governance_ui(session: nox.Session) -> None:
-    """Run Strategy Package Governance UI E2E tests on dev ports.
-
-    Mocks /api/v1/strategy-packages/* responses; safe to run without the
-    governance backend branch merged. Live integration is wired once the
-    Codex governance branch lands on main.
-    """
-    test_dir = ROOT / "frontend" / "tests" / "strategy-package-governance"
-    if not test_dir.exists():
-        session.skip("Strategy Package Governance UI tests are not implemented yet.")
-    backend_port = session.posargs[0] if session.posargs else os.environ.get("BACKEND_PORT", "8012")
-    frontend_port = session.posargs[1] if len(session.posargs) > 1 else os.environ.get("FRONTEND_PORT", "3012")
-    # Default mock-first; live mode requires Codex governance branch merge.
-    mock_api = os.environ.get("STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API", "1") != "0"
-    session.run(
-        "python",
-        "scripts/aistock_validate.py",
-        "ports",
-        "--allow-occupied",
-        backend_port,
-        frontend_port,
-        external=True,
-    )
-    if not mock_api:
-        session.run(
-            "python",
-            "scripts/aistock_validate.py",
-            "services",
-            "--backend-port",
-            backend_port,
-            "--skip-tdx",
-            external=True,
-        )
-    old_cwd = Path.cwd()
-    os.chdir(ROOT / "frontend")
-    try:
-        session.run(
-            "npm",
-            "exec",
-            "tsc",
-            "--",
-            "--noEmit",
-            "--incremental",
-            "false",
-            external=True,
-        )
-        session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
-            "tests/strategy-package-governance",
-            env=_env(
-                {
-                    "BACKEND_PORT": backend_port,
-                    "FRONTEND_PORT": frontend_port,
-                    "STRATEGY_PACKAGE_GOVERNANCE_UI_MOCK_API": "1" if mock_api else "0",
-                    "NEXT_PUBLIC_API_BASE": f"http://127.0.0.1:{backend_port}/api/v1",
-                    "PLAYWRIGHT_SKIP_WEBSERVER": "1" if _is_port_open(frontend_port) else "0",
-                }
-            ),
-            external=True,
-        )
-    finally:
-        os.chdir(old_cwd)
 
 
 @nox.session(venv_backend="none")

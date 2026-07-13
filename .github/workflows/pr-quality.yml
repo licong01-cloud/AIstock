@@ -33,7 +33,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect PR quality lane
+        id: quality_lane
+        env:
+          BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          git fetch origin "${BASE_REF}" --no-tags || true
+          BASE_COMMIT="origin/${BASE_REF}"
+          git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
+          git diff --name-only "${BASE_COMMIT}...HEAD" > tmp/validation/pr_quality/changed_files.txt
+          python scripts/ci_change_classifier.py \
+            --changed-files-file tmp/validation/pr_quality/changed_files.txt \
+            --output-json tmp/validation/pr_quality/change-classification.json
+          DOCS_LITE=$(python -c "import json; print('1' if json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['docs_lite_required'] else '0')")
+          REGISTRY_SYNC=$(python -c "import json; print('1' if json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['close_sync_metadata_only'] else '0')")
+          CLASSIFICATION=$(python -c "import json; print(json.load(open('tmp/validation/pr_quality/change-classification.json', encoding='utf-8'))['classification'])")
+          echo "docs_lite=${DOCS_LITE}" >> "${GITHUB_OUTPUT}"
+          echo "registry_sync=${REGISTRY_SYNC}" >> "${GITHUB_OUTPUT}"
+          echo "classification=${CLASSIFICATION}" >> "${GITHUB_OUTPUT}"
+
       - name: Set up Python 3.12
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -41,11 +62,13 @@ jobs:
           cache-dependency-path: .github/requirements/pr-quality.txt
 
       - name: Install quality tooling
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         run: |
           python -m pip install --upgrade pip
           python -m pip install --prefer-binary -r .github/requirements/pr-quality.txt
 
       - name: Build AIstock PR quality summary
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
           AISTOCK_PR_TITLE: ${{ github.event.pull_request.title || '' }}
@@ -69,7 +92,51 @@ jobs:
             "${ENFORCE_ARGS[@]}"
           cat tmp/validation/pr_quality/summary.md
 
+      - name: Build docs-lite version record
+        if: steps.quality_lane.outputs.docs_lite == '1'
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          {
+            echo "# Docs-lite version record"
+            echo ""
+            echo "- validation: version/change-record only"
+            echo "- code_validation: skipped"
+            echo "- code_intelligence: skipped"
+            echo "- semgrep: skipped"
+            echo "- codeql: skipped"
+            echo ""
+            echo "## Changed files"
+            sed 's/^/- `/' tmp/validation/pr_quality/changed_files.txt | sed 's/$/`/'
+          } > tmp/validation/pr_quality/summary.md
+          cp tmp/validation/pr_quality/summary.md tmp/validation/pr_quality/docs-lite-version-record.md
+          printf '{"docs_lite":true,"validation":"version_change_record_only"}\n' > tmp/validation/pr_quality/summary.json
+          cat tmp/validation/pr_quality/summary.md
+
+      - name: Build registry-sync quality record
+        if: steps.quality_lane.outputs.registry_sync == '1'
+        run: |
+          mkdir -p tmp/validation/pr_quality
+          python scripts/bug_registry_metadata_check.py \
+            --changed-files-file tmp/validation/pr_quality/changed_files.txt \
+            --close-sync-only \
+            --output-json tmp/validation/pr_quality/bug-registry-metadata.json
+          {
+            echo "# Registry-sync PR quality record"
+            echo ""
+            echo "- classification: `${{ steps.quality_lane.outputs.classification }}`"
+            echo "- validation: BUG JSON schema/linkage/gates only"
+            echo "- code_validation: skipped"
+            echo "- code_intelligence: skipped"
+            echo "- semgrep: skipped"
+            echo ""
+            echo "## Changed files"
+            sed 's/^/- `/' tmp/validation/pr_quality/changed_files.txt | sed 's/$/`/'
+          } > tmp/validation/pr_quality/summary.md
+          printf '{"registry_sync":true,"validation":"bug_registry_metadata_only"}\n' > tmp/validation/pr_quality/summary.json
+          cat tmp/validation/pr_quality/summary.md
+
       - name: Build code intelligence PR artifact
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
@@ -86,12 +153,13 @@ jobs:
           cat tmp/validation/pr_quality/code-intelligence-summary.md
 
       - name: Ruff changed Python files
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
         run: |
           BASE_COMMIT="origin/${BASE_REF}"
           git rev-parse --verify "${BASE_COMMIT}" >/dev/null 2>&1 || BASE_COMMIT="FETCH_HEAD"
-          git diff --name-only "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
+          git diff --name-only --diff-filter=ACMRT "${BASE_COMMIT}...HEAD" -- '*.py' > tmp/validation/pr_quality/changed_python.txt
           if [ -s tmp/validation/pr_quality/changed_python.txt ]; then
             xargs -a tmp/validation/pr_quality/changed_python.txt ruff check --force-exclude
           else
@@ -99,6 +167,7 @@ jobs:
           fi
 
       - name: Semgrep AIstock guardrails (report-only phase)
+        if: steps.quality_lane.outputs.docs_lite != '1' && steps.quality_lane.outputs.registry_sync != '1'
         continue-on-error: true
         env:
           BASE_REF: ${{ github.base_ref || inputs.base_ref || 'main' }}
@@ -121,11 +190,19 @@ jobs:
             const marker = '<!-- aistock-pr-quality-summary -->';
             const summaryPath = 'tmp/validation/pr_quality/summary.md';
             const codeIntelPath = 'tmp/validation/pr_quality/code-intelligence-summary.md';
+            const docsLitePath = 'tmp/validation/pr_quality/docs-lite-version-record.md';
             const summary = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : 'PR quality summary was not generated.';
             const codeIntel = fs.existsSync(codeIntelPath) ? fs.readFileSync(codeIntelPath, 'utf8') : 'Code intelligence summary was not generated.';
+            const docsLite = fs.existsSync(docsLitePath) ? fs.readFileSync(docsLitePath, 'utf8') : '';
             const maxChars = 55000;
             const compactFooter = 'Semgrep and code intelligence are report-only in this rollout; existing AIstock CI remains the blocking gate.';
-            let body = `${marker}\n${summary}\n\n${codeIntel}\n\n${compactFooter}`;
+            let body = `${marker}\n${summary}`;
+            if (docsLite) {
+              body = `${marker}\n${docsLite}\n\n${summary}`;
+            } else if (fs.existsSync(codeIntelPath)) {
+              body = `${marker}\n${summary}\n\n${codeIntel}`;
+            }
+            body = `${body}\n\n${compactFooter}`;
             if (body.length > maxChars) {
               body = `${marker}\n${summary}\n\nCode intelligence summary was omitted from the PR comment because the compact budget was exceeded. See the uploaded pr-quality artifact for details.\n\n${compactFooter}`;
             }
@@ -146,3 +223,4 @@ jobs:
           name: pr-quality-${{ github.run_id }}
           path: tmp/validation/pr_quality/
           if-no-files-found: ignore
+

@@ -334,25 +334,58 @@ def test_qe_runtime_first_pending_tools_call_backend_paths_and_confirm_updates()
         single_payload,
         confirm_update=qe_experiment.QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM,
     )
-    mcp.tools["qe_custom_evo_create_pending"]("pending custom", [custom_loop], node_id="node-1")
+    mcp.tools["qe_custom_evo_create_pending"](
+        "pending custom",
+        [custom_loop],
+        node_id="node-1",
+        phase_pipeline_enabled=True,
+        resource_telemetry_enabled=True,
+    )
     mcp.tools["qe_custom_evo_update_config_confirmed"](
         "task-1",
         "edited custom",
         [custom_loop],
         confirm_update=qe_experiment.QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM,
+        phase_pipeline_enabled=True,
+        resource_telemetry_enabled=True,
+    )
+    mcp.tools["qe_custom_evo_rerun_loop_confirmed"](
+        "task-1",
+        1,
+        custom_loop,
+        confirm_rerun="QE_CUSTOM_EVO_RERUN",
+        phase_pipeline_enabled=True,
+        resource_telemetry_enabled=True,
+    )
+    mcp.tools["qe_custom_evo_append_loops_confirmed"](
+        "task-1",
+        [custom_loop],
+        confirm_append="QE_CUSTOM_EVO_APPEND",
+        phase_pipeline_enabled=True,
+        resource_telemetry_enabled=True,
     )
 
-    assert [call["method"] for call in calls] == ["POST", "GET", "PUT", "POST", "PUT"]
+    assert [call["method"] for call in calls] == ["POST", "GET", "PUT", "POST", "PUT", "POST", "POST"]
     assert [call["path"] for call in calls] == [
         "/api/v1/quantevolver/experiments/pending",
         "/api/v1/quantevolver/experiments/exp-1/editable-config",
         "/api/v1/quantevolver/experiments/exp-1/editable-config",
         "/api/v1/quantevolver/evolution/custom-tasks",
         "/api/v1/quantevolver/evolution/tasks/task-1/custom-evo-config",
+        "/api/v1/quantevolver/evolution/tasks/task-1/loops/1/rerun",
+        "/api/v1/quantevolver/evolution/tasks/task-1/custom-loops/append",
     ]
     assert calls[0]["body"]["created_by_name"] == "unit"
     assert calls[3]["body"]["auto_start"] is False
     assert calls[3]["body"]["node_id"] == "node-1"
+    assert calls[3]["body"]["phase_pipeline_enabled"] is True
+    assert calls[3]["body"]["resource_telemetry_enabled"] is True
+    assert calls[4]["body"]["phase_pipeline_enabled"] is True
+    assert calls[4]["body"]["resource_telemetry_enabled"] is True
+    assert calls[5]["body"]["phase_pipeline_enabled"] is True
+    assert calls[5]["body"]["resource_telemetry_enabled"] is True
+    assert calls[6]["body"]["phase_pipeline_enabled"] is True
+    assert calls[6]["body"]["resource_telemetry_enabled"] is True
 
 
 def test_qe_runtime_first_create_paths_validate_before_http() -> None:

@@ -43,12 +43,18 @@ from backend.services.trading_core.errors import (
     BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
+    RiskRuleError,
     RuntimeConfigInvalidError,
 )
+from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.models import (
+    Fill,
     MinuteBar,
+    OrderEvent,
+    OrderEventType,
     OrderIntent,
     OrderSide,
+    OrderStatus,
     OrderType,
     PositionLot,
 )
@@ -146,6 +152,8 @@ def _build_backend(
     initial_cash: float = 1_000_000.0,
     data_source: MinuteDataSource = MinuteDataSource.DB_HISTORICAL,
     provider: FakeMarketDataProvider | None = None,
+    execution_engine=None,
+    initial_positions: dict[str, PositionLot] | None = None,
 ) -> tuple[LocalSimBackend, FakeMarketDataProvider, StrategyPackageManifest]:
     manifest = make_paper_enabled_manifest()
     market_data_provider = provider or FakeMarketDataProvider()
@@ -155,6 +163,8 @@ def _build_backend(
         data_source=data_source,
         manifest=manifest,
         market_data_provider=market_data_provider,
+        execution_engine=execution_engine,
+        initial_positions=initial_positions,
     )
     return backend, market_data_provider, manifest
 
@@ -174,6 +184,85 @@ def _buy_intent(
         order_type=OrderType.MARKET,
         target_trade_date=TRADE_DATE,
     )
+
+
+def _ledger_fill(
+    *,
+    order_id: str = "ord_ledger_1",
+    fill_id: str = "fill_ledger_1",
+    symbol: str = "000001.SZ",
+    side: OrderSide = OrderSide.BUY,
+    quantity: int = 100,
+    price: float = 10.0,
+    trade_time: datetime | None = None,
+) -> Fill:
+    return Fill(
+        fill_id=fill_id,
+        order_id=order_id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        trade_time=trade_time
+        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        reason="unit ledger fill",
+    )
+
+
+def _unchecked_ledger_fill(
+    *,
+    order_id: str = "ord_unchecked",
+    fill_id: str = "fill_unchecked",
+    symbol: str = "000001.SZ",
+    side: OrderSide = OrderSide.BUY,
+    quantity: int = 150,
+    price: float = 10.0,
+    trade_time: datetime | None = None,
+) -> Fill:
+    return Fill.model_construct(
+        fill_id=fill_id,
+        order_id=order_id,
+        symbol=symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        trade_time=trade_time
+        or datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31),
+        bar_time=None,
+        reason="unchecked unit ledger fill",
+        metadata={},
+    )
+
+
+class FullFillExecutionEngine:
+    def execute_order(self, *, order, minute_bars, algo_code, algo_config, market_context, allow_partial_fill):
+        bar = minute_bars[-1]
+        fill = Fill(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            quantity=order.quantity,
+            price=bar.close,
+            trade_time=bar.bar_time,
+            bar_time=bar.bar_time,
+            reason="unit full fill",
+            metadata={"algo_code": "UNIT_FULL_FILL"},
+        )
+        final_order = order.model_copy(
+            update={
+                "status": OrderStatus.FILLED,
+                "filled_quantity": order.quantity,
+                "avg_fill_price": fill.price,
+                "updated_at": fill.trade_time,
+            }
+        )
+        event = OrderEvent(
+            order_id=order.order_id,
+            event_type=OrderEventType.FILLED,
+            fill=fill,
+            reason=fill.reason,
+        )
+        return final_order, [fill], [event]
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +318,41 @@ def test_submit_order_intent_returns_terminal_status_synchronously() -> None:
     assert status.avg_fill_price is not None
     assert status.rejection_reason is None
     backend.unsubscribe_fill_callback(sub)
+
+
+def test_submit_order_intent_allows_star_whole_position_odd_lot_sell() -> None:
+    initial_lot = PositionLot(
+        portfolio_id="paper_star_exit",
+        symbol="688720.SH",
+        quantity=1547,
+        available_quantity=1547,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE - timedelta(days=1),
+    )
+    backend, _, _ = _build_backend(
+        portfolio_id="paper_star_exit",
+        initial_cash=100_000.0,
+        execution_engine=FullFillExecutionEngine(),
+        initial_positions={"688720.SH": initial_lot},
+    )
+    intent = OrderIntent(
+        package_id=backend.package_id,
+        portfolio_id=backend.portfolio_id,
+        symbol="688720.SH",
+        side=OrderSide.SELL,
+        quantity=1547,
+        order_type=OrderType.MARKET,
+        target_trade_date=TRADE_DATE,
+    )
+
+    handle = backend.submit_order_intent(intent)
+
+    status = backend.query_status(handle)
+    assert status.state == "filled"
+    assert status.filled_quantity == 1547
+    assert "688720.SH" not in backend.query_positions()
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+    assert [fill.quantity for fill in snapshot["fills"]] == [1547]
 
 
 def test_localsim_uses_portfolio_validated_execution_policy_snapshot() -> None:
@@ -522,3 +646,137 @@ def test_localsim_subscriber_isolation() -> None:
 
     backend_a.submit_order_intent(_buy_intent(backend_a))
     assert received_a and not received_b
+
+
+# ---------------------------------------------------------------------------
+# 10. LocalSim ledger money math, commission, and board-lot guardrails
+# ---------------------------------------------------------------------------
+
+
+def test_inmemoryledger_money_fields_are_decimal_quantized_without_float_drift() -> None:
+    ledger = InMemoryLedger(
+        portfolio_id="paper_decimal_math",
+        initial_cash=10_000_000.0,
+        fee_model=FeeModel(open_cost=0.0, close_cost=0.0, min_cost=0.0),
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_dec_1", fill_id="fill_dec_1", quantity=100, price=0.1)
+    )
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_dec_2", fill_id="fill_dec_2", quantity=100, price=0.2)
+    )
+
+    assert ledger.cash_decimal == Decimal("9999970.00")
+    assert ledger.cash_entries[0].notional == Decimal("10.00")
+    assert ledger.cash_entries[0].fee == Decimal("0.00")
+    assert ledger.cash_entries[0].cash_delta == Decimal("-10.00")
+    assert ledger.cash_entries[0].cash_after == Decimal("9999990.00")
+    assert ledger.cash_entries[1].cash_after == Decimal("9999970.00")
+
+
+def test_inmemoryledger_min_commission_is_charged_incrementally_per_order() -> None:
+    ledger = InMemoryLedger(
+        portfolio_id="paper_order_fee",
+        initial_cash=100_000.0,
+        fee_model=FeeModel(open_cost=0.001, close_cost=0.001, min_cost=5.0),
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_split", fill_id="fill_split_1", quantity=100, price=10.0)
+    )
+    ledger.apply_fill(
+        _ledger_fill(order_id="ord_split", fill_id="fill_split_2", quantity=100, price=60.0)
+    )
+
+    assert [entry.fee for entry in ledger.cash_entries] == [
+        Decimal("5.00"),
+        Decimal("2.00"),
+    ]
+    assert sum((entry.fee for entry in ledger.cash_entries), Decimal("0.00")) == Decimal(
+        "7.00"
+    )
+    assert ledger.cash_decimal == Decimal("92993.00")
+
+
+def test_inmemoryledger_rejects_non_board_lot_buy_loudly_at_apply_fill() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_board_buy", initial_cash=100_000.0)
+
+    with pytest.raises(RiskRuleError, match="LOCAL_SIM_BOARD_LOT_VIOLATION") as exc_info:
+        ledger.apply_fill(
+            _unchecked_ledger_fill(
+                order_id="ord_bad_buy",
+                fill_id="fill_bad_buy",
+                side=OrderSide.BUY,
+                quantity=150,
+            )
+        )
+
+    assert exc_info.value.context["reason_code"] == "LOCAL_SIM_BOARD_LOT_VIOLATION"
+    assert exc_info.value.context["operation"] == "apply_fill"
+    assert exc_info.value.context["order_id"] == "ord_bad_buy"
+    assert exc_info.value.context["fill_quantity"] == 150
+
+
+def test_inmemoryledger_rejects_non_board_lot_partial_sell_but_allows_full_exit() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_board_sell", initial_cash=100_000.0)
+    ledger.positions["000001.SZ"] = PositionLot(
+        portfolio_id=ledger.portfolio_id,
+        symbol="000001.SZ",
+        quantity=250,
+        available_quantity=250,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
+
+    with pytest.raises(RiskRuleError, match="LOCAL_SIM_BOARD_LOT_VIOLATION") as exc_info:
+        ledger.apply_fill(
+            _ledger_fill(
+                order_id="ord_bad_sell",
+                fill_id="fill_bad_sell",
+                side=OrderSide.SELL,
+                quantity=50,
+                price=11.0,
+            )
+        )
+    assert exc_info.value.context["reason_code"] == "LOCAL_SIM_BOARD_LOT_VIOLATION"
+    assert exc_info.value.context["held_quantity"] == 250
+
+    ledger.apply_fill(
+        _unchecked_ledger_fill(
+            order_id="ord_full_exit",
+            fill_id="fill_full_exit",
+            side=OrderSide.SELL,
+            quantity=250,
+            price=11.0,
+        )
+    )
+
+    assert "000001.SZ" not in ledger.positions
+    assert ledger.cash_entries[-1].notional == Decimal("2750.00")
+
+
+def test_inmemoryledger_uses_star_board_lot_increment_for_whole_position_sell() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_star_board_sell", initial_cash=100_000.0)
+    ledger.positions["688720.SH"] = PositionLot(
+        portfolio_id=ledger.portfolio_id,
+        symbol="688720.SH",
+        quantity=1547,
+        available_quantity=1547,
+        avg_cost=10.0,
+        trade_date=TRADE_DATE,
+    )
+
+    ledger.apply_fill(
+        _ledger_fill(
+            order_id="ord_star_full_exit",
+            fill_id="fill_star_full_exit",
+            symbol="688720.SH",
+            side=OrderSide.SELL,
+            quantity=1547,
+            price=11.0,
+        )
+    )
+
+    assert "688720.SH" not in ledger.positions
+    assert ledger.cash_entries[-1].notional == Decimal("17017.00")

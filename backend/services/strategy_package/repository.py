@@ -7,7 +7,7 @@ column. QE source tables are read-only from this layer.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Iterator
 
 import psycopg2.extras
@@ -22,14 +22,21 @@ from backend.services.trading_core.errors import (
 )
 
 from .execution_policy import ValidatedExecutionPolicy
-from .manifest import compute_manifest_sha256, freeze_manifest
+from .manifest import classify_manifest_hash_drift, compute_manifest_sha256, freeze_manifest
 from .model_state import (
     ModelRetrainJobStatus,
     ModelStalenessStatus,
     StrategyPackageModelRetrainJob,
     StrategyPackageModelState,
 )
-from .models import LiveApprovalStatus, PackageStatus, StrategyPackageLiveApproval, StrategyPackageManifest
+from .models import (
+    AlphaMode,
+    LiveApprovalStatus,
+    PackageStatus,
+    StrategyPackageComponentRecord,
+    StrategyPackageLiveApproval,
+    StrategyPackageManifest,
+)
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .runtime_variant import (
     RuntimeVariantKind,
@@ -52,19 +59,342 @@ logger = logging.getLogger("aistock.strategy_package.repository")
 ConnFactory = Callable[[], Iterator[Any]]
 
 
-def _manifest_drift_repair_plan(*, stored_sha256: str | None, computed_sha256: str | None) -> dict[str, Any]:
+SAFE_MANIFEST_REPAIR_CLASSIFICATION = "A_schema_evolution_stale_hash"
+MULTI_ALPHA_PAPER_ADMISSION_BLOCKER = "multi_alpha_runtime_not_validated_until_dry_run"
+MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA = "multi_alpha_signal_admission_v1"
+MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA = "multi_alpha_parent_combined_signal_smoke_v1"
+MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED = "multi_alpha_legacy_paper_dry_run_blocker_superseded"
+MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED = "multi_alpha_signal_admission_not_validated"
+MULTI_ALPHA_SIGNAL_SELF_CHECK_FAILED = "multi_alpha_signal_self_check_failed"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY = "multi_alpha_signal_selection_artifact_empty"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC = "multi_alpha_signal_selection_artifact_nondeterministic"
+MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE = "multi_alpha_signal_selection_artifact_unavailable"
+MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER = "multi_alpha_signal_unknown_manifest_blocker"
+MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING = "multi_alpha_signal_evidence_missing"
+
+
+def _manifest_drift_repair_plan(
+    *,
+    stored_sha256: str | None,
+    computed_sha256: str | None,
+    manifest_json: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    classification = classify_manifest_hash_drift(
+        manifest_json=manifest_json,
+        stored_sha256=stored_sha256,
+        computed_sha256=computed_sha256,
+    )
     return {
-        "recommended_action": "repair_manifest_hash" if computed_sha256 else "quarantine_manual_review",
+        "recommended_action": (
+            "repair_manifest_hash"
+            if classification["repair_allowed"]
+            else "quarantine_manual_review"
+        ),
         "mutates_manifest_json": False,
         "requires_operator_confirmation": True,
         "confirm_stored_sha256": stored_sha256,
         "confirm_computed_sha256": computed_sha256,
+        "confirm_repair_classification": classification["classification"],
+        "classification": classification,
         "rollback_restore": {
             "field": "strategy_pkg.package.manifest_sha256",
             "restore_value": stored_sha256,
             "audit_event_reason": "manifest_hash_repaired",
         },
     }
+
+
+def _summary_asset_eligibility_from_manifest(
+    manifest: StrategyPackageManifest,
+    package_status: PackageStatus,
+) -> dict[str, Any]:
+    blockers = ["package_retired"] if package_status == PackageStatus.RETIRED else []
+    warnings: list[str] = []
+    alpha_mode = getattr(manifest.alpha_mode, "value", manifest.alpha_mode)
+    if package_status != PackageStatus.RETIRED and alpha_mode == AlphaMode.MULTI_ALPHA.value:
+        evidence = manifest.source_evidence or {}
+        multi_alpha = evidence.get("multi_alpha") if isinstance(evidence, dict) else None
+        paper_admission = multi_alpha.get("paper_admission") if isinstance(multi_alpha, dict) else None
+        blocking = paper_admission.get("blocking") if isinstance(paper_admission, dict) else []
+        blocking_reasons = [str(item) for item in (blocking or []) if str(item)]
+        unknown_blockers = [reason for reason in blocking_reasons if reason != MULTI_ALPHA_PAPER_ADMISSION_BLOCKER]
+        if unknown_blockers:
+            blockers.append(MULTI_ALPHA_SIGNAL_UNKNOWN_MANIFEST_BLOCKER)
+        signal_blocker, signal_warnings = _summary_multi_alpha_signal_gate(manifest, evidence, multi_alpha)
+        if signal_blocker:
+            blockers.append(signal_blocker)
+        warnings.extend(signal_warnings)
+        if MULTI_ALPHA_PAPER_ADMISSION_BLOCKER in blocking_reasons and not signal_blocker:
+            warnings.append(MULTI_ALPHA_LEGACY_DRY_RUN_BLOCKER_SUPERSEDED)
+    payload: dict[str, Any] = {
+        "eligible": not blockers,
+        "summary_only": True,
+        "blockers": blockers,
+    }
+    if warnings:
+        payload["warnings"] = warnings
+    return payload
+
+
+def _summary_multi_alpha_signal_gate(
+    manifest: StrategyPackageManifest,
+    source_evidence: dict[str, Any],
+    multi_alpha: Any,
+) -> tuple[str | None, list[str]]:
+    if not isinstance(multi_alpha, dict):
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED, []
+    signal_admission = multi_alpha.get("signal_admission")
+    if isinstance(signal_admission, dict):
+        blocker = _summary_signal_admission_blocker(signal_admission)
+        return blocker, []
+    legs = multi_alpha.get("legs")
+    leg_ids = [
+        str(leg.get("leg_id") or "").strip()
+        for leg in legs
+        if isinstance(legs, list) and isinstance(leg, dict) and str(leg.get("leg_id") or "").strip()
+    ] if isinstance(legs, list) else []
+    component_ids = [str(component.alpha_id) for component in manifest.alpha_components if str(component.alpha_id or "").strip()]
+    weights = manifest.alpha_combination_policy.weights or {}
+    if source_evidence.get("authority") != "parent_package_asset_runtime_authority":
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED, []
+    if not isinstance(legs, list) or not legs or not component_ids:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE, []
+    component_id_set = set(component_ids)
+    if set(leg_ids) != component_id_set or {str(key) for key in weights} != component_id_set:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE, []
+    return None, [MULTI_ALPHA_SIGNAL_EVIDENCE_MISSING]
+
+
+def _summary_signal_admission_blocker(evidence: dict[str, Any]) -> str | None:
+    if evidence.get("schema_version") != MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA:
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED
+    if (
+        not _summary_is_sha256(evidence.get("self_check_manifest_sha256"))
+        or evidence.get("persisted_for_hot_path") is not True
+        or evidence.get("paper_runtime_dry_run_required") is not False
+    ):
+        return MULTI_ALPHA_SIGNAL_ADMISSION_NOT_VALIDATED
+    if evidence.get("self_check_passed") is not True or evidence.get("self_check_origin") != "package_asset":
+        return MULTI_ALPHA_SIGNAL_SELF_CHECK_FAILED
+    smoke = evidence.get("combined_signal_smoke")
+    if not isinstance(smoke, dict):
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_UNAVAILABLE
+    if smoke.get("schema_version") != MULTI_ALPHA_COMBINED_SIGNAL_SMOKE_SCHEMA:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY
+    if _positive_summary_int(evidence.get("leg_count")) is None and _positive_summary_int(smoke.get("leg_count")) is None:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_EMPTY
+    deterministic = evidence.get("deterministic")
+    if deterministic is None:
+        deterministic = smoke.get("deterministic_replay")
+    if deterministic is not True:
+        return MULTI_ALPHA_SIGNAL_SELECTION_ARTIFACT_NONDETERMINISTIC
+    return None
+
+
+def _positive_summary_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _summary_is_sha256(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
+
+
+def _manifest_json_for_record_classification(record: "StrategyPackageRecord") -> dict[str, Any]:
+    payload = record.current_manifest().model_dump(mode="json")
+    fields_set = getattr(record.manifest, "model_fields_set", set())
+    for default_key in ("source_evidence", "backtest_context"):
+        if default_key not in fields_set and payload.get(default_key) == {}:
+            payload.pop(default_key, None)
+    return payload
+
+
+def _infer_data_vintage(manifest: StrategyPackageManifest) -> date | None:
+    for value in (
+        manifest.backtest_summary.raw_metrics.get("data_vintage"),
+        manifest.backtest_summary.raw_metrics.get("sample_end"),
+        manifest.backtest_summary.raw_metrics.get("end_date"),
+        manifest.source_evidence.get("data_vintage"),
+        manifest.backtest_context.get("data_vintage"),
+    ):
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            continue
+    return None
+
+
+def _validate_asset_records_for_manifest(
+    manifest: StrategyPackageManifest,
+    assets: list[StrategyPackageAssetRecord],
+) -> None:
+    if not assets:
+        raise StrategyPackageValidationError(
+            "frozen strategy package assets are required",
+            context={"reason_code": "strategy_package_assets_missing", "package_id": manifest.package_id},
+        )
+    expected = _expected_manifest_asset_keys(manifest)
+    actual = {
+        (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+        for asset in assets
+    }
+    missing = sorted(
+        {
+            (asset_type.value, asset_ref, sha256)
+            for asset_type, asset_ref, sha256 in expected
+            if (asset_type, asset_ref, sha256) not in actual
+        }
+    )
+    if missing:
+        raise StrategyPackageValidationError(
+            "package_asset ledger rows do not cover frozen manifest assets",
+            context={
+                "reason_code": "strategy_package_assets_incomplete",
+                "package_id": manifest.package_id,
+                "missing_assets": missing,
+            },
+        )
+    unexpected = sorted(
+        {
+            (asset.asset_type.value, asset.asset_ref, asset.asset_sha256)
+            for asset in assets
+            if (asset.asset_type, asset.asset_ref, asset.asset_sha256) not in expected
+        }
+    )
+    if unexpected:
+        raise StrategyPackageValidationError(
+            "package_asset ledger rows must match frozen manifest assets exactly",
+            context={
+                "reason_code": "strategy_package_assets_unexpected",
+                "package_id": manifest.package_id,
+                "unexpected_assets": unexpected,
+            },
+        )
+    for asset in assets:
+        if asset.package_id != manifest.package_id:
+            raise StrategyPackageValidationError(
+                "package_asset package_id must match manifest package_id",
+                context={
+                    "reason_code": "strategy_package_asset_package_mismatch",
+                    "package_id": manifest.package_id,
+                    "asset_package_id": asset.package_id,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+        if asset.asset_type not in {
+            StrategyPackageAssetType.MODEL_WEIGHT,
+            StrategyPackageAssetType.FACTOR_CODE,
+            StrategyPackageAssetType.FACTOR_SCHEMA,
+            StrategyPackageAssetType.MODEL_CODE,
+        }:
+            raise StrategyPackageValidationError(
+                "package freeze only accepts runtime-owned model, factor, schema, and model-code assets",
+                context={
+                    "reason_code": "strategy_package_asset_unexpected_type",
+                    "package_id": manifest.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+        if _looks_like_backtest_prediction(asset.asset_ref):
+            raise StrategyPackageValidationError(
+                "QE backtest prediction artifacts must not be recorded as package runtime assets",
+                context={
+                    "reason_code": "strategy_package_prediction_asset_forbidden",
+                    "package_id": manifest.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                },
+            )
+
+
+def _expected_manifest_asset_keys(
+    manifest: StrategyPackageManifest,
+) -> set[tuple[StrategyPackageAssetType, str, str]]:
+    expected: set[tuple[StrategyPackageAssetType, str, str]] = set()
+    for factor in manifest.factor_set:
+        if not (factor.asset_ref and factor.sha256):
+            raise StrategyPackageValidationError(
+                "manifest factor asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "factor_id": factor.factor_id,
+                    "factor_name": factor.factor_name,
+                },
+            )
+        expected.add((StrategyPackageAssetType.FACTOR_CODE, factor.asset_ref, factor.sha256))
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for model in model_assets:
+        if not (model.asset_ref and model.sha256):
+            raise StrategyPackageValidationError(
+                "manifest model asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "model_id": model.model_id,
+                },
+            )
+        expected.add((StrategyPackageAssetType.MODEL_WEIGHT, model.asset_ref, model.sha256))
+        for code_asset in model.model_code_assets:
+            if not (code_asset.asset_ref and code_asset.sha256):
+                raise StrategyPackageValidationError(
+                    "manifest model code asset is not frozen",
+                    context={
+                        "reason_code": "strategy_package_assets_incomplete",
+                        "package_id": manifest.package_id,
+                        "model_id": model.model_id,
+                        "relative_path": code_asset.relative_path,
+                    },
+                )
+            expected.add((StrategyPackageAssetType.MODEL_CODE, code_asset.asset_ref, code_asset.sha256))
+    runtime_assets = manifest.runtime_assets
+    alpha158 = runtime_assets.alpha158 if runtime_assets is not None else None
+    if alpha158 is not None and alpha158.enabled:
+        if not (alpha158.asset_ref and alpha158.sha256):
+            raise StrategyPackageValidationError(
+                "manifest Alpha158 schema asset is not frozen",
+                context={
+                    "reason_code": "strategy_package_assets_incomplete",
+                    "package_id": manifest.package_id,
+                    "runtime_asset": "alpha158",
+                },
+            )
+        expected.add((StrategyPackageAssetType.FACTOR_SCHEMA, alpha158.asset_ref, alpha158.sha256))
+    return expected
+
+
+def manifest_asset_keys(
+    manifest: StrategyPackageManifest,
+) -> set[tuple[StrategyPackageAssetType, str, str]]:
+    """Public helper for callers that need parity with repository ledger validation."""
+
+    return _expected_manifest_asset_keys(manifest)
+
+
+def _looks_like_backtest_prediction(asset_ref: str) -> bool:
+    text = str(asset_ref or "").lower()
+    return "combined_prediction.pkl" in text or "pred.pkl" in text
+
+
+def _asset_key_payload(assets: list[StrategyPackageAssetRecord]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "asset_type": asset.asset_type.value,
+            "asset_ref": asset.asset_ref,
+            "asset_sha256": asset.asset_sha256,
+        }
+        for asset in assets
+    ]
 
 
 class StrategyPackageRecord(BaseModel):
@@ -80,12 +410,26 @@ class StrategyPackageRecord(BaseModel):
     package_status: PackageStatus
     manifest: StrategyPackageManifest
     manifest_sha256: str
+    alpha_mode: AlphaMode = AlphaMode.SINGLE_ALPHA
+    signal_domain: str | None = None
+    display_name: str | None = None
+    legacy_name: str | None = None
+    data_vintage: date | None = None
+    prediction_ref_uri: str | None = None
+    prediction_ref_sha256: str | None = None
+    model_artifact_uri: str | None = None
+    model_artifact_sha256: str | None = None
     paper_portfolio_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def current_manifest(self) -> StrategyPackageManifest:
-        return self.manifest.model_copy(update={"package_status": self.package_status})
+        return self.manifest.model_copy(
+            update={
+                "package_status": self.package_status,
+                "manifest_sha256": self.manifest_sha256,
+            }
+        )
 
 
 class PackageStatusEvent(BaseModel):
@@ -125,7 +469,9 @@ class StrategyPackageRepository:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         """
-                        SELECT package_id, manifest_sha256, paper_portfolio_count
+                        SELECT package_id, manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count
                         FROM strategy_pkg.package
                         WHERE package_id = %s
                         """,
@@ -150,8 +496,10 @@ class StrategyPackageRepository:
                         INSERT INTO strategy_pkg.package (
                             package_id, package_name, package_version, source_type,
                             source_id, loop_id, run_id, package_status, manifest_json,
-                            manifest_sha256
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             frozen.package_id,
@@ -164,6 +512,15 @@ class StrategyPackageRepository:
                             frozen.package_status.value,
                             psycopg2.extras.Json(frozen.model_dump(mode="json")),
                             frozen.manifest_sha256,
+                            frozen.alpha_mode.value,
+                            None,
+                            frozen.package_name,
+                            frozen.package_name,
+                            _infer_data_vintage(frozen),
+                            None,
+                            None,
+                            None,
+                            None,
                         ),
                     )
                     cur.execute(
@@ -201,6 +558,325 @@ class StrategyPackageRepository:
             ) from exc
         return self.get(frozen.package_id)
 
+    def save_manifest_with_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+    ) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        if not frozen.manifest_sha256:
+            raise StrategyPackageValidationError(
+                "manifest_sha256 is required before persistence",
+                context={"package_id": frozen.package_id},
+            )
+        _validate_asset_records_for_manifest(frozen, assets)
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            if not self._has_package_asset_rows(source_existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package source version exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": source_existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return source_existing
+
+        cm, managed_by_factory = self._transaction_conn()
+        try:
+            with cm as conn:
+                original_autocommit = getattr(conn, "autocommit", None)
+                if not managed_by_factory and original_autocommit is not None:
+                    conn.autocommit = False
+                try:
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(
+                            """
+                            SELECT package_id, manifest_sha256, paper_portfolio_count
+                            FROM strategy_pkg.package
+                            WHERE package_id = %s
+                            """,
+                            (frozen.package_id,),
+                        )
+                        existing = cur.fetchone()
+                        if existing:
+                            if existing["manifest_sha256"] != frozen.manifest_sha256:
+                                raise InvalidStateTransitionError(
+                                    "package manifest cannot be silently replaced",
+                                    context={
+                                        "package_id": frozen.package_id,
+                                        "existing_manifest_sha256": existing["manifest_sha256"],
+                                        "new_manifest_sha256": frozen.manifest_sha256,
+                                        "paper_portfolio_count": existing["paper_portfolio_count"],
+                                    },
+                                )
+                        else:
+                            self._insert_manifest(cur, frozen)
+                        for asset in assets:
+                            self._upsert_package_asset(cur, asset)
+                    if not managed_by_factory and hasattr(conn, "commit"):
+                        conn.commit()
+                except Exception:
+                    if not managed_by_factory and hasattr(conn, "rollback"):
+                        conn.rollback()
+                    raise
+                finally:
+                    if not managed_by_factory and original_autocommit is not None:
+                        conn.autocommit = original_autocommit
+        except pg_errors.UniqueViolation as exc:
+            existing_by_source = self.find_by_source_version(
+                source_type=frozen.source.source_type.value,
+                source_id=frozen.source.source_id,
+                loop_id=frozen.source.loop_id,
+                package_version=frozen.package_version,
+            )
+            if existing_by_source and self._has_package_asset_rows(existing_by_source.package_id, assets):
+                return existing_by_source
+            raise InvalidStateTransitionError(
+                "strategy package unique constraint collision",
+                context={
+                    "package_id": frozen.package_id,
+                    "source_type": frozen.source.source_type.value,
+                    "source_id": frozen.source.source_id,
+                    "loop_id": frozen.source.loop_id,
+                    "package_version": frozen.package_version,
+                    "required_assets": _asset_key_payload(assets),
+                },
+            ) from exc
+        return self.get(frozen.package_id)
+
+    def backfill_frozen_manifest_assets(
+        self,
+        package_id: str,
+        *,
+        frozen_manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+        operator: str,
+        expected_old_manifest_sha256: str,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        expected_old = str(expected_old_manifest_sha256 or "").strip().lower()
+        if record.manifest_sha256 != expected_old:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill lost compare-and-set race",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                    "package_id": package_id,
+                    "expected_old_manifest_sha256": expected_old,
+                    "actual_manifest_sha256": record.manifest_sha256,
+                },
+            )
+        if frozen_manifest.package_id != package_id:
+            raise StrategyPackageValidationError(
+                "backfilled manifest package_id must match target package",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_package_mismatch",
+                    "package_id": package_id,
+                    "manifest_package_id": frozen_manifest.package_id,
+                },
+            )
+        frozen = freeze_manifest(
+            frozen_manifest.model_copy(
+                update={
+                    "manifest_sha256": None,
+                    "package_status": record.package_status,
+                }
+            )
+        )
+        _validate_asset_records_for_manifest(frozen, assets)
+        cm, managed_by_factory = self._transaction_conn()
+        try:
+            with cm as conn:
+                original_autocommit = getattr(conn, "autocommit", None)
+                if not managed_by_factory and original_autocommit is not None:
+                    conn.autocommit = False
+                try:
+                    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                        cur.execute(
+                            """
+                            UPDATE strategy_pkg.package
+                            SET manifest_json = %s,
+                                manifest_sha256 = %s,
+                                updated_at = NOW()
+                            WHERE package_id = %s AND manifest_sha256 = %s
+                            """,
+                            (
+                                psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                                frozen.manifest_sha256,
+                                package_id,
+                                expected_old,
+                            ),
+                        )
+                        if cur.rowcount != 1:
+                            raise InvalidStateTransitionError(
+                                "strategy package asset backfill lost compare-and-set race",
+                                context={
+                                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                                    "package_id": package_id,
+                                    "expected_old_manifest_sha256": expected_old,
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                },
+                            )
+                        for asset in assets:
+                            self._upsert_package_asset(cur, asset)
+                        cur.execute(
+                            """
+                            INSERT INTO strategy_pkg.package_status_event (
+                                package_id, from_status, to_status, reason, context
+                            ) VALUES (%s, %s, %s, %s, %s)
+                            """,
+                            (
+                                package_id,
+                                record.package_status.value,
+                                record.package_status.value,
+                                "strategy_package_asset_backfill_freeze",
+                                psycopg2.extras.Json({
+                                    "operator": operator,
+                                    "old_manifest_sha256": record.manifest_sha256,
+                                    "new_manifest_sha256": frozen.manifest_sha256,
+                                    "asset_count": len(assets),
+                                    "asset_keys": _asset_key_payload(assets),
+                                    "rollback_restore": {
+                                        "field": "strategy_pkg.package.manifest_json, strategy_pkg.package.manifest_sha256",
+                                        "manifest_sha256": record.manifest_sha256,
+                                        "manifest_json": record.current_manifest().model_dump(mode="json"),
+                                    },
+                                }),
+                            ),
+                        )
+                    if not managed_by_factory and hasattr(conn, "commit"):
+                        conn.commit()
+                except Exception:
+                    if not managed_by_factory and hasattr(conn, "rollback"):
+                        conn.rollback()
+                    raise
+                finally:
+                    if not managed_by_factory and original_autocommit is not None:
+                        conn.autocommit = original_autocommit
+        except pg_errors.UniqueViolation as exc:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill audit event sequence is behind existing rows",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_event_collision",
+                    "package_id": package_id,
+                    "operator": operator,
+                },
+            ) from exc
+        return self.get(package_id)
+
+    def _transaction_conn(self) -> tuple[Any, bool]:
+        try:
+            return self._conn_factory(autocommit=False, manage_transaction=True), True  # type: ignore[misc]
+        except TypeError:
+            return self._conn_factory(), False
+
+    def _insert_manifest(self, cur: Any, frozen: StrategyPackageManifest) -> None:
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package (
+                package_id, package_name, package_version, source_type,
+                source_id, loop_id, run_id, package_status, manifest_json,
+               manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+               data_vintage, prediction_ref_uri, prediction_ref_sha256,
+               model_artifact_uri, model_artifact_sha256
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                frozen.package_id,
+                frozen.package_name,
+                frozen.package_version,
+                frozen.source.source_type.value,
+                frozen.source.source_id,
+                frozen.source.loop_id,
+                frozen.source.run_id,
+                frozen.package_status.value,
+                psycopg2.extras.Json(frozen.model_dump(mode="json")),
+                frozen.manifest_sha256,
+                frozen.alpha_mode.value,
+                None,
+                frozen.package_name,
+                frozen.package_name,
+                _infer_data_vintage(frozen),
+                None,
+                None,
+                None,
+                None,
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package_status_event (
+                package_id, from_status, to_status, reason, context
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                frozen.package_id,
+                None,
+                frozen.package_status.value,
+                "package_created",
+                psycopg2.extras.Json({"manifest_sha256": frozen.manifest_sha256}),
+            ),
+        )
+
+    def _upsert_package_asset(self, cur: Any, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord | None:
+        cur.execute(
+            """
+            INSERT INTO strategy_pkg.package_asset (
+                package_id, asset_type, asset_ref, asset_sha256, metadata,
+                asset_role, asset_size_bytes, protected_asset, source_uri, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (package_id, asset_type, asset_ref) DO UPDATE
+            SET asset_sha256 = EXCLUDED.asset_sha256,
+                metadata = EXCLUDED.metadata,
+                asset_role = EXCLUDED.asset_role,
+                asset_size_bytes = EXCLUDED.asset_size_bytes,
+                protected_asset = EXCLUDED.protected_asset,
+                source_uri = EXCLUDED.source_uri
+            WHERE strategy_pkg.package_asset.asset_sha256 IS NOT DISTINCT FROM EXCLUDED.asset_sha256
+            RETURNING *
+            """,
+            (
+                asset.package_id,
+                asset.asset_type.value,
+                asset.asset_ref,
+                asset.asset_sha256,
+                psycopg2.extras.Json(asset.metadata),
+                asset.asset_role,
+                asset.asset_size_bytes,
+                asset.protected_asset,
+                asset.source_uri,
+                asset.created_at,
+            ),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise StrategyPackageValidationError(
+                "existing package_asset row has a different sha256 for the same asset_ref",
+                context={
+                    "reason_code": "strategy_package_asset_sha_mismatch",
+                    "package_id": asset.package_id,
+                    "asset_type": asset.asset_type.value,
+                    "asset_ref": asset.asset_ref,
+                    "asset_sha256": asset.asset_sha256,
+                },
+            )
+        return self._package_asset_from_row(dict(row))
+
+    def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
+        if not assets:
+            return True
+        existing = {
+            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+            for asset in self.list_package_assets(package_id)
+        }
+        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
+
     def find_by_source_version(
         self,
         *,
@@ -215,7 +891,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE source_type = %s
                       AND source_id = %s
@@ -238,7 +916,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE package_id = %s
                     """,
@@ -267,7 +947,9 @@ class StrategyPackageRepository:
                     f"""
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     {where}
                     ORDER BY created_at DESC
@@ -277,6 +959,222 @@ class StrategyPackageRepository:
                 )
                 rows = cur.fetchall()
         return [record for record in (self._record_from_row(dict(row), quarantine=True) for row in rows) if record is not None]
+
+    def list_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        """Return scalar StrategyPackage rows for UI lists without manifest validation."""
+
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        params: list[Any] = []
+        where = ""
+        if status is not None:
+            where = "WHERE package_status = %s"
+            params.append(status.value)
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    WITH package_summary AS (
+                        SELECT package_id, package_name, package_version, source_type,
+                               source_id, loop_id, run_id, package_status,
+                               manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                               data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                               model_artifact_uri, model_artifact_sha256, paper_portfolio_count,
+                               created_at, updated_at,
+                               manifest_json #> '{{backtest_summary}}' AS backtest_summary,
+                               jsonb_array_length(COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)) AS alpha_count,
+                               ARRAY(
+                                   SELECT component ->> 'alpha_id'
+                                   FROM jsonb_array_elements(COALESCE(manifest_json -> 'alpha_components', '[]'::jsonb)) AS component
+                                   WHERE COALESCE(component ->> 'alpha_id', '') <> ''
+                                   ORDER BY component ->> 'alpha_id'
+                               ) AS alpha_ids,
+                               COALESCE(
+                                   NULLIF(manifest_json #>> '{{backtest_context,daily_strategy,topk}}', ''),
+                                   NULLIF(manifest_json #>> '{{portfolio_policy,topk}}', '')
+                               ) AS portfolio_topk,
+                                COALESCE(
+                                    manifest_json #> '{{source_evidence,multi_alpha,paper_admission,blocking}}',
+                                    '[]'::jsonb
+                                ) AS paper_admission_blocking,
+                                manifest_json #> '{{source_evidence}}' AS source_evidence,
+                                manifest_json #> '{{source_evidence,multi_alpha}}' AS multi_alpha_evidence,
+                                manifest_json #> '{{source_evidence,multi_alpha,signal_admission}}' AS signal_admission,
+                                CASE
+                                    WHEN jsonb_typeof(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb)) = 'array'
+                                    THEN jsonb_array_length(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb))
+                                    ELSE 0
+                                END AS multi_alpha_leg_count,
+                                ARRAY(
+                                    SELECT leg ->> 'leg_id'
+                                    FROM jsonb_array_elements(COALESCE(manifest_json #> '{{source_evidence,multi_alpha,legs}}', '[]'::jsonb)) AS leg
+                                    WHERE COALESCE(leg ->> 'leg_id', '') <> ''
+                                    ORDER BY leg ->> 'leg_id'
+                                ) AS multi_alpha_leg_ids,
+                                ARRAY(
+                                    SELECT weight_key
+                                    FROM jsonb_object_keys(
+                                        CASE
+                                            WHEN jsonb_typeof(COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)) = 'object'
+                                            THEN COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)
+                                            ELSE '{{}}'::jsonb
+                                        END
+                                    ) AS weight_key
+                                    ORDER BY weight_key
+                                ) AS multi_alpha_weight_ids,
+                                (
+                                    SELECT COUNT(*)::int
+                                    FROM jsonb_object_keys(
+                                        CASE
+                                            WHEN jsonb_typeof(COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)) = 'object'
+                                            THEN COALESCE(manifest_json #> '{{alpha_combination_policy,weights}}', '{{}}'::jsonb)
+                                            ELSE '{{}}'::jsonb
+                                        END
+                                    ) AS weight_key
+                                ) AS multi_alpha_weight_count
+                        FROM strategy_pkg.package
+                        {where}
+                    )
+                    SELECT *,
+                           (
+                               package_status <> 'RETIRED'
+                               AND (
+                                   alpha_mode <> 'multi_alpha'
+                                    OR (
+                                        NOT EXISTS (
+                                            SELECT 1
+                                            FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                            WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                        )
+                                        AND (
+                                            (
+                                                signal_admission IS NOT NULL
+                                                AND signal_admission #>> '{{schema_version}}' = 'multi_alpha_signal_admission_v1'
+                                                AND COALESCE(signal_admission #>> '{{self_check_manifest_sha256}}', '') ~ '^[0-9a-f]{{64}}$'
+                                                AND signal_admission #>> '{{persisted_for_hot_path}}' = 'true'
+                                                AND signal_admission #>> '{{paper_runtime_dry_run_required}}' = 'false'
+                                                AND signal_admission #>> '{{self_check_passed}}' = 'true'
+                                                AND signal_admission #>> '{{self_check_origin}}' = 'package_asset'
+                                                AND signal_admission #>> '{{combined_signal_smoke,schema_version}}' = 'multi_alpha_parent_combined_signal_smoke_v1'
+                                                AND CASE
+                                                    WHEN COALESCE(signal_admission #>> '{{leg_count}}', '') ~ '^[0-9]+$'
+                                                    THEN (signal_admission #>> '{{leg_count}}')::int
+                                                    ELSE 0
+                                                END > 0
+                                                AND COALESCE(signal_admission #>> '{{deterministic}}', signal_admission #>> '{{combined_signal_smoke,deterministic_replay}}') = 'true'
+                                            )
+                                            OR (
+                                                source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                                AND cardinality(alpha_ids) > 0
+                                                AND alpha_ids = multi_alpha_leg_ids
+                                                AND alpha_ids = multi_alpha_weight_ids
+                                            )
+                                        )
+                                    )
+                                )
+                            ) AS summary_asset_eligible,
+                            CASE
+                                WHEN package_status = 'RETIRED' THEN ARRAY['package_retired']::text[]
+                                WHEN alpha_mode <> 'multi_alpha' THEN ARRAY[]::text[]
+                                WHEN EXISTS (
+                                    SELECT 1
+                                    FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                    WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                ) THEN ARRAY['multi_alpha_signal_unknown_manifest_blocker']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{schema_version}}', '') <> 'multi_alpha_signal_admission_v1'
+                                    THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND (
+                                         COALESCE(signal_admission #>> '{{self_check_manifest_sha256}}', '') !~ '^[0-9a-f]{{64}}$'
+                                         OR COALESCE(signal_admission #>> '{{persisted_for_hot_path}}', '') <> 'true'
+                                         OR COALESCE(signal_admission #>> '{{paper_runtime_dry_run_required}}', '') <> 'false'
+                                     )
+                                    THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND (
+                                         COALESCE(signal_admission #>> '{{self_check_passed}}', '') <> 'true'
+                                         OR COALESCE(signal_admission #>> '{{self_check_origin}}', '') <> 'package_asset'
+                                     )
+                                    THEN ARRAY['multi_alpha_signal_self_check_failed']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{combined_signal_smoke,schema_version}}', '') <> 'multi_alpha_parent_combined_signal_smoke_v1'
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_empty']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND CASE
+                                         WHEN COALESCE(signal_admission #>> '{{leg_count}}', '') ~ '^[0-9]+$'
+                                         THEN (signal_admission #>> '{{leg_count}}')::int
+                                         ELSE 0
+                                     END <= 0
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_empty']::text[]
+                                WHEN signal_admission IS NOT NULL
+                                     AND COALESCE(signal_admission #>> '{{deterministic}}', signal_admission #>> '{{combined_signal_smoke,deterministic_replay}}', '') <> 'true'
+                                    THEN ARRAY['multi_alpha_signal_selection_artifact_nondeterministic']::text[]
+                                WHEN signal_admission IS NULL
+                                     AND source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                     AND cardinality(alpha_ids) > 0
+                                     AND alpha_ids = multi_alpha_leg_ids
+                                     AND alpha_ids = multi_alpha_weight_ids
+                                    THEN ARRAY[]::text[]
+                                WHEN signal_admission IS NULL THEN ARRAY['multi_alpha_signal_admission_not_validated']::text[]
+                                ELSE COALESCE(
+                                    (
+                                        SELECT ARRAY_AGG(blocker.reason)::text[]
+                                       FROM jsonb_array_elements_text(paper_admission_blocking) AS blocker(reason)
+                                       WHERE blocker.reason <> 'multi_alpha_runtime_not_validated_until_dry_run'
+                                   ),
+                                   ARRAY[]::text[]
+                               )
+                            END AS summary_asset_blockers,
+                            CASE
+                                WHEN package_status <> 'RETIRED'
+                                     AND alpha_mode = 'multi_alpha'
+                                     AND paper_admission_blocking ? 'multi_alpha_runtime_not_validated_until_dry_run'
+                                    THEN ARRAY['multi_alpha_legacy_paper_dry_run_blocker_superseded']::text[]
+                                WHEN package_status <> 'RETIRED'
+                                     AND alpha_mode = 'multi_alpha'
+                                     AND signal_admission IS NULL
+                                     AND source_evidence #>> '{{authority}}' = 'parent_package_asset_runtime_authority'
+                                     AND cardinality(alpha_ids) > 0
+                                     AND alpha_ids = multi_alpha_leg_ids
+                                     AND alpha_ids = multi_alpha_weight_ids
+                                    THEN ARRAY['multi_alpha_signal_evidence_missing']::text[]
+                                ELSE ARRAY[]::text[]
+                            END AS summary_asset_warnings
+                    FROM package_summary
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        return [self._summary_from_row(dict(row)) for row in rows]
+
+    def list_single_alpha_candidates_for_seed_reuse(self, *, limit: int = 2000) -> list[StrategyPackageRecord]:
+        """Return frozen single-alpha packages for deterministic seed-coverage matching."""
+
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT package_id, package_name, package_version, source_type,
+                           source_id, loop_id, run_id, package_status, manifest_json,
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
+                    FROM strategy_pkg.package
+                    WHERE alpha_mode = 'single_alpha'
+                      AND package_status <> 'RETIRED'
+                    ORDER BY created_at DESC, package_id ASC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [self._record_from_row(dict(row)) for row in rows]
 
     def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
         self.get(package_id)
@@ -290,6 +1188,8 @@ class StrategyPackageRepository:
             "simulation_release_bindings": [],
             "simulation_daily_runs": [],
             "execution_plans": [],
+            "component_child_edges": [],
+            "component_parent_edges": [],
             "daily_selection_evidence": 0,
             "selection_score_artifacts": 0,
         }
@@ -377,6 +1277,27 @@ class StrategyPackageRepository:
                             (package_id,),
                         )
                         summary[key] = [dict(row) for row in cur.fetchall()]
+                if self._table_exists(cur, "strategy_pkg.strategy_package_components"):
+                    cur.execute(
+                        """
+                        SELECT parent_package_id, child_package_id, position
+                        FROM strategy_pkg.strategy_package_components
+                        WHERE child_package_id = %s
+                        ORDER BY parent_package_id ASC, position ASC
+                        """,
+                        (package_id,),
+                    )
+                    summary["component_child_edges"] = [dict(row) for row in cur.fetchall()]
+                    cur.execute(
+                        """
+                        SELECT parent_package_id, child_package_id, position
+                        FROM strategy_pkg.strategy_package_components
+                        WHERE parent_package_id = %s
+                        ORDER BY position ASC, child_package_id ASC
+                        """,
+                        (package_id,),
+                    )
+                    summary["component_parent_edges"] = [dict(row) for row in cur.fetchall()]
         return summary
 
     def delete_package(self, package_id: str) -> dict[str, Any]:
@@ -397,6 +1318,7 @@ class StrategyPackageRepository:
             "validated_execution_policy": 0,
             "selection_score_artifact": 0,
             "package_asset": 0,
+            "strategy_package_components": 0,
             "package_status_event": 0,
             "package": 0,
         }
@@ -426,6 +1348,12 @@ class StrategyPackageRepository:
                         if self._table_exists(cur, table):
                             cur.execute(f"DELETE FROM {table} WHERE package_id = %s", (package_id,))
                             counts[key] = cur.rowcount
+                    if self._table_exists(cur, "strategy_pkg.strategy_package_components"):
+                        cur.execute(
+                            "DELETE FROM strategy_pkg.strategy_package_components WHERE parent_package_id = %s",
+                            (package_id,),
+                        )
+                        counts["strategy_package_components"] = cur.rowcount
                     cur.execute("DELETE FROM strategy_pkg.package WHERE package_id = %s", (package_id,))
                     counts["package"] = cur.rowcount
                 if hasattr(conn, "commit"):
@@ -534,6 +1462,7 @@ class StrategyPackageRepository:
             "simulation_release_bindings",
             "simulation_daily_runs",
             "execution_plans",
+            "component_child_edges",
         ):
             if dependencies.get(key):
                 blockers.append(key)
@@ -605,6 +1534,135 @@ class StrategyPackageRepository:
             )
             for row in rows
         ]
+
+    def update_artifact_refs(
+        self,
+        package_id: str,
+        *,
+        prediction_ref_uri: str | None = None,
+        prediction_ref_sha256: str | None = None,
+        model_artifact_uri: str | None = None,
+        model_artifact_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
+        self.get(package_id)
+        if prediction_ref_uri is not None and not prediction_ref_sha256:
+            raise StrategyPackageValidationError(
+                "prediction_ref_sha256 is required when prediction_ref_uri is set",
+                context={"package_id": package_id, "prediction_ref_uri": prediction_ref_uri},
+            )
+        if model_artifact_uri is not None and not model_artifact_sha256:
+            raise StrategyPackageValidationError(
+                "model_artifact_sha256 is required when model_artifact_uri is set",
+                context={"package_id": package_id, "model_artifact_uri": model_artifact_uri},
+            )
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategy_pkg.package
+                    SET prediction_ref_uri = COALESCE(%s, prediction_ref_uri),
+                        prediction_ref_sha256 = COALESCE(%s, prediction_ref_sha256),
+                        model_artifact_uri = COALESCE(%s, model_artifact_uri),
+                        model_artifact_sha256 = COALESCE(%s, model_artifact_sha256),
+                        updated_at = NOW()
+                    WHERE package_id = %s
+                    """,
+                    (
+                        prediction_ref_uri,
+                        prediction_ref_sha256,
+                        model_artifact_uri,
+                        model_artifact_sha256,
+                        package_id,
+                    ),
+                )
+        return self.get(package_id)
+
+    def save_components(
+        self,
+        parent_package_id: str,
+        components: list[StrategyPackageComponentRecord],
+    ) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        if not components:
+            raise StrategyPackageValidationError(
+                "multi-alpha package requires at least one component edge",
+                context={"parent_package_id": parent_package_id},
+            )
+        with self._conn_factory() as conn:
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "DELETE FROM strategy_pkg.strategy_package_components WHERE parent_package_id = %s",
+                        (parent_package_id,),
+                    )
+                    saved: list[StrategyPackageComponentRecord] = []
+                    for component in components:
+                        cur.execute(
+                            """
+                            INSERT INTO strategy_pkg.strategy_package_components (
+                                parent_package_id, child_package_id, child_manifest_sha256,
+                                component_weight, score_normalization, position
+                            ) VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id, parent_package_id, child_package_id, child_manifest_sha256,
+                                      component_weight, score_normalization, position, created_at
+                            """,
+                            (
+                                parent_package_id,
+                                component.child_package_id,
+                                component.child_manifest_sha256,
+                                component.component_weight,
+                                component.score_normalization,
+                                component.position,
+                            ),
+                        )
+                        saved.append(self._component_from_row(dict(cur.fetchone())))
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
+        return saved
+
+    def list_components(self, parent_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, parent_package_id, child_package_id, child_manifest_sha256,
+                           component_weight, score_normalization, position, created_at
+                    FROM strategy_pkg.strategy_package_components
+                    WHERE parent_package_id = %s
+                    ORDER BY position ASC, id ASC
+                    """,
+                    (parent_package_id,),
+                )
+                rows = cur.fetchall()
+        return [self._component_from_row(dict(row)) for row in rows]
+
+    def list_component_parents(self, child_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(child_package_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT id, parent_package_id, child_package_id, child_manifest_sha256,
+                           component_weight, score_normalization, position, created_at
+                    FROM strategy_pkg.strategy_package_components
+                    WHERE child_package_id = %s
+                    ORDER BY created_at DESC, id ASC
+                    """,
+                    (child_package_id,),
+                )
+                rows = cur.fetchall()
+        return [self._component_from_row(dict(row)) for row in rows]
 
     def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
         self.get(asset.package_id)
@@ -1303,7 +2361,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     ORDER BY created_at DESC
                     LIMIT %s
@@ -1326,6 +2386,11 @@ class StrategyPackageRepository:
                     "stored_sha256": row_dict["manifest_sha256"],
                     "computed_sha256": None,
                     "error": "manifest_json failed pydantic validation",
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=row_dict["manifest_sha256"],
+                        computed_sha256=None,
+                        manifest_json=manifest_json if isinstance(manifest_json, dict) else None,
+                    ),
                 })
                 continue
             stored = row_dict["manifest_sha256"]
@@ -1340,6 +2405,15 @@ class StrategyPackageRepository:
                 package_status=PackageStatus(row_dict["package_status"]),
                 manifest=manifest,
                 manifest_sha256=stored,
+                alpha_mode=AlphaMode(row_dict.get("alpha_mode") or manifest.alpha_mode.value),
+                signal_domain=row_dict.get("signal_domain"),
+                display_name=row_dict.get("display_name") or row_dict["package_name"],
+                legacy_name=row_dict.get("legacy_name"),
+                data_vintage=row_dict.get("data_vintage"),
+                prediction_ref_uri=row_dict.get("prediction_ref_uri"),
+                prediction_ref_sha256=row_dict.get("prediction_ref_sha256"),
+                model_artifact_uri=row_dict.get("model_artifact_uri"),
+                model_artifact_sha256=row_dict.get("model_artifact_sha256"),
                 paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
                 created_at=row_dict["created_at"],
                 updated_at=row_dict["updated_at"],
@@ -1360,6 +2434,7 @@ class StrategyPackageRepository:
                     "repair_plan": _manifest_drift_repair_plan(
                         stored_sha256=stored,
                         computed_sha256=computed,
+                        manifest_json=manifest_json if isinstance(manifest_json, dict) else None,
                     ),
                 })
             else:
@@ -1391,7 +2466,9 @@ class StrategyPackageRepository:
                     """
                     SELECT package_id, package_name, package_version, source_type,
                            source_id, loop_id, run_id, package_status, manifest_json,
-                           manifest_sha256, paper_portfolio_count, created_at, updated_at
+                           manifest_sha256, alpha_mode, signal_domain, display_name, legacy_name,
+                           data_vintage, prediction_ref_uri, prediction_ref_sha256,
+                           model_artifact_uri, model_artifact_sha256, paper_portfolio_count, created_at, updated_at
                     FROM strategy_pkg.package
                     WHERE package_id = %s
                     """,
@@ -1404,7 +2481,25 @@ class StrategyPackageRepository:
                 context={"package_id": package_id},
             )
         row_dict = dict(row)
-        manifest = StrategyPackageManifest.model_validate(row_dict["manifest_json"])
+        try:
+            manifest = StrategyPackageManifest.model_validate(row_dict["manifest_json"])
+        except Exception as exc:
+            repair_plan = _manifest_drift_repair_plan(
+                stored_sha256=row_dict["manifest_sha256"],
+                computed_sha256=None,
+                manifest_json=row_dict["manifest_json"] if isinstance(row_dict["manifest_json"], dict) else None,
+            )
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": row_dict["manifest_sha256"],
+                    "computed_sha256": None,
+                    "error": "manifest_json failed pydantic validation",
+                    "validation_error": str(exc),
+                    "repair_plan": repair_plan,
+                },
+            ) from exc
         record = StrategyPackageRecord(
             package_id=row_dict["package_id"],
             package_name=row_dict["package_name"],
@@ -1416,6 +2511,15 @@ class StrategyPackageRepository:
             package_status=PackageStatus(row_dict["package_status"]),
             manifest=manifest,
             manifest_sha256=row_dict["manifest_sha256"],
+            alpha_mode=AlphaMode(row_dict.get("alpha_mode") or manifest.alpha_mode.value),
+            signal_domain=row_dict.get("signal_domain"),
+            display_name=row_dict.get("display_name") or row_dict["package_name"],
+            legacy_name=row_dict.get("legacy_name"),
+            data_vintage=row_dict.get("data_vintage"),
+            prediction_ref_uri=row_dict.get("prediction_ref_uri"),
+            prediction_ref_sha256=row_dict.get("prediction_ref_sha256"),
+            model_artifact_uri=row_dict.get("model_artifact_uri"),
+            model_artifact_sha256=row_dict.get("model_artifact_sha256"),
             paper_portfolio_count=int(row_dict.get("paper_portfolio_count") or 0),
             created_at=row_dict["created_at"],
             updated_at=row_dict["updated_at"],
@@ -1423,6 +2527,21 @@ class StrategyPackageRepository:
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        repair_plan = _manifest_drift_repair_plan(
+            stored_sha256=record.manifest_sha256,
+            computed_sha256=correct_hash,
+            manifest_json=row_dict["manifest_json"] if isinstance(row_dict["manifest_json"], dict) else None,
+        )
+        if repair_plan["classification"]["classification"] != SAFE_MANIFEST_REPAIR_CLASSIFICATION:
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "repair_plan": repair_plan,
+                },
+            )
         if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
             raise InvalidStateTransitionError(
                 "manifest hash repair requires explicit stored/computed hash confirmation",
@@ -1432,45 +2551,124 @@ class StrategyPackageRepository:
                     "computed_sha256": correct_hash,
                     "confirm_stored_sha256": confirm_stored_sha256,
                     "confirm_computed_sha256": confirm_computed_sha256,
-                    "repair_plan": _manifest_drift_repair_plan(
-                        stored_sha256=record.manifest_sha256,
-                        computed_sha256=correct_hash,
-                    ),
+                    "repair_plan": repair_plan,
                 },
             )
         with self._conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE strategy_pkg.package
-                    SET manifest_sha256 = %s, updated_at = NOW()
-                    WHERE package_id = %s
-                    """,
-                    (correct_hash, package_id),
-                )
-                cur.execute(
-                    """
-                    INSERT INTO strategy_pkg.package_status_event (
-                        package_id, from_status, to_status, reason, context
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (
-                        package_id,
-                        record.package_status.value,
-                        record.package_status.value,
-                        "manifest_hash_repaired",
-                        psycopg2.extras.Json({
-                            "operator": operator,
-                            "old_manifest_sha256": record.manifest_sha256,
-                            "new_manifest_sha256": correct_hash,
-                            "rollback_restore": {
-                                "field": "strategy_pkg.package.manifest_sha256",
-                                "restore_value": record.manifest_sha256,
+            original_autocommit = getattr(conn, "autocommit", None)
+            try:
+                if original_autocommit is not None:
+                    conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE strategy_pkg.package
+                        SET manifest_sha256 = %s, updated_at = NOW()
+                        WHERE package_id = %s AND manifest_sha256 = %s
+                        """,
+                        (correct_hash, package_id, record.manifest_sha256),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "manifest hash repair lost compare-and-set race",
+                            context={
+                                "package_id": package_id,
+                                "expected_stored_sha256": record.manifest_sha256,
+                                "computed_sha256": correct_hash,
                             },
-                        }),
-                    ),
-                )
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO strategy_pkg.package_status_event (
+                            package_id, from_status, to_status, reason, context
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (
+                            package_id,
+                            record.package_status.value,
+                            record.package_status.value,
+                            "manifest_hash_repaired",
+                            psycopg2.extras.Json({
+                                "operator": operator,
+                                "old_manifest_sha256": record.manifest_sha256,
+                                "new_manifest_sha256": correct_hash,
+                                "repair_classification": repair_plan["classification"]["classification"],
+                                "classification_reason": repair_plan["classification"]["reason"],
+                                "rollback_restore": {
+                                    "field": "strategy_pkg.package.manifest_sha256",
+                                    "restore_value": record.manifest_sha256,
+                                },
+                            }),
+                        ),
+                    )
+                if hasattr(conn, "commit"):
+                    conn.commit()
+            except Exception:
+                if hasattr(conn, "rollback"):
+                    conn.rollback()
+                raise
+            finally:
+                if original_autocommit is not None:
+                    conn.autocommit = original_autocommit
         return self.get(package_id)
+
+    @staticmethod
+    def _summary_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        backtest_summary = row.get("backtest_summary") or {}
+        raw_metrics = backtest_summary.get("raw_metrics") if isinstance(backtest_summary, dict) else {}
+        raw_metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        metrics_summary = {
+            "ic": backtest_summary.get("ic", raw_metrics.get("ic")) if isinstance(backtest_summary, dict) else raw_metrics.get("ic"),
+            "rank_ic": backtest_summary.get("rank_ic", raw_metrics.get("rank_ic")) if isinstance(backtest_summary, dict) else raw_metrics.get("rank_ic"),
+            "icir": backtest_summary.get("icir", raw_metrics.get("icir")) if isinstance(backtest_summary, dict) else raw_metrics.get("icir"),
+            "sharpe": backtest_summary.get("sharpe", raw_metrics.get("sharpe")) if isinstance(backtest_summary, dict) else raw_metrics.get("sharpe"),
+            "annual_return": backtest_summary.get("annual_return", raw_metrics.get("annual_return")) if isinstance(backtest_summary, dict) else raw_metrics.get("annual_return"),
+            "max_drawdown": backtest_summary.get("max_drawdown", raw_metrics.get("max_drawdown")) if isinstance(backtest_summary, dict) else raw_metrics.get("max_drawdown"),
+            "final_nav": backtest_summary.get("final_nav", raw_metrics.get("final_nav")) if isinstance(backtest_summary, dict) else raw_metrics.get("final_nav"),
+            "turnover": backtest_summary.get("turnover", raw_metrics.get("turnover")) if isinstance(backtest_summary, dict) else raw_metrics.get("turnover"),
+            "n_trading_days": backtest_summary.get("n_trading_days", raw_metrics.get("n_trading_days")) if isinstance(backtest_summary, dict) else raw_metrics.get("n_trading_days"),
+            "sample_start": backtest_summary.get("sample_start", raw_metrics.get("sample_start")) if isinstance(backtest_summary, dict) else raw_metrics.get("sample_start"),
+            "sample_end": backtest_summary.get("sample_end", raw_metrics.get("sample_end")) if isinstance(backtest_summary, dict) else raw_metrics.get("sample_end"),
+        }
+        alpha_count = row.get("alpha_count")
+        portfolio_topk = row.get("portfolio_topk")
+        asset_blockers = [str(item) for item in (row.get("summary_asset_blockers") or []) if str(item)]
+        asset_warnings = [str(item) for item in (row.get("summary_asset_warnings") or []) if str(item)]
+        asset_eligible = bool(row.get("summary_asset_eligible", row["package_status"] != PackageStatus.RETIRED.value))
+        asset_eligibility = {
+            "eligible": asset_eligible,
+            "summary_only": True,
+            "blockers": asset_blockers,
+        }
+        if asset_warnings:
+            asset_eligibility["warnings"] = asset_warnings
+        return {
+            "package_id": row["package_id"],
+            "package_name": row["package_name"],
+            "package_version": row["package_version"],
+            "source_type": row["source_type"],
+            "source_id": row["source_id"],
+            "loop_id": row.get("loop_id"),
+            "run_id": row.get("run_id"),
+            "package_status": row["package_status"],
+            "manifest_sha256": row["manifest_sha256"],
+            "alpha_mode": row.get("alpha_mode") or "single_alpha",
+            "signal_domain": row.get("signal_domain"),
+            "display_name": row.get("display_name") or row["package_name"],
+            "legacy_name": row.get("legacy_name"),
+            "data_vintage": row.get("data_vintage").isoformat() if row.get("data_vintage") else None,
+            "prediction_ref_uri": row.get("prediction_ref_uri"),
+            "prediction_ref_sha256": row.get("prediction_ref_sha256"),
+            "model_artifact_uri": row.get("model_artifact_uri"),
+            "model_artifact_sha256": row.get("model_artifact_sha256"),
+            "paper_portfolio_count": int(row.get("paper_portfolio_count") or 0),
+            "created_at": row["created_at"].isoformat(),
+            "updated_at": row["updated_at"].isoformat(),
+            "metrics_summary": metrics_summary,
+            "asset_eligibility": asset_eligibility,
+            "alpha_count": int(alpha_count) if alpha_count is not None else 0,
+            "portfolio_topk": int(portfolio_topk) if portfolio_topk not in (None, "") else None,
+        }
 
     def _record_from_row(self, row: dict[str, Any], *, quarantine: bool = False) -> StrategyPackageRecord | None:
         manifest_json = row["manifest_json"]
@@ -1486,6 +2684,15 @@ class StrategyPackageRepository:
             package_status=PackageStatus(row["package_status"]),
             manifest=manifest,
             manifest_sha256=row["manifest_sha256"],
+            alpha_mode=AlphaMode(row.get("alpha_mode") or manifest.alpha_mode.value),
+            signal_domain=row.get("signal_domain"),
+            display_name=row.get("display_name") or row["package_name"],
+            legacy_name=row.get("legacy_name"),
+            data_vintage=row.get("data_vintage"),
+            prediction_ref_uri=row.get("prediction_ref_uri"),
+            prediction_ref_sha256=row.get("prediction_ref_sha256"),
+            model_artifact_uri=row.get("model_artifact_uri"),
+            model_artifact_sha256=row.get("model_artifact_sha256"),
             paper_portfolio_count=int(row.get("paper_portfolio_count") or 0),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -1509,6 +2716,19 @@ class StrategyPackageRepository:
                 },
             )
         return record
+
+    @staticmethod
+    def _component_from_row(row: dict[str, Any]) -> StrategyPackageComponentRecord:
+        return StrategyPackageComponentRecord(
+            id=row.get("id"),
+            parent_package_id=row["parent_package_id"],
+            child_package_id=row["child_package_id"],
+            child_manifest_sha256=row["child_manifest_sha256"],
+            component_weight=float(row["component_weight"]),
+            score_normalization=row["score_normalization"],
+            position=int(row["position"]),
+            created_at=row["created_at"],
+        )
 
     @staticmethod
     def _execution_policy_from_row(row: dict[str, Any]) -> ValidatedExecutionPolicy:
@@ -1685,6 +2905,8 @@ class InMemoryStrategyPackageRepository:
         self.model_retrain_jobs: dict[str, StrategyPackageModelRetrainJob] = {}
         self.runtime_variants: dict[str, StrategyPackageRuntimeVariant] = {}
         self.validation_runs: dict[str, StrategyPackageValidationRun] = {}
+        self.components: dict[int, StrategyPackageComponentRecord] = {}
+        self._next_component_id = 1
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         frozen = freeze_manifest(manifest)
@@ -1708,6 +2930,10 @@ class InMemoryStrategyPackageRepository:
             package_status=frozen.package_status,
             manifest=frozen,
             manifest_sha256=frozen.manifest_sha256 or "",
+            alpha_mode=frozen.alpha_mode,
+            display_name=frozen.package_name,
+            legacy_name=frozen.package_name,
+            data_vintage=_infer_data_vintage(frozen),
             created_at=now,
             updated_at=now,
         )
@@ -1722,6 +2948,164 @@ class InMemoryStrategyPackageRepository:
             )
         )
         return record
+
+    def save_manifest_with_assets(
+        self,
+        manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+    ) -> StrategyPackageRecord:
+        frozen = freeze_manifest(manifest)
+        _validate_asset_records_for_manifest(frozen, assets)
+        existing = self.records.get(frozen.package_id)
+        if existing:
+            if existing.manifest_sha256 != frozen.manifest_sha256:
+                raise InvalidStateTransitionError(
+                    "package manifest cannot be silently replaced",
+                    context={"package_id": frozen.package_id},
+                )
+            if not self._has_package_asset_rows(existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return existing
+        source_existing = self.find_by_source_version(
+            source_type=frozen.source.source_type.value,
+            source_id=frozen.source.source_id,
+            loop_id=frozen.source.loop_id,
+            package_version=frozen.package_version,
+        )
+        if source_existing:
+            if not self._has_package_asset_rows(source_existing.package_id, assets):
+                raise InvalidStateTransitionError(
+                    "strategy package source version exists without required frozen asset rows",
+                    context={
+                        "reason_code": "strategy_package_source_existing_assets_incomplete",
+                        "package_id": source_existing.package_id,
+                        "required_assets": _asset_key_payload(assets),
+                    },
+                )
+            return source_existing
+        record = self.save_manifest(frozen)
+        try:
+            for asset in assets:
+                self.save_package_asset(asset)
+        except Exception:
+            self.records.pop(record.package_id, None)
+            self.events = [event for event in self.events if event.package_id != record.package_id]
+            self.package_assets = {
+                key: value for key, value in self.package_assets.items() if value.package_id != record.package_id
+            }
+            raise
+        return self.get(record.package_id)
+
+    def backfill_frozen_manifest_assets(
+        self,
+        package_id: str,
+        *,
+        frozen_manifest: StrategyPackageManifest,
+        assets: list[StrategyPackageAssetRecord],
+        operator: str,
+        expected_old_manifest_sha256: str,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        expected_old = str(expected_old_manifest_sha256 or "").strip().lower()
+        if record.manifest_sha256 != expected_old:
+            raise InvalidStateTransitionError(
+                "strategy package asset backfill lost compare-and-set race",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_cas_mismatch",
+                    "package_id": package_id,
+                    "expected_old_manifest_sha256": expected_old,
+                    "actual_manifest_sha256": record.manifest_sha256,
+                },
+            )
+        if frozen_manifest.package_id != package_id:
+            raise StrategyPackageValidationError(
+                "backfilled manifest package_id must match target package",
+                context={
+                    "reason_code": "strategy_package_asset_backfill_package_mismatch",
+                    "package_id": package_id,
+                    "manifest_package_id": frozen_manifest.package_id,
+                },
+            )
+        frozen = freeze_manifest(
+            frozen_manifest.model_copy(
+                update={
+                    "manifest_sha256": None,
+                    "package_status": record.package_status,
+                }
+            )
+        )
+        _validate_asset_records_for_manifest(frozen, assets)
+        backup_record = record
+        backup_assets = dict(self.package_assets)
+        backup_events = list(self.events)
+        try:
+            for asset in assets:
+                key = (asset.package_id, asset.asset_type, asset.asset_ref)
+                existing = self.package_assets.get(key)
+                if existing is not None and existing.asset_sha256 != asset.asset_sha256:
+                    raise StrategyPackageValidationError(
+                        "existing package_asset row has a different sha256 for the same asset_ref",
+                        context={
+                            "reason_code": "strategy_package_asset_sha_mismatch",
+                            "package_id": asset.package_id,
+                            "asset_type": asset.asset_type.value,
+                            "asset_ref": asset.asset_ref,
+                            "asset_sha256": asset.asset_sha256,
+                            "existing_asset_sha256": existing.asset_sha256,
+                        },
+                    )
+                asset_id = existing.asset_id if existing else self._next_package_asset_id
+                if existing is None:
+                    self._next_package_asset_id += 1
+                self.package_assets[key] = asset.model_copy(update={"asset_id": asset_id})
+            updated = record.model_copy(
+                update={
+                    "manifest": frozen,
+                    "manifest_sha256": frozen.manifest_sha256 or "",
+                    "updated_at": datetime.now(timezone.utc),
+                }
+            )
+            self.records[package_id] = updated
+            self.events.append(
+                PackageStatusEvent(
+                    package_id=package_id,
+                    from_status=record.package_status,
+                    to_status=record.package_status,
+                    reason="strategy_package_asset_backfill_freeze",
+                    context={
+                        "operator": operator,
+                        "old_manifest_sha256": record.manifest_sha256,
+                        "new_manifest_sha256": frozen.manifest_sha256,
+                        "asset_count": len(assets),
+                        "asset_keys": _asset_key_payload(assets),
+                        "rollback_restore": {
+                            "field": "strategy_pkg.package.manifest_json, strategy_pkg.package.manifest_sha256",
+                            "manifest_sha256": record.manifest_sha256,
+                            "manifest_json": record.current_manifest().model_dump(mode="json"),
+                        },
+                    },
+                )
+            )
+        except Exception:
+            self.records[package_id] = backup_record
+            self.package_assets = backup_assets
+            self.events = backup_events
+            raise
+        return self.get(package_id)
+
+    def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
+        existing = {
+            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+            for asset in self.list_package_assets(package_id)
+        }
+        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
 
     def find_by_source_version(
         self,
@@ -1741,6 +3125,16 @@ class InMemoryStrategyPackageRepository:
             ):
                 return record
         return None
+
+    def list_single_alpha_candidates_for_seed_reuse(self, *, limit: int = 2000) -> list[StrategyPackageRecord]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        records = [
+            record
+            for record in self.records.values()
+            if record.alpha_mode == AlphaMode.SINGLE_ALPHA and record.package_status != PackageStatus.RETIRED
+        ]
+        return sorted(records, key=lambda record: (record.created_at, record.package_id), reverse=True)[:limit]
 
     def get(self, package_id: str) -> StrategyPackageRecord:
         record = self.records.get(package_id)
@@ -1766,6 +3160,52 @@ class InMemoryStrategyPackageRepository:
             result.append(record)
         return result
 
+    def list_summaries(self, *, status: PackageStatus | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        if limit <= 0:
+            raise StrategyPackageValidationError("limit must be positive")
+        from .metrics_summary import metrics_summary_from_record
+
+        records = list(self.records.values())
+        if status is not None:
+            records = [record for record in records if record.package_status == status]
+        rows: list[dict[str, Any]] = []
+        for record in records[:limit]:
+            manifest = record.manifest
+            daily_strategy = (manifest.backtest_context or {}).get("daily_strategy")
+            portfolio_topk = daily_strategy.get("topk") if isinstance(daily_strategy, dict) else None
+            if portfolio_topk is None and getattr(manifest, "is_legacy_runtime_manifest", False) and manifest.portfolio_policy is not None:
+                portfolio_topk = manifest.portfolio_policy.topk
+            rows.append(
+                {
+                    "package_id": record.package_id,
+                    "package_name": record.package_name,
+                    "package_version": record.package_version,
+                    "source_type": record.source_type,
+                    "source_id": record.source_id,
+                    "loop_id": record.loop_id,
+                    "run_id": record.run_id,
+                    "package_status": record.package_status.value,
+                    "manifest_sha256": record.manifest_sha256,
+                    "alpha_mode": record.alpha_mode.value,
+                    "signal_domain": record.signal_domain,
+                    "display_name": record.display_name,
+                    "legacy_name": record.legacy_name,
+                    "data_vintage": record.data_vintage.isoformat() if record.data_vintage else None,
+                    "prediction_ref_uri": record.prediction_ref_uri,
+                    "prediction_ref_sha256": record.prediction_ref_sha256,
+                    "model_artifact_uri": record.model_artifact_uri,
+                    "model_artifact_sha256": record.model_artifact_sha256,
+                    "paper_portfolio_count": record.paper_portfolio_count,
+                    "created_at": record.created_at.isoformat(),
+                    "updated_at": record.updated_at.isoformat(),
+                    "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
+                    "asset_eligibility": _summary_asset_eligibility_from_manifest(manifest, record.package_status),
+                    "alpha_count": len(manifest.alpha_components),
+                    "portfolio_topk": int(portfolio_topk) if portfolio_topk is not None else None,
+                }
+            )
+        return rows
+
     def package_delete_dependencies(self, package_id: str) -> dict[str, Any]:
         self.get(package_id)
         live_approvals = [
@@ -1777,6 +3217,24 @@ class InMemoryStrategyPackageRepository:
             for approval in self.live_approvals.values()
             if approval.package_id == package_id
         ]
+        component_child_edges = [
+            {
+                "parent_package_id": component.parent_package_id,
+                "child_package_id": component.child_package_id,
+                "position": component.position,
+            }
+            for component in self.components.values()
+            if component.child_package_id == package_id
+        ]
+        component_parent_edges = [
+            {
+                "parent_package_id": component.parent_package_id,
+                "child_package_id": component.child_package_id,
+                "position": component.position,
+            }
+            for component in self.components.values()
+            if component.parent_package_id == package_id
+        ]
         return {
             "paper_portfolios": [],
             "active_paper_portfolios": [],
@@ -1787,6 +3245,8 @@ class InMemoryStrategyPackageRepository:
             "simulation_release_bindings": [],
             "simulation_daily_runs": [],
             "execution_plans": [],
+            "component_child_edges": component_child_edges,
+            "component_parent_edges": component_parent_edges,
             "daily_selection_evidence": 0,
             "selection_score_artifacts": 0,
         }
@@ -1807,8 +3267,18 @@ class InMemoryStrategyPackageRepository:
             "package_runtime_variant": len([variant for variant in self.runtime_variants.values() if variant.package_id == package_id]),
             "validated_execution_policy": len([policy for policy in self.execution_policies.values() if policy.package_id == package_id]),
             "package_asset": len([asset for asset in self.package_assets.values() if asset.package_id == package_id]),
+            "strategy_package_components": len([
+                component
+                for component in self.components.values()
+                if component.parent_package_id == package_id or component.child_package_id == package_id
+            ]),
             "package_status_event": len([event for event in self.events if event.package_id == package_id]),
             "package": 1,
+        }
+        self.components = {
+            component_id: component
+            for component_id, component in self.components.items()
+            if component.parent_package_id != package_id and component.child_package_id != package_id
         }
         self.validation_runs = {
             run_id: run for run_id, run in self.validation_runs.items() if run.package_id != package_id
@@ -1850,6 +3320,11 @@ class InMemoryStrategyPackageRepository:
                     "stored_sha256": record.manifest_sha256,
                     "computed_sha256": None,
                     "error": "manifest_json failed pydantic validation",
+                    "repair_plan": _manifest_drift_repair_plan(
+                        stored_sha256=record.manifest_sha256,
+                        computed_sha256=None,
+                        manifest_json=_manifest_json_for_record_classification(record),
+                    ),
                 })
                 continue
             if record.manifest_sha256 != computed:
@@ -1867,6 +3342,7 @@ class InMemoryStrategyPackageRepository:
                     "repair_plan": _manifest_drift_repair_plan(
                         stored_sha256=record.manifest_sha256,
                         computed_sha256=computed,
+                        manifest_json=_manifest_json_for_record_classification(record),
                     ),
                 })
             else:
@@ -1892,6 +3368,21 @@ class InMemoryStrategyPackageRepository:
         correct_hash = compute_manifest_sha256(record.current_manifest())
         if record.manifest_sha256 == correct_hash:
             return record
+        repair_plan = _manifest_drift_repair_plan(
+            stored_sha256=record.manifest_sha256,
+            computed_sha256=correct_hash,
+            manifest_json=_manifest_json_for_record_classification(record),
+        )
+        if repair_plan["classification"]["classification"] != SAFE_MANIFEST_REPAIR_CLASSIFICATION:
+            raise InvalidStateTransitionError(
+                "manifest hash repair blocked until manifest drift classification is safe",
+                context={
+                    "package_id": package_id,
+                    "stored_sha256": record.manifest_sha256,
+                    "computed_sha256": correct_hash,
+                    "repair_plan": repair_plan,
+                },
+            )
         if confirm_stored_sha256 != record.manifest_sha256 or confirm_computed_sha256 != correct_hash:
             raise InvalidStateTransitionError(
                 "manifest hash repair requires explicit stored/computed hash confirmation",
@@ -1901,10 +3392,7 @@ class InMemoryStrategyPackageRepository:
                     "computed_sha256": correct_hash,
                     "confirm_stored_sha256": confirm_stored_sha256,
                     "confirm_computed_sha256": confirm_computed_sha256,
-                    "repair_plan": _manifest_drift_repair_plan(
-                        stored_sha256=record.manifest_sha256,
-                        computed_sha256=correct_hash,
-                    ),
+                    "repair_plan": repair_plan,
                 },
             )
         updated = record.model_copy(update={"manifest_sha256": correct_hash, "updated_at": datetime.now(timezone.utc)})
@@ -1919,6 +3407,8 @@ class InMemoryStrategyPackageRepository:
                     "operator": operator,
                     "old_manifest_sha256": record.manifest_sha256,
                     "new_manifest_sha256": correct_hash,
+                    "repair_classification": repair_plan["classification"]["classification"],
+                    "classification_reason": repair_plan["classification"]["reason"],
                     "rollback_restore": {
                         "field": "strategy_pkg.package.manifest_sha256",
                         "restore_value": record.manifest_sha256,
@@ -1938,10 +3428,28 @@ class InMemoryStrategyPackageRepository:
         context: dict[str, Any] | None = None,
     ) -> StrategyPackageRecord:
         record = self.get(package_id)
+        if to_status == PackageStatus.RETIRED:
+            parents = [
+                component.parent_package_id
+                for component in self.components.values()
+                if component.child_package_id == package_id
+                and self.records.get(component.parent_package_id)
+                and self.records[component.parent_package_id].package_status != PackageStatus.RETIRED
+            ]
+            if parents:
+                raise InvalidStateTransitionError(
+                    "referenced single-alpha child package cannot be retired",
+                    context={"package_id": package_id, "active_parent_package_ids": sorted(parents)},
+                )
         if record.package_status not in allowed_from:
             raise InvalidStateTransitionError(
                 "invalid strategy package status transition",
-                context={"package_id": package_id, "from_status": record.package_status.value, "to_status": to_status.value},
+                context={
+                    "package_id": package_id,
+                    "from_status": record.package_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed_from),
+                },
             )
         updated = record.model_copy(update={"package_status": to_status, "updated_at": datetime.now(timezone.utc)})
         self.records[package_id] = updated
@@ -1955,6 +3463,78 @@ class InMemoryStrategyPackageRepository:
             )
         )
         return updated
+
+    def update_artifact_refs(
+        self,
+        package_id: str,
+        *,
+        prediction_ref_uri: str | None = None,
+        prediction_ref_sha256: str | None = None,
+        model_artifact_uri: str | None = None,
+        model_artifact_sha256: str | None = None,
+    ) -> StrategyPackageRecord:
+        record = self.get(package_id)
+        if prediction_ref_uri is not None and not prediction_ref_sha256:
+            raise StrategyPackageValidationError(
+                "prediction_ref_sha256 is required when prediction_ref_uri is set",
+                context={"package_id": package_id, "prediction_ref_uri": prediction_ref_uri},
+            )
+        if model_artifact_uri is not None and not model_artifact_sha256:
+            raise StrategyPackageValidationError(
+                "model_artifact_sha256 is required when model_artifact_uri is set",
+                context={"package_id": package_id, "model_artifact_uri": model_artifact_uri},
+            )
+        updated = record.model_copy(
+            update={
+                "prediction_ref_uri": prediction_ref_uri if prediction_ref_uri is not None else record.prediction_ref_uri,
+                "prediction_ref_sha256": prediction_ref_sha256 if prediction_ref_sha256 is not None else record.prediction_ref_sha256,
+                "model_artifact_uri": model_artifact_uri if model_artifact_uri is not None else record.model_artifact_uri,
+                "model_artifact_sha256": model_artifact_sha256 if model_artifact_sha256 is not None else record.model_artifact_sha256,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+        self.records[package_id] = updated
+        return updated
+
+    def save_components(
+        self,
+        parent_package_id: str,
+        components: list[StrategyPackageComponentRecord],
+    ) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        if not components:
+            raise StrategyPackageValidationError(
+                "multi-alpha package requires at least one component edge",
+                context={"parent_package_id": parent_package_id},
+            )
+        self.components = {
+            component_id: component
+            for component_id, component in self.components.items()
+            if component.parent_package_id != parent_package_id
+        }
+        saved: list[StrategyPackageComponentRecord] = []
+        for component in components:
+            component_id = self._next_component_id
+            self._next_component_id += 1
+            stored = component.model_copy(update={"id": component_id, "created_at": datetime.now(timezone.utc)})
+            self.components[component_id] = stored
+            saved.append(stored)
+        return saved
+
+    def list_components(self, parent_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(parent_package_id)
+        return sorted(
+            [component for component in self.components.values() if component.parent_package_id == parent_package_id],
+            key=lambda item: (item.position, item.id or 0),
+        )
+
+    def list_component_parents(self, child_package_id: str) -> list[StrategyPackageComponentRecord]:
+        self.get(child_package_id)
+        return sorted(
+            [component for component in self.components.values() if component.child_package_id == child_package_id],
+            key=lambda item: (item.created_at, item.id or 0),
+            reverse=True,
+        )
 
     def list_status_events(self, package_id: str, *, limit: int = 200) -> list[PackageStatusEvent]:
         self.get(package_id)
@@ -2282,3 +3862,4 @@ def _validate_validation_run_matches_variant(run: StrategyPackageValidationRun, 
                 "expected_runtime_variant_hash": expected_variant_hash,
             },
         )
+

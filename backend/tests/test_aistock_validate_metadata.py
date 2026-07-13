@@ -1,7 +1,6 @@
 ﻿from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from scripts import aistock_validate
 
@@ -72,6 +71,114 @@ def test_record_can_keep_legacy_markdown_only(tmp_path) -> None:
     module_dir = tmp_path / "qe"
     assert len(list(module_dir.glob("*_l1_markdown-only.md"))) == 1
     assert not list(module_dir.glob("*.json"))
+
+
+def test_record_refuses_default_history_in_canonical_root_main(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(aistock_validate, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        aistock_validate,
+        "DEFAULT_HISTORY_ROOT",
+        tmp_path / "tests" / "aistock_validation" / "history",
+    )
+    monkeypatch.setattr(aistock_validate, "_canonical_root", lambda: tmp_path.resolve())
+    monkeypatch.setattr(aistock_validate, "_git_branch", lambda cwd=None: "main")
+    monkeypatch.delenv(aistock_validate.ROOT_HISTORY_OVERRIDE_ENV, raising=False)
+
+    try:
+        _run_cli([
+            "record",
+            "--module",
+            "QE",
+            "--level",
+            "L3",
+            "--title",
+            "Root Pollution",
+        ])
+    except SystemExit as exc:
+        assert "canonical root main" in str(exc)
+    else:
+        raise AssertionError("canonical root main validation history write should fail fast")
+
+    assert not (tmp_path / "tests" / "aistock_validation" / "history").exists()
+
+
+def test_record_allows_isolated_worktree_default_history(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(aistock_validate, "ROOT", tmp_path / "worktree")
+    monkeypatch.setattr(
+        aistock_validate,
+        "DEFAULT_HISTORY_ROOT",
+        tmp_path / "worktree" / "tests" / "aistock_validation" / "history",
+    )
+    monkeypatch.setattr(aistock_validate, "_canonical_root", lambda: (tmp_path / "canonical").resolve())
+    monkeypatch.setattr(aistock_validate, "_git_branch", lambda cwd=None: "main")
+
+    rc = _run_cli([
+        "record",
+        "--module",
+        "QE",
+        "--level",
+        "L3",
+        "--title",
+        "Worktree Evidence",
+    ])
+
+    assert rc == 0
+    assert list((tmp_path / "worktree" / "tests" / "aistock_validation" / "history" / "qe").glob("*.md"))
+
+
+def test_record_allows_canonical_root_when_history_root_is_outside_default(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(aistock_validate, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        aistock_validate,
+        "DEFAULT_HISTORY_ROOT",
+        tmp_path / "tests" / "aistock_validation" / "history",
+    )
+    monkeypatch.setattr(aistock_validate, "_canonical_root", lambda: tmp_path.resolve())
+    monkeypatch.setattr(aistock_validate, "_git_branch", lambda cwd=None: "main")
+    external_history = tmp_path / "tmp" / "validation-history"
+
+    rc = _run_cli([
+        "record",
+        "--module",
+        "QE",
+        "--level",
+        "L3",
+        "--title",
+        "External Evidence",
+        "--history-root",
+        str(external_history),
+    ])
+
+    assert rc == 0
+    assert list((external_history / "qe").glob("*.md"))
+
+
+def test_record_allows_canonical_root_with_explicit_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(aistock_validate, "ROOT", tmp_path)
+    monkeypatch.setattr(
+        aistock_validate,
+        "DEFAULT_HISTORY_ROOT",
+        tmp_path / "tests" / "aistock_validation" / "history",
+    )
+    monkeypatch.setattr(aistock_validate, "_canonical_root", lambda: tmp_path.resolve())
+    monkeypatch.setattr(aistock_validate, "_git_branch", lambda cwd=None: "main")
+    monkeypatch.setenv(
+        aistock_validate.ROOT_HISTORY_OVERRIDE_ENV,
+        aistock_validate.ROOT_HISTORY_OVERRIDE_VALUE,
+    )
+
+    rc = _run_cli([
+        "record",
+        "--module",
+        "QE",
+        "--level",
+        "L3",
+        "--title",
+        "Override Evidence",
+    ])
+
+    assert rc == 0
+    assert list((tmp_path / "tests" / "aistock_validation" / "history" / "qe").glob("*.md"))
 
 
 def test_evidence_manifest_records_hash_and_missing_files(tmp_path) -> None:

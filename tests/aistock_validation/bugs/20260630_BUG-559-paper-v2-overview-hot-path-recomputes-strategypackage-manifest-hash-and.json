@@ -1,0 +1,136 @@
+{
+  "actual": "StrategyPackageRepository.list() calls _record_from_row(..., quarantine=True), which computes manifest_sha256 for each row. SelectionCenterService.list_selectable_packages() then calls asset_eligibility_service.summarize(record), package_service.get_model_state(record.package_id), and package_health_service.summarize(record). get_model_state evaluates staleness and upserts model_state during a GET-derived overview path.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/repository.py",
+    "backend/services/strategy_package/service.py",
+    "backend/services/strategy_package/asset_eligibility.py",
+    "backend/services/selection_center/service.py",
+    "backend/services/selection_center/package_health.py",
+    "backend/tests/strategy_package",
+    "backend/tests/selection_center",
+    "frontend/src/app/paper-v2/page.tsx",
+    "tests/aistock_validation/bugs/20260630_BUG-559-paper-v2-overview-hot-path-recomputes-strategypackage-manifest-hash-and.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/tests/paper_trading_v2",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/tests/paper-v2",
+    "tests/aistock_validation/bugs/20260630_BUG-558-paper-v2-overview-loads-heavyweight-selectable-packages-instead-of-light.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-559",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T17:12:08.621047Z",
+  "description": "StrategyPackageRepository.list() calls _record_from_row(..., quarantine=True), which computes manifest_sha256 for each row. SelectionCenterService.list_selectable_packages() then calls asset_eligibility_service.summarize(record), package_service.get_model_state(record.package_id), and package_health_service.summarize(record). get_model_state evaluates staleness and upserts model_state during a GET-derived overview path.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260630-6fed3047d428",
+      "timestamp": "2026-06-29T17:12:08.621044Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\backend\\services\\strategy_package\\repository.py:308; F:\\Dev\\AIstock\\backend\\services\\strategy_package\\repository.py:334; F:\\Dev\\AIstock\\backend\\services\\strategy_package\\repository.py:1737; F:\\Dev\\AIstock\\backend\\services\\strategy_package\\repository.py:1764; F:\\Dev\\AIstock\\backend\\services\\strategy_package\\service.py:549; F:\\Dev\\AIstock\\backend\\services\\strategy_package\\service.py:555; F:\\Dev\\AIstock\\backend\\services\\selection_center\\service.py:721; F:\\Dev\\AIstock\\backend\\services\\selection_center\\service.py:725"
+  ],
+  "expected": "模拟盘总览页面仅查询持久化数据库记录和必要聚合状态；总览热路径禁止任何文件/manifest hash 重算、asset 深校验和 GET 写回。manifest/hash 校验应只在入库、晋级、显式审计/repair 任务执行；model_state 刷新必须是显式写路径或后台任务。",
+  "first_seen_at": "2026-06-29T17:12:08.621047Z",
+  "fix_branch": null,
+  "fix_commit": "45f4d4482e3aaac08dbdab1b85316b930fc53fbc",
+  "fixed_at": "2026-07-01T11:35:23.882269Z",
+  "github_issue_number": 1752,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1752",
+  "last_seen_at": "2026-06-29T17:12:08.621047Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1794",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open Paper v2 overview and trace /api/v1/selection-center/selectable-packages?limit=300; inspect StrategyPackageRepository.list/_record_from_row and StrategyPackageService.get_model_state call chain.",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Paper v2 overview hot path recomputes StrategyPackage manifest hash and writes model state during GET",
+  "trigger_condition": {
+    "fingerprint": "6fed3047d428d0bdb02b3d46",
+    "source_event_id": "FE-20260630-6fed3047d428"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:strategy_package",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/strategy_package/repository.py",
+      "backend/services/strategy_package/service.py",
+      "backend/services/strategy_package/asset_eligibility.py",
+      "backend/services/selection_center/service.py",
+      "backend/services/selection_center/package_health.py",
+      "backend/tests/strategy_package",
+      "backend/tests/selection_center",
+      "frontend/src/app/paper-v2/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/selectable",
+    "ui_routes": [
+      "/selectable"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1794 merged with CI green; watch-ci: passed_count=20 failed=0 pending=0",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_overview_summary.py backend/tests/paper_trading_v2/test_day_runner.py::test_paper_trading_day_runner_persists_full_day_path -q -> passed (2 passed)",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk python -m nox -s paper_v2_backend -> passed",
+    "rtk paper_v2_l3 hosted CI with PAPER_V2_L3_SKIP_UI=1 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

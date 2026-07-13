@@ -1,0 +1,107 @@
+{
+  "actual": "market_data.py reads TDX realtime last/open/high/low/book/turnover with NO timestamp/freshness check (frozen TDX client -> stale-quote trading); _a_share_daily_limit_pct picks limit% only by code prefix so ST/*ST main-board (5%) get 10%; the pre-trade gate never blocks BUY at limit-up / SELL at limit-down (only flags fully-empty book).",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "tests/aistock_validation/bugs/20260622_BUG-466-p1-paper-v2-localsim-tdx-realtime-quote-freshness-st-5-limit-limit-up-do.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-466-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-466",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T19:11:39.976840Z",
+  "description": "[LocalSim L5] market_data.py: (a) quote_tradability_evidence / pre-trade gate (255-408) read TDX realtime last/open/high/low/book/turnover with NO timestamp/freshness check -> a frozen TDX client returns yesterday's prices which then drive same-day limit/tradability/fills (minute bars are date-checked, quotes are not). (b) _a_share_daily_limit_pct (1155) picks limit% only by code prefix so ST/*ST main-board (5%) are treated as 10% -> records impossible +6~10% fills. (c) the pre-trade gate never blocks BUY at limit-up / SELL at limit-down (only flags a fully-empty book), so one-sided sealed boards get over-optimistic fills. FIX: validate TDX quote freshness fail-closed (DataUnavailableError when timestamp missing/older than a bound vs as_of_time); detect ST/*ST and apply 5% (fail-closed if ST status unavailable); block side-appropriate intents at limit-up/limit-down with an explicit reason_code. MiniQMT untouched.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-5f43c5295385",
+      "timestamp": "2026-06-21T19:11:39.976835Z"
+    },
+    {
+      "action": "sync_fix_scope_validation",
+      "actor": "codex-l5",
+      "note": "Added explicit L5 handoff doc scope and validation_module_registry_l0 evidence before PR.",
+      "timestamp": "2026-06-21T20:40:47.114223Z"
+    },
+    {
+      "action": "validation_evidence_synced",
+      "actor": "codex-l5",
+      "note": "LocalSim TDX realtime freshness/ST limit/side limit-block validation completed; PR creation pending.",
+      "timestamp": "2026-06-21T20:57:30.757011Z"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex-l5",
+      "note": "Opened PR #1438 for BUG-466; merge/production restart left to Tier2/user.",
+      "timestamp": "2026-06-21T21:04:26.971337Z"
+    },
+    {
+      "action": "tier2_rework_st_source_verified",
+      "actor": "codex-l5",
+      "note": "Verified runtime market.stock_st exists and is daily snapshot semantics; adjusted DbStStatusProvider to use latest ann_date snapshot and loud-fail empty/query errors; PR #1438 updated pending Tier2.",
+      "timestamp": "2026-06-22T10:22:11Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Validate TDX quote freshness fail-closed (DataUnavailableError when timestamp missing/older than bound vs as_of_time); detect ST/*ST and apply 5% limit (fail-closed if ST status unavailable); block side-appropriate intents at limit-up/limit-down with explicit reason_code. MiniQMT untouched.",
+  "first_seen_at": "2026-06-21T19:11:39.976840Z",
+  "fix_branch": "bug/BUG-466-p1-paper-v2-localsim-tdx-realtime-quote-freshnes-20260622",
+  "fix_commit": "6d1bf35dde17a94fb619b9da4fd7ef5f5508b000",
+  "fixed_at": "2026-06-22T10:45:32.350552Z",
+  "github_issue_number": 1431,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1431",
+  "last_seen_at": "2026-06-21T19:11:39.976840Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1438",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect market_data.py:255-408 (no quote timestamp check), 1155 _a_share_daily_limit_pct (prefix-only), pre-trade gate (no limit blocking).",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P1][Paper v2][LocalSim] TDX realtime quote freshness + ST 5% limit + limit-up/down order blocking",
+  "trigger_condition": {
+    "fingerprint": "5f43c5295385bc85eaac87bc",
+    "source_event_id": "FE-20260622-5f43c5295385"
+  },
+  "validation_evidence": [
+    "rtk gh pr checks 1438 -> passed 17, failed 0",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py -q -> 29 passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": "BUG-466-L5-tier2-st-source-rework-20260622",
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "pr_opened"
+}

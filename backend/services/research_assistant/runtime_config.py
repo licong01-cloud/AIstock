@@ -15,6 +15,43 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RUNTIME_CONFIG_PATH = REPO_ROOT / "configs" / "research_assistant" / "runtime_context.yaml"
 RUNTIME_CONFIG_KEY = "research_assistant.runtime_context"
 DEFAULT_ENVIRONMENT = "dev"
+WORKFLOW_CAPABILITY_LIST_FIELDS = {
+    "natural_language_triggers",
+    "required_confirmations",
+    "output_cards",
+    "mcp_tool_refs",
+    "skill_refs",
+}
+
+
+class RuntimeConfigCapabilityValidationError(ValueError):
+    """Structured validation error for planner.workflow_capabilities entries."""
+
+    def __init__(
+        self,
+        *,
+        index: int,
+        capability_key: str,
+        field: str,
+        actual_type: str,
+        detail: str,
+        entry_index: int | None = None,
+    ) -> None:
+        self.index = index
+        self.capability_key = capability_key
+        self.field = field
+        self.actual_type = actual_type
+        self.entry_index = entry_index
+        location = f"planner.workflow_capabilities[{index}]"
+        if entry_index is not None:
+            location = f"{location}.{field}[{entry_index}]"
+        else:
+            location = f"{location}.{field}"
+        message = (
+            f"{location} invalid for capability_key={capability_key}: "
+            f"field={field}; actual_type={actual_type}; {detail}"
+        )
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -40,7 +77,7 @@ def load_runtime_config(path: Path | None = None, *, environment: str = DEFAULT_
     if not config_path.exists():
         raise FileNotFoundError(f"Research Assistant runtime config not found: {config_path}")
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8-sig")) or {}
-    _validate_runtime_config(payload, config_path)
+    validate_runtime_config_payload(payload, config_path)
     source_sha256 = sha256_json(payload)
     return RuntimeConfigSnapshot(
         config_key=str(payload["config_key"]),
@@ -52,7 +89,9 @@ def load_runtime_config(path: Path | None = None, *, environment: str = DEFAULT_
     )
 
 
-def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
+def validate_runtime_config_payload(payload: dict[str, Any], path: Path | str) -> None:
+    if not isinstance(payload, dict):
+        raise ValueError(f"runtime config {path} root must be an object; actual_type={_runtime_config_type_name(payload)}")
     required = {
         "schema_version",
         "config_key",
@@ -99,6 +138,10 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         total += number
     if total > 1.5:
         raise ValueError("runtime context budget ratios are unexpectedly high")
+    response_cfg = payload["budget"]["response"]
+    response_max_tokens = response_cfg.get("max_tokens")
+    if response_max_tokens is not None and int(response_max_tokens) <= 0:
+        raise ValueError("budget.response.max_tokens must be positive when configured")
     if str(payload["compaction"]["worker"].get("tools_enabled")).lower() != "false":
         raise ValueError("compaction.worker.tools_enabled must be false")
     execution_defaults = payload["execution"]
@@ -183,6 +226,41 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         for key in ("capability_key", "capability_type", "title", "description_for_llm", "risk_level", "side_effect_level", "status"):
             if key not in capability:
                 raise ValueError(f"planner.workflow_capabilities[{index}] missing {key}")
+        capability_key = str(capability.get("capability_key") or f"index:{index}")
+        for field in WORKFLOW_CAPABILITY_LIST_FIELDS:
+            if field not in capability:
+                continue
+            value = capability[field]
+            if not isinstance(value, list):
+                raise RuntimeConfigCapabilityValidationError(
+                    index=index,
+                    capability_key=capability_key,
+                    field=field,
+                    actual_type=_runtime_config_type_name(value),
+                    detail="must be a list when present",
+                )
+            if field == "mcp_tool_refs":
+                for entry_index, entry in enumerate(value):
+                    if not isinstance(entry, dict):
+                        raise RuntimeConfigCapabilityValidationError(
+                            index=index,
+                            capability_key=capability_key,
+                            field=field,
+                            entry_index=entry_index,
+                            actual_type=_runtime_config_type_name(entry),
+                            detail="entries must be objects",
+                        )
+            else:
+                for entry_index, entry in enumerate(value):
+                    if not isinstance(entry, str) or not entry:
+                        raise RuntimeConfigCapabilityValidationError(
+                            index=index,
+                            capability_key=capability_key,
+                            field=field,
+                            entry_index=entry_index,
+                            actual_type=_runtime_config_type_name(entry),
+                            detail="entries must be non-empty strings",
+                        )
         if str(capability["risk_level"]) not in {"low", "medium", "high", "production_sensitive"}:
             raise ValueError(f"planner.workflow_capabilities[{index}].risk_level is invalid")
         if str(capability["side_effect_level"]) not in {"read_only", "draft_only", "write_nonprod", "high_cost_compute", "production_sensitive"}:
@@ -225,6 +303,10 @@ def _validate_runtime_config(payload: dict[str, Any], path: Path) -> None:
         value = int(query_limits[key])
         if value <= 0:
             raise ValueError(f"query_limits.{key} must be positive")
+
+
+def _runtime_config_type_name(value: Any) -> str:
+    return type(value).__name__
 
 
 def _validate_dialogue_modes(dialogue_modes: dict[str, Any], path: Path) -> None:

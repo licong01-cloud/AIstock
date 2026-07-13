@@ -1,0 +1,85 @@
+{
+  "actual": "Current MiniQMT simulation runtime still exposes local qmt_strategy position lots as strategy quantities that can diverge from MiniQMT merged positions. Live read-only API evidence on 2026-06-17 shows simrun_ca7abfe9f74bf98f is SUCCEEDED while carrying 43 POSITION_MISMATCH records, and simrun_ebf382bde34bf3f9 remains INTRADAY_RUNNING with 43 POSITION_MISMATCH records plus sell-proceeds/capacity residuals. Examples include broker_quantity=0 with positive strategy_quantity. This indicates AIstock strategy-slot holdings are still treated as independently persisted position state rather than a pure projection of MiniQMT authority.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/qmt_strategy_ledger",
+    "backend/services/miniqmt_execution_runtime",
+    "backend/tests/simulation_runtime",
+    "tests/aistock_validation/bugs/20260617_BUG-400-p0-paper-v2-miniqmt-strategy-slot-positions-must-be-broker-authoritative.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-400",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-17T05:35:47.630962Z",
+  "description": "Current MiniQMT simulation runtime still exposes local qmt_strategy position lots as strategy quantities that can diverge from MiniQMT merged positions. Live read-only API evidence on 2026-06-17 shows simrun_ca7abfe9f74bf98f is SUCCEEDED while carrying 43 POSITION_MISMATCH records, and simrun_ebf382bde34bf3f9 remains INTRADAY_RUNNING with 43 POSITION_MISMATCH records plus sell-proceeds/capacity residuals. Examples include broker_quantity=0 with positive strategy_quantity. This indicates AIstock strategy-slot holdings are still treated as independently persisted position state rather than a pure projection of MiniQMT authority.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260617-ea3c6f53279e",
+      "timestamp": "2026-06-17T05:35:47.630957Z"
+    }
+  ],
+  "evidence_uris": [
+    "2026-06-17 live read-only validation: minqmt_sim runs simrun_ca7abfe9f74bf98f and simrun_ebf382bde34bf3f9 report 43 POSITION_MISMATCH records; user requirement: strategy-slot positions are broker-authoritative projections only."
+  ],
+  "expected": "MiniQMT account ledger is the only authoritative source for account cash, frozen cash, holdings, can_sell, orders and trades. AIstock persists a MiniQMT total-ledger mirror from MiniQMT APIs and derives strategy-slot position projections from that ledger plus deterministic attribution. Strategy-slot projections cannot exist as independent position facts; if attribution is incomplete, unmatched quantities must be reported as unattributed/pending instead of being treated as strategy-owned holdings. Execution preflight, sell-first proceeds, run status and reconciliation must use broker-authoritative positions, and POSITION_MISMATCH cannot coexist with SUCCEEDED unless proven out-of-scope and moved to unattributed evidence.",
+  "first_seen_at": "2026-06-17T05:35:47.630962Z",
+  "fix_branch": null,
+  "fix_commit": "6df679dc8d38ceb8a7366f72187cc597444bf378",
+  "fixed_at": "2026-06-17T07:10:46.274210Z",
+  "github_issue_number": 1202,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1202",
+  "last_seen_at": "2026-06-17T05:35:47.630962Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1204",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read-only: GET http://127.0.0.1:8001/api/v1/simulation-runtime/runs?trade_date=2026-06-17&broker_backend=minqmt_sim&limit=20, then GET /api/v1/simulation-runtime/runs/simrun_ca7abfe9f74bf98f and /api/v1/simulation-runtime/runs/simrun_ebf382bde34bf3f9; inspect errors with code POSITION_MISMATCH and compare strategy_quantity against MiniQMT broker_quantity. Code refs: backend/services/simulation_runtime/scheduler.py _load_miniqmt_context, _reconcile_miniqmt_positions_with_broker, _reconcile_after_submit; backend/services/qmt_strategy_ledger sync/reconciliation services.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][Paper v2][MiniQMT] strategy-slot positions must be broker-authoritative projections, not independent virtual holdings",
+  "trigger_condition": {
+    "fingerprint": "ea3c6f53279ec76becae9a9b",
+    "source_event_id": "FE-20260617-ea3c6f53279e"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_strategy_performance_projection.py backend/tests/qmt_strategy_ledger/test_reconciliation.py backend/tests/qmt_strategy_ledger/test_account_group_slots.py -q -> 70 passed",
+    "python -m py_compile backend/services/qmt_strategy_ledger/reconciliation.py backend/services/simulation_runtime/scheduler.py -> passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 --no-error-on-missing-interpreters -> passed",
+    "python -m nox -s paper_v2_backend --no-error-on-missing-interpreters -> 624 passed, 1 skipped, 2 xfailed",
+    "PAPER_V2_L3_SKIP_UI=1 python -m nox -s paper_v2_l3 --no-error-on-missing-interpreters -> passed; paper_v2_data_quality legacy WARN only"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

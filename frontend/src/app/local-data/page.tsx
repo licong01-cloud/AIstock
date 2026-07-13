@@ -3994,6 +3994,17 @@ function DataStatsTab({
     other: "其他",
   };
 
+  const getStatsScopeLabel = (item: any): string | null => {
+    const kind = String(item?.data_kind || item?.kind || "").toLowerCase();
+    const extra = item?.extra_info && typeof item.extra_info === "object" ? item.extra_info : {};
+    const scope = String(item?.stats_scope || extra.stats_scope || "");
+    const months = item?.stats_window_months || extra.window_months || 3;
+    if (kind === "kline_minute_raw" && scope === "recent_window") {
+      return `仅统计最近 ${months} 个月，非全历史行数`;
+    }
+    return null;
+  };
+
   const getCategoryKey = (kind: string): "market" | "basic" | "xtquant" | "sector" | "other" => {
     const k = (kind || "").toLowerCase();
     if (
@@ -4445,6 +4456,7 @@ function DataStatsTab({
                     }
 
                     const kind = String(it.data_kind || it.kind || "");
+                    const statsScopeLabel = getStatsScopeLabel(it);
 
                     let description =
                       extra.desc || it.label || it.description || "—";
@@ -4485,9 +4497,17 @@ function DataStatsTab({
                         <td className={styles.statsCell}>
                           {it.data_kind || it.kind || "—"}
                         </td>
-                        <td className={styles.statsCell}>{description}</td>
                         <td className={styles.statsCell}>
-                          {it.row_count || it.rows || 0}
+                          <div>{description}</div>
+                          {statsScopeLabel && (
+                            <div className={styles.textMuted}>{statsScopeLabel}</div>
+                          )}
+                        </td>
+                        <td className={styles.statsCell}>
+                          <div>{it.row_count || it.rows || 0}</div>
+                          {statsScopeLabel && (
+                            <div className={styles.textMuted}>统计窗口</div>
+                          )}
                         </td>
                         <td className={styles.statsCell}>
                           {it.min_date || it.date_min || it.start_date || "—"}

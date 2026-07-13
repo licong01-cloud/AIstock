@@ -357,19 +357,19 @@ class CorrelationLLMAgent:
     def _load_factor_context(self, factor_name: str) -> Dict[str, Any]:
         """从 DB + 文件系统加载因子上下文。
 
-        读取策略: realtime_code_text (DB) → qe_code_path (文件) → asset_path (文件)
+        读取策略: asset_path（官方原始源码文件）→ code_text（DB 展示兜底）。
+        相关性分析不得读取非官方 live/simulation 改造代码路径。
         """
         result: Dict[str, Any] = {}
-        code_text: Optional[str] = None
+        original_code_text: Optional[str] = None
         asset_path: Optional[str] = None
-        qe_code_path: Optional[str] = None
 
         with get_conn() as conn:
             with conn.cursor() as cur:
                 # catalog: 源代码路径
                 cur.execute(
                     """
-                    SELECT realtime_code_text, asset_path, qe_code_path
+                    SELECT code_text, asset_path
                     FROM aistock_factor_catalog
                     WHERE factor_name = %s LIMIT 1
                     """,
@@ -377,9 +377,8 @@ class CorrelationLLMAgent:
                 )
                 row = cur.fetchone()
                 if row:
-                    code_text = row[0]
+                    original_code_text = row[0]
                     asset_path = row[1]
-                    qe_code_path = row[2]
 
                 # 独立指标 from aistock_factor_metrics
                 cur.execute(
@@ -433,21 +432,19 @@ class CorrelationLLMAgent:
                     result["category"] = cl[1]
                     result["grade"] = cl[2]
 
-        # 源代码: DB 优先 → 文件系统回退
+        # 源代码: 官方原始文件优先，DB code_text 仅作展示兜底。
         source_code = None
-        if code_text and code_text.strip():
-            source_code = code_text
-        else:
-            for path_field in [qe_code_path, asset_path]:
-                if path_field:
-                    full_path = self._resolve_path(path_field)
-                    if full_path and os.path.isfile(full_path):
-                        try:
-                            with open(full_path, "r", encoding="utf-8") as f:
-                                source_code = f.read()
-                        except Exception as e:
-                            logger.warning(f"读取因子源代码失败 [{path_field}]: {e}")
-                        break
+        if asset_path:
+            full_path = self._resolve_path(asset_path)
+            if full_path and os.path.isfile(full_path):
+                try:
+                    with open(full_path, "r", encoding="utf-8") as f:
+                        source_code = f.read()
+                except Exception as e:
+                    logger.warning(f"读取官方因子源代码失败 [{asset_path}]: {e}")
+
+        if source_code is None and original_code_text and original_code_text.strip():
+            source_code = original_code_text
 
         result["source_code"] = source_code or ""
         return result

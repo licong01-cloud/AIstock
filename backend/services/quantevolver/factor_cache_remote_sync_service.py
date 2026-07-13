@@ -351,21 +351,65 @@ class FactorCacheRemoteSyncService:
     def load_local_meta(self) -> Dict[str, Any]:
         return _load_json(self.local_meta_path, {"factors": {}})
 
+    def _local_disk_factor_names(self) -> List[str]:
+        if not self.local_single_dir.is_dir():
+            return []
+        names: List[str] = []
+        for path in self.local_single_dir.glob("*.parquet"):
+            if path.name.startswith("_"):
+                continue
+            names.append(path.stem)
+        return sorted(names)
+
+    def _local_meta_factor_names(self) -> List[str]:
+        factors = self.load_local_meta().get("factors") or {}
+        if not isinstance(factors, dict):
+            return []
+        return sorted(str(name) for name in factors)
+
+    def _local_disk_factor_stats(self) -> Dict[str, int]:
+        if not self.local_single_dir.is_dir():
+            return {}
+        stats: Dict[str, int] = {}
+        for path in self.local_single_dir.glob("*.parquet"):
+            if path.name.startswith("_"):
+                continue
+            stats[path.stem] = path.stat().st_size
+        return stats
+
     def _local_factor_entries(self, factor_names: Optional[Iterable[str]] = None) -> Dict[str, Dict[str, Any]]:
         wanted = {str(name) for name in factor_names or [] if str(name or "").strip()}
         factors = self.load_local_meta().get("factors") or {}
-        result: Dict[str, Dict[str, Any]] = {}
-        for name, entry in factors.items():
+        if not isinstance(factors, dict):
+            factors = {}
+        for name in factors:
             if wanted and name not in wanted:
                 continue
-            if not isinstance(entry, dict) or str(entry.get("status") or "ok").lower() == "error":
-                continue
-            if not entry.get("date_range"):
+            _safe_factor_file_name(name)
+        result: Dict[str, Dict[str, Any]] = {}
+        for name in self._local_disk_factor_names():
+            if wanted and name not in wanted:
                 continue
             parquet = self._local_parquet_path(name)
             if not parquet.exists():
                 continue
-            result[name] = entry
+            entry = factors.get(name)
+            if not isinstance(entry, dict):
+                result[name] = {
+                    "status": "missing_meta_reconcile_required",
+                    "_has_meta": False,
+                    "_metadata_status": "missing_meta_reconcile_required",
+                    "_size_bytes": parquet.stat().st_size,
+                }
+                continue
+            if str(entry.get("status") or "ok").lower() == "error":
+                continue
+            metadata_status = "ok" if entry.get("date_range") else "incomplete_meta_reconcile_required"
+            enriched = dict(entry)
+            enriched["_has_meta"] = True
+            enriched["_metadata_status"] = metadata_status
+            enriched["_size_bytes"] = parquet.stat().st_size
+            result[name] = enriched
         return result
 
     def _local_parquet_path(self, factor_name: str) -> Path:
@@ -390,6 +434,8 @@ class FactorCacheRemoteSyncService:
 
     @staticmethod
     def _entry_matches(local_entry: Dict[str, Any], remote_entry: Dict[str, Any]) -> bool:
+        if local_entry.get("_metadata_status") not in (None, "ok"):
+            return False
         keys = ("source_hash_raw", "date_range", "window_train_start", "window_backtest_end")
         for key in keys:
             local_val = local_entry.get(key)
@@ -411,10 +457,23 @@ class FactorCacheRemoteSyncService:
         sync_items: List[Dict[str, Any]] = []
         skipped_items: List[Dict[str, Any]] = []
         local_missing: List[Dict[str, Any]] = []
+        requested = {str(name) for name in factor_names or [] if str(name or "").strip()}
+        for name in sorted(requested - set(local_entries)):
+            local_missing.append({"factor_name": name, "reason": "local_parquet_missing"})
         for name, local_entry in sorted(local_entries.items()):
             local_parquet = self._local_parquet_path(name)
             if not local_parquet.exists():
                 local_missing.append({"factor_name": name, "reason": "local_parquet_missing"})
+                continue
+            metadata_status = str(local_entry.get("_metadata_status") or "ok")
+            if metadata_status != "ok":
+                skipped_items.append(
+                    {
+                        "factor_name": name,
+                        "status": "metadata_reconcile_required",
+                        "reason": metadata_status,
+                    }
+                )
                 continue
             remote_entry = remote_factors.get(name) or {}
             meta_match = isinstance(remote_entry, dict) and self._entry_matches(local_entry, remote_entry)
@@ -454,8 +513,20 @@ class FactorCacheRemoteSyncService:
         }
 
     def get_stats(self, node_id: Optional[str] = None, include_factor_status: bool = True) -> Dict[str, Any]:
+        local_disk_stats = self._local_disk_factor_stats()
         local_entries = self._local_factor_entries()
-        local_size = sum(self._local_parquet_path(name).stat().st_size for name in local_entries)
+        local_disk_names = set(local_disk_stats)
+        local_meta_names = set(self._local_meta_factor_names())
+        local_size = sum(local_disk_stats.values())
+        local_meta_count = len(local_meta_names)
+        local_orphan_count = len(local_disk_names - local_meta_names)
+        local_orphan_meta_count = len(local_meta_names - local_disk_names)
+        local_metadata_pending = sum(
+            1
+            for entry in local_entries.values()
+            if str(entry.get("_metadata_status") or "ok") != "ok"
+        )
+        local_effective_count = len(local_entries)
         nodes = self.list_remote_nodes()
         selected_node_id = node_id or (nodes[0].node_id if nodes else None)
         remote_nodes: List[Dict[str, Any]] = []
@@ -477,9 +548,19 @@ class FactorCacheRemoteSyncService:
                 synced = 0
                 stale = 0
                 missing = 0
+                metadata_pending = 0
                 for name, local_entry in local_entries.items():
                     remote_entry = remote_factors.get(name)
-                    if isinstance(remote_entry, dict) and self._entry_matches(local_entry, remote_entry):
+                    local_meta_status = str(local_entry.get("_metadata_status") or "ok")
+                    if local_meta_status != "ok":
+                        metadata_pending += 1
+                        if remote_entry:
+                            stale += 1
+                            status = "metadata_pending"
+                        else:
+                            missing += 1
+                            status = "missing"
+                    elif isinstance(remote_entry, dict) and self._entry_matches(local_entry, remote_entry):
                         synced += 1
                         status = "synced"
                     elif remote_entry:
@@ -491,6 +572,7 @@ class FactorCacheRemoteSyncService:
                     if include_factor_status and node.node_id == selected_node_id:
                         factor_status[name] = {
                             "status": status,
+                            "local_meta_status": local_meta_status,
                             "local_date_range": local_entry.get("date_range"),
                             "remote_date_range": remote_entry.get("date_range") if isinstance(remote_entry, dict) else None,
                         }
@@ -501,6 +583,12 @@ class FactorCacheRemoteSyncService:
                         "synced": synced,
                         "missing": missing,
                         "stale": stale,
+                        "metadata_pending": metadata_pending,
+                        "local_disk_factor_count": len(local_disk_names),
+                        "local_effective_factor_count": local_effective_count,
+                        "local_meta_factor_count": local_meta_count,
+                        "local_orphan_parquet_count": local_orphan_count,
+                        "local_orphan_meta_count": local_orphan_meta_count,
                         "top_level_as_of_date": remote_meta.get("as_of_date"),
                     }
                 )
@@ -511,8 +599,14 @@ class FactorCacheRemoteSyncService:
                         "error": str(exc),
                         "remote_cached": 0,
                         "synced": 0,
-                        "missing": len(local_entries),
+                        "missing": local_effective_count,
                         "stale": 0,
+                        "metadata_pending": local_metadata_pending,
+                        "local_disk_factor_count": len(local_disk_names),
+                        "local_effective_factor_count": local_effective_count,
+                        "local_meta_factor_count": local_meta_count,
+                        "local_orphan_parquet_count": local_orphan_count,
+                        "local_orphan_meta_count": local_orphan_meta_count,
                     }
                 )
             remote_nodes.append(node_payload)
@@ -522,7 +616,13 @@ class FactorCacheRemoteSyncService:
             "ok": True,
             "local": {
                 "cache_root": str(self.local_cache_root),
-                "cached": len(local_entries),
+                "cached": local_effective_count,
+                "disk_cached": len(local_disk_names),
+                "effective_cached": local_effective_count,
+                "meta_cached": local_meta_count,
+                "orphan_parquet_count": local_orphan_count,
+                "orphan_meta_count": local_orphan_meta_count,
+                "metadata_pending": local_metadata_pending,
                 "size_mb": round(local_size / 1024 / 1024, 1),
                 "meta_sha256": _sha256_file(self.local_meta_path) if self.local_meta_path.exists() else None,
             },
@@ -622,11 +722,13 @@ class FactorCacheRemoteSyncService:
         merged_meta = dict(remote_meta or {})
         merged_factors = dict(merged_meta.get("factors") or {})
         local_factors = local_meta.get("factors") or {}
+        local_entries = self._local_factor_entries(item["factor_name"] for item in sync_items)
         factor_files: Dict[str, Path] = {}
         for item in sync_items:
             name = item["factor_name"]
-            if name not in local_factors:
-                raise RuntimeError(f"local factor meta missing: {name}")
+            local_entry = local_entries.get(name) or {}
+            if name not in local_factors or str(local_entry.get("_metadata_status") or "ok") != "ok":
+                raise RuntimeError(f"local factor meta missing or incomplete, reconcile required: {name}")
             path = self._local_parquet_path(name)
             if not path.exists():
                 raise RuntimeError(f"local factor parquet missing: {name}")

@@ -79,7 +79,7 @@ class QEEvolutionConfig(BaseModel):
 
 class TaskCreateRequest(BaseModel):
     task_name: str
-    task_type: str  # fin_factor/fin_model/fin_quant/fin_factor_report/qe_evolution/correlation_compute/official_evaluation
+    task_type: str  # fin_factor/fin_model/fin_quant/fin_factor_report/qe_evolution/correlation_compute/official_evaluation/official_factor_full_compute
     node_id: str
     # RDAgent 参数
     evolving_n: int = 10

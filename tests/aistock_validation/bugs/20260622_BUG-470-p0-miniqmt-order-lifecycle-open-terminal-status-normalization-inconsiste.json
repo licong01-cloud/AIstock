@@ -1,0 +1,90 @@
+{
+  "actual": "MiniQMT open/terminal status semantics are inconsistent across modules: qmt_strategy_ledger/models.py:18 STATUS_OPEN_LIKE=50 (single value); scheduler.py:4703 _miniqmt_open_order_evidence counts open only when order_status==STATUS_OPEN_LIKE(50), so a partial-fill order (raw order_status=55, e.g. 603690.SH 2000 ordered/1800 filled) is NOT counted as open; but runtime.py:1587 treats {48,49,50,51,55} as open and minqmtsim.py:52-53 classifies {48,49,50,51} pending / {52,53,55} partial. When only partial-fill (55) orders remain, scheduler/ledger can mis-judge no-open-orders and prematurely terminalize the run or trigger a dependent BUY retry before the SELL fully fills -- unattended trading-safety hazard.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/models.py",
+    "backend/services/qmt_strategy_ledger/sync_service.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/qmt_strategy_ledger/test_sync_service.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "tests/aistock_validation/bugs/20260622_BUG-470-p0-miniqmt-order-lifecycle-open-terminal-status-normalization-inconsiste.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-470",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T04:58:40.844697Z",
+  "description": "MiniQMT order open/terminal status semantics are inconsistent across modules -> unattended trading-safety hazard. qmt_strategy_ledger/models.py:18 STATUS_OPEN_LIKE=50 (single value); scheduler.py:4703 _miniqmt_open_order_evidence treats an order open only when order_status==STATUS_OPEN_LIKE(50), so a raw partial-fill order_status=55 (today 603690.SH 2000 ordered/1800 filled) is NOT counted as open. runtime.py:1587 treats {48,49,50,51,55} as open; minqmtsim.py:52-53 classifies {48,49,50,51} pending / {52,53,55} partial; sync_service.py:646 collapses 'not fully filled' to STATUS_OPEN_LIKE(50) in the ledger while scheduler reads the raw broker status. CONSEQUENCE: when only partial-fill(55) orders remain, scheduler/ledger can mis-judge no-open-orders and prematurely terminalize the run or trigger a dependent BUY retry before the SELL fully fills. FIX (A, P0 core): define ONE canonical non-terminal(open) vs terminal broker order_status predicate in qmt_strategy_ledger/models.py (pending 48/49/50/51 + partial 52/53/55 = non-terminal; terminal = 54 cancelled / 56 filled / 57 rejected) and use it everywhere incl. scheduler.py:4703 (count 55 as open) and sync_service lifecycle (remaining-qty aware). FIX (B, P1 within bug): runtime recover()/_sync_managed_child_result must reconcile child-order status from broker order/trade snapshots (FILLED/PARTIALLY_FILLED/CANCELLED) so runtime persisted state stops lagging broker truth (recovery/audit/operator-cancel/terminal judgment). No silent fallback. LocalSim untouched. SEQUENCING: overlaps scheduler.py with BUG-463/#1441(L2 LocalSim terminalizers); different functions (4703 MiniQMT evidence vs LocalSim terminalizers) but rebase whichever merges second. RELATED separate P1 to register: succeeded_with_capacity_residual must be surfaced in API/UI/alert (scheduler.py:4661/2300 allow SUCCEEDED with terminal_capacity_residual; top-level SUCCEEDED with failed_intents>0 is a monitoring false-positive).",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-a477413bff89",
+      "timestamp": "2026-06-22T04:58:40.844693Z"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "note": "Verified xtquant constants from vendored xtconstant.py: 48/49/50/51 pending, 52/53/55 partial non-terminal, 54/56/57 terminal. Added canonical qmt_strategy_ledger predicates, aligned scheduler open evidence/sync_service/runtime/client child-order reconciliation, and confirmed status 55 remains open. No LocalSim files, production runtime, DB, or DDL touched. Full qmt_strategy_ledger suite has two pre-existing/out-of-scope failures unrelated to BUG-470 allowed scope.",
+      "timestamp": "2026-06-22T06:45:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Define ONE canonical non-terminal(open) vs terminal broker order_status predicate in qmt_strategy_ledger/models.py (pending 48/49/50/51 + partial 52/53/55 = non-terminal; terminal = 54 cancelled / 56 filled / 57 rejected) and use it everywhere: scheduler.py:4703 must count partial-fill(55) as open; qmt_strategy_ledger lifecycle (sync_service) consistent and remaining-qty aware. MiniQMT runtime child-order status must also be reconciled from broker order/trade snapshots (recover/_sync_managed_child_result backfill FILLED/PARTIALLY_FILLED/CANCELLED) so runtime persisted state stops lagging broker truth. No silent fallback. LocalSim untouched.",
+  "first_seen_at": "2026-06-22T04:58:40.844697Z",
+  "fix_branch": "bug/BUG-470-p0-miniqmt-order-lifecycle-open-terminal-status-20260622",
+  "fix_commit": "a96a48212b816ba3e9e80060839e4ae5b51bbc44",
+  "fixed_at": "2026-06-22T07:12:42.845312Z",
+  "github_issue_number": 1453,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1453",
+  "last_seen_at": "2026-06-22T04:58:40.844697Z",
+  "module": "qmt_strategy_ledger",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1458",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Compare qmt_strategy_ledger/models.py:18 (STATUS_OPEN_LIKE=50), scheduler.py:4703 (==STATUS_OPEN_LIKE only), runtime.py:1587 ({48,49,50,51,55}); an order_status=55 partial-fill is open in runtime but not in scheduler open-evidence.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "qmt_strategy_ledger"
+  ],
+  "title": "[P0][MiniQMT] order lifecycle open/terminal status normalization inconsistent (partial-fill 55 not counted as open)",
+  "trigger_condition": {
+    "fingerprint": "a477413bff896d8e0543357d",
+    "source_event_id": "FE-20260622-a477413bff89"
+  },
+  "validation_evidence": [
+    "gh pr checks 1458 -> 17 passed, 0 failed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_tier2_review"
+}

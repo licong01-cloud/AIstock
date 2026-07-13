@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
@@ -15,6 +16,9 @@ class MemoryWriteProvider(Protocol):
 
     def update_record(self, kind: str, record_id: str, updates: Mapping[str, Any]) -> dict[str, Any]:
         ...
+
+
+SemanticMemoryCandidateExtractor = Callable[..., list[Mapping[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -40,9 +44,16 @@ class _Candidate:
 
 
 class MemoryCurator:
-    def __init__(self, repo: MemoryWriteProvider, *, namespace: str = "aistock") -> None:
+    def __init__(
+        self,
+        repo: MemoryWriteProvider,
+        *,
+        namespace: str = "aistock",
+        semantic_extractor: SemanticMemoryCandidateExtractor | None = None,
+    ) -> None:
         self.repo = repo
         self.namespace = namespace
+        self.semantic_extractor = semantic_extractor
 
     def curate_turn(
         self,
@@ -103,8 +114,44 @@ class MemoryCurator:
             approval_required_ids=approval_required_ids,
         )
 
+    def create_reflection_memory(self, memory_row: Mapping[str, Any]) -> dict[str, Any]:
+        row = dict(memory_row)
+        if row.get("source_type") != "reflection_card":
+            raise ValueError("reflection memory source_type must be reflection_card")
+        if row.get("memory_type") != "episodic":
+            raise ValueError("reflection memory_type must be episodic")
+        if row.get("scope") != "personal" or not str(row.get("tree_path") or "").startswith("personal.episodic."):
+            raise ValueError("reflection memory must target personal.episodic.*")
+        if row.get("approval_status") != "approved" or row.get("risk_level") != "low":
+            raise ValueError("reflection memory must be approved low-risk")
+        return self.repo.create_record("memory_items", row)
+
     def _extract_candidates(self, *, user_message: str, assistant_message: str) -> list[_Candidate]:
-        del assistant_message
+        if self.semantic_extractor is not None:
+            return _dedupe_candidates(self._semantic_candidates(user_message=user_message, assistant_message=assistant_message))
+        return _dedupe_candidates(self._seed_candidates(user_message=user_message))
+
+    def _semantic_candidates(self, *, user_message: str, assistant_message: str) -> list[_Candidate]:
+        if self.semantic_extractor is None:
+            return []
+        raw_candidates = self.semantic_extractor(user_message=user_message, assistant_message=assistant_message)
+        if not isinstance(raw_candidates, list):
+            raise ValueError(
+                "reason_code=memory_curator_invalid_semantic_candidates; semantic_memory_candidates must be a list: "
+                f"actual_type={type(raw_candidates).__name__}"
+            )
+        candidates: list[_Candidate] = []
+        for index, item in enumerate(raw_candidates):
+            if not isinstance(item, Mapping):
+                raise ValueError(
+                    "reason_code=memory_curator_invalid_semantic_candidate; semantic_memory_candidates entries must be objects: "
+                    f"index={index}; actual_type={type(item).__name__}"
+                )
+            candidates.append(_candidate_from_semantic_mapping(item, index=index))
+        return candidates
+
+    @staticmethod
+    def _seed_candidates(*, user_message: str) -> list[_Candidate]:
         text = user_message.strip()
         lower = text.lower()
         candidates: list[_Candidate] = []
@@ -167,7 +214,7 @@ class MemoryCurator:
                     importance=0.9,
                 )
             )
-        return _dedupe_candidates(candidates)
+        return candidates
 
     def _ensure_branch(self, candidate: _Candidate, provenance: Mapping[str, Any]) -> dict[str, Any] | None:
         page = self.repo.list_records(
@@ -288,6 +335,87 @@ def _after_marker(text: str, marker: str, *, default: str) -> str:
     if marker not in text:
         return default.strip()
     return text.split(marker, 1)[1].strip() or default.strip()
+
+
+def _candidate_from_semantic_mapping(item: Mapping[str, Any], *, index: int) -> _Candidate:
+    memory_type = _required_str(item, "memory_type", index=index)
+    scope = _required_str(item, "scope", index=index)
+    tree_path = _required_str(item, "tree_path", index=index)
+    title = _required_str(item, "title", index=index)
+    content_text = _required_str(item, "content_text", index=index)
+    trust_level = _required_str(item, "trust_level", index=index)
+    resident = _required_bool(item, "resident", index=index)
+    requires_approval = _required_bool(item, "requires_approval", index=index)
+    importance = _required_float(item, "importance", index=index)
+    allowed_memory_types = {"user_preference", "habit", "directive", "task_state", "analysis_note"}
+    if memory_type not in allowed_memory_types:
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate has invalid memory_type: "
+            f"index={index}; memory_type={memory_type}; allowed={sorted(allowed_memory_types)}"
+        )
+    if scope not in {"personal", "project"}:
+        raise ValueError(f"reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate has invalid scope: index={index}; scope={scope}")
+    if not tree_path.startswith(f"{scope}."):
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate tree_path must stay inside scope: "
+            f"index={index}; scope={scope}; tree_path={tree_path}"
+        )
+    if trust_level not in {"user_stated", "assistant_inferred"}:
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate has invalid trust_level: "
+            f"index={index}; trust_level={trust_level}"
+        )
+    if scope == "project" and not requires_approval:
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; project semantic memory candidates require draft approval: "
+            f"index={index}; tree_path={tree_path}; requires_approval={requires_approval}"
+        )
+    if not 0 <= importance <= 1:
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate importance must be between 0 and 1: "
+            f"index={index}; importance={importance}"
+        )
+    return _Candidate(
+        memory_type=memory_type,
+        scope=scope,
+        tree_path=tree_path,
+        title=title,
+        content_text=content_text,
+        trust_level=trust_level,
+        resident=resident,
+        requires_approval=requires_approval,
+        importance=importance,
+    )
+
+
+def _required_str(item: Mapping[str, Any], field: str, *, index: int) -> str:
+    value = item.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate field must be a non-empty string: "
+            f"index={index}; field={field}; actual_type={type(value).__name__}"
+        )
+    return value.strip()
+
+
+def _required_bool(item: Mapping[str, Any], field: str, *, index: int) -> bool:
+    value = item.get(field)
+    if not isinstance(value, bool):
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate field must be a bool: "
+            f"index={index}; field={field}; actual_type={type(value).__name__}"
+        )
+    return value
+
+
+def _required_float(item: Mapping[str, Any], field: str, *, index: int) -> float:
+    value = item.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(
+            "reason_code=memory_curator_invalid_semantic_candidate; semantic memory candidate field must be a number: "
+            f"index={index}; field={field}; actual_type={type(value).__name__}"
+        )
+    return float(value)
 
 
 def _parent_path(path: str) -> str | None:

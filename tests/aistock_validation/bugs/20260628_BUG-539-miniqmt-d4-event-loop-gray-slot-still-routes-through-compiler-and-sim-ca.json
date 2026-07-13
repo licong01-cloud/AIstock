@@ -1,0 +1,95 @@
+{
+  "actual": "gray EVENT_LOOP override exists but SIM scheduler submit path remains B MiniQMTExecutionBridge.submit_plan / submit_managed_vnpy_order_requests. gray require_shadow_evidence still requires multi-day full scenario coverage for SIM, blocking canary after single-day smoke evidence.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/bridges.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/gray.py",
+    "backend/services/miniqmt_execution_runtime/runtime.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+    "backend/tests/miniqmt_execution_runtime/test_runtime.py",
+    "docs/handoff/BUG-539-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md",
+    "tests/aistock_validation/bugs/20260628_BUG-539-miniqmt-d4-event-loop-gray-slot-still-routes-through-compiler-and-sim-ca.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-539",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-27T18:34:59.126980Z",
+  "description": "D4 go-live blocker after D1-D3.7: gray switch can mark a SIM portfolio/strategy_slot as EVENT_LOOP, but production SimulationLifecycleScheduler submission still routes through B compiler. D4 must route EVENT_LOOP SIM scopes into durable MiniQMT event_loop submission while leaving COMPILER scopes, LocalSim, and LIVE hard locks unchanged. SIM canary evidence gate must be configurable/auditable single_day_smoke by default for SIM only; full_scenario_set remains available and LIVE remains forbidden. The fix scope includes scheduler/orchestrator/bridge route split, event_loop broker-quote submission, gray canary strictness, and regression tests.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260628-2838d6037e0b",
+      "timestamp": "2026-06-27T18:34:59.126976Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "EVENT_LOOP SIM scopes route to A event_loop submission with QmtClientMiniQMTEventLoopGateway, qmt_strategy_ledger authoritative OMS, broker quote source MINIQMT_REALTIME.broker_quote, D3.5 dependent-buy and D3.6 board-lot semantics. COMPILER scopes and LocalSim remain unchanged. gray SIM switch supports explicit MINIQMT_GRAY_CANARY_STRICTNESS=single_day_smoke|full_scenario_set; LIVE remains MINIQMT_GRAY_LIVE_FORBIDDEN.",
+  "first_seen_at": "2026-06-27T18:34:59.126980Z",
+  "fix_branch": null,
+  "fix_commit": "1256fb112abf051b2b14519f860ea2f81bde6def",
+  "fixed_at": "2026-06-28T03:21:41.523246Z",
+  "github_issue_number": 1686,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1686",
+  "last_seen_at": "2026-06-27T18:34:59.126980Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not start/restart/stop services.",
+    "Do not write production DB or DDL.",
+    "Do not unlock LIVE.",
+    "Do not change LocalSim.",
+    "Do not delete B compiler or change B compiler behavior for non-switched scopes.",
+    "Do not touch Research Assistant or frontend."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1695",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Switch a SIM scope to EVENT_LOOP and run SimulationLifecycleScheduler MiniQMT submit; observe compiler submit_managed_vnpy_order_requests path still used instead of durable event_loop runtime. switch_to_event_loop requires full scenario/day gate instead of single_day_smoke strictness for SIM.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT D4 event_loop gray slot still routes through compiler and SIM canary gate too strict",
+  "trigger_condition": {
+    "fingerprint": "2838d6037e0b3f9ea528cbd3",
+    "source_event_id": "FE-20260628-2838d6037e0b"
+  },
+  "ui_issue": false,
+  "validation_evidence": [
+    "GitHub PR #1695 checks -> 17 passed / 0 failed; mergeStateStatus=CLEAN before merge",
+    "Merge commit -> 1256fb112abf051b2b14519f860ea2f81bde6def",
+    "production_ddl_gate=noop; production_frontend_dependency_gate=noop; production_backend_dependency_gate=noop"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

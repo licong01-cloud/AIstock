@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import qmt, qmt_strategy_ledger
-from backend.services.qmt_strategy_ledger.models import BUY_ORDER_TYPE, IntentSubmitStatus, VirtualAccount, VirtualAccountStatus
+from backend.services.qmt_strategy_ledger.models import VirtualAccount, VirtualAccountStatus
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
 
 
@@ -119,6 +119,24 @@ def _payload() -> dict:
     }
 
 
+def _runtime_metadata(suffix: str = "router", **extra: object) -> dict:
+    return {
+        "runtime_owner": "MiniQMTExecutionRuntime",
+        "runtime_id": f"mqrt_{suffix}",
+        "runtime_child_order_id": f"child_{suffix}",
+        "runtime_algo_instance_id": f"algo_{suffix}",
+        "runtime_parent_intent_id": f"parent_{suffix}",
+        **extra,
+    }
+
+
+def _runtime_payload(suffix: str = "router", **overrides: object) -> dict:
+    payload = _payload()
+    payload["metadata"] = _runtime_metadata(suffix)
+    payload.update(overrides)
+    return payload
+
+
 def _raw_payload() -> dict:
     return {
         "stock_code": "300604.SZ",
@@ -187,7 +205,7 @@ def test_submit_router_blocks_live_mode_without_approval_metadata(monkeypatch) -
     assert fake_service.calls == []
 
 
-def test_submit_router_allows_live_mode_only_after_live_approval_gate(monkeypatch) -> None:
+def test_submit_router_runs_live_approval_gate_then_blocks_retired_direct_path(monkeypatch) -> None:
     monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
     monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_LIVE_MANAGED_ORDERS", "1")
     fake_client = FakeQmtClient()
@@ -205,6 +223,7 @@ def test_submit_router_allows_live_mode_only_after_live_approval_gate(monkeypatc
         "mode": "LIVE",
         "package_id": "pkg_live_unit_test",
         "metadata": {
+            **_runtime_metadata("live_unit_test"),
             "live_approval_id": "liveappr_unit_test",
             "runtime_release_sha256": "sha256:runtime-release-unit-test",
         },
@@ -212,8 +231,8 @@ def test_submit_router_allows_live_mode_only_after_live_approval_gate(monkeypatc
 
     response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders", json=payload)
 
-    assert response.status_code == 200
-    assert response.json()["result"]["broker_called"] is True
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
     assert fake_service.calls == [
         {
             "package_id": "pkg_live_unit_test",
@@ -222,7 +241,7 @@ def test_submit_router_allows_live_mode_only_after_live_approval_gate(monkeypatc
             "target_broker_backend": "minqmt_live",
         }
     ]
-    assert fake_client.place_order_calls[0]["strategy_name"] == "poc_strategy_a"
+    assert fake_client.place_order_calls == []
 
 
 def test_raw_order_router_is_disabled_by_default_and_does_not_call_broker(monkeypatch) -> None:
@@ -234,7 +253,7 @@ def test_raw_order_router_is_disabled_by_default_and_does_not_call_broker(monkey
 
     assert response.status_code == 403
     assert "administrator/POC diagnostics only" in response.json()["detail"]
-    assert "/api/v1/qmt/virtual-strategies/orders" in response.json()["detail"]
+    assert "MiniQMTExecutionRuntime" in response.json()["detail"]
     assert fake_client.place_order_calls == []
 
 
@@ -250,7 +269,7 @@ def test_raw_batch_order_router_is_disabled_by_default_and_does_not_call_broker(
 
     assert response.status_code == 403
     assert "administrator/POC diagnostics only" in response.json()["detail"]
-    assert "/api/v1/qmt/virtual-strategies/orders" in response.json()["detail"]
+    assert "MiniQMTExecutionRuntime" in response.json()["detail"]
     assert fake_client.place_order_calls == []
 
 
@@ -282,6 +301,7 @@ def test_raw_order_router_requires_explicit_diagnostic_switch(monkeypatch) -> No
 
 def test_raw_cancel_router_returns_broker_diagnostic(monkeypatch) -> None:
     monkeypatch.setenv("QMT_TRADE_PASSWORD", "secret")
+    monkeypatch.setenv("AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS", "1")
     fake_client = FakeQmtClient()
 
     response = _raw_client(fake_client, monkeypatch).post(
@@ -298,7 +318,23 @@ def test_raw_cancel_router_returns_broker_diagnostic(monkeypatch) -> None:
     assert body["diagnostic"]["order_id"] == "1090519216"
     assert body["diagnostic"]["raw_return_code"] == -1
     assert body["diagnostic"]["classification"] == "xtquant_nonzero_return"
+    assert "administrator/POC diagnostics only" in body["diagnostic_warning"]
     assert fake_client.cancel_order_calls == ["1090519216"]
+
+
+def test_raw_cancel_router_is_disabled_by_default_and_does_not_call_broker(monkeypatch) -> None:
+    monkeypatch.setenv("QMT_TRADE_PASSWORD", "secret")
+    monkeypatch.delenv("AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS", raising=False)
+    fake_client = FakeQmtClient()
+
+    response = _raw_client(fake_client, monkeypatch).post(
+        "/api/v1/qmt/cancel",
+        json={"trade_password": "secret", "order_id": "1090519216"},
+    )
+
+    assert response.status_code == 403
+    assert "administrator/POC diagnostics only" in response.json()["detail"]
+    assert fake_client.cancel_order_calls == []
 
 
 def test_raw_batch_order_router_requires_explicit_diagnostic_switch(monkeypatch) -> None:
@@ -321,7 +357,26 @@ def test_raw_batch_order_router_requires_explicit_diagnostic_switch(monkeypatch)
     assert [call["order_remark"] for call in fake_client.place_order_calls] == ["", "remark_b"]
 
 
-def test_managed_submit_records_intent_before_broker_call(monkeypatch) -> None:
+def test_managed_submit_route_is_retired_even_for_runtime_owned_request(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: fake_client)
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+
+    response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders", json=_runtime_payload("single_submit"))
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["context"]["required_runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert "MiniQMTExecutionRuntime" in detail["context"]["canonical_path"]
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_router") is None
+    assert fake_client.place_order_calls == []
+
+
+def test_managed_submit_rejects_non_runtime_owned_request_before_broker_call(monkeypatch) -> None:
     monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
     fake_client = FakeQmtClient()
     repo = _repo()
@@ -331,21 +386,15 @@ def test_managed_submit_records_intent_before_broker_call(monkeypatch) -> None:
 
     response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders", json=_payload())
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["success"] is True
-    assert body["result"]["broker_called"] is True
-    intent_id = body["result"]["intent_id"]
-    intent = repo.get_order_intent(intent_id)
-    assert intent.strategy_name == "poc_strategy_a"
-    assert intent.order_type == BUY_ORDER_TYPE
-    assert intent.order_remark == "remark_router"
-    assert intent.submit_status == IntentSubmitStatus.ACCEPTED
-    assert fake_client.place_order_calls[0]["strategy_name"] == "poc_strategy_a"
-    assert fake_client.place_order_calls[0]["order_remark"] == "remark_router"
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["context"]["required_runtime_owner"] == "MiniQMTExecutionRuntime"
+    assert detail["context"]["blocked_path"] == "public qmt_strategy_ledger managed mutation -> QmtManagedOrderService"
+    assert fake_client.place_order_calls == []
 
 
-def test_managed_batch_submit_returns_batch_preflight_contract(monkeypatch) -> None:
+def test_managed_batch_submit_route_is_retired_even_for_runtime_owned_requests(monkeypatch) -> None:
     monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
     fake_client = FakeQmtClient()
     repo = _repo()
@@ -355,27 +404,21 @@ def test_managed_batch_submit_returns_batch_preflight_contract(monkeypatch) -> N
 
     payload = {
         "orders": [
-            {**_payload(), "order_remark": "remark_batch_a"},
-            {**_payload(), "stock_code": "300054.SZ", "order_remark": "remark_batch_b"},
+            {**_runtime_payload("batch_a"), "order_remark": "remark_batch_a"},
+            {**_runtime_payload("batch_b"), "stock_code": "300054.SZ", "order_remark": "remark_batch_b"},
         ]
     }
     response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders/batch", json=payload)
 
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert result["success"] is True
-    assert result["batch_id"].startswith("qmtbatch_")
-    assert result["batch_status"] == "SUCCEEDED"
-    assert result["preflight_passed"] is True
-    assert result["retry_of_batch_id"] is None
-    assert result["compensation_actions"] == []
-    assert len(fake_client.place_order_calls) == 2
-    batch = repo.get_order_batch(result["batch_id"])
-    assert batch is not None
-    assert batch.batch_status.value == "SUCCEEDED"
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["context"]["request_count"] == 2
+    assert fake_client.place_order_calls == []
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "dup") is None
 
 
-def test_managed_batch_submit_preflight_failure_skips_broker(monkeypatch) -> None:
+def test_managed_batch_submit_rejects_non_runtime_owned_request_before_broker_call(monkeypatch) -> None:
     monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
     fake_client = FakeQmtClient()
     repo = _repo()
@@ -383,17 +426,62 @@ def test_managed_batch_submit_preflight_failure_skips_broker(monkeypatch) -> Non
     app = FastAPI()
     app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
 
-    payload = {"orders": [{**_payload(), "order_remark": "dup"}, {**_payload(), "order_remark": "dup"}]}
+    payload = {
+        "orders": [
+            {**_runtime_payload("batch_ok"), "order_remark": "remark_batch_ok"},
+            {**_payload(), "stock_code": "300054.SZ", "order_remark": "legacy_batch_b"},
+        ]
+    }
     response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders/batch", json=payload)
 
-    assert response.status_code == 200
-    result = response.json()["result"]
-    assert result["success"] is False
-    assert result["batch_status"] == "PREFLIGHT_FAILED"
-    assert result["preflight_passed"] is False
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["context"]["required_runtime_owner"] == "MiniQMTExecutionRuntime"
     assert fake_client.place_order_calls == []
-    assert "BATCH_DUPLICATE_ORDER_REMARK" in {
-        error["code"]
-        for item in result["results"]
-        for error in item["preflight"]["errors"]
-    }
+
+
+def test_retired_managed_batch_submit_skips_broker_before_preflight(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: fake_client)
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+
+    payload = {"orders": [{**_runtime_payload("dup_a"), "order_remark": "dup"}, {**_runtime_payload("dup_b"), "order_remark": "dup"}]}
+    response = TestClient(app).post("/api/v1/qmt/virtual-strategies/orders/batch", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert fake_client.place_order_calls == []
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_batch_a") is None
+    assert repo.get_order_intent_by_remark(ACCOUNT_ID, "remark_batch_b") is None
+
+def test_managed_cancel_route_is_retired_before_broker_call(monkeypatch) -> None:
+    monkeypatch.setenv("AISTOCK_ALLOW_MINIQMT_MANAGED_ORDERS", "1")
+    fake_client = FakeQmtClient()
+    repo = _repo()
+    qmt_strategy_ledger.configure_dependencies(repository_factory=lambda: repo, client_factory=lambda: fake_client)
+    app = FastAPI()
+    app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
+
+    response = TestClient(app).post(
+        "/api/v1/qmt/virtual-strategies/orders/cancel",
+        json={
+            "account_id": ACCOUNT_ID,
+            "strategy_name": "poc_strategy_a",
+            "order_remark": "remark_router",
+            "qmt_order_id": "1090519216",
+            "trade_date": date(2026, 5, 18).isoformat(),
+            "mode": "SIM",
+        },
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "EXECUTION_PATH_NOT_CANONICAL"
+    assert detail["context"]["operation"] == "cancel_order"
+    assert detail["context"]["operator_command_endpoint"] == "/simulation-runtime/miniqmt/operator-commands"
+    assert fake_client.cancel_order_calls == []
+

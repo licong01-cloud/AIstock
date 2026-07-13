@@ -1,0 +1,99 @@
+{
+  "actual": "After BUG-488 switched MiniQMT pre-trade to broker quote (quote_source=MINIQMT_REALTIME.broker_quote, confirmed live), L2/L16 still PRE_RUN_FAILED/FAILED_RETRYABLE with REALTIME_QUOTE_LIMIT_RANGE_INVALID: derived limit_up==limit_down==int(pre_close) and < pre_close (000048.SZ pre_close=20.75 -> up=down=20.0; 603303.SH pre_close=30.14 -> 30.0). broker_called=false, orders=[], fills=[], observed_count~481. normalize_miniqmt_quote_row (minqmtsim.py:1118) does NOT set limit fields, so the degenerate limits come from the downstream market_data limit handling on the broker-quote path (reads a degenerate broker raw limit field, or wrong derivation). Also the error text at market_data.py:617/1754 reads 'TDX realtime quote derived limit price range invalid' although source is MINIQMT_REALTIME.broker_quote -- misleading diagnosis.",
+  "allowed_write_scope": [
+    "backend/services/paper_trading_v2/market_data.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/paper_trading_v2/test_market_data.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260623_BUG-499-p0-miniqmt-broker-quote-pre-trade-limit-up-down-degenerate-int-pre-close.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-499-analysis.md"
+  ],
+  "assigned_agent": "codex",
+  "bug_id": "BUG-499",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T11:31:28.578266Z",
+  "description": "After BUG-488 MiniQMT pre-trade uses broker quote (quote_source=MINIQMT_REALTIME.broker_quote, confirmed live), L2/L16 still PRE_RUN_FAILED with REALTIME_QUOTE_LIMIT_RANGE_INVALID: limit_up==limit_down==int(pre_close), < pre_close (000048.SZ 20.75->20.0/20.0; 603303.SH 30.14->30.0/30.0); broker_called=false, no orders/fills, observed_count~481. normalize_miniqmt_quote_row (minqmtsim.py:1118) does NOT emit limit_up/limit_down -> the degenerate values come from downstream market_data limit handling on the broker-quote path (either reads a degenerate broker raw limit field, or the derived-limit path mis-computes for the broker source). FIX: MiniQMT broker-quote pre-trade limits must be valid A-share limits -- derive from pre_close x board%/ST(5%) with correct per-board tick rounding (reuse the existing _derived_realtime_limit_price_from_previous_close / _a_share_daily_limit_pct path, incl. BUG-466 ST 5%), OR authoritative stk_limit; reject/ignore degenerate broker limit fields (limit_up==limit_down or not matching pre_close+/-pct); if limits genuinely unavailable -> loud fail with ACCURATE source label (no hardcoded 'TDX'). Also fix the misleading message at market_data.py:617 (_quote_source_label) / :1754 so it reports MINIQMT not TDX. L2/L16 then pass pre-run when limits valid. Add regression: broker-quote with degenerate/absent limit fields -> derives valid limits (pass) OR loud-fails with correct source label; no 'TDX' text on MINIQMT path. MiniQMT-scoped; do not change LocalSim TDX limit logic.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-d7e5c3a11c0a",
+      "timestamp": "2026-06-23T11:31:28.578263Z"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "note": "MiniQMT broker quote path forces yuan price basis; degenerate broker limit metadata ignored; validation passed locally.",
+      "timestamp": "2026-06-23T12:16:23.166141Z"
+    },
+    {
+      "action": "pr_created",
+      "actor": "codex",
+      "note": "Created PR #1555 for Tier2 review; PR is not merged.",
+      "timestamp": "2026-06-23T12:22:44.518352Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "MiniQMT broker-quote pre-trade limits must be valid A-share limits: derive from pre_close x board%/ST(5%) with correct per-board tick rounding (reuse existing derivation) OR authoritative stk_limit; reject/ignore degenerate broker limit fields (limit_up==limit_down, or not matching pre_close +/- pct); if limits truly unavailable -> loud fail with ACCURATE source label (no hardcoded TDX). L2/L16 then pass pre-run when limits valid. Fix the misleading TDX message (_quote_source_label / hardcoded text). MiniQMT-scoped.",
+  "first_seen_at": "2026-06-23T11:31:28.578266Z",
+  "fix_branch": "bug/BUG-499-p0-miniqmt-broker-quote-pre-trade-limit-up-down-20260623",
+  "fix_commit": "eb42c7fc7861163b3373eef740f3be38ca71e471",
+  "fixed_at": "2026-06-23T16:01:32.917954Z",
+  "github_issue_number": 1549,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1549",
+  "last_seen_at": "2026-06-23T11:31:28.578266Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1555",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Today simulation_runtime runs: L2 simrun_7a2627318fcaa653 / L16 simrun_08f939b5408082f9 PRE_RUN_FAILED reason_code REALTIME_QUOTE_LIMIT_RANGE_INVALID with quote_source=MINIQMT_REALTIME.broker_quote and limit_up==limit_down==int(pre_close).",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT] broker-quote pre-trade limit_up/down degenerate (==int(pre_close)) blocks all pre-run; misleading TDX error text",
+  "trigger_condition": {
+    "fingerprint": "d7e5c3a11c0adad5d5ced68f",
+    "source_event_id": "FE-20260623-d7e5c3a11c0a"
+  },
+  "validation_evidence": [
+    "rtk gh pr checks 1555 -> passed (17 passed, 0 failed)",
+    "rtk python -m pytest backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> passed (116 passed)",
+    "rtk python -m ruff check backend/services/paper_trading_v2/market_data.py backend/services/paper_trading_v2/broker/minqmtsim.py backend/tests/paper_trading_v2/test_market_data.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "rtk git diff --check -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1 && set PAPER_V2_L3_SKIP_UI=1 && python -m nox -s paper_v2_l3 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_tier2_review"
+}

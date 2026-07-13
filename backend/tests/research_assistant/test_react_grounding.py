@@ -1,0 +1,1048 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import pytest
+
+from backend.services.research_assistant.react_grounding import (
+    McpToolCall,
+    McpToolResult,
+    ModelTurn,
+    ReactGroundingConfig,
+    ToolCatalogEntry,
+    ToolGateDecision,
+    _no_data_source_guard,
+    _should_force_external_research,
+    compose_with_evidence_guard,
+    run_react_grounding_loop,
+)
+
+
+def _result(tool_name: str, *, source: str, as_of: str) -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-test",
+        tool_name=tool_name,
+        status="succeeded",
+        payload_json={"source": source, "as_of": as_of},
+        source_refs=[source],
+        as_of=as_of,
+        executed=True,
+    )
+
+
+def _empty_business_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        status="succeeded",
+        payload_json={"source": "stock_quote:000688", "as_of": "2026-06-30", "items": []},
+        source_refs=[],
+        as_of=None,
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def _business_evidence_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-stock-analysis",
+        tool_name="stock_analysis_get_quote",
+        status="succeeded",
+        payload_json={
+            "source": "stock_quote:000688",
+            "as_of": "2026-06-30",
+            "items": [{"symbol": "000688", "close": 11.2}],
+        },
+        source_refs=["stock_quote:000688"],
+        as_of="2026-06-30",
+        summary="quote evidence is available",
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def test_bug_568_guard_mode_off_returns_narrative_numeric_answer_without_row_sources() -> None:
+    answer = "华海清科主营 CMP 设备，2025 年收入约 40 亿元，客户包括晶圆厂，竞对包括海外设备商。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [_business_evidence_result()],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="介绍华海清科主营、客户和竞对"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+    assert "Insufficient evidence" not in decision.text
+
+
+def test_bug_568_guard_mode_off_does_not_block_directional_prediction() -> None:
+    answer = "国城矿业短期可能上涨，但这只是模型根据上下文给出的判断。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [_business_evidence_result()],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="这只票后面怎么看？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+
+
+def test_bug_568_guard_mode_off_does_not_block_unsourced_numeric_fact() -> None:
+    answer = "公司收入 40 亿元，毛利率 35%，这里没有逐项来源。"
+
+    decision = compose_with_evidence_guard(
+        answer,
+        [],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="给我一个概览"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "guard_disabled"
+    assert decision.text == answer
+
+
+def test_bug_568_guard_mode_off_surfaces_program_error_without_insufficient_directive() -> None:
+    class FailingProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise RuntimeError("local data offline")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("read-only tool should not need approval")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-tool-error",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-local-data",
+                    tool_name="local_data_sync_status",
+                    stable_call_id="local-data-fail",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "看看本地数据同步状态"}],
+        model_complete=model_complete,
+        mcp_provider=FailingProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-local-data",
+                tool_name="local_data_sync_status",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, guard_mode="off", user_message="看看本地数据同步状态"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "guard_disabled_tool_error"
+    assert "Insufficient evidence" not in result.final_text
+    assert "aistock-local-data/local_data_sync_status" in result.final_text
+    assert "local data offline" in result.final_text
+    assert any("local_data_sync_status" in str(message.get("content", "")) for message in result.messages)
+
+
+def test_bug_568_guard_mode_off_keeps_write_action_approval_gate() -> None:
+    class RecordingProvider:
+        def __init__(self) -> None:
+            self.executed: list[McpToolCall] = []
+            self.preflighted: list[McpToolCall] = []
+
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            self.executed.append(call)
+            raise AssertionError("write tool must not auto-execute in guard_mode=off")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            self.preflighted.append(call)
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="preflight_required",
+                payload_json={"approval_required": True},
+                executed=False,
+                blocked_reason="preflight_confirmation_required",
+                side_effect_level=decision.side_effect_level,
+            )
+
+    provider = RecordingProvider()
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-write-tool",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-trading-ops",
+                    tool_name="submit_order_confirmed",
+                    stable_call_id="write-order",
+                    risk_level="production_sensitive",
+                    side_effect_level="production_sensitive",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "提交实盘订单"}],
+        model_complete=model_complete,
+        mcp_provider=provider,
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-trading-ops",
+                tool_name="submit_order_confirmed",
+                status="enabled",
+                risk_level="production_sensitive",
+                side_effect_level="production_sensitive",
+                requires_approval=True,
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, guard_mode="off", user_message="提交实盘订单"),
+    )
+
+    assert provider.executed == []
+    assert len(provider.preflighted) == 1
+    assert result.tool_results[0].executed is False
+    assert result.tool_results[0].status == "preflight_required"
+    assert result.tool_results[0].side_effect_level == "production_sensitive"
+
+
+def test_bug_568_guard_mode_annotate_keeps_soft_failure_answer_with_chinese_note() -> None:
+    answer = "- loop-001 CAGR 112.00%\nSources: qe_archive:leaderboard as_of 2026-06-24."
+
+    decision = compose_with_evidence_guard(
+        answer,
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="annotate", user_message="说说 QE loop 结果"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "annotated:factual_list_row_evidence_missing"
+    assert "- loop-001 CAGR 112.00%" in decision.text
+    assert "⚠️" in decision.text
+    assert "来源" in decision.text
+
+
+def test_bug_568_guard_mode_annotate_still_blocks_hard_placeholder_redline() -> None:
+    decision = compose_with_evidence_guard(
+        "收入 XX%；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=2, guard_mode="annotate", user_message="给我概览"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason.startswith("placeholder_blocked")
+
+
+def test_bug_568_invalid_guard_mode_falls_back_to_strict_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="aistock.research_assistant.react_grounding")
+
+    config = ReactGroundingConfig(max_tool_iterations=2, guard_mode="invalid-mode")
+    decision = compose_with_evidence_guard(
+        "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        config,
+    )
+
+    assert config.guard_mode == "strict"
+    assert "invalid research_assistant.guard_mode" in caplog.text
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
+def _external_research_call() -> McpToolCall:
+    return McpToolCall(
+        server_key="aistock-external-research",
+        tool_name="external_research_search_web",
+        stable_call_id="external-search-001",
+        risk_level="low",
+        side_effect_level="read_only",
+    )
+
+
+def _empty_external_research_result() -> McpToolResult:
+    return McpToolResult(
+        server_key="aistock-external-research",
+        tool_name="external_research_search_web",
+        status="succeeded",
+        payload_json={"provider": "offline_stub", "items": []},
+        executed=True,
+        side_effect_level="read_only",
+    )
+
+
+def test_t9_2_force_external_research_without_information_query_terms() -> None:
+    assert _should_force_external_research(
+        config=ReactGroundingConfig(max_tool_iterations=2, user_message="000688"),
+        collected_calls=[],
+        collected_results=[_empty_business_result()],
+    )
+
+
+def test_t9_2_force_external_research_keeps_mechanism_guards() -> None:
+    config = ReactGroundingConfig(max_tool_iterations=2, user_message="000688")
+
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[_business_evidence_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[_external_research_call()],
+        collected_results=[_empty_business_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[_empty_business_result(), _empty_external_research_result()],
+    )
+    assert not _should_force_external_research(
+        config=config,
+        collected_calls=[],
+        collected_results=[],
+    )
+
+
+def test_t9_2_force_external_research_is_wording_invariant_without_information_terms() -> None:
+    messages = ("000688", "ticker 000688", "Guocheng Mining")
+    for message in messages:
+        assert _should_force_external_research(
+            config=ReactGroundingConfig(max_tool_iterations=2, user_message=message),
+            collected_calls=[],
+            collected_results=[_empty_business_result()],
+        )
+
+
+def test_t9_2_external_stub_fallback_remains_honest_no_data() -> None:
+    class EmptyThenStubProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            if call.server_key == "aistock-stock-analysis":
+                return _empty_business_result()
+            if call.server_key == "aistock-external-research":
+                return McpToolResult(
+                    server_key=call.server_key,
+                    tool_name=call.tool_name,
+                    status="succeeded",
+                    payload_json={
+                        "provider": "offline_stub",
+                        "source": "https://example.org/offline",
+                        "as_of": "2026-06-30",
+                        "items": [],
+                    },
+                    source_refs=["https://example.org/offline"],
+                    as_of="2026-06-30",
+                    summary="offline_stub result contains no real web evidence",
+                    executed=True,
+                    side_effect_level=decision.side_effect_level,
+                )
+            raise AssertionError(f"unexpected tool call {call.server_key}/{call.tool_name}")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("T9-2 fallback must stay read-only")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-empty-business-first",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-stock-analysis",
+                    tool_name="stock_analysis_get_quote",
+                    stable_call_id="quote-empty-001",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "000688"}],
+        model_complete=model_complete,
+        mcp_provider=EmptyThenStubProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            ToolCatalogEntry(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=3, user_message="000688"),
+    )
+
+    assert any(call.server_key == "aistock-external-research" for call in result.tool_calls)
+    assert result.stopped_reason == "no_data_source"
+    assert result.evidence_guard.reason == "no_data_source_after_mcp_and_external_research"
+    assert "reason_code=no_data_source_after_mcp_and_external_research" in result.final_text
+    assert result.evidence_guard.source_count == 0
+
+
+def test_bug_568_guard_mode_off_no_data_source_is_visible_without_error_code() -> None:
+    guard = _no_data_source_guard(
+        collected_calls=[
+            McpToolCall(
+                server_key="aistock-stock-analysis",
+                tool_name="stock_analysis_get_quote",
+                stable_call_id="quote-empty-001",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+            McpToolCall(
+                server_key="aistock-external-research",
+                tool_name="external_research_search_web",
+                stable_call_id="external-empty-001",
+                risk_level="low",
+                side_effect_level="read_only",
+            ),
+        ],
+        collected_results=[_empty_business_result(), _empty_external_research_result()],
+        config=ReactGroundingConfig(max_tool_iterations=2, guard_mode="off", user_message="000688"),
+    )
+
+    assert guard.allowed is True
+    assert guard.reason == "guard_disabled_no_data_source"
+    assert "aistock-stock-analysis/stock_analysis_get_quote" in guard.text
+    assert "证据不足" not in guard.text
+    assert "reason_code=" not in guard.text
+
+
+def test_future_answer_allows_grounded_non_directional_answer_without_style_template() -> None:
+    decision = compose_with_evidence_guard(
+        "国城矿业未来更应观察成交和资金面是否延续，当前只读证据显示波动加大；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业未来趋势怎样？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason != "future_answer_boundary_missing"
+    assert decision.reason == "ok"
+
+
+def test_future_answer_still_blocks_directional_prediction() -> None:
+    decision = compose_with_evidence_guard(
+        "国城矿业未来一个月将上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="国城矿业未来趋势如何？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_t9_1_blocks_directional_prediction_without_future_question_terms() -> None:
+    decision = compose_with_evidence_guard(
+        "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="这只票怎么样？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_future_answer_allows_negated_directional_marker_context() -> None:
+    decision = compose_with_evidence_guard(
+        "基于现有证据无法判断方向、不会上涨，也不会给出涨跌预测；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="国城矿业未来趋势如何？",
+            future_directional_markers=("上涨", "下跌"),
+        ),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_1_allows_historical_price_restatement_without_prediction() -> None:
+    decision = compose_with_evidence_guard(
+        "历史事实：该股上月上涨了 10%，昨日涨停；来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="把这只票近期表现说明一下"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_1_directional_prediction_guard_is_wording_invariant_without_future_terms() -> None:
+    messages = (
+        "这只票怎么样？",
+        "国城矿业怎么看？",
+        "这家公司现在值得关注吗？",
+    )
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "国城矿业必然上涨；来源 stock_ref，截至 2026-06-17。",
+            [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is False
+        assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_future_answer_allows_driver_scenario_risk_without_directional_prediction() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line：只看驱动、情景和风险，不预测方向，也不构成投资建议；"
+        "驱动是成交和资金流，情景是放量/缩量两种验证路径，风险是样本窗口短。"
+        "来源 stock_ref，截至 2026-06-17。",
+        [_result("stock_analysis_get_quote", source="stock_ref", as_of="2026-06-17")],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="这只股票未来趋势如何？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def _qe_leaderboard_results() -> list[McpToolResult]:
+    return [
+        McpToolResult(
+            server_key="aistock-qe",
+            tool_name="qe_archive_query_run_leaderboard",
+            status="succeeded",
+            payload_json={
+                "source": "qe_archive:leaderboard",
+                "as_of": "2026-06-24",
+                "items": [
+                    {
+                        "rank": 1,
+                        "loop_id": "loop-001",
+                        "cagr": 1.12,
+                        "model_type": "seed_LSTM_10D_hs64_d02",
+                        "verification_status": "not_verified",
+                    },
+                    {
+                        "rank": 10,
+                        "loop_id": "loop-010",
+                        "cagr": 1.06,
+                        "model_type": "seed_TCN_10D_d02",
+                        "verification_status": "not_verified",
+                    },
+                ],
+            },
+            source_refs=["qe_archive:leaderboard"],
+            as_of="2026-06-24",
+            executed=True,
+        ),
+        McpToolResult(
+            server_key="aistock-qe",
+            tool_name="qe_archive_health",
+            status="succeeded",
+            payload_json={"source": "qe_archive:health", "as_of": "2026-06-24", "item": {"run_count": 10}},
+            source_refs=["qe_archive:health"],
+            as_of="2026-06-24",
+            executed=True,
+        ),
+    ]
+
+
+def test_factual_qe_ranking_list_allows_structured_list_with_unverified_risk_label() -> None:
+    decision = compose_with_evidence_guard(
+        """
+| rank | loop | CAGR | model | verification | source | as_of |
+| 1 | loop-001 | 112.00% | seed_LSTM_10D_hs64_d02 | not_verified - unverified backtest risk; do not treat as real returns | qe_archive:leaderboard | 2026-06-24 |
+| 10 | loop-010 | 106.00% | seed_TCN_10D_d02 | not_verified - unverified backtest risk; do not treat as real returns | qe_archive:leaderboard | 2026-06-24 |
+Sources: qe_archive:leaderboard as_of 2026-06-24; qe_archive:health as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_react_loop_allows_realistic_factual_qe_ranking_list_output() -> None:
+    class NoToolProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded QE evidence should be enough for final factual list")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded QE evidence should not trigger preflight")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content=(
+                "按当前 QE archive 排名清单：\n"
+                "| rank | loop | CAGR | model | verification | source | as_of |\n"
+                "| 1 | loop-001 | 112.00% | seed_LSTM_10D_hs64_d02 | not_verified - 未验证回测风险，勿当真实收益 | qe_archive:leaderboard | 2026-06-24 |\n"
+                "| 10 | loop-010 | 106.00% | seed_TCN_10D_d02 | not_verified - 未验证回测风险，勿当真实收益 | qe_archive:leaderboard | 2026-06-24 |\n"
+                "来源: qe_archive:leaderboard as_of 2026-06-24；qe_archive:health as_of 2026-06-24。"
+            ),
+            provider="fake-realistic",
+            model="fake-qe-list",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？"}],
+        model_complete=model_complete,
+        mcp_provider=NoToolProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(
+            max_tool_iterations=2,
+            user_message="目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？",
+        ),
+        initial_tool_results=_qe_leaderboard_results(),
+    )
+
+    assert result.evidence_guard is not None
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "ok"
+    assert result.stopped_reason == "final_answer"
+    assert "Insufficient evidence" not in result.final_text
+
+
+def test_factual_qe_ranking_list_requires_row_level_source_and_as_of() -> None:
+    decision = compose_with_evidence_guard(
+        """
+| rank | loop | CAGR | model | verification |
+| 1 | loop-001 | 112.00% | seed_LSTM_10D_hs64_d02 | not_verified - unverified backtest risk; do not treat as real returns |
+| 10 | loop-010 | 106.00% | seed_TCN_10D_d02 | not_verified - unverified backtest risk; do not treat as real returns |
+Sources: qe_archive:leaderboard as_of 2026-06-24; qe_archive:health as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "factual_list_row_evidence_missing"
+
+
+def test_factual_qe_ranking_list_requires_unverified_risk_label() -> None:
+    decision = compose_with_evidence_guard(
+        """
+| rank | loop | CAGR | model | verification | source | as_of |
+| 1 | loop-001 | 112.00% | seed_LSTM_10D_hs64_d02 | not_verified | qe_archive:leaderboard | 2026-06-24 |
+| 10 | loop-010 | 106.00% | seed_TCN_10D_d02 | not_verified | qe_archive:leaderboard | 2026-06-24 |
+Sources: qe_archive:leaderboard as_of 2026-06-24; qe_archive:health as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "unverified_evidence_risk_label_missing"
+
+
+def test_factual_qe_ranking_list_still_blocks_placeholder_facts() -> None:
+    decision = compose_with_evidence_guard(
+        """
+| rank | loop | CAGR | model | verification | source | as_of |
+| 1 | loop-001 | XX% | seed_LSTM_10D_hs64_d02 | not_verified - unverified backtest risk; do not treat as real returns | qe_archive:leaderboard | 2026-06-24 |
+Sources: qe_archive:leaderboard as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="目前QE实验排名前10位的loop年化收益分别是多少？分别使用了什么模型？"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason.startswith("placeholder_blocked")
+
+
+def test_t9_3_judgement_question_allows_list_style_without_synthesis_guard() -> None:
+    decision = compose_with_evidence_guard(
+        "Source 1: quote source source_a as_of 2026-06-17. Source 2: fund flow source source_b as_of 2026-06-17.",
+        [
+            _result("tool_a", source="source_a", as_of="2026-06-17"),
+            _result("tool_b", source="source_b", as_of="2026-06-17"),
+        ],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="please synthesize and analyze this stock"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_3_numeric_list_rows_need_source_as_of_without_list_query_terms() -> None:
+    decision = compose_with_evidence_guard(
+        """
+- loop-001 CAGR 112.00% not_verified - unverified backtest risk; do not treat as real returns
+- loop-010 CAGR 106.00% not_verified - unverified backtest risk; do not treat as real returns
+Sources: qe_archive:leaderboard as_of 2026-06-24.
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="tell me about QE loop outcomes"),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "factual_list_row_evidence_missing"
+
+
+def test_t9_3_numeric_list_rows_with_source_as_of_are_allowed_without_list_query_terms() -> None:
+    decision = compose_with_evidence_guard(
+        """
+- loop-001 CAGR 112.00%; source qe_archive:leaderboard; as_of 2026-06-24; not_verified - unverified backtest risk; do not treat as real returns
+- loop-010 CAGR 106.00%; source qe_archive:leaderboard; as_of 2026-06-24; not_verified - unverified backtest risk; do not treat as real returns
+""",
+        _qe_leaderboard_results(),
+        ReactGroundingConfig(max_tool_iterations=4, user_message="tell me about QE loop outcomes"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+def test_t9_3_numeric_row_citation_guard_is_wording_invariant_without_list_terms() -> None:
+    messages = ("tell me about QE loop outcomes", "QE loops status", "compare these QE runs")
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "- loop-001 CAGR 112.00% not_verified - unverified backtest risk; do not treat as real returns\n"
+            "Sources: qe_archive:leaderboard as_of 2026-06-24.",
+            _qe_leaderboard_results(),
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is False
+        assert decision.reason == "factual_list_row_evidence_missing"
+
+
+def test_multi_source_bottom_line_synthesis_is_allowed() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line：综合判断应先处理 A，再用 B 做交叉验证；来源 source_a，截至 2026-06-17；来源 source_b，截至 2026-06-17。",
+        [
+            _result("tool_a", source="source_a", as_of="2026-06-17"),
+            _result("tool_b", source="source_b", as_of="2026-06-17"),
+        ],
+        ReactGroundingConfig(max_tool_iterations=4, user_message="综合分析一下这些信息"),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "ok"
+
+
+
+def _stock_depth_partial_results() -> list[McpToolResult]:
+    return [
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_quote",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "quote",
+                        "source": "stock_quote:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"price": 10.2}],
+                    }
+                ]
+            },
+            source_refs=["stock_quote:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_kline",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "kline",
+                        "source": "stock_kline:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"close": 10.2}, {"close": 9.7}],
+                    }
+                ]
+            },
+            source_refs=["stock_kline:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_fund_flow",
+            status="succeeded",
+            payload_json={
+                "sections": [
+                    {
+                        "dataset": "fund_flow",
+                        "source": "stock_fund_flow:000688",
+                        "as_of": "2026-06-24",
+                        "items": [{"net_inflow": 1200}],
+                    }
+                ]
+            },
+            source_refs=["stock_fund_flow:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+        McpToolResult(
+            server_key="aistock-stock-analysis",
+            tool_name="stock_analysis_get_financials",
+            status="succeeded",
+            payload_json={"dataset": "financials", "source": "stock_financials:000688", "as_of": "2026-06-24", "items": []},
+            source_refs=["stock_financials:000688"],
+            as_of="2026-06-24",
+            executed=True,
+            side_effect_level="read_only",
+        ),
+    ]
+
+
+def test_t9_4_stock_depth_forced_evidence_guard_removed_for_grounded_answer() -> None:
+    class NoToolProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded partial read-only evidence should be enough")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preflight should not run")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content=(
+                "Bottom-line: available read-only evidence only covers market, history, and fund flow; "
+                "drivers/scenarios/risks are incomplete, and this is not a direction forecast or investment advice. "
+                "stock_quote:000688 as_of 2026-06-24; stock_kline:000688 as_of 2026-06-24; "
+                "stock_fund_flow:000688 as_of 2026-06-24."
+            ),
+            provider="fake",
+            model="fake-partial-stock-depth",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "stock depth analysis: limit down future trend and fundamental for 000688"}],
+        model_complete=model_complete,
+        mcp_provider=NoToolProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="stock depth analysis: limit down future trend and fundamental for 000688"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "ok"
+    assert result.stopped_reason == "final_answer"
+    assert "Insufficient evidence" not in result.final_text
+    assert "stock_quote:000688" in result.final_text
+    assert "2026-06-24" in result.final_text
+    assert "stock_depth_required_evidence_missing" not in result.final_text
+
+
+def test_t9_4_stock_depth_without_source_still_fails_anti_hallucination() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line: available evidence covers market and fund flow only.",
+        _stock_depth_partial_results(),
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="stock depth analysis: limit down future trend and fundamental for 000688",
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "missing_inline_tool_evidence"
+
+
+def test_t9_4_stock_depth_directional_prediction_still_fails_guard() -> None:
+    decision = compose_with_evidence_guard(
+        "Bottom-line: 000688 will rise; stock_quote:000688 as_of 2026-06-24.",
+        _stock_depth_partial_results(),
+        ReactGroundingConfig(
+            max_tool_iterations=4,
+            user_message="stock depth analysis: limit down future trend and fundamental for 000688",
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "future_answer_boundary_missing"
+
+
+def test_t9_4_stock_depth_wording_variants_do_not_trigger_forced_evidence_gate() -> None:
+    messages = (
+        "stock depth analysis: limit down future trend and fundamental for 000688",
+        "take a broad look at 000688 across recent price, money flow, and fundamentals",
+        "help me review 000688 from multiple angles",
+    )
+    for message in messages:
+        decision = compose_with_evidence_guard(
+            "Bottom-line: only partial read-only evidence is available; "
+            "stock_quote:000688 as_of 2026-06-24; "
+            "stock_kline:000688 as_of 2026-06-24; "
+            "stock_fund_flow:000688 as_of 2026-06-24.",
+            _stock_depth_partial_results(),
+            ReactGroundingConfig(max_tool_iterations=4, user_message=message),
+        )
+
+        assert decision.allowed is True
+        assert decision.reason == "ok"
+
+
+def test_non_read_only_partial_evidence_still_fails_closed() -> None:
+    class FakeProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("write action should not execute as read-only")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="preflight_required",
+                payload_json={"preflight_only": True},
+                source_refs=["preflight"],
+                as_of="2026-06-24",
+                executed=False,
+                blocked_reason="preflight_confirmation_required",
+                side_effect_level=decision.side_effect_level,
+            )
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="Insufficient evidence: max tool iterations reached without reliable evidence.",
+            provider="fake",
+            model="fake-write",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-write",
+                    tool_name="submit_order",
+                    stable_call_id="write_001",
+                    risk_level="high",
+                    side_effect_level="production_sensitive",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "submit the write action"}],
+        model_complete=model_complete,
+        mcp_provider=FakeProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-write",
+                tool_name="submit_order",
+                status="enabled",
+                risk_level="high",
+                side_effect_level="production_sensitive",
+                requires_approval=True,
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="submit the write action"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason != "read_only_partial_evidence_degraded"
+    assert "Insufficient evidence" in result.final_text
+
+
+def test_read_only_degradation_does_not_override_placeholder_redline() -> None:
+    class NoToolProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preloaded evidence should be enough")
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("preflight should not run")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="XX% change; stock_quote:000688 as_of 2026-06-24.",
+            provider="fake",
+            model="fake-placeholder",
+            duration_ms=1,
+            usage={},
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "stock depth analysis: limit down future trend and fundamental for 000688"}],
+        model_complete=model_complete,
+        mcp_provider=NoToolProvider(),
+        catalog_entries=[],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="stock depth analysis: limit down future trend and fundamental for 000688"),
+        initial_tool_results=_stock_depth_partial_results(),
+    )
+
+    assert result.evidence_guard.allowed is False
+    assert result.evidence_guard.reason.startswith("placeholder_blocked")
+
+
+def test_read_only_partial_degradation_is_based_on_side_effect_not_question_keywords() -> None:
+    class GenericReadProvider:
+        def execute_read_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            return McpToolResult(
+                server_key=call.server_key,
+                tool_name=call.tool_name,
+                status="succeeded",
+                payload_json={"source": "generic_read_source", "as_of": "2026-06-24", "items": [{"value": "available"}]},
+                source_refs=["generic_read_source"],
+                as_of="2026-06-24",
+                summary="one read-only evidence item is available",
+                executed=True,
+                side_effect_level=decision.side_effect_level,
+            )
+
+        def preflight_confirmation_only(self, call: McpToolCall, decision: ToolGateDecision) -> McpToolResult:
+            raise AssertionError("read-only tool should execute without preflight")
+
+    def model_complete(messages: list[dict[str, Any]]) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            provider="fake",
+            model="fake-generic-read-only",
+            duration_ms=1,
+            usage={},
+            tool_calls=[
+                McpToolCall(
+                    server_key="aistock-generic-read",
+                    tool_name="generic_lookup",
+                    stable_call_id="generic_read_001",
+                    risk_level="low",
+                    side_effect_level="read_only",
+                )
+            ],
+        )
+
+    result = run_react_grounding_loop(
+        messages=[{"role": "user", "content": "tell me about this arbitrary thing"}],
+        model_complete=model_complete,
+        mcp_provider=GenericReadProvider(),
+        catalog_entries=[
+            ToolCatalogEntry(
+                server_key="aistock-generic-read",
+                tool_name="generic_lookup",
+                status="enabled",
+                risk_level="low",
+                side_effect_level="read_only",
+            )
+        ],
+        config=ReactGroundingConfig(max_tool_iterations=1, user_message="tell me about this arbitrary thing"),
+    )
+
+    assert result.evidence_guard.allowed is True
+    assert result.evidence_guard.reason == "read_only_partial_evidence_degraded"
+    assert "generic_read_source" in result.final_text
+    assert "original_reason=max_tool_iterations_exhausted" in result.final_text

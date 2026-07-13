@@ -1,8 +1,7 @@
 """Durable MiniQMT execution runtime domain models.
 
-Phase 2 intentionally keeps these models broker-interface oriented and does not
-connect to a production MiniQMT process. The runtime owns event ordering,
-gateway calls, OMS projection, and restart recovery.
+The runtime owns event ordering, gateway calls, OMS projection, and restart
+recovery for MiniQMT SIM event-loop submissions.
 """
 
 from __future__ import annotations
@@ -50,6 +49,7 @@ class MiniQMTOmsState(str, Enum):
 class MiniQMTExecutionEventType(str, Enum):
     RUNTIME_CREATED = "RUNTIME_CREATED"
     GATEWAY_CONNECTED = "GATEWAY_CONNECTED"
+    GATEWAY_DISCONNECTED = "GATEWAY_DISCONNECTED"
     BROKER_SYNC_STARTED = "BROKER_SYNC_STARTED"
     BROKER_SYNCED = "BROKER_SYNCED"
     ALGO_INSTANCE_CREATED = "ALGO_INSTANCE_CREATED"
@@ -61,12 +61,24 @@ class MiniQMTExecutionEventType(str, Enum):
     CHILD_ORDER_CANCEL_REQUESTED = "CHILD_ORDER_CANCEL_REQUESTED"
     ORDER_EVENT = "ORDER_EVENT"
     TRADE_EVENT = "TRADE_EVENT"
+    ACCOUNT_EVENT = "ACCOUNT_EVENT"
+    RISK_KILL_SWITCH_TRIGGERED = "RISK_KILL_SWITCH_TRIGGERED"
     RECONCILE_STARTED = "RECONCILE_STARTED"
     RECONCILE_COMPLETED = "RECONCILE_COMPLETED"
     OPERATOR_COMMAND_RECEIVED = "OPERATOR_COMMAND_RECEIVED"
     OPERATOR_COMMAND_EXECUTED = "OPERATOR_COMMAND_EXECUTED"
     OPERATOR_COMMAND_REJECTED = "OPERATOR_COMMAND_REJECTED"
     RUNTIME_STOPPED = "RUNTIME_STOPPED"
+    QUOTE_OBSERVED = "QUOTE_OBSERVED"
+    QUOTE_REJECTED = "QUOTE_REJECTED"
+    QUOTE_ELIGIBILITY_EVALUATED = "QUOTE_ELIGIBILITY_EVALUATED"
+    QUOTE_MARK_CAPTURED = "QUOTE_MARK_CAPTURED"
+    QUOTE_INGRESS_HEALTH = "QUOTE_INGRESS_HEALTH"
+
+
+MINIQMT_EXECUTION_EVENT_SOURCES = frozenset(
+    {"runtime", "gateway", "oms", "algo", "operator", "recovery", "quote_ingress"}
+)
 
 
 class MiniQMTAlgoInstanceStatus(str, Enum):
@@ -153,7 +165,7 @@ class MiniQMTExecutionEvent(BaseModel):
     sequence: int = Field(ge=1)
     event_type: MiniQMTExecutionEventType
     event_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery"]
+    source: Literal["runtime", "gateway", "oms", "algo", "operator", "recovery", "quote_ingress"]
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("event_id", "runtime_id", "source")
@@ -166,7 +178,7 @@ class MiniQMTExecutionEvent(BaseModel):
 
 
 class MiniQMTExecutionAlgoInstance(BaseModel):
-    """Runtime-owned algo instance; Phase 3 will attach vn.py-derived behavior."""
+    """Runtime-owned vn.py-style algo instance."""
 
     model_config = ConfigDict(extra="forbid")
 

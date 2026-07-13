@@ -136,6 +136,7 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "claim_outbox_events",
         "complete_outbox_event",
         "fail_outbox_event",
+        "skip_outbox_event",
         "create_archive_job",
         "complete_archive_job",
         "fail_archive_job",
@@ -162,6 +163,7 @@ def test_repository_exposes_phase_one_write_methods() -> None:
         "query_hyperparam_history",
         "get_analytics_view_status",
         "query_run_leaderboard",
+        "query_topk_quality",
         "query_seed_robustness",
         "query_factor_performance",
         "query_model_hyperparam_seed_perf",
@@ -387,6 +389,69 @@ def test_payload_extractor_captures_reproducible_config_metrics_account_and_curv
     }
 
 
+def test_payload_extractor_passes_through_topk_prediction_diagnostics() -> None:
+    payload = _sample_qe_payload()
+    payload["metrics"] = dict(payload["metrics"])
+    enhanced = dict(payload["metrics"]["enhanced_metrics"])
+    enhanced["prediction_diagnostics"] = {
+        "topk_return_20": 0.0123,
+        "topk_return_50": 0.0061,
+        "topk_hit_rate_20": 0.55,
+        "topk_hit_rate_50": 0.51,
+        "topk_decay": 0.0062,
+        "within_portfolio_rankic": -0.11,
+        "topk_dispersion_20": 0.018,
+        "topk_quality_status": "ok",
+        "topk_source": "pred_label_artifacts",
+        "topk_k_values": [20, 50],
+        "topk_date_count": 2,
+    }
+    payload["metrics"]["enhanced_metrics"] = enhanced
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_topk",
+        source_sub_id="Loop1",
+    )
+
+    by_key = {metric.metric_key: metric for metric in extracted.metrics if metric.metric_scope == "prediction_topk"}
+    assert by_key["topk_return_20"].value_num == 0.0123
+    assert by_key["topk_hit_rate_20"].value_num == 0.55
+    assert by_key["topk_quality_status"].value_text == "ok"
+    assert by_key["topk_k_values"].value_json == [20, 50]
+    assert by_key["topk_return_20"].quality_flag == "ok"
+
+
+def test_payload_extractor_preserves_null_topk_with_quality_flag() -> None:
+    payload = _sample_qe_payload()
+    payload["metrics"] = dict(payload["metrics"])
+    enhanced = dict(payload["metrics"]["enhanced_metrics"])
+    enhanced["prediction_diagnostics"] = {
+        "topk_return_20": None,
+        "topk_hit_rate_20": None,
+        "topk_quality_status": "missing_label",
+        "topk_error": "label.pkl not found",
+    }
+    payload["metrics"]["enhanced_metrics"] = enhanced
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system="qe",
+        source_id="task_topk_missing",
+        source_sub_id="Loop1",
+    )
+
+    by_key = {metric.metric_key: metric for metric in extracted.metrics if metric.metric_scope == "prediction_topk"}
+    assert by_key["topk_return_20"].value_num is None
+    assert by_key["topk_hit_rate_20"].value_num is None
+    assert by_key["topk_quality_status"].value_text == "missing_label"
+    assert by_key["topk_return_20"].quality_flag == "topk_missing_label"
+    assert by_key["topk_error"].value_text == "label.pkl not found"
+
+
 def test_payload_extractor_marks_seedless_payload_audit_only_unset_legacy() -> None:
     payload = _sample_qe_payload()
     payload["config"] = dict(payload["config"])
@@ -481,6 +546,10 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
         def upsert_reproducibility_manifest(self, manifest):  # type: ignore[no-untyped-def]
             self.calls.append(("upsert_reproducibility_manifest", manifest))
 
+        def upsert_artifact_manifest(self, run_id, artifact_manifest, *, replace_existing):  # type: ignore[no-untyped-def]
+            self.calls.append(("upsert_artifact_manifest", (run_id, list(artifact_manifest))))
+            assert replace_existing is True
+
         def upsert_data_context(self, context):  # type: ignore[no-untyped-def]
             self.calls.append(("upsert_data_context", context))
 
@@ -527,11 +596,12 @@ def test_archive_service_write_calls_repository_without_runtime_hooks() -> None:
     run_call = repository.calls[call_names.index("upsert_run")]
     assert run_call[1].archived_at is not None
     assert run_call[1].archived_at.tzinfo is not None
-    assert call_names[:6] == [
+    assert call_names[:7] == [
         "upsert_run",
         "upsert_run_source",
         "upsert_run_config",
         "upsert_reproducibility_manifest",
+        "upsert_artifact_manifest",
         "upsert_data_context",
         "upsert_account_summary",
     ]
@@ -1048,6 +1118,58 @@ def test_backfill_service_task_loop_indices_expand_selected_loops() -> None:
     assert result["results"][2]["skipped_reason"] == "loop_not_found_or_filtered"
 
 
+def test_backfill_all_includes_multi_alpha_runs() -> None:
+    class FakeAssembler:
+        def list_experiment_ids(self, *, status, limit, include_archived):  # type: ignore[no-untyped-def]
+            return ["exp_1"]
+
+        def list_loop_refs(self, *, status, limit, include_archived):  # type: ignore[no-untyped-def]
+            return [{"task_id": "task_1", "loop_id": "loop_1", "loop_index": 1}]
+
+        def assemble_experiment_payload(self, experiment_id):  # type: ignore[no-untyped-def]
+            return {"source_system": "qe", "source_id": experiment_id, "experiment_id": experiment_id}
+
+        def assemble_loop_payload(self, *, loop_id=None, task_id=None, loop_index=None):  # type: ignore[no-untyped-def]
+            return {"source_system": "qe_evolution", "source_id": task_id, "source_sub_id": loop_id}
+
+    class FakeArchiveService:
+        def process_payload(self, payload, *, event_type, source_system, source_id, source_sub_id, dry_run):  # type: ignore[no-untyped-def]
+            return SimpleNamespace(run_id=f"run_{source_id}_{source_sub_id or 'exp'}", stats={"written": not dry_run})
+
+    class FakeRepository:
+        def get_archive_summary(self):  # type: ignore[no-untyped-def]
+            return {"run_count": 2}
+
+        def list_multi_alpha_combine_run_ids(self, *, include_archived, limit):  # type: ignore[no-untyped-def]
+            assert include_archived is False
+            assert limit == 10
+            return ["macb_1", "macb_2"]
+
+    class FakeMultiAlphaHandler:
+        def archive_run(self, run_id, *, dry_run=False):  # type: ignore[no-untyped-def]
+            return {
+                "run_id": run_id,
+                "dry_run": dry_run,
+                "written": not dry_run,
+                "leg_count": 1,
+                "provenance_complete_leg_count": 1,
+                "leg_source_count": 1,
+                "resolved_source_count": 1,
+            }
+
+    result = QEArchiveBackfillService(
+        assembler=FakeAssembler(),  # type: ignore[arg-type]
+        archive_service=FakeArchiveService(),  # type: ignore[arg-type]
+        repository=FakeRepository(),  # type: ignore[arg-type]
+        multi_alpha_handler=FakeMultiAlphaHandler(),  # type: ignore[arg-type]
+    ).process_backfill(QEArchiveBackfillOptions(source="all", limit=10, write=False))
+
+    assert result["processed_count"] == 4
+    assert result["candidate_count"] == 4
+    assert result["multi_alpha_report"]["processed_count"] == 2
+    assert result["multi_alpha_report"]["provenance_report"]["source_resolve_rate"] == 1.0
+
+
 def test_backfill_execute_records_audit_run_items_and_separate_counts() -> None:
     class FakeAssembler:
         def list_loop_refs_for_task_indices(self, task_id, loop_indices, *, status, include_archived):  # type: ignore[no-untyped-def]
@@ -1434,6 +1556,10 @@ def test_qe_archive_analytics_api_exposes_compact_view_queries(monkeypatch) -> N
             assert kwargs == {"model_type": "LSTM", "min_icir": 0.5, "min_ir": None, "limit": 7, "order_by": "icir"}
             return [{"run_id": "run_1", "icir": 0.6}]
 
+        def query_topk_quality(self, **kwargs):  # type: ignore[no-untyped-def]
+            assert kwargs == {"run_id": "run_1", "task_id": None, "k": 20, "limit": 6}
+            return [{"run_id": "run_1", "topk_return_20": 0.012}]
+
         def query_seed_robustness(self, **kwargs):  # type: ignore[no-untyped-def]
             assert kwargs == {"model_type": None, "min_seed_count": 3, "stable_only": True, "limit": 5, "order_by": "cagr_mean"}
             return [{"factor_set_hash": "hash", "distinct_seed_count": 3}]
@@ -1466,6 +1592,7 @@ def test_qe_archive_analytics_api_exposes_compact_view_queries(monkeypatch) -> N
     cases = [
         ("/api/v1/qe-archive/analytics/views", None, "v_run_leaderboard"),
         ("/api/v1/qe-archive/analytics/run-leaderboard?model_type=LSTM&min_icir=0.5&limit=7&order_by=icir", "run_id", "run_1"),
+        ("/api/v1/qe-archive/analytics/topk-quality?run_id=run_1&k=20&limit=6", "run_id", "run_1"),
         ("/api/v1/qe-archive/analytics/seed-robustness?min_seed_count=3&stable_only=true&limit=5", "factor_set_hash", "hash"),
         ("/api/v1/qe-archive/analytics/factor-performance?factor_name=alpha_001&min_runs=2&limit=4&order_by=avg_icir", "factor_name", "alpha_001"),
         ("/api/v1/qe-archive/analytics/model-hyperparam-seed-perf?model_type=LSTM&limit=6", "model_type", "LSTM"),
@@ -1530,6 +1657,7 @@ def test_event_capture_writes_outbox_event_only_when_explicitly_enabled() -> Non
     assert event.source_system == "qe"
     assert event.source_id == "qe_exp"
     assert event.payload["experiment_id"] == "qe_exp"
+    assert event.payload["routing_class"] == "archive"
 
 
 def test_worker_is_disabled_by_default_and_does_not_claim(monkeypatch) -> None:
@@ -1590,8 +1718,9 @@ def test_worker_processes_supported_event_and_completes_job() -> None:
             self.failed_events: list[str] = []
             self.claim_event_types: tuple[str, ...] | None = None
 
-        def claim_outbox_events(self, *, worker_id, limit, event_types):  # type: ignore[no-untyped-def]
+        def claim_outbox_events(self, *, worker_id, limit, event_types, routing_class):  # type: ignore[no-untyped-def]
             self.claim_event_types = tuple(event_types)
+            assert routing_class == "archive"
             return [event]
 
         def create_archive_job(self, job):  # type: ignore[no-untyped-def]
@@ -1699,6 +1828,270 @@ def test_worker_handler_exception_fails_job_and_retries_outbox() -> None:
     assert repository.failed_event[2:] == (7, 3)
 
 
+def test_repository_claim_outbox_events_filters_archive_routing_class() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.claim_outbox_events(worker_id="worker_1", limit=3, event_types=("qe.loop.completed",))
+
+    sql, params = executed[-1]
+    assert "AND event_type = ANY(%s)" in sql
+    assert "payload->>'routing_class' = %s OR NOT (payload ? 'routing_class')" in sql
+    assert params == [["qe.loop.completed"], "archive", 3, "worker_1"]
+
+
+def test_repository_claim_outbox_events_can_filter_source_systems() -> None:
+    executed: list[tuple[str, list[object] | None]] = []
+
+    class FakeCursor:
+        description = []
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+    repository.claim_outbox_events(
+        worker_id="worker_1",
+        limit=5,
+        source_systems=("paper_v2.daemon", "paper_v2"),
+        routing_class=None,
+    )
+
+    sql, params = executed[-1]
+    assert "AND source_system = ANY(%s)" in sql
+    assert "payload->>'routing_class' = %s" not in sql
+    assert params == [["paper_v2.daemon", "paper_v2"], 5, "worker_1"]
+
+
+def test_outbox_skipped_status_is_not_claimed_or_counted_as_active() -> None:
+    claim_source = inspect.getsource(QEArchiveRepository.claim_outbox_events)
+    summary_source = inspect.getsource(QEArchiveRepository.get_archive_summary)
+
+    assert "WHERE status = 'pending'" in claim_source
+    assert "status = 'pending'" in summary_source
+    assert "status IN ('pending', 'processing')" in summary_source
+    assert "status = 'skipped'" not in claim_source
+    assert "status IN ('pending', 'processing', 'skipped')" not in summary_source
+
+
+def test_worker_skips_paper_v2_archive_events_with_audit_reason() -> None:
+    """PaperV2 archive handler registration is deferred because paper_v2 is
+    throwaway debug data; those archive rows must become audited skips instead
+    of permanent pending blackholes.
+    """
+
+    event = ClaimedOutboxEvent(
+        event_id="evt_paper",
+        event_type="paper.portfolio_run.completed",
+        source_system="paper_v2",
+        source_id="prun_1",
+        source_sub_id="prun_1",
+        payload={"routing_class": "archive", "run_id": "prun_1"},
+    )
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.claims: list[dict] = []
+            self.skipped: list[tuple[ClaimedOutboxEvent, str, str]] = []
+
+        def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.claims.append(dict(kwargs))
+            if set(kwargs.get("source_systems") or ()) >= {"paper_v2.daemon", "paper_v2"}:
+                return [event]
+            return []
+
+        def skip_outbox_event(self, event, *, reason_code, trigger_reason="realtime"):  # type: ignore[no-untyped-def]
+            self.skipped.append((event, reason_code, trigger_reason))
+
+    repository = FakeRepository()
+    worker = QEArchiveWorker(
+        repository=repository,  # type: ignore[arg-type]
+        enabled=True,
+        handlers={"qe.loop.completed": lambda item: ArchiveWorkerEventResult(success=True)},
+    )
+
+    result = worker.run_once(limit=2)
+
+    assert result.claimed == 1
+    assert result.completed == 0
+    assert result.failed == 0
+    assert result.skipped == 1
+    assert repository.claims[1]["routing_class"] is None
+    assert set(repository.claims[1]["source_systems"]) >= {"paper_v2.daemon", "paper_v2"}
+    assert repository.skipped == [(event, "paper_v2_archive_deferred_throwaway", "realtime")]
+
+
+def test_worker_skips_unsupported_paper_outbox_events_loudly() -> None:
+    event = ClaimedOutboxEvent(
+        event_id="evt_unknown",
+        event_type="paper_v2.coldstart_sentinel",
+        source_system="paper_v2",
+        source_id="run_1",
+        source_sub_id="fill_1",
+        payload={"routing_class": "telemetry"},
+    )
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.skipped: list[tuple[str, str]] = []
+
+        def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            if set(kwargs.get("source_systems") or ()) >= {"paper_v2.daemon", "paper_v2"}:
+                return [event]
+            return []
+
+        def skip_outbox_event(self, event, *, reason_code, trigger_reason="realtime"):  # type: ignore[no-untyped-def]
+            self.skipped.append((event.event_id, reason_code))
+
+    repository = FakeRepository()
+    result = QEArchiveWorker(
+        repository=repository,  # type: ignore[arg-type]
+        enabled=True,
+        handlers={"qe.loop.completed": lambda item: ArchiveWorkerEventResult(success=True)},
+    ).run_once(limit=1)
+
+    assert result.skipped == 1
+    assert repository.skipped == [("evt_unknown", "unsupported_outbox_event_type")]
+
+
+def test_repository_skip_outbox_event_writes_skip_history_and_terminal_status() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class FakeCursor:
+        description = [("table_name",), ("column_name",)]
+        rowcount = 1
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def execute(self, sql, params=None):  # type: ignore[no-untyped-def]
+            executed.append((sql, params))
+            if "UPDATE qe_archive.outbox_event" in sql:
+                self.rowcount = 1
+
+        def fetchall(self):  # type: ignore[no-untyped-def]
+            last_sql = executed[-1][0]
+            if "information_schema.columns" in last_sql:
+                return [
+                    ("skip_registry", "source_system"),
+                    ("skip_registry", "source_type"),
+                    ("skip_registry", "source_id"),
+                    ("skip_registry", "source_sub_id"),
+                    ("skip_registry", "event_type"),
+                    ("skip_registry", "archive_policy"),
+                    ("skip_registry", "archive_policy_source"),
+                    ("skip_registry", "skip_reason"),
+                    ("skip_registry", "trigger_reason"),
+                    ("skip_registry", "metadata"),
+                    ("ingest_history", "source_system"),
+                    ("ingest_history", "source_type"),
+                    ("ingest_history", "source_id"),
+                    ("ingest_history", "source_sub_id"),
+                    ("ingest_history", "trigger_reason"),
+                    ("ingest_history", "archive_policy"),
+                    ("ingest_history", "ingest_status"),
+                    ("ingest_history", "stats"),
+                    ("ingest_history", "error_message"),
+                    ("outbox_event", "event_id"),
+                    ("outbox_event", "status"),
+                    ("outbox_event", "error_message"),
+                    ("outbox_event", "locked_by"),
+                    ("outbox_event", "locked_at"),
+                ]
+            if "ck_qear_ingest_trigger" in last_sql:
+                return [
+                    (
+                        "CHECK ((trigger_reason = ANY (ARRAY['realtime'::text, "
+                        "'backfill'::text, 'retry'::text, 'manual'::text, "
+                        "'rebootstrap'::text])))",
+                    )
+                ]
+            return []
+
+    class FakeConnection:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def cursor(self):  # type: ignore[no-untyped-def]
+            return FakeCursor()
+
+    event = ClaimedOutboxEvent(
+        event_id="evt_paper",
+        event_type="paper.portfolio_run.completed",
+        source_system="paper_v2",
+        source_id="prun_1",
+        source_sub_id="prun_1",
+        payload={"routing_class": "archive"},
+    )
+    repository = QEArchiveRepository(connection_provider=lambda: FakeConnection())
+
+    repository.skip_outbox_event(
+        event,
+        reason_code="paper_v2_archive_deferred_throwaway",
+        trigger_reason="realtime",
+    )
+
+    sql_text = "\n".join(sql for sql, _ in executed)
+    assert "INSERT INTO qe_archive.skip_registry" in sql_text
+    assert "INSERT INTO qe_archive.ingest_history" in sql_text
+    assert "UPDATE qe_archive.outbox_event" in sql_text
+    assert "SET status = 'skipped'" in sql_text
+    flattened_params = repr([params for _, params in executed])
+    assert "paper_v2_throwaway_policy" in flattened_params
+    assert "paper_v2_archive_deferred_throwaway" in flattened_params
+    assert "skipped" in flattened_params
+
+
 def test_worker_service_archives_loop_outbox_event_through_backfill_handler() -> None:
     event = ClaimedOutboxEvent(
         event_id="evt_loop",
@@ -1715,7 +2108,11 @@ def test_worker_service_archives_loop_outbox_event_through_backfill_handler() ->
             self.completed_jobs: list[tuple[str, str | None, dict]] = []
 
         def claim_outbox_events(self, **kwargs):  # type: ignore[no-untyped-def]
-            assert kwargs["event_types"] == ("qe.loop.completed", "qe.experiment.completed")
+            assert kwargs["event_types"] == (
+                "qe.loop.completed",
+                "qe.experiment.completed",
+                "qe.multi_alpha.combine.completed",
+            )
             return [event]
 
         def create_archive_job(self, job):  # type: ignore[no-untyped-def]
@@ -1801,6 +2198,35 @@ def test_qe_archive_worker_api_returns_worker_report(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["data"]["completed"] == 2
+
+
+def test_qe_archive_resource_phase_api_forwards_bounded_filters(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResourceService:
+        def list_resource_phases(self, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(kwargs)
+            return [{"session_id": "qers_1", "phases": []}]
+
+    monkeypatch.setattr(qe_archive_router, "QEResourcePhaseService", lambda: FakeResourceService())
+    app = FastAPI()
+    app.include_router(qe_archive_router.router, prefix="/api/v1")
+    client = TestClient(app)
+
+    response = client.get(
+        "/api/v1/qe-archive/resource-phases",
+        params={"task_id": "qe_task", "loop_index": 2, "source_run_key": "qe_task_L2", "limit": 25},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert captured == {
+        "run_id": None,
+        "task_id": "qe_task",
+        "loop_index": 2,
+        "source_run_key": "qe_task_L2",
+        "limit": 25,
+    }
 
 
 def test_qe_archive_implementation_does_not_read_worker_workspace_paths() -> None:

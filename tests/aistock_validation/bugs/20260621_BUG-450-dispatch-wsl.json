@@ -1,0 +1,117 @@
+{
+  "actual": "后端重启后，因子库页面继续请求 /api/v1/quantevolver/factor-cache/compute-status/{task_id} 会返回 404。官方因子全量计算已提交到 WSL/compute-node dispatch，dispatch 任务持久化在 infra.dispatch_tasks 且 NodeHealthScheduler 可跨重启同步远端进度，但 factor-cache compute-status/active-tasks 仅依赖进程内 _active_cache_tasks，重启后丢失 task_id 与 remote_task_id 映射，UI 无法继续轮询 WSL 上的任务状态并可能持续请求旧 task_id。期望 factor-cache 状态接口在内存任务缺失时从 Dispatch DB/WSL scheduler 恢复 official_factor_full_compute 状态，active-tasks 合并持久化任务，前端对过期 task_id 清理，不能静默把节点不可达或任务失败当作任务不存在。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260621_BUG-450-dispatch-wsl.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/quantevolver.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-450",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T12:30:01.740504Z",
+  "description": "后端重启后，因子库页面继续请求 /api/v1/quantevolver/factor-cache/compute-status/{task_id} 会返回 404。官方因子全量计算已提交到 WSL/compute-node dispatch，dispatch 任务持久化在 infra.dispatch_tasks 且 NodeHealthScheduler 可跨重启同步远端进度，但 factor-cache compute-status/active-tasks 仅依赖进程内 _active_cache_tasks，重启后丢失 task_id 与 remote_task_id 映射，UI 无法继续轮询 WSL 上的任务状态并可能持续请求旧 task_id。期望 factor-cache 状态接口在内存任务缺失时从 Dispatch DB/WSL scheduler 恢复 official_factor_full_compute 状态，active-tasks 合并持久化任务，前端对过期 task_id 清理，不能静默把节点不可达或任务失败当作任务不存在。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-bdcc5744423e",
+      "timestamp": "2026-06-21T12:30:01.740500Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "factor-cache compute-status must recover official_factor_full_compute status from infra.dispatch_tasks/DispatchService when in-memory _active_cache_tasks is empty or stale; active-tasks must include persisted official full-compute tasks; UI must clear stale selected task ids on 404 or when active-tasks no longer contains them.",
+  "first_seen_at": "2026-06-21T12:30:01.740504Z",
+  "fix_branch": null,
+  "fix_commit": "799f3183619e9b622d81781b25e444226379e492",
+  "fixed_at": "2026-06-21T13:49:47.243200Z",
+  "github_issue_number": 1395,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1395",
+  "implementation_notes": [
+    {
+      "note": "Added DispatchService fallback for factor-cache compute-status, merged persisted official_factor_full_compute tasks into active-tasks, overlaid persisted state on in-memory task details to avoid stale running status, and cleared stale UI selectedCacheTaskId on missing tasks/404. No full factor recompute, production restart, DB write, or DDL was performed.",
+      "timestamp": "2026-06-21T12:38:21.131836+00:00",
+      "type": "fix_implementation"
+    }
+  ],
+  "last_seen_at": "2026-06-21T12:30:01.740504Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1396",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/quantevolver/factor-cache/compute creates official_factor_full_compute dispatch task; restart backend or clear _active_cache_tasks; GET /api/v1/quantevolver/factor-cache/compute-status/{task_id} returns 404 instead of persisted Dispatch/WSL status.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "因子缓存计算状态重启后无法从 Dispatch/WSL 恢复",
+  "trigger_condition": {
+    "fingerprint": "bdcc5744423e1c2e197dde5d",
+    "source_event_id": "FE-20260621-bdcc5744423e"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/WSL",
+    "ui_routes": [
+      "/WSL"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m py_compile backend/routers/quantevolver.py -> passed",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py -q -> 14 passed",
+    "python -m pytest backend/tests/quantevolver/test_official_factor_cache_dispatch_route.py backend/tests/test_correlation_compute_independence.py backend/tests/unified_engine/test_qe_config_truth.py backend/tests/qe_templates/test_template_validator.py backend/tests/unified_engine/test_multi_alpha_command_generation.py -q -> 175 passed",
+    "git diff --check -> passed",
+    "python -m nox -s l0 validation_module_registry_l0 qe_read_l3 with QE_READ_L3_SKIP_UI=1 -> passed; l0 success, validation_module_registry_l0 8 passed, qe_read_backend 14 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "allowed"
+}

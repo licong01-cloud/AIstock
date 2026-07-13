@@ -12,6 +12,11 @@ from .contract import (
     PayloadValidationError,
     UnsupportedEventError,
 )
+from .multi_alpha_combine_archive_handler import (
+    MULTI_ALPHA_COMBINE_EVENT_TYPE,
+    MULTI_ALPHA_COMBINE_SCHEMA_VERSION,
+    MultiAlphaCombineArchiveHandler,
+)
 
 __all__ = [
     "ArchiveHandler",
@@ -19,4 +24,7 @@ __all__ = [
     "HandlerStatus",
     "PayloadValidationError",
     "UnsupportedEventError",
+    "MULTI_ALPHA_COMBINE_EVENT_TYPE",
+    "MULTI_ALPHA_COMBINE_SCHEMA_VERSION",
+    "MultiAlphaCombineArchiveHandler",
 ]

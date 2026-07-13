@@ -1,7 +1,8 @@
 from typing import Dict, Any
 import json
 import logging
-from datetime import datetime
+import math
+from datetime import datetime, timezone
 
 from ..models.analysis import (
     StockAnalysisRequest,
@@ -23,9 +24,152 @@ from ..repositories.analysis_repo_impl import analysis_repo
 from ..repositories.trend_analysis_repo_impl import trend_analysis_repo
 from ..infra.pdf_report_impl import create_pdf_report, generate_markdown_report
 from ..infra.deepseek_config import DEFAULT_DEEPSEEK_MODEL
+from .mcp_payload_budget import artifact_ref, assert_summary_payload, clamp_limit, json_safe, summary_envelope
 
 
 logger = logging.getLogger(__name__)
+
+
+STOCK_ANALYSIS_FACADE_SCHEMA_VERSION = "stock_analysis_summary_envelope_v1"
+_STOCK_SUMMARY_LIMIT = 12
+_STOCK_OMITTED_SECTIONS = ["raw_payload", "full_financial_statement_rows", "full_kline_dataframe", "database_rows"]
+
+
+def _utc_as_of_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _normalize_analysis_date(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    return text.replace("-", "") if text else None
+
+
+def _iso_date_from_compact(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text or None
+
+
+def _stock_source_ref(source: str, symbol: str, dataset: str, as_of: str | None = None) -> str:
+    suffix = f":{as_of}" if as_of else ""
+    return f"stock-analysis:{source}:{dataset}:{symbol}{suffix}"
+
+
+def _stock_warning(reason_code: str, detail: str) -> dict[str, str]:
+    return {"reason_code": reason_code, "warning": detail}
+
+
+def _safe_json_value(value: Any) -> Any:
+    value = json_safe(value)
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    if isinstance(value, dict):
+        return {str(key): _safe_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_safe_json_value(item) for item in value]
+    return value
+
+
+def _safe_records_from_dataframe(df: Any, *, limit: int | None = None) -> list[dict[str, Any]]:
+    if df is None or not hasattr(df, "iterrows"):
+        return []
+    records: list[dict[str, Any]] = []
+    selected = df.tail(limit) if limit else df
+    for index, row in selected.iterrows():
+        item: dict[str, Any] = {"date": index.strftime("%Y-%m-%d") if hasattr(index, "strftime") else str(index)}
+        for column in getattr(df, "columns", []):
+            item[str(column)] = _safe_json_value(row.get(column))
+        records.append(item)
+    return records
+
+
+def _latest_date_from_items(items: list[dict[str, Any]], *keys: str) -> str | None:
+    for item in items:
+        for key in keys:
+            value = item.get(key)
+            if value not in (None, "", "N/A"):
+                return str(value)
+    return None
+
+
+def _statement_rows(statement: Any, *, limit: int = _STOCK_SUMMARY_LIMIT) -> tuple[list[dict[str, Any]], int, str | None, str | None]:
+    if not isinstance(statement, dict):
+        return [], 0, None, None
+    rows = statement.get("data") if isinstance(statement.get("data"), list) else []
+    safe_rows = [_safe_json_value(dict(row)) for row in rows[:limit] if isinstance(row, dict)]
+    total = int(statement.get("periods") or len(rows))
+    query_time = str(statement.get("query_time") or "") or None
+    source = str(statement.get("source") or "") or None
+    return safe_rows, total, query_time, source
+
+
+def _stock_summary_envelope(
+    *,
+    domain: str,
+    symbol: str,
+    items: list[dict[str, Any]],
+    total: int,
+    source: str,
+    dataset: str,
+    as_of: str | None,
+    status: str,
+    summary: str,
+    reason_codes: list[str] | None = None,
+    warnings: list[dict[str, str]] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    source_refs = [_stock_source_ref(source, symbol, dataset, as_of)]
+    safe_limit = clamp_limit(max(len(items), 1))
+    envelope = summary_envelope(
+        domain=domain,
+        items=items,
+        total=total,
+        limit=safe_limit,
+        offset=0,
+        omitted_sections=_STOCK_OMITTED_SECTIONS,
+        detail_tool=f"aistock-stock-analysis/stock_analysis_get_{dataset.replace('-', '_')}",
+        detail_args_hint={"symbol": symbol},
+        artifact_refs=[artifact_ref(f"stock_analysis_{dataset}", source_refs[0], {"symbol": symbol, "source": source, "as_of": as_of})],
+        extra={
+            "schema_version": STOCK_ANALYSIS_FACADE_SCHEMA_VERSION,
+            "symbol": symbol,
+            "status": status,
+            "summary": summary,
+            "source": source,
+            "source_refs": source_refs,
+            "as_of": as_of,
+            "reason_codes": list(reason_codes or []),
+            "warnings": list(warnings or []),
+            "response_mode": "stock_analysis_evidence_card",
+            "evidence_card": True,
+            "dataset": dataset,
+            **dict(extra or {}),
+        },
+    )
+    assert_summary_payload(envelope)
+    return envelope
+
+
+def _stock_degraded_envelope(*, domain: str, symbol: str, dataset: str, reason_code: str, warning: str, source: str = "stock_analysis_facade") -> dict[str, Any]:
+    as_of = _utc_as_of_now()
+    return _stock_summary_envelope(
+        domain=domain,
+        symbol=symbol,
+        items=[],
+        total=0,
+        source=source,
+        dataset=dataset,
+        as_of=as_of,
+        status="degraded",
+        summary=warning,
+        reason_codes=[reason_code],
+        warnings=[_stock_warning(reason_code, warning)],
+    )
 
 
 def _choose_period(start_date: str | None, end_date: str | None) -> str:
@@ -969,6 +1113,242 @@ def get_realtime_quote(symbol: str) -> StockQuote:
         amount=amount,
         quote_source=quote_source,
         quote_timestamp=quote_timestamp,
+    )
+
+
+def get_stock_quote_evidence(symbol: str) -> dict[str, Any]:
+    quote = get_realtime_quote(symbol)
+    as_of = quote.quote_timestamp.isoformat() if quote.quote_timestamp else _utc_as_of_now()
+    source = quote.quote_source or "unavailable"
+    has_quote = quote.current_price is not None or quote.change_percent is not None
+    reason_codes: list[str] = []
+    warnings: list[dict[str, str]] = []
+    if not has_quote:
+        reason_codes.append("stock_quote_unavailable")
+        warnings.append(_stock_warning("stock_quote_unavailable", "实时行情源未返回可用价格字段，已按空行情证据卡降级。"))
+    return _stock_summary_envelope(
+        domain="stock_analysis.quote",
+        symbol=symbol,
+        items=[quote.model_dump(mode="json")] if has_quote else [],
+        total=1 if has_quote else 0,
+        source=source,
+        dataset="quote",
+        as_of=as_of,
+        status="ok" if has_quote else "degraded",
+        summary=f"{symbol} quote from {source}" if has_quote else "实时行情暂不可用。",
+        reason_codes=reason_codes,
+        warnings=warnings,
+    )
+
+
+def get_stock_kline_evidence(symbol: str, period: str = "1y", analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        df = uda.get_stock_data(symbol, period, analysis_date=normalized_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock kline evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.kline", symbol=symbol, dataset="kline", reason_code="stock_kline_source_failed", warning=f"K线数据源读取失败：{type(exc).__name__}: {exc}")
+    if isinstance(df, dict) and df.get("error"):
+        return _stock_degraded_envelope(domain="stock_analysis.kline", symbol=symbol, dataset="kline", reason_code="stock_kline_source_unavailable", warning=str(df.get("error")))
+    records = _safe_records_from_dataframe(df, limit=_STOCK_SUMMARY_LIMIT)
+    if not records:
+        return _stock_degraded_envelope(domain="stock_analysis.kline", symbol=symbol, dataset="kline", reason_code="stock_kline_empty", warning="K线数据源未返回可展示记录。")
+    df_index = getattr(df, "index", None)
+    total = len(df_index) if df_index is not None else len(records)
+    as_of = records[-1].get("date") if records else _iso_date_from_compact(normalized_date) or _utc_as_of_now()
+    return _stock_summary_envelope(
+        domain="stock_analysis.kline",
+        symbol=symbol,
+        items=records,
+        total=total,
+        source="unified_data_access.stock_data",
+        dataset="kline",
+        as_of=str(as_of),
+        status="ok",
+        summary=f"{symbol} K线摘要，period={period}，展示最近 {len(records)} 条。",
+        extra={"period": period, "analysis_date": _iso_date_from_compact(normalized_date)},
+    )
+
+
+def get_stock_financials_evidence(symbol: str, analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        data = uda.get_financial_data(symbol, analysis_date=normalized_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock financials evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.financials", symbol=symbol, dataset="financials", reason_code="stock_financials_source_failed", warning=f"财务数据源读取失败：{type(exc).__name__}: {exc}")
+    if not isinstance(data, dict) or not data.get("data_success"):
+        reason = str((data or {}).get("error") if isinstance(data, dict) else "financial data source returned no payload")
+        return _stock_degraded_envelope(domain="stock_analysis.financials", symbol=symbol, dataset="financials", reason_code="stock_financials_unavailable", warning=reason)
+    source = str(data.get("source") or "unified_data_access.financials")
+    items: list[dict[str, Any]] = []
+    total = 0
+    as_of: str | None = None
+    for statement_key in ("income_statement", "balance_sheet", "cash_flow"):
+        rows, count, query_time, statement_source = _statement_rows(data.get(statement_key))
+        total += count
+        as_of = as_of or query_time
+        source = statement_source or source
+        for row in rows:
+            row.setdefault("statement", statement_key)
+            items.append(row)
+    if not items:
+        return _stock_degraded_envelope(domain="stock_analysis.financials", symbol=symbol, dataset="financials", reason_code="stock_financials_empty", warning="财务数据源返回成功但没有可展示摘要行。", source=source)
+    as_of = as_of or _latest_date_from_items(items, "end_date", "period", "ann_date", "report_date") or _utc_as_of_now()
+    return _stock_summary_envelope(
+        domain="stock_analysis.financials",
+        symbol=symbol,
+        items=items[:_STOCK_SUMMARY_LIMIT],
+        total=total,
+        source=source,
+        dataset="financials",
+        as_of=as_of,
+        status="ok",
+        summary=f"{symbol} 财务摘要，来源={source}，展示 {min(len(items), _STOCK_SUMMARY_LIMIT)} 行。",
+        extra={"analysis_date": _iso_date_from_compact(normalized_date)},
+    )
+
+
+def get_stock_quarterly_evidence(symbol: str, analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        data = uda.get_quarterly_reports(symbol, analysis_date=normalized_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock quarterly evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.quarterly", symbol=symbol, dataset="quarterly", reason_code="stock_quarterly_source_failed", warning=f"季度数据源读取失败：{type(exc).__name__}: {exc}")
+    if not isinstance(data, dict) or not data.get("data_success"):
+        reason = str((data or {}).get("error") if isinstance(data, dict) else "quarterly data source returned no payload")
+        return _stock_degraded_envelope(domain="stock_analysis.quarterly", symbol=symbol, dataset="quarterly", reason_code="stock_quarterly_unavailable", warning=reason)
+    source = str(data.get("source") or "unified_data_access.quarterly")
+    items: list[dict[str, Any]] = []
+    total = 0
+    as_of: str | None = None
+    for statement_key in ("income_statement", "balance_sheet", "cash_flow", "financial_indicators"):
+        rows, count, query_time, statement_source = _statement_rows(data.get(statement_key))
+        total += count
+        as_of = as_of or query_time
+        source = statement_source or source
+        for row in rows:
+            row.setdefault("statement", statement_key)
+            items.append(row)
+    if not items:
+        return _stock_degraded_envelope(domain="stock_analysis.quarterly", symbol=symbol, dataset="quarterly", reason_code="stock_quarterly_empty", warning="季度数据源返回成功但没有可展示摘要行。", source=source)
+    as_of = as_of or _latest_date_from_items(items, "报告日", "报告期", "end_date", "period") or _utc_as_of_now()
+    return _stock_summary_envelope(
+        domain="stock_analysis.quarterly",
+        symbol=symbol,
+        items=items[:_STOCK_SUMMARY_LIMIT],
+        total=total,
+        source=source,
+        dataset="quarterly",
+        as_of=as_of,
+        status="ok",
+        summary=f"{symbol} 季报摘要，来源={source}，展示 {min(len(items), _STOCK_SUMMARY_LIMIT)} 行。",
+        extra={"analysis_date": _iso_date_from_compact(normalized_date)},
+    )
+
+
+def get_stock_fund_flow_evidence(symbol: str, analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        data = uda.get_fund_flow_data(symbol, analysis_date=normalized_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock fund-flow evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.fund_flow", symbol=symbol, dataset="fund_flow", reason_code="stock_fund_flow_source_failed", warning=f"资金流向数据源读取失败：{type(exc).__name__}: {exc}")
+    if not isinstance(data, dict) or not data.get("data_success"):
+        reason = str((data or {}).get("error") if isinstance(data, dict) else "fund-flow data source returned no payload")
+        return _stock_degraded_envelope(domain="stock_analysis.fund_flow", symbol=symbol, dataset="fund_flow", reason_code="stock_fund_flow_unavailable", warning=reason)
+    source = str(data.get("source") or "unified_data_access.fund_flow")
+    fund_flow = data.get("fund_flow_data") if isinstance(data.get("fund_flow_data"), dict) else {}
+    rows = fund_flow.get("data") if isinstance(fund_flow.get("data"), list) else []
+    items = [_safe_json_value(dict(row)) for row in rows[:_STOCK_SUMMARY_LIMIT] if isinstance(row, dict)]
+    if not items:
+        return _stock_degraded_envelope(domain="stock_analysis.fund_flow", symbol=symbol, dataset="fund_flow", reason_code="stock_fund_flow_empty", warning="资金流向数据源返回成功但没有可展示摘要行。", source=source)
+    as_of = _latest_date_from_items(items, "日期", "trade_date", "date") or str(fund_flow.get("query_time") or _utc_as_of_now())
+    return _stock_summary_envelope(
+        domain="stock_analysis.fund_flow",
+        symbol=symbol,
+        items=items,
+        total=int(fund_flow.get("days") or len(rows)),
+        source=source,
+        dataset="fund_flow",
+        as_of=as_of,
+        status="ok",
+        summary=f"{symbol} 资金流向摘要，来源={source}，展示 {len(items)} 行。",
+        extra={"market": fund_flow.get("market"), "analysis_date": _iso_date_from_compact(normalized_date)},
+    )
+
+
+def get_stock_margin_financing_evidence(symbol: str, analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        history = uda.get_margin_trading_history(symbol, days=5, analysis_date=normalized_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock margin-financing evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.margin_financing", symbol=symbol, dataset="margin_financing", reason_code="stock_margin_financing_source_failed", warning=f"融资融券数据源读取失败：{type(exc).__name__}: {exc}")
+    items: list[dict[str, Any]] = []
+    source = "unified_data_access.margin_financing"
+    if isinstance(history, dict) and history:
+        source = str(history.get("source") or source)
+        for row in (history.get("records") if isinstance(history.get("records"), list) else [])[: _STOCK_SUMMARY_LIMIT - len(items)]:
+            if isinstance(row, dict):
+                items.append({"record_type": "history", **_safe_json_value(row)})
+        if not items and not history.get("error"):
+            items.append({"record_type": "summary", **_safe_json_value(history)})
+    if not items:
+        return _stock_degraded_envelope(domain="stock_analysis.margin_financing", symbol=symbol, dataset="margin_financing", reason_code="stock_margin_financing_unavailable", warning="融资融券数据源未返回个股或汇总记录。", source=source)
+    as_of = _latest_date_from_items(items, "date", "trade_date", "last_date") or _utc_as_of_now()
+    return _stock_summary_envelope(
+        domain="stock_analysis.margin_financing",
+        symbol=symbol,
+        items=items,
+        total=len(items),
+        source=source,
+        dataset="margin_financing",
+        as_of=as_of,
+        status="ok",
+        summary=f"{symbol} 融资融券摘要，来源={source}，展示 {len(items)} 行。",
+        extra={"analysis_date": _iso_date_from_compact(normalized_date)},
+    )
+
+
+def get_stock_technicals_evidence(symbol: str, period: str = "1y", analysis_date: str | None = None) -> dict[str, Any]:
+    uda = NextUnifiedDataAccess()
+    normalized_date = _normalize_analysis_date(analysis_date)
+    try:
+        df = uda.get_stock_data(symbol, period, analysis_date=normalized_date)
+        if isinstance(df, dict) and df.get("error"):
+            return _stock_degraded_envelope(domain="stock_analysis.technicals", symbol=symbol, dataset="technicals", reason_code="stock_technicals_kline_unavailable", warning=str(df.get("error")))
+        indicator_df = uda.stock_data_fetcher.calculate_technical_indicators(df)
+        indicators = uda.stock_data_fetcher.get_latest_indicators(indicator_df)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("stock technicals evidence read failed for symbol=%s", symbol)
+        return _stock_degraded_envelope(domain="stock_analysis.technicals", symbol=symbol, dataset="technicals", reason_code="stock_technicals_source_failed", warning=f"技术指标数据源读取失败：{type(exc).__name__}: {exc}")
+    if not isinstance(indicators, dict) or indicators.get("error"):
+        reason = str((indicators or {}).get("error") if isinstance(indicators, dict) else "technical indicators unavailable")
+        return _stock_degraded_envelope(domain="stock_analysis.technicals", symbol=symbol, dataset="technicals", reason_code="stock_technicals_unavailable", warning=reason)
+    item = _safe_json_value(indicators)
+    if not isinstance(item, dict):
+        item = {"value": item}
+    latest_records = _safe_records_from_dataframe(df, limit=1)
+    as_of = latest_records[-1].get("date") if latest_records else _iso_date_from_compact(normalized_date) or _utc_as_of_now()
+    item["indicator_date"] = as_of
+    return _stock_summary_envelope(
+        domain="stock_analysis.technicals",
+        symbol=symbol,
+        items=[item],
+        total=1,
+        source="unified_data_access.technical_indicators",
+        dataset="technicals",
+        as_of=str(as_of),
+        status="ok",
+        summary=f"{symbol} 技术指标摘要，period={period}。",
+        extra={"period": period, "analysis_date": _iso_date_from_compact(normalized_date)},
     )
 
 

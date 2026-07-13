@@ -4,7 +4,12 @@ import pytest
 
 from backend.services.qmt_strategy_ledger.order_service import QmtManagedOrderService
 from backend.services.qmt_strategy_ledger.repository import InMemoryQmtStrategyLedgerRepository
-from backend.services.simulation_runtime import MiniQMTExecutionBridge, MiniQMTUnsupportedExecutionAlgoError, SimulationBrokerBackend
+from backend.services.simulation_runtime import (
+    ExecutionPathNotCanonicalError,
+    MiniQMTExecutionBridge,
+    MiniQMTUnsupportedExecutionAlgoError,
+    SimulationBrokerBackend,
+)
 from backend.tests.simulation_runtime.test_target_rebalance_shared import _compiled_plan_for_bridge
 
 
@@ -61,3 +66,29 @@ def test_miniqmt_bridge_rejects_v25_policy_id_without_silent_direct_order_fallba
 
     assert exc_info.value.context["inferred_algo_code"] == "V25_1_SMALL_CAP"
     assert exc_info.value.context["payload_has_policy_json"] is False
+
+
+def test_miniqmt_bridge_rejects_non_vnpy_policy_before_preview_or_submit() -> None:
+    _release, binding, plan = _compiled_plan_for_bridge(backend=SimulationBrokerBackend.MINIQMT_SIM)
+    plan = plan.model_copy(
+        update={
+            "execution_policy_version_id": "exec_policy_close_price",
+            "plan_payload_json": {
+                **plan.plan_payload_json,
+                "execution_policy": {
+                    **plan.plan_payload_json["execution_policy"],
+                    "version_id": "exec_policy_close_price",
+                    "payload": {"algo_code": "CLOSE_PRICE", "policy_json": {"algo_code": "CLOSE_PRICE", "algo_config": {}}},
+                },
+            },
+        }
+    )
+    bridge = MiniQMTExecutionBridge(
+        managed_order_service=QmtManagedOrderService(repository=InMemoryQmtStrategyLedgerRepository())
+    )
+
+    for method_name in ("build_managed_order_requests", "preview_plan", "submit_plan"):
+        with pytest.raises(ExecutionPathNotCanonicalError) as exc_info:
+            getattr(bridge, method_name)(plan=plan, binding=binding)
+        assert exc_info.value.error_code == "EXECUTION_PATH_NOT_CANONICAL"
+        assert exc_info.value.context["inferred_algo_code"] == "CLOSE_PRICE"

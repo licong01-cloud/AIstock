@@ -8,7 +8,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .models import ArchiveJobRecord, ClaimedOutboxEvent
-from .repository import QEArchiveRepository
+from .repository import (
+    MULTI_ALPHA_OUTBOX_SKIP_SOURCE_SYSTEMS,
+    PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED,
+    PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY,
+    PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES,
+    PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS,
+    UNSUPPORTED_OUTBOX_EVENT_TYPE,
+    QEArchiveRepository,
+)
 
 
 QE_ARCHIVE_WORKER_ENABLED_ENV = "QE_ARCHIVE_WORKER_ENABLED"
@@ -24,6 +32,7 @@ class ArchiveWorkerEventResult:
     run_id: str | None = None
     stats: Mapping[str, Any] = field(default_factory=dict)
     error: str | None = None
+    skipped_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -31,6 +40,7 @@ class ArchiveWorkerRunResult:
     claimed: int = 0
     completed: int = 0
     failed: int = 0
+    skipped: int = 0
     skipped_reason: str | None = None
 
 
@@ -85,6 +95,7 @@ def archive_handler_adapter(handler: Any) -> ArchiveEventHandler:
                 **dict(result.stats or {}),
             },
             error=result.error_message if not success else None,
+            skipped_reason=(result.stats or {}).get("skipped_reason") if result.status == HandlerStatus.NOOP else None,
         )
 
     return _adapted
@@ -130,24 +141,37 @@ class QEArchiveWorker:
             worker_id=self._worker_id,
             limit=limit,
             event_types=tuple(self._handlers.keys()),
+            routing_class="archive",
         )
         completed = 0
         failed = 0
+        skipped = 0
         for event in events:
-            if self._process_event(event):
+            outcome = self._process_event(event)
+            if outcome == "completed":
                 completed += 1
+            elif outcome == "skipped":
+                skipped += 1
+            else:
+                failed += 1
+
+        policy_events = self._claim_policy_skip_events(limit=max(0, limit - len(events)))
+        for event in policy_events:
+            if self._skip_policy_event(event):
+                skipped += 1
             else:
                 failed += 1
         return ArchiveWorkerRunResult(
-            claimed=len(events),
+            claimed=len(events) + len(policy_events),
             completed=completed,
             failed=failed,
+            skipped=skipped,
         )
 
-    def _process_event(self, event: ClaimedOutboxEvent) -> bool:
+    def _process_event(self, event: ClaimedOutboxEvent) -> str:
         handler = self._handlers.get(event.event_type)
         if handler is None:
-            return False
+            return "failed"
 
         job_id = self._repository.create_archive_job(
             ArchiveJobRecord(
@@ -159,6 +183,21 @@ class QEArchiveWorker:
         )
         try:
             result = handler(event)
+            if result.skipped_reason:
+                self._repository.skip_outbox_event(
+                    event,
+                    reason_code=result.skipped_reason,
+                    trigger_reason="realtime",
+                )
+                self._repository.complete_archive_job(
+                    job_id,
+                    run_id=None,
+                    stats={
+                        **dict(result.stats or {}),
+                        "terminal_outbox_status": "skipped",
+                    },
+                )
+                return "skipped"
             if result.success:
                 self._repository.complete_archive_job(
                     job_id,
@@ -166,7 +205,7 @@ class QEArchiveWorker:
                     stats=result.stats,
                 )
                 self._repository.complete_outbox_event(event.event_id)
-                return True
+                return "completed"
             error = result.error or "archive event handler returned unsuccessful result"
         except Exception as exc:  # pragma: no cover - exercised through tests with concrete exception.
             error = f"{type(exc).__name__}: {exc}"
@@ -178,4 +217,41 @@ class QEArchiveWorker:
             retry_after_seconds=self._retry_after_seconds,
             max_retries=self._max_retries,
         )
-        return False
+        return "failed"
+
+    def _claim_policy_skip_events(self, *, limit: int) -> list[ClaimedOutboxEvent]:
+        if limit <= 0 or not hasattr(self._repository, "skip_outbox_event"):
+            return []
+        # Claim policy-only rows explicitly so unsupported telemetry or
+        # non-archiveable macb rows do not remain as silent pending black holes.
+        return self._repository.claim_outbox_events(
+            worker_id=f"{self._worker_id}:policy_skip",
+            limit=limit,
+            source_systems=PAPER_V2_OUTBOX_SKIP_SOURCE_SYSTEMS + MULTI_ALPHA_OUTBOX_SKIP_SOURCE_SYSTEMS,
+            routing_class=None,
+            allow_missing_routing_class=False,
+        )
+
+    def _skip_policy_event(self, event: ClaimedOutboxEvent) -> bool:
+        reason_code = _paper_policy_skip_reason(event)
+        self._repository.skip_outbox_event(
+            event,
+            reason_code=reason_code,
+            trigger_reason="realtime",
+        )
+        return True
+
+
+def _paper_policy_skip_reason(event: ClaimedOutboxEvent) -> str:
+    """Return the explicit policy-skip reason for paper outbox rows."""
+
+    routing_class = (event.payload or {}).get("routing_class")
+    if event.event_type == "qe.multi_alpha.combine.completed":
+        return UNSUPPORTED_OUTBOX_EVENT_TYPE
+    if event.event_type.startswith("paper.daemon.") or (
+        event.source_system == "paper_v2.daemon" and routing_class == "telemetry"
+    ):
+        return PAPER_DAEMON_TELEMETRY_NOT_ARCHIVED
+    if event.event_type in PAPER_V2_DEFERRED_ARCHIVE_EVENT_TYPES:
+        return PAPER_V2_ARCHIVE_DEFERRED_THROWAWAY
+    return UNSUPPORTED_OUTBOX_EVENT_TYPE

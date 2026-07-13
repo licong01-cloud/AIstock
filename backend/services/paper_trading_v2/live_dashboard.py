@@ -128,6 +128,10 @@ class PaperTradingLiveDashboardService:
             limit=5,
             scan_limit=event_limit,
         )
+        capacity_residual_observability = self._miniqmt_capacity_residual_observability(
+            current_run=current_run,
+            execution_quality=execution_quality,
+        )
 
         warnings = []
         if not sessions:
@@ -140,6 +144,19 @@ class PaperTradingLiveDashboardService:
             warnings.append({"code": "NO_OPERABLE_SESSION", "message": operability["remediation_hint"]})
         if current_run is None:
             warnings.append({"code": "NO_CURRENT_RUN", "message": "当前日期或会话尚未产生 run，无法展示信号到订单链路"})
+        if capacity_residual_observability:
+            warnings.append(
+                {
+                    "code": "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL",
+                    "severity": "warning",
+                    "message": (
+                        "MiniQMT run succeeded with capacity residual; "
+                        "treat this as non-clean success in unattended monitoring"
+                    ),
+                    "capacity_residual_count": capacity_residual_observability.get("capacity_residual_count"),
+                    "failed_intents": capacity_residual_observability.get("failed_intents"),
+                }
+            )
 
         dashboard = {
             "portfolio": portfolio.model_dump(mode="json"),
@@ -155,6 +172,7 @@ class PaperTradingLiveDashboardService:
             "target_rebalance": self._target_rebalance(run_events),
             "minute_execution": self._minute_execution_summary(orders, fills, order_events, states),
             "execution_quality": execution_quality,
+            "miniqmt_capacity_residual_observability": capacity_residual_observability,
             "intraday_nav": {
                 "status": "AVAILABLE" if intraday_snapshots else "MISSING",
                 "missing_reason": None if intraday_snapshots else "尚未持久化分钟资产快照",
@@ -170,6 +188,59 @@ class PaperTradingLiveDashboardService:
             "warnings": warnings,
         }
         return self._enrich_display_names(dashboard)
+
+    @staticmethod
+    def _miniqmt_capacity_residual_observability(
+        *,
+        current_run: PaperRun | None,
+        execution_quality: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        candidates: list[Any] = []
+        if current_run is not None:
+            runtime_config = current_run.runtime_config or {}
+            candidates.extend(
+                [
+                    runtime_config.get("miniqmt_capacity_residual_observability"),
+                    (runtime_config.get("simulation_runtime") or {}).get("miniqmt_capacity_residual_observability")
+                    if isinstance(runtime_config.get("simulation_runtime"), dict)
+                    else None,
+                ]
+            )
+        latest_report = execution_quality.get("latest_report") if isinstance(execution_quality, dict) else None
+        latest_summary = latest_report.get("summary") if isinstance(latest_report, dict) else None
+        if isinstance(latest_summary, dict):
+            candidates.append(latest_summary.get("miniqmt_capacity_residual_observability"))
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if not bool(candidate.get("succeeded_with_capacity_residual")):
+                continue
+            try:
+                capacity_residual_count = int(candidate.get("capacity_residual_count") or 0)
+                failed_intents = int(candidate.get("failed_intents") or 0)
+            except (TypeError, ValueError) as exc:
+                raise DataUnavailableError(
+                    "MiniQMT capacity residual dashboard observability has invalid counts",
+                    context={
+                        "reason_code": "MINIQMT_CAPACITY_RESIDUAL_DASHBOARD_COUNTS_INVALID",
+                        "capacity_residual_count": candidate.get("capacity_residual_count"),
+                        "failed_intents": candidate.get("failed_intents"),
+                        "qmt_batch_id": candidate.get("qmt_batch_id"),
+                    },
+                ) from exc
+            return {
+                "schema_version": str(
+                    candidate.get("schema_version") or "miniqmt_capacity_residual_observability_v1"
+                ),
+                "succeeded_with_capacity_residual": True,
+                "reason": candidate.get("reason"),
+                "source": candidate.get("source") or "live_dashboard",
+                "capacity_residual_count": capacity_residual_count,
+                "failed_intents": failed_intents,
+                "qmt_batch_id": candidate.get("qmt_batch_id"),
+                "qmt_batch_status": candidate.get("qmt_batch_status"),
+            }
+        return None
 
     @staticmethod
     def _operability(

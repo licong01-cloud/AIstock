@@ -7,12 +7,9 @@ regression and against the inverse mistake of collapsing both error classes
 into 409.
 
 R6 originally added a governance enable_paper gate. Paper v2 gate decoupling
-now keeps governance as read-only/live-strict metadata: paper_ready blockers
-must no longer prevent Paper simulation admission.
-
-Per T9 audit-drift §6: the only path that reaches the state-machine check
-without first being rejected by `validate_manifest_identity_for_paper_trading`
-is `PAPER_ENABLED` re-entry (already-enabled package).
+keeps governance as read-only/live-strict metadata, while enable_paper is now
+again a real lifecycle transition. Re-entering PAPER_ENABLED must surface as
+HTTP 409 instead of silent no-op success.
 """
 
 from __future__ import annotations
@@ -128,10 +125,10 @@ def _seed_paper_ready_package(service: StrategyPackageService, package_id: str) 
         )
 
 
-def test_enable_paper_endpoint_treats_legacy_paper_enabled_as_noop(
+def test_enable_paper_endpoint_rejects_paper_enabled_reentry_with_409(
     app_and_repo: tuple[FastAPI, InMemoryStrategyPackageRepository],
 ) -> None:
-    """Legacy PAPER_ENABLED is compatibility metadata, not an admission gate."""
+    """Already-enabled PAPER_ENABLED rows are valid state, not no-op success."""
 
     app, repo = app_and_repo
 
@@ -147,10 +144,16 @@ def test_enable_paper_endpoint_treats_legacy_paper_enabled_as_noop(
     client = TestClient(app)
     response = client.post(f"/strategy-packages/{record.package_id}/enable-paper")
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["package"]["package_status"] == PackageStatus.PAPER_ENABLED.value
-    assert payload["package"]["asset_eligibility"]["eligible"] is True
+    assert response.status_code == 409, response.text
+    detail = response.json().get("detail")
+    assert detail["error_code"] == "INVALID_STATE_TRANSITION"
+    assert detail["context"]["package_id"] == record.package_id
+    assert detail["context"]["from_status"] == PackageStatus.PAPER_ENABLED.value
+    assert detail["context"]["to_status"] == PackageStatus.PAPER_ENABLED.value
+    assert detail["context"]["allowed_from"] == [
+        PackageStatus.BACKTEST_APPROVED.value,
+        PackageStatus.SELECTION_ENABLED.value,
+    ]
 
 
 def test_enable_paper_endpoint_returns_400_on_validation_error(
@@ -213,7 +216,7 @@ def test_enable_paper_endpoint_allows_simulation_despite_governance_blockers(
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["package"]["package_status"] == PackageStatus.BACKTEST_APPROVED.value
+    assert payload["package"]["package_status"] == PackageStatus.PAPER_ENABLED.value
 
     admission = TestClient(app).get(f"/strategy-packages/{record.package_id}/paper-simulation-admission")
     assert admission.status_code == 200, admission.text

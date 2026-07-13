@@ -1,4 +1,4 @@
-﻿"""Authoritative single-day Paper Trading v2 runner."""
+"""Authoritative single-day Paper Trading v2 runner."""
 
 from __future__ import annotations
 
@@ -27,19 +27,25 @@ from backend.services.strategy_package.runtime import (
     StrategyPackageRuntime,
     TargetPositionEngine,
     _candidate_selection_artifact_runtime_hashes,
+    _candidate_selection_artifact_runtime_hashes_v2,
     apply_runtime_variant_to_manifest,
 )
 from backend.services.strategy_package.selection_artifact import (
     StrategyPackageSelectionArtifactService,
+    selection_artifact_runtime_hash_for_manifest,
+    selection_artifact_runtime_hash_v2_for_manifest,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
 )
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
+    BrokerConnectivityError,
+    BrokerRejectedError,
     BrokerSubmitError,
     DataUnavailableError,
     InvalidStateTransitionError,
@@ -47,7 +53,8 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     TradingCoreError,
 )
-from backend.execution_algos.vnpy_style import is_vnpy_style_algo
+from backend.execution_algos.vnpy_style import VNPY_STYLE_ASSETS, is_vnpy_style_algo
+from backend.services.simulation_runtime.models import ExecutionPathNotCanonicalError, MiniQMTUnsupportedExecutionAlgoError
 from backend.services.miniqmt_execution_runtime import MiniQMTExecutionRuntimeClient
 from backend.services.trading_core.execution_algo_capabilities import required_minute_bars_for_policy
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
@@ -65,7 +72,7 @@ from backend.services.trading_core.models import (
 )
 from backend.services.trading_core.oms import OMS
 
-from .broker import MiniQMTSimBackend
+from .broker import MiniQMTSimBackend, OrderHandle
 from .execution import MiniQMTAlgoExecutionResult, build_minqmt_execution_quality_report
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
@@ -75,7 +82,7 @@ from .auto_run import (
     miniqmt_strategy_slot_id,
 )
 from .models import OrderExecutionState, PaperDayRunResult, PaperRun, PortfolioStatus
-from .repository import PaperTradingV2Repository
+from .repository import PaperTradingV2Repository, assert_orders_terminal_before_run_success, non_terminal_orders_for_run_success
 from .risk_targets import overlay_risk_forced_exit_targets
 from .service import PaperTradingV2PortfolioService
 
@@ -95,18 +102,32 @@ def _in_memory_package_repository_from_portfolios(repository: Any | None) -> Any
 
 
 def miniqmt_account_slot_context(repository: Any, portfolio: Any) -> dict[str, str]:
-    if hasattr(repository, "list_active_broker_account_bindings"):
-        bindings = repository.list_active_broker_account_bindings(portfolio.portfolio_id)
-    else:  # pragma: no cover - legacy dry-run repository shims do not model bindings.
-        bindings = []
+    if not hasattr(repository, "list_active_broker_account_bindings"):
+        raise ExecutionPathNotCanonicalError(
+            "Paper v2 MiniQMT execution requires an account_group_slots broker binding",
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "required_allocation_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+                "missing_repository_method": "list_active_broker_account_bindings",
+                "required_runtime_owner": "MiniQMTExecutionRuntime",
+            },
+        )
+    bindings = repository.list_active_broker_account_bindings(portfolio.portfolio_id)
     binding = next(
         (item for item in bindings if item.allocation_mode == MINIQMT_ACCOUNT_GROUP_BINDING_MODE),
         None,
     )
     if binding is None:
-        return {
-            "strategy_slot_id": str(portfolio.portfolio_id),
-        }
+        raise ExecutionPathNotCanonicalError(
+            "Paper v2 MiniQMT execution requires an active account_group_slots broker binding",
+            context={
+                "portfolio_id": portfolio.portfolio_id,
+                "active_binding_count": len(bindings),
+                "active_allocation_modes": sorted({str(item.allocation_mode) for item in bindings}),
+                "required_allocation_mode": MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
+                "required_runtime_owner": "MiniQMTExecutionRuntime",
+            },
+        )
     account_id = str(binding.broker_account_id or ((portfolio.auto_run_config or {}).get("broker") or {}).get("account_id") or "")
     account_group_id = binding.account_group_id or miniqmt_account_group_id(account_id)
     strategy_slot_id = binding.strategy_slot_id or miniqmt_strategy_slot_id(portfolio.portfolio_id)
@@ -594,6 +615,7 @@ class PaperTradingDayRunner:
                     message="target positions match current positions; persisted mark-to-market snapshot without orders",
                     context={"position_count": len(position_list), "snapshot_time": snapshot_time.isoformat()},
                 )
+                self._assert_orders_terminal_before_success(run, [])
                 succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
                 ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
                 self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 no-rebalance day run succeeded")
@@ -616,16 +638,43 @@ class PaperTradingDayRunner:
                 package_id=manifest.package_id,
             )
             require_day_features = self._policy_requires_day_features(execution_policy_json)
+            day_feature_excluded_intents: list[dict[str, Any]] = []
 
             for intent in intents:
-                market_input = self.market_data_provider.load_symbol_input(
-                    symbol=intent.symbol,
-                    trade_date=trade_date,
-                    source=portfolio.data_source,
-                    min_bars=required_bars,
-                    require_suspend_status=True,
-                    require_day_features=require_day_features,
-                )
+                try:
+                    market_input = self.market_data_provider.load_symbol_input(
+                        symbol=intent.symbol,
+                        trade_date=trade_date,
+                        source=portfolio.data_source,
+                        min_bars=required_bars,
+                        require_suspend_status=True,
+                        require_day_features=require_day_features,
+                    )
+                except DataUnavailableError as exc:
+                    if not (require_day_features and self._is_v25_day_feature_symbol_exclusion(exc)):
+                        raise
+                    excluded = {
+                        "intent_id": intent.intent_id,
+                        "symbol": intent.symbol,
+                        "side": intent.side.value,
+                        "quantity": intent.quantity,
+                        "reason_code": exc.context.get("reason_code"),
+                        "fail_closed_policy": exc.context.get("fail_closed_policy"),
+                    }
+                    day_feature_excluded_intents.append(excluded)
+                    self.repository.save_run_event(
+                        run_id=run.run_id,
+                        event_type="DAY_FEATURE_SYMBOL_EXCLUDED",
+                        message="V25 day_features unavailable; excluded LocalSim order intent for trade date",
+                        context={
+                            "portfolio_id": portfolio_id,
+                            "trade_date": trade_date.isoformat(),
+                            "data_source": portfolio.data_source.value,
+                            **excluded,
+                            "source_error": exc.to_dict(),
+                        },
+                    )
+                    continue
                 if not market_input.minute_bars:
                     raise DataUnavailableError(
                         "market data provider returned no minute bars",
@@ -703,6 +752,8 @@ class PaperTradingDayRunner:
                         "trade_date": trade_date.isoformat(),
                         "order_count": len(orders),
                         "order_event_count": len(events),
+                        "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
+                        "day_feature_excluded_intents": day_feature_excluded_intents,
                     },
                 )
             missing_snapshot_symbols = [symbol for symbol in ledger.positions if symbol not in snapshot_prices]
@@ -732,8 +783,15 @@ class PaperTradingDayRunner:
                 run_id=run.run_id,
                 trade_date=trade_date,
                 snapshot=account_snapshot,
-                metadata={"position_count": len(position_list), "order_count": len(orders), "fill_count": len(fills)},
+                metadata={
+                    "position_count": len(position_list),
+                    "order_count": len(orders),
+                    "fill_count": len(fills),
+                    "day_feature_excluded_intent_count": len(day_feature_excluded_intents),
+                    "day_feature_excluded_intents": day_feature_excluded_intents,
+                },
             )
+            self._assert_orders_terminal_before_success(run, orders)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
             ready_portfolio = self.repository.update_portfolio_status(portfolio_id, PortfolioStatus.READY)
             self.repository.save_run_event(run_id=run.run_id, event_type="RUN_SUCCEEDED", message="paper v2 day run succeeded")
@@ -852,7 +910,14 @@ class PaperTradingDayRunner:
         force_regenerate = bool(artifact_config.get("force_regenerate"))
         artifact_repository = getattr(self.runtime, "artifact_repository", None)
         if artifact_repository is not None and not force_regenerate:
-            for runtime_hash in _candidate_selection_artifact_runtime_hashes(runtime_config):
+            for runtime_hash in dict.fromkeys(
+                [
+                    selection_artifact_runtime_hash_v2_for_manifest(manifest, runtime_config),
+                    *_candidate_selection_artifact_runtime_hashes_v2(runtime_config),
+                    selection_artifact_runtime_hash_for_manifest(manifest, runtime_config),
+                    *_candidate_selection_artifact_runtime_hashes(runtime_config),
+                ]
+            ):
                 try:
                     artifact = artifact_repository.get(
                         package_id=manifest.package_id,
@@ -862,10 +927,15 @@ class PaperTradingDayRunner:
                         runtime_config_hash=runtime_hash,
                     )
                     metadata = artifact.metadata or {}
+                    expected_source_type = (
+                        LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                        if getattr(getattr(manifest, "alpha_mode", None), "value", None) == "multi_alpha"
+                        else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                    )
                     if (
                         artifact.status.value == "SUCCEEDED"
                         and artifact.scores_json
-                        and metadata.get("source_type") == AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                        and metadata.get("source_type") == expected_source_type
                         and metadata.get("authority_scope") == AUTHORITATIVE_SELECTION_SCOPE
                     ):
                         return
@@ -1079,6 +1149,16 @@ class PaperTradingDayRunner:
         return str(policy_json.get("algo_code") or "").strip().upper() in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}
 
     @staticmethod
+    def _is_v25_day_feature_symbol_exclusion(exc: DataUnavailableError) -> bool:
+        context = exc.context or {}
+        reason_code = str(context.get("reason_code") or "")
+        return (
+            str(context.get("fail_closed_policy") or "") == "exclude_symbol_for_trade_date"
+            and str(context.get("field") or "") == "turnover_rate_f"
+            and reason_code.startswith("V25_DAY_FEATURE_TURNOVER_RATE_F_")
+        )
+
+    @staticmethod
     def _data_requirements_for_policy(policy_json: dict[str, Any], *, package_id: str) -> dict[str, bool]:
         requirements = policy_json.get("data_requirements")
         if not isinstance(requirements, dict):
@@ -1163,307 +1243,32 @@ class PaperTradingDayRunner:
                 manifest=manifest,
                 execution_policy_context=execution_policy_context,
             )
-            use_vnpy_style_execution = self._miniqmt_uses_vnpy_style_execution(execution_policy_context)
+            execution_policy_context = self._require_miniqmt_vnpy_style_execution(
+                execution_policy_context,
+                portfolio_id=portfolio.portfolio_id,
+                trade_date=trade_date,
+                package_id=manifest.package_id,
+            )
             for intent in ordered_intents:
-                if use_vnpy_style_execution:
-                    algo_result = self._run_minqmt_vnpy_style_intent(
-                        run=run,
-                        trade_date=trade_date,
-                        intent=intent,
-                        broker=broker,
-                        execution_policy_context=execution_policy_context or {},
-                        session_id=session_id,
-                        account_slot_context=account_slot_context,
-                        runtime_config_hash=runtime_hash,
-                    )
-                    orders.extend(algo_result["orders"])
-                    fills.extend(algo_result["fills"])
-                    events.extend(algo_result["events"])
-                    continue
-
-                order = self.oms.create_order(intent)
                 audit_before = self._miniqmt_broker_audit_snapshot(
                     broker,
                     phase="before_submit",
                     intent=intent,
                 )
-                try:
-                    runtime_result = self.minqmt_runtime_client.submit_paper_order_intents(
-                        portfolio=portfolio,
-                        run=run,
-                        trade_date=trade_date,
-                        intents=[intent],
-                        broker=broker,
-                        runtime_config_hash=runtime_hash,
-                        account_group_id=str(account_slot_context.get("account_group_id") or portfolio.portfolio_id),
-                        strategy_slot_id=str(account_slot_context.get("strategy_slot_id") or portfolio.portfolio_id),
-                    )
-                    runtime_evidence = runtime_result.runtime_evidence.to_dict()
-                    child_result = runtime_result.child_results[0]
-                    if child_result.submit_exception is not None:
-                        exc = child_result.submit_exception
-                        if isinstance(exc, TradingCoreError):
-                            exc.context.setdefault("runtime_evidence", runtime_evidence)
-                        raise exc
-                    handle = child_result.handle
-                    if handle is None or child_result.status is None:
-                        raise BrokerSubmitError(
-                            "MiniQMT runtime client did not return broker handle/status",
-                            context={"intent_id": intent.intent_id, "runtime_evidence": runtime_result.runtime_evidence.to_dict()},
-                        )
-                    native = dict(child_result.native_context)
-                    status = child_result.status
-                    trade_rows = list(child_result.trades)
-                except TradingCoreError as exc:
-                    runtime_evidence = (
-                        exc.context.get("runtime_evidence")
-                        if isinstance(exc.context, dict) and isinstance(exc.context.get("runtime_evidence"), dict)
-                        else None
-                    )
-                    submit_native = self._miniqmt_submit_error_native(exc)
-                    audit_after = self._miniqmt_broker_audit_snapshot(
-                        broker,
-                        phase="submit_error",
-                        intent=intent,
-                        native=submit_native,
-                    )
-                    diagnostic = self._miniqmt_submit_error_diagnostic(
-                        exc,
-                        intent=intent,
-                        audit_before=audit_before,
-                        audit_after=audit_after,
-                    )
-                    final_order, event = self.oms.reject_order(order, exc.message)
-                    metadata = dict(final_order.metadata or {})
-                    metadata.update(
-                        {
-                            "broker_backend": "minqmt_sim",
-                            "authority_source": "MINIQMT",
-                            "broker_status": "submit_error",
-                            "broker_raw_status": None,
-                            "broker_status_msg": exc.message,
-                            "broker_rejection_reason": exc.message,
-                            "broker_status_raw": exc.to_dict(),
-                            "broker_handle_id": submit_native.get("handle_id"),
-                            "broker_error": exc.to_dict(),
-                            "broker_diagnostic": diagnostic,
-                            "broker_audit": diagnostic["broker_audit"],
-                            **submit_native,
-                        }
-                    )
-                    if runtime_evidence is not None:
-                        metadata.update(
-                            {
-                                "runtime_owner": "MiniQMTExecutionRuntime",
-                                "runtime_evidence": runtime_evidence,
-                            }
-                        )
-                    final_order = final_order.model_copy(update={"metadata": metadata})
-                    event = event.model_copy(update={"metadata": diagnostic})
-                    self.repository.save_order(run.run_id, final_order)
-                    self.repository.save_order_event(run.run_id, event)
-                    self.repository.save_run_event(
-                        run_id=run.run_id,
-                        event_type="MINIQMT_ORDER_SUBMIT_FAILED",
-                        message="MiniQMT order submit failed with broker diagnostic context",
-                        context=diagnostic,
-                    )
-                    orders.append(final_order)
-                    events.append(event)
-                    raise
-
-                audit_after = self._miniqmt_broker_audit_snapshot(
-                    broker,
-                    phase="after_reconcile",
-                    intent=intent,
-                    native=native,
-                    status=status,
-                )
-                diagnostic = self._miniqmt_order_diagnostic(
-                    status=status,
-                    native=native,
-                    visible_trade_count=len(trade_rows),
-                    audit_before=audit_before,
-                    audit_after=audit_after,
-                )
-                metadata = self._miniqmt_metadata_with_status(
-                    order.metadata,
-                    status=status,
-                    native=native,
-                    visible_trade_count=len(trade_rows),
-                    audit_before=audit_before,
-                    audit_after=audit_after,
-                )
-                metadata.update({"runtime_owner": "MiniQMTExecutionRuntime", "runtime_evidence": runtime_evidence})
-                order = order.model_copy(update={"metadata": metadata})
-                order_fills = self._miniqmt_fills_from_trades(
-                    trade_rows,
-                    order=order,
-                    native=native,
+                algo_result = self._run_minqmt_vnpy_style_intent(
+                    run=run,
                     trade_date=trade_date,
+                    intent=intent,
+                    broker=broker,
+                    execution_policy_context=execution_policy_context,
+                    session_id=session_id,
+                    account_slot_context=account_slot_context,
+                    runtime_config_hash=runtime_hash,
+                    audit_before=audit_before,
                 )
-                final_order = order
-                order_events = []
-                for fill in order_fills:
-                    final_order, event = self.oms.apply_fill(final_order, fill)
-                    self.repository.save_fill(
-                        run.run_id,
-                        fill,
-                        intended_price=order.limit_price,
-                        fill_market_context=self._miniqmt_fill_market_context(
-                            trade=fill.metadata.get("miniqmt_trade_raw") if isinstance(fill.metadata, dict) else {},
-                            native=native,
-                            trade_date=trade_date,
-                        ),
-                    )
-                    self.repository.save_order_event(run.run_id, event)
-                    order_events.append(event)
-                broker_state = self._miniqmt_order_status_from_handle(status)
-                if not order_fills and broker_state in {OrderStatus.REJECTED, OrderStatus.CANCELLED}:
-                    if final_order.status in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}:
-                        final_order = final_order.model_copy(update={"status": broker_state})
-                        event = OrderEvent(
-                            order_id=final_order.order_id,
-                            event_type=(
-                                OrderEventType.REJECTED
-                                if broker_state == OrderStatus.REJECTED
-                                else OrderEventType.CANCELLED
-                            ),
-                            reason=status.rejection_reason or f"MiniQMT order {broker_state.value.lower()}",
-                            metadata=diagnostic,
-                        )
-                    elif broker_state == OrderStatus.REJECTED:
-                        final_order, event = self.oms.reject_order(order, status.rejection_reason or "MiniQMT order rejected")
-                        event = event.model_copy(update={"metadata": diagnostic})
-                    else:
-                        final_order, event = self.oms.cancel_order(order, status.rejection_reason or "MiniQMT order cancelled")
-                        event = event.model_copy(update={"metadata": diagnostic})
-                    self.repository.save_order_event(run.run_id, event)
-                    order_events.append(event)
-                elif (
-                    final_order.status != broker_state
-                    and broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED}
-                    and status.filled_quantity > 0
-                    and status.filled_quantity >= final_order.filled_quantity
-                ):
-                    previous_status = final_order.status
-                    reconciled_update: dict[str, Any] = {
-                        "status": broker_state,
-                        "filled_quantity": min(status.filled_quantity, final_order.quantity),
-                    }
-                    if status.avg_fill_price is not None:
-                        reconciled_update["avg_fill_price"] = float(status.avg_fill_price)
-                    final_order = final_order.model_copy(update=reconciled_update)
-                    if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and previous_status != broker_state:
-                        event = OrderEvent(
-                            order_id=final_order.order_id,
-                            event_type=(
-                                OrderEventType.FILLED
-                                if broker_state == OrderStatus.FILLED
-                                else OrderEventType.PARTIALLY_FILLED
-                            ),
-                            reason="MiniQMT order status reconciled without visible trade rows",
-                            metadata={
-                                "broker_backend": "minqmt_sim",
-                                "authority_source": "MINIQMT_ORDER_STATUS",
-                                "broker_status": status.state,
-                                "broker_handle_id": handle.handle_id,
-                                "miniqmt_order_id": native["miniqmt_order_id"],
-                                "visible_trade_count": 0,
-                                "broker_diagnostic": diagnostic,
-                            },
-                        )
-                        self.repository.save_order_event(run.run_id, event)
-                        order_events.append(event)
-                    if broker_state in {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED} and not order_fills:
-                        self.repository.save_run_event(
-                            run_id=run.run_id,
-                            event_type="MINIQMT_ORDER_FILLED_WITHOUT_VISIBLE_TRADE_ROWS",
-                            message="MiniQMT order status reported fills but no trade rows were visible during reconciliation",
-                            context={
-                                "order_id": final_order.order_id,
-                                "symbol": final_order.symbol,
-                                "side": final_order.side.value,
-                                "filled_quantity": final_order.filled_quantity,
-                                "broker_status": status.state,
-                                "broker_handle_id": handle.handle_id,
-                                "miniqmt_order_id": native["miniqmt_order_id"],
-                            },
-                        )
-                final_order = final_order.model_copy(
-                    update={
-                        "metadata": {
-                            **self._miniqmt_metadata_with_status(
-                            final_order.metadata,
-                            status=status,
-                            native=native,
-                            visible_trade_count=len(trade_rows),
-                            audit_before=audit_before,
-                            audit_after=audit_after,
-                            ),
-                            "runtime_owner": "MiniQMTExecutionRuntime",
-                            "runtime_evidence": runtime_evidence,
-                        },
-                        "avg_fill_price": float(final_order.avg_fill_price) if final_order.avg_fill_price is not None else None,
-                    }
-                )
-                self.repository.save_order(run.run_id, final_order)
-                if session_id:
-                    self.repository.save_order_execution_state(
-                        OrderExecutionState(
-                            session_id=session_id,
-                            run_id=run.run_id,
-                            order_id=final_order.order_id,
-                            symbol=final_order.symbol,
-                            trade_date=trade_date,
-                            algo_code="MINIQMT_BROKER_AUTHORITY",
-                            algo_state={
-                                "broker_backend": "minqmt_sim",
-                                "authority_source": "MINIQMT",
-                                "runtime_owner": "MiniQMTExecutionRuntime",
-                                "runtime_evidence": runtime_evidence,
-                                "broker_handle_id": handle.handle_id,
-                                "miniqmt_order_id": native["miniqmt_order_id"],
-                                "broker_status": status.state,
-                                "broker_raw_status": status.raw_status,
-                                "broker_status_msg": status.status_msg,
-                                "broker_rejection_reason": status.rejection_reason,
-                                "trade_count": len(trade_rows),
-                                "fill_count": len(order_fills),
-                                "broker_diagnostic": diagnostic,
-                            },
-                            filled_quantity=final_order.filled_quantity,
-                            remaining_quantity=final_order.remaining_quantity,
-                            status=final_order.status.value,
-                        )
-                    )
-                orders.append(final_order)
-                fills.extend(order_fills)
-                events.extend(order_events)
-                self.repository.save_run_event(
-                    run_id=run.run_id,
-                    event_type="MINIQMT_ORDER_SUBMITTED",
-                    message="order intent submitted to MiniQMT broker authority",
-                    context={
-                        "order_id": final_order.order_id,
-                        "intent_id": intent.intent_id,
-                        "symbol": intent.symbol,
-                        "side": intent.side.value,
-                        "quantity": intent.quantity,
-                        "broker_handle_id": handle.handle_id,
-                        "miniqmt_order_id": native["miniqmt_order_id"],
-                        "broker_status": status.state,
-                        "broker_raw_status": status.raw_status,
-                        "broker_status_msg": status.status_msg,
-                        "broker_rejection_reason": status.rejection_reason,
-                        "fill_count": len(order_fills),
-                        "paper_order_status": final_order.status.value,
-                        "filled_quantity": final_order.filled_quantity,
-                        "broker_diagnostic": diagnostic,
-                        "runtime_owner": "MiniQMTExecutionRuntime",
-                        "runtime_evidence": runtime_evidence,
-                    },
-                )
+                orders.extend(algo_result["orders"])
+                fills.extend(algo_result["fills"])
+                events.extend(algo_result["events"])
 
             return self._persist_minqmt_authority_snapshot(
                 portfolio=portfolio,
@@ -1503,9 +1308,64 @@ class PaperTradingDayRunner:
         return hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _miniqmt_uses_vnpy_style_execution(execution_policy_context: dict[str, Any] | None) -> bool:
-        policy_json = execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
-        return isinstance(policy_json, dict) and is_vnpy_style_algo(policy_json.get("algo_code"))
+    def _require_miniqmt_vnpy_style_execution(
+        execution_policy_context: dict[str, Any] | None,
+        *,
+        portfolio_id: str,
+        trade_date: date,
+        package_id: str,
+    ) -> dict[str, Any]:
+        policy_context = dict(execution_policy_context or {})
+        policy_json = policy_context.get("policy_json") if isinstance(policy_context.get("policy_json"), dict) else None
+        explicit_algo_code = str(
+            (policy_json or {}).get("algo_code")
+            or policy_context.get("algo_code")
+            or policy_context.get("validated_execution_policy_id")
+            or ""
+        ).strip().upper()
+        if isinstance(policy_json, dict):
+            algo_code = str(policy_json.get("algo_code") or "").strip().upper()
+            if is_vnpy_style_algo(algo_code):
+                return {**policy_context, "algo_code": algo_code, "policy_json": {**policy_json, "algo_code": algo_code}}
+        context = {
+            "portfolio_id": portfolio_id,
+            "package_id": package_id,
+            "trade_date": trade_date.isoformat(),
+            "broker_backend": "minqmt_sim",
+            "inferred_algo_code": explicit_algo_code or None,
+            "payload_has_policy_json": isinstance(policy_json, dict),
+            "allowed_algo_codes": sorted(VNPY_STYLE_ASSETS),
+            "required_runtime_owner": "MiniQMTExecutionRuntime",
+        }
+        if explicit_algo_code.startswith("V25_") or explicit_algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"}:
+            raise MiniQMTUnsupportedExecutionAlgoError(
+                "MiniQMT broker execution does not support V25_* execution algorithms",
+                context={
+                    **context,
+                    "required_action": (
+                        "activate SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT, "
+                        "or another approved MiniQMT vn.py-style execution asset"
+                    ),
+                },
+            )
+        if explicit_algo_code:
+            raise MiniQMTUnsupportedExecutionAlgoError(
+                "MiniQMT broker execution requires an approved MiniQMT vn.py-style execution asset",
+                context={
+                    **context,
+                    "required_action": (
+                        "activate SNIPER_MINIQMT, BEST_LIMIT_MINIQMT, TWAP_LITE_MINIQMT, "
+                        "or another approved MiniQMT vn.py-style execution asset"
+                    ),
+                },
+            )
+        raise ExecutionPathNotCanonicalError(
+            "Paper v2 MiniQMT broker execution requires a full vn.py-style execution policy snapshot",
+            context={
+                **context,
+                "required_action": "bind an approved MiniQMT vn.py-style execution policy before broker submit",
+            },
+        )
 
     def _run_minqmt_vnpy_style_intent(
         self,
@@ -1518,6 +1378,7 @@ class PaperTradingDayRunner:
         session_id: str | None,
         account_slot_context: dict[str, str],
         runtime_config_hash: str,
+        audit_before: dict[str, Any] | None,
     ) -> dict[str, list[Any]]:
         result = self.minqmt_runtime_client.execute_paper_vnpy_intent(
             portfolio=type("PaperMiniQMTPortfolioRef", (), {"portfolio_id": intent.portfolio_id})(),
@@ -1579,15 +1440,46 @@ class PaperTradingDayRunner:
             final_order = order
             order_events: list[Any] = []
             if child.handle is None:
+                audit_after = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="submit_error",
+                    intent=child.intent,
+                    native=child.native_context,
+                    status=child.status,
+                )
                 reason = self._miniqmt_child_error_reason(child)
                 final_order, event = self.oms.reject_order(order, reason)
                 final_order = final_order.model_copy(
-                    update={"metadata": self._miniqmt_child_order_metadata(final_order.metadata, child, result)}
+                    update={
+                        "metadata": self._miniqmt_child_order_metadata(
+                            final_order.metadata,
+                            child,
+                            result,
+                            audit_before=audit_before,
+                            audit_after=audit_after,
+                        )
+                    }
                 )
+                event = event.model_copy(update={"metadata": final_order.metadata})
                 self.repository.save_order_event(run.run_id, event)
+                self.repository.save_run_event(
+                    run_id=run.run_id,
+                    event_type="MINIQMT_ORDER_SUBMIT_FAILED",
+                    message="MiniQMT vn.py-style child order submit failed with broker diagnostic context",
+                    context=final_order.metadata.get("broker_diagnostic") or final_order.metadata,
+                )
                 order_events.append(event)
+                self.repository.save_order(run.run_id, final_order)
+                self._raise_minqmt_child_submit_error(child)
             else:
                 native = dict(child.native_context or {})
+                audit_after = self._miniqmt_broker_audit_snapshot(
+                    broker,
+                    phase="after_reconcile",
+                    intent=child.intent,
+                    native=native,
+                    status=child.status,
+                )
                 order_fills = self._miniqmt_fills_from_trades(
                     child.trades,
                     order=order,
@@ -1614,6 +1506,17 @@ class PaperTradingDayRunner:
                         final_order, event = self.oms.reject_order(order, child.status.rejection_reason or "MiniQMT child order rejected")
                     else:
                         final_order, event = self.oms.cancel_order(order, child.status.rejection_reason or "MiniQMT child order cancelled")
+                    event = event.model_copy(
+                        update={
+                            "metadata": self._miniqmt_child_order_metadata(
+                                dict(event.metadata or {}),
+                                child,
+                                result,
+                                audit_before=audit_before,
+                                audit_after=audit_after,
+                            )
+                        }
+                    )
                     self.repository.save_order_event(run.run_id, event)
                     order_events.append(event)
                 elif (
@@ -1631,7 +1534,15 @@ class PaperTradingDayRunner:
                         }
                     )
                 final_order = final_order.model_copy(
-                    update={"metadata": self._miniqmt_child_order_metadata(final_order.metadata, child, result)}
+                    update={
+                        "metadata": self._miniqmt_child_order_metadata(
+                            final_order.metadata,
+                            child,
+                            result,
+                            audit_before=audit_before,
+                            audit_after=audit_after,
+                        )
+                    }
                 )
                 fills.extend(order_fills)
             self.repository.save_order(run.run_id, final_order)
@@ -1648,7 +1559,14 @@ class PaperTradingDayRunner:
                             "broker_backend": "minqmt_sim",
                             "authority_source": "MINIQMT_VNPY_STYLE",
                             "execution_terminal_state": result.terminal_state,
+                            "broker_handle_id": final_order.metadata.get("broker_handle_id"),
+                            "miniqmt_order_id": final_order.metadata.get("miniqmt_order_id"),
+                            "broker_status": final_order.metadata.get("broker_status"),
+                            "broker_raw_status": final_order.metadata.get("broker_raw_status"),
+                            "broker_status_msg": final_order.metadata.get("broker_status_msg"),
+                            "broker_rejection_reason": final_order.metadata.get("broker_rejection_reason"),
                             "diagnostic": result.diagnostic,
+                            "broker_diagnostic": final_order.metadata.get("broker_diagnostic"),
                         },
                         plan={"asset_metadata": result.asset_metadata, "policy_context": result.policy_context},
                         plan_sha256=result.policy_sha256,
@@ -1679,16 +1597,54 @@ class PaperTradingDayRunner:
         return {"orders": orders, "fills": fills, "events": events}
 
     @staticmethod
+    def _raise_minqmt_child_submit_error(child: Any) -> None:
+        error = child.submit_error if isinstance(child.submit_error, dict) else {}
+        error_code = str(error.get("error_code") or "").strip().upper()
+        message = str(error.get("message") or "MiniQMT vn.py-style child order submit failed")
+        context = error.get("context") if isinstance(error.get("context"), dict) else {}
+        if error_code == BrokerRejectedError.error_code:
+            raise BrokerRejectedError(message, context=dict(context))
+        if error_code == BrokerConnectivityError.error_code:
+            raise BrokerConnectivityError(message, context=dict(context))
+        raise BrokerSubmitError(message, context=dict(context))
+
+    @staticmethod
     def _miniqmt_child_order_metadata(
         metadata: dict[str, Any],
         child: Any,
         result: MiniQMTAlgoExecutionResult,
+        *,
+        audit_before: dict[str, Any] | None = None,
+        audit_after: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         native = dict(child.native_context or {})
+        authority_source = "MINIQMT_SUBMIT_ERROR" if child.submit_error else "MINIQMT_VNPY_STYLE"
+        broker_diagnostic = (
+            PaperTradingDayRunner._miniqmt_order_diagnostic(
+                status=child.status,
+                native=native,
+                visible_trade_count=len(child.trades),
+                audit_before=audit_before,
+                audit_after=audit_after,
+                authority_source=authority_source,
+            )
+            if child.status is not None
+            else None
+        )
+        if child.submit_error and broker_diagnostic is not None:
+            broker_error_context = child.submit_error.get("context") if isinstance(child.submit_error, dict) else {}
+            broker_diagnostic.update(
+                {
+                    "broker_error": child.submit_error,
+                    "submit_diagnostic": broker_error_context.get("submit_diagnostic")
+                    if isinstance(broker_error_context, dict)
+                    else None,
+                }
+            )
         return {
             **dict(metadata or {}),
             "broker_backend": "minqmt_sim",
-            "authority_source": "MINIQMT_VNPY_STYLE",
+            "authority_source": authority_source,
             "execution_algo_code": result.algo_code,
             "execution_asset_version": result.asset_metadata.get("asset_version"),
             "execution_policy_id": result.policy_context.get("validated_execution_policy_id"),
@@ -1697,12 +1653,25 @@ class PaperTradingDayRunner:
             "execution_source_attribution": result.asset_metadata.get("source_attribution"),
             "parent_intent_id": result.parent_intent.intent_id,
             "vnpy_vt_orderid": child.vt_orderid,
-            "broker_handle_id": child.handle.handle_id if child.handle else None,
-            "broker_status": child.status.state if child.status else None,
+            "broker_handle_id": child.handle.handle_id if child.handle else native.get("handle_id"),
+            "broker_status": "submit_error" if child.submit_error else child.status.state if child.status else None,
             "broker_raw_status": child.status.raw_status if child.status else None,
             "broker_status_msg": child.status.status_msg if child.status else None,
             "broker_rejection_reason": child.status.rejection_reason if child.status else None,
             "broker_status_raw": child.status.raw if child.status else None,
+            "broker_error": child.submit_error,
+            "broker_diagnostic": broker_diagnostic,
+            "broker_audit": broker_diagnostic["broker_audit"] if broker_diagnostic else None,
+            "broker_error_code": broker_diagnostic.get("broker_error_code") if broker_diagnostic else None,
+            "broker_rejection_classification": (
+                broker_diagnostic.get("broker_rejection_classification") if broker_diagnostic else None
+            ),
+            "diagnostic_completeness": broker_diagnostic.get("diagnostic_completeness") if broker_diagnostic else None,
+            "diagnostic_gap": broker_diagnostic.get("diagnostic_gap", False) if broker_diagnostic else False,
+            "status_msg_best_available": broker_diagnostic.get("status_msg_best_available") if broker_diagnostic else None,
+            "status_msg_maybe_truncated": broker_diagnostic.get("status_msg_maybe_truncated", False)
+            if broker_diagnostic
+            else False,
             "miniqmt_trade_count": len(child.trades),
             "child_submit_error": child.submit_error,
             **native,
@@ -1785,7 +1754,43 @@ class PaperTradingDayRunner:
                 "execution_quality_report": execution_quality_report,
             },
         )
-        succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
+        session_id = self._miniqmt_session_id_from_run(run)
+        open_orders = non_terminal_orders_for_run_success(orders)
+        if session_id and hasattr(self.repository, "get_session") and open_orders:
+            pending_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="MINIQMT_RUN_PENDING_RECONCILE",
+                message="MiniQMT broker-authoritative snapshot persisted with non-terminal orders; run requires later broker reconciliation",
+                context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                    "order_count": len(orders),
+                    "fill_count": fill_count,
+                    "new_fill_count": len(fills),
+                    "open_order_count": len(open_orders),
+                    "open_orders": open_orders,
+                },
+            )
+            return PaperDayRunResult(
+                portfolio=pending_portfolio,
+                run=run,
+                orders=orders,
+                fills=fills,
+                events=events,
+                positions=position_list,
+                account_snapshot=snapshot,
+            )
+        if not session_id and hasattr(self.repository, "get_session") and open_orders:
+            orders, terminal_events = self._terminalize_minqmt_orders_before_non_live_success(
+                run=run,
+                trade_date=trade_date,
+                broker=broker,
+                orders=orders,
+            )
+            events.extend(terminal_events)
+        if hasattr(self.repository, "get_session"):
+            self._assert_orders_terminal_before_success(run, orders)
+        succeeded = run if run.status == RunStatus.SUCCEEDED else self.repository.update_run_status(run, RunStatus.SUCCEEDED)
         ready_portfolio = self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.READY)
         self.repository.save_run_event(
             run_id=run.run_id,
@@ -1827,6 +1832,103 @@ class PaperTradingDayRunner:
             positions=position_list,
             account_snapshot=snapshot,
         )
+
+    def _assert_orders_terminal_before_success(self, run: PaperRun, orders: list[Any] | None = None) -> None:
+        checked_orders = list(orders) if orders is not None else self.repository.list_orders_for_run(run.run_id)
+        assert_orders_terminal_before_run_success(run_id=run.run_id, orders=checked_orders)
+
+    def _terminalize_minqmt_orders_before_non_live_success(
+        self,
+        *,
+        run: PaperRun,
+        trade_date: date,
+        broker: MiniQMTSimBackend,
+        orders: list[Any],
+    ) -> tuple[list[Any], list[OrderEvent]]:
+        terminalized: list[Any] = []
+        events: list[OrderEvent] = []
+        for order in orders:
+            if not non_terminal_orders_for_run_success([order]):
+                terminalized.append(order)
+                continue
+            native = self._miniqmt_native_context_from_order(order)
+            if native is None:
+                raise InvalidStateTransitionError(
+                    "MiniQMT non-live run cannot be marked SUCCEEDED because an open order lacks native broker ids",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "status": order.status.value,
+                    },
+                )
+            handle = OrderHandle(
+                handle_id=native["handle_id"],
+                backend_id="minqmt_sim",
+                submitted_at=order.created_at,
+                intent_id=order.intent_id,
+            )
+            try:
+                ack = broker.cancel(handle)
+            except TradingCoreError:
+                raise
+            except Exception as exc:
+                raise BrokerSubmitError(
+                    "MiniQMT non-live run failed to cancel open order before success",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_TERMINALIZE_CANCEL_FAILED",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "handle_id": handle.handle_id,
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc),
+                    },
+                ) from exc
+            if not ack.accepted:
+                raise InvalidStateTransitionError(
+                    "MiniQMT non-live run cannot be marked SUCCEEDED because open order cancel was rejected",
+                    context={
+                        "reason_code": "PAPER_V2_RUN_TERMINALIZE_CANCEL_REJECTED",
+                        "run_id": run.run_id,
+                        "order_id": order.order_id,
+                        "symbol": order.symbol,
+                        "handle_id": handle.handle_id,
+                        "cancel_reason": ack.reason,
+                    },
+                )
+            final_order, event = self.oms.cancel_order(
+                order,
+                ack.reason or "MiniQMT non-live run terminalized open order before success",
+            )
+            metadata = {
+                **dict(final_order.metadata or {}),
+                "authority_source": "MINIQMT_NON_LIVE_TERMINALIZE_BEFORE_SUCCESS",
+                "terminalize_reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                "terminalize_trade_date": trade_date.isoformat(),
+                "terminalize_cancel_ack": ack.model_dump(mode="json"),
+            }
+            final_order = final_order.model_copy(update={"metadata": metadata})
+            event = event.model_copy(update={"metadata": metadata})
+            self.repository.save_order_event(run.run_id, event)
+            self.repository.save_order(run.run_id, final_order)
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="MINIQMT_NON_LIVE_ORDER_CANCELLED_BEFORE_SUCCESS",
+                message="MiniQMT non-live run cancelled an open order before marking the run succeeded",
+                context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
+                    "order_id": order.order_id,
+                    "symbol": order.symbol,
+                    "previous_status": order.status.value,
+                    "final_status": final_order.status.value,
+                    "cancel_ack": ack.model_dump(mode="json"),
+                },
+            )
+            terminalized.append(final_order)
+            events.append(event)
+        return terminalized, events
 
     def reconcile_minqmt_native_run(
         self,

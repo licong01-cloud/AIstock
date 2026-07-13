@@ -11,6 +11,13 @@ interface EvolutionTrajectoryProps {
   taskType?: string;
   evolutionMode?: string;
   sourceType?: string;
+  dataSourceAdapter?: DataSourceAdapter;
+}
+
+export interface DataSourceAdapter {
+  basePath: string;
+  taskType: "multi_alpha_combine";
+  scheme?: string;
 }
 
 /**
@@ -51,6 +58,7 @@ function formatStatus(status: string): { label: string; color: string; bg: strin
     case "completed":
       return { label: "已完成", color: "#047857", bg: "#d1fae5" };
     case "failed":
+    case "partial_failed":
       return { label: "失败", color: "#b91c1c", bg: "#fee2e2" };
     case "pending":
       return { label: "等待调度", color: "#64748b", bg: "#f1f5f9" };
@@ -64,6 +72,7 @@ export default React.memo(function EvolutionTrajectory({
   taskType,
   evolutionMode,
   sourceType,
+  dataSourceAdapter,
 }: EvolutionTrajectoryProps) {
   const [rawData, setRawData] = useState<any>(null);
   const [customConfig, setCustomConfig] = useState<any>(null);
@@ -84,9 +93,18 @@ export default React.memo(function EvolutionTrajectory({
       return json.data;
     };
 
+    const query = dataSourceAdapter?.scheme ? `?scheme=${encodeURIComponent(dataSourceAdapter.scheme)}` : "";
+    const encodedTaskId = dataSourceAdapter ? encodeURIComponent(taskId) : taskId;
+    const trajectoryUrl = dataSourceAdapter
+      ? `${API}${dataSourceAdapter.basePath}/tasks/${encodedTaskId}/trajectory${query}`
+      : `${API}/quantevolver/evolution/tasks/${taskId}/trajectory`;
+    const configUrl = dataSourceAdapter
+      ? `${API}${dataSourceAdapter.basePath}/tasks/${encodedTaskId}/custom-evo-config${query}`
+      : `${API}/quantevolver/evolution/tasks/${taskId}/custom-evo-config`;
+
     Promise.allSettled([
-      fetchJson(`${API}/quantevolver/evolution/tasks/${taskId}/trajectory`),
-      fetchJson(`${API}/quantevolver/evolution/tasks/${taskId}/custom-evo-config`),
+      fetchJson(trajectoryUrl),
+      fetchJson(configUrl),
     ])
       .then(([trajectoryResult, configResult]) => {
         if (trajectoryResult.status === "fulfilled") {
@@ -99,7 +117,7 @@ export default React.memo(function EvolutionTrajectory({
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [taskId]);
+  }, [taskId, dataSourceAdapter?.basePath, dataSourceAdapter?.scheme, dataSourceAdapter]);
 
   // 从后端原始数据转换为组件所需的格式
   const processedData = useMemo(() => {
@@ -159,6 +177,7 @@ export default React.memo(function EvolutionTrajectory({
       loopDescriptions.map((item) => [item.loopIndex, item]),
     );
 
+    const isCombine = (dataSourceAdapter?.taskType || taskType || sourceType) === "multi_alpha_combine";
     const trajectory = trajectoryRows.map((loop: any) => {
       const m = loop.metrics_json || {};
       const desc = loopDescriptionByIndex.get(Number(loop.loop_index ?? 0));
@@ -182,6 +201,7 @@ export default React.memo(function EvolutionTrajectory({
       .filter((t: any) => t.is_sota)
       .map((t: any) => ({
         loop_id: t.loop_id,
+        label: t.label,
         ic: t.ic,
         ann_ret: t.ann_ret,
         sharpe: t.sharpe,
@@ -198,9 +218,13 @@ export default React.memo(function EvolutionTrajectory({
     }
 
     // 计算最佳指标
-    const completedLoops = trajectory.filter((t: any) => t.ic != null);
-    const bestIc = completedLoops.length > 0
-      ? Math.max(...completedLoops.map((t: any) => t.ic))
+    const icEligibleLoops = trajectory.filter((t: any) => t.ic != null);
+    const completedLoops = isCombine ? trajectory.filter((t: any) => t.ann_ret != null) : icEligibleLoops;
+    const bestIc = icEligibleLoops.length > 0
+      ? Math.max(...icEligibleLoops.map((t: any) => t.ic))
+      : null;
+    const bestCagr = trajectory.filter((t: any) => t.ann_ret != null).length > 0
+      ? Math.max(...trajectory.filter((t: any) => t.ann_ret != null).map((t: any) => t.ann_ret))
       : null;
     const bestSharpe = completedLoops.filter((t: any) => t.sharpe != null).length > 0
       ? Math.max(...completedLoops.filter((t: any) => t.sharpe != null).map((t: any) => t.sharpe))
@@ -213,9 +237,10 @@ export default React.memo(function EvolutionTrajectory({
       sota_history: sotaHistory,
       dimension_stats: dimMap,
       best_ic: bestIc,
+      best_cagr: bestCagr,
       best_sharpe: bestSharpe,
     };
-  }, [rawData, customConfig]);
+  }, [rawData, customConfig, dataSourceAdapter?.taskType, taskType, sourceType]);
 
   if (!taskId) {
     return (
@@ -244,19 +269,28 @@ export default React.memo(function EvolutionTrajectory({
   if (!processedData) return null;
   const data = processedData;
   const normalizedMode = evolutionMode || "auto";
-  const normalizedType = taskType || sourceType || "evolution";
+  const normalizedType = dataSourceAdapter?.taskType || taskType || sourceType || "evolution";
+  const isCombine = normalizedType === "multi_alpha_combine";
   const showDimensionStats = normalizedType === "evolution" && normalizedMode === "auto";
+  const summaryStats = isCombine
+    ? [
+        { label: "总配置", value: data.total_loops, color: "#0f172a" },
+        { label: "最优配置数", value: data.sota_history.length, color: "#d97706" },
+        { label: "最佳 CAGR", value: data.best_cagr != null ? (data.best_cagr * 100).toFixed(1) + "%" : "-", color: "#059669" },
+        { label: "最佳 Sharpe", value: data.best_sharpe != null ? data.best_sharpe.toFixed(2) : "-", color: "#3b82f6" },
+      ]
+    : [
+        { label: "总轮次", value: data.total_loops, color: "#0f172a" },
+        { label: "SOTA 次数", value: data.sota_history.length, color: "#d97706" },
+        { label: "最佳 IC", value: data.best_ic != null ? data.best_ic.toFixed(4) : "-", color: "#059669" },
+        { label: "最佳 Sharpe", value: data.best_sharpe != null ? data.best_sharpe.toFixed(2) : "-", color: "#3b82f6" },
+      ];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, minWidth: 0 }}>
       {/* Summary stats */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        {[
-          { label: "总轮次", value: data.total_loops, color: "#0f172a" },
-          { label: "SOTA 次数", value: data.sota_history.length, color: "#d97706" },
-          { label: "最佳 IC", value: data.best_ic != null ? data.best_ic.toFixed(4) : "-", color: "#059669" },
-          { label: "最佳 Sharpe", value: data.best_sharpe != null ? data.best_sharpe.toFixed(2) : "-", color: "#3b82f6" },
-        ].map((s) => (
+        {summaryStats.map((s) => (
           <div key={s.label} style={{
             flex: "1 1 120px", padding: "12px 16px",
             backgroundColor: "#f8fafc", borderRadius: 8,
@@ -282,10 +316,10 @@ export default React.memo(function EvolutionTrajectory({
               margin: 0, fontSize: 13, fontWeight: 700,
               color: "#0f766e", textTransform: "uppercase", letterSpacing: "0.05em",
             }}>
-              Loop 目标说明
+              {isCombine ? "配置说明" : "Loop 目标说明"}
             </h4>
             <span style={{ fontSize: 12, color: "#64748b" }}>
-              展示 custom_evo 配置中的 loop.label 和 loop_desc
+              {isCombine ? "展示窗口×topk 配置与当前 weighting_scheme" : "展示 custom_evo 配置中的 loop.label 和 loop_desc"}
             </span>
           </div>
           <div style={{
@@ -313,7 +347,7 @@ export default React.memo(function EvolutionTrajectory({
                 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <span style={{ fontFamily: "monospace", fontWeight: 800, color: "#0f172a" }}>
-                      Loop {item.loopIndex}
+                      {isCombine ? "配置" : "Loop"} {item.loopIndex}
                     </span>
                     <span style={{
                       fontSize: 11,
@@ -377,11 +411,12 @@ export default React.memo(function EvolutionTrajectory({
           margin: "0 0 12px", fontSize: 13, fontWeight: 700,
           color: "#3b82f6", textTransform: "uppercase", letterSpacing: "0.05em",
         }}>
-          指标演进折线
+          {isCombine ? "指标配置散点" : "指标演进折线"}
         </h4>
         <MetricsTrajectoryChart
           trajectory={data.trajectory}
           sota_history={data.sota_history}
+          mode={isCombine ? "combine" : "evolution"}
         />
       </div>
 
@@ -395,7 +430,7 @@ export default React.memo(function EvolutionTrajectory({
             margin: "0 0 12px", fontSize: 13, fontWeight: 700,
             color: "#f59e0b", textTransform: "uppercase", letterSpacing: "0.05em",
           }}>
-            SOTA 进化阶梯
+            {isCombine ? "最优配置摘要" : "SOTA 进化阶梯"}
           </h4>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {data.sota_history.map((s: any, i: number) => (
@@ -408,11 +443,13 @@ export default React.memo(function EvolutionTrajectory({
                   fontWeight: 700, color: "#d97706",
                   fontFamily: "monospace", minWidth: 60,
                 }}>
-                  Loop {s.loop_id}
+                  {isCombine ? "配置" : "Loop"} {s.loop_id}
                 </span>
-                <span style={{ fontSize: 13, color: "#475569" }}>
-                  IC: {s.ic?.toFixed(4) ?? "-"}
-                </span>
+                {!isCombine && (
+                  <span style={{ fontSize: 13, color: "#475569" }}>
+                    IC: {s.ic?.toFixed(4) ?? "-"}
+                  </span>
+                )}
                 <span style={{ fontSize: 13, color: "#475569" }}>
                   Sharpe: {s.sharpe?.toFixed(2) ?? "-"}
                 </span>

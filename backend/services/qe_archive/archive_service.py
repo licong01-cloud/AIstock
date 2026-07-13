@@ -6,12 +6,21 @@ Callers must pass payloads that have already been collected from DB/API paths.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from .payload_extractor import ExtractedArchivePayload, QEArchivePayloadExtractor
 from .repository import QEArchiveRepository
+from backend.services.quantevolver.qe_resource_phase_service import (
+    RESOURCE_SCHEMA_REASON,
+    QEResourcePhaseError,
+    QEResourcePhaseService,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -30,9 +39,15 @@ class QEArchiveService:
         *,
         repository: QEArchiveRepository | None = None,
         extractor: QEArchivePayloadExtractor | None = None,
+        resource_phase_service: QEResourcePhaseService | None = None,
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._extractor = extractor or QEArchivePayloadExtractor()
+        self._resource_phase_service = resource_phase_service
+        if resource_phase_service is None and (
+            repository is None or isinstance(repository, QEArchiveRepository)
+        ):
+            self._resource_phase_service = QEResourcePhaseService()
 
     def process_payload(
         self,
@@ -97,6 +112,7 @@ class QEArchiveService:
         repo.upsert_run_source(extracted.source)
         repo.upsert_run_config(extracted.config)
         repo.upsert_reproducibility_manifest(extracted.reproducibility_manifest)
+        repo.upsert_artifact_manifest(run_id, extracted.artifact_manifest, replace_existing=True)
         for context in extracted.data_contexts:
             repo.upsert_data_context(context)
         if extracted.account_summary is not None:
@@ -109,3 +125,21 @@ class QEArchiveService:
         repo.replace_run_trades(run_id, extracted.trades)
         repo.replace_run_execution_events(run_id, extracted.execution_events)
         repo.replace_raw_payloads(run_id, extracted.raw_payloads)
+        task_id = getattr(extracted.run, "task_id", None)
+        loop_index = getattr(extracted.run, "loop_index", None)
+        if task_id and loop_index is not None and self._resource_phase_service is not None:
+            try:
+                self._resource_phase_service.bind_archive_run(
+                    task_id=str(task_id),
+                    loop_index=int(loop_index),
+                    archive_run_id=run_id,
+                    attempt_no=getattr(extracted.run, "attempt_no", None),
+                )
+            except QEResourcePhaseError as exc:
+                if exc.reason_code != RESOURCE_SCHEMA_REASON:
+                    raise
+                logger.warning(
+                    "%s: resource telemetry schema is not deployed; archive run binding skipped for %s",
+                    RESOURCE_SCHEMA_REASON,
+                    run_id,
+                )

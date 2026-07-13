@@ -12,6 +12,8 @@ import type {
   HmmSnapshot,
   JsonObject,
   MiniQMTExecutionQualityResponse,
+  MultiAlphaCombineRun,
+  MultiAlphaCombineRunDetail,
   PaperPortfolio,
   PaperAutoRunSummary,
   PaperLiveDashboard,
@@ -41,6 +43,7 @@ import type {
   SimulationRuntimeRunDetail,
   SimulationRuntimeRunsResponse,
   SimulationRuntimeSchedulerStatus,
+  StrategyPackagePromotionResult,
   StrategyPackage,
   TradingDayDefaults,
 } from "./types";
@@ -50,14 +53,16 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/
 export class PaperV2ApiError extends Error {
   status: number;
   errorCode?: string;
+  reasonCode?: string;
   context?: JsonObject;
   raw: unknown;
 
-  constructor(message: string, status: number, raw: unknown, errorCode?: string, context?: JsonObject) {
+  constructor(message: string, status: number, raw: unknown, errorCode?: string, context?: JsonObject, reasonCode?: string) {
     super(message);
     this.name = "PaperV2ApiError";
     this.status = status;
     this.errorCode = errorCode;
+    this.reasonCode = reasonCode;
     this.context = context;
     this.raw = raw;
   }
@@ -71,10 +76,13 @@ function parseError(payload: unknown, status: number): PaperV2ApiError {
   if (isObject(payload)) {
     const detail = payload.detail;
     if (isObject(detail)) {
-      const errorCode = typeof detail.error_code === "string" ? detail.error_code : undefined;
+      const reasonCode = typeof detail.reason_code === "string" ? detail.reason_code : undefined;
+      const errorCode = typeof detail.error_code === "string"
+        ? detail.error_code
+        : reasonCode;
       const message = typeof detail.message === "string" ? detail.message : JSON.stringify(detail);
       const context = isObject(detail.context) ? detail.context : undefined;
-      return new PaperV2ApiError(message, status, payload, errorCode, context);
+      return new PaperV2ApiError(message, status, payload, errorCode, context, reasonCode);
     }
     if (typeof detail === "string") return new PaperV2ApiError(detail, status, payload);
     if (typeof payload.error === "string") return new PaperV2ApiError(payload.error, status, payload);
@@ -134,6 +142,20 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ sources: QEPackagingSource[] }>(`/strategy-packages/qe-sources?${qs.toString()}`);
     return data.sources || [];
   },
+  async listCombineRuns(limit = 200): Promise<MultiAlphaCombineRun[]> {
+    const qs = new URLSearchParams({ status: "succeeded", limit: String(limit) });
+    const data = await apiFetch<{ data?: { runs?: MultiAlphaCombineRun[] }; runs?: MultiAlphaCombineRun[] }>(
+      `/multi-alpha/combine-backtest/runs?${qs.toString()}`,
+    );
+    return data.data?.runs || data.runs || [];
+  },
+  async getCombineRun(runId: string): Promise<MultiAlphaCombineRunDetail> {
+    const data = await apiFetch<{ data?: MultiAlphaCombineRunDetail }>(
+      `/multi-alpha/combine-backtest/runs/${encodeURIComponent(runId)}`,
+    );
+    if (!data.data) throw new PaperV2ApiError("combine run response missing data", 500, data);
+    return data.data;
+  },
   async createFromQEExperiment(payload: { experiment_id: string; resolve_runtime_assets?: boolean }): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-experiment", body(payload));
     return data.package;
@@ -141,6 +163,45 @@ export const strategyPackageApi = {
   async createFromQEEvolutionLoop(payload: { qe_task_id: string; qe_loop_id: string; resolve_runtime_assets?: boolean }): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>("/strategy-packages/from-qe-evolution-loop", body(payload));
     return data.package;
+  },
+  async createFromMultiAlphaCombineRun(payload: {
+    combine_backtest_run_id: string;
+    weighting_scheme: string;
+    scheme_result_id?: string | null;
+    topk: number;
+    secondary_topk?: number[];
+    package_name?: string | null;
+    component_package_ids?: Record<string, string> | null;
+    weight_policy: JsonObject;
+    promotion_gate?: JsonObject;
+    confirmation: string;
+  }): Promise<StrategyPackagePromotionResult> {
+    const data = await apiFetch<StrategyPackagePromotionResult & { package?: StrategyPackage }>(
+      "/strategy-packages/from-multi-alpha-combine-run",
+      body(payload),
+    );
+    return {
+      ...(data.package || {}),
+      ...data,
+      package_id: data.package_id || data.package?.package_id || "",
+      package_name: data.package?.package_name || data.package_name || "",
+      package_status: data.package?.package_status || data.package_status || "",
+      manifest_sha256: data.manifest_sha256 || data.package?.manifest_sha256 || "",
+    };
+  },
+  async paperRuntimeDryRun(packageId: string, payload: {
+    broker_backend: "local_sim" | "minqmt_sim";
+    trade_date: string;
+    runtime_variant: "top_k=25" | "top_k=50";
+    confirmation: string;
+    validated_by?: string;
+    runtime_config?: JsonObject;
+    initial_cash?: number;
+  }): Promise<JsonObject> {
+    return apiFetch(
+      `/strategy-packages/${encodeURIComponent(packageId)}/paper-runtime-dry-run`,
+      body(payload),
+    );
   },
   async createFromCandidate(candidateId: string, payload: { manifest_json?: JsonObject | null } = {}): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(
@@ -215,6 +276,12 @@ export const strategyPackageApi = {
     const data = await apiFetch<{ packages: StrategyPackage[] }>(`/strategy-packages?${qs.toString()}`);
     return data.packages || [];
   },
+  async listSummary(status?: string, limit = 200): Promise<StrategyPackage[]> {
+    const qs = new URLSearchParams({ limit: String(limit), view: "summary" });
+    if (status) qs.set("status", status);
+    const data = await apiFetch<{ packages: StrategyPackage[] }>(`/strategy-packages?${qs.toString()}`);
+    return data.packages || [];
+  },
   async get(packageId: string): Promise<StrategyPackage> {
     const data = await apiFetch<{ package: StrategyPackage }>(`/strategy-packages/${packageId}`);
     return data.package;
@@ -259,8 +326,10 @@ export const strategyPackageApi = {
 };
 
 export const selectionCenterApi = {
-  async selectablePackages(limit = 300): Promise<SelectablePackage[]> {
-    const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?limit=${limit}`);
+  async selectablePackages(limit = 300, view: "full" | "summary" = "full"): Promise<SelectablePackage[]> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (view !== "full") qs.set("view", view);
+    const data = await apiFetch<{ packages: SelectablePackage[] }>(`/selection-center/selectable-packages?${qs.toString()}`);
     return data.packages || [];
   },
   async industryTree(): Promise<JsonObject[]> {
@@ -305,10 +374,6 @@ export const selectionCenterApi = {
     const data = await apiFetch<{ point_in_time_context: JsonObject }>(`/selection-center/pit-cutoff?${qs.toString()}`);
     return data.point_in_time_context;
   },
-  async aggregateRuns(payload: { source_run_ids: string[]; mode: SelectionMode; runtime_config: JsonObject }): Promise<SelectionRun> {
-    const data = await apiFetch<{ run: SelectionRun }>("/selection-center/aggregate-runs", body(payload));
-    return data.run;
-  },
   async excludedResults(runId: string): Promise<Record<string, unknown[]>> {
     const data = await apiFetch<{ excluded_results: Record<string, unknown[]> }>(`/selection-center/runs/${runId}/excluded-results`);
     return data.excluded_results || {};
@@ -348,6 +413,7 @@ export const paperV2Api = {
     pageSize?: number;
     limit?: number;
     statuses?: string[];
+    brokerBackend?: string;
     search?: string;
     sortBy?: string;
     sortDir?: string;
@@ -362,6 +428,7 @@ export const paperV2Api = {
     for (const status of params.statuses || []) {
       if (status) qs.append("status", status);
     }
+    if (params.brokerBackend) qs.set("broker_backend", params.brokerBackend);
     if (params.search?.trim()) qs.set("search", params.search.trim());
     const data = await apiFetch<{ portfolios: PaperPortfolio[]; pagination?: JsonObject }>(`/paper-v2/portfolios?${qs.toString()}`);
     return {
@@ -425,6 +492,10 @@ export const paperV2Api = {
         sort_dir: params.sortDir || "desc",
       },
     };
+  },
+  async overviewSummary(): Promise<JsonObject> {
+    const data = await apiFetch<{ summary?: JsonObject }>("/paper-v2/overview-summary");
+    return data.summary || {};
   },
   async createPortfolio(payload: { package_id: string; portfolio_name: string; initial_cash: number; start_date: string; data_source: DataSource; broker_backend?: "local_sim" | "minqmt_sim"; fee_policy?: JsonObject; risk_policy?: JsonObject; execution_policy?: JsonObject }): Promise<PaperPortfolio> {
     const data = await apiFetch<{ portfolio: PaperPortfolio }>("/paper-v2/portfolios", body(payload));

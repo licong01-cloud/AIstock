@@ -375,13 +375,31 @@ class ValidationPipelineCenterService:
         }
         return item
 
-    def issue_candidate_summary(self) -> dict[str, Any]:
-        items = self.issue_candidates(page=1, page_size=10000)["items"]
+    def issue_candidate_summary(self, *, search: str | None = None) -> dict[str, Any]:
+        items = self.issue_candidates(search=search, page=1, page_size=10000)["items"]
+        outcome = self._candidate_outcome_metrics(items)
         by_status = Counter(str(item.get("status") or "unknown") for item in items)
         by_module = Counter(str(item.get("module_id") or "unknown") for item in items)
         by_severity = Counter(str(item.get("severity") or "unknown") for item in items)
+        by_source_type = Counter(str(item.get("source_type") or "unknown") for item in items)
+        by_quality_gate = Counter(str(item.get("quality_gate_state") or "unknown") for item in items)
+        no_submit_reason_counts: Counter[str] = Counter()
+        for item in items:
+            no_submit_reason_counts.update(self._candidate_string_list(item.get("no_submit_reasons")))
         linked_issue_count = sum(1 for item in items if item.get("github_issue_url") or item.get("github_issue_number"))
+        issue_payload_ready_count = sum(1 for item in items if item.get("issue_payload_ready") is True)
         open_count = sum(1 for item in items if str(item.get("status") or "").lower() not in {"ignored", "promoted", "closed"})
+        reason_codes: list[str] = []
+        if not items:
+            reason_codes.append("candidate_queue_empty")
+        elif issue_payload_ready_count == 0:
+            reason_codes.append("no_issue_ready_candidate")
+        if len(items) - linked_issue_count > 0:
+            reason_codes.append("missing_github_issue_links")
+        if outcome["confirmed_issue_count"]:
+            reason_codes.append("confirmed_nightly_issue")
+        elif items:
+            reason_codes.append("no_confirmed_nightly_issue_yet")
         return {
             "schema_version": CANDIDATE_QUEUE_SCHEMA,
             "generated_at": _now_iso(),
@@ -389,10 +407,19 @@ class ValidationPipelineCenterService:
             "open_count": open_count,
             "linked_issue_count": linked_issue_count,
             "missing_issue_link_count": max(0, len(items) - linked_issue_count),
+            "nightly_candidate_count": sum(1 for item in items if str(item.get("source_type") or "").startswith("nightly_")),
+            "issue_payload_ready_count": issue_payload_ready_count,
+            "draft_count": sum(1 for item in items if str(item.get("status") or "").lower() == "draft"),
+            "deduped_count": sum(1 for item in items if str(item.get("status") or "").lower() == "deduped"),
+            "artifact_only_count": sum(1 for item in items if str(item.get("status") or "").lower() == "artifact_only"),
             "by_status": dict(sorted(by_status.items())),
             "by_module": dict(sorted(by_module.items())),
             "by_severity": dict(sorted(by_severity.items())),
-            "reason_codes": [] if items else ["candidate_queue_empty"],
+            "by_source_type": dict(sorted(by_source_type.items())),
+            "by_quality_gate": dict(sorted(by_quality_gate.items())),
+            "no_submit_reason_counts": dict(sorted(no_submit_reason_counts.items())),
+            "outcome_metrics": outcome,
+            "reason_codes": reason_codes,
             "data_state": "complete",
             "production_8001_touched": False,
         }
@@ -403,6 +430,7 @@ class ValidationPipelineCenterService:
         module: str | None = None,
         severity: str | None = None,
         status: str | None = None,
+        search: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
@@ -416,6 +444,27 @@ class ValidationPipelineCenterService:
         if status:
             wanted = status.lower()
             items = [item for item in items if str(item.get("status") or "").lower() == wanted]
+        if search:
+            needle = search.strip().lower()
+            fields = (
+                "candidate_id",
+                "title",
+                "module_id",
+                "module",
+                "severity",
+                "status",
+                "summary",
+                "actual",
+                "expected",
+                "fingerprint",
+                "source_path",
+            )
+            items = [
+                item
+                for item in items
+                if any(needle in str(item.get(field) or "").lower() for field in fields)
+                or any(needle in str(ref or "").lower() for ref in self._candidate_string_list(item.get("source_paths")))
+            ]
         items.sort(
             key=lambda item: (
                 _severity_rank(item.get("severity")),
@@ -1047,12 +1096,16 @@ class ValidationPipelineCenterService:
         }
 
     def _candidate_queue_roots(self) -> list[Path]:
-        return [
+        roots = [
             self.repo_root / "tests" / "aistock_validation" / "runs" / "candidates",
             self.repo_root / "tests" / "aistock_validation" / "history" / "issue_candidates",
             self.repo_root / "tmp" / "validation" / "ci_failure_issue",
             self.repo_root / "tmp" / "validation" / "nightly_failure_issue",
         ]
+        code_intelligence_root = self.repo_root / "tmp" / "validation" / "code-intelligence"
+        if code_intelligence_root.exists():
+            roots.extend(path for path in sorted(code_intelligence_root.glob("*/bug-candidates")) if path.is_dir())
+        return roots
 
     def _candidate_queue_items(self) -> list[dict[str, Any]]:
         by_key: dict[str, dict[str, Any]] = {}
@@ -1067,13 +1120,27 @@ class ValidationPipelineCenterService:
                 except (OSError, json.JSONDecodeError, UnicodeDecodeError):
                     continue
                 item = self._candidate_item_from_payload(path, payload)
-                if not item:
-                    continue
-                key = str(item.get("fingerprint") or item.get("candidate_id") or item.get("source_path"))
-                if key in by_key:
-                    by_key[key] = self._merge_candidate_items(by_key[key], item)
+                items: list[dict[str, Any]]
+                if item:
+                    items = [item]
+                elif payload.get("schema_version") == "aistock_bug_candidate_queue_v1" and isinstance(payload.get("candidates"), list):
+                    items = [
+                        queue_item
+                        for queue_item in (
+                            self._candidate_item_from_payload(path, candidate)
+                            for candidate in payload.get("candidates") or []
+                            if isinstance(candidate, dict)
+                        )
+                        if queue_item
+                    ]
                 else:
-                    by_key[key] = item
+                    continue
+                for queue_item in items:
+                    key = str(queue_item.get("fingerprint") or queue_item.get("candidate_id") or queue_item.get("source_path"))
+                    if key in by_key:
+                        by_key[key] = self._merge_candidate_items(by_key[key], queue_item)
+                    else:
+                        by_key[key] = queue_item
         return list(by_key.values())
 
     def _candidate_item_from_payload(self, path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -1085,8 +1152,14 @@ class ValidationPipelineCenterService:
         handoff = payload.get("agent_handoff") if isinstance(payload.get("agent_handoff"), dict) else {}
         dedupe = payload.get("dedupe") if isinstance(payload.get("dedupe"), dict) else {}
         schema = str(payload.get("schema_version") or candidate.get("schema_version") or event.get("schema_version") or "")
+        if schema == "aistock_bug_candidate_queue_v1":
+            return None
 
-        if not candidate and not schema.startswith(("aistock_ci_failure_", "aistock_failure_event_")) and "fingerprint" not in payload:
+        if (
+            not candidate
+            and not schema.startswith(("aistock_ci_failure_", "aistock_failure_event_", "aistock_bug_candidate_"))
+            and "fingerprint" not in payload
+        ):
             return None
 
         issue_number = (
@@ -1126,35 +1199,87 @@ class ValidationPipelineCenterService:
             or self._candidate_severity_from_labels(payload.get("labels"))
             or "P1"
         )
-        created_at = candidate.get("created_at") or event.get("timestamp") or failure_event.get("timestamp") or self._candidate_path_mtime(path)
+        created_at = candidate.get("created_at") or payload.get("created_at") or event.get("timestamp") or failure_event.get("timestamp") or self._candidate_path_mtime(path)
         evidence_refs = self._candidate_string_list(candidate.get("evidence"))
         evidence_refs.extend(self._candidate_string_list(payload.get("evidence_refs")))
         evidence_refs.extend(self._candidate_string_list(event.get("evidence_refs")))
         evidence_refs.extend(self._candidate_string_list(failure_event.get("evidence_refs")))
         evidence_refs.extend(self._candidate_string_list([payload.get("run_url"), issue_url]))
+        evidence_refs.extend(self._candidate_string_list(candidate.get("evidence_refs")))
 
         required_verification = self._candidate_string_list(candidate.get("required_validation"))
         required_verification.extend(self._candidate_string_list(candidate.get("required_verification")))
         required_verification.extend(self._candidate_string_list(payload.get("required_verification")))
+        required_verification.extend(self._candidate_string_list(payload.get("suggested_validation")))
+        required_verification.extend(self._candidate_string_list(candidate.get("suggested_validation")))
         required_verification.extend(self._candidate_string_list(handoff.get("required_verification")))
         if not required_verification:
             required_verification = self._candidate_string_list([event.get("reproduce_command"), failure_event.get("reproduce_command")])
 
+        quality_gate = candidate.get("quality_gate") if isinstance(candidate.get("quality_gate"), dict) else payload.get("quality_gate")
+        quality_gate = quality_gate if isinstance(quality_gate, dict) else {}
+        issue_payload_ready = quality_gate.get("issue_payload_ready")
+        if issue_payload_ready is None and schema == "aistock_bug_candidate_github_issue_payload_v1":
+            issue_payload_ready = True
+        auto_submit_allowed = quality_gate.get("auto_submit_allowed")
+        if auto_submit_allowed is None:
+            auto_submit_allowed = payload.get("auto_submit_allowed")
+        codegraph_refs = self._dedupe_strings(
+            self._candidate_string_list(candidate.get("codegraph_refs")) + self._candidate_string_list(payload.get("codegraph_refs"))
+        )
+        ua_refs = self._dedupe_strings(self._candidate_string_list(candidate.get("ua_refs")) + self._candidate_string_list(payload.get("ua_refs")))
+        quality_reasons = self._dedupe_strings(self._candidate_string_list(quality_gate.get("reasons")))
+        status_value = str(candidate.get("status") or payload.get("status") or payload.get("candidate_status") or event.get("candidate_status") or failure_event.get("candidate_status") or "new")
+        source_path = self._candidate_source_path(path)
+        no_submit_reasons = self._candidate_no_submit_reasons(
+            status=status_value,
+            issue_payload_ready=issue_payload_ready,
+            auto_submit_allowed=auto_submit_allowed,
+            quality_reasons=quality_reasons,
+            issue_number=issue_number,
+            issue_url=issue_url,
+        )
+        issue_payload_ref = candidate.get("github_issue_payload_ref") or payload.get("github_issue_payload_ref")
+        if not issue_payload_ref and schema == "aistock_bug_candidate_github_issue_payload_v1":
+            issue_payload_ref = source_path
+
         return {
             "schema_version": CANDIDATE_QUEUE_SCHEMA,
-            "candidate_id": candidate.get("candidate_id") or payload.get("pack_id") or event.get("event_id") or failure_event.get("event_id") or f"CAND-{str(fingerprint)[:16]}",
+            "candidate_id": candidate.get("candidate_id") or payload.get("candidate_id") or payload.get("pack_id") or event.get("event_id") or failure_event.get("event_id") or f"CAND-{str(fingerprint)[:16]}",
             "title": candidate.get("title") or payload.get("title") or payload.get("problem_statement") or event.get("normalized_error") or failure_event.get("normalized_error") or "Issue workflow candidate",
             "source_type": self._candidate_source_type(schema),
+            "source_types": [self._candidate_source_type(schema)],
             "source_schema": schema or "unknown",
             "module_id": str(module_id),
             "severity": str(severity).upper(),
-            "status": str(candidate.get("status") or payload.get("candidate_status") or event.get("candidate_status") or failure_event.get("candidate_status") or "new"),
+            "status": status_value,
             "fingerprint": str(fingerprint),
-            "dedupe_key": candidate.get("dedupe_key") or dedupe.get("marker") or dedupe.get("search_query"),
+            "dedupe_key": candidate.get("dedupe_key") or payload.get("dedupe_fingerprint") or dedupe.get("marker") or dedupe.get("search_query"),
             "run_count": int(payload.get("run_count") or payload.get("occurrence_count") or payload.get("recurrence_count") or 1),
             "github_issue_number": issue_number,
             "github_issue_url": issue_url,
             "linked_pr_url": candidate.get("pr_url") or payload.get("pr_url") or payload.get("pull_request_url"),
+            "confidence": candidate.get("confidence") or payload.get("confidence"),
+            "summary": candidate.get("summary") or payload.get("summary"),
+            "llm_hypothesis": candidate.get("llm_hypothesis") or payload.get("llm_hypothesis"),
+            "expected": candidate.get("expected") or payload.get("expected"),
+            "actual": candidate.get("actual") or payload.get("actual"),
+            "verification_result": candidate.get("verification_result") or payload.get("verification_result"),
+            "reproduce": self._dedupe_strings(self._candidate_string_list(candidate.get("reproduce")) + self._candidate_string_list(payload.get("reproduce"))),
+            "source_plan_key": candidate.get("source_plan_key") or payload.get("source_plan_key"),
+            "quality_gate": quality_gate,
+            "quality_gate_state": quality_gate.get("workflow_gate") or ("ready" if issue_payload_ready is True else "draft" if quality_gate else None),
+            "issue_payload_ready": issue_payload_ready,
+            "auto_submit_allowed": auto_submit_allowed,
+            "promotion_mode": candidate.get("promotion_mode") or payload.get("promotion_mode") or ("deterministic_quality_gate" if issue_payload_ready is True else None),
+            "llm_enhancement_opt_in": candidate.get("llm_enhancement_opt_in") or payload.get("llm_enhancement_opt_in"),
+            "quality_gate_reasons": quality_reasons,
+            "no_submit_reasons": no_submit_reasons,
+            "why_not_submitted": " / ".join(no_submit_reasons) if no_submit_reasons else None,
+            "active_discovery_reason": candidate.get("active_discovery_reason") or payload.get("active_discovery_reason"),
+            "codegraph_refs": codegraph_refs,
+            "ua_refs": ua_refs,
+            "github_issue_payload_ref": issue_payload_ref,
             "evidence_refs": self._dedupe_strings(evidence_refs),
             "recommended_validation": self._dedupe_strings(required_verification),
             "allowed_write_scope": self._dedupe_strings(
@@ -1164,10 +1289,34 @@ class ValidationPipelineCenterService:
             ),
             "created_at": created_at,
             "last_seen_at": payload.get("last_seen_at") or created_at,
-            "source_path": self._candidate_source_path(path),
-            "source_paths": [self._candidate_source_path(path)],
+            "source_path": source_path,
+            "source_paths": [source_path],
             "data_state": "complete",
         }
+
+    @staticmethod
+    def _candidate_no_submit_reasons(
+        *,
+        status: str,
+        issue_payload_ready: Any,
+        auto_submit_allowed: Any,
+        quality_reasons: list[str],
+        issue_number: Any,
+        issue_url: Any,
+    ) -> list[str]:
+        if issue_number or issue_url:
+            return []
+        reasons: list[str] = []
+        status_text = str(status or "").lower()
+        if status_text in {"deduped", "artifact_only", "rejected", "ignored"}:
+            reasons.append(status_text)
+        if issue_payload_ready is not True:
+            reasons.extend(quality_reasons or ["quality_gate_not_ready"])
+        else:
+            reasons.append("awaiting_operator_promotion")
+        if auto_submit_allowed is False:
+            reasons.append("auto_submit_disabled")
+        return ValidationPipelineCenterService._dedupe_strings(reasons)
 
     @staticmethod
     def _candidate_source_type(schema: str) -> str:
@@ -1179,6 +1328,12 @@ class ValidationPipelineCenterService:
             return "ci_github_issue_payload"
         if schema == "aistock_failure_event_v1":
             return "failure_event"
+        if schema == "aistock_bug_candidate_v1":
+            return "nightly_bug_candidate"
+        if schema == "aistock_bug_candidate_github_issue_payload_v1":
+            return "nightly_bug_candidate_issue_payload"
+        if schema == "aistock_bug_candidate_queue_v1":
+            return "nightly_bug_candidate_queue"
         return "issue_flow_candidate"
 
     @staticmethod
@@ -1196,6 +1351,46 @@ class ValidationPipelineCenterService:
     def _candidate_first_string(value: Any) -> str | None:
         items = ValidationPipelineCenterService._candidate_string_list(value)
         return items[0] if items else None
+
+    def _candidate_outcome_metrics(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        bugs = self.finding_store.list_bugs(page_size=10000)["items"]
+        bugs_by_issue = {
+            str(value): bug
+            for bug in bugs
+            for value in (bug.get("github_issue_number"), bug.get("github_issue_url"))
+            if value
+        }
+        confirmed = 0
+        false_positive = 0
+        promoted = 0
+        deduped = 0
+        open_unlinked = 0
+        for item in items:
+            if item.get("github_issue_number") or item.get("github_issue_url"):
+                promoted += 1
+            if str(item.get("status") or "").lower() == "deduped":
+                deduped += 1
+            if not (item.get("github_issue_number") or item.get("github_issue_url")):
+                open_unlinked += 1
+            bug = bugs_by_issue.get(str(item.get("github_issue_number"))) or bugs_by_issue.get(str(item.get("github_issue_url")))
+            if bug:
+                workflow = _workflow_state(bug.get("status"))
+                if workflow in {"fixed", "verified", "closed"}:
+                    confirmed += 1
+                elif str(bug.get("status") or "").lower() in {"rejected", "false_positive", "not_a_bug"}:
+                    false_positive += 1
+        total = len(items)
+        return {
+            "candidate_count": total,
+            "promoted_issue_count": promoted,
+            "confirmed_issue_count": confirmed,
+            "false_positive_count": false_positive,
+            "deduped_count": deduped,
+            "open_unlinked_count": open_unlinked,
+            "promotion_rate": round(promoted / total, 4) if total else 0.0,
+            "confirmation_rate": round(confirmed / promoted, 4) if promoted else 0.0,
+            "false_positive_rate": round(false_positive / promoted, 4) if promoted else 0.0,
+        }
 
     @staticmethod
     def _candidate_severity_from_labels(value: Any) -> str | None:
@@ -1234,14 +1429,57 @@ class ValidationPipelineCenterService:
 
     def _merge_candidate_items(self, left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
         merged = dict(left)
-        for key in ("github_issue_number", "github_issue_url", "linked_pr_url", "dedupe_key"):
+        for key in (
+            "github_issue_number",
+            "github_issue_url",
+            "linked_pr_url",
+            "dedupe_key",
+            "confidence",
+            "summary",
+            "llm_hypothesis",
+            "expected",
+            "actual",
+            "verification_result",
+            "source_plan_key",
+            "issue_payload_ready",
+            "auto_submit_allowed",
+            "promotion_mode",
+            "llm_enhancement_opt_in",
+            "github_issue_payload_ref",
+            "why_not_submitted",
+            "active_discovery_reason",
+        ):
             if not merged.get(key) and right.get(key):
                 merged[key] = right[key]
-        for key in ("evidence_refs", "recommended_validation", "allowed_write_scope", "source_paths"):
+        for key in (
+            "evidence_refs",
+            "recommended_validation",
+            "allowed_write_scope",
+            "source_paths",
+            "source_types",
+            "reproduce",
+            "quality_gate_reasons",
+            "no_submit_reasons",
+            "codegraph_refs",
+            "ua_refs",
+        ):
             merged[key] = self._dedupe_strings(self._candidate_string_list(merged.get(key)) + self._candidate_string_list(right.get(key)))
+        if not merged.get("quality_gate") and right.get("quality_gate"):
+            merged["quality_gate"] = right["quality_gate"]
+        if not merged.get("quality_gate_state") and right.get("quality_gate_state"):
+            merged["quality_gate_state"] = right["quality_gate_state"]
         merged["run_count"] = max(int(merged.get("run_count") or 1), int(right.get("run_count") or 1))
         if str(right.get("last_seen_at") or "") > str(merged.get("last_seen_at") or ""):
             merged["last_seen_at"] = right.get("last_seen_at")
+        merged["no_submit_reasons"] = self._candidate_no_submit_reasons(
+            status=str(merged.get("status") or ""),
+            issue_payload_ready=merged.get("issue_payload_ready"),
+            auto_submit_allowed=merged.get("auto_submit_allowed"),
+            quality_reasons=self._candidate_string_list(merged.get("quality_gate_reasons")),
+            issue_number=merged.get("github_issue_number"),
+            issue_url=merged.get("github_issue_url"),
+        )
+        merged["why_not_submitted"] = " / ".join(self._candidate_string_list(merged.get("no_submit_reasons"))) or None
         return merged
 
     def _local_branches(self) -> list[dict[str, Any]]:

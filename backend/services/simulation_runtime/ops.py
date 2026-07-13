@@ -7,7 +7,8 @@ from collections import Counter
 from datetime import date, datetime
 from typing import Any
 
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan, SimulationBrokerBackend, SimulationDailyRun, SimulationDailyRunStatus
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
@@ -28,6 +29,167 @@ TERMINAL_RUN_STATUSES = frozenset(
 )
 
 
+def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
+    value = status.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeConfigInvalidError(
+            f"scheduler status {key} must be a mapping",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_STATUS_INVALID",
+                "stage": "SCHEDULER_STATUS_PROJECTION",
+                "field": key,
+            },
+        )
+    return dict(value)
+
+
+def _quote_evidence(event: Any) -> dict[str, Any] | None:
+    payload = getattr(event, "payload", None)
+    evidence = payload.get("evidence") if isinstance(payload, dict) else None
+    return dict(evidence) if isinstance(evidence, dict) else None
+
+
+def _quote_event_symbol(event: Any) -> str | None:
+    evidence = _quote_evidence(event)
+    return str(evidence.get("symbol")) if evidence and evidence.get("symbol") else None
+
+
+def _quote_event_summary(event: Any) -> dict[str, Any]:
+    evidence = _quote_evidence(event)
+    return {
+        "event_id": event.event_id,
+        "runtime_id": event.runtime_id,
+        "sequence": event.sequence,
+        "event_type": event.event_type.value,
+        "event_time": event.event_time.isoformat(),
+        "source": event.source,
+        "evidence_id": evidence.get("evidence_id") if evidence else None,
+        "market_data_id": evidence.get("market_data_id") if evidence else None,
+        "symbol": evidence.get("symbol") if evidence else None,
+        "capture_type": evidence.get("capture_type") if evidence else None,
+        "reason_code": (evidence.get("quality_reason_code") or evidence.get("unavailable_reason")) if evidence else None,
+        "stage": evidence.get("stage") if evidence else None,
+    }
+
+
+def _page_runtime_events(events: list[Any], *, cursor: str | None, limit: int) -> tuple[list[Any], str | None]:
+    if limit < 1 or limit > 500:
+        raise DataUnavailableError(
+            "quote diagnostics limit must be between 1 and 500",
+            context={"reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_LIMIT_INVALID", "limit": limit},
+        )
+    ordered = sorted(events, key=lambda item: (int(item.sequence), item.event_id))
+    if cursor:
+        sequence_raw, separator, event_id = cursor.partition(":")
+        if not separator or not sequence_raw.isdigit() or not event_id:
+            raise DataUnavailableError(
+                "quote diagnostics cursor is invalid",
+                context={"reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_CURSOR_INVALID"},
+            )
+        boundary = (int(sequence_raw), event_id)
+        ordered = [item for item in ordered if (int(item.sequence), item.event_id) > boundary]
+    page = ordered[:limit]
+    next_cursor = f"{page[-1].sequence}:{page[-1].event_id}" if len(ordered) > len(page) and page else None
+    return page, next_cursor
+
+
+def _decode_quote_cursor(cursor: str | None, *, limit: int) -> tuple[int, str]:
+    if limit < 1 or limit > 500:
+        raise DataUnavailableError(
+            "quote diagnostics limit must be between 1 and 500",
+            context={"reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_LIMIT_INVALID", "limit": limit},
+        )
+    if cursor is None:
+        return 0, ""
+    sequence_raw, separator, event_id = cursor.partition(":")
+    if not separator or not sequence_raw.isdigit() or not event_id:
+        raise DataUnavailableError(
+            "quote diagnostics cursor is invalid",
+            context={"reason_code": "MINIQMT_QUOTE_DIAGNOSTICS_CURSOR_INVALID"},
+        )
+    return int(sequence_raw), event_id
+
+
+def _bounded_page(items: list[Any], *, limit: int) -> tuple[list[Any], str | None]:
+    page = items[:limit]
+    next_cursor = f"{page[-1].sequence}:{page[-1].event_id}" if len(items) > limit and page else None
+    return page, next_cursor
+
+
+def _missing_required_evidence_links(
+    evidence: dict[str, Any],
+    *,
+    known_evidence_ids: set[str],
+    known_event_ids: set[str],
+) -> list[str]:
+    capture_type = str(evidence.get("capture_type") or "")
+    missing: list[str] = []
+
+    def require_value(field_name: str) -> None:
+        if not evidence.get(field_name):
+            missing.append(field_name)
+
+    def require_evidence(field_name: str) -> None:
+        value = evidence.get(field_name)
+        if not value:
+            missing.append(field_name)
+        elif str(value) not in known_evidence_ids:
+            missing.append(f"{field_name}:unresolved")
+
+    def require_event(field_name: str) -> None:
+        value = evidence.get(field_name)
+        if not value:
+            missing.append(field_name)
+        elif str(value) not in known_event_ids:
+            missing.append(f"{field_name}:unresolved")
+
+    for field_name in ("evidence_id", "policy_sha256", "mark_policy_version"):
+        require_value(field_name)
+    if capture_type == "ACTION_INPUT":
+        for field_name in ("evaluation_id", "action_id", "parent_intent_id", "market_data_id", "clock_event_id"):
+            require_value(field_name)
+    elif capture_type == "ACTION_REJECT":
+        for field_name in ("evaluation_id", "parent_intent_id", "clock_event_id", "quality_reason_code", "stage"):
+            require_value(field_name)
+    elif capture_type in {"CHILD_RECEIPT", "PROTECTION_BAND_TRIGGER"}:
+        for field_name in ("child_order_id", "action_id", "anchor_market_data_id"):
+            require_value(field_name)
+        require_evidence("action_evidence_id")
+        require_event("source_child_event_id")
+        if capture_type == "CHILD_RECEIPT":
+            require_value("broker_order_id")
+    elif capture_type.startswith("MARKOUT_"):
+        for field_name in (
+            "child_order_id",
+            "trade_id",
+            "anchor_market_data_id",
+            "mark_series_key",
+            "horizon_seconds",
+            "target_time_utc",
+            "mark_status",
+        ):
+            require_value(field_name)
+        require_evidence("action_evidence_id")
+        require_event("anchor_trade_event_id")
+    elif capture_type == "CADENCE_AGGREGATE":
+        for field_name in ("cadence_window_start_utc", "cadence_counts", "source_session_id", "ingress_generation"):
+            if evidence.get(field_name) is None:
+                missing.append(field_name)
+    else:
+        missing.append("capture_type:unsupported")
+    return sorted(set(missing))
+
+
+HUMAN_RUN_STATUS_LABELS = {
+    SimulationDailyRunStatus.PLANNING_EXECUTION: "\u6267\u884c\u8ba1\u5212\u5df2\u751f\u6210",
+    SimulationDailyRunStatus.INTRADAY_RUNNING: "\u76d8\u4e2d\u8fd0\u884c\u4e2d",
+    SimulationDailyRunStatus.SUCCEEDED: "\u5df2\u5b8c\u6210 / \u65e0\u5f85\u5904\u7406\u9519\u8bef",
+    SimulationDailyRunStatus.FAILED_RETRYABLE: "\u5f53\u65e5\u5931\u8d25 / \u53ef\u91cd\u8bd5",
+    SimulationDailyRunStatus.FAILED_TERMINAL: "\u7ec8\u6b62\u5931\u8d25",
+    SimulationDailyRunStatus.CANCELLED: "\u5df2\u53d6\u6d88",
+}
+
+
 class SimulationRuntimeOpsService:
     """Expose business-readable runtime state without triggering trading actions."""
 
@@ -46,12 +208,26 @@ class SimulationRuntimeOpsService:
 
     def scheduler_status(self) -> dict[str, Any]:
         status = dict(self.scheduler.status())
+        default_submit = bool(status.get("default_submit", False))
+        last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else None
+        last_result_errors = (
+            list(last_result.get("errors") or [])
+            if isinstance(last_result, dict) and isinstance(last_result.get("errors"), list)
+            else []
+        )
         return {
             "ok": True,
             "scheduler": status.get("scheduler") or "simulation_lifecycle_scheduler",
             "autostart": bool(status.get("autostart", False)),
-            "default_submit": bool(status.get("default_submit", False)),
+            "running": bool(status.get("running", False)),
+            "thread_alive": bool(status.get("thread_alive", False)),
+            "last_run_at": status.get("last_run_at"),
+            "last_result": last_result,
+            "last_result_errors": last_result_errors,
+            "last_error_count": len(last_result_errors),
+            "default_submit": default_submit,
             "approval_states": list(status.get("approval_states") or []),
+            "sim_binding_selection_policy": status.get("sim_binding_selection_policy"),
             "schedule_windows": list(status.get("schedule_windows") or []),
             "restart_recovery_mode": status.get("restart_recovery_mode") or "persisted_state_only",
             "window_orchestration": status.get("window_orchestration") or {},
@@ -64,6 +240,14 @@ class SimulationRuntimeOpsService:
             "context_provider_mode": status.get("context_provider_mode"),
             "data_source": status.get("data_source"),
             "data_source_policy": status.get("data_source_policy") or {},
+            "miniqmt_quote_ingress_activation": _required_scheduler_status_mapping(
+                status,
+                "miniqmt_quote_ingress_activation",
+            ),
+            "b0_quote_v2_controllers": _required_scheduler_status_mapping(
+                status,
+                "b0_quote_v2_controllers",
+            ),
             "account_slot_persistence": {
                 "enabled": True,
                 "release_binding_columns": ["account_group_id", "strategy_slot_id"],
@@ -76,7 +260,7 @@ class SimulationRuntimeOpsService:
                 "next_action": "monitor scheduler windows, or use the controlled start/stop/tick APIs",
                 "safety_note": (
                     "Status is read-only. start/stop/tick are controlled operations; "
-                    "default_submit remains false unless explicitly enabled."
+                    f"default_submit is {'enabled' if default_submit else 'disabled'}."
                 ),
             },
         }
@@ -135,6 +319,241 @@ class SimulationRuntimeOpsService:
     def get_execution_plan_detail(self, plan_id: str) -> dict[str, Any]:
         plan = self.repository.get_execution_plan(plan_id)
         return {"execution_plan": self._plan_summary(plan, include_intents=True)}
+
+    def list_miniqmt_runtime_events(
+        self,
+        *,
+        runtime_repository: MiniQMTExecutionRuntimeRepository,
+        runtime_id: str,
+    ) -> dict[str, Any]:
+        runtime = runtime_repository.get_runtime(runtime_id)
+        if runtime is None:
+            raise DataUnavailableError(
+                "MiniQMT execution runtime does not exist",
+                context={"reason_code": "MINIQMT_RUNTIME_NOT_FOUND", "runtime_id": runtime_id},
+            )
+        events = [
+            {
+                "event_id": event.event_id,
+                "runtime_id": event.runtime_id,
+                "sequence": event.sequence,
+                "event_type": event.event_type.value,
+                "event_time": event.event_time.isoformat(),
+                "source": event.source,
+                "payload": event.payload,
+            }
+            for event in runtime_repository.list_events(runtime_id)
+        ]
+        return {
+            "schema_version": "miniqmt_runtime_events_readonly_v1",
+            "runtime": runtime.model_dump(mode="json"),
+            "count": len(events),
+            "events": events,
+            "read_only": True,
+        }
+
+    def list_miniqmt_quote_diagnostics(
+        self,
+        *,
+        runtime_repository: MiniQMTExecutionRuntimeRepository,
+        runtime_id: str,
+        symbol: str | None = None,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Project durable journal facts only; never construct quote runtime objects."""
+
+        runtime = runtime_repository.get_runtime(runtime_id)
+        if runtime is None:
+            raise DataUnavailableError(
+                "MiniQMT execution runtime does not exist",
+                context={"reason_code": "MINIQMT_RUNTIME_NOT_FOUND", "runtime_id": runtime_id},
+            )
+        after_sequence, after_event_id = _decode_quote_cursor(cursor, limit=limit)
+        page, next_cursor = _bounded_page(
+            runtime_repository.list_quote_events_page(
+                runtime_id,
+                symbol=symbol,
+                after_sequence=after_sequence,
+                after_event_id=after_event_id,
+                limit=limit + 1,
+            ),
+            limit=limit,
+        )
+        summary = runtime_repository.quote_diagnostics_summary(runtime_id, symbol=symbol)
+        markout = dict(summary["markout"])
+        markout_due = int(markout["terminal_due_count"])
+        markout_captured = int(markout["captured_count"])
+        per_symbol = [
+            {
+                **item,
+                "capture_count": int(item["capture_count"]),
+                "last_event_time": item["last_event_time"].isoformat(),
+            }
+            for item in summary["per_symbol"]
+            if item.get("symbol")
+        ]
+        last_reason = summary["last_reason"]
+        if last_reason is not None:
+            last_reason = {
+                **last_reason,
+                "event_time": last_reason["event_time"].isoformat(),
+            }
+        return {
+            "schema_version": "miniqmt_quote_diagnostics_v1",
+            "runtime_id": runtime_id,
+            "read_only": True,
+            "production_ddl_gate": runtime_repository.quote_event_schema_gate(),
+            "health": summary["health"]
+            or {
+                "status": "UNKNOWN",
+                "reason_code": "MINIQMT_QUOTE_INGRESS_HEALTH_NOT_DURABLY_REPORTED",
+                "durable_ack": False,
+            },
+            "per_symbol": sorted(per_symbol, key=lambda item: item["symbol"]),
+            "recent_reason": last_reason,
+            "reason_counts": dict(sorted(summary["reason_counts"].items())),
+            "markout": {
+                "terminal_due_count": markout_due,
+                "captured_count": markout_captured,
+                "coverage_ratio": (markout_captured / markout_due) if markout_due else None,
+            },
+            "events": [_quote_event_summary(event) for event in page],
+            "next_cursor": next_cursor,
+            "limit": limit,
+        }
+
+    def list_miniqmt_quote_evidence(
+        self,
+        *,
+        runtime_repository: MiniQMTExecutionRuntimeRepository,
+        runtime_id: str,
+        market_data_id: str | None = None,
+        evidence_id: str | None = None,
+        include_archived: bool = False,
+        cursor: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Read evidence envelopes and reconstruct links without repairing them."""
+
+        if (market_data_id is None) == (evidence_id is None):
+            raise DataUnavailableError(
+                "exactly one of market_data_id or evidence_id is required",
+                context={"reason_code": "MINIQMT_QUOTE_EVIDENCE_QUERY_INVALID"},
+            )
+        if runtime_repository.get_runtime(runtime_id) is None:
+            raise DataUnavailableError(
+                "MiniQMT execution runtime does not exist",
+                context={"reason_code": "MINIQMT_RUNTIME_NOT_FOUND", "runtime_id": runtime_id},
+            )
+        after_sequence, after_event_id = _decode_quote_cursor(cursor, limit=limit)
+        receipts = runtime_repository.list_evidence_receipts(
+            runtime_id,
+            market_data_id=market_data_id,
+            evidence_id=evidence_id,
+            include_archived=include_archived,
+            after_sequence=after_sequence,
+            after_event_id=after_event_id,
+            limit=limit + 1,
+        )
+        receipt_page, next_cursor = _bounded_page([receipt.event for receipt in receipts], limit=limit)
+        page_ids = {event.event_id for event in receipt_page}
+        receipt_by_event_id = {receipt.event.event_id: receipt for receipt in receipts}
+        page_evidence = [_quote_evidence(event) for event in receipt_page]
+        linked_event_ids = tuple(
+            sorted(
+                {
+                    str(value)
+                    for evidence in page_evidence
+                    if evidence is not None
+                    for value in (evidence.get("source_child_event_id"), evidence.get("anchor_trade_event_id"))
+                    if value
+                }
+            )
+        )
+        known_event_ids = page_ids | {
+            event.event_id
+            for event in runtime_repository.list_events_by_ids(
+                runtime_id,
+                event_ids=linked_event_ids,
+                include_archived=include_archived,
+            )
+        }
+        known_evidence_ids = {
+            str(evidence.get("evidence_id"))
+            for receipt in receipts
+            for event in (receipt.event,)
+            if (evidence := _quote_evidence(event)) is not None and evidence.get("evidence_id")
+        }
+        referenced_evidence_ids = tuple(
+            sorted(
+                {
+                    str(value)
+                    for evidence in page_evidence
+                    if evidence is not None
+                    for value in (
+                        evidence.get("action_evidence_id"),
+                        evidence.get("child_receipt_evidence_id"),
+                        evidence.get("supersedes_evidence_id"),
+                    )
+                    if value
+                }
+            )
+        )
+        known_evidence_ids.update(
+            runtime_repository.existing_evidence_ids(
+                runtime_id,
+                evidence_ids=referenced_evidence_ids,
+                include_archived=include_archived,
+            )
+        )
+        records: list[dict[str, Any]] = []
+        for event in receipt_page:
+            receipt = receipt_by_event_id[event.event_id]
+            evidence = _quote_evidence(event)
+            if evidence is None:
+                raise DataUnavailableError(
+                    "quote evidence readback returned an invalid event envelope",
+                    context={"reason_code": "MINIQMT_QUOTE_EVIDENCE_READBACK_INVALID", "event_id": event.event_id},
+                )
+            links = {
+                "action_evidence_id": evidence.get("action_evidence_id"),
+                "child_receipt_evidence_id": evidence.get("child_receipt_evidence_id"),
+                "source_child_event_id": evidence.get("source_child_event_id"),
+                "anchor_trade_event_id": evidence.get("anchor_trade_event_id"),
+                "anchor_market_data_id": evidence.get("anchor_market_data_id"),
+                "trade_id": evidence.get("trade_id"),
+                "policy_sha256": evidence.get("policy_sha256"),
+                "mark_policy_version": evidence.get("mark_policy_version"),
+            }
+            missing_links = _missing_required_evidence_links(
+                evidence,
+                known_evidence_ids=known_evidence_ids,
+                known_event_ids=known_event_ids,
+            )
+            records.append(
+                {
+                    "event": _quote_event_summary(event),
+                    "durable_receipt": {
+                        "persisted_at_utc": receipt.persisted_at_utc.isoformat(),
+                        "durable_ack": receipt.durable_ack,
+                        "readback_verified": receipt.readback_verified,
+                    },
+                    "evidence": evidence,
+                    "links": links,
+                    "link_complete": not missing_links,
+                    "missing_links": missing_links,
+                }
+            )
+        return {
+            "schema_version": "miniqmt_quote_evidence_readback_v1",
+            "runtime_id": runtime_id,
+            "query": {"market_data_id": market_data_id, "evidence_id": evidence_id, "include_archived": include_archived},
+            "read_only": True,
+            "records": records,
+            "next_cursor": next_cursor,
+            "limit": limit,
+        }
 
     def build_live_admission_evidence(
         self,
@@ -196,6 +615,15 @@ class SimulationRuntimeOpsService:
         by_account_group = Counter(run.account_group_id for run in runs if run.account_group_id)
         by_strategy_slot = Counter(run.strategy_slot_id for run in runs if run.strategy_slot_id)
         active = sum(1 for run in runs if run.status not in TERMINAL_RUN_STATUSES)
+        capacity_residual = [
+            observability
+            for observability in (
+                SimulationLifecycleScheduler._miniqmt_capacity_residual_observability(run.run_payload_json)
+                for run in runs
+                if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+            )
+            if observability
+        ]
         return {
             "run_count": len(runs),
             "active_run_count": active,
@@ -204,13 +632,68 @@ class SimulationRuntimeOpsService:
             "by_broker_backend": dict(sorted(by_backend.items())),
             "by_account_group": dict(sorted(by_account_group.items())),
             "by_strategy_slot": dict(sorted(by_strategy_slot.items())),
+            "succeeded_with_capacity_residual_count": len(capacity_residual),
+            "capacity_residual_count": sum(int(item.get("capacity_residual_count") or 0) for item in capacity_residual),
+            "capacity_residual_failed_intents": sum(int(item.get("failed_intents") or 0) for item in capacity_residual),
+        }
+
+    @staticmethod
+    def _readable_identifier(value: str | None) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "-"
+        ignored = {"strategy", "simrun", "srr", "simbind", "dse", "plan", "pkg", "ag", "slot"}
+        words: list[str] = []
+        for part in raw.replace("-", "_").split("_"):
+            if not part or part.lower() in ignored:
+                continue
+            lower = part.lower()
+            if lower == "local":
+                words.append("Local")
+            elif lower in {"miniqmt", "minqmt"}:
+                words.append("MiniQMT")
+            elif lower == "qmt":
+                words.append("QMT")
+            elif lower == "sim":
+                words.append("SIM")
+            elif lower == "ops":
+                words.append("Ops")
+            elif len(part) == 8 and part.isdigit() and part.startswith(("19", "20")):
+                words.append(f"{part[:4]}-{part[4:6]}-{part[6:]}")
+            else:
+                words.append(part[:1].upper() + part[1:])
+        return " ".join(words) or raw[:12]
+
+    def _run_display(self, run: SimulationDailyRun, stage_counts: dict[str, int]) -> dict[str, Any]:
+        target_count = int(stage_counts.get("target_count") or 0)
+        intent_count = int(stage_counts.get("execution_plan_intent_count") or stage_counts.get("order_intent_count") or 0)
+        submitted = int(stage_counts.get("submitted_intents") or 0)
+        failed = int(stage_counts.get("failed_intents") or 0)
+        broker_label = "MiniQMT \u6a21\u62df\u76d8" if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM else "LocalSim \u672c\u5730\u6a21\u62df"
+        account_label = self._readable_identifier(run.account_group_id) if run.account_group_id else "\u672c\u5730\u6a21\u62df\u8d26\u6237"
+        slot_label = self._readable_identifier(run.strategy_slot_id) if run.strategy_slot_id else "\u9ed8\u8ba4\u7b56\u7565\u69fd"
+        return {
+            "run_title": f"{run.trade_date.isoformat()} - {HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value)}",
+            "status_label": HUMAN_RUN_STATUS_LABELS.get(run.status, run.status.value),
+            "broker_label": broker_label,
+            "strategy_label": self._readable_identifier(run.strategy_id),
+            "package_label": f"\u7b56\u7565\u5305 {self._readable_identifier(run.package_id)}",
+            "account_slot_label": f"{account_label} / {slot_label}",
+            "selection_label": f"\u9009\u51fa {target_count} \u53ea\u5019\u9009",
+            "execution_plan_label": f"\u4ea4\u6613\u610f\u56fe {intent_count} / \u5df2\u63d0\u4ea4 {submitted} / \u5931\u8d25 {failed}",
+            "stage_label": f"\u9009\u80a1 {target_count} / \u610f\u56fe {intent_count} / \u5df2\u63d0\u4ea4 {submitted} / \u5931\u8d25 {failed}",
         }
 
     def _run_summary(self, run: SimulationDailyRun) -> dict[str, Any]:
         stage_counts = self._stage_counts(run.run_payload_json)
         broker_context = self._broker_context(run)
         reconciliation_context = self._reconciliation_context(run)
-        return {
+        capacity_residual_observability = None
+        if run.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
+            capacity_residual_observability = SimulationLifecycleScheduler._miniqmt_capacity_residual_observability(
+                run.run_payload_json
+            )
+        payload = {
             "run_id": run.run_id,
             "trade_date": run.trade_date.isoformat(),
             "strategy_id": run.strategy_id,
@@ -235,6 +718,7 @@ class SimulationRuntimeOpsService:
             "status": run.status.value,
             "last_stage": str(run.run_payload_json.get("last_stage") or run.status.value),
             "stage_counts": stage_counts,
+            "display": self._run_display(run, stage_counts),
             "broker_context": broker_context,
             "strategy_performance": self._strategy_performance(run),
             "reconciliation_context": reconciliation_context,
@@ -247,6 +731,21 @@ class SimulationRuntimeOpsService:
                 "created_by": run.run_payload_json.get("created_by"),
             },
         }
+        if capacity_residual_observability:
+            payload.update(
+                {
+                    "succeeded_with_capacity_residual": True,
+                    "capacity_residual_count": int(
+                        capacity_residual_observability.get("capacity_residual_count") or 0
+                    ),
+                    "capacity_residual_failed_intents": int(
+                        capacity_residual_observability.get("failed_intents") or 0
+                    ),
+                    "miniqmt_capacity_residual_observability": capacity_residual_observability,
+                    "alerts": [capacity_residual_observability["alert"]],
+                }
+            )
+        return payload
 
     @staticmethod
     def _require_successful_run_for_live_evidence(
@@ -443,7 +942,10 @@ class SimulationRuntimeOpsService:
             "account_group_id": run.account_group_id or payload.get("account_group_id"),
             "strategy_slot_id": run.strategy_slot_id or payload.get("strategy_slot_id"),
             "sync_before_submit": payload.get("sync_before_submit"),
+            "local_sim_cash_fit": payload.get("local_sim_cash_fit"),
+            "local_sim_retry_diagnostics": payload.get("local_sim_retry_diagnostics"),
             "local_sim_persistence": payload.get("local_sim_persistence"),
+            "submit_failure": payload.get("submit_failure"),
             "reconcile_after_submit": payload.get("reconcile_after_submit"),
             "tail_handling": payload.get("tail_handling"),
         }
@@ -585,6 +1087,18 @@ class SimulationRuntimeOpsService:
                             "context": issue.get("context") or {},
                         }
                     )
+        submit_failure = broker_context.get("submit_failure")
+        if isinstance(submit_failure, dict):
+            errors.append(
+                {
+                    "source": "local_sim_submit_failure"
+                    if run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                    else "simulation_submit_failure",
+                    "code": submit_failure.get("stage") or run.status.value,
+                    "message": submit_failure.get("message") or run.status.value,
+                    "context": submit_failure.get("context") or {},
+                }
+            )
         if run.status in {SimulationDailyRunStatus.FAILED_RETRYABLE, SimulationDailyRunStatus.FAILED_TERMINAL} and not errors:
             errors.append(
                 {

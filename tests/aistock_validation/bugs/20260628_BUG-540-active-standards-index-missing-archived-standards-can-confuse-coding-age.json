@@ -1,0 +1,102 @@
+{
+  "actual": "docs/standards lacks a clear active-standards index. Historical development standard versions are already under docs/standards/archive, but agents launched outside the repo or without explicit guidance may still discover multiple versions and read archived standards. Expected: keep old versions in archive, add a current active standards README/index that marks v1.5 as the only active development standard and states archive files must not be read unless the user explicitly asks for historical context.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260628_BUG-540-active-standards-index-missing-archived-standards-can-confuse-coding-age.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/standards/README.md",
+    "docs/codex_project_memory.md",
+    ".claude/commands/fix-aistock-issue.md",
+    ".claude/commands/aistock-feature-workflow.md",
+    ".codex/skills/fix-aistock-issue/SKILL.md",
+    ".codex/skills/verify-aistock-feature/SKILL.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-540",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-27T18:58:16.625014Z",
+  "description": "docs/standards lacks a clear active-standards index. Historical development standard versions are already under docs/standards/archive, but agents launched outside the repo or without explicit guidance may still discover multiple versions and read archived standards. Expected: keep old versions in archive, add a current active standards README/index that marks v1.5 as the only active development standard and states archive files must not be read unless the user explicitly asks for historical context.\n\nScope update: also update the active standards index and agent entrypoints so Codex and Claude Code default to current standards only and do not load archived standards unless explicitly requested.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260628-ff5026eee2c2",
+      "timestamp": "2026-06-27T18:58:16.625011Z"
+    },
+    {
+      "action": "fix_validated",
+      "actor": "codex",
+      "note": "Added active standards index; confirmed old development standards are only under docs/standards/archive; updated Codex and Claude entrypoints to avoid archived standards by default.",
+      "timestamp": "2026-06-27T19:06:55Z"
+    }
+  ],
+  "evidence_uris": [
+    "git diff --check -> passed",
+    "python %USERPROFILE%/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/fix-aistock-issue -> passed",
+    "python %USERPROFILE%/.codex/skills/.system/skill-creator/scripts/quick_validate.py .codex/skills/verify-aistock-feature -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "expected": "docs/standards has an explicit active-standard index: v1.5 is the only current development standard, historical versions stay under docs/standards/archive, and agents are instructed not to read archived standards unless the user explicitly asks for historical context.",
+  "first_seen_at": "2026-06-27T18:58:16.625014Z",
+  "fix_branch": "bug/BUG-540-active-standards-index-missing-archived-standard-20260628",
+  "fix_commit": "3dbfc315e1f67b0f66929f6eaf91acbb6774fbe9",
+  "fixed_at": "2026-06-27T19:34:39.986750Z",
+  "github_issue_number": 1689,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1689",
+  "last_seen_at": "2026-06-27T18:58:16.625014Z",
+  "module": "scripts",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1692",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Get-ChildItem docs/standards; verify active index and archived historical versions.",
+  "required_verification": [
+    "l0",
+    "git diff --check",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P3",
+  "status": "fixed",
+  "suspected_modules": [
+    "scripts",
+    "docs.standards",
+    "agent.workflow"
+  ],
+  "title": "Active standards index missing, archived standards can confuse coding agents",
+  "trigger_condition": {
+    "fingerprint": "ff5026eee2c2281bb1271640",
+    "source_event_id": "FE-20260628-ff5026eee2c2"
+  },
+  "ui_issue": false,
+  "validation_evidence": [
+    "git diff --check -> passed",
+    "quick_validate fix-aistock-issue skill -> passed",
+    "quick_validate verify-aistock-feature skill -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

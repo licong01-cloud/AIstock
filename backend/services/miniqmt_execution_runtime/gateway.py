@@ -1,4 +1,4 @@
-"""MiniQMT gateway protocol and fake gateway used by Phase 2 validation."""
+"""MiniQMT gateway protocols and controlled test gateway."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 from backend.services.trading_core.models import OrderSide
 
-from .models import MiniQMTChildOrder
+from .models import MiniQMTChildOrder, MiniQMTExecutionEvent
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,70 @@ class MiniQMTGateway(Protocol):
 
     def cancel_child_order(self, order: MiniQMTChildOrder, *, reason: str) -> MiniQMTGatewayCancelAck:
         ...
+
+
+class MiniQMTGatewayEventSink(Protocol):
+    def on_tick(self, *, symbol: str, price: float, payload: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
+        ...
+
+    def record_order_event(
+        self,
+        *,
+        broker_order_id: str,
+        status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> MiniQMTExecutionEvent:
+        ...
+
+    def record_trade_event(
+        self,
+        *,
+        broker_order_id: str,
+        quantity: int,
+        price: float,
+        payload: dict[str, Any] | None = None,
+    ) -> MiniQMTExecutionEvent:
+        ...
+
+    def record_account_event(self, *, payload: dict[str, Any]) -> MiniQMTExecutionEvent:
+        ...
+
+    def record_disconnect_event(
+        self,
+        *,
+        reason: str,
+        payload: dict[str, Any] | None = None,
+    ) -> MiniQMTExecutionEvent:
+        ...
+
+
+class MiniQMTGatewayEventSource(Protocol):
+    def bind_event_sink(self, sink: MiniQMTGatewayEventSink) -> None:
+        ...
+
+    def on_order(self, raw_order: dict[str, Any]) -> MiniQMTExecutionEvent:
+        ...
+
+    def on_trade(self, raw_trade: dict[str, Any]) -> MiniQMTExecutionEvent:
+        ...
+
+    def on_tick(self, raw_tick: dict[str, Any]) -> MiniQMTExecutionEvent:
+        ...
+
+    def on_account(self, raw_account: dict[str, Any]) -> MiniQMTExecutionEvent:
+        ...
+
+    def on_disconnect(self, raw_event: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
+        ...
+
+
+class MiniQMTGatewayEventSourceError(RuntimeError):
+    """Loud gateway event-source failure with a stable reason code."""
+
+    def __init__(self, message: str, *, reason_code: str, context: dict[str, Any] | None = None) -> None:
+        self.reason_code = reason_code
+        self.context = dict(context or {})
+        super().__init__(f"{message}; reason_code={reason_code}; context={self.context}")
 
 
 class FakeMiniQMTGateway:
@@ -274,3 +338,212 @@ def _maybe_call(obj: Any, method_name: str) -> Any:
         return method()
     except Exception:  # noqa: BLE001
         return None
+
+
+class QmtClientMiniQMTEventLoopGateway(QmtClientMiniQMTGateway):
+    """Real MiniQMT event-loop gateway.
+
+    This adapter is used only by the explicit ``event_loop`` runtime path. It
+    converts raw broker callbacks into runtime events and refuses to turn
+    missing broker query APIs into silent empty snapshots.
+    """
+
+    def __init__(
+        self,
+        *,
+        qmt_client: Any,
+        event_sink: MiniQMTGatewayEventSink | None = None,
+        strategy_name: str | None = None,
+        order_remark_prefix: str = "aistock-eventloop",
+    ) -> None:
+        super().__init__(
+            qmt_client=qmt_client,
+            strategy_name=strategy_name,
+            order_remark_prefix=order_remark_prefix,
+        )
+        self._event_sink = event_sink
+
+    def bind_event_sink(self, sink: MiniQMTGatewayEventSink) -> None:
+        self._event_sink = sink
+
+    def sync_orders(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_orders",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_ORDERS_UNAVAILABLE",
+            kwargs={"cancelable_only": False},
+            runtime_id=runtime_id,
+        )
+
+    def sync_trades(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_trades",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_TRADES_UNAVAILABLE",
+            runtime_id=runtime_id,
+        )
+
+    def sync_positions(self, *, runtime_id: str) -> list[dict[str, Any]]:
+        return _required_qmt_list(
+            self.qmt_client,
+            "get_positions",
+            reason_code="MINIQMT_EVENT_LOOP_SYNC_POSITIONS_UNAVAILABLE",
+            runtime_id=runtime_id,
+        )
+
+    def on_order(self, raw_order: dict[str, Any]) -> MiniQMTExecutionEvent:
+        payload = dict(raw_order)
+        broker_order_id = _payload_text(payload, "broker_order_id", "order_id", "qmt_order_id", "native_order_id")
+        if not broker_order_id:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT order callback missing broker order id",
+                reason_code="MINIQMT_EVENT_LOOP_ORDER_ID_MISSING",
+                context={"raw_order": payload},
+            )
+        raw_status = payload.get("order_status")
+        if raw_status is None:
+            raw_status = payload.get("status") or payload.get("raw_status")
+        if raw_status is None or str(raw_status).strip() == "":
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT order callback missing status",
+                reason_code="MINIQMT_EVENT_LOOP_ORDER_STATUS_MISSING",
+                context={"broker_order_id": broker_order_id},
+            )
+        payload.setdefault("broker_order_id", broker_order_id)
+        payload.setdefault("reason_code", "MINIQMT_EVENT_LOOP_ORDER_CALLBACK")
+        return self._require_event_sink().record_order_event(
+            broker_order_id=broker_order_id,
+            status=str(raw_status),
+            payload=payload,
+        )
+
+    def on_trade(self, raw_trade: dict[str, Any]) -> MiniQMTExecutionEvent:
+        payload = dict(raw_trade)
+        broker_order_id = _payload_text(payload, "broker_order_id", "order_id", "qmt_order_id", "native_order_id")
+        if not broker_order_id:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT trade callback missing broker order id",
+                reason_code="MINIQMT_EVENT_LOOP_TRADE_ORDER_ID_MISSING",
+                context={"raw_trade": payload},
+            )
+        quantity = _payload_int(payload, "traded_volume", "quantity", "volume", "filled_quantity")
+        price = _payload_float(payload, "traded_price", "price", "avg_price")
+        payload.setdefault("broker_order_id", broker_order_id)
+        payload.setdefault("reason_code", "MINIQMT_EVENT_LOOP_TRADE_CALLBACK")
+        return self._require_event_sink().record_trade_event(
+            broker_order_id=broker_order_id,
+            quantity=quantity,
+            price=price,
+            payload=payload,
+        )
+
+    def on_tick(self, raw_tick: dict[str, Any]) -> MiniQMTExecutionEvent:
+        payload = dict(raw_tick)
+        symbol = _payload_text(payload, "symbol", "stock_code", "instrument", "code")
+        if not symbol:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT tick callback missing symbol",
+                reason_code="MINIQMT_EVENT_LOOP_TICK_SYMBOL_MISSING",
+                context={"raw_tick": payload},
+            )
+        price = _payload_float(payload, "price", "last_price", "current_price")
+        payload.setdefault("symbol", symbol)
+        payload.setdefault("price", price)
+        payload.setdefault("reason_code", "MINIQMT_EVENT_LOOP_TICK_CALLBACK")
+        return self._require_event_sink().on_tick(symbol=symbol, price=price, payload=payload)
+
+    def on_account(self, raw_account: dict[str, Any]) -> MiniQMTExecutionEvent:
+        payload = dict(raw_account)
+        payload.setdefault("reason_code", "MINIQMT_EVENT_LOOP_ACCOUNT_CALLBACK")
+        return self._require_event_sink().record_account_event(payload=payload)
+
+    def on_disconnect(self, raw_event: dict[str, Any] | None = None) -> MiniQMTExecutionEvent:
+        payload = dict(raw_event or {})
+        reason = str(payload.get("reason") or payload.get("message") or "MiniQMT gateway disconnected")
+        payload.setdefault("reason_code", "MINIQMT_GATEWAY_DISCONNECTED")
+        return self._require_event_sink().record_disconnect_event(reason=reason, payload=payload)
+
+    def _require_event_sink(self) -> MiniQMTGatewayEventSink:
+        if self._event_sink is None:
+            raise MiniQMTGatewayEventSourceError(
+                "MiniQMT event-loop gateway has no runtime event sink",
+                reason_code="MINIQMT_EVENT_LOOP_SINK_MISSING",
+            )
+        return self._event_sink
+
+
+def _required_qmt_list(
+    qmt_client: Any,
+    method_name: str,
+    *,
+    reason_code: str,
+    runtime_id: str,
+    kwargs: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    getter = getattr(qmt_client, method_name, None)
+    if not callable(getter):
+        raise MiniQMTGatewayEventSourceError(
+            "MiniQMT event-loop gateway requires broker query API",
+            reason_code=reason_code,
+            context={"method_name": method_name, "runtime_id": runtime_id},
+        )
+    try:
+        raw_items = getter(**dict(kwargs or {}))
+    except Exception as exc:  # noqa: BLE001
+        raise MiniQMTGatewayEventSourceError(
+            "MiniQMT broker query failed for event-loop gateway",
+            reason_code=reason_code,
+            context={"method_name": method_name, "runtime_id": runtime_id, "error": f"{type(exc).__name__}: {exc}"},
+        ) from exc
+    if raw_items is None:
+        raise MiniQMTGatewayEventSourceError(
+            "MiniQMT broker query returned no snapshot for event-loop gateway",
+            reason_code=reason_code,
+            context={"method_name": method_name, "runtime_id": runtime_id},
+        )
+    return [dict(item) for item in raw_items]
+
+
+def _payload_text(payload: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _payload_int(payload: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed >= 0:
+            return parsed
+    raise MiniQMTGatewayEventSourceError(
+        "MiniQMT callback missing non-negative integer field",
+        reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_MISSING",
+        context={"keys": list(keys), "payload": payload},
+    )
+
+
+def _payload_float(payload: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    raise MiniQMTGatewayEventSourceError(
+        "MiniQMT callback missing numeric price field",
+        reason_code="MINIQMT_EVENT_LOOP_NUMERIC_FIELD_MISSING",
+        context={"keys": list(keys), "payload": payload},
+    )

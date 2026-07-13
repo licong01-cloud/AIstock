@@ -1,0 +1,77 @@
+{
+  "actual": "backend/scripts 仍保留旧 metrics sync/backfill 脚本，可误导维护者或被手工执行。",
+  "allowed_write_scope": [
+    "backend/tests/test_factor_metrics_authority_static.py",
+    "tests/aistock_validation/bugs/20260622_BUG-461-issue.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/scripts/batch_factor_metrics_sync.py",
+    "backend/scripts/backfill_missing_factors.py",
+    "backend/scripts/backfill_missing_factors_v2.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-461",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T18:24:38.156822Z",
+  "description": "backend/scripts 仍保留旧 metrics sync/backfill 脚本，可误导维护者或被手工执行。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-3568ac90676d",
+      "timestamp": "2026-06-21T18:24:38.156819Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "backend/scripts 中不再保留旧因子指标同步、缺失因子补录或直接写库的可执行脚本入口；官方因子库只通过后端正式服务/API处理缓存、独立指标、相关性和QE回测。",
+  "first_seen_at": "2026-06-21T18:24:38.156822Z",
+  "fix_branch": null,
+  "fix_commit": "90156fe98db188e9d18b44e8f088480ff8de0639",
+  "fixed_at": "2026-06-21T19:27:23.082939Z",
+  "github_issue_number": 1423,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1423",
+  "last_seen_at": "2026-06-21T18:24:38.156822Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1424",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "清理后端旧因子补录与指标同步脚本入口",
+  "trigger_condition": {
+    "fingerprint": "3568ac90676d5bc4dde56ba9",
+    "source_event_id": "FE-20260622-3568ac90676d"
+  },
+  "validation_evidence": [
+    "local: python -m pytest backend/tests/test_factor_metrics_authority_static.py::test_retired_backend_factor_backfill_scripts_are_removed -q -p no:cacheprovider -> 1 passed; python -m nox -s l0 -> passed; python -m nox -s validation_module_registry_l0 -> passed; git diff --check -> passed; PR #1424 CI all green"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "actual": "Backend/frontend/cache defaults remain stale and unstarted exact legacy records require a guarded migration.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/bugs/20260711_BUG-620-qe-all-scenarios-retain-stale-2026-04-backtest-cutoff-defaults.json",
+    "backend/routers/quantevolver.py",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/factor_metrics_scheduler.py",
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/quantevolver/test_qe_cutoff_default_migration.py",
+    "frontend/src/app/quantevolver/components/FactorList.tsx",
+    "frontend/src/app/quantevolver/compose/page.tsx",
+    "frontend/src/app/quantevolver/factor-correlation/components/ComputePanel.tsx",
+    "scripts/migrate_qe_cutoff_defaults.py"
+  ],
+  "bug_id": "BUG-620",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "description": "Backend/frontend/cache defaults remain stale and unstarted exact legacy records require a guarded migration.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260711-05edf233060f",
+      "timestamp": "2026-07-11T19:03:48.282756Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "All newly composed QE scenarios use test_end=2026-06-30 and backtest_end=2026-06-29; official factor windows end 2026-06-30; exact legacy defaults upgrade safely; completed history is immutable.",
+  "fix_commit": "9606ff644e510d3a669b4f8fd2e53c22672cfcb7",
+  "fixed_at": "2026-07-11T19:22:06.996647Z",
+  "github_issue_number": 1986,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1986",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1987",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE all scenarios retain stale 2026-04 backtest cutoff defaults",
+  "trigger_condition": {
+    "fingerprint": "05edf233060fe4a0e20a1f99",
+    "source_event_id": "FE-20260711-05edf233060f"
+  },
+  "validation_evidence": [
+    "PR #1987 checks -> 14 passed, 0 failed, 0 pending",
+    "local targeted QE cutoff tests, ruff, eslint, l0, validation_module_registry_l0, and migration dry-run -> passed"
+  ]
+}

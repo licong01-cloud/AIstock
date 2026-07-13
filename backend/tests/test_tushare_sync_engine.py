@@ -199,7 +199,7 @@ def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
     assert result["ok"] is True
     assert calls[0][0] == "mark_dirty"
     assert calls[0][1]["source_dataset"] == "stock_st_events"
-    assert calls[1] == ("ensure", {"strict": False})
+    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
 
 
 def test_stock_basic_success_hook_also_ensures(monkeypatch):
@@ -221,7 +221,7 @@ def test_stock_basic_success_hook_also_ensures(monkeypatch):
     assert result["ok"] is True
     assert calls[0][0] == "mark_dirty"
     assert calls[0][1]["source_dataset"] == "stock_basic"
-    assert calls[1] == ("ensure", {"strict": False})
+    assert calls[1] == ("ensure", {"strict": False, "refresh_policy": "source_fingerprint"})
 
 
 class _RowsCursor(_FakeCursor):

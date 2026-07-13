@@ -13,6 +13,7 @@ class StrategyPackageAssetType(str, Enum):
     MODEL_WEIGHT = "model_weight"
     FACTOR_CODE = "factor_code"
     FACTOR_SCHEMA = "factor_schema"
+    MODEL_CODE = "model_code"
     FEATURE_ORDER = "feature_order"
     TRAIN_CONFIG = "train_config"
     PREPROCESSOR = "preprocessor"

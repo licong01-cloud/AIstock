@@ -20,6 +20,8 @@ DEFAULT_HISTORY_ROOT = ROOT / "tests" / "aistock_validation" / "history"
 RUN_METADATA_SCHEMA_VERSION = "aistock_validation_run_v1"
 EVIDENCE_MANIFEST_SCHEMA_VERSION = "aistock_validation_evidence_manifest_v1"
 COVERAGE_SNAPSHOT_SCHEMA_VERSION = "aistock_validation_coverage_snapshot_v1"
+ROOT_HISTORY_OVERRIDE_ENV = "AISTOCK_ALLOW_ROOT_VALIDATION_HISTORY"
+ROOT_HISTORY_OVERRIDE_VALUE = "ALLOW_CANONICAL_ROOT_VALIDATION_HISTORY"
 
 
 def _safe_slug(value: str) -> str:
@@ -35,6 +37,87 @@ def _git_commit(cwd: Path | None = None) -> str:
         ).strip()
     except Exception:
         return "unknown"
+
+
+def _git_branch(cwd: Path | None = None) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(cwd or ROOT), text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _git_output(args: list[str], cwd: Path | None = None) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=str(cwd or ROOT),
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def _canonical_root() -> Path | None:
+    raw = os.environ.get("AISTOCK_CANONICAL_ROOT")
+    if raw:
+        return Path(raw).resolve()
+    worktree_output = _git_output(["worktree", "list", "--porcelain"])
+    current_worktree: dict[str, str] = {}
+    for line in [*worktree_output.splitlines(), ""]:
+        if not line:
+            if current_worktree.get("branch") == "refs/heads/main" and current_worktree.get("worktree"):
+                return Path(current_worktree["worktree"]).resolve()
+            current_worktree = {}
+            continue
+        key, _, value = line.partition(" ")
+        current_worktree[key] = value
+    top_level = _git_output(["rev-parse", "--show-toplevel"])
+    common_dir = _git_output(["rev-parse", "--git-common-dir"])
+    if not top_level or not common_dir:
+        return None
+    top_path = Path(top_level).resolve()
+    common_path = Path(common_dir)
+    if not common_path.is_absolute():
+        common_path = top_path / common_path
+    try:
+        if common_path.resolve() == (top_path / ".git").resolve():
+            return top_path
+    except OSError:
+        return None
+    return None
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _guard_canonical_root_history_write(history_root: Path) -> None:
+    canonical_root = _canonical_root()
+    if canonical_root is None:
+        return
+    root_resolved = ROOT.resolve()
+    history_resolved = history_root.resolve()
+    default_history = (root_resolved / "tests" / "aistock_validation" / "history").resolve()
+    if root_resolved != canonical_root:
+        return
+    if _git_branch(root_resolved) != "main":
+        return
+    if not _is_relative_to(history_resolved, default_history):
+        return
+    if os.environ.get(ROOT_HISTORY_OVERRIDE_ENV) == ROOT_HISTORY_OVERRIDE_VALUE:
+        return
+    raise SystemExit(
+        "Refusing to write validation history in canonical root main. "
+        "Run validation from an isolated worktree or set "
+        f"{ROOT_HISTORY_OVERRIDE_ENV}={ROOT_HISTORY_OVERRIDE_VALUE} for an audited exception."
+    )
 
 
 def _operator() -> str:
@@ -118,6 +201,7 @@ def cmd_record(args: argparse.Namespace) -> int:
     level = _safe_slug(args.level.upper())
     title_slug = _safe_slug(args.title)
     history_root = Path(args.history_root).resolve() if args.history_root else DEFAULT_HISTORY_ROOT
+    _guard_canonical_root_history_write(history_root)
     out_dir = history_root / module
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{now}_{level}_{title_slug}.md"

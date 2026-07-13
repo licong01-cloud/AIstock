@@ -1,0 +1,130 @@
+{
+  "actual": "The page shows 124 records under 当前模拟盘 even though they are persisted portfolio records rather than currently running operable simulations, and the launch card occupies only the left column with blank space on the right.",
+  "allowed_write_scope": [
+    "frontend/src/app/paper-v2/portfolios/page.tsx",
+    "frontend/src/app/paper-v2/paper-v2.css",
+    "frontend/src/lib/paper-v2/api.ts",
+    "frontend/src/lib/paper-v2/types.ts",
+    "frontend/tests/paper-v2",
+    "frontend/src/app/paper-v2",
+    "frontend/src/lib/api",
+    "backend/routers/paper_trading_v2.py",
+    "backend/services/paper_trading_v2",
+    "tests/aistock_validation/bugs/20260624_BUG-504-paper-v2-portfolios-page-mixes-history-into-current-list-and-leaves-laun.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-504",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T16:28:17.668700Z",
+  "description": "The page shows 124 records under 当前模拟盘 even though they are persisted portfolio records rather than currently running operable simulations, and the launch card occupies only the left column with blank space on the right.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-56eba7621708",
+      "timestamp": "2026-06-23T16:28:17.668696Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The strategy-package launch card should span the available width. The current-running section should show only operable LocalSim/MiniQMT simulations. Historical, terminal, READY, and stale RUNNING records should be shown separately as history or abnormal/stale records without inflating the current count.",
+  "first_seen_at": "2026-06-23T16:28:17.668700Z",
+  "fix_branch": null,
+  "fix_commit": "0f08f8bbd327c0b5a57ebbf4726196e0bdb82546",
+  "fixed_at": "2026-06-23T17:46:25.603814Z",
+  "github_issue_number": 1559,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1559",
+  "last_seen_at": "2026-06-23T16:28:17.668700Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1562",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open http://localhost:3000/paper-v2/portfolios; observe the single launch card half-width and 当前模拟盘 count including READY/COMPLETED/history records. Compare with GET /api/v1/paper-v2/running-summary and operability.has_tickable_session.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "frontend_tsc",
+    "paper_v2_ui",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "Paper v2 portfolios page mixes history into current list and leaves launch card half-width",
+  "trigger_condition": {
+    "fingerprint": "56eba7621708ddb01b072875",
+    "source_event_id": "FE-20260624-56eba7621708"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:paper_v2",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "frontend_tsc",
+      "paper_v2_ui",
+      "paper_v2_backend",
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/paper-v2",
+      "frontend/src/lib/api",
+      "frontend/tests/paper-v2",
+      "backend/routers/paper_trading_v2.py",
+      "backend/services/paper_trading_v2",
+      "frontend/src/app/paper-v2/portfolios/page.tsx",
+      "frontend/src/app/paper-v2/paper-v2.css",
+      "frontend/src/lib/paper-v2/api.ts",
+      "frontend/src/lib/paper-v2/types.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/RUNNING/COMPLETED",
+    "ui_routes": [
+      "/RUNNING/COMPLETED",
+      "/paper-v2"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1562 GitHub checks -> passed (mergeStateStatus=CLEAN; AIstock CI, PR Quality, Semgrep, CodeQL success)",
+    "rtk npm exec -- tsc --noEmit --incremental false (frontend) -> passed",
+    "rtk npm exec -- playwright test tests/paper-v2/paper-v2-portfolios-current-history.spec.ts --project=chromium (frontend) -> passed, 1 passed",
+    "rtk cmd /c set AISTOCK_HOSTED_CI=1&& set PAPER_V2_SKIP_REALTIME=1&& set PAPER_V2_E2E_SKIP_REALTIME=1&& python -m nox -s paper_v2_ui -> passed, 27 passed, 1 skipped"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

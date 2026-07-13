@@ -18,10 +18,10 @@ from backend.mcp.tool_manifest import (
 
 
 def test_manifest_counts_and_required_metadata() -> None:
-    assert legacy_tool_count() == 212
+    assert legacy_tool_count() == 372
     assert platform_tool_count() == 6
-    assert len(TOOL_MANIFEST) == 218
-    assert len(TOOL_MANIFEST_BY_NAME) == 218
+    assert len(TOOL_MANIFEST) == 378
+    assert len(TOOL_MANIFEST_BY_NAME) == 378
     assert validate_manifest() == []
     for entry in TOOL_MANIFEST:
         assert entry.tool_name
@@ -71,8 +71,13 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "strategy_governance_plan_promotion",
         "strategy_governance_plan_retirement",
         "execution_policy_plan_binding",
+        "advisory_list_bindings",
+        "advisory_get_active_binding",
+        "paper_v2_monitoring_get_scheduler_status",
+        "paper_v2_monitoring_get_scheduler_bootstrap_status",
         "local_data_plan_schedule_reset",
         "local_data_plan_repair",
+        "qlib_export_plan_dataset_update",
         "local_data_list_sync_targets",
         "local_data_get_sync_target",
         "local_data_list_sync_attempts",
@@ -86,6 +91,7 @@ def test_manifest_risk_no_write_as_readonly() -> None:
         "qe_archive_list_backfill_runs",
         "qe_archive_get_backfill_run",
         "qe_archive_query_run_leaderboard",
+        "qe_archive_query_topk_quality",
         "list_validation_runs",
         "get_validation_run",
     } <= read_only_exemptions
@@ -115,6 +121,28 @@ def test_external_research_l25_read_only_retrieval_stays_direct() -> None:
     save_evidence = TOOL_MANIFEST_BY_NAME["external_research_save_evidence"]
     assert save_evidence.risk_level in NON_DIRECT_RISK_LEVELS
     assert save_evidence.assistant_usable == "preflight_required"
+
+
+def test_qlib_export_candidate_generation_is_confirmed_and_candidate_only() -> None:
+    for name in [
+        "qlib_export_run_h5_dataset_full_confirmed",
+        "qlib_export_run_h5_dataset_incremental_confirmed",
+        "qlib_export_run_h5_daily_aux_incremental_all_confirmed",
+        "qlib_export_build_static_factors_confirmed",
+        "qlib_export_export_field_map_confirmed",
+        "qlib_export_run_bin_unified_v2_confirmed",
+        "qlib_export_generate_backtest_candidate_confirmed",
+    ]:
+        entry = TOOL_MANIFEST_BY_NAME[name]
+        assert entry.requires_confirmation is True
+        assert entry.risk_level in NON_DIRECT_RISK_LEVELS
+        assert entry.assistant_usable == "preflight_required"
+        assert entry.backend_endpoint == "qlib/*"
+
+    plan_entry = TOOL_MANIFEST_BY_NAME["qlib_export_plan_dataset_update"]
+    assert plan_entry.risk_level == "read_only"
+    assert plan_entry.requires_confirmation is False
+    assert plan_entry.assistant_usable == "direct_or_catalog"
 
 
 def test_manifest_metadata_override_reasons_are_required() -> None:
@@ -148,6 +176,31 @@ def test_migration_state_is_derived_and_overrideable() -> None:
     )
 
 
+def test_paper_v2_current_phase_excludes_runtime_control_tools() -> None:
+    forbidden_fragments = (
+        "paper_v2_create_portfolio",
+        "paper_v2_enable_auto_run",
+        "paper_v2_disable_auto_run",
+        "paper_v2_run_day",
+        "paper_v2_start_session",
+        "paper_v2_pause_session",
+        "paper_v2_resume_session",
+        "paper_v2_stop_session",
+        "paper_v2_scheduler_start",
+        "paper_v2_scheduler_stop",
+        "qmt_broker_place_order",
+        "qmt_broker_cancel_order",
+        "qmt_broker_bank",
+        "qmt_virtual",
+    )
+    exposed = {entry.tool_name for entry in TOOL_MANIFEST}
+    assert not [name for name in exposed if any(fragment in name for fragment in forbidden_fragments)]
+    assert TOOL_MANIFEST_BY_NAME["paper_v2_monitoring_list_positions"].risk_level == "read_only"
+    assert TOOL_MANIFEST_BY_NAME["qmt_broker_monitoring_get_snapshot"].risk_level == "read_only"
+
+
 def test_manifest_validation_rejects_invalid_migration_state() -> None:
-    bad_entry = replace(TOOL_MANIFEST[0], migration_state="unknown_state")
+    health_entry = next(entry for entry in TOOL_MANIFEST if entry.tool_name == "mcp_gateway_health")
+    bad_entry = replace(health_entry, migration_state="unknown_state")
     assert validate_manifest([bad_entry]) == ["invalid migration_state for mcp_gateway_health: unknown_state"]
+

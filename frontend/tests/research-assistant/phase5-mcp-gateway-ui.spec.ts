@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import type { AssistantMcpToolEvent } from "../../src/lib/research-assistant/api";
+
 function envelope(data: unknown, status = 200) {
   return { status: status >= 400 ? "error" : "success", data };
 }
@@ -146,7 +148,7 @@ const tools = [
   },
 ];
 
-let toolEvents = [
+let toolEvents: AssistantMcpToolEvent[] = [
   {
     tool_event_id: "mcptev_existing_readonly",
     task_id: "task_phase5",
@@ -278,6 +280,7 @@ test("Phase 5 MCP tools page shows unified catalog health, filters, profile reco
   await expect(page.getByTestId("ra-mcp-evidence-refs")).toContainText("manifest:external_research_save_evidence");
   await expect(page.getByTestId("ra-mcp-audit-panel")).toContainText("mcptev_phase5_preflight");
   await expect(page.getByTestId("ra-mcp-audit-panel")).toContainText("external_research_save_evidence");
+  await expect(page.getByTestId("ra-mcp-audit-panel")).toContainText(/Task Id\s*-/);
 
   const bodyText = await page.locator("body").innerText();
   expect(bodyText).not.toContain("placeholder");

@@ -1,0 +1,113 @@
+{
+  "actual": "switch_to_event_loop(require_shadow_evidence=True) accepts the latest same-scope shadow metadata report without requiring trading-day or scenario coverage.",
+  "allowed_write_scope": [
+    "backend/services/miniqmt_execution_runtime/gray.py",
+    "backend/services/miniqmt_execution_runtime/shadow.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py",
+    "docs/handoff/BUG-526-analysis.md",
+    "tests/aistock_validation/bugs/20260625_BUG-526-miniqmt-canary-gray-switch-shadow-evidence-gate-is-too-weak-single-lates.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-526",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-25T07:38:04.071560Z",
+  "description": "A canary switch to event_loop is guarded by gray.py MiniQMTGraySwitchController.switch_to_event_loop(require_shadow_evidence=True). Current behavior is weaker than ADR 0002 / durable execution runtime design section 8: it only inspects the latest last_shadow_reconciliation metadata for scope match, no FATAL, no in-flight work, and SIM mode, without coverage by trading days or required scenarios. D1/BUG-522 already makes the SIM scheduler emit durable SHADOW_RECONCILIATION_REPORTED evidence; this BUG strengthens the canary hard gate to consume that evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-bb3714a5193e",
+      "timestamp": "2026-06-25T07:38:04.071555Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Require same scope, at least N durable trade_date reports, minimum scenario coverage, no FATAL differences, no in-flight work, SIM mode, and traceable accepted event_ids before canary event_loop switch.",
+  "first_seen_at": "2026-06-25T07:38:04.071560Z",
+  "fix_branch": null,
+  "fix_commit": "f8884beca7060519b413b4808d115671ce636eb6",
+  "fixed_at": "2026-06-25T09:58:05.857414Z",
+  "github_issue_number": 1636,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1636",
+  "last_seen_at": "2026-06-25T07:38:04.071560Z",
+  "module": "miniqmt_execution_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1643",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "miniqmt_execution_runtime"
+  ],
+  "title": "MiniQMT canary gray-switch shadow-evidence gate is too weak (single latest report, no trading-day/scenario coverage)",
+  "trigger_condition": {
+    "fingerprint": "bb3714a5193e4e90d38e50f7",
+    "source_event_id": "FE-20260625-bb3714a5193e"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "module:miniqmt_execution_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0",
+      "validation_module_registry_l0",
+      "paper_v2_l3"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "explicit_bug_intake_allowed_write_scope",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
+  },
+  "ui_issue": false,
+  "validation_evidence": [
+    "rtk git diff --check origin/main...HEAD -> passed",
+    "rtk python -m py_compile backend/services/miniqmt_execution_runtime/gray.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -> passed",
+    "rtk python -m ruff check backend/services/miniqmt_execution_runtime/gray.py backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -> passed",
+    "rtk python -m pytest backend/tests/miniqmt_execution_runtime/test_miniqmt_phase6_gray_switch.py -q -> 8 passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk cmd /c 'set AISTOCK_HOSTED_CI=1&& set PAPER_V2_L3_SKIP_UI=1&& python -m nox -s paper_v2_l3' -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use the issue worktree and explicit MiniQMT runtime allowed scope only.",
+      "Run targeted MiniQMT gray-switch tests before final l0/module/L3 gates.",
+      "Do not start/restart services, write production DB/DDL, or attempt LIVE mode."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

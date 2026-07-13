@@ -1,0 +1,80 @@
+{
+  "actual": "simulation_runtime/scheduler.py:2029 run_once: when _run_binding raises DataUnavailableError/RuntimeConfigInvalidError and raise_on_error=False (the unattended background scheduler mode), the failure is ONLY appended to the in-memory results list (SimulationSchedulerBindingResult status=FAILED) returned in the transient SimulationSchedulerRunOnceResult; there is NO durable write (no create_run / save_run_event / save_error). So an active binding whose pre-run stage (selection/planning/config) fails produces no durable run and no operator-visible error -- a silent 'disappearing skip'. Likely root cause of LocalSim L16 today: active binding but no durable 2026-06-22 run/plan/selection evidence, portfolio stuck at 2026-06-17, no visible error. Violates no-silent-error rule.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260623_BUG-484-p1-simulationruntime-unattended-pre-run-binding-failure-must-be-durably.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "docs/handoff/BUG-484-analysis.md"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-484",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T17:14:04.443866Z",
+  "description": "simulation_runtime/scheduler.py:2029 run_once: when _run_binding raises DataUnavailableError/RuntimeConfigInvalidError with raise_on_error=False (unattended background scheduler), the failure is ONLY appended to the in-memory results list (SimulationSchedulerBindingResult status=FAILED) in the transient SimulationSchedulerRunOnceResult; NO durable write (no create_run/save_run_event/save_error). An active binding whose pre-run (selection/planning/config) fails thus produces no durable run and no operator-visible error -- silent 'disappearing skip'. Found by pre-open rescan 2026-06-23; likely root cause of LocalSim L16 (active binding, no durable 2026-06-22 run, portfolio stuck 2026-06-17, no visible error). Violates no-silent-error rule. FIX: durably record the pre-run failure (FAILED run row or durable run-event/error with reason_code+binding_id+strategy_id+trade_date) visible via API/UI/monitoring; keep per-binding isolation (one failure must not abort the tick); covers both LocalSim and MiniQMT bindings (shared loop). No service start; no MiniQMT-logic change beyond shared durable-audit.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-e8cc1fa53fdb",
+      "timestamp": "2026-06-22T17:14:04.443862Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "An unattended binding pre-run failure must be durably recorded (persist a FAILED run row, or a durable run-event/error row with reason_code + binding_id + strategy_id + trade_date) that is visible via API/UI/monitoring, so operators can see WHY a binding did not trade. Keep per-binding isolation (one binding failure must not abort the whole tick) but make the failure durably auditable, not transient-only. Covers both LocalSim and MiniQMT bindings (shared run_once loop). No silent skip.",
+  "first_seen_at": "2026-06-22T17:14:04.443866Z",
+  "fix_branch": "bug/BUG-484-p1-simulationruntime-unattended-pre-run-binding-20260623",
+  "fix_commit": "fa891f2a6c6d47d7fe7130cfe96f302dac1c3209",
+  "fixed_at": "2026-06-22T18:36:00.455022Z",
+  "github_issue_number": 1490,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1490",
+  "last_seen_at": "2026-06-22T17:14:04.443866Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1495",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "scheduler.py:2029 except (DataUnavailableError, RuntimeConfigInvalidError) with raise_on_error=False only appends a transient SimulationSchedulerBindingResult; no durable DB write; an active binding with failing selection/plan shows no durable run/error in API/UI.",
+  "required_verification": [
+    "l0",
+    "paper_v2_l3",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "[P1][SimulationRuntime] unattended pre-run binding failure must be durably audited (silent disappearing skip)",
+  "trigger_condition": {
+    "fingerprint": "e8cc1fa53fdb3693abc242f3",
+    "source_event_id": "FE-20260623-e8cc1fa53fdb"
+  },
+  "validation_evidence": [
+    "gh pr checks 1495 -> 17 passed, 0 failed; local validations from PR: test_lifecycle_scheduler 75 passed, ruff passed, git diff --check passed, nox l0 passed, validation_module_registry_l0 passed, paper_v2_l3 passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "ready_for_fix"
+}

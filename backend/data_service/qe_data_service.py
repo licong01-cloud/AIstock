@@ -10,7 +10,7 @@ QuantEvolver data service layer
   - adj_latest：该股票最新复权因子（按每只股票分组取最大值）
   - qfq_factor = adj_t / adj_latest（前复权因子，最新日 = 1.0）
 - 价格单位：数据库存储为厘（×1000），输出为元（÷1000）
-- 成交量：volume_hand（手），输出保持手为单位（与 daily_pv.h5 一致）
+- 成交量：volume_hand（手），输出为股并按前复权因子反向调整
 - 成交额：amount_li（厘），输出为元（÷1000），不做复权
 - 字段命名：不带 $ 前缀（open/close/high/low/volume/amount/factor）
 - bak_basic：排除上市日期前的数据和停牌期间的数据（JOIN kline_daily_raw 过滤）
@@ -31,11 +31,21 @@ import numpy as np
 import pandas as pd
 
 from ..db.pg_pool import get_conn
+from backend.services.industry_code_map import (
+    UNKNOWN_L2_CODE_ID,
+    encode_l2_codes,
+    load_sw_l2_code_map,
+)
 from backend.services.market_data.instrument_validator import (
     DEFAULT_SQL_CHUNK_SIZE,
     load_chunks_with_logging,
     normalize_and_validate_ts_codes,
     normalize_ts_code,
+)
+from .moneyflow_contract import (
+    MONEYFLOW_FIELD_MAP,
+    derive_moneyflow_factors,
+    normalize_tushare_moneyflow_units,
 )
 
 logger = logging.getLogger("aistock.qe_data_service")
@@ -138,27 +148,6 @@ DAILY_BASIC_FIELD_MAP: Dict[str, str] = {
     "free_share":      "db_free_share",
     "total_mv":        "db_total_mv",
     "circ_mv":         "db_circ_mv",
-}
-
-MONEYFLOW_FIELD_MAP: Dict[str, str] = {
-    "buy_sm_vol":      "mf_sm_buy_vol",
-    "buy_sm_amount":   "mf_sm_buy_amt",
-    "sell_sm_vol":     "mf_sm_sell_vol",
-    "sell_sm_amount":  "mf_sm_sell_amt",
-    "buy_md_vol":      "mf_md_buy_vol",
-    "buy_md_amount":   "mf_md_buy_amt",
-    "sell_md_vol":     "mf_md_sell_vol",
-    "sell_md_amount":  "mf_md_sell_amt",
-    "buy_lg_vol":      "mf_lg_buy_vol",
-    "buy_lg_amount":   "mf_lg_buy_amt",
-    "sell_lg_vol":     "mf_lg_sell_vol",
-    "sell_lg_amount":  "mf_lg_sell_amt",
-    "buy_elg_vol":     "mf_elg_buy_vol",
-    "buy_elg_amount":  "mf_elg_buy_amt",
-    "sell_elg_vol":    "mf_elg_sell_vol",
-    "sell_elg_amount": "mf_elg_sell_amt",
-    "net_mf_vol":      "mf_net_vol",
-    "net_mf_amount":   "mf_net_amt",
 }
 
 BAK_BASIC_FIELD_MAP: Dict[str, str] = {
@@ -268,6 +257,86 @@ def _build_multiindex_df(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
     for c in cols:
         result[c] = pd.to_numeric(result[c], errors="coerce").astype("float32")
     return result.sort_index()
+
+
+def _load_sw_l2_member_intervals(conn, ts_codes: List[str]) -> pd.DataFrame:
+    """加载给定股票的申万 L2 归属区间（in_date/out_date）。数据量小（每股少量区间）。"""
+    if not ts_codes:
+        return pd.DataFrame(columns=["ts_code", "l2_code", "in_date", "out_date"])
+    placeholders = ",".join(["%s"] * len(ts_codes))
+    sql = f"""
+        SELECT ts_code, l2_code, in_date, out_date
+        FROM market.sw_index_member
+        WHERE ts_code IN ({placeholders})
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, ts_codes)
+        rows = cur.fetchall()
+    return pd.DataFrame(rows, columns=["ts_code", "l2_code", "in_date", "out_date"])
+
+
+def _asof_l2_codes(trade_date: pd.Series, ts_code: pd.Series, members: pd.DataFrame) -> list:
+    """按 (ts_code, trade_date) 做 PIT as-of 匹配，返回与输入行一一对应的 l2_code 列表。
+
+    规则与 db_reader 的 LATERAL 一致：取 in_date <= trade_date 的最近区间，且该区间
+    out_date 为空或 >= trade_date；否则视为未归属（None）。用 pandas merge_asof 向量化，
+    避免逐行相关子查询在全市场规模下 statement timeout。
+    """
+    n = len(trade_date)
+    left = pd.DataFrame(
+        {
+            "_ord": np.arange(n, dtype=np.int64),
+            "trade_date": pd.to_datetime(pd.Series(trade_date).to_numpy()),
+            "ts_code": pd.Series(ts_code).astype(str).to_numpy(),
+        }
+    )
+    if members is None or members.empty:
+        return [None] * n
+    m = members.copy()
+    m["ts_code"] = m["ts_code"].astype(str)
+    m["in_date"] = pd.to_datetime(m["in_date"])
+    m["out_date"] = pd.to_datetime(m["out_date"])
+    m = m.dropna(subset=["in_date"]).sort_values("in_date")
+    left_sorted = left.sort_values("trade_date")
+    merged = pd.merge_asof(
+        left_sorted,
+        m,
+        left_on="trade_date",
+        right_on="in_date",
+        by="ts_code",
+        direction="backward",
+    )
+    active = merged["out_date"].isna() | (merged["out_date"] >= merged["trade_date"])
+    merged.loc[~active, "l2_code"] = None
+    merged = merged.sort_values("_ord")
+    # merge_asof 未匹配行会产生 NaN，统一规整为 None（编码侧按未知/-1 处理）
+    return [code if pd.notna(code) else None for code in merged["l2_code"].tolist()]
+
+
+def _warn_low_l2_code_coverage(df: pd.DataFrame) -> None:
+    """按交易日检查 l2_code_id 覆盖率，低于阈值 loud warning（不静默、不丢行）。"""
+    if df.empty or "l2_code_id" not in df.columns:
+        return
+    coverage = (
+        df["l2_code_id"].ne(UNKNOWN_L2_CODE_ID).groupby(level="datetime").agg(["sum", "count"])
+    )
+    for dt_value, row in coverage.iterrows():
+        total = int(row["count"])
+        if total <= 0:
+            continue
+        matched = int(row["sum"])
+        ratio = matched / total
+        if ratio < 0.90:
+            label = dt_value.date().isoformat() if hasattr(dt_value, "date") else str(dt_value)
+            logger.warning(
+                "sector_data_l2_code_id_coverage_below_threshold "
+                "reason_code=sector_data_l2_code_id_low_coverage "
+                "trade_date=%s coverage=%.4f missing_count=%d total_count=%d",
+                label,
+                ratio,
+                total - matched,
+                total,
+            )
 
 
 # ============================================================
@@ -558,6 +627,7 @@ def load_moneyflow(
     if df.empty:
         return pd.DataFrame()
 
+    df = normalize_tushare_moneyflow_units(df, copy=False)
     df = df.rename(columns=MONEYFLOW_FIELD_MAP)
     result = _build_multiindex_df(df, "mf_")
     _CACHE.set("load_moneyflow", ts_codes, start.isoformat(), end.isoformat(), result)
@@ -666,8 +736,12 @@ def load_sector_data(
     end_date: Union[str, date],
 ) -> pd.DataFrame:
     """
-    加载申万 L2 行业板块数据（展开到个股级别），输出 sw2_* 前缀字段。
-    数据源：market.sector_data
+    加载申万 L2 行业板块数据（展开到个股级别），输出 sw2_* 前缀字段
+    以及整数 l2_code_id（PIT 申万 L2 归属，未知/未匹配=-1）。
+
+    数据源：market.sector_data（sw2_* 数值）+ market.sw_index_member（PIT LEFT JOIN
+    LATERAL 取当日有效 l2_code）。l2_code_id 用共享稳定映射
+    backend.services.industry_code_map 编码（禁 pd.factorize，回测/导出/线上口径一致）。
     """
     start = _to_date(start_date)
     end = _to_date(end_date)
@@ -693,12 +767,32 @@ def load_sector_data(
 
     with get_conn() as conn:
         df = pd.read_sql(sql, conn, params=params)
+        if df.empty:
+            return pd.DataFrame()
+        l2_code_map = load_sw_l2_code_map(conn)
+        members = _load_sw_l2_member_intervals(conn, ts_codes)
 
-    if df.empty:
-        return pd.DataFrame()
+    # 按 (datetime,instrument) 编码 l2_code_id（PIT as-of，见 _asof_l2_codes）。
+    # 用 pandas merge_asof 而非逐行 SQL LATERAL：后者在全市场规模下会 statement timeout。
+    l2_codes = _asof_l2_codes(df["trade_date"], df["ts_code"], members)
+    l2_index = pd.MultiIndex.from_arrays(
+        [pd.to_datetime(df["trade_date"]), df["ts_code"].apply(_normalize_instrument)],
+        names=["datetime", "instrument"],
+    )
+    encoded = pd.Series(
+        np.asarray(encode_l2_codes(l2_codes, l2_code_map), dtype=np.int16),
+        index=l2_index,
+    )
+    encoded = encoded[~encoded.index.duplicated(keep="last")]
 
-    # 列已经是 sw2_* 前缀，无需重命名
+    # sw2_* 数值列（float32，逐值不变）
     result = _build_multiindex_df(df, "sw2_")
+    # 追加整数 l2_code_id（未知/未匹配=-1），按索引对齐；不改任何 sw2_* 值
+    result["l2_code_id"] = (
+        encoded.reindex(result.index).fillna(UNKNOWN_L2_CODE_ID).astype(np.int16)
+    )
+    _warn_low_l2_code_coverage(result)
+
     _CACHE.set("load_sector_data", ts_codes, start.isoformat(), end.isoformat(), result)
     return result
 
@@ -754,109 +848,9 @@ def compute_moneyflow_derived_factors(
     df_mf: pd.DataFrame,
     df_pv: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    从原始资金流向数据派生 mf_* 因子，逻辑与 generate_static_factors_bundle.py
-    的 _derive_moneyflow_features() 完全一致。
+    """Return canonical moneyflow factors without changing legacy field names."""
 
-    对应 factors/moneyflow_factors/result.pkl 中的14个字段，
-    并额外计算5日/20日滚动窗口因子（generate_static_factors_bundle.py 中也有）。
-
-    Args:
-        df_mf: load_moneyflow() 返回的 DataFrame（含 mf_sm_buy_vol 等原始字段）
-        df_pv: load_daily_pv() 返回的 DataFrame（需要 amount 和 volume 列）
-
-    Returns:
-        MultiIndex(datetime, instrument) DataFrame，包含所有派生 mf_* 因子
-    """
-    if df_mf is None or df_mf.empty:
-        return pd.DataFrame()
-
-    required_raw = [
-        "mf_sm_buy_amt", "mf_sm_sell_amt",
-        "mf_md_buy_amt", "mf_md_sell_amt",
-        "mf_lg_buy_amt", "mf_lg_sell_amt",
-        "mf_elg_buy_amt", "mf_elg_sell_amt",
-        "mf_sm_buy_vol", "mf_sm_sell_vol",
-        "mf_md_buy_vol", "mf_md_sell_vol",
-        "mf_lg_buy_vol", "mf_lg_sell_vol",
-        "mf_elg_buy_vol", "mf_elg_sell_vol",
-    ]
-    missing = [c for c in required_raw if c not in df_mf.columns]
-    if missing:
-        logger.warning(f"moneyflow 原始字段缺失: {missing}，跳过派生因子计算")
-        return pd.DataFrame(index=df_mf.index)
-
-    if df_pv is None or df_pv.empty or "amount" not in df_pv.columns or "volume" not in df_pv.columns:
-        logger.warning("daily_pv 数据缺失 amount/volume，跳过 mf_*_ratio 派生因子")
-        return pd.DataFrame(index=df_mf.index)
-
-    df = df_mf.sort_index()
-    amount = df_pv["amount"].astype("float64").reindex(df.index).mask(
-        df_pv["amount"].astype("float64").reindex(df.index) == 0, np.nan
-    )
-    volume = df_pv["volume"].astype("float64").reindex(df.index).mask(
-        df_pv["volume"].astype("float64").reindex(df.index) == 0, np.nan
-    )
-
-    buy_amt_total  = df["mf_sm_buy_amt"]  + df["mf_md_buy_amt"]  + df["mf_lg_buy_amt"]  + df["mf_elg_buy_amt"]
-    sell_amt_total = df["mf_sm_sell_amt"] + df["mf_md_sell_amt"] + df["mf_lg_sell_amt"] + df["mf_elg_sell_amt"]
-    buy_vol_total  = df["mf_sm_buy_vol"]  + df["mf_md_buy_vol"]  + df["mf_lg_buy_vol"]  + df["mf_elg_buy_vol"]
-    sell_vol_total = df["mf_sm_sell_vol"] + df["mf_md_sell_vol"] + df["mf_lg_sell_vol"] + df["mf_elg_sell_vol"]
-
-    main_buy_amt  = df["mf_lg_buy_amt"]  + df["mf_elg_buy_amt"]
-    main_sell_amt = df["mf_lg_sell_amt"] + df["mf_elg_sell_amt"]
-    main_buy_vol  = df["mf_lg_buy_vol"]  + df["mf_elg_buy_vol"]
-    main_sell_vol = df["mf_lg_sell_vol"] + df["mf_elg_sell_vol"]
-
-    total_net_amt = (buy_amt_total  - sell_amt_total).astype("float64")
-    total_net_vol = (buy_vol_total  - sell_vol_total).astype("float64")
-    main_net_amt  = (main_buy_amt   - main_sell_amt).astype("float64")
-    main_net_vol  = (main_buy_vol   - main_sell_vol).astype("float64")
-    elg_net_amt   = (df["mf_elg_buy_amt"] - df["mf_elg_sell_amt"]).astype("float64")
-    elg_net_vol   = (df["mf_elg_buy_vol"] - df["mf_elg_sell_vol"]).astype("float64")
-
-    out = pd.DataFrame(index=df.index)
-
-    # 全档净流入
-    out["mf_total_net_amt"]       = total_net_amt
-    out["mf_total_net_vol"]       = total_net_vol
-    out["mf_total_net_amt_ratio"] = _safe_div(total_net_amt, amount)
-    out["mf_total_net_vol_ratio"] = _safe_div(total_net_vol, volume)
-
-    # 主力净流入（大单+超大单）
-    out["mf_main_net_amt"]        = main_net_amt
-    out["mf_main_net_vol"]        = main_net_vol
-    out["mf_main_net_amt_ratio"]  = _safe_div(main_net_amt, amount)
-    out["mf_main_net_vol_ratio"]  = _safe_div(main_net_vol, volume)
-
-    # 超大单净流入
-    out["mf_elg_net_amt"]         = elg_net_amt
-    out["mf_elg_net_vol"]         = elg_net_vol
-    out["mf_elg_net_amt_ratio"]   = _safe_div(elg_net_amt, amount)
-    out["mf_elg_net_vol_ratio"]   = _safe_div(elg_net_vol, volume)
-
-    # 超大单占主力比
-    out["mf_elg_share_in_main_amt"] = _safe_div(
-        df["mf_elg_buy_amt"],
-        df["mf_lg_buy_amt"] + df["mf_elg_buy_amt"],
-    )
-    out["mf_elg_share_in_main_vol"] = _safe_div(
-        df["mf_elg_buy_vol"],
-        df["mf_lg_buy_vol"] + df["mf_elg_buy_vol"],
-    )
-
-    # 滚动窗口（5日、20日）
-    for w in (5, 20):
-        out[f"mf_total_net_amt_{w}d"] = _rolling_sum_by_instrument(total_net_amt, w)
-        out[f"mf_main_net_amt_{w}d"]  = _rolling_sum_by_instrument(main_net_amt, w)
-        out[f"mf_elg_net_amt_{w}d"]   = _rolling_sum_by_instrument(elg_net_amt, w)
-
-        amount_w = _rolling_sum_by_instrument(amount, w)
-        out[f"mf_total_net_amt_ratio_{w}d"] = _safe_div(out[f"mf_total_net_amt_{w}d"], amount_w)
-        out[f"mf_main_net_amt_ratio_{w}d"]  = _safe_div(out[f"mf_main_net_amt_{w}d"], amount_w)
-        out[f"mf_elg_net_amt_ratio_{w}d"]   = _safe_div(out[f"mf_elg_net_amt_{w}d"], amount_w)
-
-    return out.sort_index()
+    return derive_moneyflow_factors(df_mf, df_pv)
 
 
 def compute_daily_basic_precomputed_factors(

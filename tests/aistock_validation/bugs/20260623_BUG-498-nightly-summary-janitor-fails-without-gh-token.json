@@ -1,0 +1,112 @@
+{
+  "actual": "Manual nightly run 28016507522 completed the code-intelligence and new LLM silent degradation audit steps, but the final Nightly summary + auto-bug on failure job failed in step 'Close stale Nightly failure issues after recovery'. The step runs 'python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact' in GitHub Actions without GH_TOKEN, so gh exits with: 'To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.' Fix nightly.yml so the janitor step has the required GitHub token while preserving least privilege and warning-only behavior.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260623_BUG-498-nightly-summary-janitor-fails-without-gh-token.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    ".github/workflows/nightly.yml"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-498",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T09:45:01.485556Z",
+  "description": "Manual nightly run 28016507522 completed the code-intelligence and new LLM silent degradation audit steps, but the final Nightly summary + auto-bug on failure job failed in step 'Close stale Nightly failure issues after recovery'. The step runs 'python scripts/aistock_issue_workflow.py ci-issue-janitor --superseded-only --apply --stdout-format compact' in GitHub Actions without GH_TOKEN, so gh exits with: 'To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.' Fix nightly.yml so the janitor step has the required GitHub token while preserving least privilege and warning-only behavior.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-1630ec2764b3",
+      "timestamp": "2026-06-23T09:45:01.485552Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-06-23T09:45:01.485556Z",
+  "fix_branch": null,
+  "fix_commit": "89d8a7f2735655f628579f4a5fc5131b17e6dda9",
+  "fixed_at": "2026-06-23T10:00:53.289219Z",
+  "github_issue_number": 1541,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1541",
+  "last_seen_at": "2026-06-23T09:45:01.485556Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1543",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly summary janitor fails without GH_TOKEN",
+  "trigger_condition": {
+    "fingerprint": "1630ec2764b388e3c8f89cf3",
+    "source_event_id": "FE-20260623-1630ec2764b3"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/aistock_issue_workflow.py",
+    "ui_routes": [
+      "/aistock_issue_workflow.py"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "PR #1543 CI -> 14 passed, mergeState CLEAN",
+    "git diff --check -> passed",
+    "workflow-smoke --changed-file .github/workflows/nightly.yml --module validation -> passed",
+    "ci-issue-janitor --superseded-only dry-run -> passed",
+    "nox -s l0 validation_module_registry_l0 guardrail_changed_files -> passed",
+    "nox -s validation_center_backend -> passed (458 passed, coverage line=80.41 branch=63.04)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "open"
+}

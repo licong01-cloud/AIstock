@@ -10,6 +10,28 @@ TRADING_CORE_INIT = REPO_ROOT / "backend" / "db" / "init_trading_core_v2_schema.
 
 def test_runtime_release_and_binding_schema_are_commented_in_migration_and_bootstrap() -> None:
     expected = {
+        "strategy_pkg.selection_score_artifact": [
+            "artifact_id",
+            "package_id",
+            "manifest_sha256",
+            "trade_date",
+            "data_source",
+            "runtime_config_hash",
+            "scores_json",
+            "artifact_sha256",
+            "score_count",
+            "universe_count",
+            "top_score_symbol",
+            "status",
+            "error_json",
+            "metadata",
+            "artifact_contract_version",
+            "artifact_payload_sha256",
+            "artifact_input_context_hash",
+            "source_revision_set_hash",
+            "asset_closure_hash",
+            "created_at",
+        ],
         "strategy_pkg.strategy_runtime_release": [
             "release_id",
             "package_id",

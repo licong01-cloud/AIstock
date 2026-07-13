@@ -379,6 +379,251 @@ def test_submit_batch_rejects_account_group_cash_overcommit_across_strategy_slot
 
     assert result.preflight_passed is False
     assert broker.place_order_calls == 0
-    assert "BATCH_INSUFFICIENT_ACCOUNT_GROUP_CASH" in {
-        error.code for item in result.results for error in item.preflight.errors
-    }
+    assert [item.preflight.primary_error.code for item in result.results] == [
+        "ACCOUNT_GROUP_CASH_OVERCOMMIT",
+        "ACCOUNT_GROUP_CASH_OVERCOMMIT",
+    ]
+    assert all(item.broker_called is False for item in result.results)
+    assert {
+        error.context["account_group_id"]
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    } == {"ag_minqmt_62266303_sim"}
+    assert {
+        error.context["gate"]
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    } == {"account_group_cash_hard_gate"}
+    assert all(
+        "risk_layer" not in error.context
+        for item in result.results
+        for error in item.preflight.errors
+        if error.code == "ACCOUNT_GROUP_CASH_OVERCOMMIT"
+    )
+
+
+def test_submit_batch_allows_account_group_cash_fit_across_strategy_slots() -> None:
+    repo = InMemoryQmtStrategyLedgerRepository()
+    repo.create_account_group_slots(
+        MiniQmtAccountGroup(
+            account_group_id="ag_minqmt_62266303_sim",
+            broker_account_id=ACCOUNT_ID,
+            cash_limit=Decimal("25000"),
+            slots=(
+                MiniQmtStrategySlot(
+                    account_group_id="ag_minqmt_62266303_sim",
+                    strategy_slot_id="slot_a",
+                    strategy_id="strat_a",
+                    strategy_name="poc_strategy_a",
+                    display_name="POC Strategy A",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("12500"),
+                    order_remark_prefix="ag622-a",
+                ),
+                MiniQmtStrategySlot(
+                    account_group_id="ag_minqmt_62266303_sim",
+                    strategy_slot_id="slot_b",
+                    strategy_id="strat_b",
+                    strategy_name="poc_strategy_b",
+                    display_name="POC Strategy B",
+                    account_id=ACCOUNT_ID,
+                    allocated_cash=Decimal("12500"),
+                    order_remark_prefix="ag622-b",
+                ),
+            ),
+        )
+    )
+    for strategy_id in ("strat_a", "strat_b"):
+        account = repo.get_virtual_account(strategy_id)
+        repo.update_virtual_account(replace(account, cash=Decimal("12500")))
+    broker = CountingBroker()
+
+    result = _service(repo, broker).submit_batch(
+        [
+            _buy_request(strategy_name="poc_strategy_a", order_remark="ag622-fit-a", quantity=1000, price=Decimal("10")),
+            _buy_request(strategy_name="poc_strategy_b", order_remark="ag622-fit-b", quantity=1000, price=Decimal("10")),
+        ]
+    )
+
+    assert result.preflight_passed is True
+    assert result.success is True
+    assert broker.place_order_calls == 2
+    assert all(item.preflight.errors == () for item in result.results)
+
+
+def test_pre_trade_risk_default_is_inert_for_sim_submit() -> None:
+    repo = _repo()
+    account = repo.get_virtual_account("strat_a")
+    repo.update_virtual_account(replace(account, cash=Decimal("100000")))
+    broker = CountingBroker()
+
+    result = _service(repo, broker).submit_order(_buy_request(quantity=1000, price=Decimal("50")))
+
+    assert result.success is True
+    assert broker.place_order_calls == 1
+
+
+def test_pre_trade_risk_kill_switch_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "kill_switch_active": True,
+            }
+        }
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_KILL_SWITCH_ACTIVE"
+    assert result.preflight.primary_error.context["risk_layer"] == "miniqmt_pre_trade"
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_price_collar_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        price=Decimal("13.50"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "price_collar": {"reference_price": "10", "max_deviation_pct": "0.10"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_PRICE_COLLAR_REJECT"
+    assert result.preflight.primary_error.context["max_price"] == 11.0
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_fat_finger_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        quantity=2000,
+        price=Decimal("10"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "fat_finger": {"max_quantity": 1000, "max_notional": "15000"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert [error.code for error in result.preflight.errors] == [
+        "PRE_TRADE_FAT_FINGER_QUANTITY",
+        "PRE_TRADE_FAT_FINGER_NOTIONAL",
+    ]
+    assert broker.place_order_calls == 0
+
+
+def test_pre_trade_risk_buying_power_rejects_before_broker_call() -> None:
+    broker = CountingBroker()
+    request = _buy_request(
+        quantity=1000,
+        price=Decimal("10"),
+        metadata={
+            "miniqmt_pre_trade_risk": {
+                "enabled": True,
+                "buying_power": {"available_buying_power": "9000"},
+            }
+        },
+    )
+
+    result = _service(_repo(), broker).submit_order(request)
+
+    assert result.success is False
+    assert result.broker_called is False
+    assert result.preflight.primary_error.code == "PRE_TRADE_BUYING_POWER_REJECT"
+    assert result.preflight.primary_error.context["available_buying_power"] == 9000.0
+    assert broker.place_order_calls == 0
+
+
+class DisconnectingBroker(CountingBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.connected = True
+        self.fail_next_place = True
+        self.status_calls = 0
+        self.order_query_calls = 0
+        self.trade_query_calls = 0
+
+    def status(self) -> dict:
+        self.status_calls += 1
+        return {"connected": self.connected}
+
+    def connect(self) -> tuple[bool, str]:
+        return self.connected, "connected" if self.connected else "still disconnected"
+
+    def get_orders(self, cancelable_only: bool = False) -> list[dict]:
+        self.order_query_calls += 1
+        return []
+
+    def get_trades(self) -> list[dict]:
+        self.trade_query_calls += 1
+        return []
+
+    def place_order(self, **kwargs):
+        self.place_order_calls += 1
+        if not self.fail_next_place:
+            return 109, "accepted after reconnect"
+        self.fail_next_place = False
+        self.connected = False
+        error = RuntimeError("broker disconnected")
+        error.error_code = "BROKER_CONNECTIVITY_ERROR"
+        raise error
+
+
+def test_broker_disconnect_freeze_has_priority_over_pre_trade_and_cash_gates() -> None:
+    repo = _repo(cash=Decimal("1000"))
+    broker = DisconnectingBroker()
+    service = _service(repo, broker)
+
+    first = service.submit_batch([_buy_request(order_remark="disconnect-first", quantity=100, price=Decimal("10"))])
+    assert first.success is False
+    assert first.results[0].broker_called is True
+    assert first.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert broker.place_order_calls == 1
+
+    blocked = service.submit_batch(
+        [
+            _buy_request(
+                order_remark="disconnect-blocked",
+                quantity=1000,
+                price=Decimal("50"),
+                metadata={
+                    "miniqmt_pre_trade_risk": {
+                        "enabled": True,
+                        "kill_switch_active": True,
+                    }
+                },
+            )
+        ]
+    )
+
+    assert blocked.success is False
+    assert blocked.results[0].broker_called is False
+    assert blocked.results[0].preflight.primary_error.code == "MINIQMT_BROKER_DISCONNECTED_FREEZE"
+    assert [error.code for error in blocked.results[0].preflight.errors] == ["MINIQMT_BROKER_DISCONNECTED_FREEZE"]
+    assert blocked.results[0].preflight.primary_error.context["broker_called"] is False
+    assert broker.place_order_calls == 1
+
+    broker.connected = True
+    recovered = service.submit_batch([_buy_request(order_remark="disconnect-recovered", quantity=100, price=Decimal("10"))])
+    assert recovered.success is True
+    assert broker.order_query_calls >= 1
+    assert broker.trade_query_calls >= 1
+    assert broker.place_order_calls == 2

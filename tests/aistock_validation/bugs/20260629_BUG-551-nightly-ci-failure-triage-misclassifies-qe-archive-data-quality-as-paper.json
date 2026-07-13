@@ -1,0 +1,86 @@
+{
+  "actual": "Issue #1723 was labeled module:paper_v2 and triage context allowed paper_v2 write scope despite qe_archive_data_quality being the real failed session.",
+  "allowed_write_scope": [
+    "scripts/ci_failure_issue_summary.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260629_BUG-551-nightly-ci-failure-triage-misclassifies-qe-archive-data-quality-as-paper.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-551",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-29T09:12:27.259163Z",
+  "description": "Issue #1723 was labeled module:paper_v2 and triage context allowed paper_v2 write scope despite qe_archive_data_quality being the real failed session.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260629-adc5dc80fcc2",
+      "timestamp": "2026-06-29T09:12:27.259159Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock\\tmp\\issue_workflow\\triage-ci-issue-1723-readonly.json"
+  ],
+  "expected": "CI/nightly failure triage should classify by the actual failed nox session or failed_step. When qe_archive_data_quality fails, suspected_modules and allowed_write_scope should point to qe_archive/validation scripts, not paper_v2. Mixed nightly jobs should preserve the concrete failing sub-session evidence.",
+  "first_seen_at": "2026-06-29T09:12:27.259163Z",
+  "fix_branch": null,
+  "fix_commit": "4dee69bb6b593027ddc0df862ad47f86e658f38c",
+  "fixed_at": "2026-06-29T10:32:07.030642Z",
+  "github_issue_number": 1731,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1731",
+  "last_seen_at": "2026-06-29T09:12:27.259163Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1739",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py triage-ci-issue --issue 1723 --output tmp/issue_workflow/triage-ci-issue-1723-readonly.json --output-format summary",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly CI failure triage misclassifies qe_archive_data_quality as paper_v2",
+  "trigger_condition": {
+    "fingerprint": "adc5dc80fcc2901f023f6895",
+    "source_event_id": "FE-20260629-adc5dc80fcc2"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py -q -p no:cacheprovider -> 35 passed",
+    "python -m nox -s l0 guardrail_changed_files validation_center_backend validation_module_registry_l0 -> passed",
+    "git diff --check -> passed",
+    "python scripts/code_intelligence_adapter.py verify-clients --item-id BUG-551 --module validation --changed-file scripts/ci_failure_issue_summary.py --changed-file backend/tests/scripts/test_ci_failure_issue_summary.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

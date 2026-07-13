@@ -1,0 +1,133 @@
+{
+  "actual": "Shared RA detail drawers and diagnostic blocks default to raw JSON blobs, making multiple RA pages hard to read.",
+  "allowed_write_scope": [
+    "frontend/src/components/research-assistant/AssistantShared.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260622_BUG-472-humanize-research-assistant-shared-json-detail-renderers.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/research-assistant/mcp-tools/page.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-472",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T06:00:01.191566Z",
+  "description": "Shared RA detail drawers and diagnostic blocks default to raw JSON blobs, making multiple RA pages hard to read.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-9b61188bc45a",
+      "timestamp": "2026-06-22T06:00:01.191562Z"
+    },
+    {
+      "action": "implementation",
+      "actor": "codex",
+      "note": "Implemented shared RA humanized detail rendering in AssistantShared; raw JSON is default-collapsed under developer details; updated frontend tests. Validation passed: tsc, lint, build, focused Playwright, l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept, validation_module_registry_l0, git diff --check.",
+      "timestamp": "2026-06-22T07:04:42.342636Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Expanded frontend-only scope to mcp-tools page after scoped grep found a direct JSON.stringify display helper outside AssistantShared; no backend/DB/service scope added.",
+      "timestamp": "2026-06-22T07:07:49.133225Z"
+    },
+    {
+      "action": "implementation_update",
+      "actor": "codex",
+      "note": "Also removed direct object JSON.stringify display from scoped mcp-tools helper; focused MCP tools Playwright check, tsc, lint, diff-check, and pr-check passed after scope expansion.",
+      "timestamp": "2026-06-22T07:11:56.961543Z"
+    },
+    {
+      "action": "validation_update",
+      "actor": "codex",
+      "note": "After scope expansion for mcp-tools direct JSON helper, re-ran tsc, lint, build, focused MCP tools Playwright, git diff --check, and pr-check successfully.",
+      "timestamp": "2026-06-22T07:15:13.545531Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "RA shared detail renderers show human-readable field tables by default, keep raw JSON in collapsed developer details, never crash on unusual structures, and do not touch backend or BUG-402 BlockerCard/EvidenceCard.",
+  "first_seen_at": "2026-06-22T06:00:01.191566Z",
+  "fix_branch": null,
+  "fix_commit": "af8ca42fc81e",
+  "fixed_at": "2026-07-06T18:29:56.489339Z",
+  "github_issue_number": 1456,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1456",
+  "last_seen_at": "2026-06-22T06:00:01.191566Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Humanize Research Assistant shared JSON detail renderers",
+  "trigger_condition": {
+    "fingerprint": "9b61188bc45a645f12971af1",
+    "source_event_id": "FE-20260622-9b61188bc45a"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/components/research-assistant/AssistantShared.tsx",
+      "frontend/tests/research-assistant/research-assistant.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/JsonPreview/DiagnosticLogBlock",
+    "ui_routes": [
+      "/JsonPreview/DiagnosticLogBlock"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

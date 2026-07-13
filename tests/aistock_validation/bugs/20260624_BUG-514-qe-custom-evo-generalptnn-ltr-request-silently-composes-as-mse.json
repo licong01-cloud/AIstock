@@ -1,0 +1,88 @@
+{
+  "actual": "Requests in custom_params and model_params both compose to qlib.contrib.model.pytorch_general_nn.GeneralPTNN loss=mse with no ltr_loss_mode/topk_train_k; training log reports loss_type mse and metrics match MSE baseline.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/experiment_config_builders.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "tests/aistock_validation/bugs/20260624_BUG-514-qe-custom-evo-generalptnn-ltr-request-silently-composes-as-mse.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-514",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T09:50:13.990705Z",
+  "description": "Requests in custom_params and model_params both compose to qlib.contrib.model.pytorch_general_nn.GeneralPTNN loss=mse with no ltr_loss_mode/topk_train_k; training log reports loss_type mse and metrics match MSE baseline.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-87d054da3daa",
+      "timestamp": "2026-06-24T09:50:13.990701Z"
+    },
+    {
+      "action": "scope_expansion",
+      "actor": "codex",
+      "note": "Scope expanded during fix: root cause is Path 4 build_config_from_custom_evo_loop dropping loop_config.model_params before ConfigComposer.",
+      "timestamp": "2026-06-24T10:00:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20260624_172229_4bf7 Loop1 conf.yaml lines 5299-5316 and run.log loss_type:mse"
+  ],
+  "expected": "custom_evo loop can explicitly pass ltr_loss_mode=approx_ndcg_at_k through compose so conf.yaml routes to aistock_models.general_ptnn_ltr.AIStockGeneralPTNNLTR with LTR params, or fails loud with reason_code=ltr_loss_mode_injection_failed.",
+  "first_seen_at": "2026-06-24T09:50:13.990705Z",
+  "fix_branch": null,
+  "fix_commit": "81473947bc1070aca154950788ba1fc757c8cea1",
+  "fixed_at": "2026-06-24T13:34:53.972082Z",
+  "github_issue_number": 1593,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1593",
+  "last_seen_at": "2026-06-24T09:50:13.990705Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1596",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE custom_evo GeneralPTNN LTR request silently composes as MSE",
+  "trigger_condition": {
+    "fingerprint": "87d054da3daaafe61a7bc441",
+    "source_event_id": "FE-20260624-87d054da3daa"
+  },
+  "validation_evidence": [
+    "rtk conda run -n AIstock python -m pytest backend/tests/unified_engine/test_qe_config_truth.py -q -> 79 passed",
+    "rtk conda run -n AIstock python -m nox -s l0 -> successful",
+    "rtk conda run -n AIstock python -m nox -s validation_module_registry_l0 -> successful",
+    "rtk cmd /c set PYTHONIOENCODING=utf-8&& set PYTHONUTF8=1&& set QE_READ_L3_SKIP_UI=1&& conda run -n AIstock python -m nox -s qe_read_l3 -> successful"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -80,6 +80,9 @@ def test_loop_row_archive_status_reads_archive_policy_from_config_json() -> None
 
 
 class _FakeAssembler:
+    def __init__(self) -> None:
+        self.global_loop_ref_calls = 0
+
     def list_loop_refs_for_task_indices(self, task_id, loop_indices, *, status, include_archived):
         assert task_id == "task_1"
         assert loop_indices == [1, 2, 3]
@@ -102,9 +105,14 @@ class _FakeAssembler:
             "config": {},
         }
 
+    def list_loop_refs(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.global_loop_ref_calls += 1
+        return [{"task_id": "unrelated_task", "loop_id": "unrelated_Loop1", "loop_index": 1}]
+
 
 def test_build_candidates_returns_missing_loop_indices_in_preview_order() -> None:
-    service = QEArchiveBackfillService(assembler=_FakeAssembler())  # type: ignore[arg-type]
+    assembler = _FakeAssembler()
+    service = QEArchiveBackfillService(assembler=assembler)  # type: ignore[arg-type]
 
     candidates = service._build_candidates(  # noqa: SLF001 - regression covers the selection expander.
         QEArchiveBackfillOptions(task_id="task_1", loop_indices=[1, 2, 3], status="completed", include_archived=False),
@@ -118,3 +126,29 @@ def test_build_candidates_returns_missing_loop_indices_in_preview_order() -> Non
     ]
     assert candidates[-1]["payload"]["loop_index"] == 2
     assert candidates[-1]["payload"]["missing_reason"] == "loop_not_found_or_filtered"
+    assert assembler.global_loop_ref_calls == 0
+
+
+def test_build_candidates_does_not_fallback_to_global_when_scoped_task_has_no_matches() -> None:
+    class EmptyScopedAssembler:
+        def __init__(self) -> None:
+            self.global_calls = 0
+
+        def list_loop_refs_for_tasks(self, task_ids, *, status, include_archived):  # type: ignore[no-untyped-def]
+            assert task_ids == ["task_1"]
+            return []
+
+        def list_loop_refs(self, **kwargs):  # type: ignore[no-untyped-def]
+            self.global_calls += 1
+            return [{"task_id": "unrelated_task", "loop_id": "unrelated_Loop1", "loop_index": 1}]
+
+    assembler = EmptyScopedAssembler()
+    service = QEArchiveBackfillService(assembler=assembler)  # type: ignore[arg-type]
+
+    candidates = service._build_candidates(  # noqa: SLF001 - regression covers selected-scope isolation.
+        QEArchiveBackfillOptions(source="loop", task_ids=["task_1"], status="completed", include_archived=False),
+        source="loop",
+    )
+
+    assert candidates == []
+    assert assembler.global_calls == 0

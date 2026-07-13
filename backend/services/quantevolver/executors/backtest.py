@@ -103,6 +103,13 @@ class BacktestExecutor(BaseExecutor):
                 execution_algo_params=config.execution_algo_params,
                 strategy_params=strategy_params if strategy_params else None,
                 node_id=ctx.node_id,
+                callback_url=ctx.callback_url,
+                task_id=ctx.task_id,
+                loop_index=ctx.loop_index,
+                resource_session_id=ctx.resource_session_id,
+                resource_source_run_key=ctx.resource_source_run_key,
+                resource_session_token=ctx.resource_session_token,
+                phase_pipeline_enabled=ctx.phase_pipeline_enabled,
             )
             return compose_res_local, stock_pool_payload
 
@@ -206,10 +213,14 @@ class BacktestExecutor(BaseExecutor):
             callback_url=ctx.callback_url,
         )
 
+        returned_experiment_files = dict(experiment_files)
+        if "qe_resource_session_secret.json" in returned_experiment_files:
+            returned_experiment_files["qe_resource_session_secret.json"] = "<redacted>"
+
         return ExecutionResult(
             job_id=job_id,
             status="submitted",
-            experiment_files=experiment_files,
+            experiment_files=returned_experiment_files,
             wsl_command=wsl_command,
             detail={
                 "execution_manifest": execution_manifest,

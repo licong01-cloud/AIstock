@@ -11,6 +11,8 @@ from backend.services.trading_core.models import PositionLot
 
 from .models import SimulationBrokerBackend
 
+MINIQMT_CAPACITY_RESIDUAL_WARNING_FLAG = "miniqmt_succeeded_with_capacity_residual"
+
 
 @dataclass(frozen=True)
 class StrategyPositionProjection:
@@ -208,3 +210,25 @@ class StrategyPerformanceProjectionService:
                 )
             )
         return rows
+
+
+def with_miniqmt_capacity_residual_observability(
+    performance_payload: Mapping[str, object],
+    observability: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Attach MiniQMT capacity residual observability to a performance payload."""
+
+    payload = dict(performance_payload)
+    if not observability:
+        return payload
+    capacity_residual_count = int(observability.get("capacity_residual_count") or 0)
+    failed_intents = int(observability.get("failed_intents") or 0)
+    payload["succeeded_with_capacity_residual"] = True
+    payload["capacity_residual_count"] = capacity_residual_count
+    payload["capacity_residual_failed_intents"] = failed_intents
+    payload["miniqmt_capacity_residual_observability"] = dict(observability)
+    flags = list(payload.get("warning_flags") or [])
+    if MINIQMT_CAPACITY_RESIDUAL_WARNING_FLAG not in flags:
+        flags.append(MINIQMT_CAPACITY_RESIDUAL_WARNING_FLAG)
+    payload["warning_flags"] = flags
+    return payload

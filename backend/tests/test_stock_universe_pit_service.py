@@ -60,6 +60,31 @@ def test_needs_rebuild_when_state_is_dirty_for_source_fingerprint_policy() -> No
     assert reason == "dirty"
 
 
+def test_needs_rebuild_when_source_fingerprint_changed_for_source_policy() -> None:
+    service = StockUniversePitService()
+
+    needs, reason = service._needs_rebuild(
+        state={
+            "status": "ready",
+            "dirty": False,
+            "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+            "scope": "st_only_active",
+            "start_date": dt.date(2018, 8, 1),
+            "end_date": dt.date(2026, 4, 30),
+            "source_fingerprint_sha256": "old",
+            "last_build_summary": {"validation": {}},
+        },
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 4, 30),
+        rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+        source_sha="new",
+        refresh_policy="source_fingerprint",
+    )
+
+    assert needs is True
+    assert reason == "source_fingerprint_changed"
+
+
 def test_needs_rebuild_rejects_failed_validation() -> None:
     service = StockUniversePitService()
 
@@ -193,3 +218,43 @@ def test_ensure_reuses_same_range_even_when_source_fingerprint_changes(monkeypat
     assert result["rebuilt"] is False
     assert result["reason"] == "coverage_ready_source_changed_ignored"
     assert called["rebuild"] is False
+
+
+def test_ensure_rebuilds_dirty_same_range_for_source_fingerprint_policy(monkeypatch) -> None:
+    service = StockUniversePitService()
+    source = {"source": "new-fingerprint"}
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "compute_source_fingerprint", lambda *, end_date=None: source)
+    monkeypatch.setattr(
+        service,
+        "get_status",
+        lambda *, universe_key="shsz_st_pit_active_v1": {
+            "status": "ready",
+            "dirty": True,
+            "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+            "scope": "st_only_active",
+            "start_date": dt.date(2018, 8, 1),
+            "end_date": dt.date(2026, 4, 30),
+            "source_fingerprint_sha256": "old-fingerprint",
+            "last_build_summary": {"validation": {"overlap_error_count": 0}},
+        },
+    )
+
+    def fake_rebuild(**kwargs):
+        captured.update(kwargs)
+        return {"universe_key": kwargs["universe_key"], "status": "ready", "rebuilt": True}
+
+    monkeypatch.setattr(service, "rebuild_st_pit_universe", fake_rebuild)
+
+    result = service.ensure_st_pit_universe(
+        end_date=dt.date(2026, 4, 30),
+        refresh_policy="source_fingerprint",
+    )
+
+    assert result["status"] == "ready"
+    assert result["reason"] == "dirty"
+    assert captured["write_mode"] == "replace"
+    assert captured["incremental_from"] is None
+    assert captured["refresh_policy"] == "source_fingerprint"

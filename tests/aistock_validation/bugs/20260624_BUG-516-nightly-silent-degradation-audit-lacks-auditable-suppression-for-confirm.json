@@ -1,0 +1,110 @@
+{
+  "actual": "Nightly silent-degradation audit has no suppression mechanism; confirmed false positives such as SDA-2d2969408339 recur every night and require repeat human review. finding_id is unstable for LLM findings, so ad hoc finding_id-only suppression would be unreliable.",
+  "allowed_write_scope": [
+    "scripts/nightly_silent_degradation_audit.py",
+    "configs/validation/silent_degradation_audit.yaml",
+    "backend/tests/scripts/test_nightly_silent_degradation_audit.py",
+    "docs/handoff/BUG-516-analysis.md",
+    "docs/handoff/live_readiness_dev_selfaudit_log.md",
+    "tests/aistock_validation/bugs/20260624_BUG-516-nightly-silent-degradation-audit-lacks-auditable-suppression-for-confirm.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-516",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T14:26:10.012871Z",
+  "description": "Tool debt: scripts/nightly_silent_degradation_audit.py and configs/validation/silent_degradation_audit.yaml currently have no suppression/allowlist.\n\nCurrent behavior:\n- deterministic_findings() and _coerce_llm_findings() are merged into payload[\"findings\"] in build_audit().\n- workflow_gate is computed as warning when findings remain, otherwise ready.\n- finding_id is SDA-sha256(module,title,reference_refs,code_refs)[:12]. LLM title/code_refs can drift nightly, so suppression must not rely only on finding_id.\n\nTriggering confirmed false positive:\n- SDA-2d2969408339 (P1, confidence 0.7, MiniQMT runtime lacks fail-closed) was Tier2-reviewed as false positive.\n- runtime.py:845, client.py:822, and gateway.py:255 are per-order fail-closed-and-loud: explicit error_code + REJECTED/accepted=False + exception detail, not silent degradation.\n- The finding recurs nightly and consumes human review.\n\nRequired design:\n- Add optional top-level suppressions list to configs/validation/silent_degradation_audit.yaml.\n- Each suppression has module, optional finding_id, optional code_refs_any path-prefix matching while ignoring line numbers, optional case-insensitive title_contains guard, reason, dismissed_by, dismissed_at YYYY-MM-DD, and optional expires_at YYYY-MM-DD.\n- Missing suppressions keeps current behavior unchanged.\n- A suppression matches only when module matches and either finding_id exact or code_refs_any overlaps finding.code_refs by path prefix, plus title_contains when present.\n- A suppression with neither finding_id nor code_refs_any is config error and must raise SilentDegradationAuditError loudly.\n- Expired suppressions are inactive.\n- In build_audit(), apply suppressions after findings are aggregated and before workflow_gate calculation.\n- Matched findings are removed from findings, appended to suppressed_findings with suppressed_by metadata, and do not trigger warning.\n- public_artifact() must include suppressed_findings for auditability; suppressed findings must not be silently discarded.\n\nFirst configured suppression:\n- module: miniqmt_execution_runtime\n- finding_id: SDA-2d2969408339\n- code_refs_any: backend/services/miniqmt_execution_runtime/runtime.py, backend/services/miniqmt_execution_runtime/client.py, backend/services/miniqmt_execution_runtime/gateway.py\n- title_contains: fail-closed\n- reason: Tier2 manual review 2026-06-24: per-order fail-closed-and-loud (explicit error_code + REJECTED/accepted=False + exception detail); not silent degradation.\n- dismissed_by: tier2-review\n- dismissed_at: 2026-06-24\n- expires_at: 2026-09-24\n\nAcceptance tests:\n1. Matching finding moves to suppressed_findings and is removed from findings; with no other findings workflow_gate is ready.\n2. Nonmatching module or code_refs leaves finding in findings and workflow_gate warning.\n3. Expired suppression is inactive and finding reappears.\n4. SDA-2d29-like finding is suppressed by the YAML entry.\n5. Suppression missing both finding_id and code_refs_any raises SilentDegradationAuditError.\n6. public_artifact() includes suppressed_findings.\n7. No suppressions section preserves current findings/workflow_gate behavior.\n",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260624-a829a41c4c08",
+      "timestamp": "2026-06-24T14:26:10.012866Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Provide structured, auditable, expiring suppression. Suppressed findings remain visible in suppressed_findings and public artifacts, do not count toward workflow_gate, and invalid suppression config fails loudly.",
+  "first_seen_at": "2026-06-24T14:26:10.012871Z",
+  "fix_branch": null,
+  "fix_commit": "49e3c1a2dd57e716288bca3c5cbe48cb08e048a4",
+  "fixed_at": "2026-06-24T15:48:50.856525Z",
+  "github_issue_number": 1606,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1606",
+  "last_seen_at": "2026-06-24T14:26:10.012871Z",
+  "module": "validation_llm_pipeline",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1608",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P3",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation_llm_pipeline"
+  ],
+  "title": "nightly silent-degradation audit lacks auditable suppression for confirmed false positives",
+  "trigger_condition": {
+    "fingerprint": "a829a41c4c081f75b3c21e5e",
+    "source_event_id": "FE-20260624-a829a41c4c08"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "module:validation_llm_pipeline",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Run the nightly silent-degradation audit unit tests and module registry validation."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": false,
+    "ui_route": null,
+    "ui_routes": [],
+    "visual_acceptance_required": false
+  },
+  "ui_issue": false,
+  "validation_evidence": [
+    "python -m ruff check scripts/nightly_silent_degradation_audit.py backend/tests/scripts/test_nightly_silent_degradation_audit.py -> passed",
+    "python -m pytest backend/tests/scripts/test_nightly_silent_degradation_audit.py -q -> passed (13 passed)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "git diff --check -> passed",
+    "rtk git diff --check -> passed",
+    "GitHub PR checks -> passed (17/17)"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "open"
+}

@@ -8,6 +8,13 @@ from typing import Any, Callable, Iterable, Iterator
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
+from backend.services.trading_core.tca_sidecar import (
+    TCA_OBSERVATION_KEY,
+    CaptureMergeOutcome,
+    merge_parent_first_write,
+    new_run_tca_sidecar,
+    preserve_tca_sidecar,
+)
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .models import (
@@ -25,6 +32,17 @@ from .models import (
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
+
+
+def _is_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> bool:
+    return (evidence.evidence_payload_json or {}).get("schema_version") == "daily_selection_evidence_v2"
+
+
+def _validate_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> None:
+    """Validate the typed payload at the persistence boundary as well."""
+    from backend.services.selection_center.prospective_evidence import DailySelectionEvidenceV2Payload
+
+    DailySelectionEvidenceV2Payload.model_validate(evidence.evidence_payload_json)
 
 
 class SimulationRuntimeRepository:
@@ -279,6 +297,9 @@ class SimulationRuntimeRepository:
         return [self._binding_from_row(row) for row in rows]
 
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        if _is_daily_selection_evidence_v2(evidence):
+            _validate_daily_selection_evidence_v2(evidence)
+            return self._save_daily_selection_evidence_v2(evidence)
         existing_by_hash = self.get_daily_selection_evidence_by_hash(evidence.artifact_hash)
         if existing_by_hash is not None:
             return existing_by_hash
@@ -320,8 +341,92 @@ class SimulationRuntimeRepository:
                     raise InvalidStateTransitionError(
                         "daily selection evidence conflicts with an existing immutable evidence row",
                         context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
-                    ) from exc
+                ) from exc
         return evidence
+
+    def _save_daily_selection_evidence_v2(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        """Insert-or-compare for the v2 content-addressed prospective contract."""
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    INSERT INTO selection.daily_selection_evidence (
+                        evidence_id, target_trade_date, cutoff_date, package_id, manifest_sha256,
+                        release_id, release_hash, runtime_profile_version_id, runtime_profile_hash,
+                        source_type, data_source, candidate_count, excluded_count, artifact_hash,
+                        evidence_payload_json, created_at, created_by
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    self._daily_selection_evidence_insert_params(evidence),
+                )
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM selection.daily_selection_evidence
+                    WHERE evidence_id = %s OR artifact_hash = %s
+                    ORDER BY evidence_id
+                    """,
+                    (evidence.evidence_id, evidence.artifact_hash),
+                )
+                rows = cur.fetchall()
+        if len(rows) != 1:
+            raise InvalidStateTransitionError(
+                "daily selection evidence v2 conflicts with an immutable identity",
+                context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
+            )
+        stored = self._evidence_from_row(dict(rows[0]))
+        self._assert_same_v2_evidence(stored, evidence)
+        return stored
+
+    @staticmethod
+    def _daily_selection_evidence_insert_params(evidence: DailySelectionEvidence) -> tuple[Any, ...]:
+        return (
+            evidence.evidence_id,
+            evidence.target_trade_date,
+            evidence.cutoff_date,
+            evidence.package_id,
+            evidence.manifest_sha256,
+            evidence.release_id,
+            evidence.release_hash,
+            evidence.runtime_profile_version_id,
+            evidence.runtime_profile_hash,
+            evidence.source_type,
+            evidence.data_source,
+            evidence.candidate_count,
+            evidence.excluded_count,
+            evidence.artifact_hash,
+            psycopg2.extras.Json(evidence.evidence_payload_json),
+            evidence.created_at,
+            evidence.created_by,
+        )
+
+    @staticmethod
+    def _assert_same_v2_evidence(stored: DailySelectionEvidence, requested: DailySelectionEvidence) -> None:
+        fields = (
+            "evidence_id",
+            "target_trade_date",
+            "cutoff_date",
+            "package_id",
+            "manifest_sha256",
+            "release_id",
+            "release_hash",
+            "runtime_profile_version_id",
+            "runtime_profile_hash",
+            "source_type",
+            "data_source",
+            "candidate_count",
+            "excluded_count",
+            "artifact_hash",
+            "evidence_payload_json",
+        )
+        if any(getattr(stored, field) != getattr(requested, field) for field in fields):
+            raise InvalidStateTransitionError(
+                "daily selection evidence v2 conflicts with immutable content",
+                context={"evidence_id": requested.evidence_id, "artifact_hash": requested.artifact_hash},
+            )
 
     def get_daily_selection_evidence(self, evidence_id: str) -> DailySelectionEvidence:
         rows = self._fetch_rows(
@@ -550,6 +655,7 @@ class SimulationRuntimeRepository:
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        merged_payload = preserve_tca_sidecar(current.run_payload_json, merged_payload)
         for key in payload_unset or ():
             merged_payload.pop(str(key), None)
         updated = current.model_copy(
@@ -587,6 +693,108 @@ class SimulationRuntimeRepository:
                     ),
                 )
         return self.get_simulation_daily_run(run_id)
+
+    def merge_run_tca_capture_sidecar(
+        self,
+        *,
+        run_id: str,
+        expected_plan_id: str,
+        expected_plan_hash: str,
+        parent_intent_id: str,
+        decision_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+        capture_batch_id: str | None = None,
+    ) -> CaptureMergeOutcome:
+        """CAS-merge one TCA parent observation without touching run state.
+
+        The generic update path intentionally cannot replace this namespace.
+        This is the sole PostgreSQL writer that obtains a row lock and applies
+        the first-write/hash comparison contract for run-side evidence.
+        """
+
+        if sum(value is not None for value in (decision_capture, capture_error, capture_batch_id)) != 1:
+            raise ValueError("exactly one run TCA capture mutation is required")
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """
+                        SELECT execution_plan_id, execution_plan_hash, run_payload_json
+                        FROM paper_v2.simulation_daily_run
+                        WHERE run_id = %s
+                        FOR UPDATE
+                        """,
+                        (run_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        conn.rollback()
+                        return CaptureMergeOutcome.NOT_FOUND
+                    if row.get("execution_plan_id") != expected_plan_id or row.get("execution_plan_hash") != expected_plan_hash:
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    payload = dict(row.get("run_payload_json") or {})
+                    existing = payload.get(TCA_OBSERVATION_KEY)
+                    if existing is None:
+                        sidecar = new_run_tca_sidecar(
+                            execution_plan_id=expected_plan_id,
+                            execution_plan_hash=expected_plan_hash,
+                        )
+                    elif not isinstance(existing, dict):
+                        conn.rollback()
+                        return CaptureMergeOutcome.IDENTITY_DRIFT
+                    else:
+                        sidecar = dict(existing)
+                        if (
+                            sidecar.get("execution_plan_id") != expected_plan_id
+                            or sidecar.get("execution_plan_hash") != expected_plan_hash
+                        ):
+                            conn.rollback()
+                            return CaptureMergeOutcome.IDENTITY_DRIFT
+                    if decision_capture is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="decision_capture_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=decision_capture,
+                        )
+                    elif capture_error is not None:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_errors",
+                            parent_intent_id=parent_intent_id,
+                            value=capture_error,
+                        )
+                    else:
+                        outcome = merge_parent_first_write(
+                            sidecar,
+                            section="capture_batch_id_by_parent",
+                            parent_intent_id=parent_intent_id,
+                            value=str(capture_batch_id),
+                        )
+                    if outcome == CaptureMergeOutcome.CONFLICT:
+                        conn.rollback()
+                        return outcome
+                    payload[TCA_OBSERVATION_KEY] = sidecar
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_daily_run
+                        SET run_payload_json = %s, updated_at = now()
+                        WHERE run_id = %s
+                        """,
+                        (psycopg2.extras.Json(payload), run_id),
+                    )
+                conn.commit()
+                return outcome
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
 
     def _fetch_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         with self._conn_factory() as conn:
@@ -936,8 +1144,22 @@ class InMemorySimulationRuntimeRepository:
         return ordered[:limit]
 
     def save_daily_selection_evidence(self, evidence: DailySelectionEvidence) -> DailySelectionEvidence:
+        if _is_daily_selection_evidence_v2(evidence):
+            _validate_daily_selection_evidence_v2(evidence)
         if evidence.artifact_hash in self.daily_selection_hash_index:
-            return self.daily_selection_evidences[self.daily_selection_hash_index[evidence.artifact_hash]]
+            existing = self.daily_selection_evidences[self.daily_selection_hash_index[evidence.artifact_hash]]
+            if _is_daily_selection_evidence_v2(evidence):
+                SimulationRuntimeRepository._assert_same_v2_evidence(existing, evidence)
+            return existing
+        existing_by_id = self.daily_selection_evidences.get(evidence.evidence_id)
+        if existing_by_id is not None:
+            if _is_daily_selection_evidence_v2(evidence):
+                SimulationRuntimeRepository._assert_same_v2_evidence(existing_by_id, evidence)
+                return existing_by_id
+            raise InvalidStateTransitionError(
+                "daily selection evidence conflicts with an existing immutable evidence id",
+                context={"evidence_id": evidence.evidence_id, "artifact_hash": evidence.artifact_hash},
+            )
         self.daily_selection_evidences[evidence.evidence_id] = evidence
         self.daily_selection_hash_index[evidence.artifact_hash] = evidence.evidence_id
         return evidence
@@ -1058,6 +1280,7 @@ class InMemorySimulationRuntimeRepository:
     ) -> SimulationDailyRun:
         current = self.get_simulation_daily_run(run_id)
         merged_payload = {**current.run_payload_json, **(payload_patch or {})}
+        merged_payload = preserve_tca_sidecar(current.run_payload_json, merged_payload)
         for key in payload_unset or ():
             merged_payload.pop(str(key), None)
         updated = current.model_copy(
@@ -1072,3 +1295,61 @@ class InMemorySimulationRuntimeRepository:
         )
         self.daily_runs[run_id] = updated
         return updated
+
+    def merge_run_tca_capture_sidecar(
+        self,
+        *,
+        run_id: str,
+        expected_plan_id: str,
+        expected_plan_hash: str,
+        parent_intent_id: str,
+        decision_capture: dict[str, Any] | None = None,
+        capture_error: dict[str, Any] | None = None,
+        capture_batch_id: str | None = None,
+    ) -> CaptureMergeOutcome:
+        if sum(value is not None for value in (decision_capture, capture_error, capture_batch_id)) != 1:
+            raise ValueError("exactly one run TCA capture mutation is required")
+        current = self.daily_runs.get(run_id)
+        if current is None:
+            return CaptureMergeOutcome.NOT_FOUND
+        if current.execution_plan_id != expected_plan_id or current.execution_plan_hash != expected_plan_hash:
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        payload = dict(current.run_payload_json or {})
+        existing = payload.get(TCA_OBSERVATION_KEY)
+        if existing is None:
+            sidecar = new_run_tca_sidecar(
+                execution_plan_id=expected_plan_id,
+                execution_plan_hash=expected_plan_hash,
+            )
+        elif not isinstance(existing, dict):
+            return CaptureMergeOutcome.IDENTITY_DRIFT
+        else:
+            sidecar = dict(existing)
+            if sidecar.get("execution_plan_id") != expected_plan_id or sidecar.get("execution_plan_hash") != expected_plan_hash:
+                return CaptureMergeOutcome.IDENTITY_DRIFT
+        if decision_capture is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="decision_capture_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=decision_capture,
+            )
+        elif capture_error is not None:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_errors",
+                parent_intent_id=parent_intent_id,
+                value=capture_error,
+            )
+        else:
+            outcome = merge_parent_first_write(
+                sidecar,
+                section="capture_batch_id_by_parent",
+                parent_intent_id=parent_intent_id,
+                value=str(capture_batch_id),
+            )
+        if outcome == CaptureMergeOutcome.CONFLICT:
+            return outcome
+        payload[TCA_OBSERVATION_KEY] = sidecar
+        self.daily_runs[run_id] = current.model_copy(update={"run_payload_json": payload})
+        return outcome

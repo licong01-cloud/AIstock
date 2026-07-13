@@ -1,0 +1,105 @@
+{
+  "actual": "Approvals are only available through the /approvals path; chat emits read-only cards and confirm_approval_id is defined but unused, leaving in-chat approval incomplete.",
+  "allowed_write_scope": [
+    "backend/services/research_assistant/service.py",
+    "tests/aistock_validation/bugs/20260622_BUG-481-ra-chat-approval-confirmation-is-not-consumed-in-chat-turns.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/research_assistant/test_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-481",
+  "closed_at": "2026-06-22T16:36:30Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-22T12:13:55.818712Z",
+  "description": "Approvals are only available through the /approvals path; chat emits read-only cards and confirm_approval_id is defined but unused, leaving in-chat approval incomplete.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260622-5a89fcf2e941",
+      "timestamp": "2026-06-22T12:13:55.818708Z"
+    },
+    {
+      "action": "scope_expanded",
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope to backend/tests/research_assistant/test_service.py because acceptance requires backend unit tests for chat approval consumption, NL confirmation mapping, wrong-token/cross-conversation/multiple-pending rejection, self-approval prevention, and L2 naked-affirmative rejection.",
+      "timestamp": "2026-06-22T12:18:00Z"
+    },
+    {
+      "action": "implementation_ready_for_tier2_review",
+      "actor": "codex",
+      "note": "Implemented chat-bound action proposal approvals: approval_id/exact token card output, explicit confirm_approval_id consumption through _consume_approval_gate, guarded single-pending L1 natural-language mapping, and fail-closed rejection for wrong-token/cross-conversation/multiple-pending/L2/self-approval paths. Validation run locally: l0, research_assistant_backend, research_assistant_mcp_contract, ra_phase7_full_accept, validation_module_registry_l0, new targeted tests, ruff, diff --check.",
+      "timestamp": "2026-06-22T14:35:00Z"
+    },
+    {
+      "action": "post_merge_aftercare",
+      "actor": "codex",
+      "note": "Post-merge aftercare: PR #1487 was squash-merged at f71b29f60f016d07eb3a8cfa78b8d30e8fc62673; close-sync PR #1489 was merged at cb85b2d9c8361baf2904a2d3850be3b24e04ce3d; GitHub Issue #1483 is closed with status:fixed; BUG JSON marked closed with closed_at. No services started, no production DB touched, no DDL executed.",
+      "timestamp": "2026-06-22T16:39:42Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Chat turns display approval_id and exact confirmation token for proposed side-effect actions; later chat turns with confirm_approval_id plus exact confirmation_text consume the pending approval via the existing approval gate; narrow natural-language affirmative mapping is allowed only for one safe pending approval and never for L2 production-sensitive actions.",
+  "first_seen_at": "2026-06-22T12:13:55.818712Z",
+  "fix_branch": "bug/BUG-481-ra-chat-approval-confirmation-is-not-consumed-in-20260622",
+  "fix_commit": "f71b29f60f016d07eb3a8cfa78b8d30e8fc62673",
+  "fixed_at": "2026-06-22T16:39:20.466277Z",
+  "github_issue_number": 1483,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1483",
+  "last_seen_at": "2026-06-22T12:13:55.818712Z",
+  "merge_commit": "f71b29f60f016d07eb3a8cfa78b8d30e8fc62673",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1487",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA chat approval confirmation is not consumed in chat turns",
+  "trigger_condition": {
+    "fingerprint": "5a89fcf2e9411eddbea15283",
+    "source_event_id": "FE-20260622-5a89fcf2e941"
+  },
+  "validation_evidence": [
+    "GitHub PR checks for #1487 -> passed (17/17 before merge)",
+    "rtk proxy python -m nox -s l0 -> passed",
+    "rtk proxy python -m nox -s research_assistant_backend -> passed (320 passed)",
+    "rtk proxy python -m nox -s research_assistant_mcp_contract -> passed (38 passed)",
+    "rtk proxy python -m nox -s validation_module_registry_l0 -> passed (8 passed)",
+    "rtk proxy python tmp/run_bug481_phase7_skip.py -> passed (ra_phase7_full_accept with isolated test frontend)",
+    "rtk git diff --check -> passed",
+    "rtk proxy ruff check backend/services/research_assistant/service.py backend/tests/research_assistant/test_service.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

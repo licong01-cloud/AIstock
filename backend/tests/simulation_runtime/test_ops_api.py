@@ -15,6 +15,7 @@ from backend.services.simulation_runtime import (
     InMemorySimulationRuntimeRepository,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
+    SimulationDailyRun,
     SimulationDailyRunStatus,
     SimulationLifecycleScheduler,
     SimulationRunContext,
@@ -24,7 +25,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 TRADE_DATE = date(2026, 5, 21)
 
@@ -209,6 +210,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     scheduler = response.json()["scheduler"]
     assert scheduler["autostart"] is False
     assert scheduler["default_submit"] is False
+    assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
     assert scheduler["read_only_status_api"] is True
     assert scheduler["read_only_ops_api"] is False
     assert scheduler["controlled_ops_api"] is True
@@ -218,12 +220,70 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "fail_fast"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
+    assert scheduler["miniqmt_quote_ingress_activation"] == {
+        "schema_version": "miniqmt_quote_ingress_activation_v1",
+        "status": "UNCONFIGURED",
+        "factory_available": False,
+    }
+    assert scheduler["b0_quote_v2_controllers"] == {
+        "status": "DISABLED",
+        "controller_count": 0,
+    }
+    assert scheduler["summary"]["safety_note"].endswith("default_submit is disabled.")
     assert [window["window_id"] for window in scheduler["schedule_windows"]] == [
         "pre_open",
         "selection",
         "planning",
         "execution",
+        "post_close_reconcile",
     ]
+
+
+def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
+    class _EnabledSubmitScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "default_submit": True,
+                "sim_binding_selection_policy": "all_non_retired",
+                "miniqmt_quote_ingress_activation": {
+                    "schema_version": "miniqmt_quote_ingress_activation_v1",
+                    "status": "RUNNING",
+                    "factory_available": True,
+                },
+                "b0_quote_v2_controllers": {
+                    "status": "RUNNING",
+                    "controller_count": 2,
+                },
+            }
+
+    scheduler = SimulationRuntimeOpsService(scheduler=_EnabledSubmitScheduler()).scheduler_status()
+
+    assert scheduler["default_submit"] is True
+    assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
+    assert scheduler["miniqmt_quote_ingress_activation"]["status"] == "RUNNING"
+    assert scheduler["b0_quote_v2_controllers"]["controller_count"] == 2
+    assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
+
+
+@pytest.mark.parametrize(
+    "status_patch",
+    [
+        {"miniqmt_quote_ingress_activation": None, "b0_quote_v2_controllers": {}},
+        {"miniqmt_quote_ingress_activation": {}, "b0_quote_v2_controllers": "invalid"},
+    ],
+)
+def test_scheduler_status_rejects_missing_or_invalid_quote_health(status_patch: dict[str, object]) -> None:
+    class _InvalidQuoteHealthScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "default_submit": False,
+                **status_patch,
+            }
+
+    with pytest.raises(RuntimeConfigInvalidError, match="scheduler status .* must be a mapping"):
+        SimulationRuntimeOpsService(scheduler=_InvalidQuoteHealthScheduler()).scheduler_status()
 
 
 def test_list_runs_returns_business_summary_and_filters(
@@ -241,10 +301,16 @@ def test_list_runs_returns_business_summary_and_filters(
     payload = response.json()
     assert payload["summary"]["run_count"] == 1
     assert payload["summary"]["by_broker_backend"] == {"local_sim": 1}
-    assert payload["runs"][0]["run_id"] == run_id
-    assert payload["runs"][0]["execution_plan_id"]
-    assert payload["runs"][0]["stage_counts"]["execution_plan_intent_count"] == 1
-    assert payload["runs"][0]["strategy_performance"]["nav"] == 1.0
+    run = payload["runs"][0]
+    assert run["run_id"] == run_id
+    assert run["execution_plan_id"]
+    assert run["stage_counts"]["execution_plan_intent_count"] == 1
+    assert run["strategy_performance"]["nav"] == 1.0
+    assert run["display"]["status_label"] == "\u6267\u884c\u8ba1\u5212\u5df2\u751f\u6210"
+    assert run["display"]["broker_label"] == "LocalSim \u672c\u5730\u6a21\u62df"
+    assert run["display"]["strategy_label"] == "Ops"
+    assert run["display"]["selection_label"] == "\u9009\u51fa 1 \u53ea\u5019\u9009"
+    assert run["display"]["execution_plan_label"] == "\u4ea4\u6613\u610f\u56fe 1 / \u5df2\u63d0\u4ea4 0 / \u5931\u8d25 0"
 
 
 def test_run_and_execution_plan_detail_include_traceability(
@@ -271,6 +337,122 @@ def test_run_and_execution_plan_detail_include_traceability(
     assert plan_payload["plan_id"] == plan_id
     assert plan_payload["intent_count"] == 1
     assert plan_payload["intents"][0]["symbol"] == "000001.SZ"
+
+
+def test_runs_api_surfaces_miniqmt_succeeded_with_capacity_residual(
+    client: TestClient,
+    repo_with_plan: tuple[InMemorySimulationRuntimeRepository, str, str],
+) -> None:
+    repo = repo_with_plan[0]
+    release_service = StrategyRuntimeReleaseService(repository=repo)
+    release = release_service.create_release(
+        package_id="pkg_ops_qmt",
+        manifest_sha256="manifest_ops_qmt",
+        runtime_profile_id="runtime_profile_ops_qmt",
+        runtime_profile_version_id="runtime_profile_ops_qmt_v1",
+        runtime_profile_sha256="runtime_profile_hash_ops_qmt",
+        daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
+        execution_policy_version_id="exec_policy_v25_1_small_cap",
+        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        tail_policy_version_id="tail_policy_close_v1",
+        tail_policy_sha256="tail_policy_hash_close_v1",
+        created_by="unit-test",
+        created_reason="ops api capacity residual test",
+    )
+    binding = release_service.create_binding(
+        strategy_id="strategy_qmt_ops",
+        release=release,
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        capital_allocation=100_000,
+        broker_account_id="QMT_SIM_ACCOUNT",
+        account_group_id="ag_ops",
+        strategy_slot_id="slot_ops",
+        strategy_name="OpsQmtCapacityResidual",
+        order_remark_prefix="ops-qmt-capacity-residual",
+        approval_state=SimulationBindingApprovalState.SIM_PASSED,
+        created_by="unit-test",
+        created_reason="ops api capacity residual test",
+    )
+    repo.save_simulation_daily_run(
+        SimulationDailyRun(
+            run_id="simrun_qmt_capacity_residual",
+            trade_date=TRADE_DATE,
+            strategy_id=binding.strategy_id,
+            broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+            release_id=release.release_id,
+            release_hash=release.release_hash,
+            binding_id=binding.binding_id,
+            binding_hash=binding.binding_hash,
+            account_group_id=binding.account_group_id,
+            strategy_slot_id=binding.strategy_slot_id,
+            status=SimulationDailyRunStatus.SUCCEEDED,
+            run_payload_json={
+                "last_stage": "SUCCEEDED",
+                "broker_called": True,
+                "submitted_intents": 1,
+                "failed_intents": 1,
+                "qmt_batch_id": "batch_ops_capacity",
+                "qmt_batch_status": "PARTIAL",
+                "qmt_batch_result": {
+                    "batch_status": "PARTIAL",
+                    "failed": 1,
+                    "results": [
+                        {
+                            "success": False,
+                            "broker_called": False,
+                            "preflight": {
+                                "primary_error_code": "SKIPPED_INSUFFICIENT_CAPITAL",
+                                "primary_error": {"message": "capacity residual"},
+                                "errors": [
+                                    {
+                                        "code": "SKIPPED_INSUFFICIENT_CAPITAL",
+                                        "message": "capacity residual",
+                                        "context": {},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+                "reconcile_after_submit": {
+                    "submit_result_gate": {
+                        "schema_version": "miniqmt_reconcile_submit_result_gate_v2",
+                        "status": "SUCCEEDED",
+                        "reason": "miniqmt_capacity_residual_skipped_and_reconciled",
+                        "terminal_capacity_residual": True,
+                    },
+                    "qmt_batch_residual_summary": {
+                        "schema_version": "miniqmt_batch_residual_summary_v1",
+                        "noncompensating_residual": True,
+                        "capacity_residual_count": 1,
+                        "dependent_buy_count": 0,
+                        "failed_result_count": 1,
+                    },
+                    "run": {"status": "SUCCEEDED"},
+                },
+            },
+        )
+    )
+
+    response = client.get(
+        "/api/v1/simulation-runtime/runs",
+        params={"trade_date": TRADE_DATE.isoformat(), "broker_backend": "minqmt_sim"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["succeeded_with_capacity_residual_count"] == 1
+    assert payload["summary"]["capacity_residual_count"] == 1
+    assert payload["summary"]["capacity_residual_failed_intents"] == 1
+    run = payload["runs"][0]
+    assert run["succeeded_with_capacity_residual"] is True
+    assert run["capacity_residual_count"] == 1
+    assert run["capacity_residual_failed_intents"] == 1
+    assert run["miniqmt_capacity_residual_observability"]["alert"]["reason_code"] == (
+        "MINIQMT_SUCCEEDED_WITH_CAPACITY_RESIDUAL"
+    )
 
 
 def test_scheduler_tick_api_is_controlled_dry_run_by_default(client: TestClient) -> None:

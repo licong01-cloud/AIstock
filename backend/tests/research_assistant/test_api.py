@@ -5,9 +5,19 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.mcp.tool_manifest import TOOL_MANIFEST
 from backend.routers import research_assistant
 from backend.services.research_assistant.repository import InMemoryResearchAssistantRepository
 from backend.services.research_assistant.service import ASSISTANT_APPROVAL_CONFIRM, LlmCallResult, ResearchAssistantService
+
+
+class DiagnosticDefaultResearchAssistantService(ResearchAssistantService):
+    def chat_turn(self, request):  # type: ignore[override]
+        if isinstance(request, dict):
+            request = {**request, "developer_diagnostics": request.get("developer_diagnostics", True)}
+        else:
+            request = request.model_copy(update={"developer_diagnostics": True})
+        return super().chat_turn(request)
 
 
 class FakeLlmClient:
@@ -23,7 +33,7 @@ class FakeLlmClient:
 
 def _client(*, seed: bool = True) -> TestClient:
     repository = InMemoryResearchAssistantRepository()
-    service = ResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
+    service = DiagnosticDefaultResearchAssistantService(repository=repository, llm_client=FakeLlmClient())
     if seed:
         service.seed_catalogs()
     app = FastAPI()
@@ -39,7 +49,7 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert health["status"] == "catalog_not_ready"
     assert health["runtime_code"]["schema_version"] == "aistock_research_assistant_runtime_code_visibility_v1"
     assert health["catalog_readiness"]["ready"] is False
-    assert "prompt_nodes" in health["catalog_readiness"]["missing_catalogs"]
+    assert "skills" in health["catalog_readiness"]["missing_catalogs"]
 
     readiness = client.get("/api/v1/research-assistant/catalogs/readiness").json()["data"]
     assert readiness["operator_action"] == "POST /api/v1/research-assistant/catalogs/seed"
@@ -54,7 +64,8 @@ def test_research_assistant_catalog_readiness_api_is_explicit() -> None:
     assert detail["readiness"]["ready"] is False
 
     seed_result = client.post("/api/v1/research-assistant/catalogs/seed").json()["data"]
-    assert seed_result["seeded"]["prompt_nodes"] >= 1
+    assert seed_result["seeded"]["prompt_nodes"] == 0
+    assert seed_result["seeded"]["skills"] >= 1
     seeded_health = client.get("/api/v1/research-assistant/health").json()["data"]
     assert seeded_health["status"] == "ok"
     assert seeded_health["runtime_code"]["current_repo_git_commit_short"]
@@ -116,6 +127,23 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert chat_resp["cards"]["intent_type"] == "experiment_draft_request"
     assert chat_resp["cards"]["status_rail"][3]["label"] == "等待确认"
     assert chat_resp["cards"]["safety"]["no_materialize_before_confirmation"] is True
+    usage_events = client.get("/api/v1/research-assistant/llm-usage/events", params={"task_id": chat_resp["task"]["task_id"]}).json()["data"]
+    assert usage_events["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_events["prompt_text_retained"] is False
+    assert usage_events["total"] >= 1
+    assert usage_events["items"][0]["usage_status"] in {"recorded", "unavailable"}
+    usage_summary = client.get("/api/v1/research-assistant/llm-usage/summary", params={"task_id": chat_resp["task"]["task_id"]}).json()["data"]
+    assert usage_summary["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_summary["summary"]["call_count"] >= 1
+    assert usage_summary["events_page"]["items"]
+    usage_report = client.get("/api/v1/research-assistant/llm-usage/report", params={"task_id": chat_resp["task"]["task_id"], "granularity": "day", "timezone": "Asia/Shanghai"}).json()["data"]
+    assert usage_report["schema_version"] == "aistock_research_assistant_llm_usage_report_v1"
+    assert usage_report["source_of_truth"] == "assistant_llm_usage_events"
+    assert usage_report["prompt_text_retained"] is False
+    assert usage_report["summary"]["call_count"] >= 1
+    assert usage_report["time_series"]
+    assert usage_report["model_breakdown"]
+    assert "private prompt" not in json.dumps(usage_report, ensure_ascii=False)
 
     capability_resp = client.post(
         "/api/v1/research-assistant/chat/turn",
@@ -139,15 +167,19 @@ def test_research_assistant_api_phase1_smoke() -> None:
 
     preflight_resp = client.post(
         "/api/v1/research-assistant/mcp/preflight",
-        json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
+        json={"task_id": task_id, "server_key": "aistock-validation", "tool_name": "mcp_github_issue_sync_bug", "payload_json": {"bug_id": "BUG-423"}},
     ).json()
     assert preflight_resp["data"]["approval_required"] is True
     assert preflight_resp["data"]["passed"] is False
-    assert preflight_resp["data"]["failed_checks"][0]["check"] == "input_schema"
-    assert "github_formal_issue_blocked" in preflight_resp["data"]["preflight_checks"]
-    assert preflight_resp["data"]["gateway_manifest"]["module"] == "research_assistant"
-    assert preflight_resp["data"]["manifest_risk_level"] == "production_adjacent"
+    assert preflight_resp["data"]["gateway_manifest"]["module"] == "validation"
+    assert preflight_resp["data"]["manifest_risk_level"] == "external_network"
     assert preflight_resp["data"]["assistant_usable"] == "preflight_required"
+
+    retired_preflight = client.post(
+        "/api/v1/research-assistant/mcp/preflight",
+        json={"task_id": task_id, "server_key": "research-assistant", "tool_name": "assistant_create_issue_candidate", "payload_json": {"title": "bug"}},
+    )
+    assert retired_preflight.status_code == 404
 
     catalog_preflight = client.post(
         "/api/v1/research-assistant/mcp/preflight",
@@ -177,8 +209,10 @@ def test_research_assistant_api_phase1_smoke() -> None:
         "/api/v1/research-assistant/issue-candidates",
         json={"title": "Candidate", "severity": "P1", "problem_statement": "review first"},
     ).json()
-    assert issue_resp["data"]["status"] == "needs_review"
-    assert issue_resp["data"]["github_sync_status"] == "not_requested"
+    assert issue_resp["data"]["status"] == "retired"
+    assert issue_resp["data"]["standard_workflow_required"] is True
+    assert issue_resp["data"]["storage_performed"] is False
+    assert issue_resp["data"]["draft_storage_authoritative"] is False
 
     assert client.get("/api/v1/research-assistant/skills").json()["data"]["total"] >= 5
     assert client.get("/api/v1/research-assistant/mcp/tools").json()["data"]["total"] >= 6
@@ -254,8 +288,11 @@ def test_research_assistant_api_phase1_smoke() -> None:
     assert action_events["trace_events"]
 
     sync = client.post(f"/api/v1/research-assistant/issue-candidates/{issue_resp['data']['candidate_id']}/github-sync", json={"mode": "formal"}).json()["data"]
-    assert sync["github_sync_status"] == "approval_required"
+    assert sync["github_sync_status"] == "blocked"
     assert sync["github_sync_json"]["direct_github_create_performed"] is False
+    assert sync["github_sync_json"]["reason"] == "ra_github_sync_retired_use_standard_workflow"
+    assert sync["storage_performed"] is False
+    assert "mcp_github_issue_sync_bug" in sync["github_sync_json"]["recommended_tools"]
 
     assert client.get("/api/v1/research-assistant/validation-discovery/summary").status_code == 200
 
@@ -401,7 +438,7 @@ def test_mcp_tools_endpoint_defaults_to_compact_summary_first_payload() -> None:
     assert compact["summary_first"] is True
     assert compact["detail_available"] is True
     assert compact["items"]
-    assert compact["total"] == 218
+    assert compact["total"] == len(TOOL_MANIFEST)
     assert "input_schema_json" not in compact["items"][0]
     assert "output_schema_json" not in compact["items"][0]
     assert "preflight_schema_json" not in compact["items"][0]

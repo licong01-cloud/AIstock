@@ -1,0 +1,222 @@
+{
+  "status": "passed",
+  "started_at": "2026-06-29T04:28:45.356148+00:00",
+  "env_source": "F:\\Dev\\AIstock\\.env",
+  "repo_head": "70c27b8c1c347572984ec6bfdf93da8caa8f53b0",
+  "migrations": [
+    {
+      "name": "paper_admission",
+      "path": "backend\\migrations\\strategy_pkg_multi_alpha_paper_admission_20260628.sql",
+      "sha256": "f0c515bd412e9fb23cb3ac5da0f730e2acb0a204f74bc438404a302a79329ecb",
+      "bytes": 3782,
+      "wrap_transaction_by_runner": true,
+      "started_at": "2026-06-29T04:28:45.474667+00:00",
+      "elapsed_ms": 9.31,
+      "notices": [
+        "NOTICE:  relation \"multi_alpha_paper_admission\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_multi_alpha_paper_admission_lookup\" already exists, skipping\n"
+      ],
+      "verification": {
+        "table_exists": true,
+        "constraints": [
+          {
+            "conname": "multi_alpha_paper_admission_broker_backend_chk",
+            "definition": "CHECK ((broker_backend = ANY (ARRAY['local_sim'::text, 'minqmt_sim'::text])))",
+            "comment": null
+          },
+          {
+            "conname": "multi_alpha_paper_admission_unique",
+            "definition": "UNIQUE (package_id, manifest_sha256, broker_backend, runtime_variant)",
+            "comment": null
+          }
+        ],
+        "indexes": [
+          {
+            "indexname": "idx_multi_alpha_paper_admission_lookup",
+            "indexdef": "CREATE INDEX idx_multi_alpha_paper_admission_lookup ON strategy_pkg.multi_alpha_paper_admission USING btree (package_id, manifest_sha256, broker_backend, runtime_variant) WHERE (eligible = true)"
+          }
+        ],
+        "pass": true
+      },
+      "status": "passed"
+    },
+    {
+      "name": "qe_archive_phase_a",
+      "path": "backend\\migrations\\qe_archive_multi_alpha_phase_a_20260628.sql",
+      "sha256": "8ddc96bbafb1b8966d76fa8806fded205d6d60ad096fdb0476db918da5ac1ae3",
+      "bytes": 16681,
+      "wrap_transaction_by_runner": false,
+      "started_at": "2026-06-29T04:28:45.489354+00:00",
+      "dml_guard": {
+        "query": "count failed rows with reason.logical_status=partial_failed before migration UPDATE",
+        "update_would_affect": 0,
+        "pass": true
+      },
+      "elapsed_ms": 25.09,
+      "notices": [
+        "NOTICE:  schema \"qe_archive\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_run_type_status\" already exists, skipping\n",
+        "NOTICE:  relation \"multi_alpha_run\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_run_roster\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_run_status\" already exists, skipping\n",
+        "NOTICE:  relation \"multi_alpha_leg\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_leg_factor_hash\" already exists, skipping\n",
+        "NOTICE:  relation \"multi_alpha_leg_source\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_leg_source_exp_loop\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_leg_source_seed\" already exists, skipping\n",
+        "NOTICE:  relation \"multi_alpha_scheme\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_scheme_best\" already exists, skipping\n",
+        "NOTICE:  relation \"multi_alpha_loo\" already exists, skipping\n",
+        "NOTICE:  relation \"idx_qear_macb_loo_leg\" already exists, skipping\n"
+      ],
+      "verification": {
+        "tables": {
+          "qe_archive.multi_alpha_run": true,
+          "qe_archive.multi_alpha_leg": true,
+          "qe_archive.multi_alpha_leg_source": true,
+          "qe_archive.multi_alpha_scheme": true,
+          "qe_archive.multi_alpha_loo": true
+        },
+        "ck_qear_run_status": [
+          {
+            "conname": "ck_qear_run_status",
+            "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'interrupted'::text, 'partial_archived'::text, 'archived'::text, 'succeeded'::text, 'partial_failed'::text])))",
+            "comment": null
+          }
+        ],
+        "ck_macb_run_status": [
+          {
+            "conname": "ck_macb_run_status",
+            "definition": "CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'partial_failed'::text])))",
+            "comment": "Allows running, succeeded, failed, and Phase A partial_failed terminal status without rewriting old values."
+          }
+        ],
+        "remaining_update_candidates": 0,
+        "pass": true
+      },
+      "status": "passed"
+    },
+    {
+      "name": "combine_source_type",
+      "path": "backend\\migrations\\strategy_pkg_multi_alpha_combine_source_type_20260629.sql",
+      "sha256": "b9cb2d7e50832ffca5a19be8ff1287d9ae3c076837c53629711fbe81f65ce69d",
+      "bytes": 870,
+      "wrap_transaction_by_runner": true,
+      "started_at": "2026-06-29T04:28:45.522857+00:00",
+      "elapsed_ms": 7.11,
+      "notices": [
+        "NOTICE:  schema \"strategy_pkg\" already exists, skipping\n"
+      ],
+      "verification": {
+        "constraints": [
+          {
+            "conname": "package_source_type_check",
+            "definition": "CHECK ((source_type = ANY (ARRAY['qe_experiment'::text, 'qe_evolution_loop'::text, 'candidate_strategy_package'::text, 'multi_alpha_combine_run'::text])))",
+            "comment": "Allowed StrategyPackage manifest source types, including multi_alpha_combine_run for one-step Multi-Alpha combine export lineage."
+          }
+        ],
+        "pass": true
+      },
+      "status": "passed"
+    }
+  ],
+  "precheck": {
+    "identity": {
+      "database": "aistock",
+      "server_addr": "172.17.0.3/32",
+      "server_port": 5432,
+      "db_user": "postgres"
+    },
+    "required_existing_tables": {
+      "qe_archive.run": true,
+      "strategy_pkg.package": true,
+      "strategy_pkg.multi_alpha_combine_backtest_run": true
+    },
+    "paper_admission_table_exists": true,
+    "package_source_type_check": [
+      {
+        "conname": "package_source_type_check",
+        "definition": "CHECK ((source_type = ANY (ARRAY['qe_experiment'::text, 'qe_evolution_loop'::text, 'candidate_strategy_package'::text])))",
+        "comment": null
+      }
+    ],
+    "ck_qear_run_status": [
+      {
+        "conname": "ck_qear_run_status",
+        "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'interrupted'::text, 'partial_archived'::text, 'archived'::text, 'succeeded'::text, 'partial_failed'::text])))",
+        "comment": null
+      }
+    ],
+    "ck_macb_run_status": [
+      {
+        "conname": "ck_macb_run_status",
+        "definition": "CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'partial_failed'::text])))",
+        "comment": "Allows running, succeeded, failed, and Phase A partial_failed terminal status without rewriting old values."
+      }
+    ],
+    "qe_archive_phase_a_update_would_affect": 0,
+    "multi_alpha_package_count": 0
+  },
+  "postcheck": {
+    "paper_admission": {
+      "table_exists": true,
+      "constraints": [
+        {
+          "conname": "multi_alpha_paper_admission_broker_backend_chk",
+          "definition": "CHECK ((broker_backend = ANY (ARRAY['local_sim'::text, 'minqmt_sim'::text])))",
+          "comment": null
+        },
+        {
+          "conname": "multi_alpha_paper_admission_unique",
+          "definition": "UNIQUE (package_id, manifest_sha256, broker_backend, runtime_variant)",
+          "comment": null
+        }
+      ],
+      "indexes": [
+        {
+          "indexname": "idx_multi_alpha_paper_admission_lookup",
+          "indexdef": "CREATE INDEX idx_multi_alpha_paper_admission_lookup ON strategy_pkg.multi_alpha_paper_admission USING btree (package_id, manifest_sha256, broker_backend, runtime_variant) WHERE (eligible = true)"
+        }
+      ],
+      "pass": true
+    },
+    "qe_archive_phase_a": {
+      "tables": {
+        "qe_archive.multi_alpha_run": true,
+        "qe_archive.multi_alpha_leg": true,
+        "qe_archive.multi_alpha_leg_source": true,
+        "qe_archive.multi_alpha_scheme": true,
+        "qe_archive.multi_alpha_loo": true
+      },
+      "ck_qear_run_status": [
+        {
+          "conname": "ck_qear_run_status",
+          "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'completed'::text, 'failed'::text, 'interrupted'::text, 'partial_archived'::text, 'archived'::text, 'succeeded'::text, 'partial_failed'::text])))",
+          "comment": null
+        }
+      ],
+      "ck_macb_run_status": [
+        {
+          "conname": "ck_macb_run_status",
+          "definition": "CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'partial_failed'::text])))",
+          "comment": "Allows running, succeeded, failed, and Phase A partial_failed terminal status without rewriting old values."
+        }
+      ],
+      "remaining_update_candidates": 0,
+      "pass": true
+    },
+    "combine_source_type": {
+      "constraints": [
+        {
+          "conname": "package_source_type_check",
+          "definition": "CHECK ((source_type = ANY (ARRAY['qe_experiment'::text, 'qe_evolution_loop'::text, 'candidate_strategy_package'::text, 'multi_alpha_combine_run'::text])))",
+          "comment": "Allowed StrategyPackage manifest source types, including multi_alpha_combine_run for one-step Multi-Alpha combine export lineage."
+        }
+      ],
+      "pass": true
+    },
+    "qe_archive_phase_a_update_would_affect_after": 0
+  },
+  "production_ddl_gate": "applied_and_verified",
+  "finished_at": "2026-06-29T04:28:45.543460+00:00"
+}

@@ -13,6 +13,12 @@ from backend.services.selection_center.industry_provider import (
     industry_info_from_candidate,
 )
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
+from backend.services.selection_center.prospective_evidence import (
+    CandidateStageName,
+    StageReceiptStatus,
+    TradabilityResult,
+    build_stage_receipt,
+)
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
     DataUnavailableError,
@@ -101,6 +107,30 @@ class TradabilityFilter:
         enabled: bool = True,
         industry_blacklist: list[str] | None = None,
     ) -> tuple[list[SelectionCandidate], list[SelectionExclusion]]:
+        result = self.filter_candidates_with_receipt(
+            candidates=candidates,
+            trade_date=trade_date,
+            top_k=top_k,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+            enabled=enabled,
+            industry_blacklist=industry_blacklist,
+        )
+        return result.candidates, result.exclusions
+
+    def filter_candidates_with_receipt(
+        self,
+        *,
+        candidates: list[SelectionCandidate],
+        trade_date: date,
+        top_k: int,
+        package_id: str,
+        manifest_sha256: str,
+        enabled: bool = True,
+        industry_blacklist: list[str] | None = None,
+        allow_empty: bool = False,
+    ) -> TradabilityResult:
+        """Run the current filter once and preserve its exact in-memory trace."""
         if top_k <= 0:
             raise RuntimeConfigInvalidError(
                 "tradability filter requires positive top_k",
@@ -109,13 +139,24 @@ class TradabilityFilter:
         ordered = sorted(candidates, key=lambda item: (item.rank, -item.score, item.symbol))
         normalized_industry_blacklist = self._normalize_industry_blacklist(industry_blacklist)
         if not enabled and not normalized_industry_blacklist:
-            return self._rerank(
+            selected = self._rerank(
                 ordered[:top_k],
                 package_id=package_id,
                 manifest_sha256=manifest_sha256,
                 exclude_suspended=False,
                 industry_blacklist=[],
-            ), []
+            )
+            return self._result_with_receipt(
+                candidates=selected,
+                exclusions=[],
+                candidate_pool_count=len(ordered),
+                inspected_count=len(selected),
+                enabled=False,
+                industry_blacklist=[],
+                trade_date=trade_date,
+                package_id=package_id,
+                manifest_sha256=manifest_sha256,
+            )
 
         suspended = (
             self.suspend_provider.get_suspended_symbols(
@@ -208,6 +249,18 @@ class TradabilityFilter:
 
         if not selected:
             reasons = sorted({item.reason for item in excluded})
+            if allow_empty:
+                return self._result_with_receipt(
+                    candidates=[],
+                    exclusions=excluded,
+                    candidate_pool_count=len(ordered),
+                    inspected_count=len(excluded),
+                    enabled=enabled,
+                    industry_blacklist=normalized_industry_blacklist,
+                    trade_date=trade_date,
+                    package_id=package_id,
+                    manifest_sha256=manifest_sha256,
+                )
             if reasons == ["suspended_by_suspend_d"]:
                 raise DataUnavailableError(
                     "all ranked candidates are suspended by suspend_d",
@@ -230,13 +283,102 @@ class TradabilityFilter:
                     "exclusion_reasons": reasons,
                 },
             )
-        return self._rerank(
+        reranked = self._rerank(
             selected,
             package_id=package_id,
             manifest_sha256=manifest_sha256,
             exclude_suspended=enabled,
             industry_blacklist=normalized_industry_blacklist,
-        ), excluded
+        )
+        return self._result_with_receipt(
+            candidates=reranked,
+            exclusions=excluded,
+            candidate_pool_count=len(ordered),
+            inspected_count=len(reranked) + len(excluded),
+            enabled=enabled,
+            industry_blacklist=normalized_industry_blacklist,
+            trade_date=trade_date,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+        )
+
+    def select_top_k_with_receipt(
+        self,
+        *,
+        candidates: list[SelectionCandidate],
+        top_k: int,
+        trade_date: date,
+        package_id: str,
+        manifest_sha256: str,
+    ) -> TradabilityResult:
+        """Record the existing no-filter top-k branch without mutating rows."""
+        if top_k <= 0:
+            raise RuntimeConfigInvalidError(
+                "tradability filter requires positive top_k",
+                context={"package_id": package_id, "top_k": top_k},
+            )
+        selected = list(candidates[:top_k])
+        return self._result_with_receipt(
+            candidates=selected,
+            exclusions=[],
+            candidate_pool_count=len(candidates),
+            inspected_count=len(selected),
+            enabled=False,
+            industry_blacklist=[],
+            trade_date=trade_date,
+            package_id=package_id,
+            manifest_sha256=manifest_sha256,
+        )
+
+    @staticmethod
+    def _result_with_receipt(
+        *,
+        candidates: list[SelectionCandidate],
+        exclusions: list[SelectionExclusion],
+        candidate_pool_count: int,
+        inspected_count: int,
+        enabled: bool,
+        industry_blacklist: list[str],
+        trade_date: date,
+        package_id: str,
+        manifest_sha256: str,
+    ) -> TradabilityResult:
+        if inspected_count != len(candidates) + len(exclusions):
+            raise RuntimeConfigInvalidError(
+                "tradability receipt counts do not reconcile",
+                context={
+                    "package_id": package_id,
+                    "candidate_pool_count": candidate_pool_count,
+                    "inspected_count": inspected_count,
+                    "output_count": len(candidates),
+                    "excluded_count": len(exclusions),
+                },
+            )
+        universe_metadata = {
+            "status": "COMPLETE",
+            "enabled": enabled,
+            "industry_blacklist": list(industry_blacklist),
+            "trade_date": trade_date.isoformat(),
+            "package_id": package_id,
+            "manifest_sha256": manifest_sha256,
+            "candidate_pool_count": candidate_pool_count,
+            "inspected_count": inspected_count,
+            "unprocessed_tail_count": candidate_pool_count - inspected_count,
+        }
+        receipt = build_stage_receipt(
+            stage=CandidateStageName.SELECTION_EFFECTIVE,
+            status=StageReceiptStatus.COMPLETE,
+            input_count=inspected_count,
+            candidates=candidates,
+            exclusions=exclusions,
+            semantic_payload=universe_metadata,
+        )
+        return TradabilityResult(
+            candidates=candidates,
+            exclusions=exclusions,
+            receipt=receipt,
+            universe_metadata=universe_metadata,
+        )
 
     @staticmethod
     def _rerank(

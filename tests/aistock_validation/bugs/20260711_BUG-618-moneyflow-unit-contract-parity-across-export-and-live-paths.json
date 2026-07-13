@@ -1,0 +1,180 @@
+{
+  "actual": "Tushare-moneyflow-raw-units-are-hand-and-10k-yuan-but-H5-static-factor-QE-live-selection-paper-and-export-paths-apply-inconsistent-conversions.-Preserve-existing-field-names-and-fix-values-docs-skills-and-UI-API-export.",
+  "allowed_write_scope": [
+    ".claude/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/SKILL.md",
+    ".codex/skills/update-backtest-dataset/agents/openai.yaml",
+    "backend/data_service/moneyflow_contract.py",
+    "backend/data_service/preprocessor.py",
+    "backend/data_service/qe_data_service.py",
+    "backend/data_service/timescaledb_adapter.py",
+    "backend/inference_engine.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/qlib_exporter/router.py",
+    "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/correlation_compute_service.py",
+    "backend/services/quantevolver/factor_value_loader.py",
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/tests/data_service/test_moneyflow_contract.py",
+    "backend/tests/test_correlation_compute_independence.py",
+    "backend/tests/test_qe_static_factors_live_asof.py",
+    "backend/tests/quantevolver/test_moneyflow_cache_contract.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
+    "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+    "docs/analysis/qlib_backtest_dataset_export_guide_20260712.md",
+    "frontend/src/app/qlib/page.tsx",
+    "scripts/export_qe_qlib_candidate.py",
+    "scripts/validate_qe_qlib_candidate.py",
+    "tests/aistock_validation/bugs/20260711_BUG-618-moneyflow-unit-contract-parity-across-export-and-live-paths.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-618",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-11T16:20:34.979794Z",
+  "description": "Tushare-moneyflow-raw-units-are-hand-and-10k-yuan-but-H5-static-factor-QE-live-selection-paper-and-export-paths-apply-inconsistent-conversions.-Preserve-existing-field-names-and-fix-values-docs-skills-and-UI-API-export.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260711-ee095c45955c",
+      "timestamp": "2026-07-11T16:20:34.979790Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Keep existing mf_total_net_* names while every offline export, static factor, QE, factor-library and live inference path emits the same shares/yuan moneyflow contract and derives total net flow from Tushare net_mf_*.",
+  "first_seen_at": "2026-07-11T16:20:34.979794Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1977,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1977",
+  "last_seen_at": "2026-07-11T16:20:34.979794Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "python -m pytest backend/tests/data_service/test_moneyflow_contract.py -q",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "moneyflow-unit-contract-parity-across-export-and-live-paths",
+  "trigger_condition": {
+    "fingerprint": "ee095c45955c85a8cb5faf6d",
+    "source_event_id": "FE-20260711-ee095c45955c"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "aistock_backend"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "aistock_backend"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

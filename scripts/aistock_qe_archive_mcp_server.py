@@ -44,6 +44,26 @@ def qe_archive_health() -> dict[str, Any]:
 
 
 @mcp.tool()
+def qe_archive_query_resource_phases(
+    run_id: str | None = None,
+    task_id: str | None = None,
+    loop_index: int | None = None,
+    source_run_key: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    return _client().get(
+        "/resource-phases",
+        params={
+            "run_id": run_id,
+            "task_id": task_id,
+            "loop_index": loop_index,
+            "source_run_key": source_run_key,
+            "limit": max(1, min(int(limit), 200)),
+        },
+    )
+
+
+@mcp.tool()
 def qe_archive_list_runs(status: str | None = None, run_type: str | None = None, search: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/runs", params={"status": status, "run_type": run_type, "search": search, "limit": limit})
 
@@ -287,7 +307,7 @@ def qe_archive_query_run_leaderboard(
     min_icir: float | None = None,
     min_ir: float | None = None,
     limit: int = 20,
-    order_by: str = "cagr",
+    order_by: str = "calmar",
 ) -> dict[str, Any]:
     """Query compact run-level signal/return leaderboard rows."""
 
@@ -300,6 +320,21 @@ def qe_archive_query_run_leaderboard(
             "limit": limit,
             "order_by": order_by,
         },
+    )
+
+
+@mcp.tool()
+def qe_archive_query_topk_quality(
+    run_id: str | None = None,
+    task_id: str | None = None,
+    k: int | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Query forward-only prediction-rank Top-K quality rows."""
+
+    return _client().get(
+        "/analytics/topk-quality",
+        params={"run_id": run_id, "task_id": task_id, "k": k, "limit": limit},
     )
 
 
@@ -379,7 +414,7 @@ def qe_archive_query_promotion_candidates(
     model_type: str | None = None,
     min_seed_count: int = 5,
     limit: int = 20,
-    order_by: str = "cagr_mean",
+    order_by: str = "calmar",
 ) -> dict[str, Any]:
     """Query compact multi-seed promotion candidate configs."""
 

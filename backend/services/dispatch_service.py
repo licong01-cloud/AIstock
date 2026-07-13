@@ -43,7 +43,7 @@ _TASK_TYPE_COMMANDS = {
     "fin_factor_report": "fin_factor_report",
 }
 
-_CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation"}
+_CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation", "official_factor_full_compute"}
 _REMOTE_CONDA_ENV = "rdagent-gpu"
 _SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -668,10 +668,23 @@ class DispatchService:
         task_id = task["task_id"]
         self._add_event(task_id, "created", {"config": config})
 
+        scheduler_task_type = task_type
+        scheduler_payload_payload = payload
+        if task_type == "official_factor_full_compute":
+            # Older WSL scheduler workers only know the official_evaluation
+            # custom handler. Keep AIstock's local task typed as the new
+            # full-compute task, but route the remote worker through the
+            # compatibility runner and preserve the authoritative handler in
+            # the payload.
+            scheduler_task_type = "official_evaluation"
+            scheduler_payload_payload = dict(payload)
+            scheduler_payload_payload.setdefault("task_type", task_type)
+            scheduler_payload_payload.setdefault("handler_task_type", task_type)
+
         scheduler_payload = {
             "name": data["task_name"],
-            "task_type": task_type,
-            "payload": payload,
+            "task_type": scheduler_task_type,
+            "payload": scheduler_payload_payload,
             "loop_n": 1,
             "all_duration": data.get("all_duration") or "24:00:00",
             "env_overrides": data.get("custom_env", {}),
@@ -977,7 +990,7 @@ class DispatchService:
         total = len(all_lines)
         return {
             "task_id": task_id,
-            "lines": [l.rstrip("\n") for l in all_lines[offset:offset + limit]],
+            "lines": [line.rstrip("\n") for line in all_lines[offset:offset + limit]],
             "total": total,
             "offset": offset,
         }

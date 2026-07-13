@@ -1,0 +1,131 @@
+{
+  "actual": "Research Assistant still exposes a workbench page and duplicate chat-like entry points.",
+  "allowed_write_scope": [
+    "frontend/src/app/research-assistant/layout.tsx",
+    "frontend/src/app/research-assistant/workbench/page.tsx",
+    "frontend/src/app/research-assistant/chat/page.tsx",
+    "frontend/tests/research-assistant/research-assistant.spec.ts",
+    "tests/aistock_validation/bugs/20260623_BUG-494-retire-research-assistant-workbench-route-and-deduplicate-chat-entry.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-494",
+  "closed_at": "2026-06-23T11:05:59Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-23T07:08:19.691733Z",
+  "description": "Research Assistant still exposes a workbench page and duplicate chat-like entry points.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260623-63d017e41341",
+      "timestamp": "2026-06-23T07:08:19.691729Z"
+    },
+    {
+      "action": "scope_expanded_for_workbench_link_cleanup",
+      "actor": "codex",
+      "note": "Scoped search found the chat page still linked to the retired workbench route, so frontend chat page cleanup was added to retire visible Workbench entry points without touching backend logic.",
+      "timestamp": "2026-06-23T07:21:33Z"
+    },
+    {
+      "action": "required_verification_aligned_with_context_pack",
+      "actor": "codex",
+      "note": "Added validation_module_registry_l0 because the workflow context pack selected it as a required validation gate for BUG-494.",
+      "timestamp": "2026-06-23T07:25:42Z"
+    },
+    {
+      "action": "closed_after_merge",
+      "actor": "codex",
+      "note": "PR #1539 merged at 2026-06-23T11:05:58Z; GitHub Issue #1529 is CLOSED with status:fixed. BUG JSON status is closed in the close-sync PR.",
+      "timestamp": "2026-06-23T11:05:59Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Research Assistant has no workbench nav entry, /research-assistant/workbench redirects to chat without 404, and only one chat entry remains.",
+  "first_seen_at": "2026-06-23T07:08:19.691733Z",
+  "fix_branch": null,
+  "fix_commit": "8f8ccbf5726a3d71dcc0590de854d6bc05953064",
+  "fixed_at": "2026-06-23T11:06:22.475173Z",
+  "github_issue_number": 1529,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1529",
+  "last_seen_at": "2026-06-23T07:08:19.691733Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1539",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Open /research-assistant and /research-assistant/workbench",
+  "required_verification": [
+    "l0",
+    "research_assistant_backend",
+    "research_assistant_mcp_contract",
+    "ra_phase7_full_accept",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "Retire Research Assistant workbench route and deduplicate chat entry",
+  "trigger_condition": {
+    "fingerprint": "63d017e41341c7307c72e42f",
+    "source_event_id": "FE-20260623-63d017e41341"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:research_assistant",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/research-assistant/layout.tsx",
+      "frontend/src/app/research-assistant/workbench/page.tsx",
+      "frontend/tests/research-assistant/research-assistant.spec.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/useful",
+    "ui_routes": [
+      "/useful"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "GitHub required checks for PR #1539 after rebase -> passed: 17 passed, 0 failed",
+    "rtk proxy python -m nox -s ra_phase7_full_accept with isolated 3031 -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

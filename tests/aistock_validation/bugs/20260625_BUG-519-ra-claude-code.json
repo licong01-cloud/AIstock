@@ -1,0 +1,79 @@
+{
+  "actual": "设计稿已写好,待走文档 PR 入 main",
+  "allowed_write_scope": [
+    "docs/analysis/ra_answer_capability_alignment_with_claude_code_20260624.md",
+    "tests/aistock_validation/bugs/20260625_BUG-519-ra-claude-code.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-519",
+  "closed_at": "2026-06-24T17:48:22.699722Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-24T16:11:18.916922Z",
+  "description": "设计稿已写好,待走文档 PR 入 main",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260625-9638a43e9ea9",
+      "timestamp": "2026-06-24T16:11:18.916922Z"
+    },
+    {
+      "action": "close_sync_finalize",
+      "actor": "codex",
+      "timestamp": "2026-06-24T17:48:22.699722Z",
+      "note": "PR #1614 docs-only design draft merged at 933dfa108682f02d7f9f8bcf5f6068fe8b7d8429; persisted BUG status closed with production gates noop."
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "纲领设计稿入库 docs/analysis/,统领后续 RA 对话能力改造",
+  "first_seen_at": "2026-06-24T16:11:18.916922Z",
+  "fix_branch": "docs/ra-b9-alignment-design-20260624",
+  "fix_commit": "933dfa108682f02d7f9f8bcf5f6068fe8b7d8429",
+  "fixed_at": "2026-06-24T17:42:54.793860Z",
+  "github_issue_number": 1613,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1613",
+  "last_seen_at": "2026-06-24T16:11:18.916922Z",
+  "module": "research_assistant",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1614",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "closed",
+  "suspected_modules": [
+    "research_assistant"
+  ],
+  "title": "RA 对话能力对齐 Claude Code 架构纲领设计稿",
+  "trigger_condition": {
+    "fingerprint": "9638a43e9ea95aac54e34723",
+    "source_event_id": "FE-20260625-9638a43e9ea9"
+  },
+  "validation_evidence": [
+    "docs-only: pure documentation design PR; no code changes; scope dry-run passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "merge_commit": "933dfa108682f02d7f9f8bcf5f6068fe8b7d8429"
+}

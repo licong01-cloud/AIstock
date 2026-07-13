@@ -1,16 +1,17 @@
-"""Daemon event log — PG outbox (primary) + SQLite (fallback).
+"""Daemon event log for paper-v2 daemon lifecycle events.
 
 T6.2 (D2 path A) refactor (2026-05-10):
 
-The daemon now writes events directly to ``qe_archive.outbox_event`` so the
-DW ETL can ingest them without a sqlite replay sidecar. The SQLite store
-(``var/paper_v2_sim/daemon_events.db``) remains as a *fallback*: if PG is
-unreachable / mis-configured at emit time, the row lands in SQLite with
-``unsynced=1`` and is later pushed by ``replay_unsynced_on_startup``.
+The daemon keeps every event in the SQLite debug log
+(``var/paper_v2_sim/daemon_events.db``). High-frequency ``paper.daemon.*``
+telemetry is local-only by default and no longer targets the durable
+``qe_archive.outbox_event`` archive queue. A debug-only PG telemetry sink can
+be enabled with ``PAPER_V2_DAEMON_TELEMETRY_PG_SINK=1``.
 
 Failure semantics (per ``feedback_no_silent_errors``):
 
-* PG write succeeds -> row not duplicated to SQLite.
+* telemetry with the debug PG sink disabled -> SQLite row with ``unsynced=0``.
+* PG write succeeds -> SQLite row with ``unsynced=0``.
 * PG write fails, SQLite succeeds -> emit() returns the record, logs a
   WARNING with the original PG error; row carries ``unsynced=1`` for replay.
 * PG write fails AND SQLite write fails -> the original SQLite exception
@@ -20,7 +21,7 @@ The 9 canonical event-type names follow ``paper.daemon.<event>`` and are
 mapped onto the existing ``DaemonEventType`` enum members so existing call
 sites (sim_runner.py) stay unchanged.
 
-Outbox row shape (mirroring ``backend/db/init_qe_archive_schema.py``):
+Debug PG outbox row shape (mirroring ``backend/db/init_qe_archive_schema.py``):
 
 * event_id      = ``qear_evt_<sha256-of-fingerprint>[:24]`` (idempotent)
 * event_type    = ``paper.daemon.<name>``
@@ -29,10 +30,10 @@ Outbox row shape (mirroring ``backend/db/init_qe_archive_schema.py``):
 * source_sub_id = ``f"{event_seq:06d}"`` (unique per (run_id, event_seq))
 * payload       = JSONB containing portfolio_id, package_id, event_seq,
                   event_ts, handle_id, intent_id, symbol, payload_json
-* status        = 'pending' (the qe_archive worker will claim & process it)
+* status        = 'pending' (for opt-in debug telemetry PG sink only)
 
-We do NOT modify ``qe_archive`` source code; we only INSERT rows into the
-existing table via the canonical ``backend/db/pg_pool.get_conn`` pattern.
+The default production path intentionally avoids durable PG queue pollution
+for throwaway paper daemon telemetry.
 """
 
 from __future__ import annotations
@@ -77,6 +78,7 @@ PAPER_DAEMON_EVENT_TYPE_NAMES: dict[str, str] = {
 
 
 PAPER_DAEMON_SOURCE_SYSTEM = "paper_v2.daemon"
+PAPER_DAEMON_TELEMETRY_PG_SINK_ENV = "PAPER_V2_DAEMON_TELEMETRY_PG_SINK"
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +122,21 @@ def _routing_class_for(event_type: str) -> str:
         f"Unknown event_type {event_type!r}; must be in "
         f"ARCHIVE_EVENTS or DAEMON_EVENTS"
     )
+
+
+def _env_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _telemetry_pg_sink_enabled() -> bool:
+    """Return whether paper daemon telemetry should be copied to PG.
+
+    This debug-only sink is intentionally opt-in and bounded by configuration.
+    The default is OFF so high-frequency ``paper.daemon.*`` telemetry cannot
+    pollute the durable ``qe_archive.outbox_event`` archive work queue.
+    """
+
+    return _env_truthy(os.getenv(PAPER_DAEMON_TELEMETRY_PG_SINK_ENV))
 
 
 class DaemonEventType(str, Enum):
@@ -343,9 +360,10 @@ class DaemonEventLog:
     ) -> DaemonEventRecord:
         """Append a single event. Returns the persisted record.
 
-        Primary path: PG outbox. On failure, falls back to SQLite with
-        ``unsynced=1`` and logs a warning. If SQLite ALSO fails, the original
-        SQLite exception propagates (no silent swallow).
+        ``paper.daemon.*`` telemetry is SQLite-local by default; only the
+        debug flag targets PG. When PG is targeted and fails, SQLite carries
+        ``unsynced=1`` for replay. If SQLite also fails, the SQLite exception
+        propagates (no silent swallow).
         """
         if not isinstance(event_type, DaemonEventType):
             raise TypeError(
@@ -358,30 +376,46 @@ class DaemonEventLog:
             self._seq += 1
             seq = self._seq
 
+            canonical_event_type = event_type.canonical_name
+            routing_class = _routing_class_for(canonical_event_type)
+            pg_targeted = routing_class != "telemetry" or _telemetry_pg_sink_enabled()
             pg_synced = False
             pg_error: Exception | None = None
-            try:
-                self._write_pg(
-                    event_type=event_type,
-                    event_seq=seq,
-                    event_ts=ts,
-                    payload_json=payload_json,
-                    handle_id=handle_id,
-                    intent_id=intent_id,
-                    symbol=symbol,
-                )
-                pg_synced = True
-            except Exception as exc:  # noqa: BLE001 — fallback is intentional
-                pg_error = exc
-                logger.warning(
-                    "paper-v2 daemon PG outbox write failed (run_id=%s seq=%s); "
-                    "falling back to SQLite. err=%s",
+            if pg_targeted:
+                try:
+                    self._write_pg(
+                        event_type=event_type,
+                        event_seq=seq,
+                        event_ts=ts,
+                        payload_json=payload_json,
+                        handle_id=handle_id,
+                        intent_id=intent_id,
+                        symbol=symbol,
+                    )
+                    pg_synced = True
+                except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                    pg_error = exc
+                    logger.warning(
+                        "paper-v2 daemon PG outbox write failed "
+                        "(run_id=%s seq=%s event_type=%s routing_class=%s); "
+                        "falling back to SQLite. err=%s",
+                        self._run_id,
+                        seq,
+                        canonical_event_type,
+                        routing_class,
+                        exc,
+                    )
+            else:
+                logger.debug(
+                    "paper-v2 daemon telemetry PG sink disabled; keeping event local-only "
+                    "(run_id=%s seq=%s event_type=%s)",
                     self._run_id,
                     seq,
-                    exc,
+                    canonical_event_type,
                 )
 
             try:
+                local_only_or_synced = pg_synced or not pg_targeted
                 self._write_sqlite(
                     event_type=event_type,
                     event_seq=seq,
@@ -390,8 +424,8 @@ class DaemonEventLog:
                     handle_id=handle_id,
                     intent_id=intent_id,
                     symbol=symbol,
-                    unsynced=0 if pg_synced else 1,
-                    synced_at=ts.isoformat() if pg_synced else None,
+                    unsynced=0 if local_only_or_synced else 1,
+                    synced_at=ts.isoformat() if local_only_or_synced else None,
                 )
             except Exception as sqlite_exc:
                 # Both paths failed — propagate. Log the PG error context
@@ -551,6 +585,7 @@ class DaemonEventLog:
         scanned = 0
         pushed = 0
         skipped = 0
+        telemetry_skipped = 0
 
         # Read pending rows out first; close the SQLite read connection before
         # any per-row PG write to avoid holding two connections per attempt.
@@ -581,6 +616,21 @@ class DaemonEventLog:
             try:
                 event_type = DaemonEventType(event_type_str)
                 event_ts = datetime.fromisoformat(event_ts_str)
+                canonical_event_type = event_type.canonical_name
+                routing_class = _routing_class_for(canonical_event_type)
+                if routing_class == "telemetry" and not _telemetry_pg_sink_enabled():
+                    self._mark_sqlite_synced(row_id)
+                    skipped += 1
+                    telemetry_skipped += 1
+                    logger.info(
+                        "paper-v2 daemon replay skipped local-only telemetry "
+                        "(row_id=%s seq=%s event_type=%s reason_code=%s)",
+                        row_id,
+                        event_seq,
+                        canonical_event_type,
+                        "paper_daemon_telemetry_not_archived",
+                    )
+                    continue
                 self._write_pg(
                     event_type=event_type,
                     event_seq=event_seq,
@@ -604,12 +654,7 @@ class DaemonEventLog:
             # Mark synced. Each mark-synced is its own SQLite tx — keeps
             # retry idempotent on partial replay.
             try:
-                with closing(self._connect()) as conn:
-                    conn.execute(
-                        "UPDATE daemon_event_log SET unsynced = 0, "
-                        "synced_at = ? WHERE id = ?",
-                        (datetime.now(UTC).isoformat(), row_id),
-                    )
+                self._mark_sqlite_synced(row_id)
                 pushed += 1
             except Exception as exc:  # noqa: BLE001
                 # PG insert succeeded but the local mark failed — log and
@@ -624,7 +669,20 @@ class DaemonEventLog:
                     exc,
                 )
 
-        return {"pushed": pushed, "skipped": skipped, "scanned": scanned}
+        return {
+            "pushed": pushed,
+            "skipped": skipped,
+            "scanned": scanned,
+            "telemetry_skipped": telemetry_skipped,
+        }
+
+    def _mark_sqlite_synced(self, row_id: int) -> None:
+        with closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE daemon_event_log SET unsynced = 0, "
+                "synced_at = ? WHERE id = ?",
+                (datetime.now(UTC).isoformat(), row_id),
+            )
 
     # ------------------------------------------------------------------
     # Read helpers (unchanged)

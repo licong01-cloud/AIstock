@@ -65,7 +65,7 @@ from .models import (
     PortfolioStatus,
 )
 from .replay import PaperTradingHistoricalReplay
-from .repository import PaperTradingV2Repository
+from .repository import PaperTradingV2Repository, assert_orders_terminal_before_run_success
 from .risk_targets import overlay_risk_forced_exit_targets
 
 
@@ -153,6 +153,13 @@ class PaperTradingLiveMinuteExecutor:
             return self._tick_live_intraday(session, as_of_time=now)
         except DataUnavailableError as exc:
             if self._is_retryable_live_minute_fetch_error(exc):
+                if self._is_after_market_close(now):
+                    terminal_exc = self._mark_retryable_live_fetch_failed_after_close(
+                        session,
+                        exc,
+                        as_of_time=now,
+                    )
+                    raise terminal_exc from exc
                 return self._record_retryable_live_minute_fetch_error(session, exc, as_of_time=now)
             raise
 
@@ -234,6 +241,67 @@ class PaperTradingLiveMinuteExecutor:
             last_error=exc.to_dict(),
         )
         return self._progress(updated.session_id)
+
+    def _mark_retryable_live_fetch_failed_after_close(
+        self,
+        session: PaperTradingSession,
+        exc: DataUnavailableError,
+        *,
+        as_of_time: datetime,
+    ) -> DataUnavailableError:
+        local_as_of = self._local_session_time(as_of_time)
+        raw_trade_date = exc.context.get("trade_date")
+        try:
+            trade_date = date.fromisoformat(str(raw_trade_date)) if raw_trade_date else local_as_of.date()
+        except ValueError:
+            trade_date = local_as_of.date()
+        context = dict(exc.context)
+        context.update(
+            {
+                "reason_code": "PAPER_V2_LIVE_TDX_FETCH_FAILED_AFTER_CLOSE",
+                "session_id": session.session_id,
+                "portfolio_id": session.portfolio_id,
+                "trade_date": trade_date.isoformat(),
+                "as_of_time": local_as_of.isoformat(),
+                "market_close": MARKET_CLOSE.isoformat(timespec="minutes"),
+            }
+        )
+        terminal_exc = DataUnavailableError(
+            "paper v2 live TDX minute data unavailable after market close",
+            context=context,
+        )
+        run = self.repository.get_run_by_portfolio_date(session.portfolio_id, trade_date)
+        if run is not None and run.status == RunStatus.RUNNING:
+            error = terminal_exc.to_dict()
+            self.repository.save_error(run_id=run.run_id, portfolio_id=session.portfolio_id, error=error)
+            self.repository.update_run_status(run, RunStatus.FAILED, error=error)
+            self.repository.save_run_event(
+                run_id=run.run_id,
+                event_type="LIVE_DATA_FETCH_TERMINAL_AFTER_CLOSE",
+                message=terminal_exc.message,
+                context=context,
+            )
+            self.repository.save_session_day(
+                PaperSessionDay(
+                    session_id=session.session_id,
+                    portfolio_id=session.portfolio_id,
+                    trade_date=trade_date,
+                    run_id=run.run_id,
+                    status=PaperSessionStatus.FAILED,
+                    phase=PaperSessionPhase.LIVE_INTRADAY,
+                    data_source=run.data_source,
+                    latest_available_bar_time=None,
+                    last_processed_bar_time=None,
+                )
+            )
+        self.repository.save_session_event(
+            session_id=session.session_id,
+            run_id=run.run_id if run else None,
+            event_type="LIVE_DATA_FETCH_TERMINAL_AFTER_CLOSE",
+            message=terminal_exc.message,
+            context=context,
+        )
+        return terminal_exc
 
     def _run_historical_catchup(
         self,
@@ -1294,12 +1362,16 @@ class PaperTradingLiveMinuteExecutor:
                 existing_target_symbols=set(),
             )
             targets = overlay_risk_forced_exit_targets(targets, forced_exit_targets)
-        intents = self.rebalance_engine.build_order_intents(
-            package_id=manifest.package_id,
-            portfolio_id=portfolio.portfolio_id,
-            trade_date=trade_date,
-            current_positions=current_positions,
-            target_positions=targets,
+        intents = (
+            []
+            if not targets and not current_positions
+            else self.rebalance_engine.build_order_intents(
+                package_id=manifest.package_id,
+                portfolio_id=portfolio.portfolio_id,
+                trade_date=trade_date,
+                current_positions=current_positions,
+                target_positions=targets,
+            )
         )
         run = PaperRun(
             portfolio_id=portfolio.portfolio_id,
@@ -1376,23 +1448,28 @@ class PaperTradingLiveMinuteExecutor:
             },
         )
         if not intents:
-            if not current_positions:
-                raise ArtifactGenerationFailedError(
-                    "live rebalance produced no order intents and portfolio has no positions to mark",
-                    context={"session_id": session.session_id, "portfolio_id": portfolio.portfolio_id, "trade_date": trade_date.isoformat()},
-                )
-            prices = self._snapshot_prices_for_positions(
-                symbols=list(current_positions),
-                trade_date=trade_date,
-                as_of_time=as_of_time,
-                live_data_source=session.live_data_source,
-                known_prices=current_prices,
+            no_rebalance_reason = (
+                "valid_no_candidate"
+                if snapshot.valid_no_candidate
+                else "target_positions_equal_current_positions"
             )
-            snapshot = AccountSnapshot(
+            prices = (
+                self._snapshot_prices_for_positions(
+                    symbols=list(current_positions),
+                    trade_date=trade_date,
+                    as_of_time=as_of_time,
+                    live_data_source=session.live_data_source,
+                    known_prices=current_prices,
+                )
+                if current_positions
+                else {}
+            )
+            market_value = sum(position.quantity * prices[position.symbol] for position in current_positions.values())
+            account_snapshot = AccountSnapshot(
                 portfolio_id=portfolio.portfolio_id,
                 cash=latest_cash,
-                market_value=sum(position.quantity * prices[position.symbol] for position in current_positions.values()),
-                nav=latest_cash + sum(position.quantity * prices[position.symbol] for position in current_positions.values()),
+                market_value=market_value,
+                nav=latest_cash + market_value,
                 snapshot_time=as_of_time,
             )
             self.repository.save_positions(
@@ -1404,14 +1481,18 @@ class PaperTradingLiveMinuteExecutor:
             self.repository.save_daily_snapshot(
                 run_id=run.run_id,
                 trade_date=trade_date,
-                snapshot=snapshot,
+                snapshot=account_snapshot,
                 metadata={
                     "position_count": len(current_positions),
                     "order_count": 0,
                     "fill_count": 0,
                     "session_id": session.session_id,
                     "no_rebalance_required": True,
-                    "reason": "target_positions_equal_current_positions",
+                    "reason": no_rebalance_reason,
+                    "valid_no_candidate": snapshot.valid_no_candidate,
+                    "no_candidate_reason": snapshot.no_candidate_reason,
+                    "raw_candidate_count": raw_candidate_count,
+                    "target_count": len(targets),
                 },
             )
             self.repository.save_session_day(
@@ -1429,9 +1510,17 @@ class PaperTradingLiveMinuteExecutor:
                 session_id=session.session_id,
                 run_id=run.run_id,
                 event_type="NO_REBALANCE_REQUIRED",
-                message="target positions match current positions; live day finalized without orders",
-                context={"trade_date": trade_date.isoformat(), "position_count": len(current_positions), "nav": snapshot.nav},
+                message="paper v2 live day finalized without actionable order intents",
+                context={
+                    "trade_date": trade_date.isoformat(),
+                    "position_count": len(current_positions),
+                    "nav": account_snapshot.nav,
+                    "reason": no_rebalance_reason,
+                    "valid_no_candidate": snapshot.valid_no_candidate,
+                    "no_candidate_reason": snapshot.no_candidate_reason,
+                },
             )
+            self._assert_orders_terminal_before_success(run)
             succeeded = self.repository.update_run_status(run, RunStatus.SUCCEEDED)
             self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
             self.repository.update_session_status(
@@ -1811,10 +1900,11 @@ class PaperTradingLiveMinuteExecutor:
         allow_partial_fill = bool((policy_json.get("algo_config") or {}).get("allow_partial_fill", True))
         states = self.repository.list_order_execution_states(session_id=session.session_id, run_id=run.run_id)
         remaining_states = [state for state in states if state.remaining_quantity > 0 and state.status not in FINAL_ORDER_STATUSES]
-        if remaining_states and not allow_partial_fill:
-            error = ExecutionAlgoError(
+        if remaining_states:
+            error = InvalidStateTransitionError(
                 "live minute execution left unfilled quantity at market close",
                 context={
+                    "reason_code": "PAPER_V2_RUN_SUCCEEDED_REQUIRES_TERMINAL_ORDERS",
                     "session_id": session.session_id,
                     "run_id": run.run_id,
                     "remaining_orders": [
@@ -1862,6 +1952,7 @@ class PaperTradingLiveMinuteExecutor:
                 "remaining_order_count": len(remaining_states),
             },
         )
+        self._assert_orders_terminal_before_success(run)
         self.repository.update_run_status(run, RunStatus.SUCCEEDED)
         self.repository.update_portfolio_status(portfolio.portfolio_id, PortfolioStatus.RUNNING)
         self.repository.update_session_status(
@@ -1877,6 +1968,10 @@ class PaperTradingLiveMinuteExecutor:
             context={"trade_date": run.trade_date.isoformat(), "fill_count": len(fills), "nav": snapshot.nav},
         )
         return self._progress(session.session_id)
+
+    def _assert_orders_terminal_before_success(self, run: PaperRun) -> None:
+        orders = self.repository.list_orders_for_run(run.run_id)
+        assert_orders_terminal_before_run_success(run_id=run.run_id, orders=orders)
 
     def _mark_run_failed(self, session: PaperTradingSession, run: PaperRun, exc: TradingCoreError) -> None:
         error = exc.to_dict()

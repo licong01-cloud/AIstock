@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..qlib_exporter.config import DAILY_RAW_TABLE
 from ..qlib_exporter.db_reader import DBReader
+from .moneyflow_contract import normalize_tushare_moneyflow_units
 
 
 logger = logging.getLogger("aistock.timescaledb_adapter")
@@ -272,6 +273,7 @@ def fetch_fundamental_data_ts(
             parts.append(df_basic)
 
         if not df_flow.empty:
+            df_flow = normalize_tushare_moneyflow_units(df_flow, copy=False)
             df_flow["datetime"] = pd.to_datetime(df_flow["datetime"])
             df_flow.set_index(["datetime", "instrument"], inplace=True)
             parts.append(df_flow)

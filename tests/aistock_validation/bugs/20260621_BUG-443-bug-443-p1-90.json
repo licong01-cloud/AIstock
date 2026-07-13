@@ -1,0 +1,107 @@
+{
+  "actual": "用户要求执行官方因子独立指标全量计算验证并确认是否可控制在90分钟内。验证通过现有后端 API 触发，数据源与窗口正确：official_offline_backtest_factor_data，2018-08-01~2026-04-30，575个未禁用因子，workers=4，batch_size=16，force=true。任务 31adf993-4d8e-4ffd-acf6-6d3a2f840831 / remote 268 在约19.16分钟后失败，success_count≈42，fail_count=533，失败原因 memory_gate_failed: available_memory_below_minimum。前3批 effective_workers 仅为 1、1、2，未完成全量计算，不能证明也未达到 <=90分钟 目标。该失败是资源门禁 fail-fast，不是静默降级；但说明 BUG-437 优化后仍存在内存门禁/有效并行度/指标预计算链路问题。",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/official_factor_batch_compute_service.py",
+    "backend/services/quantevolver/qe_eval_v2_metric_engine.py",
+    "backend/services/quantevolver/backtest_base_data_memory_cache.py",
+    "backend/services/quantevolver/factor_official_evaluation_service.py",
+    "backend/scripts/run_official_evaluation_wsl.py",
+    "backend/tests/quantevolver/test_official_factor_batch_compute.py",
+    "backend/tests/quantevolver/test_official_runtime_validation.py",
+    "tests/aistock_validation/bugs/20260621_BUG-443-bug-443-p1-90.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "tests/aistock_validation/history/qe/evidence/20260621_bug437_90min_full_compute_validation/README.md",
+    "tests/aistock_validation/history/qe/evidence/20260621_bug437_90min_full_compute_validation/summary.json",
+    "tests/aistock_validation/history/qe/evidence/20260621_bug443_fix_validation/README.md",
+    "tests/aistock_validation/history/qe/evidence/20260621_bug443_fix_validation/summary.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-443",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-20T19:21:56.208321Z",
+  "description": "用户要求执行官方因子独立指标全量计算验证并确认是否可控制在90分钟内。验证通过现有后端 API 触发，数据源与窗口正确：official_offline_backtest_factor_data，2018-08-01~2026-04-30，575个未禁用因子，workers=4，batch_size=16，force=true。任务 31adf993-4d8e-4ffd-acf6-6d3a2f840831 / remote 268 在约19.16分钟后失败，success_count≈42，fail_count=533，失败原因 memory_gate_failed: available_memory_below_minimum。前3批 effective_workers 仅为 1、1、2，未完成全量计算，不能证明也未达到 <=90分钟 目标。该失败是资源门禁 fail-fast，不是静默降级；但说明 BUG-437 优化后仍存在内存门禁/有效并行度/指标预计算链路问题。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-b5e77068a0f9",
+      "timestamp": "2026-06-20T19:21:56.208316Z"
+    }
+  ],
+  "evidence_uris": [
+    "tests/aistock_validation/history/qe/evidence/20260621_bug437_90min_full_compute_validation/summary.json"
+  ],
+  "expected": "???????????????? official_offline_backtest_factor_data ? 2018-08-01~2026-04-30 ????64GB WSL?????????swap??????????????fail-fast???????????575????????????????????90????????",
+  "first_seen_at": "2026-06-20T19:21:56.208321Z",
+  "fix_branch": null,
+  "fix_commit": "603819a038227950ad3926b06f77732331e7f599",
+  "fixed_at": "2026-06-21T02:02:33.306088Z",
+  "github_issue_number": 1366,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1366",
+  "implementation_notes": [
+    {
+      "note": "Full 90-minute validation failed in business compute path, so BUG-443 requires scoped quantevolver service/test changes rather than registry-only closure. No production restart or full recompute is allowed during fix; use targeted tests and subset smoke until user approves another full run.",
+      "timestamp": "2026-06-20T19:25:00Z",
+      "type": "scope_expansion"
+    },
+    {
+      "note": "Changed official full compute default path to avoid shipping metrics context into forked factor workers, lowering child process memory pressure. Missing metrics are computed in bounded parent ThreadPool workers with explicit metric_parent_compute_failures/save_failures, and factor worker memory estimate default is reduced to 2GB so observed 20GB headroom can keep 4 effective workers. Resource gates remain fail-fast and visible; no full 575-factor recompute was run during this fix.",
+      "timestamp": "2026-06-20T19:45:00Z",
+      "type": "fix_implementation"
+    }
+  ],
+  "last_seen_at": "2026-06-20T19:21:56.208321Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1368",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/v1/quantevolver/factor-cache/compute with start_date=2018-08-01,end_date=2026-04-30,workers=4,batch_size=16,force=true,strict_backtest_data=true; task 31adf993-4d8e-4ffd-acf6-6d3a2f840831 failed after 19.16 min with memory_gate_failed.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "targeted_quantevolver_official_batch_tests",
+    "small_subset_runtime_smoke_no_full_recompute",
+    "qe_read_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "BUG-443 P1: 官方因子独立指标全量计算在90分钟验证中因内存门禁中止",
+  "trigger_condition": {
+    "fingerprint": "b5e77068a0f9ebb7544b7d16",
+    "source_event_id": "FE-20260621-b5e77068a0f9"
+  },
+  "validation_evidence": [
+    "targeted official quantevolver tests -> 44 passed, 1 skipped",
+    "git diff --check -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed",
+    "QE_READ_L3_SKIP_UI=1 python -m nox -s qe_read_l3 -> passed; qe_read_ui not run because no dev backend 8011 was active"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  },
+  "workflow_gate": "fix_allowed_with_scoped_quantevolver_paths"
+}

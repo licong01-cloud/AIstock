@@ -5,6 +5,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,9 @@ FINANCIAL_EVENT_RAW_DATASETS = {
     "tushare_express_raw",
     "tushare_fina_indicator_raw",
 }
+KLINE_MINUTE_RAW_KIND = "kline_minute_raw"
+KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS = 3
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +128,167 @@ def _execute(sql: str, params: tuple) -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
+
+
+def _quote_identifier(name: str) -> str:
+    if not _SQL_IDENTIFIER_RE.match(name):
+        raise ValueError(f"invalid SQL identifier: {name!r}")
+    return f'"{name}"'
+
+
+def _qualified_table_name(raw: Any) -> str:
+    table_name = str(raw or "").strip()
+    parts = table_name.split(".")
+    if len(parts) not in {1, 2}:
+        raise ValueError(f"invalid table name for data_stats refresh: {table_name!r}")
+    return ".".join(_quote_identifier(part) for part in parts)
+
+
+def _merge_data_stats_extra_info(existing: Any, overlay: Dict[str, Any]) -> Dict[str, Any]:
+    info = _json_load(existing)
+    if not isinstance(info, dict):
+        info = {}
+    info.update(overlay)
+    return info
+
+
+def _refresh_data_stats_backend() -> Dict[str, Any]:
+    refreshed: list[dict[str, Any]] = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT data_kind, table_name, date_column, updated_column, extra_info
+                  FROM market.data_stats_config
+                 WHERE enabled
+                 ORDER BY data_kind
+                """
+            )
+            cols = [c[0] for c in cur.description]
+            configs = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            for cfg in configs:
+                data_kind = str(cfg.get("data_kind") or "")
+                table_name = _qualified_table_name(cfg.get("table_name"))
+                date_column = str(cfg.get("date_column") or "").strip()
+                updated_column = str(cfg.get("updated_column") or "").strip()
+
+                if data_kind == KLINE_MINUTE_RAW_KIND:
+                    if date_column != "trade_time":
+                        raise RuntimeError(
+                            "reason_code=data_stats_minute_window_invalid_config "
+                            f"data_kind={data_kind} date_column={date_column!r}"
+                        )
+                    cur.execute(
+                        f"""
+                        SELECT COUNT(*),
+                               MIN({_quote_identifier(date_column)})::date,
+                               MAX({_quote_identifier(date_column)})::date
+                          FROM {table_name}
+                         WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
+                        """,
+                        (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
+                    )
+                    row_count, min_date, max_date = cur.fetchone()
+                    extra_info = _merge_data_stats_extra_info(
+                        cfg.get("extra_info"),
+                        {
+                            "stats_scope": "recent_window",
+                            "window_months": KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS,
+                            "window_basis": "trade_time >= CURRENT_DATE - INTERVAL '3 months'",
+                            "full_history_count": False,
+                            "reason_code": "kline_minute_raw_heavy_table_recent_window",
+                        },
+                    )
+                    stats_scope = "recent_window"
+                elif date_column:
+                    cur.execute(
+                        f"""
+                        SELECT COUNT(*),
+                               MIN({_quote_identifier(date_column)})::date,
+                               MAX({_quote_identifier(date_column)})::date
+                          FROM {table_name}
+                        """
+                    )
+                    row_count, min_date, max_date = cur.fetchone()
+                    extra_info = _merge_data_stats_extra_info(cfg.get("extra_info"), {})
+                    stats_scope = "full_table"
+                else:
+                    cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    row_count = cur.fetchone()[0]
+                    min_date = None
+                    max_date = None
+                    extra_info = _merge_data_stats_extra_info(cfg.get("extra_info"), {})
+                    stats_scope = "full_table"
+
+                last_updated_at = None
+                if updated_column:
+                    if data_kind == KLINE_MINUTE_RAW_KIND:
+                        cur.execute(
+                            f"""
+                            SELECT MAX({_quote_identifier(updated_column)})
+                              FROM {table_name}
+                             WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
+                            """,
+                            (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
+                        )
+                    else:
+                        cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
+                    last_updated_at = cur.fetchone()[0]
+
+                cur.execute(
+                    "SELECT pg_total_relation_size(%s::regclass), pg_indexes_size(%s::regclass)",
+                    (str(cfg.get("table_name") or "").strip(), str(cfg.get("table_name") or "").strip()),
+                )
+                table_bytes, index_bytes = cur.fetchone()
+
+                cur.execute(
+                    """
+                    INSERT INTO market.data_stats (
+                        data_kind,
+                        table_name,
+                        min_date,
+                        max_date,
+                        row_count,
+                        table_bytes,
+                        index_bytes,
+                        last_updated_at,
+                        stat_generated_at,
+                        extra_info
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now(), %s::jsonb)
+                    ON CONFLICT (data_kind) DO UPDATE
+                       SET table_name        = EXCLUDED.table_name,
+                           min_date          = EXCLUDED.min_date,
+                           max_date          = EXCLUDED.max_date,
+                           row_count         = EXCLUDED.row_count,
+                           table_bytes       = EXCLUDED.table_bytes,
+                           index_bytes       = EXCLUDED.index_bytes,
+                           last_updated_at   = EXCLUDED.last_updated_at,
+                           stat_generated_at = EXCLUDED.stat_generated_at,
+                           extra_info        = EXCLUDED.extra_info
+                    """,
+                    (
+                        data_kind,
+                        str(cfg.get("table_name") or "").strip(),
+                        min_date,
+                        max_date,
+                        int(row_count or 0),
+                        table_bytes,
+                        index_bytes,
+                        last_updated_at,
+                        _json_dump(extra_info),
+                    ),
+                )
+                refreshed.append(
+                    {
+                        "data_kind": data_kind,
+                        "stats_scope": stats_scope,
+                        "row_count": int(row_count or 0),
+                        "min_date": _date_iso(min_date),
+                        "max_date": _date_iso(max_date),
+                    }
+                )
+    return {"success": True, "items_refreshed": len(refreshed), "items": refreshed}
 
 
 # ---------------------------------------------------------------------------
@@ -2106,10 +2271,7 @@ def bulk_delete_testing_runs(
 @router.post("/data-stats/refresh")
 def refresh_data_stats() -> Dict[str, Any]:
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT market.refresh_data_stats();")
-        return {"success": True}
+        return _refresh_data_stats_backend()
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"refresh_data_stats failed: {exc}") from exc
 
@@ -2149,6 +2311,9 @@ def list_data_stats() -> Dict[str, Any]:
         """,
     )
     for row in rows:
+        extra_info = _json_load(row.get("extra_info"))
+        if not isinstance(extra_info, dict):
+            extra_info = {}
         audit_ready_date = row.get("audit_ready_date")
         stats_max_date = row.get("max_date")
         if audit_ready_date and stats_max_date:
@@ -2167,6 +2332,13 @@ def list_data_stats() -> Dict[str, Any]:
         row["readiness_source"] = "dataset_date_refresh_audit"
         row["operator_action_required"] = False
         row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
+        row["stats_scope"] = extra_info.get("stats_scope") or "full_table"
+        row["stats_window_months"] = extra_info.get("window_months")
+        row["full_history_count"] = extra_info.get("full_history_count", True)
+        if row.get("data_kind") == KLINE_MINUTE_RAW_KIND and row["stats_scope"] == "recent_window":
+            row["stats_scope_label"] = f"最近{row['stats_window_months'] or KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS}个月统计"
+        else:
+            row["stats_scope_label"] = "全量统计"
     try:
         target_rows = _fetchall(
             """

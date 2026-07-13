@@ -5,8 +5,6 @@ import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import FactorList from "../components/FactorList";
 import ModelList from "../components/ModelList";
-import MultiAlphaModeToggle from "../components/MultiAlphaModeToggle";
-import MultiAlphaGroupEditor, { type MultiAlphaConfig } from "../components/MultiAlphaGroupEditor";
 import MultiAlphaResults from "../components/MultiAlphaResults";
 import MultiAlphaProgress from "../components/MultiAlphaProgress";
 import { useExperimentSSE } from "../components/useExperimentSSE";
@@ -22,8 +20,8 @@ const ReturnCurveChart = dynamic(() => import("../components/charts/ReturnCurveC
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const MULTI_ALPHA_DISTRIBUTED_ENABLED =
   process.env.NEXT_PUBLIC_MULTI_ALPHA_DISTRIBUTED_ENABLED === "1";
-const QE_DEFAULT_SIGNAL_END = "2026-04-28";
-const QE_DEFAULT_BACKTEST_END = "2026-04-27";
+const QE_DEFAULT_SIGNAL_END = "2026-06-30";
+const QE_DEFAULT_BACKTEST_END = "2026-06-29";
 const DEFAULT_QE_DATA_SPLIT = {
   train_start: "2018-08-01",
   train_end: "2022-12-31",
@@ -70,6 +68,18 @@ type Factor = { factor_name: string; source: string; ic?: number | null; sharpe?
   category?: string; official_grade?: string | null; official_score?: number | null; description?: string; ind_annual_return?: number | null; factor_type?: string; data_source?: string };
 type Model = { model_id: string; model_name: string; model_type?: string; ic?: number; annualized_return?: number; is_sota?: boolean; display_name?: string; description?: string };
 type Strategy = { strategy_id: string; display_name: string; strategy_type?: string; portfolio_config?: any; description?: string; market?: string; catalog_source?: string; };
+type MultiAlphaConfig = {
+  alpha_groups: Array<{
+    group_name: string;
+    factor_names: string[];
+    model_id: string;
+    dataset_type: string;
+    compute_resource: string;
+  }>;
+  meta_model: { method: string; cv_strategy: string; lookback_days: number };
+  execution_mode: string;
+  auto_selected: boolean;
+};
 
 type EvalResult = {
   ok: boolean;
@@ -228,13 +238,12 @@ function ComposePageContent() {
   const [multiAlphaConfig, setMultiAlphaConfig] = useState<MultiAlphaConfig | null>(null);
 
   const handleAlphaModeChange = useCallback((mode: "single" | "multi") => {
-    setAlphaMode(mode);
     if (mode === "multi") {
-      setSelectedFactors(new Set());
-      setSelectedModel("");
-    } else {
-      setMultiAlphaConfig(null);
+      alert("旧 alpha_mode=multi 创建入口已退役；请使用 多Alpha 组合回测(combine-backtest) 主线。");
+      return;
     }
+    setAlphaMode(mode);
+    setMultiAlphaConfig(null);
     setCorrAnalyzed(false);
     setCorrPairs([]);
   }, []);
@@ -495,15 +504,9 @@ function ComposePageContent() {
       if (!d.ok) { alert("获取实验详情失败"); setInheritLoading(false); return; }
       const exp = d.experiment || d;
       if (exp.alpha_mode === "multi") {
-        if (!exp.multi_alpha_config) {
-          alert("该多Alpha实验缺少分组配置数据 (multi_alpha_config 为空)，无法继承");
-          setInheritLoading(false);
-          return;
-        }
-        setAlphaMode("multi");
-        setMultiAlphaConfig(exp.multi_alpha_config);
-        setSelectedFactors(new Set());
-        setSelectedModel("");
+        alert("旧 alpha_mode=multi 实验创建/继承入口已退役；请改用 combine-backtest 列表与详情页诊断存量组合任务。");
+        setInheritLoading(false);
+        return;
       } else {
         setAlphaMode("single");
         setMultiAlphaConfig(null);
@@ -1112,7 +1115,21 @@ function ComposePageContent() {
         {currentStep === 1 && (
           <div style={{ padding: "24px" }}>
             {/* Alpha 模式切换 — 始终显示 */}
-            <MultiAlphaModeToggle alphaMode={alphaMode} onModeChange={handleAlphaModeChange} />
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, padding: 12, backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#475569" }}>Alpha 模式:</span>
+              <button
+                onClick={() => handleAlphaModeChange("single")}
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #2563eb", backgroundColor: "#2563eb", color: "#fff", fontSize: 13, fontWeight: 800, cursor: "pointer" }}
+              >
+                单 Alpha
+              </button>
+              <a
+                href="/quantevolver/multi-alpha/combine-backtest"
+                style={{ padding: "6px 14px", borderRadius: 6, border: "1px solid #bfdbfe", backgroundColor: "#eff6ff", color: "#1d4ed8", fontSize: 13, fontWeight: 800, textDecoration: "none" }}
+              >
+                多Alpha 改用 combine-backtest
+              </a>
+            </div>
 
             {alphaMode === "single" ? (
               <>
@@ -1145,12 +1162,10 @@ function ComposePageContent() {
                   )}
                 </div>
 
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px" }}>
-                  <MultiAlphaGroupEditor
-                    config={multiAlphaConfig}
-                    onConfigChange={setMultiAlphaConfig}
-                    apiBase={API}
-                  />
+                <div style={{ border: "1px solid #bfdbfe", backgroundColor: "#eff6ff", color: "#1e3a8a", borderRadius: "8px", padding: "16px", fontSize: 13, lineHeight: 1.7 }}>
+                  旧 alpha_mode=multi 元模型创建入口已退役。请在 “多Alpha 组合回测” 页面使用 combine-backtest 主线查看和诊断已落库的组合任务。
+                  <br />
+                  后端 alpha_mode=multi config/generate 分支保留为存量只读兼容，本页面不再提供新建入口。
                 </div>
               </>
             )}
@@ -1159,10 +1174,10 @@ function ComposePageContent() {
               <button
                 data-testid="qe-step-next-factors"
                 onClick={() => setCurrentStep(2)}
-                disabled={alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig}
+                disabled={alphaMode === "single" ? selectedFactors.size === 0 : true}
                 style={{
                   ...btnPrimary, padding: "10px 28px", fontSize: "14px",
-                  opacity: (alphaMode === "single" ? selectedFactors.size === 0 : !multiAlphaConfig) ? 0.5 : 1,
+                  opacity: (alphaMode === "single" ? selectedFactors.size === 0 : true) ? 0.5 : 1,
                 }}
               >
                 下一步：{alphaMode === "single" ? "选择模型" : "模型汇总"}
@@ -2174,24 +2189,14 @@ function ComposePageContent() {
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <a
-                        href={`/quantevolver/multi-alpha/diagnostics/${configResult.experiment_id}`}
+                        href="/quantevolver/multi-alpha/combine-backtest"
                         style={{
                           display: "inline-block", padding: "8px 16px", backgroundColor: "#7c3aed", color: "#fff",
                           borderRadius: 6, fontSize: 13, fontWeight: 600, textDecoration: "none",
                           boxShadow: "0 2px 4px rgba(124, 58, 237, 0.2)",
                         }}
                       >
-                        查看多Alpha诊断
-                      </a>
-                      <a
-                        href={`/quantevolver/multi-alpha/evolve-wizard?source_exp=${configResult.experiment_id}`}
-                        style={{
-                          display: "inline-block", padding: "8px 16px", backgroundColor: "#fff", color: "#7c3aed",
-                          borderRadius: 6, fontSize: 13, fontWeight: 600, textDecoration: "none",
-                          border: "1px solid #8b5cf6",
-                        }}
-                      >
-                        基于此实验演进
+                        打开 combine-backtest 诊断
                       </a>
                     </div>
                   </div>

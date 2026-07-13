@@ -1,0 +1,112 @@
+{
+  "actual": "POST /api/data-stats/refresh 返回 HTTP 500: canceling statement due to statement timeout，SQL 为 SELECT COUNT(*), MIN(trade_time)::date, MAX(trade_time)::date FROM market.kline_minute_raw。",
+  "allowed_write_scope": [
+    "backend/routers/ingestion.py",
+    "frontend/src",
+    "tests/aistock_validation/bugs/20260702_BUG-572-local-data-stats-refresh-times-out-on-kline-minute-raw-full-table-count.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "frontend/src/app/local-data/page.tsx",
+    "backend/tests/test_ingestion_data_stats_readiness_api.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-572",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-02T04:19:03.860546Z",
+  "description": "POST /api/data-stats/refresh 返回 HTTP 500: canceling statement due to statement timeout，SQL 为 SELECT COUNT(*), MIN(trade_time)::date, MAX(trade_time)::date FROM market.kline_minute_raw。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260702-44398f8685b5",
+      "timestamp": "2026-07-02T04:19:03.860541Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "刷新统计数据成功；kline_minute_raw 仅统计最近 3 个月窗口并在 API/UI 标注 recent_window/3 months；其他数据集保持原有全量统计语义。",
+  "first_seen_at": "2026-07-02T04:19:03.860546Z",
+  "fix_branch": null,
+  "fix_commit": "d7a07782d2d3aecaa225a0b5d4028face596a793",
+  "fixed_at": "2026-07-02T05:07:10.747205Z",
+  "github_issue_number": 1806,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1806",
+  "last_seen_at": "2026-07-02T04:19:03.860546Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1808",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "POST /api/data-stats/refresh or local-data dashboard refresh stats",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "fixed",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "Local data stats refresh times out on kline_minute_raw full-table count",
+  "trigger_condition": {
+    "fingerprint": "44398f8685b5de35bfec1285",
+    "source_event_id": "FE-20260702-44398f8685b5"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:aistock_backend",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/routers/ingestion.py",
+      "frontend/src"
+    ],
+    "ui_issue": true,
+    "ui_route": "/MIN/MAX",
+    "ui_routes": [
+      "/MIN/MAX"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "rtk python -m pytest -q backend/tests/test_ingestion_data_stats_readiness_api.py -> 7 passed",
+    "rtk python -m py_compile backend/routers/ingestion.py backend/tests/test_ingestion_data_stats_readiness_api.py -> passed",
+    "rtk python -m ruff check backend/routers/ingestion.py backend/tests/test_ingestion_data_stats_readiness_api.py -> passed",
+    "rtk python -m nox -s l0 -> passed",
+    "rtk python -m nox -s validation_module_registry_l0 -> passed",
+    "rtk git diff --check -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "actual": "Nightly summary reports candidates=37, high_value=0, issue_payload_drafts=0, leaving no adoptable issue despite many anomalies.",
+  "allowed_write_scope": [
+    "scripts/nightly_adaptive_scheduler.py",
+    "scripts/llm_provider_adapter.py",
+    "scripts/code_intelligence_adapter.py",
+    ".github/workflows/nightly.yml",
+    "tests/aistock_validation/bugs/20260621_BUG-457-nightly-llm-discovery-emits-many-anomalies-but-no-high-value-issue-draft.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_nightly_bug_candidate_queue.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260621_BUG-454-nightly-summary-janitor-passes-unsupported-stdout-format-compact.json",
+    "tests/aistock_validation/bugs/20260621_BUG-455-codegraph-latest-freshness-artifact-keeps-stale-commit-metadata-despite.json",
+    "tests/aistock_validation/bugs/20260621_BUG-456-understand-anything-freshness-is-available-but-lacks-clear-latest-freshn.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-457",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-21T15:56:48.453074Z",
+  "description": "Nightly summary reports candidates=37, high_value=0, issue_payload_drafts=0, leaving no adoptable issue despite many anomalies.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260621-b20e5d9f7618",
+      "timestamp": "2026-06-21T15:56:48.453071Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/27882799951"
+  ],
+  "expected": "Nightly LLM discovery should rank/filter anomalies into at most a few high-value actionable issue drafts or explicitly report why none are actionable.",
+  "first_seen_at": "2026-06-21T15:56:48.453074Z",
+  "fix_branch": null,
+  "fix_commit": "a92ec1b5f794a73b61f823653cfa1e3f9834b5ca",
+  "fixed_at": "2026-06-21T17:04:31.601878Z",
+  "github_issue_number": 1411,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1411",
+  "last_seen_at": "2026-06-21T15:56:48.453074Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1414",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "gh run view 27882799951 --repo licong01-cloud/AIstock --json jobs",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly LLM discovery emits many anomalies but no high-value issue drafts",
+  "trigger_condition": {
+    "fingerprint": "b20e5d9f76187560c4db006d",
+    "source_event_id": "FE-20260621-b20e5d9f7618"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/scripts/test_code_intelligence_adapter.py -q -> passed (58 passed)",
+    "pytest backend/tests/scripts/test_aistock_issue_workflow.py -q -> passed (165 passed)",
+    "pytest backend/tests/scripts/test_nightly_bug_candidate_queue.py -q -> passed (9 passed)",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed",
+    "nox -s validation_center_backend -> passed (458 passed)",
+    "workflow-smoke scripts/aistock_issue_workflow.py/scripts/code_intelligence_adapter.py/scripts/nightly_bug_candidate_queue.py -> passed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

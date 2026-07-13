@@ -52,6 +52,11 @@ frontend/.next-dev-*/
 frontend/.next-build-*/
 tmp/
 
+# Local Codex/Claude scratch handoff notes.
+# Keep formal docs/handoff files tracked; put temporary cross-tool notes here.
+docs/handoff/_scratch/
+docs/handoff/local/
+
 # Paper v2 sim runner state (worktree-local SQLite event log + scratch dir)
 var/
 
@@ -73,6 +78,12 @@ nul
 !tests/aistock_validation/runs/**/*.json
 !tests/aistock_validation/templates/**/*.json
 !tests/aistock_validation/guardrails_baseline_*.json
+!tests/aistock_validation/history/
+!tests/aistock_validation/history/advisory_phase0a/
+!tests/aistock_validation/history/advisory_phase0a/**/*.json
+!tests/aistock_validation/history/advisory_phase0a/**/*.md
+# Frozen Phase 0A policy contracts are versioned source, not generated runtime JSON.
+!backend/services/advisory_phase0a/policy_registry/**/*.json
 !.mcp.json
 !.eslintrc.json
 
@@ -151,3 +162,5 @@ backend/db/dev/
 # Code intelligence local indexes and generated graph artifacts
 .codegraph/
 .understand-anything/
+/CLAUDE.md
+/.rtk/

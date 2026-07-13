@@ -1,0 +1,208 @@
+{
+  "actual": "BUG-335 runtime proof: simrun_0f984f3584786289 for codex_final_ms_l16_20260603 is FAILED_RETRYABLE/PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, total intents=53, allowed sells=17, blocked buys=36, BATCH_INSUFFICIENT_CASH, effective_cash=700750.98, batch_required_cash=1301099.64. Current order_service adds BATCH_INSUFFICIENT_CASH when total buy freeze exceeds available cash plus estimated sells and treats it as hard full-batch failure.",
+  "allowed_write_scope": [
+    "backend/services/qmt_strategy_ledger/order_service.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260612_BUG-338-p0-miniqmt-designcompliance-phase5-capacity-and-sell-first-acceptance-in.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-338",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T07:28:17.324471Z",
+  "description": "BUG-335 runtime proof: simrun_0f984f3584786289 for codex_final_ms_l16_20260603 is FAILED_RETRYABLE/PREFLIGHT_FAILED, broker_called=false, submitted_intents=0, total intents=53, allowed sells=17, blocked buys=36, BATCH_INSUFFICIENT_CASH, effective_cash=700750.98, batch_required_cash=1301099.64. Current order_service adds BATCH_INSUFFICIENT_CASH when total buy freeze exceeds available cash plus estimated sells and treats it as hard full-batch failure.",
+  "design_acceptance_matrix": [
+    {
+      "design_item": "Phase5 funds-only capacity: insufficient cash is slot/intent state, not full account-group failure",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:558",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:562",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:632"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py:_batch_preflight",
+        "backend/services/qmt_strategy_ledger/order_service.py:_skipped_insufficient_capital_error"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_aggregates_cash_before_broker_call",
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_does_not_shrink_material_cash_shortfall"
+      ]
+    },
+    {
+      "design_item": "Phase5 SELL-first: valid SELL and cash-fit BUY submit before residual BUY; no fake full success",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:373",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:380",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:470"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py:submit_batch",
+        "backend/services/qmt_strategy_ledger/order_service.py:_batch_submission_order"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_over_capacity_rebalance_submits_sell_first_and_skips_buy_residual"
+      ]
+    },
+    {
+      "design_item": "Dependent buy/residual retry after sell/cash reconciliation; no duplicate SELL",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:381",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:384",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:656"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py:_existing_dependent_buy_batch",
+        "backend/services/qmt_strategy_ledger/order_service.py:_retry_dependent_buy_batch",
+        "backend/services/simulation_runtime/scheduler.py:_mini_qmt_batch_has_retryable_buy_residual"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_dependent_buy_retry_submits_after_sell_proceeds_reconciled",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_miniqmt_preflight_failure_stays_retryable_and_can_resubmit",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_retries_deferred_miniqmt_dependent_buys_without_duplicate_sells"
+      ]
+    },
+    {
+      "design_item": "Hard failures remain hard: duplicate remarks / invalid sell lot / broker can_sell do not call broker",
+      "design_refs": [
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:618",
+        "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md:632"
+      ],
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py:submit_batch",
+        "backend/services/qmt_strategy_ledger/order_service.py:_batch_preflight"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_full_preflight_failure_does_not_call_broker",
+        "backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py::test_submit_batch_aggregates_same_symbol_sell_and_broker_can_sell"
+      ]
+    }
+  ],
+  "design_compliance_required": true,
+  "design_compliance_review": [
+    {
+      "design_item": "DESIGN-COMPLIANCE-001 complete implementation within BUG scope",
+      "gap_or_exception": "Full MiniQMT Phase0-7 completion remains covered by sibling BUGs; this BUG is Phase5 only.",
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py",
+        "backend/services/simulation_runtime/scheduler.py"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 59 passed"
+      ]
+    },
+    {
+      "design_item": "No silent fallback / fake success",
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "backend/services/qmt_strategy_ledger/order_service.py:submit_batch"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "qmt_batch_status PARTIAL/FAILED with SKIPPED_INSUFFICIENT_CAPITAL or SELL_PROCEEDS_REQUIRED; no SUCCEEDED when residual remains"
+      ]
+    },
+    {
+      "design_item": "Production gates explicit",
+      "gap_or_exception": null,
+      "implementation_refs": [
+        "BUG JSON production gates"
+      ],
+      "status": "PASS",
+      "test_or_evidence": [
+        "production_ddl_gate=noop; frontend/backend_dependency_gate=noop; runtime restart not performed"
+      ]
+    }
+  ],
+  "design_scope": "Phase 5: funds-only capacity and SELL-first model; this BUG does not claim full MiniQMT Phase0-7 completion.",
+  "design_source": "docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608.md",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-b8f51af9fa31",
+      "timestamp": "2026-06-12T07:28:17.324467Z"
+    }
+  ],
+  "evidence_uris": [
+    "runtime-api://2026-06-12/simrun_0f984f3584786289; design://miniqmt_unified_vnpy_execution_runtime_design_20260608#phase5; bug://BUG-335"
+  ],
+  "expected": "MiniQMT strategy count is governed only by capital capacity and trading rules. For over-capacity rebalance, SELL orders that pass can_sell are submitted first; BUY orders are cash-fit, scaled, skipped with SKIPPED_INSUFFICIENT_CAPITAL/PARTIAL_CAPITAL_ALLOCATED/MIN_LOT_NOT_REACHED, or residual WAITING_FOR_SELL_PROCEEDS without fake success. Unfilled/partial/rejected SELL must not release proceeds prematurely. Required closure includes automated tests for docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608 Phase5 rows plus a runtime read-only proof that L16 no longer hard-fails the whole batch.",
+  "first_seen_at": "2026-06-12T07:28:17.324471Z",
+  "fix_branch": null,
+  "fix_commit": "b10cddd211b0d5c61b223386c39ea71de06ba6ae",
+  "fixed_at": "2026-06-16T10:59:08.926633Z",
+  "forbidden_closure_conditions": [
+    "Do not close if over-capacity rebalance still reports full-batch PREFLIGHT_FAILED/BATCH_INSUFFICIENT_CASH before submitting valid SELL-first orders.",
+    "Do not close if residual BUY is marked successful without broker order or explicit SKIPPED_INSUFFICIENT_CAPITAL/SELL_PROCEEDS_REQUIRED state.",
+    "Do not close if retry of a partial SELL-first batch duplicates already submitted SELL orders.",
+    "Do not close without required validation evidence and GitHub issue sync."
+  ],
+  "github_issue_number": 1009,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1009",
+  "last_seen_at": "2026-06-12T07:28:17.324471Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1026",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Read BUG-335 runtime evidence and docs/architecture/miniqmt_unified_vnpy_execution_runtime_design_20260608 Phase 5; inspect backend/services/qmt_strategy_ledger/order_service.py:408-520 and 635-790; verify full batch hard-fails instead of producing SELL-first cash-fit/residual state.",
+  "required_runtime_evidence": [
+    "Controlled fake-broker runtime evidence proving SELL-first + residual retry is required before PR.",
+    "Read-only L16 MiniQMT/SIM proof for simrun_0f984f3584786289 or successor after merge and user backend restart is required before final closure if live runtime window is available."
+  ],
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "paper_v2_l3"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "fixed",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "[P0][MiniQMT][DesignCompliance] Phase5 capacity and SELL-first acceptance incomplete after BUG-335 runtime proof",
+  "trigger_condition": {
+    "fingerprint": "b8f51af9fa310e209ae5207e",
+    "source_event_id": "FE-20260612-b8f51af9fa31"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -q -> 67 passed",
+    "python -m ruff check backend/services/qmt_strategy_ledger/order_service.py backend/services/simulation_runtime/scheduler.py backend/tests/qmt_strategy_ledger/test_order_service_submit_fake_qmt.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -> passed",
+    "git diff --check -> passed",
+    "gh pr checks 1026 -> 17 passed, 0 failed"
+  ],
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}

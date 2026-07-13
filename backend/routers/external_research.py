@@ -133,16 +133,51 @@ def get_external_research_provider() -> ExternalResearchProvider:
     return _provider
 
 
+def _empty_result_extra(
+    provider: ExternalResearchProvider,
+    *,
+    query: str,
+    operation: str,
+    provider_name: str | None = None,
+) -> dict[str, Any]:
+    last_failure = getattr(provider, "last_failure", None)
+    if not callable(last_failure):
+        return {}
+    try:
+        failure = last_failure(operation)
+    except TypeError:
+        failure = last_failure()
+    if not isinstance(failure, dict) or not failure.get("reason_code"):
+        return {}
+    extra: dict[str, Any] = {
+        "reason_codes": [str(failure["reason_code"])],
+        "status": "no_results",
+        "warnings": [
+            {
+                "reason_code": str(failure["reason_code"]),
+                "message": "External research provider returned no evidence; no fabricated fallback was used.",
+                "query": query,
+            }
+        ],
+    }
+    if provider_name:
+        extra["provider"] = provider_name
+    return extra
+
+
 @router.post("/search-web")
 def search_web(request: SearchWebRequest) -> dict[str, Any]:
     provider = get_external_research_provider()
     items = provider.search_web(request.query, locale=request.locale, limit=clamp_limit(request.limit))
+    extra = {"query": request.query, "locale": request.locale}
+    if not items:
+        extra.update(_empty_result_extra(provider, query=request.query, operation="search_web"))
     return evidence_summary_response(
         domain="external_research.web",
         items=items,
         limit=request.limit,
         detail_tool="aistock-external-research/external_research_fetch_extract",
-        extra={"query": request.query, "locale": request.locale},
+        extra=extra,
     )
 
 
@@ -150,12 +185,18 @@ def search_web(request: SearchWebRequest) -> dict[str, Any]:
 def search_papers(request: SearchPapersRequest) -> dict[str, Any]:
     provider = get_external_research_provider()
     items = provider.search_papers(request.query, provider=request.provider, limit=clamp_limit(request.limit))
+    provider_name = request.provider or "paper_search"
+    extra = {"query": request.query, "provider": provider_name}
+    if not items:
+        extra.update(
+            _empty_result_extra(provider, query=request.query, operation="search_papers", provider_name=provider_name)
+        )
     return evidence_summary_response(
         domain="external_research.papers",
         items=items,
         limit=request.limit,
         detail_tool="aistock-external-research/external_research_fetch_extract",
-        extra={"query": request.query, "provider": request.provider or "paper_search"},
+        extra=extra,
     )
 
 
