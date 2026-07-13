@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS qe_archive.run_resource_session (
     archive_run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE SET NULL,
     token_sha256 TEXT NOT NULL,
     phase_pipeline_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive',
     current_phase TEXT NOT NULL DEFAULT 'created',
     last_sequence_no INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'reserved',
@@ -24,13 +25,16 @@ CREATE TABLE IF NOT EXISTS qe_archive.run_resource_session (
     CONSTRAINT uq_qear_resource_session_attempt UNIQUE (source_run_key, attempt_no),
     CONSTRAINT ck_qear_resource_session_status CHECK (
         status IN ('reserved', 'running', 'completed', 'failed', 'cancelled')
+    ),
+    CONSTRAINT ck_qear_resource_session_gpu_policy CHECK (
+        gpu_training_policy IN ('exclusive', 'parallel')
     )
 );
 
 CREATE INDEX IF NOT EXISTS idx_qear_resource_session_task_loop
     ON qe_archive.run_resource_session(task_id, loop_index, attempt_no DESC);
 CREATE INDEX IF NOT EXISTS idx_qear_resource_session_node_phase
-    ON qe_archive.run_resource_session(node_id, status, current_phase)
+    ON qe_archive.run_resource_session(node_id, gpu_training_policy, status, current_phase)
     WHERE phase_pipeline_enabled = TRUE;
 CREATE INDEX IF NOT EXISTS idx_qear_resource_session_archive_run
     ON qe_archive.run_resource_session(archive_run_id)
@@ -90,6 +94,7 @@ COMMENT ON COLUMN qe_archive.run_resource_session.node_id IS 'Compute node ownin
 COMMENT ON COLUMN qe_archive.run_resource_session.archive_run_id IS 'Bound QE Archive run id after archive ingestion.';
 COMMENT ON COLUMN qe_archive.run_resource_session.token_sha256 IS 'SHA-256 of the scoped runner upload token; raw token is never stored.';
 COMMENT ON COLUMN qe_archive.run_resource_session.phase_pipeline_enabled IS 'Whether an authenticated GPU release may unlock the next training phase.';
+COMMENT ON COLUMN qe_archive.run_resource_session.gpu_training_policy IS 'Model-aware GPU lease policy: exclusive for GAT-family training or parallel for shared training.';
 COMMENT ON COLUMN qe_archive.run_resource_session.current_phase IS 'Latest accepted monotonic runtime phase.';
 COMMENT ON COLUMN qe_archive.run_resource_session.last_sequence_no IS 'Latest accepted event sequence number.';
 COMMENT ON COLUMN qe_archive.run_resource_session.status IS 'Resource session lifecycle status.';

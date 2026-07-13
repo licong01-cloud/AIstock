@@ -17,14 +17,14 @@
 
 ### 目标
 
-1. 对显式启用的 custom-evo 任务提供阶段流水线：每节点总 Loop 并发仍由 `node_parallelism` 控制，每个 GPU 节点同时只允许一个 GPU 训练/预测阶段；前一 Loop 的 GPU 阶段确认释放后，后一 Loop 可开始 GPU 训练，前一 Loop 继续 CPU 回测。
+1. 对显式启用的 custom-evo 任务提供模型感知阶段流水线：每节点总 Loop 并发仍由 `node_parallelism` 控制；GAT 类模型以独占租约串行训练，其他模型以共享租约保持原并发能力；前一独占 Loop 的 GPU 阶段确认释放后，后一 Loop 可开始训练，前一 Loop 继续 CPU 回测。
 2. EfficientGATs 在 fit/predict 的所有正常、streaming fallback 和异常路径上确定性清理 resident tensor，并对释放后的 CUDA allocated/reserved 做阈值校验。
 3. runner 以固定采样周期采集进程树和 GPU 资源，按阶段聚合并通过带单次运行 token 的结构化事件写入 QE Archive。
 4. 提供按 run/task/loop 查询阶段资源事实的后端只读 API 和 QE MCP 工具。
 
 ### Non-Goals
 
-- 不允许两个 G17/EfficientGATs GPU 训练阶段同时运行。
+- 不允许 GAT/EfficientGATs 与任何其他 GPU 训练阶段同时运行。
 - 不改变模型、标签、因子、策略、交易成本、回测结果或已有 `node_parallelism` 默认语义。
 - 不从日志文本推断阶段，不把“GPU 利用率低”当作释放证明。
 - 不中断、迁移或重新配置 2026-07-13 已在运行的 QE 实验。
@@ -48,8 +48,8 @@
 | ID | 验收项 |
 |---|---|
 | F-001 | EfficientGATs 在 fit/predict 的正常、fallback、异常路径确定性删除 resident 引用、同步 CUDA、执行 GC/empty-cache，并输出结构化释放证明。 |
-| F-002 | 阶段流水线使用“每节点总 Loop 槽位 + 单 GPU 阶段槽位”双资源模型；同一节点不出现两个 GPU 训练/预测阶段。 |
-| F-003 | 只有已认证、顺序合法且显存释放校验通过的 `gpu_phase_released` 事件才能提前释放 GPU 槽位；否则保持整 Loop 串行。 |
+| F-002 | 阶段流水线使用“每节点总 Loop 槽位 + 模型感知共享/独占 GPU phase gate”双资源模型；GAT 独占训练，其他模型保持共享并行。 |
+| F-003 | 只有已认证、顺序合法且显存释放校验通过的 `gpu_phase_released` 事件才能提前释放 GPU 租约；否则按该模型策略保持租约到 Loop terminal。 |
 | F-004 | all-loops、selected-loops、retry/rerun 复用同一阶段等待器和失败语义，不形成旁路。 |
 | F-005 | 新能力显式 opt-in、默认关闭；未启用任务保持现有 whole-loop `node_parallelism` 行为和业务结果。 |
 | F-006 | runner 按 bootstrap/train/predict/backtest/finalize 阶段采集 GPU 峰值、GPU utilization、进程树 RSS/VmHWM、时间和 CUDA allocated/reserved。 |
@@ -59,6 +59,9 @@
 | F-010 | 后端只读 API 与 QE MCP 支持 run_id、task_id、loop_index、source_run_key 过滤和有界 limit。 |
 | F-011 | 停止、超时、回调失败、后端重启和不支持阶段契约均 fail-closed：不提前释放 GPU 槽位，不伪造成功，不中止原实验。 |
 | F-012 | migration、代码合入、生产 DDL、服务重启、运行激活分别汇报并可独立回滚。 |
+| F-013 | 模型训练策略只分 `exclusive`/`parallel` 两类：GAT/EfficientGATs 必须为 `exclusive`，其他模型默认 `parallel`；允许非 GAT 模型通过 catalog `model_config.gpu_training_policy` 显式收紧为 `exclusive`。 |
+| F-014 | 每节点使用共享/独占 GPU phase gate：`exclusive` 与任何训练互斥，多个 `parallel` 共享租约可按现有 `node_parallelism` 并行；等待中的独占租约优先，避免 GAT 饥饿。 |
+| F-015 | 模型策略写入 Loop config 与 resource session；非法策略或把已知 GAT 声明为 `parallel` 必须 fail-fast，不允许静默绕过独占门。 |
 
 ## Contracts
 
@@ -77,9 +80,19 @@ custom-evo task 新增任务级配置：
 - `phase_pipeline_enabled` 默认 `false`。
 - `resource_telemetry_enabled` 默认 `false`；启用 phase pipeline 时必须同时为 `true`。
 - `node_parallelism` 仍是节点上的总 active Loop 上限；要产生重叠必须至少为 2。
-- 当前 GPU phase slot 固定为每节点 1，不提供把它调高的业务入口。
+- GPU phase gate 不提供独立数字并发参数：`parallel` 数量继续由既有 `node_parallelism` 控制，`exclusive` 固定为独占。
 - backtest-only Loop 不占 GPU phase slot；full-train Loop 必须先获得 GPU phase slot。
-- 仅 runner 明确支持 release contract 的模型可以提前释放；不支持的模型自然退化为安全的 whole-loop 串行，并产生 `QE_GPU_PHASE_CONTRACT_UNSUPPORTED` 事件，而不是静默降级。
+- 仅 runner 明确支持 release contract 的模型可以提前释放。EfficientGATs 可在真实释放证明后解除独占租约；原生 GAT 保持独占到 Loop terminal。非 GAT `parallel` 模型没有通用预测完成回调，因此共享租约保持到 terminal，但多个共享 Loop 仍可并行。
+
+模型 catalog 可在 `model_config` 中声明：
+
+```json
+{
+  "gpu_training_policy": "exclusive"
+}
+```
+
+已知 `GATs`/`EfficientGATs` 根据规范化后的 `model_config.class`、`model_name` 或 `model_type` 强制解析为 `exclusive`，不得覆盖为 `parallel`。未声明的其他模型解析为 `parallel`，保持 LSTM/TCN/Transformer 等既有并发语义。
 
 ### 2. 阶段状态机
 
@@ -106,14 +119,17 @@ created -> bootstrap -> train -> predict -> gpu_phase_released -> backtest -> fi
 ```text
 loop coroutine
   -> acquire total_loop_semaphore(node)
-  -> if full_train: acquire gpu_phase_semaphore(node)
+  -> resolve model gpu_training_policy
+  -> if full_train: acquire model-aware gpu phase lease(node, policy)
+       exclusive: wait until no exclusive/shared lease
+       parallel:  wait until no exclusive/waiting-exclusive lease
   -> submit loop
   -> wait for authenticated gpu_phase_released OR terminal
-  -> release gpu_phase_semaphore exactly once
+  -> release gpu phase lease exactly once
   -> keep total_loop_semaphore until terminal + result processing
 ```
 
-默认关闭时仍执行原 whole-loop Semaphore 路径。流水线开启后，第二个 coroutine 可以先占总 Loop 槽位并等待 GPU slot；第一 Loop 释放 GPU slot 后，第二 Loop 提交。DB `node_parallelism` slot 校验继续限制 active Loop 总数，不替代 GPU slot。
+默认关闭时仍执行原 whole-loop `node_parallelism` 路径。流水线开启后，第二个 coroutine 可以先占总 Loop 槽位并等待模型感知租约。多个 `parallel` Loop 可直接提交；`exclusive` Loop 会等待所有共享租约结束，且其等待期间阻止新的共享租约插队。第一独占 Loop 释放租约后，后续 Loop 可提交。DB `node_parallelism` 继续限制 active Loop 总数，不替代 GPU phase gate。
 
 ### 4. Runner phase/session 事件
 
@@ -147,6 +163,7 @@ qe_archive.run_resource_session
   archive_run_id NULL FK qe_archive.run
   token_sha256
   phase_pipeline_enabled
+  gpu_training_policy             # exclusive / parallel
   current_phase, last_sequence_no, status
   gpu_phase_released_at
   created_at, updated_at, completed_at
@@ -197,6 +214,9 @@ MCP 新增只读工具 `qe_archive_query_resource_phases`，参数和 API 一致
 | `QE_GPU_PHASE_RELEASE_CONFIRMED` | 释放校验通过，可释放 GPU slot。 |
 | `QE_GPU_PHASE_RELEASE_THRESHOLD_EXCEEDED` | 保持 GPU slot 到 Loop terminal，实验继续。 |
 | `QE_GPU_PHASE_CONTRACT_UNSUPPORTED` | 不提前放行，按 whole-loop 串行。 |
+| `QE_GPU_PARALLEL_LEASE_TERMINAL_RELEASE` | parallel 模型按既有 whole-loop 边界释放共享租约，不视为降级或失败。 |
+| `QE_GPU_TRAINING_POLICY_INVALID` | catalog 策略值非法，创建/提交前 fail-fast。 |
+| `QE_GPU_TRAINING_POLICY_CONFLICT` | 已知 GAT 被声明为 parallel，拒绝提交。 |
 | `QE_GPU_PHASE_HELPER_MISSING` | pipeline 开启时拒绝 release success。 |
 | `QE_RESOURCE_EVENT_AUTH_FAILED` | HTTP 403，不更新阶段。 |
 | `QE_RESOURCE_EVENT_SEQUENCE_CONFLICT` | HTTP 409，不覆盖历史事件。 |
@@ -213,6 +233,7 @@ MCP 新增只读工具 `qe_archive_query_resource_phases`，参数和 API 一致
 3. 扩展 custom-evo request/task snapshot 和 ExecutionContext/composer env。
 4. 抽取统一 phase-aware loop runner，接入 all/selected/retry/rerun 调度路径。
 5. 验证默认关闭不变、开启后 train 串行/backtest 可重叠、release 失败保持串行。
+6. 增加模型能力解析和共享/独占 gate；验证 GAT 独占、LSTM/TCN 共享并行及混合模型互斥。
 
 ### Phase 5：QE 数仓资源遥测
 
@@ -278,12 +299,15 @@ current_running_experiment = untouched
 | F-010 | QE Archive router, MCP module/server and manifest | bounded filter/query and manifest cases | verified | none |
 | F-011 | scheduler fail-closed waiter and helper failure markers | rejected/unsupported/interrupted/upload-failure cases | verified | none |
 | F-012 | migration/rollback files and task-level opt-in gates | feature validator, this matrix and delivery gate report | verified | none |
+| F-013 | `qe_gpu_training_policy.py` resolver and Loop config snapshot | GAT/LSTM/TCN/explicit/invalid policy cases | verified | none |
+| F-014 | `ModelAwareGPUPhaseGate` and scheduler policy-specific lease acquisition | shared/shared, exclusive/shared, writer-priority and idempotent release cases | verified | none |
+| F-015 | resource session `gpu_training_policy`, migration constraint and scheduler fail-fast path | schema/service/scheduler integration tests | verified | none |
 
 ## Local Verification Results
 
 - `ruff check`：全部变更 Python 文件通过。
 - `py_compile`：全部变更运行时代码通过。
-- 资源服务、runner、API、执行器、配置、归档与调度回归：`205 passed, 25 skipped`。
+- 资源服务、模型策略、共享/独占 gate、runner、API、执行器、配置、归档与调度回归：`223 passed, 25 skipped`。
 - QE MCP、manifest 与 custom-evo mutation routes：`74 passed`。
 - 密钥边界专项：实际上传文件保留 token，但命令、任务快照和 `ExecutionResult` 返回值不含 raw token；专项回归通过。
 - `git diff --check`、F2 feature validator 与 rebase 到最新 `origin/main` 后的最小回归均通过。
@@ -291,7 +315,7 @@ current_running_experiment = untouched
 
 ## DESIGN-COMPLIANCE-001
 
-- [x] `no_simplified_delivery`：Phase 3 与 Phase 5 的全部 DAI 项均有实现和证据。
+- [x] `no_simplified_delivery`：Phase 3、Phase 5 与模型感知增量的全部 DAI 项均有实现和证据。
 - [x] `no_silent_error`：fallback、release rejected、upload failure、schema not ready 均有 reason code。
 - [x] `no_business_semantic_drift`：默认关闭，模型输出/策略/回测口径不变。
 - [x] `no_unrequested_gate_or_approval`：只增加自动资源安全校验，不增加人工审批。

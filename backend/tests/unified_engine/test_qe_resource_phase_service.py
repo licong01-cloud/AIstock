@@ -62,6 +62,7 @@ class _FakeResourceCursor:
                 node_id,
                 token_sha256,
                 phase_pipeline_enabled,
+                gpu_training_policy,
             ) = params
             self.state.sessions[session_id] = {
                 "session_id": session_id,
@@ -74,6 +75,7 @@ class _FakeResourceCursor:
                 "archive_run_id": None,
                 "token_sha256": token_sha256,
                 "phase_pipeline_enabled": phase_pipeline_enabled,
+                "gpu_training_policy": gpu_training_policy,
                 "current_phase": "created",
                 "last_sequence_no": 0,
                 "status": "reserved",
@@ -228,6 +230,7 @@ def test_resource_session_lifecycle_and_archive_binding():
     )
     assert secret.source_run_key == "qe_task_L1"
     assert secret.attempt_no == 1
+    assert secret.gpu_training_policy == "exclusive"
     assert state.sessions[secret.session_id]["token_sha256"] == _token_sha256(secret.token)
 
     service.mark_session_submitted(secret.session_id)
@@ -236,6 +239,16 @@ def test_resource_session_lifecycle_and_archive_binding():
     assert service.has_unreleased_gpu_session(node_id="wsl2-5080") is True
     state.has_unreleased = False
     assert service.has_unreleased_gpu_session(node_id="wsl2-5080") is False
+
+    parallel_secret = service.create_session(
+        task_id="qe_task",
+        loop_index=2,
+        node_id="wsl2-5080",
+        phase_pipeline_enabled=True,
+        gpu_training_policy="parallel",
+    )
+    assert parallel_secret.gpu_training_policy == "parallel"
+    assert state.sessions[parallel_secret.session_id]["gpu_training_policy"] == "parallel"
 
     assert service.bind_archive_run(
         task_id="qe_task",

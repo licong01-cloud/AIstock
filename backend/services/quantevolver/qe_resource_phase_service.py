@@ -16,6 +16,10 @@ from typing import Any, Callable, Mapping
 from psycopg2.extras import Json, RealDictCursor
 
 from backend.db.pg_pool import get_conn
+from backend.services.quantevolver.qe_gpu_training_policy import (
+    GPU_TRAINING_POLICIES,
+    GPU_TRAINING_POLICY_EXCLUSIVE,
+)
 
 
 RESOURCE_SCHEMA_REASON = "QE_RESOURCE_SESSION_SCHEMA_NOT_READY"
@@ -53,6 +57,7 @@ class ResourceSessionSecret:
     source_run_key: str
     attempt_no: int
     token: str
+    gpu_training_policy: str
 
 
 def _token_sha256(token: str) -> str:
@@ -111,8 +116,12 @@ class QEResourcePhaseService:
         loop_index: int,
         node_id: str,
         phase_pipeline_enabled: bool,
+        gpu_training_policy: str = GPU_TRAINING_POLICY_EXCLUSIVE,
     ) -> ResourceSessionSecret:
         self.ensure_schema_ready()
+        normalized_policy = str(gpu_training_policy or "").strip().lower()
+        if normalized_policy not in GPU_TRAINING_POLICIES:
+            raise ValueError(f"invalid gpu_training_policy: {gpu_training_policy!r}")
         source_run_key = f"{task_id}_L{int(loop_index)}"
         session_id = f"qers_{uuid.uuid4().hex}"
         token = secrets.token_urlsafe(32)
@@ -136,8 +145,8 @@ class QEResourcePhaseService:
                     INSERT INTO qe_archive.run_resource_session (
                         session_id, source_run_key, attempt_no, task_id, loop_id,
                         loop_index, node_id, token_sha256, phase_pipeline_enabled,
-                        current_phase, last_sequence_no, status
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'created', 0, 'reserved')
+                        gpu_training_policy, current_phase, last_sequence_no, status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'created', 0, 'reserved')
                     """,
                     (
                         session_id,
@@ -149,6 +158,7 @@ class QEResourcePhaseService:
                         node_id,
                         _token_sha256(token),
                         bool(phase_pipeline_enabled),
+                        normalized_policy,
                     ),
                 )
             conn.commit()
@@ -157,6 +167,7 @@ class QEResourcePhaseService:
             source_run_key=source_run_key,
             attempt_no=attempt_no,
             token=token,
+            gpu_training_policy=normalized_policy,
         )
 
     def mark_session_submitted(self, session_id: str) -> None:
@@ -203,13 +214,25 @@ class QEResourcePhaseService:
                 )
             conn.commit()
 
-    def has_unreleased_gpu_session(self, *, node_id: str, exclude_session_id: str | None = None) -> bool:
+    def has_unreleased_gpu_session(
+        self,
+        *,
+        node_id: str,
+        requested_policy: str = GPU_TRAINING_POLICY_EXCLUSIVE,
+        exclude_session_id: str | None = None,
+    ) -> bool:
         self.ensure_schema_ready()
+        normalized_policy = str(requested_policy or "").strip().lower()
+        if normalized_policy not in GPU_TRAINING_POLICIES:
+            raise ValueError(f"invalid requested_policy: {requested_policy!r}")
         params: list[Any] = [node_id]
         exclusion = ""
         if exclude_session_id:
             exclusion = "AND session_id <> %s"
             params.append(exclude_session_id)
+        policy_conflict = ""
+        if normalized_policy != GPU_TRAINING_POLICY_EXCLUSIVE:
+            policy_conflict = "AND gpu_training_policy = 'exclusive'"
         with self._connection_provider() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -218,6 +241,7 @@ class QEResourcePhaseService:
                     FROM qe_archive.run_resource_session
                     WHERE node_id = %s
                       AND phase_pipeline_enabled = TRUE
+                      {policy_conflict}
                       AND status IN ('reserved', 'running')
                       AND current_phase NOT IN ('gpu_phase_released', 'release_rejected', 'backtest', 'finalize', 'completed', 'failed', 'cancelled')
                       AND EXISTS (
@@ -240,7 +264,7 @@ class QEResourcePhaseService:
                 cur.execute(
                     """
                     SELECT session_id, source_run_key, attempt_no, task_id, loop_id,
-                           loop_index, node_id, phase_pipeline_enabled, current_phase,
+                           loop_index, node_id, phase_pipeline_enabled, gpu_training_policy, current_phase,
                            last_sequence_no, status, gpu_phase_released_at,
                            terminal_reason_code, created_at, updated_at, completed_at
                     FROM qe_archive.run_resource_session
@@ -460,7 +484,7 @@ class QEResourcePhaseService:
                     f"""
                     SELECT s.session_id, s.source_run_key, s.attempt_no, s.task_id,
                            s.loop_id, s.loop_index, s.node_id, s.archive_run_id,
-                           s.phase_pipeline_enabled, s.current_phase,
+                           s.phase_pipeline_enabled, s.gpu_training_policy, s.current_phase,
                            s.last_sequence_no, s.status, s.gpu_phase_released_at,
                            s.terminal_reason_code, s.created_at, s.updated_at,
                            s.completed_at,

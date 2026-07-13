@@ -601,9 +601,10 @@ BASE_DDL: list[str] = [
         loop_index INTEGER NOT NULL,
         node_id TEXT NOT NULL,
         archive_run_id TEXT REFERENCES qe_archive.run(run_id) ON DELETE SET NULL,
-        token_sha256 TEXT NOT NULL,
-        phase_pipeline_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-        current_phase TEXT NOT NULL DEFAULT 'created',
+    token_sha256 TEXT NOT NULL,
+    phase_pipeline_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive',
+    current_phase TEXT NOT NULL DEFAULT 'created',
         last_sequence_no INTEGER NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'reserved',
         gpu_phase_released_at TIMESTAMPTZ,
@@ -612,9 +613,12 @@ BASE_DDL: list[str] = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         completed_at TIMESTAMPTZ,
         CONSTRAINT uq_qear_resource_session_attempt UNIQUE (source_run_key, attempt_no),
-        CONSTRAINT ck_qear_resource_session_status CHECK (
-            status IN ('reserved', 'running', 'completed', 'failed', 'cancelled')
-        )
+    CONSTRAINT ck_qear_resource_session_status CHECK (
+        status IN ('reserved', 'running', 'completed', 'failed', 'cancelled')
+    ),
+    CONSTRAINT ck_qear_resource_session_gpu_policy CHECK (
+        gpu_training_policy IN ('exclusive', 'parallel')
+    )
     )
     """,
     """
@@ -622,8 +626,8 @@ BASE_DDL: list[str] = [
         ON qe_archive.run_resource_session(task_id, loop_index, attempt_no DESC)
     """,
     """
-    CREATE INDEX IF NOT EXISTS idx_qear_resource_session_node_phase
-        ON qe_archive.run_resource_session(node_id, status, current_phase)
+CREATE INDEX IF NOT EXISTS idx_qear_resource_session_node_phase
+ON qe_archive.run_resource_session(node_id, gpu_training_policy, status, current_phase)
         WHERE phase_pipeline_enabled = TRUE
     """,
     """
