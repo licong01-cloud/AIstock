@@ -28,6 +28,7 @@ TOOL_NAMES = (
     "qe_experiment_get_logs_tail",
     "qe_experiment_get_enhanced_metrics",
     "qe_experiment_get_trade_stats",
+    "qe_experiment_validate_config",
     "qe_single_experiment_create_pending",
     "qe_single_experiment_get_config",
     "qe_single_experiment_update_config_confirmed",
@@ -57,6 +58,10 @@ TOOL_NAMES = (
     "qe_template_create_and_run_confirmed",
 )
 TOOL_COUNT = len(TOOL_NAMES)
+
+MAX_QE_NODE_PARALLELISM = 4
+QE_LABEL_HORIZONS = {1, 3, 5, 10, 20}
+QE_TEMPLATE_KINDS = {"single_experiment", "custom_evo"}
 
 
 def _require_detail(detail: str) -> None:
@@ -89,6 +94,177 @@ def _ensure_loop_fixed_seed(loop: dict[str, Any], *, context: str) -> None:
     raise ValueError(f"{context}: runtime_flags.random_seed is required for trainable QE loops")
 
 
+def _as_mapping(value: Any, *, context: str, errors: list[str]) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        errors.append(f"{context} must be an object")
+        return {}
+    return dict(value)
+
+
+def _require_non_empty_string(value: Any, *, context: str, errors: list[str]) -> str | None:
+    if value is None or str(value).strip() == "":
+        errors.append(f"{context} is required")
+        return None
+    return str(value).strip()
+
+
+def _require_string_list(value: Any, *, context: str, errors: list[str]) -> list[str]:
+    if not isinstance(value, list):
+        errors.append(f"{context} must be a non-empty list")
+        return []
+    normalized = [str(item).strip() for item in value if str(item or "").strip()]
+    if len(normalized) != len(value) or not normalized:
+        errors.append(f"{context} must contain non-empty strings")
+    return normalized
+
+
+def _validate_optional_mapping(value: Any, *, context: str, errors: list[str]) -> None:
+    if value is not None and not isinstance(value, Mapping):
+        errors.append(f"{context} must be an object")
+
+
+def _validate_optional_seed(value: Any, *, context: str, errors: list[str]) -> None:
+    if value in (None, ""):
+        return
+    try:
+        int(value)
+    except (TypeError, ValueError):
+        errors.append(f"{context} must be an integer")
+
+
+def _validate_optional_label_horizon(value: Any, *, context: str, errors: list[str]) -> None:
+    if value in (None, ""):
+        return
+    try:
+        horizon = int(value)
+    except (TypeError, ValueError):
+        errors.append(f"{context} must be one of {sorted(QE_LABEL_HORIZONS)}")
+        return
+    if horizon not in QE_LABEL_HORIZONS:
+        errors.append(f"{context} must be one of {sorted(QE_LABEL_HORIZONS)}")
+
+
+def _validate_node_parallelism(
+    *,
+    loops: list[dict[str, Any]],
+    task_node_id: str | None,
+    node_parallelism: Any,
+    errors: list[str],
+) -> dict[str, int]:
+    if node_parallelism is None:
+        return {}
+    if not isinstance(node_parallelism, Mapping):
+        errors.append("node_parallelism must be an object keyed by node_id")
+        return {}
+
+    selected_nodes: set[str] = set()
+    first_node = str((loops[0].get("node_id") if loops else None) or task_node_id or "").strip()
+    for loop in loops:
+        node_id = str(loop.get("node_id") or first_node).strip()
+        if node_id:
+            selected_nodes.add(node_id)
+
+    normalized: dict[str, int] = {}
+    for raw_node, raw_limit in node_parallelism.items():
+        node_id = str(raw_node or "").strip()
+        if not node_id:
+            errors.append("node_parallelism contains an empty node_id")
+            continue
+        if selected_nodes and node_id not in selected_nodes:
+            errors.append(
+                "node_parallelism contains node_id "
+                f"{node_id!r} that is not selected by task node_id or any loop node_id"
+            )
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            errors.append(f"node_parallelism[{node_id!r}] must be an integer")
+            continue
+        if limit < 1 or limit > MAX_QE_NODE_PARALLELISM:
+            errors.append(
+                f"node_parallelism[{node_id!r}] must be between 1 and {MAX_QE_NODE_PARALLELISM}"
+            )
+        normalized[node_id] = limit
+    return normalized
+
+
+def _validate_single_experiment_config(config: dict[str, Any], errors: list[str]) -> None:
+    _require_string_list(config.get("factor_names"), context="single_experiment.factor_names", errors=errors)
+    _require_non_empty_string(config.get("model_id"), context="single_experiment.model_id", errors=errors)
+    custom_params = _as_mapping(config.get("custom_params"), context="single_experiment.custom_params", errors=errors)
+    _validate_optional_mapping(config.get("data_split"), context="single_experiment.data_split", errors=errors)
+    _validate_optional_mapping(config.get("factor_sources"), context="single_experiment.factor_sources", errors=errors)
+    _validate_optional_seed(
+        custom_params.get("random_seed", config.get("random_seed")),
+        context="single_experiment.custom_params.random_seed",
+        errors=errors,
+    )
+    _validate_optional_label_horizon(
+        custom_params.get("label_horizon", config.get("label_horizon")),
+        context="single_experiment.custom_params.label_horizon",
+        errors=errors,
+    )
+
+
+def _validate_custom_evo_config(config: dict[str, Any], errors: list[str]) -> None:
+    engine_mode = str(config.get("engine_mode") or "unified").strip().lower()
+    if engine_mode != "unified":
+        errors.append("custom_evo.engine_mode must be 'unified'")
+
+    raw_loops = config.get("loops")
+    if not isinstance(raw_loops, list) or not raw_loops:
+        errors.append("custom_evo.loops must be a non-empty list")
+        return
+
+    loops: list[dict[str, Any]] = []
+    for idx, raw_loop in enumerate(raw_loops, start=1):
+        loop = _as_mapping(raw_loop, context=f"custom_evo.loops[{idx}]", errors=errors)
+        if not loop:
+            continue
+        loops.append(loop)
+        _require_string_list(loop.get("factor_keys"), context=f"custom_evo.loops[{idx}].factor_keys", errors=errors)
+        _require_non_empty_string(loop.get("model_id"), context=f"custom_evo.loops[{idx}].model_id", errors=errors)
+        _validate_optional_mapping(loop.get("strategy_params"), context=f"custom_evo.loops[{idx}].strategy_params", errors=errors)
+        _validate_optional_mapping(loop.get("model_params"), context=f"custom_evo.loops[{idx}].model_params", errors=errors)
+        _validate_optional_mapping(loop.get("runtime_flags"), context=f"custom_evo.loops[{idx}].runtime_flags", errors=errors)
+        _validate_optional_mapping(loop.get("data_split"), context=f"custom_evo.loops[{idx}].data_split", errors=errors)
+        _validate_optional_label_horizon(
+            loop.get("label_horizon"),
+            context=f"custom_evo.loops[{idx}].label_horizon",
+            errors=errors,
+        )
+        if bool(loop.get("backtest_only")):
+            _require_non_empty_string(
+                loop.get("model_source_task_id"),
+                context=f"custom_evo.loops[{idx}].model_source_task_id",
+                errors=errors,
+            )
+            if loop.get("model_source_loop_index") in (None, ""):
+                errors.append(f"custom_evo.loops[{idx}].model_source_loop_index is required")
+            else:
+                try:
+                    if int(loop["model_source_loop_index"]) < 1:
+                        errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be >= 1")
+                except (TypeError, ValueError):
+                    errors.append(f"custom_evo.loops[{idx}].model_source_loop_index must be an integer")
+        else:
+            try:
+                _ensure_loop_fixed_seed(loop, context=f"custom_evo.loops[{idx}]")
+            except ValueError as exc:
+                errors.append(str(exc))
+
+    normalized_parallelism = _validate_node_parallelism(
+        loops=loops,
+        task_node_id=str(config.get("node_id") or "").strip() or None,
+        node_parallelism=config.get("node_parallelism"),
+        errors=errors,
+    )
+    if config.get("node_parallelism") is not None:
+        config["node_parallelism"] = normalized_parallelism
+
+
 def _normalize_template_config(template_kind: str, config_json: dict[str, Any]) -> dict[str, Any]:
     config = dict(config_json or {})
     if template_kind == "custom_evo":
@@ -109,6 +285,52 @@ def _normalize_template_config(template_kind: str, config_json: dict[str, Any]) 
             raise ValueError("single_experiment.custom_params.random_seed is required")
         config["custom_params"] = custom_params
     return config
+
+
+def _validate_experiment_config(
+    template_kind: str,
+    config_json: dict[str, Any],
+    *,
+    include_normalized: bool = False,
+) -> dict[str, Any]:
+    kind = str(template_kind or "").strip()
+    errors: list[str] = []
+    warnings: list[str] = []
+    if kind not in QE_TEMPLATE_KINDS:
+        errors.append(f"template_kind must be one of {sorted(QE_TEMPLATE_KINDS)}")
+        kind = kind or "unknown"
+
+    raw_config = _as_mapping(config_json or {}, context="config_json", errors=errors)
+    try:
+        normalized = _normalize_template_config(kind, raw_config) if kind in QE_TEMPLATE_KINDS else dict(raw_config)
+    except ValueError as exc:
+        errors.append(str(exc))
+        normalized = dict(raw_config)
+
+    if kind == "single_experiment":
+        _validate_single_experiment_config(normalized, errors)
+    elif kind == "custom_evo":
+        _validate_custom_evo_config(normalized, errors)
+
+    result: dict[str, Any] = {
+        "ok": not errors,
+        "valid": not errors,
+        "validation_mode": "mcp_dry_run",
+        "writes": False,
+        "template_kind": kind,
+        "errors": errors,
+        "warnings": warnings,
+    }
+    if include_normalized:
+        result["normalized_config"] = normalized
+    return result
+
+
+def _require_valid_experiment_config(template_kind: str, config_json: dict[str, Any]) -> dict[str, Any]:
+    result = _validate_experiment_config(template_kind, config_json, include_normalized=True)
+    if not result["valid"]:
+        raise ValueError("QE config validation failed: " + "; ".join(result["errors"]))
+    return dict(result["normalized_config"])
 
 
 def register(registry: "ModuleRegistry") -> None:
@@ -150,9 +372,13 @@ def register(registry: "ModuleRegistry") -> None:
         safe = registry.sanitize(experiment_id, "experiment_id")
         return client.get(f"/quantevolver/experiments/{safe}/trade-stats")
 
+    @registry.mcp.tool(name="qe_experiment_validate_config")
+    def qe_experiment_validate_config(template_kind: str, config_json: dict[str, Any], include_normalized: bool = False) -> Any:
+        return _validate_experiment_config(template_kind, config_json or {}, include_normalized=include_normalized)
+
     @registry.mcp.tool(name="qe_single_experiment_create_pending")
     def qe_single_experiment_create_pending(config_json: dict[str, Any], created_by_name: str | None = None, source_context_json: dict[str, Any] | None = None) -> Any:
-        normalized_config = _normalize_template_config("single_experiment", config_json or {})
+        normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         normalized_config["created_by_type"] = "mcp"
         normalized_config["created_by_name"] = created_by_name or "mcp_gateway"
         normalized_config["source_context_json"] = source_context_json
@@ -166,7 +392,7 @@ def register(registry: "ModuleRegistry") -> None:
     @registry.mcp.tool(name="qe_single_experiment_update_config_confirmed")
     def qe_single_experiment_update_config_confirmed(experiment_id: str, config_json: dict[str, Any], confirm_update: str | None = None) -> Any:
         registry.confirm(confirm_update, QE_SINGLE_EXPERIMENT_UPDATE_CONFIG_CONFIRM, "confirm_update")
-        normalized_config = _normalize_template_config("single_experiment", config_json or {})
+        normalized_config = _require_valid_experiment_config("single_experiment", config_json or {})
         safe = registry.sanitize(experiment_id, "experiment_id")
         return client.put(f"/quantevolver/experiments/{safe}/editable-config", normalized_config)
 
@@ -226,7 +452,17 @@ def register(registry: "ModuleRegistry") -> None:
 
     @registry.mcp.tool(name="qe_custom_evo_create_pending")
     def qe_custom_evo_create_pending(task_name: str, loops: list[dict[str, Any]], target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", clone_from_task_id: str | None = None, phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
-        normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
+        normalized_config = _require_valid_experiment_config(
+            "custom_evo",
+            {
+                "loops": loops or [],
+                "node_id": node_id,
+                "node_parallelism": node_parallelism,
+                "engine_mode": engine_mode,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
+            },
+        )
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
         return client.post(
             "/quantevolver/evolution/custom-tasks",
@@ -235,19 +471,29 @@ def register(registry: "ModuleRegistry") -> None:
                 "target_desc": target_desc,
                 "loops": normalized_config.get("loops") or [],
                 "node_id": safe_node,
-                "node_parallelism": node_parallelism,
-                "engine_mode": engine_mode,
+                "node_parallelism": normalized_config.get("node_parallelism"),
+                "engine_mode": normalized_config.get("engine_mode") or "unified",
                 "auto_start": False,
                 "clone_from_task_id": clone_from_task_id,
-                "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "phase_pipeline_enabled": bool(normalized_config.get("phase_pipeline_enabled", False)),
+                "resource_telemetry_enabled": bool(normalized_config.get("resource_telemetry_enabled", False)),
             },
         )
 
     @registry.mcp.tool(name="qe_custom_evo_update_config_confirmed")
     def qe_custom_evo_update_config_confirmed(task_id: str, task_name: str, loops: list[dict[str, Any]], confirm_update: str | None = None, target_desc: str = "", node_id: str | None = None, node_parallelism: dict[str, int] | None = None, engine_mode: str = "unified", phase_pipeline_enabled: bool = False, resource_telemetry_enabled: bool = False) -> Any:
         registry.confirm(confirm_update, QE_CUSTOM_EVO_UPDATE_CONFIG_CONFIRM, "confirm_update")
-        normalized_config = _normalize_template_config("custom_evo", {"loops": loops or []})
+        normalized_config = _require_valid_experiment_config(
+            "custom_evo",
+            {
+                "loops": loops or [],
+                "node_id": node_id,
+                "node_parallelism": node_parallelism,
+                "engine_mode": engine_mode,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
+            },
+        )
         safe = registry.sanitize(task_id, "task_id")
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
         return client.put(
@@ -257,10 +503,10 @@ def register(registry: "ModuleRegistry") -> None:
                 "target_desc": target_desc,
                 "loops": normalized_config.get("loops") or [],
                 "node_id": safe_node,
-                "node_parallelism": node_parallelism,
-                "engine_mode": engine_mode,
-                "phase_pipeline_enabled": phase_pipeline_enabled,
-                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "node_parallelism": normalized_config.get("node_parallelism"),
+                "engine_mode": normalized_config.get("engine_mode") or "unified",
+                "phase_pipeline_enabled": bool(normalized_config.get("phase_pipeline_enabled", False)),
+                "resource_telemetry_enabled": bool(normalized_config.get("resource_telemetry_enabled", False)),
             },
         )
 
@@ -329,7 +575,7 @@ def register(registry: "ModuleRegistry") -> None:
         archive_policy: str = "AUTO",
         description: str | None = None,
     ) -> Any:
-        normalized_config = _normalize_template_config(template_kind, config_json or {})
+        normalized_config = _require_valid_experiment_config(template_kind, config_json or {})
         return client.post(
             "/qe-templates",
             {
@@ -385,7 +631,7 @@ def register(registry: "ModuleRegistry") -> None:
         approval_note: str | None = None,
     ) -> Any:
         registry.confirm(confirm_direct_run, QE_TEMPLATE_CREATE_AND_RUN_CONFIRM, "confirm_direct_run")
-        normalized_config = _normalize_template_config(template_kind, config_json or {})
+        normalized_config = _require_valid_experiment_config(template_kind, config_json or {})
         safe_node = registry.sanitize(node_id, "node_id") if node_id else None
         return client.post(
             "/qe-templates/create-and-run",

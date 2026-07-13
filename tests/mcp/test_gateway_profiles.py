@@ -35,9 +35,9 @@ def test_lite_is_low_resource_default() -> None:
 
 def test_full_profile_contains_all_migrated_and_platform_tools() -> None:
     payload = list_tools_payload(profile="full")
-    assert payload["legacy_tool_count"] == legacy_tool_count() == 370
+    assert payload["legacy_tool_count"] == legacy_tool_count() == 372
     assert payload["platform_tool_count"] == 6
-    assert payload["tool_count"] == 376
+    assert payload["tool_count"] == 378
     assert "validation" in payload["modules"]
     assert "qe_experiment" in payload["modules"]
     assert "qe_archive" in payload["modules"]
@@ -59,10 +59,10 @@ def test_unknown_profile_fails_fast() -> None:
 def test_gateway_registration_counts() -> None:
     assert len(_tool_names_for_profile("lite")) == 6
     assert len(_tool_names_for_profile("validation")) == 20
-    assert len(_tool_names_for_profile("qe")) == 81
+    assert len(_tool_names_for_profile("qe")) == 82
     assert len(_tool_names_for_profile("qlib_data")) == 15
     assert len(_tool_names_for_profile("data_full")) == 62
-    assert len(_tool_names_for_profile("full")) == 377
+    assert len(_tool_names_for_profile("full")) == 378
 
 
 def test_qe_custom_evo_phase_pipeline_fields_are_exposed_in_mcp_schemas() -> None:

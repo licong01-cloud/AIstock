@@ -1,0 +1,83 @@
+{
+  "actual": "MCP create_pending writes pending task rows as part of validation and no pure raw config dry-run tool exists; model/parameter validation is uneven across single and custom_evo creation paths.",
+  "allowed_write_scope": [
+    "backend/mcp/modules/qe_experiment.py",
+    "tests/aistock_validation/bugs/20260612_BUG-341-qe-mcp-lacks-raw-experiment-config-validation-before-creation.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/mcp/tool_manifest.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/mcp/test_mcp_tool_manifest.py",
+    "tests/mcp/test_mcp_gateway_cli.py",
+    "tests/mcp/test_gateway_profiles.py",
+    "backend/tests/research_assistant/test_api.py",
+    "backend/tests/research_assistant/test_mcp_catalog_sync.py",
+    "backend/tests/research_assistant/test_ra_manifest_catalog_consumption.py",
+    "backend/tests/research_assistant/test_service.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-341",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-06-12T08:55:42.415841Z",
+  "description": "MCP create_pending writes pending task rows as part of validation and no pure raw config dry-run tool exists; model/parameter validation is uneven across single and custom_evo creation paths.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260612-83196c050a2c",
+      "timestamp": "2026-06-12T08:55:42.415837Z"
+    }
+  ],
+  "evidence_uris": [
+    "analysis: F:\\Dev\\AIstock\\backend\\mcp\\modules\\qe_experiment.py and backend\\routers\\quantevolver_evolution.py",
+    "MCP raw config validation tool and manifest/catalog count tests are in scope because the gateway must expose the dry-run validator to Codex and Claude Code."
+  ],
+  "expected": "MCP and API provide read-only config validation before experiment creation; invalid custom_evo/single configs fail fast without creating tasks; creation paths reuse the same validation contract.",
+  "first_seen_at": "2026-06-12T08:55:42.415841Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 1013,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1013",
+  "last_seen_at": "2026-06-12T08:55:42.415841Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "Inspect qe_experiment MCP tools and custom_evo create path; no qe_*_validate_config raw-config tool exists.",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE MCP lacks raw experiment config validation before creation",
+  "trigger_condition": {
+    "fingerprint": "83196c050a2c40f8c39aa216",
+    "source_event_id": "FE-20260612-83196c050a2c"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1"
+  }
+}
