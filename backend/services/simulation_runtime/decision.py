@@ -51,6 +51,19 @@ TRADABILITY_BLOCK_REASON_CODES = frozenset(
 )
 
 
+def _immutable_execution_policy_json(execution_policy: dict[str, Any]) -> dict[str, Any]:
+    """Return the immutable business-policy snapshot carried by a release.
+
+    ``StrategyRuntimeReleaseService.create_release`` stores the business
+    payload under ``execution_policy.policy_json`` while retaining the outer
+    version/hash envelope.  B0 quote-control validation must read that exact
+    snapshot without changing the envelope persisted in the execution plan.
+    """
+
+    policy_json = execution_policy.get("policy_json")
+    return dict(policy_json) if isinstance(policy_json, dict) else dict(execution_policy)
+
+
 @dataclass(frozen=True)
 class RebalanceIntentResult:
     order_intents: list[OrderIntent]
@@ -433,10 +446,11 @@ class ExecutionPlanCompiler:
         quote_control = QuoteControlBindingV1.from_binding_config(binding.binding_config_json)
         quote_revision: B0QuoteV2RevisionV1 | None = None
         if quote_control.control_revision == ControlRevision.B0_QUOTE_V2:
-            benchmark_policy_version, mark_policy_version, markout_max_lag_ms = quote_evidence_policy(execution_policy)
+            quote_policy = _immutable_execution_policy_json(execution_policy)
+            benchmark_policy_version, mark_policy_version, markout_max_lag_ms = quote_evidence_policy(quote_policy)
             manifest = source_build_manifest()
             quote_revision = B0QuoteV2RevisionV1.build(
-                execution_policy=execution_policy,
+                execution_policy=quote_policy,
                 execution_policy_version_id=runtime_release.execution_policy_version_id,
                 execution_policy_sha256=runtime_release.execution_policy_sha256,
                 adapter_version=manifest.adapter_version,
