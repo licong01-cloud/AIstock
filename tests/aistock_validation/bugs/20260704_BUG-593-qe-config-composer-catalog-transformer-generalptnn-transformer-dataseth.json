@@ -30,8 +30,8 @@
   "expected": "model_name=Transformer 的内置 GeneralPTNN seed 经 config_composer 生成的 conf.yaml 使用 dataset class=TSDatasetH(窗口化[N,T,F]) 且 d_feat 模板成 num_features, 使内置 pytorch_transformer_ts.Transformer 可正常训练(不在 Epoch0 因 [N,F] 扁平输入维度崩溃)。",
   "first_seen_at": "2026-07-04T04:34:31.133423Z",
   "fix_branch": null,
-  "fix_commit": "af8ca42fc81e",
-  "fixed_at": "2026-07-06T18:30:21.051837Z",
+  "fix_commit": "64726b26af20e004219aca6a482eee822db827c4",
+  "fixed_at": "2026-07-13T17:48:30.102851Z",
   "github_issue_number": 1877,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1877",
   "last_seen_at": "2026-07-04T04:34:31.133423Z",
@@ -39,7 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1887",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1878",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +60,7 @@
     "source_event_id": "FE-20260704-7e4724a2308b"
   },
   "validation_evidence": [
-    "GitHub issues already CLOSED by linked merged PRs; registry close-sync metadata only"
+    "PR #1878 merged; required CI checks passed including l0, qe_data_contract_backend, CodeQL and Semgrep; issue #1877 closed"
   ],
   "verification_budget": {
     "budget": "standard",
