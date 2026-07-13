@@ -17,6 +17,14 @@ def _tool_names_for_profile(profile: str) -> list[str]:
     return asyncio.run(_load())
 
 
+def _tool_input_schemas_for_profile(profile: str) -> dict[str, dict]:
+    async def _load() -> dict[str, dict]:
+        mcp, _registry = create_gateway(profile=profile)
+        return {tool.name: tool.inputSchema for tool in await mcp.list_tools()}
+
+    return asyncio.run(_load())
+
+
 def test_lite_is_low_resource_default() -> None:
     payload = list_tools_payload(profile="lite")
     assert payload["modules"] == ["catalog"]
@@ -51,10 +59,23 @@ def test_unknown_profile_fails_fast() -> None:
 def test_gateway_registration_counts() -> None:
     assert len(_tool_names_for_profile("lite")) == 6
     assert len(_tool_names_for_profile("validation")) == 20
-    assert len(_tool_names_for_profile("qe")) == 80
+    assert len(_tool_names_for_profile("qe")) == 81
     assert len(_tool_names_for_profile("qlib_data")) == 15
     assert len(_tool_names_for_profile("data_full")) == 62
-    assert len(_tool_names_for_profile("full")) == 376
+    assert len(_tool_names_for_profile("full")) == 377
+
+
+def test_qe_custom_evo_phase_pipeline_fields_are_exposed_in_mcp_schemas() -> None:
+    schemas = _tool_input_schemas_for_profile("qe")
+    expected_properties = {"phase_pipeline_enabled", "resource_telemetry_enabled"}
+
+    for tool_name in (
+        "qe_custom_evo_create_pending",
+        "qe_custom_evo_update_config_confirmed",
+        "qe_custom_evo_append_loops_confirmed",
+        "qe_custom_evo_rerun_loop_confirmed",
+    ):
+        assert expected_properties <= set(schemas[tool_name]["properties"]), tool_name
 
 
 def test_qlib_data_profiles_are_task_scoped() -> None:
