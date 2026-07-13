@@ -59,6 +59,7 @@ from backend.tests.strategy_package.test_multi_alpha_promotion import (
     A1_LEG,
     FUND_LEG,
 )
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test
 
 
 def _reason(exc: BaseException) -> str | None:
@@ -119,6 +120,11 @@ class RaiseSelectionArtifactReader:
         raise AssertionError("selection artifact repository should not be read when signal evidence is persisted")
 
 
+class RaiseRuntimePackageRevalidation:
+    def require_eligible(self, *_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+        raise AssertionError("Paper runtime must not revalidate StrategyPackage assets")
+
+
 class EmptySelectionArtifactReader:
     def list(self, **_kwargs):  # noqa: ANN003, ANN201
         return []
@@ -141,7 +147,7 @@ def _save_parent_with_signal_evidence(parent, evidence: dict[str, Any]):  # noqa
 
 def _copy_parent_with_source_evidence(parent, source_evidence: dict[str, Any], suffix: str):  # noqa: ANN001
     manifest = parent.current_manifest()
-    return freeze_manifest(
+    return admit_manifest_for_test(
         manifest.model_copy(
             update={
                 "package_id": f"{manifest.package_id}_{suffix}",
@@ -301,6 +307,7 @@ def test_selection_full_path_lists_multi_alpha_without_localsim_dry_run_admissio
     row = next(item for item in selectable if item["package_id"] == parent.package_id)
     assert row["asset_eligibility"]["eligible"] is True
     assert row["asset_eligibility"]["blockers"] == []
+    assert row["asset_eligibility"]["revalidated"] is False
     assert row["asset_eligibility"].get("warnings") in (None, [])
     assert admission_repo.records == {}
 
@@ -313,7 +320,7 @@ def test_local_sim_and_minqmt_manual_portfolio_create_succeed_after_optional_dry
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
-        asset_eligibility_service=_asset_service(),
+        asset_eligibility_service=RaiseRuntimePackageRevalidation(),
     )
 
     portfolio = service.create_portfolio(

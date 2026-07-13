@@ -15,7 +15,6 @@ from backend.services.strategy_package.execution_policy import (
     compute_execution_policy_sha256,
     normalize_execution_policy_json,
 )
-from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.models import StrategyPackageLiveApproval
 from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.repository import StrategyPackageRepository
@@ -139,15 +138,16 @@ class PaperTradingV2PortfolioService:
         repository: PaperTradingV2Repository | Any | None = None,
         validator: StrategyPackageValidator | None = None,
         runtime_release_service: StrategyRuntimeReleaseService | Any | None = None,
-        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
+        asset_eligibility_service: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or PaperTradingV2Repository()
         self.validator = validator or StrategyPackageValidator()
         self.runtime_release_service = runtime_release_service or StrategyRuntimeReleaseService()
-        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService(
-            validator=self.validator
-        )
+        # Kept as a constructor compatibility seam for callers that still inject
+        # the former runtime checker. StrategyPackage admission is completed at
+        # the package entry boundary; portfolio creation must not revalidate it.
+        self.asset_eligibility_service = asset_eligibility_service
 
     def _assert_minqmt_account_accepts_group_slot(
         self,
@@ -232,7 +232,6 @@ class PaperTradingV2PortfolioService:
                     "allowed": sorted(PAPER_V2_CREATABLE_BROKER_BACKENDS),
                 },
             )
-        self.asset_eligibility_service.require_eligible(record, broker_backend=broker_backend)
         if not manifest.manifest_sha256:
             raise PackageAssetInvalidError(
                 "paper portfolio requires frozen strategy package manifest",

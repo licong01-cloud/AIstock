@@ -14,7 +14,6 @@ from backend.services.strategy_package.live_inference import (
     DIAGNOSTIC_BACKTEST_SOURCE_TYPE,
     LiveInferenceResult,
 )
-from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.multi_alpha_live import (
     LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE,
     MULTI_ALPHA_LIVE_PROVIDER_VERSION,
@@ -50,6 +49,7 @@ from backend.tests.strategy_package.test_multi_alpha_promotion import (
     _seed_repos,
     _service,
 )
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test
 
 
 TRADE_DATE = date(2024, 7, 2)
@@ -269,7 +269,7 @@ def _make_parent(*, live_weight_policy: bool = True):
     source_evidence["multi_alpha"]["weight_policy"] = live_policy
     backtest_context = deepcopy(manifest.backtest_context)
     backtest_context["weight_policy"] = live_policy
-    updated = freeze_manifest(
+    updated = admit_manifest_for_test(
         manifest.model_copy(
             update={
                 "package_id": f"{parent.package_id}_live",

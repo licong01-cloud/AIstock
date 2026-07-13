@@ -162,9 +162,31 @@ def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() 
     )
 
 
-def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
+def test_selection_then_paper_transition_checks_package_admission_only_once() -> None:
+    class CountingAdmission:
+        def __init__(self) -> None:
+            self.package_ids: list[str] = []
+
+        def require_eligible(self, record):  # noqa: ANN001, ANN201
+            self.package_ids.append(record.package_id)
+
     repo = InMemoryStrategyPackageRepository()
     manifest = freeze_manifest(
+        make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
+    )
+    repo.save_manifest(manifest)
+    admission = CountingAdmission()
+    service = StrategyPackageService(repository=repo, asset_eligibility=admission)
+
+    service.enable_selection(manifest.package_id)
+    service.enable_paper(manifest.package_id)
+
+    assert admission.package_ids == [manifest.package_id]
+
+
+def test_enable_paper_does_not_validate_manifest_minute_runtime_asset() -> None:
+    repo = InMemoryStrategyPackageRepository()
+    manifest = _admitted_manifest(
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -201,7 +223,7 @@ def test_enable_paper_rejects_draft_direct_transition_with_context() -> None:
 
 def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -220,7 +242,7 @@ def test_enable_paper_does_not_require_live_strict_governance_ready() -> None:
 
 def test_paper_simulation_admission_uses_large_governance_history_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -251,7 +273,7 @@ def test_paper_simulation_admission_uses_large_governance_history_limit(monkeypa
 
 def test_enable_paper_allows_missing_original_fixed_weight_retest_as_warning() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -267,7 +289,7 @@ def test_enable_paper_allows_missing_original_fixed_weight_retest_as_warning() -
 
 def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_intent() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -307,7 +329,7 @@ def test_governance_reports_failed_original_retest_but_enable_paper_still_marks_
 
 def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)
@@ -338,7 +360,7 @@ def test_governance_does_not_fall_back_to_latest_fixed_weight_validation() -> No
 
 def test_enable_paper_finds_passed_original_retest_even_after_many_newer_runs() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(
+    manifest = _admitted_manifest(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     repo.save_manifest(manifest)

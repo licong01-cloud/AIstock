@@ -439,8 +439,20 @@ class StrategyPackageService:
                 "unsupported strategy package target status",
                 context={"package_id": package_id, "to_status": to_status.value},
             )
-        if to_status in {PackageStatus.SELECTION_ENABLED, PackageStatus.PAPER_ENABLED}:
-            record = self.repository.get(package_id)
+        record = self.repository.get(package_id)
+        if record.package_status not in allowed:
+            raise InvalidStateTransitionError(
+                "invalid strategy package status transition",
+                context={
+                    "package_id": package_id,
+                    "from_status": record.package_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed),
+                },
+            )
+        if to_status == PackageStatus.SELECTION_ENABLED or (
+            to_status == PackageStatus.PAPER_ENABLED and record.package_status == PackageStatus.BACKTEST_APPROVED
+        ):
             self.asset_eligibility.require_eligible(record)
         return self.repository.transition_status(
             package_id=package_id,
@@ -570,7 +582,6 @@ class StrategyPackageService:
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def enable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
-        self.asset_eligibility.require_eligible(self.repository.get(package_id))
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def disable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
@@ -1127,9 +1138,6 @@ class StrategyPackageService:
                 ],
             },
         }
-
-    def _require_paper_simulation_admission(self, record: StrategyPackageRecord) -> None:
-        self.asset_eligibility.require_eligible(record)
 
     @staticmethod
     def _require_live_identity_match(
