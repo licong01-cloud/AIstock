@@ -41,8 +41,8 @@
   "expected": "Legacy package defects have an exact auditable remediation path without fallback; unattended pre-run accepts only complete authoritative assets; pending child reconciliation produces the designed persisted state without false terminalization or duplicate broker calls; TCA benchmark policy is explicit and hashed rather than defaulted.",
   "first_seen_at": "2026-07-13T10:41:15.937997Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b8b1ef42e4afb16707ab13ed63964e4ebef3e0ea",
+  "fixed_at": "2026-07-13T11:09:01.549515Z",
   "github_issue_number": 2043,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2043",
   "last_seen_at": "2026-07-13T10:41:15.937997Z",
@@ -50,6 +50,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2046",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +62,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -70,6 +71,12 @@
     "fingerprint": "9576e05f81023fbcc1e27de2",
     "source_event_id": "FE-20260713-9576e05f8102"
   },
+  "validation_evidence": [
+    "production asset backfill DML -> applied 2 packages, 85 assets, resolution_rate=1.0",
+    "asset readback -> 2 skipped_already_frozen with exact manifest hashes",
+    "binding refreeze DML -> applied 2 exact MiniQMT bindings effective 2026-07-14",
+    "binding readback -> 2 BINDING_ALREADY_CURRENT, planned_refreeze=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
