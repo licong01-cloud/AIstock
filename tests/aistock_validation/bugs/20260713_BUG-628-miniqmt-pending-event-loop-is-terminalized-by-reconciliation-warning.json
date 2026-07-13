@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-13T02:49:46.164387Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7376f4b35821cba754f72bfec7784b5cf72675d2",
+  "fixed_at": "2026-07-13T04:14:56.521118Z",
   "github_issue_number": 2024,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2024",
   "last_seen_at": "2026-07-13T02:49:46.164387Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2029",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "miniqmt_execution_runtime"
   ],
@@ -56,6 +57,9 @@
     "fingerprint": "cca32cc57ae33aadc8e9aba7",
     "source_event_id": "FE-20260713-cca32cc57ae3"
   },
+  "validation_evidence": [
+    "PR #2029 all required checks passed; direct fail-closed matrix 4 passed; l0 and validation_module_registry_l0 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
