@@ -29,8 +29,8 @@
   "expected": "GeneralPTNN 种子(GRU2/ALSTM_sector)loop 正常训练完成",
   "first_seen_at": "2026-07-08T06:14:49.416702Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "203b3b95112ff75bd0f55ae1a6d5bd133005d3c1",
+  "fixed_at": "2026-07-13T17:48:48.789069Z",
   "github_issue_number": 1916,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1916",
   "last_seen_at": "2026-07-08T06:14:49.416702Z",
@@ -38,6 +38,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1917",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "7c5f7685396f58684044bdc9",
     "source_event_id": "FE-20260708-7c5f7685396f"
   },
+  "validation_evidence": [
+    "PR #1917 merged and closed issue #1916; GitHub source linkage and merge commit verified"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
