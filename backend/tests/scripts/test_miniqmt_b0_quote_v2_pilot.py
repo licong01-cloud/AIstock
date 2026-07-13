@@ -131,7 +131,7 @@ def test_build_pilot_rejects_date_overlap_and_conflicting_policy() -> None:
     overlapping.trade_date = date(2026, 7, 13)
     with pytest.raises(pilot.PilotActivationError, match="must follow"):
         pilot.build_pilot_artifacts(source_release=source_release, source_binding=source_binding, args=overlapping)
-    
+
     source_release.release_config_json["execution_policy"]["policy_json"]["quote_contract"] = {"unexpected": True}
     with pytest.raises(pilot.PilotActivationError, match="snapshot hash differs"):
         pilot.build_pilot_artifacts(source_release=source_release, source_binding=source_binding, args=_args())
