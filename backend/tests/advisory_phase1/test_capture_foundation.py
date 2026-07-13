@@ -9,6 +9,8 @@ import pytest
 
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.capture_foundation import (
+    CAPTURE_BATCH_SCHEMA_VERSION,
+    OBSERVATION_CAPTURE_PURPOSE,
     CaptureBatchRequest,
     CaptureBatchStatus,
     CaptureMembership,
@@ -18,6 +20,9 @@ from backend.services.advisory_phase1.capture_foundation import (
     InMemoryTraceCaptureGapRepository,
     REASON_CAPTURE_BATCH_CONFLICT,
     REASON_CAPTURE_BATCH_FENCING_INVALID,
+    capture_request_purpose,
+    capture_request_schema,
+    parse_capture_batch_request_payload,
 )
 from backend.services.advisory_phase1.observation_capture import (
     FrozenTradingCalendarVerifier,
@@ -123,6 +128,22 @@ def _plan(*, evidence_bundle_hash: str = "4" * 64, alpha_mode: str = "multi_alph
 
 def _request(*, batch_id: str = "capture-batch-1") -> CaptureBatchRequest:
     return CaptureBatchRequest(capture_batch_id=batch_id, binding=_binding(batch_id=batch_id), plans=(_plan(),))
+
+
+def test_v1_raw_request_dispatch_is_explicit_and_one_pass() -> None:
+    request = _request()
+    payload = request.model_dump(mode="json")
+    payload["schema_version"] = CAPTURE_BATCH_SCHEMA_VERSION
+
+    parsed = parse_capture_batch_request_payload(payload)
+
+    assert parsed == request
+    assert capture_request_schema(parsed) == CAPTURE_BATCH_SCHEMA_VERSION
+    assert capture_request_purpose(parsed) == OBSERVATION_CAPTURE_PURPOSE
+    malformed = dict(payload)
+    malformed["schema_version"] = "unknown-capture-schema"
+    with pytest.raises(ValueError, match="unsupported capture request schema"):
+        parse_capture_batch_request_payload(malformed)
 
 
 def _observation_repository(

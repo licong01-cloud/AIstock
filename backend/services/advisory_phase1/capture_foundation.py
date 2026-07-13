@@ -17,12 +17,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
+from backend.services.advisory_phase1.label_capture import (
+    LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
+    LABEL_CAPTURE_PURPOSE,
+    LabelCaptureBatchRequestV2,
+)
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import StageTraceEnvelope, TraceCaptureBinding
 from backend.services.advisory_phase1.trace_outbox import ExpectedTraceIdentity
 
 
 CAPTURE_BATCH_SCHEMA_VERSION = "advisory_phase1_capture_batch_v1"
+OBSERVATION_CAPTURE_PURPOSE = "OBSERVATION_CAPTURE_V1"
 REASON_CAPTURE_BATCH_CONFLICT = "ADVISORY_PHASE1_CAPTURE_BATCH_CONFLICT"
 REASON_CAPTURE_BATCH_STATE_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_STATE_INVALID"
 REASON_CAPTURE_BATCH_LEASE_EXPIRED = "ADVISORY_PHASE1_CAPTURE_BATCH_LEASE_EXPIRED"
@@ -237,6 +243,57 @@ class CaptureBatchRequest(BaseModel):
         return self
 
 
+CaptureBatchRequestLike = CaptureBatchRequest | LabelCaptureBatchRequestV2
+
+
+def capture_request_schema(request: CaptureBatchRequestLike) -> str:
+    """Return the one supported schema for an already typed request."""
+
+    if isinstance(request, CaptureBatchRequest):
+        return CAPTURE_BATCH_SCHEMA_VERSION
+    if isinstance(request, LabelCaptureBatchRequestV2):
+        return LABEL_CAPTURE_BATCH_SCHEMA_VERSION
+    raise TypeError(f"unsupported capture request type: {type(request)!r}")
+
+
+def capture_request_purpose(request: CaptureBatchRequestLike) -> str:
+    if isinstance(request, CaptureBatchRequest):
+        return OBSERVATION_CAPTURE_PURPOSE
+    if isinstance(request, LabelCaptureBatchRequestV2):
+        return LABEL_CAPTURE_PURPOSE
+    raise TypeError(f"unsupported capture request type: {type(request)!r}")
+
+
+def capture_request_hash(request: CaptureBatchRequestLike) -> str:
+    if request.capture_request_hash is None:
+        raise ValueError("capture request must expose a canonical request hash")
+    return str(request.capture_request_hash)
+
+
+def parse_capture_batch_request_payload(payload: Mapping[str, Any]) -> CaptureBatchRequestLike:
+    """Parse one explicitly tagged raw payload without a schema fallback path.
+
+    v1 intentionally has no serialized purpose field, because adding one would
+    change its frozen canonical bytes.  Its schema alone therefore determines
+    the historical observation-capture purpose.  v2 requires both tags.
+    """
+
+    schema_version = payload.get("schema_version")
+    purpose = payload.get("capture_purpose")
+    if schema_version == CAPTURE_BATCH_SCHEMA_VERSION:
+        if purpose not in (None, OBSERVATION_CAPTURE_PURPOSE):
+            raise ValueError("v1 capture request has an invalid capture purpose")
+        model_payload = dict(payload)
+        model_payload.pop("schema_version", None)
+        model_payload.pop("capture_purpose", None)
+        return CaptureBatchRequest.model_validate(model_payload)
+    if schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION:
+        if purpose != LABEL_CAPTURE_PURPOSE:
+            raise ValueError("v2 label capture request requires LABEL_CAPTURE_V1 purpose")
+        return LabelCaptureBatchRequestV2.model_validate(payload)
+    raise ValueError("unsupported capture request schema or purpose")
+
+
 class CaptureMembership(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -257,7 +314,7 @@ class CaptureMembership(BaseModel):
 class CaptureBatch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    request: CaptureBatchRequest
+    request: CaptureBatchRequestLike
     status: CaptureBatchStatus
     row_version: int = Field(ge=1)
     fencing_token: int = Field(ge=1)
@@ -355,6 +412,8 @@ class CaptureBatchRepository(Protocol):
         predecessor_fencing_token: int,
     ) -> CaptureBatch: ...
 
+    def get(self, capture_batch_id: str) -> CaptureBatch: ...
+
 
 class InMemoryCaptureBatchRepository:
     """Deterministic state-machine oracle for Phase 1C contract tests."""
@@ -365,17 +424,16 @@ class InMemoryCaptureBatchRepository:
         self._by_request_hash: dict[str, list[str]] = {}
         self._memberships: dict[str, dict[tuple[str, str], CaptureMembership]] = {}
 
-    def create(self, request: CaptureBatchRequest) -> CaptureBatch:
-        existing_ids = self._by_request_hash.get(str(request.capture_request_hash), [])
-        for existing_id in existing_ids:
-            existing = self._batches[existing_id]
-            if existing.request.capture_batch_id == request.capture_batch_id:
-                if existing.request == request:
-                    return existing
-                raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture batch id has different content")
+    def create(self, request: CaptureBatchRequestLike) -> CaptureBatch:
+        request_hash = capture_request_hash(request)
+        existing_by_id = self._batches.get(request.capture_batch_id)
+        if existing_by_id is not None:
+            if existing_by_id.request == request:
+                return existing_by_id
+            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture batch id has different content")
+        existing_ids = self._by_request_hash.get(request_hash, [])
+        if existing_ids:
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture retry requires explicit recovery from its predecessor")
-        if request.capture_batch_id in self._batches:
-            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture batch id already exists")
         now = _require_aware(self._now_provider(), field_name="now_provider")
         batch = CaptureBatch(
             request=request,
@@ -387,14 +445,14 @@ class InMemoryCaptureBatchRepository:
             updated_at=now,
         )
         self._batches[request.capture_batch_id] = batch
-        self._by_request_hash.setdefault(str(request.capture_request_hash), []).append(request.capture_batch_id)
+        self._by_request_hash.setdefault(request_hash, []).append(request.capture_batch_id)
         self._memberships[request.capture_batch_id] = {}
         return batch
 
     def recover(
         self,
         *,
-        request: CaptureBatchRequest,
+        request: CaptureBatchRequestLike,
         predecessor_capture_batch_id: str,
         expected_predecessor_row_version: int,
         predecessor_fencing_token: int,
@@ -410,7 +468,7 @@ class InMemoryCaptureBatchRepository:
             CaptureBatchStatus.ABORTED,
         }:
             raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture recovery requires a terminal predecessor")
-        if predecessor.request.capture_request_hash != request.capture_request_hash:
+        if capture_request_hash(predecessor.request) != capture_request_hash(request):
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor semantics")
         if request.capture_batch_id in self._batches:
             existing = self._batches[request.capture_batch_id]
@@ -419,12 +477,12 @@ class InMemoryCaptureBatchRepository:
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "recovery capture batch id already exists")
         if any(
             self._batches[batch_id].status in {CaptureBatchStatus.PLANNED, CaptureBatchStatus.RUNNING}
-            for batch_id in self._by_request_hash.get(str(request.capture_request_hash), [])
+            for batch_id in self._by_request_hash.get(capture_request_hash(request), [])
         ):
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture request already has an active batch")
         if any(
             self._batches[batch_id].predecessor_capture_batch_id == predecessor_capture_batch_id
-            for batch_id in self._by_request_hash.get(str(request.capture_request_hash), [])
+            for batch_id in self._by_request_hash.get(capture_request_hash(request), [])
         ):
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture predecessor already has a recovery successor")
         now = _require_aware(self._now_provider(), field_name="now_provider")
@@ -439,7 +497,7 @@ class InMemoryCaptureBatchRepository:
             updated_at=now,
         )
         self._batches[request.capture_batch_id] = batch
-        self._by_request_hash.setdefault(str(request.capture_request_hash), []).append(request.capture_batch_id)
+        self._by_request_hash.setdefault(capture_request_hash(request), []).append(request.capture_batch_id)
         self._memberships[request.capture_batch_id] = {}
         return batch
 
@@ -576,6 +634,15 @@ class InMemoryCaptureBatchRepository:
 
     def get(self, capture_batch_id: str) -> CaptureBatch:
         return self._get(capture_batch_id)
+
+    def memberships_for(self, capture_batch_id: str) -> tuple[CaptureMembership, ...]:
+        self._get(capture_batch_id)
+        return tuple(
+            sorted(
+                self._memberships[capture_batch_id].values(),
+                key=lambda item: item.content_key,
+            )
+        )
 
     def _get(self, capture_batch_id: str) -> CaptureBatch:
         try:

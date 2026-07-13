@@ -1121,9 +1121,10 @@ backend/services/simulation_runtime/selection.py
 - candidate enumeration、universe raw outcome、coverage summaries
 - `capture_foundation.py` v1/v2 domain + in-memory dispatch；PostgreSQL SQL path 保持 v1 原样
 
-退出条件：历史 source observation receipt 精确校验且不重验 current TRACE_CAPTURE enabled；
-append request 并发幂等、header/payload exactly-one、revision/selector/source membership、
-multi-alpha/empty candidate 和 universe denominator raw evidence 闭合。
+本分支已完成实现并完成本地验证：历史 source observation receipt 精确校验且不重验 current
+TRACE_CAPTURE enabled；append request 并发幂等、header/payload logical exactly-one、revision/
+selector/source membership、multi-alpha/empty candidate 和 universe denominator raw evidence 闭合。
+该状态不包含 PostgreSQL physical repository、migration 或任何 runtime wiring。
 
 ### 17.4 Batch C：Build/attempt 与 additive schema
 
@@ -1290,18 +1291,18 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | Batch B child design §15 identity/capture items: planned v1/v2 capture request union plus Advisory-owned `label_capture.py`; frozen `stage_trace.py` | exact v1 bytes/hash/repository regression; v2 historic provenance and trace enabled/disabled equivalence | design_ready | none |
+| F-001 | `label_capture.py`; `capture_foundation.py` v1/v2 in-memory request union; frozen `stage_trace.py` | v1 capture regression; v2 tagged request/parser/recovery; historic provenance fixtures | batch_b_verified | none |
 | F-002 | `backend/services/advisory_phase1/label_policy.py`; `backend/services/advisory_phase1/outcome_engine.py` | content-bound policy/calendar identity, T/E/S/X_h, horizon/terminal/censor and no-default negative fixtures; branch coverage: label policy 89%, outcome engine 86% | batch_a_verified | none |
 | F-003 | one `OutcomeEngine` for CANDIDATE/UNIVERSE with canonical request revalidation and exact SourceRevisionSet/member binding | candidate/universe parity, owner-symbol/source drift and unsafe-model-copy rejection fixtures | batch_a_verified | none |
 | F-004 | fixed-capital cashflow, per-share corporate action processing and exact rational equal-weight benchmark in `outcome_engine.py` | lot/minimum-fee/residual-cash, per-current-share action, unbuyable/zero-lot cash retention and unequal-weight rejection fixtures | batch_a_verified | none |
-| F-005 | Batch B child design §15 append/selector items: planned LabelAppendRequest, authority header/payload logical models, in-memory repository and selector | serial/concurrent/URI retry, exactly-one closure, transition/fork/no-fallback tests | design_ready | none |
-| F-006 | Batch B child design §15 candidate/universe/builder items: planned candidate enumerator, `LABEL_CAPTURE_V1` and universe raw rows | full deep-pool/empty-candidate/coverage plus immutable batch tests | design_ready | none |
+| F-005 | `label_builder.py` LabelAppendRequest, logical header/payload, in-memory repository and terminal-first selector | serial/concurrent/URI retry, stale predecessor, transition, exact/no-fallback and mapping collision tests | batch_b_verified | none |
+| F-006 | `label_builder.py` alpha_raw candidate enumerator, LABEL_CAPTURE_V1 builder and universe raw rows | single/multi-alpha/empty, source/policy/duplicate universe, coverage, real-CAS COMPLETE/gap tests | batch_b_verified | none |
 | F-007 | planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
 | F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; planned Batch D `snapshot_writer.py` and blob/ref repositories | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
 | F-009 | planned Phase 1C-3 migration/rollback with capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
-| F-010 | §17 four implementation batches; Batch A implementation refs are recorded by F-002/F-003/F-004/F-008 | Batch A direct suite 49 passed; Advisory Phase 1 regression 135 passed/3 skipped; aggregate changed-module branch coverage 87%; remaining batch exits stay defined by §17 | design_ready | none |
-| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch A zero-diff/import scan plus existing Advisory Phase 1 regression; runtime remains noop | batch_a_verified | none |
-| F-012 | §2/§4/§18/§20 plus Batch A changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; DESIGN-COMPLIANCE Batch A review | batch_a_verified | none |
+| F-010 | §17 four implementation batches; Batch A/B implementation refs are recorded by F-001..F-006/F-008 | Batch B direct label suite 37 passed; capture/label combined suite 48 passed; Advisory Phase 1 regression 173 passed/3 skipped; pure branch coverage: label capture 85.71%, label builder 85.21%; Batch C/D exits remain defined by §17 | batch_b_verified | none |
+| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch B zero-diff/import scan; Advisory Phase 1 regression; runtime remains noop | batch_b_verified | none |
+| F-012 | §2/§4/§18/§20 plus Batch B changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; DESIGN-COMPLIANCE Batch B review | batch_b_verified | none |
 
 ## 23. Production Gates / 生产与运行状态
 
@@ -1312,7 +1313,7 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 - Batch B 不包含模型训练；未来任何模型训练只允许 WSL/Conda，Windows 训练禁止。若需要
   实现运行时环境拒绝机制，必须先形成独立设计并经用户确认。
 - runtime observer、capture dispatcher、label scheduler、dataset store activation 均为 noop。
-- `production_ddl_gate`: `noop` for design-only task。
+- `production_ddl_gate`: `noop` for Batch B pure/in-memory code task。
 - `production_dml_gate`: `noop`。
 - `production_frontend_dependency_gate`: `noop`。
 - `production_backend_dependency_gate`: `noop`。
@@ -1362,8 +1363,8 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 ## 26. Exit Criteria
 
-本文当前状态表示 Batch A 已合入，Batch B 可以在子阶段设计开工条件满足后开发，Batch C/D 仍按
-各自批次边界等待后续实施：
+本文当前状态表示 Batch A 已合入，Batch B 已在独立 worktree 完成实现和本地验证，仍待代码审查、
+提交和合入；Batch C/D 仍按各自批次边界等待后续实施：
 
 - F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap。
 - F2 feature workflow validation 通过。
