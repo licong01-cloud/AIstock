@@ -60,8 +60,8 @@
   "expected": "CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
   "first_seen_at": "2026-07-09T02:21:35.706022Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f43a44e8814badea8739bde77e7ef0dc922bcc40",
+  "fixed_at": "2026-07-13T19:52:18.718134Z",
   "github_issue_number": 1757,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1757",
   "last_seen_at": "2026-07-09T02:37:27.294169+00:00",
@@ -69,6 +69,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1929",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -80,7 +81,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "paper_v2"
   ],
@@ -89,6 +90,10 @@
     "fingerprint": "281c51537c5adccc04153a98",
     "source_event_id": "FE-20260709-281c51537c5a"
   },
+  "validation_evidence": [
+    "paper_v2_backend: 913 passed, 2 skipped, 2 xfailed",
+    "l0 and validation_module_registry_l0: passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
