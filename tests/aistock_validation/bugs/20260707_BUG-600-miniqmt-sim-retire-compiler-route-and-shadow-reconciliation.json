@@ -76,8 +76,8 @@
   "expected": "MiniQMT SIM uses event_loop(A) only with the real qmt callback gateway; no shadow A/B payload/state, no gray switch, and no hidden compiler(B) fallback. Any forced B route or missing callback/precondition loudly rejects with reason_code + stage. Submit/reconcile and each binding tick are timeout-isolated so one hung binding cannot freeze the scheduler. Production runtime state persists to Postgres with incremental per-row writes, bounded prune/archive for events/algo_instances/child_orders, and JsonFile is test/offline only with no production fallback or runtime-state.json growth.",
   "first_seen_at": "2026-07-07T01:32:25.845367Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1d7f16260ff0f7e362a765c6ec726f20d767d8e1",
+  "fixed_at": "2026-07-13T17:03:34.686589Z",
   "github_issue_number": 1898,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1898",
   "last_seen_at": "2026-07-07T01:32:25.845367Z",
@@ -87,8 +87,9 @@
     "Do not write production DB or apply production DDL in the fix PR.",
     "Do not bulk import tmp/miniqmt_execution_runtime/runtime-state.json into Postgres; after DDL is applied and DB repository is verified, archive/delete the tmp JSON/JSONL store safely."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1903",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "pending",
+  "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -98,7 +99,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime",
     "miniqmt_execution_runtime"
@@ -108,6 +109,9 @@
     "fingerprint": "9b868280a90c36a541c2ac53",
     "source_event_id": "FE-20260707-9b868280a90c"
   },
+  "validation_evidence": [
+    "PR #1903 merged; merge commit 1d7f1626 is in main; GitHub issue #1898 closed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
