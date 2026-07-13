@@ -28,8 +28,8 @@
   "expected": "因子库默认表格只保留一列统一因子值缓存状态/时间段和一列统一官方计算时间；缓存开始/缓存结束/缓存计算不再默认常驻显示，详细信息进入 tooltip；时间统一按北京时间展示，若指标与缓存计算时间显著不一致再显示告警。",
   "first_seen_at": "2026-06-21T04:23:32.984624Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d167d8922c023f7a3a3dd2a2873816ffba769aec",
+  "fixed_at": "2026-07-13T17:22:14.800927Z",
   "github_issue_number": 1378,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1378",
   "last_seen_at": "2026-06-21T04:23:32.984624Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1472",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -86,6 +87,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "Superseded by merged PR #1472; current FactorList exposes one official update timestamp and removes duplicate cache time columns; stale PR #1382 and issue #1378 closed with evidence"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
