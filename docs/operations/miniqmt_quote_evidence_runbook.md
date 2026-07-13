@@ -9,6 +9,25 @@
 - P1-D 没有审批、RBAC、人工 acknowledge、confirm-run 或“手工恢复成功”状态。数据、连接或生命周期条件恢复后，下一个合法 lifecycle tick 自动再次尝试；历史 evidence 永不原地修改。
 - durable ack 只在 repository 事务提交并 post-commit readback 核对 `event_id/type/source/hash/created_at` 后成立。日志、outbox 入队、metrics 或 API `ok=true` 都不能替代它。
 
+`GET /simulation-runtime/scheduler/status` 的
+`miniqmt_quote_ingress_activation` 是 production composition 的只读状态：
+
+- `BLOCKED`：process switch=true，但 production schema readback 非 exact target 或读取失败；
+  `factory_available=false`，不得创建 B0 runtime，也不得把它解释成 LEGACY fallback。
+- `READY`：switch=true、`production_ddl_gate=applied_and_verified`、唯一 scheduler factory 已构造；
+  这只证明代码入口可用，不证明 binding 已创建、feed 已订阅或 broker 已调用。
+- `DRAINING`：switch=false、lazy factory 仅允许 durable active algo/child runtime 恢复；普通
+  LEGACY startup 不读 schema、不构造 QMT/subscriber。真正恢复时才要求 schema exact 并构造唯一
+  supervisor；`accept_new_assignments=false`。无 durable active fact 的新/空/terminal runtime 必须在
+  runtime/gateway 构造前拒绝。
+- `DISABLED`：switch=false 且 schema 未就绪/不可读，未构造 factory；LEGACY 继续。此状态不能恢复
+  active B0，因此已有 B0 parent 时不得回滚 production CHECK schema。
+
+同时核对 `process_config_sha256` 与 `runtime_config_sha256`：DRAINING 时 runtime config 仅把 admission
+switch 保持为上一启用值以恢复原 evidence config identity，因此两个 hash 有意不同并被显式报告；
+其他 process capacity 值不得在 drain recovery 中被推断或静默替换。status/readback 不启动 subscriber，
+只有合法 controller consumer acquisition 才建立 physical feed。
+
 ## 只读诊断
 
 以下端点不会构造 subscriber、scheduler、gateway 或 broker client，不会写 event、自动 repair 或重连：
