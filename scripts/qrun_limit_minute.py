@@ -62,6 +62,18 @@ except ModuleNotFoundError as exc:  # Backward-compatible for already-copied wor
         raise
     maybe_upload_prediction_artifacts = None
 
+try:
+    from qe_runtime_resource import finish_resource_monitor, start_resource_monitor
+except ModuleNotFoundError as exc:  # Backward-compatible for already-copied workspaces.
+    if exc.name != "qe_runtime_resource":
+        raise
+
+    def start_resource_monitor():
+        return None
+
+    def finish_resource_monitor(*, status: str, error: str | None = None):
+        return None
+
 
 
 # === 分钟级交易记录功能（环境变量控制）===
@@ -1419,6 +1431,18 @@ def main():
     mode_group.add_argument("--pred-backtest", type=str, metavar="PRED_PKL",
                             help="run IC analysis and portfolio backtest from an existing prediction pkl")
     args = parser.parse_args()
+
+    start_resource_monitor()
+    try:
+        _run_main(args)
+    except Exception as exc:
+        finish_resource_monitor(status="failed", error=f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        finish_resource_monitor(status="completed")
+
+
+def _run_main(args):
 
     # Jinja2 渲染 → YAML 解析
     rendered = render_yaml_template(args.yaml_path)

@@ -1330,6 +1330,130 @@ def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monke
     assert not any("UPDATE qe_evolution_tasks SET status = 'running'" in sql for sql in state["sql"])
 
 
+def test_gpu_phase_waiter_releases_before_loop_terminal_only_after_confirmed_event(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    semaphore = asyncio.Semaphore(1)
+    asyncio.run(semaphore.acquire())
+    observations = []
+
+    class FakeResourceService:
+        def get_session_state(self, _session_id):
+            return {"current_phase": "gpu_phase_released"}
+
+        def mark_session_terminal(self, session_id, *, status, reason_code=None):
+            observations.append(("terminal", session_id, status, reason_code))
+
+    statuses = iter(["running", "completed"])
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchone(self):
+            observations.append(("loop_poll", semaphore.locked()))
+            return (next(statuses),)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+
+    asyncio.run(
+        scheduler._wait_resource_session_until_safe_release(
+            session_id="qers_1",
+            task_id="qe_task",
+            loop_index=1,
+            gpu_semaphore=semaphore,
+        )
+    )
+
+    assert observations[0] == ("loop_poll", False)
+    assert observations[-1] == ("terminal", "qers_1", "completed", None)
+
+
+def test_gpu_phase_waiter_keeps_slot_for_release_rejected_until_terminal(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    semaphore = asyncio.Semaphore(1)
+    asyncio.run(semaphore.acquire())
+    observations = []
+
+    class FakeResourceService:
+        def get_session_state(self, _session_id):
+            return {"current_phase": "release_rejected"}
+
+        def mark_session_terminal(self, session_id, *, status, reason_code=None):
+            observations.append(("terminal", session_id, status, reason_code))
+
+    statuses = iter(["running", "completed"])
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, *_args, **_kwargs):
+            return None
+
+        def fetchone(self):
+            observations.append(("loop_poll", semaphore.locked()))
+            return (next(statuses),)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(qes, "QEResourcePhaseService", lambda: FakeResourceService())
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(qes.asyncio, "sleep", no_sleep)
+
+    asyncio.run(
+        scheduler._wait_resource_session_until_safe_release(
+            session_id="qers_2",
+            task_id="qe_task",
+            loop_index=2,
+            gpu_semaphore=semaphore,
+        )
+    )
+
+    assert observations[0] == ("loop_poll", True)
+    assert observations[1] == ("loop_poll", True)
+    assert observations[-1] == (
+        "terminal",
+        "qers_2",
+        "completed",
+        "QE_GPU_PHASE_RELEASE_THRESHOLD_EXCEEDED",
+    )
+
+
 def test_suspend_filter_wraps_topk_strategy():
     yaml_text = _base_yaml(
         custom_params={
@@ -2520,6 +2644,48 @@ def test_efficient_gats_gpu_resident_predict_activation_counts_reclaimable_reser
     assert model.gpu_resident_last_fallback is None
 
 
+def test_efficient_gats_gpu_phase_release_proof_is_threshold_checked(monkeypatch):
+    pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
+    torch = pytest.importorskip("torch")
+    efficient_gats = _import_efficient_gats_module()
+    dataset = _MiniGatsDataset()
+    model = efficient_gats.EfficientGATs(
+        d_feat=dataset.d_feat,
+        hidden_size=4,
+        num_layers=1,
+        dropout=0.0,
+        n_epochs=1,
+        lr=0.01,
+        metric="loss",
+        early_stop=1,
+        base_model="GRU",
+        GPU=-1,
+        n_jobs=0,
+        seed=7,
+        gpu_resident=True,
+        gpu_phase_release_tolerance_bytes=128,
+    )
+    model.device = torch.device("cuda:0")
+    published = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda _device=None: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda, "memory_allocated", lambda _device=None: 1100)
+    monkeypatch.setattr(torch.cuda, "memory_reserved", lambda _device=None: 2200)
+    monkeypatch.setattr(efficient_gats, "_publish_gpu_phase_release", lambda proof: published.append(dict(proof)))
+
+    proof = model._finalize_gpu_phase_release(
+        {
+            "release_baseline_allocated_bytes": 1000,
+            "release_baseline_reserved_bytes": 2000,
+        }
+    )
+
+    assert proof["release_check_passed"] is False
+    assert proof["cuda_reserved_bytes_after"] == 2200
+    assert published == [proof]
+
+
 def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation_check(monkeypatch):
     pytest.importorskip("qlib.contrib.model.pytorch_gats_ts")
     torch = pytest.importorskip("torch")
@@ -2561,6 +2727,7 @@ def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation
     model.device = torch.device("cuda:0")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda _device=None: calls.append("synchronize"))
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda _device: (10**12, 10**12))
     monkeypatch.setattr(torch.cuda, "memory_reserved", lambda _device: 0)
     monkeypatch.setattr(torch.cuda, "memory_allocated", lambda _device: 0)
@@ -2568,7 +2735,7 @@ def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation
     original_preload = model._preload_segment_to_cpu
 
     def _assert_empty_cache_before_preload(segment, *, segment_name):
-        assert calls == ["empty_cache"]
+        assert calls == ["empty_cache", "synchronize", "empty_cache"]
         return original_preload(segment, segment_name=segment_name)
 
     original_can_activate = efficient_gats.EfficientGATs._can_activate_gpu_resident.__get__(
@@ -2577,14 +2744,20 @@ def test_efficient_gats_gpu_resident_predict_calls_empty_cache_before_activation
     )
 
     def _assert_empty_cache_already_called(segments):
-        assert calls == ["empty_cache"]
+        assert calls == ["empty_cache", "synchronize", "empty_cache"]
         return original_can_activate(segments)
 
     monkeypatch.setattr(model, "_preload_segment_to_cpu", _assert_empty_cache_before_preload)
     monkeypatch.setattr(model, "_can_activate_gpu_resident", _assert_empty_cache_already_called)
     preds = model.predict(dataset)
 
-    assert calls == ["empty_cache"]
+    assert calls == [
+        "empty_cache",
+        "synchronize",
+        "empty_cache",
+        "synchronize",
+        "empty_cache",
+    ]
     assert not preds.empty
 
 
@@ -3392,6 +3565,12 @@ def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
         skip_db_save=True,
         execution_algo="CLOSE_PRICE",
         execution_algo_params={},
+        task_id="qe_task",
+        loop_index=1,
+        resource_session_id="qers_1",
+        resource_source_run_key="qe_task_L1",
+        resource_session_token="scoped-secret-token",
+        phase_pipeline_enabled=True,
     )
 
     files = result["experiment_files"]
@@ -3401,7 +3580,41 @@ def test_efficient_gats_in_memory_payload_includes_adapter_files(monkeypatch):
     assert "aistock_models/__init__.py" in files
     assert "aistock_models/efficient_gats.py" in files
     assert "class EfficientGATModel" in files["aistock_models/efficient_gats.py"]
+    assert "qe_runtime_resource.py" in files
+    assert json.loads(files["qe_resource_session_secret.json"])["token"] == "scoped-secret-token"
+    assert "scoped-secret-token" not in result["wsl_command"]
     assert "export PYTHONPATH=" in result["wsl_command"]
+
+
+def test_qe_resource_session_env_is_opt_in_and_complete(monkeypatch):
+    composer = ConfigComposer()
+    default_env, _ = composer._build_auto_wsl_command_parts("/tmp/qe-default")
+    default_text = "\n".join(default_env)
+    assert "QE_RESOURCE_SESSION_ID" not in default_text
+    assert "QE_PHASE_PIPELINE_ENABLED" not in default_text
+
+    env_lines, core_parts = composer._build_auto_wsl_command_parts(
+        "/tmp/qe-phase",
+        node_id="wsl2-5080",
+        task_id="qe_task",
+        loop_index=2,
+        resource_session_id="qers_123",
+        resource_source_run_key="qe_task_L2",
+        resource_session_token="token-value",
+        phase_pipeline_enabled=True,
+    )
+    env_text = "\n".join(env_lines)
+    assert "export QE_RESOURCE_SESSION_ID=qers_123" in env_text
+    assert "export QE_RESOURCE_SOURCE_RUN_KEY=qe_task_L2" in env_text
+    assert "token-value" not in env_text
+    assert "export QE_PHASE_PIPELINE_ENABLED=1" in env_text
+    assert "chmod 600 qe_resource_session_secret.json" in core_parts
+
+    with pytest.raises(ValueError, match="requires id, source_run_key, and token together"):
+        composer._build_auto_wsl_command_parts(
+            "/tmp/qe-invalid",
+            resource_session_id="qers_incomplete",
+        )
 
 
 def test_seed_ensemble_day_backtest_packages_minute_runner(monkeypatch):

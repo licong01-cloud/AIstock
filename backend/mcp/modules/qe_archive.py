@@ -43,6 +43,7 @@ TOOL_NAMES = (
     "qe_archive_query_overfit_flags",
     "qe_archive_query_promotion_candidates",
     "qe_archive_query_evolution_lineage",
+    "qe_archive_query_resource_phases",
     "multi_alpha_orthogonality",
     "multi_alpha_combine_preview",
     "multi_alpha_combine_backtest_run_confirmed",
@@ -378,6 +379,25 @@ def register(registry: "ModuleRegistry") -> None:
         return client.get(
             "/analytics/evolution-lineage",
             params={"task_id": task_id, "experiment_id": experiment_id, "model_type": model_type, "limit": limit},
+        )
+
+    @registry.mcp.tool(name="qe_archive_query_resource_phases")
+    def qe_archive_query_resource_phases(
+        run_id: str | None = None,
+        task_id: str | None = None,
+        loop_index: int | None = None,
+        source_run_key: str | None = None,
+        limit: int = 20,
+    ) -> Any:
+        return client.get(
+            "/resource-phases",
+            params={
+                "run_id": run_id,
+                "task_id": task_id,
+                "loop_index": loop_index,
+                "source_run_key": source_run_key,
+                "limit": max(1, min(int(limit), 200)),
+            },
         )
 
     @registry.mcp.tool(name="multi_alpha_orthogonality")

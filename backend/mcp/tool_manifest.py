@@ -242,6 +242,7 @@ MODULE_TOOL_NAMES: dict[str, tuple[str, ...]] = {'advisory': ('advisory_list_pro
                 'qe_archive_query_overfit_flags',
                 'qe_archive_query_promotion_candidates',
                 'qe_archive_query_evolution_lineage',
+                'qe_archive_query_resource_phases',
                 'multi_alpha_orthogonality',
                 'multi_alpha_combine_preview',
                 'multi_alpha_combine_backtest_run_confirmed',

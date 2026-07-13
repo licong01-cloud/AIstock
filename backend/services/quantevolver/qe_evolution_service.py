@@ -21,6 +21,7 @@ from .experiment_config import DEFAULT_LABEL_HORIZON, normalize_label_horizon, n
 from .runtime_contract import build_qe_minute_runtime_contract, merge_qe_minute_runtime_contract
 from .seed_contract import ensure_loop_fixed_seed
 from .payload_summary import compact_loop_row, compact_task_row
+from .qe_resource_phase_service import QEResourcePhaseService
 from .node_execution import (
     normalize_node_parallelism,
     preflight_qe_node,
@@ -172,6 +173,138 @@ class AutoEvolutionScheduler:
         self._log_stream_lock = threading.RLock()
         self._active_log_stream_counts: Dict[str, int] = {}
         self._log_stream_stop_requested: set[str] = set()
+        self._gpu_phase_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._resource_session_wait_tasks: set[asyncio.Task] = set()
+
+    def _gpu_phase_semaphore(self, node_id: str) -> asyncio.Semaphore:
+        semaphore = self._gpu_phase_semaphores.get(node_id)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(1)
+            self._gpu_phase_semaphores[node_id] = semaphore
+        return semaphore
+
+    async def _acquire_gpu_phase_slot(self, node_id: str) -> asyncio.Semaphore:
+        """Acquire the process-local slot and reconcile active leases from DB after restart."""
+
+        semaphore = self._gpu_phase_semaphore(node_id)
+        service = QEResourcePhaseService()
+        while True:
+            await semaphore.acquire()
+            try:
+                if not service.has_unreleased_gpu_session(node_id=node_id):
+                    return semaphore
+            except Exception:
+                semaphore.release()
+                raise
+            semaphore.release()
+            logger.info(
+                "QE GPU phase slot remains occupied by a persisted session: node=%s",
+                node_id,
+            )
+            await asyncio.sleep(CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS)
+
+    def _track_resource_wait_task(self, task: asyncio.Task) -> None:
+        self._resource_session_wait_tasks.add(task)
+
+        def _done(completed: asyncio.Task) -> None:
+            self._resource_session_wait_tasks.discard(completed)
+            if completed.cancelled():
+                logger.error("QE resource session waiter was cancelled before releasing its GPU phase slot")
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "QE resource session waiter failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
+
+    async def _wait_resource_session_until_safe_release(
+        self,
+        *,
+        session_id: str,
+        task_id: str,
+        loop_index: int,
+        gpu_semaphore: asyncio.Semaphore | None,
+    ) -> None:
+        """Release a GPU slot only after a verified phase event or terminal loop state."""
+
+        service = QEResourcePhaseService()
+        released = False
+        terminal_safe_release = False
+        try:
+            while True:
+                try:
+                    state = service.get_session_state(session_id)
+                    current_phase = str((state or {}).get("current_phase") or "")
+                    if gpu_semaphore is not None and current_phase == "gpu_phase_released":
+                        logger.info(
+                            "QE GPU phase release confirmed: task=%s Loop%s session=%s",
+                            task_id,
+                            loop_index,
+                            session_id,
+                        )
+                        gpu_semaphore.release()
+                        released = True
+                        gpu_semaphore = None
+
+                    with get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
+                                (f"{task_id}_Loop{int(loop_index)}",),
+                            )
+                            row = cur.fetchone()
+                    loop_status = str(row[0]) if row else "failed"
+                    if loop_status in {"completed", "failed", "cancelled", "canceled"}:
+                        terminal = "cancelled" if loop_status in {"cancelled", "canceled"} else loop_status
+                        reason_code = None
+                        if gpu_semaphore is not None and current_phase != "gpu_phase_released":
+                            reason_code = (
+                                "QE_GPU_PHASE_RELEASE_THRESHOLD_EXCEEDED"
+                                if current_phase == "release_rejected"
+                                else "QE_GPU_PHASE_CONTRACT_UNSUPPORTED"
+                            )
+                        service.mark_session_terminal(
+                            session_id,
+                            status=terminal,
+                            reason_code=reason_code,
+                        )
+                        terminal_safe_release = True
+                        break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(
+                        "QE_GPU_PHASE_WAITER_POLL_FAILED: task=%s Loop%s session=%s error=%s",
+                        task_id,
+                        loop_index,
+                        session_id,
+                        exc,
+                        exc_info=True,
+                    )
+                await asyncio.sleep(5)
+        finally:
+            if gpu_semaphore is not None and terminal_safe_release:
+                gpu_semaphore.release()
+                released = True
+            elif gpu_semaphore is not None:
+                logger.critical(
+                    "QE GPU phase slot kept fail-closed after waiter interruption: "
+                    "task=%s Loop%s session=%s",
+                    task_id,
+                    loop_index,
+                    session_id,
+                )
+            if released:
+                logger.info(
+                    "QE GPU phase slot released: task=%s Loop%s session=%s",
+                    task_id,
+                    loop_index,
+                    session_id,
+                )
 
     def _archive_completed_loop_best_effort(self, task_id: str, loop_id: str, loop_index: int | None = None) -> None:
         """Best-effort archive hook; archive failures must not affect QE status."""
@@ -3724,11 +3857,41 @@ class AutoEvolutionScheduler:
                     )
                 conn.commit()
 
+        retry_resource_service = QEResourcePhaseService()
+        retry_resource_session = None
+        retry_gpu_semaphore = None
+        retry_resource_waiter_started = False
+        retry_resource_telemetry_enabled = False
+        retry_phase_pipeline_enabled = False
+        if task.get("task_type") == "custom_evo":
+            retry_strategy_config = self._parse_custom_evo_strategy_config(
+                task.get("strategy_evo_config"),
+                task_id=task_id,
+            )
+            retry_resource_telemetry_enabled = bool(
+                retry_strategy_config.get("resource_telemetry_enabled", False)
+            )
+            retry_phase_pipeline_enabled = bool(
+                retry_strategy_config.get("phase_pipeline_enabled", False)
+            ) and retry_mode_name == QE_LOOP_RETRY_MODE_FULL_TRAIN
+            if retry_phase_pipeline_enabled and not retry_resource_telemetry_enabled:
+                raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+
         # 5. 使用统一引擎重新 compose 并提交
         try:
             from .experiment_config_builders import build_config_from_retry_loop
             from .executors.backtest import BacktestExecutor, BacktestMode
             from .executors.base import ExecutionContext
+
+            if retry_phase_pipeline_enabled:
+                retry_gpu_semaphore = await self._acquire_gpu_phase_slot(effective_node_id)
+            if retry_resource_telemetry_enabled:
+                retry_resource_session = retry_resource_service.create_session(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    node_id=effective_node_id,
+                    phase_pipeline_enabled=retry_phase_pipeline_enabled,
+                )
 
             task_for_retry = dict(task)
             task_for_retry["node_id"] = effective_node_id
@@ -3771,15 +3934,48 @@ class AutoEvolutionScheduler:
                 model_source=retry_model_source,
                 extra_experiment_files=retry_extra_experiment_files,
                 require_fixed_seed=(retry_mode_name != "backtest_only"),
+                resource_session_id=retry_resource_session.session_id if retry_resource_session else None,
+                resource_source_run_key=retry_resource_session.source_run_key if retry_resource_session else None,
+                resource_session_token=retry_resource_session.token if retry_resource_session else None,
+                phase_pipeline_enabled=retry_phase_pipeline_enabled,
             )
             retry_mode = BacktestMode.BACKTEST_ONLY if retry_mode_name == "backtest_only" else BacktestMode.FULL_TRAIN
             result = await executor.submit(cfg, ctx, mode=retry_mode)
+            if retry_resource_session is not None:
+                retry_resource_service.mark_session_submitted(retry_resource_session.session_id)
+                wait_task = asyncio.create_task(
+                    self._wait_resource_session_until_safe_release(
+                        session_id=retry_resource_session.session_id,
+                        task_id=task_id,
+                        loop_index=loop_index,
+                        gpu_semaphore=retry_gpu_semaphore,
+                    )
+                )
+                self._track_resource_wait_task(wait_task)
+                retry_resource_waiter_started = True
+                retry_gpu_semaphore = None
             logger.info("Retry in %s mode via unified engine: %s", retry_mode_name, result.wsl_command)
 
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
             logger.error(f"Retry loop failed for {evolution_loop_db_id}: {e}\n{tb_str}")
+            if retry_resource_session is not None and not retry_resource_waiter_started:
+                try:
+                    retry_resource_service.mark_session_terminal(
+                        retry_resource_session.session_id,
+                        status="failed",
+                        reason_code="QE_RESOURCE_RETRY_SUBMIT_FAILED",
+                    )
+                except Exception as resource_error:
+                    logger.error(
+                        "QE retry resource session failure marking failed: session=%s error=%s",
+                        retry_resource_session.session_id,
+                        resource_error,
+                    )
+            if retry_gpu_semaphore is not None:
+                retry_gpu_semaphore.release()
+                retry_gpu_semaphore = None
             error_detail = json.dumps({"_error": str(e), "_traceback": tb_str}, ensure_ascii=False)
             with get_conn() as conn:
                 with conn.cursor() as cur:
@@ -5201,6 +5397,8 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]] = None,
         node_id: Optional[str] = None,
         node_parallelism: Optional[Dict[str, int]] = None,
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
         engine_mode: str = "unified",
         clone_from_task_id: Optional[str] = None,
         auto_start: bool = True,
@@ -5215,6 +5413,10 @@ class AutoEvolutionScheduler:
             raise ValueError(
                 "QE legacy execution engine has been removed; only engine_mode='unified' is supported."
             )
+        if phase_pipeline_enabled and not resource_telemetry_enabled:
+            raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+        if resource_telemetry_enabled:
+            QEResourcePhaseService().ensure_schema_ready()
         loops_config, loop1_node_id, selected_node_ids = resolve_custom_loop_nodes(
             [dict(loop_cfg) for loop_cfg in loops_config],
             node_id,
@@ -5310,6 +5512,8 @@ class AutoEvolutionScheduler:
                         "loops": loops_config,
                         "engine_mode": engine_mode,
                         "node_parallelism": node_parallelism,
+                        "phase_pipeline_enabled": bool(phase_pipeline_enabled),
+                        "resource_telemetry_enabled": bool(resource_telemetry_enabled),
                         "node_resolution_policy": "loop1_inherit_v1",
                         "clone_from_task_id": clone_from_task_id,
                     }),
@@ -5457,6 +5661,8 @@ class AutoEvolutionScheduler:
             "execution_mode": "serial",  # deprecated: kept for frontend backward compat
             "engine_mode": strategy_config.get("engine_mode") or "unified",
             "node_parallelism": strategy_config.get("node_parallelism") or {},
+            "phase_pipeline_enabled": bool(strategy_config.get("phase_pipeline_enabled", False)),
+            "resource_telemetry_enabled": bool(strategy_config.get("resource_telemetry_enabled", False)),
             "node_resolution_policy": strategy_config.get("node_resolution_policy") or "loop1_inherit_v1",
             "loops": editable_loops,
             "loop_statuses": loop_rows,
@@ -5474,12 +5680,18 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]],
         node_id: Optional[str] = None,
         node_parallelism: Optional[Dict[str, int]] = None,
+        phase_pipeline_enabled: bool = False,
+        resource_telemetry_enabled: bool = False,
         engine_mode: str = "unified",
     ) -> Dict[str, Any]:
         if not loops_config:
             raise ValueError("loops_config cannot be empty")
         if (engine_mode or "unified") != "unified":
             raise ValueError("QE legacy execution engine has been removed; only engine_mode='unified' is supported.")
+        if phase_pipeline_enabled and not resource_telemetry_enabled:
+            raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+        if resource_telemetry_enabled:
+            QEResourcePhaseService().ensure_schema_ready()
 
         lock_cm = get_conn()
         lock_conn = lock_cm.__enter__()
@@ -5566,6 +5778,8 @@ class AutoEvolutionScheduler:
                         "loops": resolved_loops,
                         "engine_mode": "unified",
                         "node_parallelism": full_node_parallelism,
+                        "phase_pipeline_enabled": bool(phase_pipeline_enabled),
+                        "resource_telemetry_enabled": bool(resource_telemetry_enabled),
                         "node_resolution_policy": "loop1_inherit_v1",
                         "clone_from_task_id": (
                             task.get("strategy_evo_config") or {}
@@ -5998,6 +6212,8 @@ class AutoEvolutionScheduler:
         loop_config: Dict[str, Any],
         node_id: Optional[str] = None,
         node_parallelism: Optional[Dict[str, int]] = None,
+        phase_pipeline_enabled: Optional[bool] = None,
+        resource_telemetry_enabled: Optional[bool] = None,
     ) -> Dict[str, Any]:
         lock_cm = get_conn()
         lock_conn = lock_cm.__enter__()
@@ -6012,6 +6228,20 @@ class AutoEvolutionScheduler:
                     if task.get("task_type") != "custom_evo":
                         raise ValueError(f"task {task_id} is not a custom_evo task")
                     strategy_config = self._parse_custom_evo_strategy_config(task.get("strategy_evo_config"), task_id=task_id)
+                    effective_phase_pipeline = (
+                        bool(phase_pipeline_enabled)
+                        if phase_pipeline_enabled is not None
+                        else bool(strategy_config.get("phase_pipeline_enabled", False))
+                    )
+                    effective_resource_telemetry = (
+                        bool(resource_telemetry_enabled)
+                        if resource_telemetry_enabled is not None
+                        else bool(strategy_config.get("resource_telemetry_enabled", False))
+                    )
+                    if effective_phase_pipeline and not effective_resource_telemetry:
+                        raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+                    if effective_resource_telemetry:
+                        QEResourcePhaseService().ensure_schema_ready()
                     replaced = False
                     next_loops: List[Dict[str, Any]] = []
                     replacement = dict(loop_config)
@@ -6038,6 +6268,10 @@ class AutoEvolutionScheduler:
                     strategy_config["loops"] = resolved_loops
                     strategy_config["engine_mode"] = "unified"
                     strategy_config["node_parallelism"] = full_node_parallelism
+                    if phase_pipeline_enabled is not None:
+                        strategy_config["phase_pipeline_enabled"] = bool(phase_pipeline_enabled)
+                    if resource_telemetry_enabled is not None:
+                        strategy_config["resource_telemetry_enabled"] = bool(resource_telemetry_enabled)
                     strategy_config["node_resolution_policy"] = "loop1_inherit_v1"
                     cur.execute(
                         """
@@ -6080,6 +6314,8 @@ class AutoEvolutionScheduler:
         loops_config: List[Dict[str, Any]],
         node_id: Optional[str] = None,
         node_parallelism: Optional[Dict[str, int]] = None,
+        phase_pipeline_enabled: Optional[bool] = None,
+        resource_telemetry_enabled: Optional[bool] = None,
         ack_failed_loop_warning: bool = False,
     ) -> Dict[str, Any]:
         if not loops_config:
@@ -6112,6 +6348,20 @@ class AutoEvolutionScheduler:
                         )
 
                     strategy_config = self._parse_custom_evo_strategy_config(task.get("strategy_evo_config"), task_id=task_id)
+                    effective_phase_pipeline = (
+                        bool(phase_pipeline_enabled)
+                        if phase_pipeline_enabled is not None
+                        else bool(strategy_config.get("phase_pipeline_enabled", False))
+                    )
+                    effective_resource_telemetry = (
+                        bool(resource_telemetry_enabled)
+                        if resource_telemetry_enabled is not None
+                        else bool(strategy_config.get("resource_telemetry_enabled", False))
+                    )
+                    if effective_phase_pipeline and not effective_resource_telemetry:
+                        raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+                    if effective_resource_telemetry:
+                        QEResourcePhaseService().ensure_schema_ready()
                     existing_loops = [dict(cfg) for cfg in strategy_config["loops"]]
                     max_loop_index = max(int(cfg.get("loop_index") or 0) for cfg in existing_loops)
                     new_loop_indexes: List[int] = []
@@ -6132,6 +6382,10 @@ class AutoEvolutionScheduler:
                     strategy_config["loops"] = resolved_loops
                     strategy_config["engine_mode"] = "unified"
                     strategy_config["node_parallelism"] = full_node_parallelism
+                    if phase_pipeline_enabled is not None:
+                        strategy_config["phase_pipeline_enabled"] = bool(phase_pipeline_enabled)
+                    if resource_telemetry_enabled is not None:
+                        strategy_config["resource_telemetry_enabled"] = bool(resource_telemetry_enabled)
                     strategy_config["node_resolution_policy"] = "loop1_inherit_v1"
                     cur.execute(
                         """
@@ -6410,7 +6664,31 @@ class AutoEvolutionScheduler:
         if slot is None:
             return None
 
+        strategy_config = self._parse_custom_evo_strategy_config(
+            task.get("strategy_evo_config"),
+            task_id=task_id,
+        )
+        resource_telemetry_enabled = bool(strategy_config.get("resource_telemetry_enabled", False))
+        requested_phase_pipeline = bool(strategy_config.get("phase_pipeline_enabled", False))
+        full_train_requested = not (bool(loop_config.get("backtest_only")) and not force_full_train)
+        phase_pipeline_enabled = requested_phase_pipeline and full_train_requested
+        if requested_phase_pipeline and not resource_telemetry_enabled:
+            raise ValueError("QE phase pipeline requires resource_telemetry_enabled=true")
+
+        resource_service = QEResourcePhaseService()
+        resource_session = None
+        gpu_phase_semaphore = None
+        resource_waiter_started = False
         try:
+            if phase_pipeline_enabled:
+                gpu_phase_semaphore = await self._acquire_gpu_phase_slot(effective_node_id)
+            if resource_telemetry_enabled:
+                resource_session = resource_service.create_session(
+                    task_id=task_id,
+                    loop_index=loop_index,
+                    node_id=effective_node_id,
+                    phase_pipeline_enabled=phase_pipeline_enabled,
+                )
             loop_config = dict(loop_config)
             ensure_loop_fixed_seed(loop_config, context=f"custom_evo.task[{task_id}].Loop{loop_index}")
             if loop_config.get("backtest_only") and "source_label_horizon" not in loop_config:
@@ -6462,6 +6740,9 @@ class AutoEvolutionScheduler:
                 "label_horizon": cfg.label_horizon,
                 "node_id": effective_node_id,
                 "execution_node_id": effective_node_id,
+                "phase_pipeline_enabled": phase_pipeline_enabled,
+                "resource_telemetry_enabled": resource_telemetry_enabled,
+                "resource_session_id": resource_session.session_id if resource_session else None,
             }
             loop_model_params = merge_qe_minute_runtime_contract(
                 cfg.build_custom_params(),
@@ -6521,6 +6802,15 @@ class AutoEvolutionScheduler:
                             (evolution_loop_db_id,),
                         )
                     conn.commit()
+                if resource_session is not None:
+                    resource_service.mark_session_terminal(
+                        resource_session.session_id,
+                        status="cancelled",
+                        reason_code="QE_RESOURCE_TASK_STOPPED_BEFORE_SUBMIT",
+                    )
+                if gpu_phase_semaphore is not None:
+                    gpu_phase_semaphore.release()
+                    gpu_phase_semaphore = None
                 return None
 
             await preflight_qe_node(effective_node_id)
@@ -6535,6 +6825,10 @@ class AutoEvolutionScheduler:
                 node_id=effective_node_id,
                 callback_url=self._get_callback_url_for_node(effective_node_id),
                 require_fixed_seed=True,
+                resource_session_id=resource_session.session_id if resource_session else None,
+                resource_source_run_key=resource_session.source_run_key if resource_session else None,
+                resource_session_token=resource_session.token if resource_session else None,
+                phase_pipeline_enabled=phase_pipeline_enabled,
             )
             # backtest-only 模式：注入 model_source 并切换执行模式
             # force_full_train 可覆盖 backtest_only 配置，用于恢复时源模型不可用的场景
@@ -6571,6 +6865,10 @@ class AutoEvolutionScheduler:
                     model_source=model_source,
                     extra_experiment_files=extra_experiment_files or None,
                     require_fixed_seed=False,
+                    resource_session_id=resource_session.session_id if resource_session else None,
+                    resource_source_run_key=resource_session.source_run_key if resource_session else None,
+                    resource_session_token=resource_session.token if resource_session else None,
+                    phase_pipeline_enabled=False,
                 )
                 mode = BacktestMode.BACKTEST_ONLY
                 logger.info(
@@ -6585,6 +6883,19 @@ class AutoEvolutionScheduler:
                     )
                 mode = BacktestMode.FULL_TRAIN
             await executor.submit(cfg, ctx, mode=mode)
+            if resource_session is not None:
+                resource_service.mark_session_submitted(resource_session.session_id)
+                wait_task = asyncio.create_task(
+                    self._wait_resource_session_until_safe_release(
+                        session_id=resource_session.session_id,
+                        task_id=task_id,
+                        loop_index=loop_index,
+                        gpu_semaphore=gpu_phase_semaphore,
+                    )
+                )
+                self._track_resource_wait_task(wait_task)
+                resource_waiter_started = True
+                gpu_phase_semaphore = None
 
             logger.info(f"[unified] 自定义演进 Loop {loop_index} 已提交")
             return evolution_loop_db_id
@@ -6593,6 +6904,22 @@ class AutoEvolutionScheduler:
             import traceback
             tb_str = traceback.format_exc()
             logger.error(f"[unified] 自定义演进 Loop {loop_index} 提交失败: {e}\n{tb_str}")
+            if resource_session is not None and not resource_waiter_started:
+                try:
+                    resource_service.mark_session_terminal(
+                        resource_session.session_id,
+                        status="failed",
+                        reason_code="QE_RESOURCE_SUBMIT_FAILED",
+                    )
+                except Exception as resource_error:
+                    logger.error(
+                        "QE resource session failure marking failed: session=%s error=%s",
+                        resource_session.session_id,
+                        resource_error,
+                    )
+            if gpu_phase_semaphore is not None:
+                gpu_phase_semaphore.release()
+                gpu_phase_semaphore = None
             try:
                 with get_conn() as conn:
                     with conn.cursor() as cur:
