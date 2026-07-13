@@ -28,14 +28,45 @@ from backend.services.advisory_phase1.dataset_build import (
     REASON_ATTEMPT_LEASE_EXPIRED,
     REASON_ATTEMPT_OPERATION_INVALID,
     REASON_BUILD_GENERATION_INVALID,
+    REASON_CHECKPOINT_CONFLICT,
     SealedDatasetSnapshot,
 )
-from backend.services.advisory_phase1.dataset_build_postgres import PostgresDatasetBuildRepository
+from backend.services.advisory_phase1.dataset_build_postgres import (
+    PostgresDatasetBuildRepository,
+    _build_event_payload_hash,
+    _same_aware_timestamp,
+)
 from backend.services.advisory_phase0a.policy import canonical_json_sha256
+from backend.services.advisory_phase1.snapshot_writer import (
+    FullParquetVerificationReceipt,
+    SnapshotFileIdentity,
+    VerifiedDatasetFile,
+)
 
 
 def _hash(seed: str) -> str:
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+
+
+def test_aware_timestamp_comparison_accepts_equivalent_json_precision() -> None:
+    expected = datetime(2026, 7, 15, tzinfo=timezone.utc)
+
+    assert _same_aware_timestamp("2026-07-15T00:00:00.000000+00:00", expected)
+    assert _same_aware_timestamp("2026-07-15T08:00:00+08:00", expected)
+    assert not _same_aware_timestamp("2026-07-15T00:00:00", expected)
+    assert not _same_aware_timestamp("invalid", expected)
+
+
+def test_build_event_payload_hash_separates_retry_attempts() -> None:
+    first = type("Attempt", (), {"attempt_id": "attempt-1", "fencing_token": 2})()
+    retry = type("Attempt", (), {"attempt_id": "attempt-2", "fencing_token": 3})()
+
+    assert _build_event_payload_hash({"operation": "MATERIALIZE"}, first) == _build_event_payload_hash(
+        {"operation": "MATERIALIZE"}, first
+    )
+    assert _build_event_payload_hash({"operation": "MATERIALIZE"}, first) != _build_event_payload_hash(
+        {"operation": "MATERIALIZE"}, retry
+    )
 
 
 def _request() -> FixtureDatasetBuildRequest:
@@ -345,6 +376,112 @@ def test_batch_c_verify_contract_cannot_be_silently_promoted(tmp_path) -> None:
             operation_request_hash=_hash("invalid-verify"),
         )
     assert raised.value.reason_code == REASON_ATTEMPT_OPERATION_INVALID
+
+
+def test_batch_d_repository_rejects_handcrafted_full_receipt(tmp_path) -> None:
+    now = datetime(2026, 7, 3, tzinfo=timezone.utc)
+    repository = InMemoryDatasetBuildRepository(now_provider=lambda: now)
+    build = repository.create_or_get(_request(), actor="test")
+    materialize = repository.start_attempt(
+        build_id=build.build_id,
+        operation=AttemptOperation.MATERIALIZE,
+        expected_build_row_version=build.row_version,
+        expected_checkpoint=BuildCheckpoint.REQUESTED,
+        lease_owner_id="test",
+        lease_token="materialize-token",
+        lease_seconds=60,
+        operation_request_hash=_hash("materialize"),
+    )
+    path = tmp_path / "full.parquet"
+    payload = b"full-parquet-fixture"
+    path.write_bytes(payload)
+    attempt_file = DatasetAttemptFile(
+        attempt_id=materialize.attempt_id,
+        fencing_token=materialize.fencing_token,
+        logical_path="canonical_signals/year=2026/month=07/part-00000.parquet",
+        logical_role="canonical_signals",
+        partition_key_hash=_hash("partition"),
+        ordinal=0,
+        staging_uri=path.as_uri(),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+        row_count=1,
+        schema_fingerprint=_hash("schema"),
+        partition_content_hash=_hash("content"),
+        compression="zstd",
+        writer_version="fixture-writer-v1",
+    )
+    repository.append_file(
+        attempt_id=materialize.attempt_id,
+        expected_fencing_token=materialize.fencing_token,
+        file=attempt_file,
+    )
+    materialized = repository.complete_materialize(
+        attempt_id=materialize.attempt_id,
+        expected_fencing_token=materialize.fencing_token,
+        actor="test",
+    )
+    identity = SnapshotFileIdentity(
+        logical_path=attempt_file.logical_path,
+        logical_role=attempt_file.logical_role,
+        partition_key_hash=attempt_file.partition_key_hash,
+        ordinal=attempt_file.ordinal,
+        sha256=attempt_file.sha256,
+        size_bytes=attempt_file.size_bytes,
+        row_count=attempt_file.row_count,
+        schema_fingerprint=attempt_file.schema_fingerprint,
+        partition_content_hash=attempt_file.partition_content_hash,
+        compression=attempt_file.compression,
+        writer_version=attempt_file.writer_version,
+    )
+    full_receipt = FullParquetVerificationReceipt(
+        build_id=materialized.build_id,
+        file_set_hash=str(materialized.materialized_file_set_hash),
+        capture_set_hash=str(materialized.request.capture_set_hash),
+        source_revision_set_hash=materialized.request.snapshot_source_revision_set_hash,
+        selected_observation_mapping_set_hash=str(materialized.request.selected_observation_mapping_set_hash),
+        selected_label_mapping_set_hash=str(materialized.request.selected_label_mapping_set_hash),
+        capability_manifest_hash=_hash("capability"),
+        files=(
+            VerifiedDatasetFile(
+                file=identity,
+                observed_sha256=identity.sha256,
+                observed_size_bytes=identity.size_bytes,
+                observed_row_count=identity.row_count,
+                observed_schema_fingerprint=identity.schema_fingerprint,
+                observed_partition_content_hash=identity.partition_content_hash,
+            ),
+        ),
+        selected_observations=(),
+        selected_labels=(),
+        relational_closure_summary={
+            "canonical_signal_count": 1,
+            "selected_observation_count": 1,
+            "selected_label_count": 0,
+            "outcome_label_count": 0,
+            "outcome_evidence_count": 0,
+            "schema_descriptor_count": 0,
+            "capability_manifest_hash": _hash("capability"),
+        },
+    )
+    verify = repository.start_attempt(
+        build_id=materialized.build_id,
+        operation=AttemptOperation.VERIFY,
+        expected_build_row_version=materialized.row_version,
+        expected_checkpoint=BuildCheckpoint.MATERIALIZED,
+        lease_owner_id="test",
+        lease_token="verify-token",
+        lease_seconds=60,
+        operation_request_hash=_hash("verify"),
+    )
+    with pytest.raises(DatasetBuildError) as raised:
+        repository.complete_full_verify(
+            attempt_id=verify.attempt_id,
+            expected_fencing_token=verify.fencing_token,
+            receipt=full_receipt,
+            actor="test",
+        )
+    assert raised.value.reason_code == REASON_CHECKPOINT_CONFLICT
 
 
 def test_aborted_generation_requires_exact_termination_receipt_for_rebuild() -> None:

@@ -2,22 +2,42 @@
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 import hashlib
 import os
 
 import pytest
 
 from backend.services.advisory_phase1.calculation_evidence import (
+    LOCAL_CALCULATION_EVIDENCE_STORE_SCHEMA_VERSION,
     REASON_CAS_CONTENT_CONFLICT,
     REASON_STORE_INVALID,
     CalculationEvidenceStoreError,
     LocalCalculationEvidenceStore,
 )
-from backend.services.advisory_phase1.outcome_engine import CalculationEvidenceBundle
+from backend.services.advisory_phase1.dataset_store import LocalContentAddressedStore
+from backend.services.advisory_phase1.label_builder_postgres import _same_calculation_evidence
+from backend.services.advisory_phase1.outcome_engine import CalculationEvidenceBundle, OwnerType
 
 
 def _bundle(value: str = "fixture") -> CalculationEvidenceBundle:
     return CalculationEvidenceBundle(evidence_payload={"owner": "fixture", "value": value})
+
+
+def test_canonical_evidence_comparison_accepts_json_type_normalization() -> None:
+    typed = CalculationEvidenceBundle(
+        evidence_payload={
+            "owner_type": OwnerType.CANDIDATE,
+            "trade_date": date(2026, 7, 3),
+            "price": Decimal("10.500000000000"),
+        }
+    )
+    restored = CalculationEvidenceBundle.model_validate_json(typed.canonical_bytes())
+
+    assert typed != restored
+    assert typed.evidence_hash == restored.evidence_hash
+    assert _same_calculation_evidence(typed, restored)
 
 
 def _store_identity() -> dict[str, str]:
@@ -71,6 +91,31 @@ def test_local_cas_reader_rejects_uri_outside_the_content_addressed_root(tmp_pat
             sha256=stored.sha256,
             size_bytes=stored.size_bytes,
             store_backend_hash=stored.store_backend_hash,
+        )
+
+
+def test_local_cas_reader_rejects_non_blob_uri_inside_store(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    identity = _store_identity()
+    evidence_store = LocalCalculationEvidenceStore(
+        root=tmp_path / "outside-repository-evidence",
+        repository_root=tmp_path / "repository",
+        store_identity=identity,
+    )
+    raw_store = LocalContentAddressedStore(
+        root=tmp_path / "outside-repository-evidence",
+        repository_root=tmp_path / "repository",
+        store_identity=identity,
+        schema_version=LOCAL_CALCULATION_EVIDENCE_STORE_SCHEMA_VERSION,
+    )
+    bundle = _bundle("wrong-kind")
+    document = raw_store.put_document_bytes(kind="manifests", payload=bundle.canonical_bytes())
+
+    with pytest.raises(CalculationEvidenceStoreError, match=REASON_STORE_INVALID):
+        evidence_store.get(
+            uri=document.uri,
+            sha256=document.sha256,
+            size_bytes=document.size_bytes,
+            store_backend_hash=document.store_backend_hash,
         )
 
 

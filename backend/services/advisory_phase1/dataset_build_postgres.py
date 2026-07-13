@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import logging
 from typing import Any, Iterator, Mapping
 
@@ -22,6 +23,8 @@ from backend.services.advisory_phase1.dataset_build import (
     DatasetBuildError,
     DatasetBuildEvent,
     DatasetBuildEventType,
+    DatasetBlobHeader,
+    DatasetSnapshotFile,
     DatasetSnapshotInvalidation,
     SealedDatasetSnapshot,
     FixtureDatasetBuildRequest,
@@ -39,12 +42,33 @@ from backend.services.advisory_phase1.dataset_build import (
     build_id_for,
     file_set_hash,
     logical_build_key,
+    _attempt_file_identities,
+    _snapshot_file_identities,
+    _verify_promoted_cas,
 )
 
 
 REASON_DATABASE_INVARIANT_VIOLATION = "ADVISORY_PHASE1C3_DATABASE_INVARIANT_VIOLATION"
 
 logger = logging.getLogger(__name__)
+
+
+def _same_aware_timestamp(raw: object, expected: datetime) -> bool:
+    try:
+        observed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        return False
+    return observed.astimezone(timezone.utc) == expected.astimezone(timezone.utc)
+
+
+def _build_event_payload_hash(payload: Mapping[str, object], attempt: DatasetBuildAttempt | None) -> str:
+    event_payload = dict(payload)
+    if attempt is not None:
+        event_payload["attempt_id"] = attempt.attempt_id
+        event_payload["fencing_token"] = attempt.fencing_token
+    return canonical_json_sha256(event_payload)
 
 
 @contextmanager
@@ -279,7 +303,15 @@ class PostgresDatasetBuildRepository:
                     raise DatasetBuildError(REASON_ATTEMPT_FENCING_STALE, "attempt heartbeat lost current fencing")
                 return self._attempt_from_row(dict(row))
 
-    def complete_materialize(self, *, attempt_id: str, expected_fencing_token: int, observed_file_set_hash: str, actor: str) -> DatasetBuild:
+    def complete_materialize(
+        self,
+        *,
+        attempt_id: str,
+        expected_fencing_token: int,
+        observed_file_set_hash: str,
+        actor: str,
+        materialization_receipt: object | None = None,
+    ) -> DatasetBuild:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 attempt, build = self._require_active_attempt(cur, attempt_id, expected_fencing_token)
@@ -288,7 +320,40 @@ class PostgresDatasetBuildRepository:
                 files = self._files_for_attempt(cur, attempt_id)
                 if not files or file_set_hash(files) != observed_file_set_hash:
                     raise DatasetBuildError(REASON_ATTEMPT_FILE_CONFLICT, "observed file set does not match persisted immutable files")
-                receipt = canonical_json_sha256({"attempt_id": attempt_id, "file_set_hash": observed_file_set_hash, "contract": "MATERIALIZE_V1"})
+                if materialization_receipt is not None:
+                    from backend.services.advisory_phase1.snapshot_writer import MaterializationReceipt
+
+                    expected_source_identity = canonical_json_sha256(
+                        {
+                            "source_revision_set_hash": build.request.snapshot_source_revision_set_hash,
+                            "query_registry_hash": build.request.query_registry_hash,
+                            "requested_source_cutoff": build.request.requested_source_cutoff,
+                            "label_as_of_ts": build.request.label_as_of_ts,
+                        }
+                    )
+                    if (
+                        not isinstance(materialization_receipt, MaterializationReceipt)
+                        or materialization_receipt.build_id != build.build_id
+                        or materialization_receipt.attempt_id != attempt_id
+                        or materialization_receipt.source_identity_hash != expected_source_identity
+                        or materialization_receipt.capture_set_hash != build.request.capture_set_hash
+                        or materialization_receipt.source_revision_set_hash
+                        != build.request.snapshot_source_revision_set_hash
+                        or materialization_receipt.files != _attempt_file_identities(files)
+                    ):
+                        raise DatasetBuildError(
+                            REASON_ATTEMPT_FILE_CONFLICT,
+                            "materialization receipt differs from exact file readback",
+                        )
+                    receipt = str(materialization_receipt.receipt_hash)
+                else:
+                    receipt = canonical_json_sha256(
+                        {
+                            "attempt_id": attempt_id,
+                            "file_set_hash": observed_file_set_hash,
+                            "contract": "MATERIALIZE_V1",
+                        }
+                    )
                 cur.execute(
                     "UPDATE app.advisory_dataset_build_attempt SET attempt_state = 'SUCCEEDED', finished_at = clock_timestamp() WHERE attempt_id = %s",
                     (attempt_id,),
@@ -348,6 +413,175 @@ class PostgresDatasetBuildRepository:
                 updated = self._build_from_row(dict(row))
                 self._append_event(cur, build=updated, attempt=attempt, event_type=DatasetBuildEventType.VERIFIED, actor=actor, payload={"receipt": receipt})
                 return updated
+
+    def complete_full_verify(
+        self,
+        *,
+        attempt_id: str,
+        expected_fencing_token: int,
+        receipt: object,
+        actor: str,
+    ) -> DatasetBuild:
+        """Persist only a typed Batch D all-file verification receipt."""
+
+        from backend.services.advisory_phase1.snapshot_writer import (
+            BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT,
+            FullParquetVerifier,
+            FullParquetVerificationReceipt,
+            capability_manifest_for_build,
+            written_files_from_attempt,
+        )
+
+        if not isinstance(receipt, FullParquetVerificationReceipt):
+            raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "Batch D verification requires a typed full-parquet receipt")
+        preflight_build = self.get_build(receipt.build_id)
+        if preflight_build.materialized_attempt_id is None:
+            raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "Batch D build has no materialized attempt")
+        preflight_files = self.files_for_attempt(preflight_build.materialized_attempt_id)
+        try:
+            reconstructed = FullParquetVerifier().verify_files(
+                build=preflight_build,
+                files=written_files_from_attempt(preflight_files),
+                capability_manifest=capability_manifest_for_build(preflight_build),
+            )
+        except Exception as error:
+            raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "full verification file readback failed") from error
+        if reconstructed != receipt:
+            raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "full verification receipt was not produced by exact file readback")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                attempt, build = self._require_active_attempt(cur, attempt_id, expected_fencing_token)
+                if (
+                    attempt.operation is not AttemptOperation.VERIFY
+                    or build.materialized_file_set_hash != receipt.file_set_hash
+                    or receipt.build_id != build.build_id
+                    or receipt.verification_contract_version != BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT
+                    or receipt.capture_set_hash != build.request.capture_set_hash
+                    or receipt.source_revision_set_hash != build.request.snapshot_source_revision_set_hash
+                    or receipt.selected_observation_mapping_set_hash != build.request.selected_observation_mapping_set_hash
+                    or receipt.selected_label_mapping_set_hash != build.request.selected_label_mapping_set_hash
+                ):
+                    raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "full verification must consume the exact materialized Batch D file set")
+                materialized_files = self._files_for_attempt(cur, str(build.materialized_attempt_id))
+                if _attempt_file_identities(materialized_files) != tuple(
+                    sorted((item.file for item in receipt.files), key=lambda item: item.logical_path)
+                ):
+                    raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "full verification files differ from persisted materialization")
+                cur.execute(
+                    "UPDATE app.advisory_dataset_build_attempt SET attempt_state = 'SUCCEEDED', finished_at = clock_timestamp() WHERE attempt_id = %s",
+                    (attempt_id,),
+                )
+                cur.execute(
+                    """
+                    UPDATE app.advisory_dataset_build
+                       SET checkpoint = 'VERIFIED', current_attempt_id = NULL,
+                           verified_attempt_id = %s, verify_receipt_hash = %s,
+                           verified_file_set_hash = %s, verification_contract_version = %s,
+                           row_version = row_version + 1, updated_at = clock_timestamp()
+                     WHERE build_id = %s AND current_attempt_id = %s AND current_fencing_token = %s
+                    RETURNING *
+                    """,
+                    (
+                        attempt_id, receipt.receipt_hash, receipt.file_set_hash,
+                        BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT,
+                        build.build_id, attempt_id, expected_fencing_token,
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DatasetBuildError(REASON_ATTEMPT_FENCING_STALE, "full verification completion lost current fencing")
+                updated = self._build_from_row(dict(row))
+                self._append_event(
+                    cur,
+                    build=updated,
+                    attempt=attempt,
+                    event_type=DatasetBuildEventType.VERIFIED,
+                    actor=actor,
+                    payload={"receipt": receipt.receipt_hash, "contract": BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT},
+                )
+                return updated
+
+    def complete_promote(
+        self,
+        *,
+        attempt_id: str,
+        expected_fencing_token: int,
+        receipt: object,
+        manifest: object,
+        store: object,
+        actor: str,
+    ) -> DatasetBuild:
+        """Advance VERIFIED to PROMOTED after caller has reopened every CAS object."""
+
+        from backend.services.advisory_phase1.dataset_store import LocalContentAddressedStore
+        from backend.services.advisory_phase1.snapshot_writer import DatasetManifest, PromotionReceipt
+
+        if (
+            not isinstance(receipt, PromotionReceipt)
+            or not isinstance(manifest, DatasetManifest)
+            or not isinstance(store, LocalContentAddressedStore)
+        ):
+            raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "promotion requires typed receipt, manifest, and CAS")
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                attempt, build = self._require_active_attempt(cur, attempt_id, expected_fencing_token)
+                if (
+                    attempt.operation is not AttemptOperation.PROMOTE
+                    or build.verification_contract_version != BATCH_D_FULL_PARQUET_VERIFICATION_CONTRACT
+                    or receipt.build_id != build.build_id
+                    or receipt.full_verification_receipt_hash != build.verify_receipt_hash
+                    or receipt.manifest_core_sha256 != manifest.core.manifest_core_sha256
+                    or receipt.manifest_sha256 != manifest.manifest_sha256
+                    or receipt.store_backend_hash != manifest.store_backend_hash
+                    or receipt.store_backend_hash != store.store_backend_hash
+                    or tuple(receipt.blobs) != tuple(manifest.core.files)
+                ):
+                    raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "promotion must consume one verified full-parquet receipt")
+                materialized_files = self._files_for_attempt(cur, str(build.materialized_attempt_id))
+                expected_identities = _attempt_file_identities(materialized_files)
+                promoted_identities = _snapshot_file_identities(receipt.blobs)
+                if expected_identities != promoted_identities or receipt.verified_content_set_hash != canonical_json_sha256(
+                    [item.canonical_identity() for item in expected_identities]
+                ):
+                    raise DatasetBuildError(REASON_CHECKPOINT_CONFLICT, "promotion blobs differ from verified materialization")
+                _verify_promoted_cas(store=store, manifest=manifest, receipt=receipt)
+                cur.execute(
+                    "UPDATE app.advisory_dataset_build_attempt SET attempt_state = 'SUCCEEDED', finished_at = clock_timestamp() WHERE attempt_id = %s",
+                    (attempt_id,),
+                )
+                cur.execute(
+                    """
+                    UPDATE app.advisory_dataset_build
+                       SET checkpoint = 'PROMOTED', current_attempt_id = NULL,
+                           promoted_attempt_id = %s, promotion_receipt_hash = %s,
+                           promoted_manifest_hash = %s, row_version = row_version + 1,
+                           updated_at = clock_timestamp()
+                     WHERE build_id = %s AND current_attempt_id = %s AND current_fencing_token = %s
+                    RETURNING *
+                    """,
+                    (
+                        attempt_id, receipt.receipt_sha256, receipt.manifest_sha256,
+                        build.build_id, attempt_id, expected_fencing_token,
+                    ),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise DatasetBuildError(REASON_ATTEMPT_FENCING_STALE, "promotion completion lost current fencing")
+                updated = self._build_from_row(dict(row))
+                self._append_event(
+                    cur,
+                    build=updated,
+                    attempt=attempt,
+                    event_type=DatasetBuildEventType.PROMOTED,
+                    actor=actor,
+                    payload={"receipt": receipt.receipt_sha256, "manifest": receipt.manifest_sha256},
+                )
+                return updated
+
+    def files_for_attempt(self, attempt_id: str) -> tuple[DatasetAttemptFile, ...]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._files_for_attempt(cur, attempt_id)
 
     def fail_attempt(self, *, attempt_id: str, expected_fencing_token: int, error_code: str, actor: str) -> DatasetBuildAttempt:
         with self._conn_factory() as conn:
@@ -500,6 +734,41 @@ class PostgresDatasetBuildRepository:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._build_from_row(self._select_build_locked(cur, build_id))
 
+    def snapshot_files(self, snapshot_id: str) -> tuple[DatasetSnapshotFile, ...]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT logical_path, logical_role, partition_key_hash, ordinal, content_uri,
+                           sha256, size_bytes, row_count, schema_fingerprint, partition_content_hash,
+                           store_backend_hash, blob_sha256
+                      FROM app.advisory_dataset_snapshot_file
+                     WHERE snapshot_id = %s
+                     ORDER BY logical_path
+                    """,
+                    (snapshot_id,),
+                )
+                return tuple(
+                    DatasetSnapshotFile(
+                        logical_path=str(row["logical_path"]),
+                        logical_role=str(row["logical_role"]),
+                        partition_key_hash=str(row["partition_key_hash"]),
+                        ordinal=int(row["ordinal"]),
+                        content_uri=str(row["content_uri"]),
+                        sha256=str(row["sha256"]),
+                        size_bytes=int(row["size_bytes"]),
+                        row_count=int(row["row_count"]),
+                        schema_fingerprint=str(row["schema_fingerprint"]),
+                        partition_content_hash=str(row["partition_content_hash"]),
+                        blob=DatasetBlobHeader(
+                            store_backend_hash=str(row["store_backend_hash"]),
+                            blob_sha256=str(row["blob_sha256"]),
+                            size_bytes=int(row["size_bytes"]),
+                        ),
+                    )
+                    for row in cur.fetchall()
+                )
+
     def append_snapshot_invalidation(self, invalidation: DatasetSnapshotInvalidation) -> DatasetSnapshotInvalidation:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -552,6 +821,11 @@ class PostgresDatasetBuildRepository:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1 FROM app.advisory_dataset_snapshot_invalidation WHERE snapshot_id = %s", (snapshot_id,))
                 return cur.fetchone() is not None
+
+    def assert_base_snapshot_reusable(self, request: FixtureDatasetBuildRequest) -> None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                self._require_base_snapshot_admission(cur, request)
 
     def save_sealed_snapshot(self, snapshot: SealedDatasetSnapshot, *, actor: str) -> SealedDatasetSnapshot:
         """Persist a Batch-D-produced aggregate in one short seal transaction.
@@ -864,7 +1138,7 @@ class PostgresDatasetBuildRepository:
                 if (
                     str(payload.get("label_policy_bundle_id")) != request.label_policy_bundle_id
                     or str(payload.get("label_policy_bundle_hash")) != request.label_policy_bundle_hash
-                    or str(payload.get("label_as_of_ts")).replace("Z", "+00:00") != request.label_as_of_ts.isoformat()
+                    or not _same_aware_timestamp(payload.get("label_as_of_ts"), request.label_as_of_ts)
                 ):
                     raise DatasetBuildError(REASON_BUILD_REQUEST_CONFLICT, "label capture policy or as-of identity is incompatible")
                 observed_label_targets.update(
@@ -1029,7 +1303,8 @@ class PostgresDatasetBuildRepository:
         event = DatasetBuildEvent(
             build_id=build.build_id, attempt_id=attempt.attempt_id if attempt else None,
             fencing_token=attempt.fencing_token if attempt else None, event_type=event_type,
-            event_at=cur.fetchone()["database_now"], actor=actor, payload_hash=canonical_json_sha256(payload),
+            event_at=cur.fetchone()["database_now"], actor=actor,
+            payload_hash=_build_event_payload_hash(payload, attempt),
             reason_codes=tuple(sorted(set(reasons))),
         )
         cur.execute(
