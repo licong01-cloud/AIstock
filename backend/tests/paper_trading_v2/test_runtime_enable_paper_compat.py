@@ -26,7 +26,7 @@ from backend.services.strategy_package.models import (
 )
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
-from backend.services.trading_core.errors import InvalidStateTransitionError, StrategyPackageValidationError
+from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 from backend.tests.strategy_package.test_enable_paper_router_409 import (
     _seed_paper_ready_package,
@@ -201,54 +201,21 @@ def test_runtime_enable_paper_enabled_status_reentry_fails_fast(
 # ---------------------------------------------------------------------------
 
 
-def test_runtime_handles_enable_paper_strict_gate_failure(
+def test_selection_enabled_to_paper_does_not_repeat_strategy_package_validation(
     dev_pkg_repo: StrategyPackageRepository,
 ) -> None:
-    """enable_paper on a SELECTION_ENABLED package whose manifest has a
-    failed asset_check raises StrategyPackageValidationError.
-
-    Asset eligibility runs before the repository compare-and-set, so even
-    though the persisted transition (SELECTION_ENABLED -> PAPER_ENABLED) is
-    allowed, the manifest asset-check gate fails fast.
-
-    This is what audit-grade observability means: the failure surfaces the
-    failed-checks context for downstream operator triage rather than
-    silently no-op'ing the transition.
-    """
+    """Selection admission is authoritative for the later Paper transition."""
     pkg_id = _seed_test_package(
         dev_pkg_repo,
         persisted_status=PackageStatus.SELECTION_ENABLED,
         asset_checks_passing=False,
     )
     service = StrategyPackageService(repository=dev_pkg_repo)
-    # Seed governance fixtures; the asset-check failure remains the operative
-    # blocker, but seeding avoids unrelated blockers crowding the context.
     _seed_paper_ready_package(service, pkg_id)
 
-    with pytest.raises(StrategyPackageValidationError) as exc_info:
-        service.enable_paper(pkg_id)
+    paper = service.enable_paper(pkg_id)
 
-    err = exc_info.value
-    context = getattr(err, "context", {}) or {}
-    msg = str(err)
-    # Paper simulation admission wraps the validator's asset-check failure as a
-    # blocker string inside the alpha-core admission context.
-    # Audit-grade observability: the failed asset-check must remain
-    # discoverable so operators know which gate fired.
-    alpha_core_identity = context.get("alpha_core_identity") or {}
-    blockers_str = " ".join([*(context.get("blockers") or []), *(alpha_core_identity.get("blockers") or [])])
-    surfaces_asset_check = (
-        "asset" in msg.lower()
-        or "asset" in blockers_str.lower()
-        or "asset_checks" in str(context)
-        or "failed_checks" in str(context)
-    )
-    assert surfaces_asset_check, (
-        f"strict gate failure must surface asset-check context; "
-        f"got msg={msg!r} context={context!r}"
-    )
-
-    # Verify no silent state mutation: row stays SELECTION_ENABLED.
+    assert paper.package_status == PackageStatus.PAPER_ENABLED
     conn = psycopg2.connect(**_dev_dsn())
     try:
         with conn.cursor() as cur:
@@ -260,6 +227,4 @@ def test_runtime_handles_enable_paper_strict_gate_failure(
     finally:
         conn.close()
     assert row is not None
-    assert row[0] == PackageStatus.SELECTION_ENABLED.value, (
-        f"validator failure must NOT mutate state; got {row[0]!r}"
-    )
+    assert row[0] == PackageStatus.PAPER_ENABLED.value

@@ -71,15 +71,17 @@ class SelectionPackageHealthService:
                     },
                 }
             )
-        elif self._auto_generate(config):
-            checks.append(self._source_resolution_check(record))
         else:
             checks.append(
                 {
-                    "name": "source_resolves",
-                    "status": UNKNOWN,
-                    "message": "not checked until live artifact auto-generation is requested",
-                    "context": {},
+                    "name": "runtime_asset_admission",
+                    "status": PASS,
+                    "message": "StrategyPackage runtime assets were admitted before Selection; health does not revalidate them",
+                    "context": {
+                        "package_id": record.package_id,
+                        "asset_authority": "persisted_runtime_asset_admission",
+                        "revalidated": False,
+                    },
                 }
             )
 
@@ -138,7 +140,7 @@ class SelectionPackageHealthService:
     def _contract_check(manifest: Any) -> dict[str, Any]:
         try:
             contract = build_backtest_runtime_contract(manifest)
-            risk_contract = contract["runtime_features"]["risk_policy"]
+            contract["runtime_features"]["risk_policy"]
         except TradingCoreError as exc:
             return {
                 "name": "st_pit_contract_status",
@@ -320,34 +322,6 @@ class SelectionPackageHealthService:
                 "trade_date": artifact.trade_date.isoformat(),
                 "data_source": artifact.data_source,
             },
-        }
-
-    def _source_resolution_check(self, record: Any) -> dict[str, Any]:
-        if self.runtime_source_resolver is None:
-            return {
-                "name": "source_resolves",
-                "status": UNKNOWN,
-                "message": "runtime source resolver is not available to the health service",
-                "context": {"package_id": record.package_id},
-            }
-        try:
-            source_loader = getattr(self.runtime_source_resolver, "load_source_for_strategy_package", None)
-            if callable(source_loader):
-                source_loader(
-                    source_type=record.source_type,
-                    source_id=record.source_id,
-                    loop_id=record.loop_id,
-                    run_id=record.run_id,
-                )
-            else:
-                self.runtime_source_resolver.load_source(record.source_id)
-        except TradingCoreError as exc:
-            return {"name": "source_resolves", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
-        return {
-            "name": "source_resolves",
-            "status": PASS,
-            "message": "StrategyPackage QE source resolves for live inference",
-            "context": {"source_type": record.source_type, "source_id": record.source_id, "loop_id": record.loop_id},
         }
 
     def _hmm_artifact_check(

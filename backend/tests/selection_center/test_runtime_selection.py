@@ -51,7 +51,7 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     UnsupportedFeatureError,
 )
-from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
 
 
 class NoopRefreshAudit:
@@ -292,7 +292,7 @@ def ready_manifest_with_scores(package_name: str, symbol: str, score: float, ran
             },
         }
     )
-    frozen = freeze_manifest(manifest)
+    frozen = admit_manifest_for_test(manifest)
     seed_test_authoritative_artifact(frozen, rows)
     return frozen
 
@@ -308,7 +308,7 @@ def ready_manifest_with_score_rows(package_name: str, rows: list[dict]):
             },
         }
     )
-    frozen = freeze_manifest(manifest)
+    frozen = admit_manifest_for_test(manifest)
     seed_test_authoritative_artifact(frozen, rows)
     return frozen
 
@@ -1688,7 +1688,7 @@ def test_selectable_packages_summary_path_does_not_expand_limit_or_upsert_model_
     assert "runtime_config_contract" not in packages[0]
 
 
-def test_selectable_packages_summary_path_filters_summary_ineligible_rows() -> None:
+def test_selectable_packages_summary_path_does_not_revalidate_or_filter_upstream_rows() -> None:
     class SummaryOnlyPackageRepository(InMemoryStrategyPackageRepository):
         def list_summaries(self, *, status=None, limit: int = 100):  # noqa: ANN001, ANN202
             rows = super().list_summaries(status=status, limit=limit)
@@ -1715,7 +1715,12 @@ def test_selectable_packages_summary_path_filters_summary_ineligible_rows() -> N
 
     packages = service.list_selectable_packages(limit=10, view="summary")
 
-    assert [item["package_id"] for item in packages] == [manifest.package_id]
+    assert [item["package_id"] for item in packages] == [manifest.package_id, "pkg_blocked_summary"]
+    legacy = packages[1]["asset_eligibility"]
+    assert legacy["eligible"] is True
+    assert legacy["revalidated"] is False
+    assert legacy["admission_authority"] == "strategy_package_entry"
+    assert legacy["prior_diagnostics"]["blockers"] == ["multi_alpha_runtime_not_validated_until_dry_run"]
 
 
 def test_selectable_packages_summary_path_preserves_localsim_multi_alpha_warning_rows() -> None:

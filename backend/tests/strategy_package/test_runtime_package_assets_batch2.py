@@ -11,6 +11,13 @@ from typing import Any
 
 import pytest
 
+from backend.services.selection_center.package_health import SelectionPackageHealthService
+from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    attach_runtime_asset_admission,
+    runtime_asset_admission_status,
+)
 from backend.services.strategy_package.live_inference import (
     LiveInferencePreflightError,
     LiveInferenceResult,
@@ -367,6 +374,102 @@ def test_prepare_workspace_rejects_package_asset_params_with_missing_pickled_mod
 
     assert excinfo.value.context["reason_code"] == "strategy_package_model_code_missing"
     assert excinfo.value.context["missing_modules"] == ["model"]
+
+
+def _admit_manifest(manifest):  # noqa: ANN001, ANN202
+    return attach_runtime_asset_admission(
+        manifest,
+        FrozenRuntimeSelfCheckResult(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=2,
+            dynamic_factor_count=2,
+            alpha158_alias_count=0,
+            factor_order_count=2,
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+        ),
+    )
+
+
+def test_selection_health_does_not_revalidate_admitted_package_assets(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    manifest = _admit_manifest(_frozen_manifest(store))
+    package_repo = InMemoryStrategyPackageRepository()
+    record = package_repo.save_manifest(manifest)
+
+    class ResolverMustNotRun:
+        def preflight_for_strategy_package(self, **_kwargs: Any) -> None:
+            raise AssertionError("Selection health must not rerun StrategyPackage admission")
+
+        def load_source_for_strategy_package(self, **_kwargs: Any) -> None:
+            raise AssertionError("Selection health must not materialize StrategyPackage assets")
+
+    health = SelectionPackageHealthService(runtime_source_resolver=ResolverMustNotRun()).summarize(record)
+
+    assert health["status"] == "RUNNABLE"
+    assert health["runnable"] is True
+    assert health["diagnostic_only"] is True
+    admission = next(item for item in health["checks"] if item["name"] == "runtime_asset_admission")
+    assert admission["context"]["revalidated"] is False
+
+
+def test_runtime_asset_admission_supports_models_without_model_code(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    admitted = _admit_manifest(_frozen_manifest(store))
+
+    passed, context = runtime_asset_admission_status(admitted)
+
+    assert passed is True
+    assert context["reason_code"] == "strategy_package_runtime_asset_admission_passed"
+    assert admitted.model_asset.model_code_required is False
+    assert admitted.model_asset.model_code_assets == []
+
+
+def test_runtime_asset_admission_supports_models_with_model_code(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    admitted = _admit_manifest(
+        _frozen_manifest(
+            store,
+            model_payload=_pickled_model_instance_payload(tmp_path),
+            model_code_files={"model.py": b"class LSTM_10D_hs64_d02:\n    pass\n"},
+        )
+    )
+
+    passed, _context = runtime_asset_admission_status(admitted)
+
+    assert passed is True
+    assert admitted.model_asset.model_code_required is True
+    assert [asset.relative_path for asset in admitted.model_asset.model_code_assets] == ["model.py"]
+
+
+def test_asset_eligibility_blocks_package_without_one_time_admission(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    repo = InMemoryStrategyPackageRepository()
+    record = repo.save_manifest(_frozen_manifest(store))
+
+    result = StrategyPackageAssetEligibilityService().summarize(record)
+
+    assert result.eligible is False
+    assert "runtime_asset_admission" in result.blockers
+    check = next(item for item in result.checks if item.name == "runtime_asset_admission")
+    assert check.context["reason_code"] == "strategy_package_runtime_asset_admission_missing"
+
+
+def test_runtime_asset_admission_rejects_manifest_asset_closure_drift(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    admitted = _admit_manifest(_frozen_manifest(store))
+    drifted_model = admitted.model_asset.model_copy(update={"sha256": "0" * 64})
+    drifted = freeze_manifest(admitted.model_copy(update={"model_asset": drifted_model, "manifest_sha256": None}))
+
+    passed, context = runtime_asset_admission_status(drifted)
+
+    assert passed is False
+    assert context["reason_code"] == "strategy_package_runtime_asset_admission_invalid"
+    assert "asset_closure_sha256" in context["invalid_fields"]
 
 
 def test_package_asset_params_with_model_code_materialize_successfully(tmp_path: Path) -> None:

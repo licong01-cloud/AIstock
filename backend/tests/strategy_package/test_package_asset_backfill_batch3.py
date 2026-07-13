@@ -8,6 +8,10 @@ from types import SimpleNamespace
 
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package import package_asset_backfill as backfill_module
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    runtime_asset_admission_status,
+)
 from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
     AlphaMode,
@@ -70,7 +74,7 @@ def _freezer(
             )
         return PackageAssetBytes(model_code_files[rel], f"unit://workspace/{rel}")
 
-    return PackageAssetFreezeService(
+    freezer = PackageAssetFreezeService(
         asset_store=LocalPackageAssetStore(tmp_path / "package_assets"),
         source=SimpleNamespace(workspace_file_bytes=workspace_file),
         conf_yaml_reader=lambda manifest: PackageAssetBytes(b"task: {}\n", f"unit://conf/{manifest.package_id}/conf.yaml"),
@@ -80,6 +84,36 @@ def _freezer(
         ),
         factor_code_reader=factor_reader,
     )
+    freezer.frozen_runtime_self_check = SimpleNamespace(
+        assert_manifest_self_contained=lambda manifest: FrozenRuntimeSelfCheckResult(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=len(manifest.factor_set),
+            dynamic_factor_count=len(manifest.factor_set),
+            alpha158_alias_count=0,
+            factor_order_count=len(manifest.factor_set),
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+            leg_results=(
+                {component.alpha_id: {"origin": "package_asset"} for component in manifest.alpha_components}
+                if manifest.alpha_mode == AlphaMode.MULTI_ALPHA
+                else None
+            ),
+            combined_signal_smoke=(
+                {
+                    "schema_version": "multi_alpha_parent_combined_signal_smoke_v1",
+                    "leg_count": len(manifest.alpha_components),
+                    "deterministic_replay": True,
+                }
+                if manifest.alpha_mode == AlphaMode.MULTI_ALPHA
+                else None
+            ),
+        )
+    )
+    return freezer
 
 
 def _pickled_model_instance_payload(tmp_path: Path) -> bytes:
@@ -183,6 +217,7 @@ def test_dry_run_apply_and_idempotent_backfill_single_alpha(tmp_path: Path) -> N
     assert applied.items[0].status == STATUS_APPLIED
     assert updated.manifest_sha256 != old_sha
     assert manifest_has_frozen_runtime_assets(updated.current_manifest())
+    assert runtime_asset_admission_status(updated.current_manifest())[0] is True
     assert len(repo.list_package_assets(record.package_id)) == 2
     assert repo.events[-1].reason == "strategy_package_asset_backfill_freeze"
     assert repo.events[-1].context["old_manifest_sha256"] == old_sha
@@ -233,17 +268,18 @@ def test_frozen_manifest_with_missing_ledger_rebuilds_package_asset_rows(tmp_pat
     plan = service.build_plan(package_ids=[record.package_id])
 
     assert plan.items[0].status == STATUS_PLANNED_FREEZE
-    assert plan.items[0].old_manifest_sha256 == plan.items[0].new_manifest_sha256 == record.manifest_sha256
+    assert plan.items[0].old_manifest_sha256 == record.manifest_sha256
+    assert plan.items[0].new_manifest_sha256 != record.manifest_sha256
     assert repo.list_package_assets(record.package_id) == []
 
     applied = service.apply_plan(plan, operator="unit_test")
 
     assert applied.items[0].status == STATUS_APPLIED
-    assert repo.get(record.package_id).manifest_sha256 == record.manifest_sha256
+    assert repo.get(record.package_id).manifest_sha256 != record.manifest_sha256
     assert len(repo.list_package_assets(record.package_id)) == 2
 
 
-def test_already_frozen_manifest_with_complete_ledger_is_skipped(tmp_path: Path) -> None:
+def test_frozen_manifest_without_admission_receipt_is_admitted_once_then_skipped(tmp_path: Path) -> None:
     repo = InMemoryStrategyPackageRepository()
     frozen_assets = _freezer(tmp_path).freeze_manifest_assets(_single_manifest("done"))
     record = repo.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
@@ -251,9 +287,14 @@ def test_already_frozen_manifest_with_complete_ledger_is_skipped(tmp_path: Path)
 
     plan = service.build_plan(package_ids=[record.package_id])
 
-    assert plan.items[0].status == STATUS_SKIPPED_ALREADY_FROZEN
-    assert plan.items[0].asset_count == 2
-    assert repo.events[-1].reason == "package_created"
+    assert plan.items[0].status == STATUS_PLANNED_FREEZE
+    applied = service.apply_plan(plan, operator="unit_test")
+    assert applied.items[0].status == STATUS_APPLIED
+    assert runtime_asset_admission_status(repo.get(record.package_id).current_manifest())[0] is True
+
+    rerun = service.build_plan(package_ids=[record.package_id])
+    assert rerun.items[0].status == STATUS_SKIPPED_ALREADY_FROZEN
+    assert rerun.items[0].asset_count == 2
 
 
 def test_already_frozen_manifest_with_pickled_model_but_missing_code_is_repaired(tmp_path: Path) -> None:

@@ -35,7 +35,7 @@ from backend.services.strategy_package.validation_run import (
     PackageValidationStatus,
     PackageValidationType,
 )
-from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
 
 
 @pytest.fixture
@@ -207,7 +207,7 @@ def test_enable_paper_endpoint_allows_simulation_despite_governance_blockers(
 ) -> None:
     """paper_ready=False stays governance-only and must not block simulation."""
     app, repo = app_and_repo
-    manifest = freeze_manifest(
+    manifest = admit_manifest_for_test(
         make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED})
     )
     record = repo.save_manifest(manifest)

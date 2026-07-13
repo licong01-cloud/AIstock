@@ -17,7 +17,7 @@ from .candidate import (
     CandidateStrategyPackageStatus,
 )
 from .asset_eligibility import StrategyPackageAssetEligibilityService
-from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService, attach_runtime_asset_admission
 from .execution_policy import (
     BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
@@ -131,8 +131,8 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
 
     def create_from_qe_evolution_loop(
         self,
@@ -149,8 +149,8 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
 
     def create_from_candidate(
         self,
@@ -182,8 +182,14 @@ class StrategyPackageService:
         manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
+
+    def _attach_runtime_asset_admission(self, manifest: StrategyPackageManifest) -> StrategyPackageManifest:
+        self_check = self.frozen_runtime_self_check.assert_manifest_self_contained(manifest)
+        admitted = attach_runtime_asset_admission(manifest, self_check)
+        self.validator.validate_manifest(admitted)
+        return admitted
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         self.validator.validate_manifest(manifest)
@@ -433,8 +439,20 @@ class StrategyPackageService:
                 "unsupported strategy package target status",
                 context={"package_id": package_id, "to_status": to_status.value},
             )
-        if to_status in {PackageStatus.SELECTION_ENABLED, PackageStatus.PAPER_ENABLED}:
-            record = self.repository.get(package_id)
+        record = self.repository.get(package_id)
+        if record.package_status not in allowed:
+            raise InvalidStateTransitionError(
+                "invalid strategy package status transition",
+                context={
+                    "package_id": package_id,
+                    "from_status": record.package_status.value,
+                    "to_status": to_status.value,
+                    "allowed_from": sorted(item.value for item in allowed),
+                },
+            )
+        if to_status == PackageStatus.SELECTION_ENABLED or (
+            to_status == PackageStatus.PAPER_ENABLED and record.package_status == PackageStatus.BACKTEST_APPROVED
+        ):
             self.asset_eligibility.require_eligible(record)
         return self.repository.transition_status(
             package_id=package_id,
@@ -564,7 +582,6 @@ class StrategyPackageService:
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def enable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
-        self.asset_eligibility.require_eligible(self.repository.get(package_id))
         return self.repository.get_execution_policy(package_id, policy_id)
 
     def disable_execution_policy_for_paper(self, package_id: str, policy_id: str) -> ValidatedExecutionPolicy:
@@ -1121,9 +1138,6 @@ class StrategyPackageService:
                 ],
             },
         }
-
-    def _require_paper_simulation_admission(self, record: StrategyPackageRecord) -> None:
-        self.asset_eligibility.require_eligible(record)
 
     @staticmethod
     def _require_live_identity_match(

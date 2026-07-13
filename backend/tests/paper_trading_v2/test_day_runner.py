@@ -22,7 +22,6 @@ from backend.services.paper_trading_v2.selection_cutoff import ensure_previous_t
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.risk_policy import RiskDecision, StockRiskPolicyService
 from backend.services.selection_center.tradability import TradabilityFilter
-from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.model_asset_resolver import DEFAULT_MODEL_CACHE_ROOT
 from backend.services.strategy_package.models import PackageStatus, PortfolioPolicy
@@ -39,7 +38,7 @@ from backend.services.trading_core.errors import DataUnavailableError, InvalidSt
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 from backend.services.trading_core.models import AccountSnapshot, Fill, MinuteBar, Order, OrderEvent, OrderEventType, OrderSide, OrderStatus, OrderType, PositionLot, RunStatus
-from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
 
 
 class FakeCalendar:
@@ -478,7 +477,7 @@ def make_paper_enabled_manifest(
             "strategy_config": strategy_config,
         }
     )
-    return freeze_manifest(manifest)
+    return admit_manifest_for_test(manifest)
 
 
 def save_manifest_with_default_execution_policy(
@@ -588,7 +587,7 @@ def test_create_portfolio_uses_manifest_minute_policy_as_platform_default() -> N
 def test_create_portfolio_accepts_requested_validated_policy_that_differs_from_manifest() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
-    manifest = freeze_manifest(
+    manifest = admit_manifest_for_test(
         make_manifest(algo_code="V24_PLAN").model_copy(update={"package_status": PackageStatus.PAPER_ENABLED})
     )
     save_manifest_with_default_execution_policy(package_repo, manifest)
@@ -651,7 +650,7 @@ def test_create_portfolio_derives_platform_policy_from_qe_backtest_execution_con
             "execution_algo_params": {"device": "cuda", "min_cost": 5, "max_buckets": 12},
         },
     }
-    manifest = freeze_manifest(
+    manifest = admit_manifest_for_test(
         base.model_copy(
             update={
                 "package_status": PackageStatus.BACKTEST_APPROVED,
@@ -691,7 +690,7 @@ def test_create_portfolio_derives_platform_policy_using_model_cache_env(monkeypa
     paper_repo = InMemoryPaperTradingV2Repository()
     monkeypatch.setenv("AISTOCK_MODEL_CACHE_DIR", str(tmp_path / "model_cache" / "execution"))
     base = make_manifest(algo_code="TWAP")
-    manifest = freeze_manifest(
+    manifest = admit_manifest_for_test(
         base.model_copy(
             update={
                 "package_status": PackageStatus.BACKTEST_APPROVED,
@@ -729,7 +728,7 @@ def test_create_portfolio_derives_platform_policy_using_model_cache_env(monkeypa
 def test_create_portfolio_rejects_missing_execution_context_without_manifest_policy() -> None:
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
-    manifest = freeze_manifest(
+    manifest = admit_manifest_for_test(
         make_manifest().model_copy(
             update={
                 "package_status": PackageStatus.BACKTEST_APPROVED,

@@ -6,6 +6,10 @@ import pytest
 from pydantic import ValidationError
 
 from backend.services.strategy_package.manifest import freeze_manifest
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    attach_runtime_asset_admission,
+)
 from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
     AlphaComponent,
@@ -83,6 +87,40 @@ def make_manifest(algo_code: str = "TWAP") -> StrategyPackageManifest:
             sample_start=date(2024, 1, 1),
         ),
         package_status=PackageStatus.BACKTEST_APPROVED,
+    )
+
+
+def admit_manifest_for_test(manifest: StrategyPackageManifest) -> StrategyPackageManifest:
+    frozen = freeze_manifest(manifest.model_copy(update={"manifest_sha256": None}))
+    return attach_runtime_asset_admission(
+        frozen,
+        FrozenRuntimeSelfCheckResult(
+            package_id=frozen.package_id,
+            manifest_sha256=frozen.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=len(frozen.factor_set),
+            dynamic_factor_count=len(frozen.factor_set),
+            alpha158_alias_count=0,
+            factor_order_count=len(frozen.factor_set),
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+            leg_results=(
+                {component.alpha_id: {"origin": "package_asset"} for component in frozen.alpha_components}
+                if frozen.alpha_mode == AlphaMode.MULTI_ALPHA
+                else None
+            ),
+            combined_signal_smoke=(
+                {
+                    "schema_version": "multi_alpha_parent_combined_signal_smoke_v1",
+                    "leg_count": len(frozen.alpha_components),
+                    "deterministic_replay": True,
+                }
+                if frozen.alpha_mode == AlphaMode.MULTI_ALPHA
+                else None
+            ),
+        ),
     )
 
 

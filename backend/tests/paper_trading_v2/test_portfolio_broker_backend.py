@@ -14,6 +14,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 
@@ -22,6 +23,7 @@ from backend.services.paper_trading_v2.models import PaperPortfolio, PortfolioSt
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test
 from backend.services.trading_core.errors import (
     BrokerMarketSourceMismatchError,
     RuntimeConfigInvalidError,
@@ -35,7 +37,7 @@ from backend.tests.paper_trading_v2.test_day_runner import (
 
 def _seed_paper_enabled_package() -> tuple[InMemoryStrategyPackageRepository, Any]:  # type: ignore[name-defined]
     package_repo = InMemoryStrategyPackageRepository()
-    manifest = make_paper_enabled_manifest()
+    manifest = admit_manifest_for_test(make_paper_enabled_manifest())
     save_manifest_with_default_execution_policy(package_repo, manifest)
     return package_repo, manifest
 

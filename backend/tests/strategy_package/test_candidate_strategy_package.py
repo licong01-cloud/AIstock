@@ -18,6 +18,7 @@ from backend.services.strategy_package.candidate import (
     CandidateStrategyPackageStatus,
     InMemoryCandidateStrategyPackageRepository,
 )
+from backend.services.strategy_package.frozen_runtime_self_check import FrozenRuntimeSelfCheckResult
 from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
     AlphaComponent,
@@ -95,7 +96,19 @@ def _make_manifest() -> StrategyPackageManifest:
 
 class _NoopFrozenRuntimeSelfCheck:
     def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
-        return None
+        return FrozenRuntimeSelfCheckResult(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=len(manifest.factor_set),
+            dynamic_factor_count=len(manifest.factor_set),
+            alpha158_alias_count=0,
+            factor_order_count=len(manifest.factor_set),
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+        )
 
 
 class _FakeAssetFreezer:

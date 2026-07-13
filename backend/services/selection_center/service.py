@@ -15,7 +15,6 @@ from backend.services.paper_trading_v2.market_data import TradeCalendarProvider
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.simulation_runtime import InMemorySimulationRuntimeRepository
 from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
-from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
 from backend.services.strategy_package.repository import StrategyPackageRepository
@@ -29,7 +28,6 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-    LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.service import StrategyPackageService
@@ -108,7 +106,7 @@ class SelectionCenterService:
         package_health_service: SelectionPackageHealthService | Any | None = None,
         strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
         result_enrichment_service: SelectionResultEnrichmentService | Any | None = None,
-        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
+        asset_eligibility_service: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -125,7 +123,9 @@ class SelectionCenterService:
         self.calendar_provider = calendar_provider or TradeCalendarProvider()
         self.risk_policy_service = risk_policy_service or StockRiskPolicyService()
         self.result_enrichment_service = result_enrichment_service or SelectionResultEnrichmentService()
-        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
+        # Compatibility-only injection seam. StrategyPackage admission belongs
+        # to the upstream package-entry boundary, never to Selection runtime.
+        self.asset_eligibility_service = asset_eligibility_service
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
@@ -145,7 +145,6 @@ class SelectionCenterService:
             calendar_provider=self.calendar_provider,
             risk_policy_service=self.risk_policy_service,
             package_health_service=self.package_health_service,
-            asset_eligibility_service=self.asset_eligibility_service,
             repository=selection_evidence_repository,
         )
 
@@ -284,7 +283,6 @@ class SelectionCenterService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -301,7 +299,6 @@ class SelectionCenterService:
                 trade_date=trade_date,
                 data_source=data_source,
             )
-            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health
@@ -522,15 +519,6 @@ class SelectionCenterService:
                 except DataUnavailableError:
                     continue
 
-        # Cold-start preflight (P0-F / Codex doc P0-4): fail fast on missing
-        # QE source / node / conf.yaml / factors / model params BEFORE
-        # generate_from_live_inference triggers the heavy materialization
-        # path that historically hung for 30+ minutes.
-        self._require_live_inference_preflight(
-            record=record,
-            runtime_config=runtime_config,
-        )
-
         self.selection_artifact_service.generate_from_live_inference(
             package_id=record.package_id,
             trade_date=trade_date,
@@ -538,36 +526,6 @@ class SelectionCenterService:
             runtime_config=runtime_config,
             include_reference_price=bool(artifact_config.get("include_reference_price", True)),
             cutoff_date=cutoff_date,
-        )
-
-    def _require_live_inference_preflight(
-        self,
-        *,
-        record: Any,
-        runtime_config: dict[str, Any],
-    ) -> LiveInferencePreflightResult:
-        """Run live inference cold-start preflight; raise typed error on fail.
-
-        Hardens Selection Center against the historical 30+ cold-start
-        timeouts (audit doc §0/§7 P0-4). The resolver is sourced from the
-        injected ``selection_artifact_service`` so tests can swap a fake
-        resolver via the existing dependency-injection seam.
-        """
-
-        resolver = getattr(self.selection_artifact_service, "runtime_asset_resolver", None)
-        if resolver is None or not hasattr(resolver, "require_preflight_or_raise"):
-            raise ArtifactGenerationFailedError(
-                "selection_artifact_service.runtime_asset_resolver is not preflight-capable",
-                context={"package_id": record.package_id},
-            )
-        return resolver.require_preflight_or_raise(
-            source_type=record.source_type,
-            source_id=record.source_id,
-            loop_id=record.loop_id,
-            run_id=record.run_id,
-            runtime_config=runtime_config,
-            manifest=record.current_manifest(),
-            package_id=record.package_id,
         )
 
     def resolve_point_in_time_context(
@@ -767,14 +725,15 @@ class SelectionCenterService:
             for row in summary_rows:
                 if str(row.get("package_status") or "").upper() == "RETIRED":
                     continue
-                if ((row.get("asset_eligibility") or {}).get("eligible") is False):
-                    continue
                 latest_run = latest_runs.get(str(row["package_id"]))
                 summary_asset_eligibility = dict(row.get("asset_eligibility") or {})
                 items.append(
                     {
                         **row,
-                        "asset_eligibility": {**summary_asset_eligibility, "eligible": True, "summary_only": True},
+                        "asset_eligibility": self._upstream_admission_summary(
+                            summary_asset_eligibility,
+                            summary_only=True,
+                        ),
                         "selection_health": {"status": "NOT_EVALUATED", "summary_only": True},
                         "model_state": {"package_id": row["package_id"], "staleness_status": "UNKNOWN", "summary_only": True},
                         "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
@@ -791,9 +750,6 @@ class SelectionCenterService:
         package_service = StrategyPackageService(repository=self.package_repository)
         items: list[dict[str, Any]] = []
         for record in records:
-            asset_eligibility = self.asset_eligibility_service.summarize(record)
-            if not asset_eligibility.eligible:
-                continue
             manifest = record.current_manifest()
             model_state = package_service.get_model_state(record.package_id)
             latest_run = latest_runs.get(record.package_id)
@@ -816,12 +772,37 @@ class SelectionCenterService:
                     "updated_at": record.updated_at.isoformat(),
                     "metrics_summary": metrics_summary_from_record(record).model_dump(mode="json"),
                     "model_state": model_state.model_dump(mode="json"),
-                    "asset_eligibility": asset_eligibility.to_dict(),
+                    "asset_eligibility": self._upstream_admission_summary(),
                     "selection_health": health,
                     "latest_selection_run": self._selection_run_summary(latest_run) if latest_run else None,
                 }
             )
         return items[:limit]
+
+    @staticmethod
+    def _upstream_admission_summary(
+        prior_diagnostics: dict[str, Any] | None = None,
+        *,
+        summary_only: bool = False,
+    ) -> dict[str, Any]:
+        """Describe the upstream authority without revalidating package assets."""
+
+        prior = dict(prior_diagnostics or {})
+        result: dict[str, Any] = {
+            "eligible": True,
+            "status": "ADMISSION_ENFORCED_UPSTREAM",
+            "blockers": [],
+            "revalidated": False,
+            "admission_authority": "strategy_package_entry",
+        }
+        if summary_only:
+            result["summary_only"] = True
+        warnings = [str(item) for item in (prior.get("warnings") or []) if str(item)]
+        if warnings:
+            result["warnings"] = warnings
+        if prior.get("eligible") is False or prior.get("blockers"):
+            result["prior_diagnostics"] = prior
+        return result
 
     @staticmethod
     def _display_portfolio_topk(manifest: Any) -> int | None:
