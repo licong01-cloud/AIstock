@@ -133,6 +133,7 @@ audit_scan_batch_size
 source_fetch_rows
 statement_timeout_ms
 lock_timeout_ms
+serialization_retry_limit
 max_partition_rows
 max_partition_bytes
 created_by_service_principal
@@ -148,6 +149,8 @@ config_hash
   早于该边界的 row 不处理，不用当前时间补造历史 evidence。
 - 数值 resource bounds 必须来自 Phase 1D capacity receipt；实现初始 DEV fixture 值只用于
   测试，生产 config 在 receipt 形成后冻结。不得在超限时缩小数据或抽样后假成功。
+- `serialization_retry_limit` 是 PostgreSQL `40001`/deadlock 的有限自动重试次数；耗尽后输出
+  `CURSOR_CONFLICT`，不是人工确认、审批或无限重试。
 - config hash 覆盖全部字段和有序 dataset specs；同 id/version 不同 hash 是 conflict。
 - config 不含 `approved_by`、role、authorization、approval chain、manual gate 或人工状态。
 
@@ -298,7 +301,7 @@ source query 只 SELECT。observer 不修复、填充、更新或锁写 market s
 no prior event
   -> INGESTED revision 1
 
-prior terminal PASS + same schema/count/content/revision
+prior terminal PASS + same schema/count/content
   -> UNCHANGED receipt, no new event
 
 prior terminal PASS + new valid content descriptor
@@ -314,6 +317,9 @@ invalidation，必须先设计独立、可证明的 invalidation signal 契约�
 
 `revision_id` 由 dataset/source role/partition/query/schema/content/provider job descriptor 的
 canonical hash 派生，不能只使用 mutable audit key 或 job id。
+当 source content 未变化但 audit job/data source 变化时，existing ledger 的 content-identity
+约束要求复用原 event，并由新 observation receipt 绑定本次 audit/data source；不得为同内容
+伪造 `CORRECTED` event。只有新 valid content 形成的新 event 才使用新的 revision identity。
 
 ### 7.5 Atomic Commit And Retry
 
@@ -374,7 +380,9 @@ Paper/模拟盘 scheduler 或 ingestion transaction。未来生产周期调度�
 - `market.dataset_date_refresh_audit` 的日期覆盖、row_count、expected_rows、coverage 分布；
 - registry allowlist source table 的 min/max date、bounded date sample 和实际 row width；
 - 当前 Advisory ledger/capture/label/build/snapshot 表的 relation size 和 row count；
-- Phase 1C-3 golden 的真实 Parquet row/file/byte ratio；
+- `SEALED` 的 `app.advisory_dataset_snapshot` / `advisory_dataset_snapshot_file` 及其本地可读
+  Parquet metadata，用于真实 logical row width、compressed bytes/row、changed-partition ratio
+  和 snapshot/manifest provenance；
 - versioned workload assumptions。
 
 数据库连接必须由仓库现有 env/config 解析，禁止猜测 host、port、database、username 或
@@ -393,18 +401,28 @@ program_count_by_style
 candidate_depth_by_program
 universe_size_p50/p95/max
 horizons[]
+projection_count
+stage_projection_factor
 revision_multiplier_p50/p95/max
 retained_snapshot_count
 concurrent_build_count
 staging_copy_count
 parquet_target_file_bytes
 memory_budget_bytes
+worker_memory_overheads
 store_available_bytes
+orphan_reserve_bytes
+concurrent_build_bytes
+manifest_overhead_bytes_per_snapshot
+parquet_measurement_snapshot_limit
+parquet_measurement_file_limit
 request_hash
 ```
 
-workload assumptions 必须显式进入 request/hash，不得隐藏在代码默认值中。未知值输出
-`PARTIAL` 和 missing field，不以零或经验值假装已测量。
+workload assumptions 和 probe bounds 必须显式进入 request/hash，不得隐藏在代码默认值中。
+request 禁止接收任何命名为 measured 的 Parquet/row-width/changed-ratio 字段；这些数值只能由
+read-only probe 从 `SEALED` evidence 形成。未知值输出 `PARTIAL` 和 missing field，不以零、
+经验值或其它 role 代理值假装已测量。
 
 ### 9.3 Deterministic Formulas
 
@@ -414,17 +432,21 @@ signal_rows = sum(program_days * candidate_depth)
 stage_rows = signal_rows * configured_stage_projection_factor
 candidate_label_rows = signal_rows * horizon_count * projection_count
 universe_outcome_rows = program_days * universe_size * horizon_count * projection_count
-source_event_rows = observed_partitions * source_role_count * revision_multiplier
+source_event_rows = sum(observed_partitions_by_role) * revision_multiplier
 logical_uncompressed_bytes = sum(role_rows * measured_role_row_width)
 projected_parquet_bytes = sum(role_rows * measured_role_parquet_bytes_per_row_p95)
 staging_peak_bytes = projected_parquet_bytes * staging_copy_count
-retained_store_bytes = changed_partition_bytes_across_retained_snapshots + manifest_overhead
-required_free_bytes = staging_peak_bytes + concurrent_build_bytes + orphan_reserve_bytes
+retained_store_bytes = initial_full_snapshot_bytes
+                     + changed_partition_bytes * (retained_snapshot_count - 1)
+                     + manifest_overhead_bytes_per_snapshot * retained_snapshot_count
+required_free_bytes = staging_peak_bytes + concurrent_build_bytes * concurrent_build_count + orphan_reserve_bytes
 peak_worker_memory = fetch_batch_bytes + arrow_builder_bytes + hash_buffer_bytes + verifier_bytes
+concurrent_peak_memory = peak_worker_memory * concurrent_build_count
 ```
 
-- row width、compression 和 changed-partition ratio 优先来自真实 bounded sample/Batch D golden，
-  并在 receipt 标记 measured source；没有测量时不得输出 `FIT`。
+- row width、compression 和 changed-partition ratio 只能来自真实 bounded sample/Batch D
+  `SEALED` golden，并在 receipt 绑定 snapshot set hash、manifest hash、writer version 和 file
+  count；某个 required role 没有非空 Parquet measurement 时必须 `PARTIAL`，不得跨 role 代理。
 - 使用 p50/p95/max 三组结果，不只给平均值。
 - capacity probe 不全表加载 DataFrame；SQL aggregate、server-side cursor 和 bounded sample
   都必须有 query timeout/row budget。
@@ -474,6 +496,7 @@ ADVISORY_PHASE1_SOURCE_OBSERVER_QUALITY_NOT_ELIGIBLE
 ADVISORY_PHASE1_SOURCE_OBSERVER_RESOURCE_LIMIT
 ADVISORY_PHASE1_SOURCE_OBSERVER_EVENT_CONFLICT
 ADVISORY_PHASE1_SOURCE_OBSERVER_RECEIPT_CONFLICT
+ADVISORY_PHASE1_SOURCE_OBSERVER_UNEXPECTED
 ADVISORY_PHASE1_CAPACITY_REQUEST_INVALID
 ADVISORY_PHASE1_CAPACITY_STATS_UNAVAILABLE
 ADVISORY_PHASE1_CAPACITY_BUDGET_INSUFFICIENT
@@ -623,16 +646,16 @@ frontend/
 
 ## 15. Production Gates And Rollout / 生产状态、发布与回滚
 
-当前设计提交：
+当前代码交付：
 
 ```text
 feature_tier = F2
-implementation_status = design_ready
-production_ddl_gate = noop
+implementation_status = verified
+production_ddl_gate = pending
 production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
 runtime_activation = noop
-database_read_or_write = none
+database_read_or_write = DEV apply/reapply/E2E/rollback-no-residue verified; production untouched
 model_training = none
 selection_paper_simulation_qmt_impact = none
 ```
@@ -690,24 +713,24 @@ selection_paper_simulation_qmt_impact = none
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-401 | existing `source_ledger.py`/`source_ledger_postgres.py`; §4 | authority/source-resolution regression | design_ready | none |
-| F-402 | `SourceAuditSnapshot`; §2.2/§7.1 | mutable audit/correction/no-backfill matrix | design_ready | none |
-| F-403 | config/query/schema registries; §5 | dynamic SQL/provider-time negative tests | design_ready | none |
-| F-404 | transaction-bound ledger append; §7.3/§7.5 | DB clock and backdate rejection | design_ready | none |
-| F-405 | canonical source stream hasher; §7.3 | full-row corruption/schema/count/resource tests | design_ready | none |
-| F-406 | event mapper; §7.4 | INGESTED/UNCHANGED/CORRECTED/REVALIDATED/failed matrix | design_ready | none |
-| F-407 | observer PostgreSQL repository; §6/§7.5 | atomic rollback, commit-loss, readback tests | design_ready | none |
-| F-408 | per-scope cursor and chain lock; §6.1/§7.5 | two-worker and bad-scope isolation tests | design_ready | none |
-| F-409 | observation receipt migration/repository; §6.2 | immutable/hash/exact retry/conflict tests | design_ready | none |
-| F-410 | standalone CLI; §8/§11 | startup/import/frozen-path regression | design_ready | none |
-| F-411 | `AdvisoryPhase1CapacityProbe`; §9.1-§9.3 | real DEV read-only bounded probe | design_ready | none |
-| F-412 | capacity receipt/verifier; §9.4 | deterministic hash and missing-measurement tests | design_ready | none |
-| F-413 | error/logging contract; §10 | reason/context/traceback and no-secret scan | design_ready | none |
-| F-414 | implementation scope/plan; §11-§12 | changed-path scope check | design_ready | none |
-| F-415 | invariant table; §13-§14 | positive, negative and recovery matrix | design_ready | none |
-| F-416 | non-goals/runtime placement; §3.2/§8 | no backtest/training import scan | design_ready | none |
-| F-417 | config/schema/source scan; §3.2/§14 | no approval/RBAC/backup/manual gate scan | design_ready | none |
-| F-418 | full document and DESIGN-COMPLIANCE-001 | item-by-item review | design_ready | none |
+| F-401 | `source_ledger_postgres.py`; `source_observer_postgres.py` | existing ledger regression + DEV event readback | verified | none |
+| F-402 | `AuditRowSnapshot`; observer discovery | eligibility/correction/no-backfill unit and DEV matrix | verified | none |
+| F-403 | `SOURCE_QUERY_TEMPLATES`; typed config/spec | registry mismatch, schema and isolation static tests | verified | none |
+| F-404 | transaction-bound ledger append | DEV DB-clock event/receipt readback | verified | none |
+| F-405 | `canonical_source_partition_descriptor`; named-cursor stream | full-row/resource unit + real DEV source hash | verified | none |
+| F-406 | `decide_observation` | INGESTED/UNCHANGED/CORRECTED/REVALIDATED/failed tests | verified | none |
+| F-407 | `PostgresSourceObserverRepository` | DEV event/receipt/cursor rollback, recovery and exact retry | verified | none |
+| F-408 | per-scope cursor lock + bounded serialization retry | real two-worker DEV convergence and isolation static test | verified | none |
+| F-409 | observer migration + receipt repository | apply/reapply, immutable/hash/conflict and rollback-no-residue | verified | none |
+| F-410 | standalone CLI | disabled nonzero, import graph and frozen-path scans | verified | none |
+| F-411 | `AdvisoryPhase1CapacityProbe` | real DEV read-only calendar/source/relation/SEALED evidence probe | verified | none |
+| F-412 | capacity receipt/verifier | three-tier deterministic receipt and missing-role non-MEASURED evidence | verified | none |
+| F-413 | stable observer errors + structured scope context | traceback/reason/context/transaction-stage DEV evidence | verified | none |
+| F-414 | implementation paths in §11 | changed-path scope and `git diff --check` | verified | none |
+| F-415 | automatic invariants in §14 | positive, negative, rollback, recovery and concurrency matrix | verified | none |
+| F-416 | standalone observer/capacity modules | no backtest/training import scan | verified | none |
+| F-417 | typed config + migration + CLI | no approval/RBAC/backup/manual-gate scan | verified | none |
+| F-418 | full implementation and DESIGN-COMPLIANCE-001 | item-by-item review + F2 validator | verified | none |
 
 ## 19. DESIGN-COMPLIANCE-001
 
@@ -725,18 +748,20 @@ selection_paper_simulation_qmt_impact = none
 - [x] `training_boundary`：不读回测数据、不训练模型；未来训练只允许 WSL/Conda。
 - [x] `production_truth`：设计合入、代码合入、DDL、worker activation、Phase 1E readiness 分开报告。
 
-## 20. Exit Criteria / 进入代码阶段条件
+## 20. Exit Criteria / 代码合入条件
 
-只有以下条件全部满足，Phase 1D 才可进入代码开发：
+只有以下条件全部满足，Phase 1D 代码才可请求合入：
 
-1. F-401 至 F-418 全部保持 `design_ready` 且无未批准 gap、partial、TODO 或 exception。
+1. F-401 至 F-418 全部为 `verified` 且无未批准 gap、TODO 或 exception。
 2. F2 feature workflow validation 通过。
 3. 父蓝图、Phase 1 父设计、现有 source ledger、mutable refresh audit 和 Batch D 当前代码一致。
 4. 允许修改范围和 frozen runtime paths 明确，无 ingestion/Selection/Paper/模拟盘接线。
 5. 合法 DEV input 存在无需人工干预的正向路径：
    `audit success -> source full verify -> event -> receipt -> cursor`。
 6. 每个错误在修复配置/数据/基础设施后可自动重跑通过，不需要数据库人工改值或审批 override。
-7. migration 只是未来开发/发布依赖，不是 runtime DDL；设计提交本身 production gates 全部 noop。
+7. DEV migration apply/reapply/E2E/rollback-no-residue 已验证；production DDL 与 worker activation 仍
+   分开报告为 pending/noop，不由 runtime 自动执行。
 
-代码完成时必须把矩阵逐项更新为 `verified` 并填写真实 implementation/test/DEV receipt；任一条
-未验证时不得报告 Phase 1D 完成、不得请求代码合入、不得进入 Phase 1E。
+Phase 1D 实现允许真实 DEV capacity receipt 因缺少某个 required role 的非空 `SEALED` sample 而
+明确返回 `PARTIAL`；这证明 unknown-measurement 契约生效，不是代码缺项。Phase 1E 仍只能冻结
+后续补齐数据后得到的 `MEASURED` receipt，当前不得注册 production observer config 或激活 worker。
