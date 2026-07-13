@@ -2057,9 +2057,12 @@ Phase 1B 实施验收表：
 
 ### 22.7 Phase 1D：Source availability observer 与容量计划
 
-- 实现默认关闭的 ingestion-completion observer；证明只追加 Advisory event，不改变 source table、StrategyPackage、Selection、Paper。
-- 在只读环境完成历史范围、revision scan、DB transaction budget、行数/磁盘/store reserve 计划。
-- observer 使用版本化配置，source ledger write 使用强类型 request、content hash 和幂等键；历史缺口不回填。
+- 已形成唯一实施级详细设计：`docs/architecture/advisory_phase1d_source_availability_observer_capacity_f2_design_20260714.md`，当前状态为 `design_ready`，尚未实现或激活。
+- 实现默认关闭、独立进程运行的 ingestion-completion observer；只读取 mutable `market.dataset_date_refresh_audit` 发现候选 completion，并通过注册 source query 全量核验 schema/row/content 后追加既有 Advisory source availability ledger。refresh audit 不是 availability authority，不改变 source table、StrategyPackage、Selection、Paper、模拟盘或 QMT。
+- 使用 restart-safe per-scope cursor 和 append-only observation receipt 保证 exact retry、失败隔离与诊断；这些是 worker checkpoint/evidence，不是审批、角色或新的 source authority。
+- 在只读环境完成历史范围、revision scan、DB transaction budget、行数/内存/临时空间/Parquet/durable store reserve 计划，并输出 content-addressed capacity receipt。
+- observer 使用版本化 typed registry，source ledger write 使用强类型 request、数据库观测时间、全量 content hash 和幂等键；不依据 failed audit 猜测 invalidation，provider time 无证据时保持 NULL，`effective_from_observed_at` 以前的历史缺口不回填。
+- Phase 1D 未来实现需要 additive cursor/receipt migration，但 runtime 不执行 DDL，不创建 authority table、角色、授权或审批；设计提交本身不执行 DDL/DML、数据库读写或 observer 调度。
 
 ### 22.8 Phase 1E：Phase 0A 双轨复验、readiness 与执行计划
 
