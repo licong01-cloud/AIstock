@@ -182,17 +182,129 @@ def test_runtime_resource_gpu_sampling_failure_is_structured_and_loud(monkeypatc
     monkeypatch.setattr(
         qrr.QERuntimeResourceMonitor,
         "_process_sample",
-        lambda _self: {"process_rss_bytes": 1, "process_vm_hwm_bytes": 2},
+        lambda _self: {
+            "process_rss_bytes": 1,
+            "process_vm_hwm_bytes": 2,
+            "process_pids": [qrr.os.getpid()],
+        },
     )
-    monkeypatch.setattr(
-        qrr.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=9, stdout="", stderr="unavailable"),
-    )
+    def fake_run(command, **_kwargs):
+        if any("query-gpu" in part for part in command):
+            return SimpleNamespace(returncode=9, stdout="", stderr="unavailable")
+        return SimpleNamespace(returncode=0, stdout=f"{qrr.os.getpid()}, 256\n", stderr="")
+
+    monkeypatch.setattr(qrr.subprocess, "run", fake_run)
 
     monitor = qrr.QERuntimeResourceMonitor()
     sample = monitor._collect_sample()
 
     assert sample["process_rss_bytes"] == 1
-    assert sample["resource_sample_errors"] == ["QE_RESOURCE_GPU_SAMPLE_FAILED:RuntimeError"]
-    assert "reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED" in capsys.readouterr().out
+    assert sample["gpu_process_memory_bytes"] == 256 * 1024 * 1024
+    assert sample["gpu_process_sample_available"] is True
+    assert sample["gpu_device_sample_available"] is False
+    assert sample["resource_sample_errors"] == [
+        "QE_RESOURCE_GPU_SAMPLE_FAILED:device:RuntimeError"
+    ]
+    output = capsys.readouterr().out
+    assert "reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED" in output
+    assert "component=device" in output
+
+
+def test_runtime_resource_process_gpu_timeout_preserves_device_metrics(monkeypatch, tmp_path, capsys):
+    _set_resource_env(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    qrr._RESOURCE_SECRET_CACHE = None
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_process_sample",
+        lambda _self: {
+            "process_rss_bytes": 1,
+            "process_vm_hwm_bytes": 2,
+            "process_pids": [123],
+        },
+    )
+
+    def fake_run(command, **_kwargs):
+        if any("query-gpu" in part for part in command):
+            return SimpleNamespace(returncode=0, stdout="NVIDIA Test, 1024, 25\n", stderr="")
+        raise qrr.subprocess.TimeoutExpired(command, timeout=5)
+
+    monkeypatch.setattr(qrr.subprocess, "run", fake_run)
+
+    sample = qrr.QERuntimeResourceMonitor()._collect_sample()
+
+    assert sample["gpu_memory_used_bytes"] == 1024 * 1024 * 1024
+    assert sample["gpu_utilization_pct"] == 25.0
+    assert sample["gpu_device_sample_available"] is True
+    assert sample["gpu_process_sample_available"] is False
+    assert sample["resource_sample_errors"] == [
+        "QE_RESOURCE_GPU_SAMPLE_FAILED:process:TimeoutExpired"
+    ]
+    output = capsys.readouterr().out
+    assert "reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED" in output
+    assert "component=process" in output
+
+
+def test_runtime_resource_process_sample_keeps_sum_rss_and_adds_complete_pss(monkeypatch):
+    class FakeProcess:
+        def __init__(self, pid, rss, children=()):
+            self.pid = pid
+            self._rss = rss
+            self._children = list(children)
+
+        def children(self, *, recursive):
+            assert recursive is True
+            return list(self._children)
+
+        def memory_info(self):
+            return SimpleNamespace(rss=self._rss)
+
+    child = FakeProcess(202, 200)
+    root = FakeProcess(101, 300, [child])
+    fake_psutil = SimpleNamespace(
+        Process=lambda _pid: root,
+        NoSuchProcess=RuntimeError,
+        AccessDenied=PermissionError,
+    )
+    monkeypatch.setattr(qrr, "psutil", fake_psutil)
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_read_vm_hwm",
+        staticmethod(lambda pid: {101: 350, 202: 250}[pid]),
+    )
+    monkeypatch.setattr(
+        qrr.QERuntimeResourceMonitor,
+        "_read_pss",
+        staticmethod(lambda pid: {101: 180, 202: 120}[pid]),
+    )
+
+    monitor = object.__new__(qrr.QERuntimeResourceMonitor)
+    sample = monitor._process_sample()
+
+    assert sample["process_rss_bytes"] == 500
+    assert sample["process_pss_bytes"] == 300
+    assert sample["process_pss_complete"] is True
+    assert sample["process_vm_hwm_bytes"] == 350
+    assert sample["process_pids"] == [101, 202]
+
+    aggregate = qrr._PhaseAggregate("train")
+    aggregate.observe(sample)
+    event = aggregate.event_fields()
+    assert event["process_rss_peak_bytes"] == 500
+    assert event["metadata"]["process_pss_peak_bytes"] == 300
+    assert event["metadata"]["process_pss_complete_sample_count"] == 1
+    assert event["metadata"]["process_capacity_metric"] == "process_pss_peak_bytes"
+    assert "shared_pages_may_be_counted" in event["metadata"]["process_rss_semantics"]
+
+    incomplete = qrr._PhaseAggregate("predict")
+    incomplete.observe(
+        {
+            "process_rss_bytes": 500,
+            "process_pss_bytes": 180,
+            "process_pss_complete": False,
+        }
+    )
+    incomplete_metadata = incomplete.event_fields()["metadata"]
+    assert incomplete_metadata["process_pss_peak_bytes"] is None
+    assert incomplete_metadata["process_pss_complete_sample_count"] == 0
+    assert incomplete_metadata["process_capacity_metric"] is None
