@@ -2,6 +2,7 @@
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -752,17 +753,46 @@ def _user_home() -> Path:
     return Path(os.environ.get("USERPROFILE") or os.environ.get("HOME") or Path.home())
 
 
+def _user_home_candidates(home: Path | None = None) -> list[Path]:
+    windows_home = None
+    if os.environ.get("HOMEDRIVE") and os.environ.get("HOMEPATH"):
+        windows_home = Path(f"{os.environ['HOMEDRIVE']}{os.environ['HOMEPATH']}")
+    candidates = [
+        home,
+        Path(os.environ["USERPROFILE"]) if os.environ.get("USERPROFILE") else None,
+        Path(os.environ["HOME"]) if os.environ.get("HOME") else None,
+        windows_home,
+        Path.home(),
+    ]
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        key = os.path.normcase(str(candidate.expanduser().resolve()))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate.expanduser())
+    return unique
+
+
 def _codex_understand_skill_path(home: Path | None = None) -> Path:
-    return (home or _user_home()) / ".agents" / "skills" / "understand"
+    candidates = [candidate / ".agents" / "skills" / "understand" for candidate in _user_home_candidates(home)]
+    return _first_existing_dir(candidates) or candidates[0]
 
 
 def _ua_plugin_root_candidates(home: Path | None = None) -> list[Path]:
-    home = home or _user_home()
-    return [
-        home / ".understand-anything-plugin",
-        home / ".understand-anything" / "repo" / "understand-anything-plugin",
-        home / ".codex" / "understand-anything" / "understand-anything-plugin",
-    ]
+    candidates: list[Path] = []
+    for candidate_home in _user_home_candidates(home):
+        candidates.extend(
+            [
+                candidate_home / ".understand-anything-plugin",
+                candidate_home / ".understand-anything" / "repo" / "understand-anything-plugin",
+                candidate_home / ".codex" / "understand-anything" / "understand-anything-plugin",
+            ]
+        )
+    return candidates
 
 
 def _first_existing_dir(paths: list[Path]) -> Path | None:
@@ -770,6 +800,14 @@ def _first_existing_dir(paths: list[Path]) -> Path | None:
         if path.exists() and path.is_dir():
             return path
     return None
+
+
+def _ua_skill_file(skill_name: str, home: Path | None = None) -> Path:
+    candidates = [root / "skills" / skill_name / "SKILL.md" for root in _ua_plugin_root_candidates(home)]
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[0]
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -3022,17 +3060,51 @@ def build_summary(
     }
 
 
-def _client_file_status(path: Path, required_terms: list[str] | None = None) -> dict[str, Any]:
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _client_file_status(
+    path: Path,
+    required_terms: list[str] | None = None,
+    *,
+    authoritative_path: Path | None = None,
+) -> dict[str, Any]:
     exists = path.exists()
     missing_terms: list[str] = []
-    if exists and required_terms:
+    installed_sha256 = _file_sha256(path)
+    authoritative_exists = authoritative_path.is_file() if authoritative_path is not None else False
+    authoritative_sha256 = _file_sha256(authoritative_path) if authoritative_path is not None else None
+    if authoritative_path is not None:
+        verification = "authoritative_sha256"
+        if not authoritative_exists:
+            status = "authority_missing"
+        else:
+            status = "ready" if exists and installed_sha256 == authoritative_sha256 else ("stale" if exists else "missing")
+    elif exists and required_terms:
         text = _read_text_if_exists(path).lower()
         missing_terms = [term for term in required_terms if term.lower() not in text]
+        status = "ready" if not missing_terms else "stale"
+        verification = "required_terms"
+    else:
+        status = "ready" if exists else "missing"
+        verification = "existence"
     return {
         "path": str(path),
         "exists": exists,
-        "status": "ready" if exists and not missing_terms else ("stale" if exists else "missing"),
+        "status": status,
+        "verification": verification,
         "missing_terms": missing_terms,
+        "installed_sha256": installed_sha256,
+        "authoritative_path": str(authoritative_path) if authoritative_path is not None else None,
+        "authoritative_exists": authoritative_exists,
+        "authoritative_sha256": authoritative_sha256,
     }
 
 
@@ -3084,27 +3156,25 @@ def build_client_verification(
             output_dir=output_dir,
         )
     home = _user_home()
+    understand_skill = _ua_skill_file("understand", home)
+    understand_chat_skill = _ua_skill_file("understand-chat", home)
     clients = {
         "codex_issue_skill": _client_file_status(
             home / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md",
             ["graph-first", "code intelligence", "aistock_issue_workflow.py"],
+            authoritative_path=root / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md",
         ),
         "claude_issue_command": _client_file_status(
             home / ".claude" / "commands" / "fix-aistock-issue.md",
             ["graph-first", "code intelligence", "aistock_issue_workflow.py"],
+            authoritative_path=root / ".claude" / "commands" / "fix-aistock-issue.md",
         ),
         "codex_understand_skill": _client_file_status(
-            home / ".understand-anything" / "repo" / "understand-anything-plugin" / "skills" / "understand" / "SKILL.md",
+            understand_skill,
             ["understand"],
         ),
         "codex_understand_chat_skill": _client_file_status(
-            home
-            / ".understand-anything"
-            / "repo"
-            / "understand-anything-plugin"
-            / "skills"
-            / "understand-chat"
-            / "SKILL.md",
+            understand_chat_skill,
             ["understand"],
         ),
     }
