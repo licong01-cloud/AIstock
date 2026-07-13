@@ -1274,17 +1274,17 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-001 | planned v1/v2 capture request union plus Advisory-owned `label_capture.py`; frozen `stage_trace.py` | exact v1 bytes/hash/repository regression; v2 historic provenance and trace enabled/disabled equivalence | design_ready | none |
-| F-002 | planned `label_policy.py`/`outcome_engine.py` | calendar and maturity matrix golden | design_ready | none |
-| F-003 | one planned `OutcomeEngine` for CANDIDATE/UNIVERSE | parity golden with identical owner-independent inputs | design_ready | none |
-| F-004 | planned cashflow/benchmark policy implementations | lot/minimum-fee/residual-cash/frozen-weight golden | design_ready | none |
+| F-002 | `backend/services/advisory_phase1/label_policy.py`; `backend/services/advisory_phase1/outcome_engine.py` | content-bound policy/calendar identity, T/E/S/X_h, horizon/terminal/censor and no-default negative fixtures; branch coverage: label policy 89%, outcome engine 86% | batch_a_verified | none |
+| F-003 | one `OutcomeEngine` for CANDIDATE/UNIVERSE with canonical request revalidation and exact SourceRevisionSet/member binding | candidate/universe parity, owner-symbol/source drift and unsafe-model-copy rejection fixtures | batch_a_verified | none |
+| F-004 | fixed-capital cashflow, per-share corporate action processing and exact rational equal-weight benchmark in `outcome_engine.py` | lot/minimum-fee/residual-cash, per-current-share action, unbuyable/zero-lot cash retention and unequal-weight rejection fixtures | batch_a_verified | none |
 | F-005 | planned LabelAppendRequest, authority header/payload repository and selector | serial/concurrent/URI retry, exactly-one closure, transition/fork/no-fallback tests | design_ready | none |
 | F-006 | planned candidate enumerator, `LABEL_CAPTURE_V1` and universe Parquet rows | full deep-pool/empty-candidate/coverage plus immutable batch tests | design_ready | none |
 | F-007 | planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
-| F-008 | planned `snapshot_writer.py`, blob/ref repositories and local filesystem store | byte-identical Parquet, blob/ref immutability, CAS and SEALED golden | design_ready | none |
+| F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; planned Batch D `snapshot_writer.py` and blob/ref repositories | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
 | F-009 | planned Phase 1C-3 migration/rollback with capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
-| F-010 | §17 four implementation batches | each batch exit evidence plus final complete matrix | design_ready | none |
-| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | zero-diff/import and existing Phase1TraceCaptureService v1 contract regression; runtime-noop evidence | design_ready | none |
-| F-012 | §2/§4/§18/§20 | approval/auth/current-control-gate scan, silent-fallback scan and DESIGN-COMPLIANCE review | design_ready | none |
+| F-010 | §17 four implementation batches; Batch A implementation refs are recorded by F-002/F-003/F-004/F-008 | Batch A direct suite 49 passed; Advisory Phase 1 regression 135 passed/3 skipped; aggregate changed-module branch coverage 87%; remaining batch exits stay defined by §17 | design_ready | none |
+| F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch A zero-diff/import scan plus existing Advisory Phase 1 regression; runtime remains noop | batch_a_verified | none |
+| F-012 | §2/§4/§18/§20 plus Batch A changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; DESIGN-COMPLIANCE Batch A review | batch_a_verified | none |
 
 ## 23. Production Gates / 生产与运行状态
 
