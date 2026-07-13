@@ -7440,6 +7440,9 @@ class SimulationLifecycleScheduler:
         side_effect_evidence: dict[str, Any],
     ) -> dict[str, Any]:
         batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+        pending_event_loop = SimulationLifecycleScheduler._miniqmt_pending_event_loop_evidence(
+            run.run_payload_json
+        )
         terminal_capacity_residual = (
             bool(batch_residual_summary.get("noncompensating_residual"))
             and int(batch_residual_summary.get("capacity_residual_count") or 0) > 0
@@ -7450,6 +7453,9 @@ class SimulationLifecycleScheduler:
         if open_order_count > 0:
             status = "PENDING"
             reason = "miniqmt_open_orders_pending_after_reconciliation"
+        elif pending_event_loop["eligible"]:
+            status = "PENDING"
+            reason = "miniqmt_event_loop_pending_after_reconciliation_warning"
         elif run_status_gate.get("status") != "SUCCEEDED":
             status = "blocked"
             reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
@@ -7479,6 +7485,105 @@ class SimulationLifecycleScheduler:
             "open_order_count": open_order_count,
             "pending_open_orders": open_order_count > 0,
             "broker_side_effect_count": broker_side_effect_count,
+            "pending_event_loop": pending_event_loop,
+        }
+
+    @staticmethod
+    def _miniqmt_pending_event_loop_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        payload_batch_id = str(payload.get("qmt_batch_id") or "").strip()
+        result_batch_id = str(batch.get("batch_id") or "").strip()
+        runtime_id = str(runtime_evidence.get("runtime_id") or "").strip()
+        source = str(runtime_evidence.get("source") or "").strip()
+        payload_batch_status = str(payload.get("qmt_batch_status") or "").strip().upper()
+        result_batch_status = str(batch.get("batch_status") or "").strip().upper()
+        accepted_sources = {
+            "simulation_runtime_event_loop_submit",
+            "simulation_runtime_event_loop_tick_driver",
+        }
+        conflicts: list[str] = []
+
+        def required_count(raw: Any, field: str) -> int | None:
+            if raw is None:
+                conflicts.append(f"{field}_missing")
+                return None
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                conflicts.append(f"{field}_invalid")
+                return None
+            return raw
+
+        if not payload_batch_id:
+            conflicts.append("payload_batch_id_missing")
+        if not result_batch_id:
+            conflicts.append("result_batch_id_missing")
+        if payload_batch_id and result_batch_id and payload_batch_id != result_batch_id:
+            conflicts.append("batch_id_conflict")
+        if payload_batch_status != OrderBatchStatus.SUBMITTING.value:
+            conflicts.append("payload_batch_not_submitting")
+        if result_batch_status != OrderBatchStatus.SUBMITTING.value:
+            conflicts.append("result_batch_not_submitting")
+        if payload_batch_status and result_batch_status and payload_batch_status != result_batch_status:
+            conflicts.append("batch_status_conflict")
+        if not runtime_id:
+            conflicts.append("runtime_id_missing")
+        if source not in accepted_sources:
+            conflicts.append("runtime_evidence_source_invalid")
+
+        pending_counts = {
+            "payload_pending_intents": required_count(payload.get("pending_intents"), "payload_pending_intents"),
+            "result_pending": required_count(batch.get("pending"), "result_pending"),
+            "result_pending_child_trigger_count": required_count(
+                batch.get("pending_child_trigger_count"),
+                "result_pending_child_trigger_count",
+            ),
+            "runtime_pending_algo_count": required_count(
+                runtime_evidence.get("pending_algo_count"),
+                "runtime_pending_algo_count",
+            ),
+        }
+        valid_pending_counts = [value for value in pending_counts.values() if value is not None]
+        pending_count = pending_counts["runtime_pending_algo_count"]
+        if len(valid_pending_counts) == len(pending_counts) and len(set(valid_pending_counts)) != 1:
+            conflicts.append("pending_count_conflict")
+        if pending_count == 0:
+            conflicts.append("no_pending_algos")
+
+        failure_counts = {
+            "payload_failed_intents": required_count(payload.get("failed_intents"), "payload_failed_intents"),
+            "result_failed": required_count(batch.get("failed"), "result_failed"),
+            "runtime_rejected_child_count": required_count(
+                runtime_evidence.get("rejected_child_count"),
+                "runtime_rejected_child_count",
+            ),
+        }
+        valid_failure_counts = [value for value in failure_counts.values() if value is not None]
+        failed_count = max(valid_failure_counts) if valid_failure_counts else None
+        if any(value > 0 for value in valid_failure_counts):
+            conflicts.append("failed_or_rejected_algos_present")
+
+        active_count = required_count(runtime_evidence.get("active_algo_count"), "runtime_active_algo_count")
+        if active_count is not None and pending_count is not None and active_count < pending_count:
+            conflicts.append("active_algo_count_below_pending")
+        return {
+            "schema_version": "miniqmt_pending_event_loop_evidence_v1",
+            "eligible": not conflicts,
+            "batch_id": payload_batch_id or result_batch_id or None,
+            "runtime_id": runtime_id or None,
+            "runtime_evidence_source": source or None,
+            "batch_status": payload_batch_status or result_batch_status or None,
+            "active_algo_count": active_count,
+            "pending_algo_count": pending_count,
+            "failed_or_rejected_count": failed_count,
+            "identity_sources": {
+                "payload_batch_id": payload_batch_id or None,
+                "result_batch_id": result_batch_id or None,
+                "payload_batch_status": payload_batch_status or None,
+                "result_batch_status": result_batch_status or None,
+            },
+            "pending_count_sources": pending_counts,
+            "failure_count_sources": failure_counts,
+            "conflicts": conflicts,
         }
 
     @staticmethod
