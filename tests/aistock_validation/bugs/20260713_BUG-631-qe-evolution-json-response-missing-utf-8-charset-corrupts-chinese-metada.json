@@ -30,8 +30,8 @@
   "expected": "QE evolution JSON responses explicitly declare UTF-8 and a GET-to-PUT roundtrip preserves Chinese task_name, target_desc, and loop labels byte-for-byte.",
   "first_seen_at": "2026-07-13T10:29:32.725619Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cf41c384e2fbbaa063feee47964a5a0b53529ae0",
+  "fixed_at": "2026-07-13T10:51:23.593622Z",
   "github_issue_number": 2040,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2040",
   "last_seen_at": "2026-07-13T10:29:32.725619Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2042",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -59,6 +60,11 @@
     "fingerprint": "fc8039fb703c126be7c3bf18",
     "source_event_id": "FE-20260713-fc8039fb703c"
   },
+  "validation_evidence": [
+    "targeted UTF-8 response test -> passed",
+    "custom evolution mutation route matrix -> 16 passed",
+    "CI PR #2042 -> 14 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
