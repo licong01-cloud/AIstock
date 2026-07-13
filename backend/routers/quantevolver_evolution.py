@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request, Query, Body
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 import httpx
 
 # 导入未来的 EvolutionService (目前可能为空实现)
@@ -223,9 +223,16 @@ def _sync_all_filtered_pools_to_remote(node: dict):
 
     return sync_all_filtered_pools_to_remote_node(node)
 
+class QEEvolutionJSONResponse(JSONResponse):
+    """Declare the UTF-8 JSON contract for Windows operator clients."""
+
+    media_type = "application/json; charset=utf-8"
+
+
 router = APIRouter(
     prefix="/quantevolver/evolution",
     tags=["quantevolver_evolution"],
+    default_response_class=QEEvolutionJSONResponse,
 )
 
 factor_metrics_router = APIRouter(
