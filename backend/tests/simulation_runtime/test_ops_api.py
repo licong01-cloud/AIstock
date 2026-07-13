@@ -25,7 +25,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 TRADE_DATE = date(2026, 5, 21)
 
@@ -220,6 +220,15 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["account_slot_persistence"]["miniqmt_unified_binding_mode"] == "account_group_slots"
     assert scheduler["context_provider_mode"] == "fail_fast"
     assert scheduler["restart_recovery_mode"] == "persisted_state_only"
+    assert scheduler["miniqmt_quote_ingress_activation"] == {
+        "schema_version": "miniqmt_quote_ingress_activation_v1",
+        "status": "UNCONFIGURED",
+        "factory_available": False,
+    }
+    assert scheduler["b0_quote_v2_controllers"] == {
+        "status": "DISABLED",
+        "controller_count": 0,
+    }
     assert scheduler["summary"]["safety_note"].endswith("default_submit is disabled.")
     assert [window["window_id"] for window in scheduler["schedule_windows"]] == [
         "pre_open",
@@ -237,13 +246,44 @@ def test_scheduler_status_summary_reports_enabled_submit_mode() -> None:
                 "scheduler": "simulation_lifecycle_scheduler",
                 "default_submit": True,
                 "sim_binding_selection_policy": "all_non_retired",
+                "miniqmt_quote_ingress_activation": {
+                    "schema_version": "miniqmt_quote_ingress_activation_v1",
+                    "status": "RUNNING",
+                    "factory_available": True,
+                },
+                "b0_quote_v2_controllers": {
+                    "status": "RUNNING",
+                    "controller_count": 2,
+                },
             }
 
     scheduler = SimulationRuntimeOpsService(scheduler=_EnabledSubmitScheduler()).scheduler_status()
 
     assert scheduler["default_submit"] is True
     assert scheduler["sim_binding_selection_policy"] == "all_non_retired"
+    assert scheduler["miniqmt_quote_ingress_activation"]["status"] == "RUNNING"
+    assert scheduler["b0_quote_v2_controllers"]["controller_count"] == 2
     assert scheduler["summary"]["safety_note"].endswith("default_submit is enabled.")
+
+
+@pytest.mark.parametrize(
+    "status_patch",
+    [
+        {"miniqmt_quote_ingress_activation": None, "b0_quote_v2_controllers": {}},
+        {"miniqmt_quote_ingress_activation": {}, "b0_quote_v2_controllers": "invalid"},
+    ],
+)
+def test_scheduler_status_rejects_missing_or_invalid_quote_health(status_patch: dict[str, object]) -> None:
+    class _InvalidQuoteHealthScheduler:
+        def status(self) -> dict[str, object]:
+            return {
+                "scheduler": "simulation_lifecycle_scheduler",
+                "default_submit": False,
+                **status_patch,
+            }
+
+    with pytest.raises(RuntimeConfigInvalidError, match="scheduler status .* must be a mapping"):
+        SimulationRuntimeOpsService(scheduler=_InvalidQuoteHealthScheduler()).scheduler_status()
 
 
 def test_list_runs_returns_business_summary_and_filters(
