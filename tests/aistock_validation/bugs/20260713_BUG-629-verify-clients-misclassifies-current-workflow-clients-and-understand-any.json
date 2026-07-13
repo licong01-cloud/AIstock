@@ -2,7 +2,9 @@
   "actual": "BUG-628 verify-clients reports clients_ready=0/4 although install-client manifest and repo/profile SHA256 values are current. It relies on brittle required-term checks for 'code intelligence' and 'graph-first', and searches Understand Anything only below the active Codex profile while the installed plugin is at the user-level C:\\Users\\lc999\\.understand-anything path. Use the authoritative client manifest/content identity and supported path discovery, preserve loud missing/stale reporting, and add direct regression tests; no silent success or hardcoded single-machine fallback.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260713_BUG-629-verify-clients-misclassifies-current-workflow-clients-and-understand-any.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "scripts/code_intelligence_adapter.py",
+    "backend/tests/scripts/test_code_intelligence_adapter.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-629",
