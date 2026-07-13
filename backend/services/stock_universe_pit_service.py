@@ -52,6 +52,22 @@ class StockUniversePitService:
     def __init__(self, reports_dir: Optional[Path] = None) -> None:
         self.reports_dir = reports_dir or Path("reports") / "stock_universe_pit"
 
+    @staticmethod
+    def _preserve_existing_end_date(requested_end: dt.date, state: dict[str, Any]) -> dt.date:
+        """Keep a shared PIT universe's coverage monotonic across consumers."""
+
+        existing_end = state.get("end_date")
+        if isinstance(existing_end, dt.datetime):
+            existing_end = existing_end.date()
+        elif isinstance(existing_end, str):
+            try:
+                existing_end = dt.date.fromisoformat(existing_end)
+            except ValueError:
+                existing_end = None
+        if isinstance(existing_end, dt.date) and existing_end > requested_end:
+            return existing_end
+        return requested_end
+
     def ensure_tables(self) -> None:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -364,10 +380,11 @@ class StockUniversePitService:
     ) -> dict[str, Any]:
         refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
-        end = end_date or self.resolve_default_end_date()
+        requested_end = end_date or self.resolve_default_end_date()
+        state = self.get_status(universe_key=universe_key)
+        end = self._preserve_existing_end_date(requested_end, state)
         source = self.compute_source_fingerprint(end_date=end)
         source_sha = _fingerprint_sha256(source)
-        state = self.get_status(universe_key=universe_key)
         needs_rebuild, reason = self._needs_rebuild(
             state=state,
             start_date=start_date,
@@ -467,9 +484,20 @@ class StockUniversePitService:
     ) -> dict[str, Any]:
         refresh_policy = _normalize_refresh_policy(refresh_policy)
         self.ensure_tables()
-        end = end_date or self.resolve_default_end_date()
-        source = source_fingerprint or self.compute_source_fingerprint(end_date=end)
-        source_sha = source_fingerprint_sha256 or _fingerprint_sha256(source)
+        requested_end = end_date or self.resolve_default_end_date()
+        initial_state = self.get_status(universe_key=universe_key)
+        end = self._preserve_existing_end_date(requested_end, initial_state)
+        source_matches_effective_end = end == requested_end
+        source = (
+            source_fingerprint
+            if source_fingerprint is not None and source_matches_effective_end
+            else self.compute_source_fingerprint(end_date=end)
+        )
+        source_sha = (
+            source_fingerprint_sha256
+            if source_fingerprint_sha256 is not None and source_matches_effective_end
+            else _fingerprint_sha256(source)
+        )
         lock_key = f"stock_universe_pit:{universe_key}"
         with get_conn() as lock_conn:
             with lock_conn.cursor() as cur:
@@ -499,10 +527,15 @@ class StockUniversePitService:
                     f"within {lock_wait_seconds:.0f}s ({peer_reason})"
                 )
             try:
+                locked_state = self.get_status(universe_key=universe_key)
+                locked_end = self._preserve_existing_end_date(end, locked_state)
+                if locked_end != end:
+                    end = locked_end
+                    source = self.compute_source_fingerprint(end_date=end)
+                    source_sha = _fingerprint_sha256(source)
                 if skip_if_ready:
-                    state = self.get_status(universe_key=universe_key)
                     needs_rebuild, reason = self._needs_rebuild(
-                        state=state,
+                        state=locked_state,
                         start_date=start_date,
                         end_date=end,
                         rule_version=rule_version,
@@ -516,7 +549,7 @@ class StockUniversePitService:
                             "rebuilt": False,
                             "reason": reason,
                             "source_fingerprint_sha256": source_sha,
-                            "state": state,
+                            "state": locked_state,
                         }
                 self._set_building(universe_key, start_date, end, rule_version, source, source_sha)
                 from scripts import build_stock_universe_pit_spans as pit_builder
@@ -574,7 +607,9 @@ class StockUniversePitService:
                                 universe_key,
                             ),
                         )
-                        cur.execute("SELECT market.refresh_data_stats();")
+                        # Global data statistics are maintained by ingestion. A PIT
+                        # rebuild must not synchronously scan every registered market
+                        # table on the latency-sensitive selection path.
                 return {
                     "universe_key": universe_key,
                     "status": "ready",
