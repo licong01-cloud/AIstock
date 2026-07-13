@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -19,7 +20,12 @@ from backend.services.advisory_phase1.source_revision import (
     SourceRevisionMemberInput,
     build_source_revision_set,
 )
-from backend.services.advisory_phase1.source_revision_postgres import _matches_member_rows, _member_payload
+from backend.services.advisory_phase1.source_revision_postgres import (
+    SOURCE_REVISION_MEMBER_INSERT_SQL,
+    _matches_member_rows,
+    _member_params,
+    _member_payload,
+)
 
 
 UTC = timezone.utc
@@ -64,6 +70,7 @@ def _member(
         query_template_version="1",
         query_template_hash=HASH_B,
         bound_parameter_hash=HASH_C,
+        enforced_cutoff_predicate_hash="d" * 64,
         partition_key=source.partition_key,
         revision_kind=revision_kind,
         revision_id=source.revision_id,
@@ -170,3 +177,56 @@ def test_exact_retry_compares_member_content_not_only_count() -> None:
     assert _matches_member_rows([persisted], revision_set)
     persisted["partition_content_hash"] = HASH_B
     assert not _matches_member_rows([persisted], revision_set)
+    assert len(_member_params(revision_set.source_revision_set_id, member)) == 25
+    assert SOURCE_REVISION_MEMBER_INSERT_SQL.count("%s") == 25
+
+
+def test_v2_member_requires_frozen_cutoff_predicate_and_migration_preserves_v1() -> None:
+    member = _member().model_dump()
+    member.pop("enforced_cutoff_predicate_hash")
+    with pytest.raises(ValidationError, match="enforced_cutoff_predicate_hash"):
+        SourceRevisionMemberInput.model_validate(member)
+
+    migration = (
+        Path(__file__).parents[2]
+        / "db"
+        / "migrations"
+        / "add_advisory_phase1c2_source_revision_cutoff_20260713.sql"
+    ).read_text(encoding="utf-8")
+    rollback = (
+        Path(__file__).parents[2]
+        / "db"
+        / "migrations"
+        / "add_advisory_phase1c2_source_revision_cutoff_20260713.rollback.sql"
+    ).read_text(encoding="utf-8")
+    assert "schema_version" in migration
+    assert "enforced_cutoff_predicate_hash" in migration
+    assert "advisory_phase1_source_revision_set_v2" in migration
+    assert "NEW.enforced_cutoff_predicate_hash IS NULL" in migration
+    assert "UPDATE app.advisory_source_revision" not in migration
+    assert "ROLLBACK_REQUIRES_NO_V2_SOURCE_REVISION_EVIDENCE" in rollback
+
+
+def test_frozen_cutoff_predicate_changes_source_revision_set_hash() -> None:
+    member = _member()
+    divergent_payload = member.model_dump()
+    divergent_payload["enforced_cutoff_predicate_hash"] = "e" * 64
+    divergent_member = SourceRevisionMemberInput.model_validate(divergent_payload)
+
+    first = build_source_revision_set(
+        query_registry_hash=HASH_C,
+        requested_source_cutoff=OBSERVED_AT,
+        label_as_of_ts=OBSERVED_AT,
+        research_only=True,
+        members=[member],
+    )
+    second = build_source_revision_set(
+        query_registry_hash=HASH_C,
+        requested_source_cutoff=OBSERVED_AT,
+        label_as_of_ts=OBSERVED_AT,
+        research_only=True,
+        members=[divergent_member],
+    )
+
+    assert first.schema_version == "advisory_phase1_source_revision_set_v2"
+    assert first.source_revision_set_hash != second.source_revision_set_hash

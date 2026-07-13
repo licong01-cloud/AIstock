@@ -26,6 +26,7 @@ from backend.services.advisory_phase1.observation_capture import (
     REASON_OBSERVATION_PLAN_MISMATCH,
     expected_evidence_bundle_hash,
 )
+from backend.services.advisory_phase1.observation_selector import FixtureObservationVersion
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import (
     PHASE1_STAGE_TRACE_SCHEMA_VERSION,
@@ -446,6 +447,9 @@ def test_observation_writer_uses_only_frozen_plan_and_trace_content() -> None:
         "advisory_model",
     ]
     assert repository.append(plan=plan, envelope=envelope, binding=binding) == record
+    selector_version = FixtureObservationVersion.from_capture_record(record)
+    assert selector_version.observation_content_hash == record.observation_content_hash
+    assert selector_version.signal_source_revision_set_hash == plan.signal_source_revision_set_hash
 
     invalid_payload = plan.model_dump(mode="python", exclude={"plan_hash"})
     invalid_payload["package_id"] = "different-package"

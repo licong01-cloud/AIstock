@@ -38,7 +38,8 @@ readiness、observation version selector 与 capture membership 绑定。
   必须是 `BLOCKED`。
 - 单 Alpha 和原生多 Alpha 都使用同一解析协议。多 Alpha 各腿允许具有不同的合法
   lookback/window、query parameters、business range、row count 和 content hash；
-  仅公共 PIT identity 必须一致。
+  每个 requirement 的 `common_pit_identity_hash` 必须等于 set 冻结的公共 PIT
+  identity；合法不同的腿级窗口不参与该等值比较。
 - 所有正常数据校验必须同时具备拒绝错误输入和接受合法输入的正向路径；不得形成
   正常输入永远无法满足的条件。
 
@@ -146,6 +147,7 @@ availability_requirement         # DECISION_CUTOFF/LABEL_AS_OF/POLICY_FROZEN
 business_min_date/business_max_date
 requested_cutoff
 enforced_cutoff_predicate_hash
+common_pit_identity_hash           # 与 set 的公共 PIT identity 精确一致
 required_quality_status = PASS
 research_only = true
 ```
@@ -166,14 +168,16 @@ alpha_mode
 decision_as_of_trade_date
 requested_source_cutoff
 query_registry_hash
+common_pit_identity_hash
 requirements[]                    # 按 requirement_id 排序
 research_only = true
 ```
 
 同一 requirement set 内不得有重复 requirement identity。公共 PIT identity 包括
 package/manifest、decision date、cutoff、calendar identity、universe policy 和 query
-registry。原生多 Alpha component 的 lookback/window 属于各自 requirement 内容，
-不属于公共一致性字段。
+registry，并包含 admission/handoff、Program/binding 和 historical research identity。
+set 在构造时重新计算该 hash，并逐条比较每个 requirement；原生多 Alpha component
+的 lookback/window 属于各自 requirement 内容，不属于公共一致性字段。
 
 ### RequirementResolution
 
@@ -239,13 +243,14 @@ selected_mapping_hash
 对每个 requirement 按以下固定顺序执行：
 
 1. 校验 requirement set、handoff/admission、package/manifest、decision date、query
-   registry 和 research-only identity 完整一致。
+   registry、research-only identity 和每个 requirement 的 common PIT identity hash。
 2. 按 `(dataset_name, source_role, partition_key_hash)` 取得调用方显式提供的完整
    fixture chain；不访问 mutable latest state。
 3. 校验 revision 从 1 连续递增、精确 predecessor、单 successor、同 partition、无
    fork/cycle/tamper，并校验 correction/revalidation 的 revision/content 变化。
-4. 只保留 `formal_available_at <= requested_cutoff` 的 event，解析唯一最大
-   `event_revision_no` terminal。
+4. `DECISION_CUTOFF` 使用 requested source cutoff，`LABEL_AS_OF` 使用 frozen
+   label-as-of timestamp；只保留 `formal_available_at <= effective cutoff` 的 event，
+   解析唯一最大 `event_revision_no` terminal。
 5. terminal 为 `INVALIDATED`、非 `PASS` 或 cutoff 前不存在 event 时产生可枚举的
    `UNAVAILABLE`；字段与 requirement 不一致、出现多个合法 terminal 或 chain
    identity 冲突时产生 `CONFLICT`。
@@ -315,15 +320,18 @@ UNAVAILABLE，不选择旧 FULL。
 绑定通过现有 `CaptureMembership` append-only evidence role 完成，COMPLETE 时进入
 排序 membership hash。不得从当前 Program、当前 binding、latest artifact 或最新
 source row 补齐缺失 identity。gap-only receipt 不伪造 `CapturePlan` 所要求的
-source revision set id/hash。
+source revision set id/hash。helper 在生成 membership 前逐项比较 CapturePlan 与
+requirement set 的 package/manifest、Program/binding、alpha mode、decision date、
+handoff/admission、calendar、universe policy 和 evidence scope；任何差异均不能绑定。
 
 ## Additive Schema Alignment
 
 实现阶段只允许为父级已有契约补齐 additive 字段/表，不得创建审批或授权表：
 
-- 给 source revision member model/schema 增加非空
-  `enforced_cutoff_predicate_hash`，并纳入 member payload、set hash、持久化比较和
-  migration rollback。
+- 给 source revision member model 增加非空 `enforced_cutoff_predicate_hash`，并纳入
+  member payload、set hash 和持久化比较。schema v2 INSERT trigger 同样要求非空；
+  既有 v1 row 保留 nullable legacy column，不回填、不改写，也不能被 v2 repository
+  重新解释为完整证据。
 - requirement set、resolution receipt 和 selected mapping 在 Phase 1C fixture/local
   store 使用强类型 immutable repository oracle；进入真实 DML 前必须由后续 Phase
   1G 设计确认其最终 PostgreSQL ownership，不在本切片提前创建重复 authority 表。
@@ -435,19 +443,35 @@ BLOCKED。异常不得被转换为空列表、默认 member、旧 revision、成
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | proposed source requirement models | single/multi-alpha different-window fixture golden | design_ready | none |
-| F-002 | proposed fixture source resolver reusing Phase 1A primitives | chain/as-of/correction/invalidation tests | design_ready | none |
-| F-003 | proposed resolution receipt and mapping | deterministic hash, idempotency, gap/conflict tests | design_ready | none |
-| F-004 | proposed readiness classifier | four reachable readiness-path tests | design_ready | none |
-| F-005 | proposed fixture observation selector | EXACT/LATEST/no-fallback tests | design_ready | none |
-| F-006 | existing CaptureMembership plus proposed evidence roles | membership seal and forbidden-wiring tests | design_ready | none |
-| F-007 | proposed additive source member alignment | model/schema/hash/rollback contract tests | design_ready | none |
-| F-008 | package and runtime boundary | forbidden approval/auth/import/runtime-DDL checks | design_ready | none |
+| F-001 | `source_resolution.py::SourceRequirement/SourceRequirementSet` | single/multi-alpha different-window and divergent-common-PIT fixture golden | verified_local | none |
+| F-002 | `source_ledger.py::validate_source_availability_event_chain`；`FixtureSourceRevisionResolver` | ledger append 与 fixture resolver 共用 chain oracle；chain/as-of/correction/invalidation/quality/reverse-time tests | verified_local | none |
+| F-003 | `RequirementResolution`、`SourceResolutionReceipt`、`InMemorySourceRequirementSetRepository`、`InMemorySourceResolutionReceiptRepository` | deterministic hash、shared-member mapping、gap/conflict，以及 same-id/same-hash retry 与 same-id/different-hash conflict tests | verified_local | none |
+| F-004 | `ResearchReadiness` classifier | READY, PARTIAL with members, gap-only, replay-ineligible BLOCKED tests | verified_local | none |
+| F-005 | `FixtureObservationVersionSelector`、`InMemoryFixtureObservationRepository`、`InMemorySelectedObservationMappingRepository` | EXACT/LATEST/future correction/no-fallback/identity/chain、typed malformed-record error 与 mapping retry/conflict tests | verified_local | none |
+| F-006 | `observation_capture.py::canonical_signal_id_for_plan`、`capture_membership_evidence.py` plus existing `CaptureMembership` | capture 与 membership 共用 signal identity 派生；source/receipt/set/mapping seal；divergent plan、canonical signal、cutoff、capability rejection tests | verified_local | none |
+| F-007 | source revision v2 model/repository/migration/rollback | payload hash、SQL parameter parity；migration contract 证明 legacy row 不 UPDATE 且新默认切换 v2；DEV-DB 验证显式新 v1 拒绝、missing cutoff rejection 与 rollback | verified_local | none |
+| F-008 | Advisory Phase 1 package boundaries | forbidden-import regression plus changed-path scope review; no runtime wiring | verified_local | none |
+
+## Current Implementation Evidence
+
+- Focused source ledger/revision/capture/resolution/selector/membership matrix: `59 passed`.
+- Ruff and changed-file `py_compile`: passed.
+- DEV-DB rollback-only L4 at the project `.env` target guarded by
+  `AISTOCK_DEV_DB_E2E=1`: `1 passed`. The test applies the additive migration,
+  verifies v2 default/insert enforcement, v2 schema/readback and missing
+  cutoff-predicate rejection, rolls back test evidence, then applies the paired
+  rollback migration. Legacy v1 preservation is verified by the migration
+  contract test: add-column default is v1, no existing evidence UPDATE is allowed,
+  and the default is switched to v2 before new writes.
+- No Selection, Paper, simulation, QMT, MiniQMT, broker, scheduler or API path
+  imports/calls the new fixture modules. Broader shared-consumer parity remains
+  PR CI/nightly coverage because runtime wiring is intentionally unchanged.
 
 ## Operational Effects
 
-- Code/runtime activation: `noop`，本任务只交付详细设计。
-- Production DDL/DML: `noop`。
+- Code/runtime activation: fixture/local implementation complete；现有 runtime wiring
+  仍为 `noop`。
+- Production DDL/DML: `pending`；additive migration 已提交但未应用到生产。
 - Frontend/backend dependency: `noop`。
 - Scheduler/process/service restart: `noop`。
 - Approval/role/authorization/manual gate: 不存在，也不在后续实现范围。
@@ -458,7 +482,8 @@ BLOCKED。异常不得被转换为空列表、默认 member、旧 revision、成
 本节仅满足 AIstock F2 文档模板的状态记录要求，不新增任何产品门禁、审批流程、
 角色、授权或人工确认：
 
-- `production_ddl_gate`: `noop`；本设计不执行生产 DDL。
+- `production_ddl_gate`: `pending`；migration 只在 DEV-DB rollback-only L4 验证，
+  未应用生产。
 - `production_dml_gate`: `noop`；本设计不执行生产 DML。
 - `production_frontend_dependency_gate`: `noop`。
 - `production_backend_dependency_gate`: `noop`。
