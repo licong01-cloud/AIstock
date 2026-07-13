@@ -9,9 +9,10 @@
 - `docs/architecture/advisory_phase1c_capture_foundation_f2_design_20260713.md`
 - `docs/architecture/advisory_phase1c2_fixture_source_revision_selector_f2_design_20260713.md`
 
-Batch B 的实现级子设计由以下文档冻结：
+Batch B 与 Batch C 的实现级子设计由以下文档冻结：
 
 - `docs/architecture/advisory_phase1c3_batch_b_label_capture_revision_selector_f2_design_20260713.md`
+- `docs/architecture/advisory_phase1c3_batch_c_build_attempt_postgres_foundation_f2_design_20260713.md`
 
 Phase 1C-1 已提供 capture batch、gap、canonical signal、observation version、lineage、
 stage/candidate 和 fixture observation writer。Phase 1C-2 已提供 explicit source
@@ -19,17 +20,17 @@ requirement、exact source resolution、terminal-first observation selector、ca
 seal 和 source revision v2 cutoff evidence。
 
 本切片完整目标是在 fixture/local 环境交付 outcome label、PIT universe raw outcome、build/attempt、
-deterministic Parquet、真实本地 CAS 和 SEALED snapshot golden；当前 Batch A 已合入，Batch B-D
+deterministic Parquet、真实本地 CAS 和 SEALED snapshot golden；当前 Batch A/B 已合入，Batch C/D
 仍按本文和子阶段设计实施。它不接入真实 observer、
 日常调度、荐股页面、Selection、Paper、模拟盘、QMT、模型训练或交易执行。
 本切片任何后续阶段若引入模型训练，训练进程只能在 WSL 的项目 Conda 环境运行，禁止在
-Windows 环境执行训练；Batch B 本身不包含训练代码或训练环境运行门禁。
+Windows 环境执行训练；Batch A-C 均不包含训练代码或训练环境运行门禁。
 
 ## 1. Feature Classification
 
 - Tier：`F2`
-- Delivery type：分批实现；Batch A 已合入，Batch B-D 保持设计/待实现状态
-- Predecessors：Phase 1C-1、Phase 1C-2 和 Phase 1C-3 Batch A 已合入
+- Delivery type：分批实现；Batch A/B 已合入，Batch C/D 保持设计/待实现状态
+- Predecessors：Phase 1C-1、Phase 1C-2 和 Phase 1C-3 Batch A/B 已合入
 - Runtime activation：`noop`
 - Database mutation：`noop`
 - Approval/role/authorization/manual gate：不存在，也不在后续实现范围
@@ -82,16 +83,18 @@ COMPLETE capture batch membership
 - `SelectedObservationMapping` 的 terminal-first EXACT/LATEST policy。
 - `SourceRequirementSet`、`SourceResolutionReceipt`、`SourceRevisionSet` 和 exact member hashes。
 - `alpha_raw` INCLUDED candidate 的 symbol、rank、score、component evidence 和 stage hash。
+- `LabelPolicyBundle`、统一 `OutcomeEngine` 和 calculation evidence local CAS primitive。
+- `LabelCaptureBinding`、v2 label capture request、in-memory capture dispatch 和 label builder。
+- outcome label revision、terminal-first selector、candidate/universe raw outcome 与 coverage oracle。
 
 ### 3.2 当前不存在
 
-- label policy bundle 和统一 outcome engine。
-- outcome label revision、label selector 和 selected label mapping repository。
-- PIT universe raw outcome 与 calculation evidence schema。
+- capture v1/v2 PostgreSQL discriminator 与 v2 create/recover/readback。
+- PostgreSQL outcome label authority header/payload repository。
 - dataset build、attempt、checkpoint、file set 和 build event repository。
 - deterministic Parquet writer/verifier。
 - local filesystem CAS、promotion receipt、manifest 和 final snapshot repository。
-- 对应 label/build/snapshot additive migration。
+- 对应 capture discriminator、label/build/snapshot additive migration。
 
 因此 Phase 1C-3 不得被实现成只计算几个收益字段的纯函数，也不得把静态 fixture JSON
 描述为 snapshot 完成。
@@ -674,6 +677,11 @@ checkpoint = REQUESTED | MATERIALIZED | VERIFIED | PROMOTED | SEALED
 - 同 logical key 只允许一个 ACTIVE generation。
 - 每个 checkpoint 固定 attempt id、receipt hash 和 file/manifest set hash，写入后不可替换。
 - 普通 attempt failure 不回退 checkpoint，也不能自行终止 build。
+- verify receipt 必须携带 `verification_contract_version`。Batch C 只验证真实文件 bytes、SHA、
+  size、schema fingerprint 与 file-set repository closure，使用
+  `PHASE1C3_BATCH_C_FILESET_FOUNDATION_V1`；Batch D 全量验证 Parquet schema/sort/selected mapping/
+  cross-reference 后使用 `PHASE1C3_BATCH_D_FULL_PARQUET_V1`。只有后者允许进入 PROMOTED/SEALED。
+  该 discriminator 是不可伪造完整验证的内容契约，不是审批、角色或人工门禁。
 
 ### 12.2 Attempt
 
@@ -910,7 +918,8 @@ identity:
   label_version_id, decision_as_of_trade_date,
   projection, projection_schema_version, horizon_trading_days
 clock/status detail:
-  entry_ts, exit_ts, scheduled_maturity_ts, event_closed_at,
+  intended_entry_trade_date, earliest_sell_eligible_trade_date, exit_trade_date,
+  scheduled_maturity_ts, event_closed_at,
   source_closed_at, failure_observed_at, missing_source_receipt_hash,
   maturity_status, outcome_event_status, entry_status
 projection payload:
@@ -922,10 +931,15 @@ path/event:
   entry-day touch, executable barrier, terminal, censor,
   last-valid-price, settlement and observed holding fields
 evidence:
-  all policy hashes, label source revision id/hash, source-slice hashes,
+  all policy hashes, label source revision id/hash, price-path/corporate-action/
+  terminal/benchmark source-slice hashes,
   calculation_evidence_uri/sha256/size_bytes/store_backend_hash,
   cost breakdown hash
 ```
+
+Phase 1C-3 的权威 outcome 是日线研究模型，只有真实交易日而没有可证明的 intraday entry/exit
+timestamp；因此不得把交易日拼接午夜时间写成 `entry_ts/exit_ts`。未来若 source evidence 引入
+真实时刻，必须通过新的 projection/payload schema revision 增加，不能静默改变 v1。
 
 Payload 使用 `PRIMARY KEY(decision_as_of_trade_date,label_version_id)`，并以
 `(label_version_id,decision_as_of_trade_date)` composite FK 引用 header。它按
@@ -951,6 +965,7 @@ base snapshot id/content/manifest nullable-together
 builder/code/writer/partition/compression identities
 lifecycle_status, checkpoint, current_fencing_token, current_attempt_id
 materialized/verified/promoted/sealed attempt and receipt/file-set fields
+verification_contract_version nullable with VERIFIED checkpoint fields
 sealed_snapshot_id, termination fields, row_version, timestamps
 UNIQUE(logical_build_key_sha256,build_generation)
 ```
@@ -1121,12 +1136,16 @@ backend/services/simulation_runtime/selection.py
 - candidate enumeration、universe raw outcome、coverage summaries
 - `capture_foundation.py` v1/v2 domain + in-memory dispatch；PostgreSQL SQL path 保持 v1 原样
 
-本分支已完成实现并完成本地验证：历史 source observation receipt 精确校验且不重验 current
-TRACE_CAPTURE enabled；append request 并发幂等、header/payload logical exactly-one、revision/
-selector/source membership、multi-alpha/empty candidate 和 universe denominator raw evidence 闭合。
-该状态不包含 PostgreSQL physical repository、migration 或任何 runtime wiring。
+Batch B 已通过 PR #2039 合入 `origin/main`：历史 source observation receipt 精确校验且不重验
+current TRACE_CAPTURE enabled；append request 并发幂等、header/payload logical exactly-one、
+revision/selector/source membership、multi-alpha/empty candidate 和 universe denominator raw
+evidence 闭合。该状态不包含 PostgreSQL physical repository、migration 或任何 runtime wiring。
 
 ### 17.4 Batch C：Build/attempt 与 additive schema
+
+实施级契约、允许修改范围、PostgreSQL 事务、状态机、错误契约和 16 项验收矩阵见：
+
+`docs/architecture/advisory_phase1c3_batch_c_build_attempt_postgres_foundation_f2_design_20260713.md`
 
 - `dataset_build.py`
 - build/attempt/file/event/snapshot repositories
@@ -1135,8 +1154,9 @@ selector/source membership、multi-alpha/empty candidate 和 universe denominato
 - PostgreSQL label authority header/payload repository
 - DEV-DB rollback-only L4
 
-退出条件：合法输入可自动走 REQUESTED -> MATERIALIZED -> VERIFIED；stale fencing、非法
-transition、fork、update/delete 均拒绝。
+退出条件：合法真实文件输入可自动走 REQUESTED -> MATERIALIZED -> VERIFIED，并生成明确的
+Batch C file-set foundation verify receipt；stale fencing、非法 transition、fork、update/delete
+均拒绝。该 receipt 不得被 PROMOTE/SEAL 消费。
 
 ### 17.5 Batch D：Parquet、CAS、promotion 与 SEALED golden
 
@@ -1145,8 +1165,8 @@ transition、fork、update/delete 均拒绝。
 - real local filesystem CAS adapter
 - manifest/promotion/seal receipts
 
-退出条件：相同 fixture 两次产生相同 bytes/file SHA/manifest/snapshot ID；crash/retry 不
-消费半成品；合法完整 fixture 能到 SEALED。
+退出条件：full verifier 生成 Batch D full-Parquet verify receipt；相同 fixture 两次产生相同
+bytes/file SHA/manifest/snapshot ID；crash/retry 不消费半成品；合法完整 fixture 能到 SEALED。
 
 四个 batch 可以分别提交，但不得把 A/B 的纯函数或 C 的 schema 存在描述为 Phase 1C-3
 完整交付。只有 D 的正向 SEALED golden 和全矩阵通过后，Phase 1C-3 才完成。
@@ -1297,9 +1317,9 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 | F-004 | fixed-capital cashflow, per-share corporate action processing and exact rational equal-weight benchmark in `outcome_engine.py` | lot/minimum-fee/residual-cash, per-current-share action, unbuyable/zero-lot cash retention and unequal-weight rejection fixtures | batch_a_verified | none |
 | F-005 | `label_builder.py` LabelAppendRequest, logical header/payload, in-memory repository and terminal-first selector | serial/concurrent/URI retry, stale predecessor, transition, exact/no-fallback and mapping collision tests | batch_b_verified | none |
 | F-006 | `label_builder.py` alpha_raw candidate enumerator, LABEL_CAPTURE_V1 builder and universe raw rows | single/multi-alpha/empty, source/policy/duplicate universe, coverage, real-CAS COMPLETE/gap tests | batch_b_verified | none |
-| F-007 | planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
-| F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; planned Batch D `snapshot_writer.py` and blob/ref repositories | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
-| F-009 | planned Phase 1C-3 migration/rollback with capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
+| F-007 | Batch C child design §7-§8; planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
+| F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; Batch C child design §9 schema/repository boundary; planned Batch D `snapshot_writer.py` | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
+| F-009 | Batch C child design §5-§10 migration/rollback, capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
 | F-010 | §17 four implementation batches; Batch A/B implementation refs are recorded by F-001..F-006/F-008 | Batch B direct label suite 37 passed; capture/label combined suite 48 passed; Advisory Phase 1 regression 173 passed/3 skipped; pure branch coverage: label capture 85.71%, label builder 85.21%; Batch C/D exits remain defined by §17 | batch_b_verified | none |
 | F-011 | Advisory Phase 1 package boundary plus §17 frozen shared files | Batch B zero-diff/import scan; Advisory Phase 1 regression; runtime remains noop | batch_b_verified | none |
 | F-012 | §2/§4/§18/§20 plus Batch B changed-file scan | no approval/auth/current-control gate, no silent default, no shared runtime wiring; DESIGN-COMPLIANCE Batch B review | batch_b_verified | none |
@@ -1310,10 +1330,11 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 - 后续 migration 只在明确的 DEV/test rollback-only 任务中验证；生产应用另行记录状态。
 - 不新增依赖安装；若实现需要 PyArrow 版本变化，必须在 Batch D 设计内显式更新 lock 并
   执行 Windows dependency smoke，不能假设 WSL 环境等于 Windows。
-- Batch B 不包含模型训练；未来任何模型训练只允许 WSL/Conda，Windows 训练禁止。若需要
+- Batch A-C 不包含模型训练；未来任何模型训练只允许 WSL/Conda，Windows 训练禁止。若需要
   实现运行时环境拒绝机制，必须先形成独立设计并经用户确认。
 - runtime observer、capture dispatcher、label scheduler、dataset store activation 均为 noop。
-- `production_ddl_gate`: `noop` for Batch B pure/in-memory code task。
+- `production_ddl_gate`: `noop` for current Batch C design；后续 Batch C code 仅执行隔离 DEV/test
+  apply/readback/rollback L4，生产应用属于 Phase 1F。
 - `production_dml_gate`: `noop`。
 - `production_frontend_dependency_gate`: `noop`。
 - `production_backend_dependency_gate`: `noop`。
@@ -1363,10 +1384,11 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 ## 26. Exit Criteria
 
-本文当前状态表示 Batch A 已合入，Batch B 已在独立 worktree 完成实现和本地验证，仍待代码审查、
-提交和合入；Batch C/D 仍按各自批次边界等待后续实施：
+本文当前状态表示 Batch A/B 已合入；Batch C 已完成实施级详细设计，仍待设计复查、提交和合入，
+其代码尚未开始；Batch D 仍按批次边界等待后续详细设计与实施：
 
-- F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap。
+- F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap；Batch C 子设计的 16 项
+  acceptance items 均为 `design_ready`。
 - F2 feature workflow validation 通过。
 - 父级 identity、label、build、snapshot、isolation 和 no-approval 条款无冲突。
 - 所有 code-time 参数决策均有 frozen policy/hash 位置，不留“实现时自行决定”。
