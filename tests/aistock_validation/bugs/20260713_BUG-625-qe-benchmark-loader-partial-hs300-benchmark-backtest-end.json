@@ -32,8 +32,8 @@
   "expected": "benchmark 必须覆盖 backtest 实际 start/end;缺失/截止不足/区间断裂/schema 错误时不得使用 partial,应从已验证权威 Qlib/DB(market.index_daily 000300.SH)重生成或 fail-fast;禁静默截断/填0/ffill/延伸最后收益;日线与分钟路径行为一致;read_exp_res excess 计算须验证完整覆盖并输出 reason_code/benchmark_start/end/required_end/source/hash,绝对收益与 excess 口径分离。",
   "first_seen_at": "2026-07-12T16:40:04.253743Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f1ab84f124ca72d32b1aea6d965c7e7d26654b4c",
+  "fixed_at": "2026-07-13T17:12:50.569501Z",
   "github_issue_number": 2012,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2012",
   "last_seen_at": "2026-07-12T16:40:04.253743Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2055",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "f81e5376edc7826e1e7ee8f5",
     "source_event_id": "FE-20260713-f81e5376edc7"
   },
+  "validation_evidence": [
+    "PR #2055 required checks passed; source PR merged as f1ab84f1; source branch/worktree already cleaned"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
