@@ -496,10 +496,7 @@ class QERuntimeResourceMonitor:
         failed_event["upload_error_type"] = error_type
         self._events.append(failed_event)
         self._write_local()
-        print(
-            "[ERROR] reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED "
-            f"session_id={self.session_id} phase={event.get('phase')} error_type={error_type}"
-        )
+        print("[ERROR] reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED")
 
     def _write_local(self) -> None:
         payload = {
