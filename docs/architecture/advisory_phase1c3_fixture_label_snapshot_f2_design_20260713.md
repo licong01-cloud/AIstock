@@ -9,20 +9,27 @@
 - `docs/architecture/advisory_phase1c_capture_foundation_f2_design_20260713.md`
 - `docs/architecture/advisory_phase1c2_fixture_source_revision_selector_f2_design_20260713.md`
 
+Batch B 的实现级子设计由以下文档冻结：
+
+- `docs/architecture/advisory_phase1c3_batch_b_label_capture_revision_selector_f2_design_20260713.md`
+
 Phase 1C-1 已提供 capture batch、gap、canonical signal、observation version、lineage、
 stage/candidate 和 fixture observation writer。Phase 1C-2 已提供 explicit source
 requirement、exact source resolution、terminal-first observation selector、capture membership
 seal 和 source revision v2 cutoff evidence。
 
-本切片只完成 fixture/local 环境中的 outcome label、PIT universe raw outcome、build/attempt、
-deterministic Parquet、真实本地 CAS 和 SEALED snapshot golden。它不接入真实 observer、
+本切片完整目标是在 fixture/local 环境交付 outcome label、PIT universe raw outcome、build/attempt、
+deterministic Parquet、真实本地 CAS 和 SEALED snapshot golden；当前 Batch A 已合入，Batch B-D
+仍按本文和子阶段设计实施。它不接入真实 observer、
 日常调度、荐股页面、Selection、Paper、模拟盘、QMT、模型训练或交易执行。
+本切片任何后续阶段若引入模型训练，训练进程只能在 WSL 的项目 Conda 环境运行，禁止在
+Windows 环境执行训练；Batch B 本身不包含训练代码或训练环境运行门禁。
 
 ## 1. Feature Classification
 
 - Tier：`F2`
-- Delivery type：详细设计，不包含代码和 DDL 执行
-- Predecessors：Phase 1C-1、Phase 1C-2 已合入并完成生产 additive schema alignment
+- Delivery type：分批实现；Batch A 已合入，Batch B-D 保持设计/待实现状态
+- Predecessors：Phase 1C-1、Phase 1C-2 和 Phase 1C-3 Batch A 已合入
 - Runtime activation：`noop`
 - Database mutation：`noop`
 - Approval/role/authorization/manual gate：不存在，也不在后续实现范围
@@ -392,6 +399,9 @@ plan/mapping/policy/source-revision hashes 均不得排除。
 - v1 request/binding 仍严格走现有 `OBSERVATION_CAPTURE_V1` 路径，bytes/hash/SQL insert/readback
   完全不变；
 - v2 `LABEL_CAPTURE_V1` 只接受 `LabelCaptureBinding`，不得转换为 `TraceCaptureBinding`；
+- Batch B 只完成 domain model 与 `InMemoryCaptureBatchRepository` dispatch；PostgreSQL
+  discriminator、v2 insert/readback 和 `_load_locked()` raw payload dispatch 必须与 Batch C
+  additive migration 同批交付，禁止在 Batch B 创建等待 DDL 的半上线 SQL path；
 - `backend/services/simulation_runtime/selection.py` 及其共享消费者保持零修改，并用 import/
   contract regression 证明行为不变。
 
@@ -1099,12 +1109,17 @@ backend/services/simulation_runtime/selection.py
 
 ### 17.3 Batch B：Label capture、revision、selector 与 universe rows
 
+实施级契约、允许修改范围、WSL-only 后续训练约束和 12 项子阶段验收矩阵见：
+
+`docs/architecture/advisory_phase1c3_batch_b_label_capture_revision_selector_f2_design_20260713.md`
+
 - `label_capture.py` with Advisory-owned `LabelCaptureBinding`
 - `label_builder.py`
 - `LabelAppendRequest` canonical codec/hash
-- unpartitioned authority header + partitioned payload append-only repository/oracle
+- unpartitioned authority header + partitioned payload logical models and append-only in-memory repository/oracle
 - SelectedLabelMapping repository
 - candidate enumeration、universe raw outcome、coverage summaries
+- `capture_foundation.py` v1/v2 domain + in-memory dispatch；PostgreSQL SQL path 保持 v1 原样
 
 退出条件：历史 source observation receipt 精确校验且不重验 current TRACE_CAPTURE enabled；
 append request 并发幂等、header/payload exactly-one、revision/selector/source membership、
@@ -1115,6 +1130,8 @@ multi-alpha/empty candidate 和 universe denominator raw evidence 闭合。
 - `dataset_build.py`
 - build/attempt/file/event/snapshot repositories
 - additive migration/rollback，含 capture v1/v2 discriminator、label header/payload 和 blob/ref
+- `PostgresCaptureBatchRepository` v2 create/recover/`_load_locked()` dispatch 与 migration 同批实现
+- PostgreSQL label authority header/payload repository
 - DEV-DB rollback-only L4
 
 退出条件：合法输入可自动走 REQUESTED -> MATERIALIZED -> VERIFIED；stale fencing、非法
@@ -1273,12 +1290,12 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | planned v1/v2 capture request union plus Advisory-owned `label_capture.py`; frozen `stage_trace.py` | exact v1 bytes/hash/repository regression; v2 historic provenance and trace enabled/disabled equivalence | design_ready | none |
+| F-001 | Batch B child design §15 identity/capture items: planned v1/v2 capture request union plus Advisory-owned `label_capture.py`; frozen `stage_trace.py` | exact v1 bytes/hash/repository regression; v2 historic provenance and trace enabled/disabled equivalence | design_ready | none |
 | F-002 | `backend/services/advisory_phase1/label_policy.py`; `backend/services/advisory_phase1/outcome_engine.py` | content-bound policy/calendar identity, T/E/S/X_h, horizon/terminal/censor and no-default negative fixtures; branch coverage: label policy 89%, outcome engine 86% | batch_a_verified | none |
 | F-003 | one `OutcomeEngine` for CANDIDATE/UNIVERSE with canonical request revalidation and exact SourceRevisionSet/member binding | candidate/universe parity, owner-symbol/source drift and unsafe-model-copy rejection fixtures | batch_a_verified | none |
 | F-004 | fixed-capital cashflow, per-share corporate action processing and exact rational equal-weight benchmark in `outcome_engine.py` | lot/minimum-fee/residual-cash, per-current-share action, unbuyable/zero-lot cash retention and unequal-weight rejection fixtures | batch_a_verified | none |
-| F-005 | planned LabelAppendRequest, authority header/payload repository and selector | serial/concurrent/URI retry, exactly-one closure, transition/fork/no-fallback tests | design_ready | none |
-| F-006 | planned candidate enumerator, `LABEL_CAPTURE_V1` and universe Parquet rows | full deep-pool/empty-candidate/coverage plus immutable batch tests | design_ready | none |
+| F-005 | Batch B child design §15 append/selector items: planned LabelAppendRequest, authority header/payload logical models, in-memory repository and selector | serial/concurrent/URI retry, exactly-one closure, transition/fork/no-fallback tests | design_ready | none |
+| F-006 | Batch B child design §15 candidate/universe/builder items: planned candidate enumerator, `LABEL_CAPTURE_V1` and universe raw rows | full deep-pool/empty-candidate/coverage plus immutable batch tests | design_ready | none |
 | F-007 | planned build/attempt repositories | state reachability, lease/fencing/recover/terminate tests | design_ready | none |
 | F-008 | Batch A local atomic create-if-absent primitive in `backend/services/advisory_phase1/calculation_evidence.py`; planned Batch D `snapshot_writer.py` and blob/ref repositories | exact retry/conflict, repo-external root, hardlink atomic publish, staging cleanup and file/directory durability fixtures with 85% branch coverage; planned byte-identical Parquet/blob/ref/SEALED golden | design_ready | none |
 | F-009 | planned Phase 1C-3 migration/rollback with capture discriminator and label header/payload | apply/readback, PostgreSQL constraint creation, positive path, illegal mutation and rollback L4 | design_ready | none |
@@ -1292,6 +1309,8 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 - 后续 migration 只在明确的 DEV/test rollback-only 任务中验证；生产应用另行记录状态。
 - 不新增依赖安装；若实现需要 PyArrow 版本变化，必须在 Batch D 设计内显式更新 lock 并
   执行 Windows dependency smoke，不能假设 WSL 环境等于 Windows。
+- Batch B 不包含模型训练；未来任何模型训练只允许 WSL/Conda，Windows 训练禁止。若需要
+  实现运行时环境拒绝机制，必须先形成独立设计并经用户确认。
 - runtime observer、capture dispatcher、label scheduler、dataset store activation 均为 noop。
 - `production_ddl_gate`: `noop` for design-only task。
 - `production_dml_gate`: `noop`。
@@ -1343,9 +1362,10 @@ CHECK/trigger/service predicate 都是 P0 缺陷，禁止通过 bypass 或人工
 
 ## 26. Exit Criteria
 
-本文达到详细设计退出条件时，只表示 Phase 1C-3 可以开始按 Batch A -> D 开发：
+本文当前状态表示 Batch A 已合入，Batch B 可以在子阶段设计开工条件满足后开发，Batch C/D 仍按
+各自批次边界等待后续实施：
 
-- F-001 至 F-012 均为 `design_ready` 且无 gap。
+- F-001 至 F-012 均为已验证或 `design_ready`，且无未批准 gap。
 - F2 feature workflow validation 通过。
 - 父级 identity、label、build、snapshot、isolation 和 no-approval 条款无冲突。
 - 所有 code-time 参数决策均有 frozen policy/hash 位置，不留“实现时自行决定”。
