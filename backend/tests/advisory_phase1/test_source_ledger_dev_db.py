@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 import psycopg2
+import psycopg2.extras
 import pytest
 from dotenv import load_dotenv
 
@@ -27,6 +28,8 @@ from backend.services.advisory_phase1.source_revision_postgres import PostgresSo
 
 
 _ENV_FILE = Path("F:/Dev/AIstock/.env")
+_MIGRATION = Path("backend/db/migrations/add_advisory_phase1c2_source_revision_cutoff_20260713.sql")
+_ROLLBACK = Path("backend/db/migrations/add_advisory_phase1c2_source_revision_cutoff_20260713.rollback.sql")
 
 
 def _dev_dsn() -> dict[str, Any]:
@@ -85,13 +88,81 @@ def _assert_l4_schema(conn: psycopg2.extensions.connection) -> None:
             (["advisory_source_revision_set", "advisory_source_revision_member"],),
         )
         assert {row[0] for row in cur.fetchall()} == {"advisory_source_revision_set", "advisory_source_revision_member"}
+        cur.execute(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'app'
+              AND (
+                    (table_name = 'advisory_source_revision_set' AND column_name = 'schema_version')
+                    OR (
+                        table_name = 'advisory_source_revision_member'
+                        AND column_name = 'enforced_cutoff_predicate_hash'
+                    )
+                  )
+            """
+        )
+        assert set(cur.fetchall()) == {
+            ("advisory_source_revision_set", "schema_version"),
+            ("advisory_source_revision_member", "enforced_cutoff_predicate_hash"),
+        }
+
+
+def _apply_sql(conn: Any, path: Path) -> None:
+    with conn.cursor() as cur:
+        cur.execute(path.read_text(encoding="utf-8"))
 
 
 def test_source_ledger_l4_dev_db_is_append_only_and_rolls_back() -> None:
     conn = psycopg2.connect(**_dev_dsn(), connect_timeout=5)
-    conn.autocommit = False
+    conn.autocommit = True
+    applied = False
     try:
+        _apply_sql(conn, _ROLLBACK)
+        _apply_sql(conn, _MIGRATION)
+        _apply_sql(conn, _MIGRATION)
+        applied = True
+        conn.autocommit = False
         _assert_l4_schema(conn)
+
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT source_revision_schema_v2_insert_contract")
+            with pytest.raises(psycopg2.Error, match="ADVISORY_PHASE1_SOURCE_REVISION_SET_SCHEMA_INVALID"):
+                cur.execute(
+                    """
+                    INSERT INTO app.advisory_source_revision_set (
+                        source_revision_set_id, source_revision_set_hash, query_registry_hash,
+                        schema_version, requested_source_cutoff, label_as_of_ts, research_only, member_count
+                    ) VALUES (%s, %s, %s, %s, %s, %s, TRUE, 1)
+                    """,
+                    (
+                        "phase1c2-explicit-v1-rejected",
+                        "7" * 64,
+                        "8" * 64,
+                        "advisory_phase1_source_revision_set_v1",
+                        datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                        datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                    ),
+                )
+            cur.execute("ROLLBACK TO SAVEPOINT source_revision_schema_v2_insert_contract")
+            cur.execute(
+                """
+                INSERT INTO app.advisory_source_revision_set (
+                    source_revision_set_id, source_revision_set_hash, query_registry_hash,
+                    requested_source_cutoff, label_as_of_ts, research_only, member_count
+                ) VALUES (%s, %s, %s, %s, %s, TRUE, 1)
+                RETURNING schema_version
+                """,
+                (
+                    "phase1c2-default-v2",
+                    "9" * 64,
+                    "0" * 64,
+                    datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                    datetime(2026, 7, 1, 10, 0, tzinfo=timezone.utc),
+                ),
+            )
+            assert cur.fetchone() == ("advisory_phase1_source_revision_set_v2",)
+            cur.execute("ROLLBACK TO SAVEPOINT source_revision_schema_v2_insert_contract")
 
         @contextmanager
         def conn_factory() -> Iterator[Any]:
@@ -116,6 +187,7 @@ def test_source_ledger_l4_dev_db_is_append_only_and_rolls_back() -> None:
             query_template_version="1",
             query_template_hash="a" * 64,
             bound_parameter_hash="b" * 64,
+            enforced_cutoff_predicate_hash="c" * 64,
             partition_key=second.input.partition_key,
             revision_kind=SourceRevisionKind.IMMUTABLE_INGESTION,
             revision_id=second.input.revision_id,
@@ -142,10 +214,82 @@ def test_source_ledger_l4_dev_db_is_append_only_and_rolls_back() -> None:
         assert revisions.freeze(revision_set) == revision_set
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT count(*) FROM app.advisory_source_revision_member WHERE source_revision_set_id = %s",
+                """
+                SELECT source_revision_set_id, schema_version
+                FROM app.advisory_source_revision_set
+                WHERE source_revision_set_id = %s
+                """,
                 (revision_set.source_revision_set_id,),
             )
-            assert cur.fetchone() == (1,)
+            assert cur.fetchone() == (revision_set.source_revision_set_id, revision_set.schema_version)
+            cur.execute(
+                """
+                SELECT enforced_cutoff_predicate_hash
+                FROM app.advisory_source_revision_member
+                WHERE source_revision_set_id = %s
+                """,
+                (revision_set.source_revision_set_id,),
+            )
+            assert cur.fetchone() == (member.enforced_cutoff_predicate_hash,)
+            cur.execute("SAVEPOINT missing_v2_cutoff_predicate")
+            cur.execute(
+                """
+                INSERT INTO app.advisory_source_revision_set (
+                    source_revision_set_id, source_revision_set_hash, query_registry_hash,
+                    schema_version, requested_source_cutoff, label_as_of_ts, research_only, member_count
+                ) VALUES (%s, %s, %s, %s, %s, %s, TRUE, 1)
+                """,
+                (
+                    "phase1c2-l4-missing-cutoff",
+                    "f" * 64,
+                    "e" * 64,
+                    "advisory_phase1_source_revision_set_v2",
+                    second.formal_available_at,
+                    second.formal_available_at,
+                ),
+            )
+            with pytest.raises(psycopg2.Error, match="ADVISORY_PHASE1_SOURCE_REVISION_MEMBER_INVALID"):
+                cur.execute(
+                    """
+                    INSERT INTO app.advisory_source_revision_member (
+                        source_revision_set_id, member_key, source_role, dataset_name,
+                        query_template_id, query_template_version, query_template_hash,
+                        bound_parameter_hash, partition_key, partition_key_hash, revision_kind,
+                        revision_id, availability_event_hash, availability_requirement,
+                        business_min_date, business_max_date, available_at_min, available_at_max,
+                        schema_fingerprint, row_count, partition_content_hash, quality_status,
+                        research_only
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE
+                    )
+                    """,
+                    (
+                        "phase1c2-l4-missing-cutoff",
+                        member.member_key,
+                        member.source_role,
+                        member.dataset_name,
+                        member.query_template_id,
+                        member.query_template_version,
+                        member.query_template_hash,
+                        member.bound_parameter_hash,
+                        psycopg2.extras.Json(member.partition_key),
+                        member.partition_key_hash,
+                        member.revision_kind.value,
+                        member.revision_id,
+                        member.availability_event.event_content_hash if member.availability_event else None,
+                        member.availability_requirement.value,
+                        member.business_min_date,
+                        member.business_max_date,
+                        member.available_at_min,
+                        member.available_at_max,
+                        member.schema_fingerprint,
+                        member.row_count,
+                        member.partition_content_hash,
+                        member.quality_status,
+                    ),
+                )
+            cur.execute("ROLLBACK TO SAVEPOINT missing_v2_cutoff_predicate")
             with pytest.raises(psycopg2.Error, match="ADVISORY_PHASE1_SOURCE_EVENT_IMMUTABLE"):
                 cur.execute(
                     "UPDATE app.advisory_source_availability_event SET quality_status = 'FAILED' WHERE availability_event_id = %s",
@@ -162,4 +306,26 @@ def test_source_ledger_l4_dev_db_is_append_only_and_rolls_back() -> None:
             assert cur.fetchone() == (0,)
     finally:
         conn.rollback()
-        conn.close()
+        try:
+            if applied:
+                conn.autocommit = True
+                _apply_sql(conn, _ROLLBACK)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT count(*)
+                        FROM information_schema.columns
+                        WHERE table_schema = 'app'
+                          AND (
+                                (table_name = 'advisory_source_revision_set' AND column_name = 'schema_version')
+                                OR (
+                                    table_name = 'advisory_source_revision_member'
+                                    AND column_name = 'enforced_cutoff_predicate_hash'
+                                )
+                              )
+                        """
+                    )
+                    assert cur.fetchone() == (0,)
+                _apply_sql(conn, _ROLLBACK)
+        finally:
+            conn.close()

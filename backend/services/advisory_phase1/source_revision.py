@@ -12,7 +12,8 @@ from backend.services.advisory_phase0a.policy import canonical_json_sha256, cano
 from backend.services.advisory_phase1.source_ledger import SourceAvailabilityEvent, SourceAvailabilityEventType, SourceLedgerError
 
 
-SOURCE_REVISION_SET_SCHEMA_VERSION = "advisory_phase1_source_revision_set_v1"
+LEGACY_SOURCE_REVISION_SET_SCHEMA_VERSION = "advisory_phase1_source_revision_set_v1"
+SOURCE_REVISION_SET_SCHEMA_VERSION = "advisory_phase1_source_revision_set_v2"
 REASON_REVISION_MEMBER_INVALID = "ADVISORY_PHASE1_SOURCE_REVISION_MEMBER_INVALID"
 REASON_REVISION_SET_CONFLICT = "ADVISORY_PHASE1_SOURCE_REVISION_SET_CONFLICT"
 
@@ -41,6 +42,7 @@ class SourceRevisionMemberInput(BaseModel):
     query_template_version: str = Field(min_length=1, max_length=80)
     query_template_hash: str = Field(min_length=64, max_length=64)
     bound_parameter_hash: str = Field(min_length=64, max_length=64)
+    enforced_cutoff_predicate_hash: str = Field(min_length=64, max_length=64)
     partition_key: dict[str, Any] = Field(min_length=1)
     revision_kind: SourceRevisionKind
     revision_id: str = Field(min_length=1, max_length=160)
@@ -64,7 +66,12 @@ class SourceRevisionMemberInput(BaseModel):
             raise ValueError("availability timestamps must include an explicit timezone")
         return value.astimezone(timezone.utc)
 
-    @field_validator("query_template_hash", "bound_parameter_hash", "partition_content_hash")
+    @field_validator(
+        "query_template_hash",
+        "bound_parameter_hash",
+        "enforced_cutoff_predicate_hash",
+        "partition_content_hash",
+    )
     @classmethod
     def _require_sha256(cls, value: str) -> str:
         if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
@@ -126,6 +133,7 @@ class SourceRevisionMemberInput(BaseModel):
             "query_template_version": self.query_template_version,
             "query_template_hash": self.query_template_hash,
             "bound_parameter_hash": self.bound_parameter_hash,
+            "enforced_cutoff_predicate_hash": self.enforced_cutoff_predicate_hash,
             "partition_key": canonicalize(self.partition_key),
             "partition_key_hash": self.partition_key_hash,
             "revision_kind": self.revision_kind.value,
@@ -152,11 +160,18 @@ class SourceRevisionSet(BaseModel):
 
     source_revision_set_id: str
     source_revision_set_hash: str
+    schema_version: str = SOURCE_REVISION_SET_SCHEMA_VERSION
     query_registry_hash: str
     requested_source_cutoff: datetime
     label_as_of_ts: datetime
     research_only: bool
     members: tuple[SourceRevisionMemberInput, ...]
+
+    @model_validator(mode="after")
+    def _require_current_schema_version(self) -> "SourceRevisionSet":
+        if self.schema_version != SOURCE_REVISION_SET_SCHEMA_VERSION:
+            raise ValueError("source revision set must use the current schema version")
+        return self
 
 
 def build_source_revision_set(
@@ -210,6 +225,7 @@ def build_source_revision_set(
     return SourceRevisionSet(
         source_revision_set_id=f"srs_{source_revision_set_hash[:20]}",
         source_revision_set_hash=source_revision_set_hash,
+        schema_version=SOURCE_REVISION_SET_SCHEMA_VERSION,
         query_registry_hash=query_registry_hash,
         requested_source_cutoff=requested_source_cutoff.astimezone(timezone.utc),
         label_as_of_ts=label_as_of_ts.astimezone(timezone.utc),

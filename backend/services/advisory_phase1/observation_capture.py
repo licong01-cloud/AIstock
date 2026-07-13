@@ -41,6 +41,12 @@ class TradingCalendarVerifier(Protocol):
     def verify(self, plan: CapturePlan) -> None: ...
 
 
+def canonical_signal_id_for_plan(plan: CapturePlan) -> str:
+    """Derive the stable signal identity from the frozen capture scope."""
+
+    return f"acs_{plan.canonical_signal_scope_hash[:20]}"
+
+
 class TraceGapRepository(Protocol):
     def record(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> TraceCaptureGap: ...
 
@@ -118,7 +124,7 @@ class InMemoryObservationCaptureRepository:
         self._calendar_verifier.verify(plan)
         _validate_plan_trace(plan=plan, envelope=envelope, binding=binding)
         header = _canonical_header(plan)
-        canonical_signal_id = f"acs_{plan.canonical_signal_scope_hash[:20]}"
+        canonical_signal_id = canonical_signal_id_for_plan(plan)
         existing_header = self._headers_by_scope.get(plan.canonical_signal_scope_hash)
         if existing_header is not None and existing_header != header:
             raise SourceLedgerError(REASON_OBSERVATION_CONFLICT, "canonical signal scope has conflicting stable header")
