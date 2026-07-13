@@ -28,6 +28,7 @@ from backend.services.advisory_phase1.stage_trace import (
     TraceCaptureResult,
     TraceCaptureState,
     build_component_evidence,
+    build_stage_trace_envelope,
 )
 from backend.services.advisory_phase1.trace_outbox import (
     BoundedTraceOutboxDispatcher,
@@ -42,7 +43,7 @@ from backend.services.advisory_phase1.trace_outbox import (
     TraceDeliveryEventRequest,
     TraceDeliveryEventType,
 )
-from backend.services.selection_center.models import SelectionCandidate
+from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
 from backend.services.selection_center.prospective_evidence import (
     CandidateStageName,
     EvidenceCaptureMode,
@@ -263,6 +264,54 @@ def test_native_multi_alpha_component_evidence_is_canonical_and_complete() -> No
     assert result.component_evidence["components"][0]["leg_rank"] == 2
     assert result.component_evidence["runtime_variant_id"] is None
     assert result.component_evidence_hash == canonical_json_sha256(result.component_evidence)
+
+
+def test_multi_alpha_exclusions_keep_component_provenance_in_trace_envelope() -> None:
+    candidate = _candidate()
+    exclusion = SelectionExclusion(
+        symbol=candidate.symbol,
+        score=candidate.score,
+        rank=candidate.rank,
+        reason="fixture_exclusion",
+        source="fixture",
+    )
+    receipts = {}
+    for stage in (
+        CandidateStageName.ALPHA_RAW,
+        CandidateStageName.HMM_ADJUSTED,
+        CandidateStageName.RISK_POLICY_ADJUSTED,
+        CandidateStageName.SELECTION_EFFECTIVE,
+    ):
+        receipts[stage] = build_stage_receipt(
+            stage=stage,
+            status=StageReceiptStatus.COMPLETE,
+            input_count=1,
+            candidates=[],
+            exclusions=[exclusion],
+        )
+    trace = SelectionStageTrace(
+        alpha_raw=receipts[CandidateStageName.ALPHA_RAW],
+        hmm_adjusted=receipts[CandidateStageName.HMM_ADJUSTED],
+        risk_policy_adjusted=receipts[CandidateStageName.RISK_POLICY_ADJUSTED],
+        selection_effective=receipts[CandidateStageName.SELECTION_EFFECTIVE],
+    )
+
+    envelope = build_stage_trace_envelope(
+        context=_context(),
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        stage_trace=trace,
+        runtime_config={},
+    )
+
+    for stage in envelope.trace_content["stage_trace"]:
+        component = stage["candidate_component_evidence"][candidate.symbol]
+        assert component["capability"] in {"FULL", "PARTIAL"}
+        if component["capability"] == "FULL":
+            assert component["component_evidence_hash"]
+        else:
+            assert component["reason_codes"]
+    assert envelope.trace_content["component_capability"] == "PARTIAL"
 
 
 def test_missing_leg_rank_is_partial_without_changing_parent_candidate() -> None:

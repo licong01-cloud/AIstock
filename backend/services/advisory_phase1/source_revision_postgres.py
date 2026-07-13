@@ -19,6 +19,22 @@ from backend.services.advisory_phase1.source_revision import (
 ConnFactory = Callable[[], Iterator[Any]]
 
 
+SOURCE_REVISION_MEMBER_INSERT_SQL = """
+    INSERT INTO app.advisory_source_revision_member (
+        source_revision_set_id, member_key, source_role, dataset_name,
+        query_template_id, query_template_version, query_template_hash,
+        bound_parameter_hash, enforced_cutoff_predicate_hash, partition_key, partition_key_hash, revision_kind,
+        revision_id, availability_event_hash, availability_requirement,
+        business_min_date, business_max_date, available_at_min, available_at_max,
+        schema_fingerprint, row_count, partition_content_hash, quality_status,
+        reason_codes, research_only
+    ) VALUES (
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+    )
+"""
+
+
 def _transactional_conn_factory() -> Iterator[Any]:
     return get_conn(autocommit=False, manage_transaction=True)
 
@@ -36,16 +52,17 @@ class PostgresSourceRevisionRepository:
                     """
                     INSERT INTO app.advisory_source_revision_set (
                         source_revision_set_id, source_revision_set_hash, query_registry_hash,
-                        requested_source_cutoff, label_as_of_ts, research_only, member_count
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        schema_version, requested_source_cutoff, label_as_of_ts, research_only, member_count
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (source_revision_set_hash) DO NOTHING
-                    RETURNING source_revision_set_id, query_registry_hash, requested_source_cutoff,
+                    RETURNING source_revision_set_id, query_registry_hash, schema_version, requested_source_cutoff,
                               label_as_of_ts, research_only, member_count
                     """,
                     (
                         revision_set.source_revision_set_id,
                         revision_set.source_revision_set_hash,
                         revision_set.query_registry_hash,
+                        revision_set.schema_version,
                         revision_set.requested_source_cutoff,
                         revision_set.label_as_of_ts,
                         revision_set.research_only,
@@ -56,7 +73,7 @@ class PostgresSourceRevisionRepository:
                 if inserted is None:
                     cur.execute(
                         """
-                        SELECT source_revision_set_id, query_registry_hash, requested_source_cutoff,
+                        SELECT source_revision_set_id, query_registry_hash, schema_version, requested_source_cutoff,
                                label_as_of_ts, research_only, member_count
                         FROM app.advisory_source_revision_set
                         WHERE source_revision_set_hash = %s
@@ -85,20 +102,7 @@ class PostgresSourceRevisionRepository:
                     return revision_set
                 for member in revision_set.members:
                     cur.execute(
-                        """
-                        INSERT INTO app.advisory_source_revision_member (
-                            source_revision_set_id, member_key, source_role, dataset_name,
-                            query_template_id, query_template_version, query_template_hash,
-                            bound_parameter_hash, partition_key, partition_key_hash, revision_kind,
-                            revision_id, availability_event_hash, availability_requirement,
-                            business_min_date, business_max_date, available_at_min, available_at_max,
-                            schema_fingerprint, row_count, partition_content_hash, quality_status,
-                            reason_codes, research_only
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        )
-                        """,
+                        SOURCE_REVISION_MEMBER_INSERT_SQL,
                         _member_params(revision_set.source_revision_set_id, member),
                     )
         return revision_set
@@ -108,6 +112,7 @@ def _matches_set_row(row: Any, revision_set: SourceRevisionSet) -> bool:
     return (
         str(row["source_revision_set_id"]) == revision_set.source_revision_set_id
         and str(row["query_registry_hash"]) == revision_set.query_registry_hash
+        and str(row["schema_version"]) == revision_set.schema_version
         and row["requested_source_cutoff"] == revision_set.requested_source_cutoff
         and row["label_as_of_ts"] == revision_set.label_as_of_ts
         and bool(row["research_only"]) is revision_set.research_only
@@ -125,6 +130,7 @@ def _member_params(source_revision_set_id: str, member: SourceRevisionMemberInpu
         member.query_template_version,
         member.query_template_hash,
         member.bound_parameter_hash,
+        member.enforced_cutoff_predicate_hash,
         psycopg2.extras.Json(canonicalize(member.partition_key)),
         member.partition_key_hash,
         member.revision_kind.value,
@@ -159,6 +165,7 @@ def _member_payload(member: SourceRevisionMemberInput) -> dict[str, Any]:
         "query_template_version": member.query_template_version,
         "query_template_hash": member.query_template_hash,
         "bound_parameter_hash": member.bound_parameter_hash,
+        "enforced_cutoff_predicate_hash": member.enforced_cutoff_predicate_hash,
         "partition_key": canonicalize(member.partition_key),
         "partition_key_hash": member.partition_key_hash,
         "revision_kind": member.revision_kind.value,
@@ -187,6 +194,7 @@ def _row_payload(row: Any) -> dict[str, Any]:
         "query_template_version": str(row["query_template_version"]),
         "query_template_hash": str(row["query_template_hash"]),
         "bound_parameter_hash": str(row["bound_parameter_hash"]),
+        "enforced_cutoff_predicate_hash": str(row["enforced_cutoff_predicate_hash"]),
         "partition_key": canonicalize(dict(row["partition_key"])),
         "partition_key_hash": str(row["partition_key_hash"]),
         "revision_kind": str(row["revision_kind"]),

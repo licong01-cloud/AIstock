@@ -89,6 +89,7 @@ from .models import (
     StrategyRuntimeRelease,
     canonical_json_sha256,
 )
+from .miniqmt_quote_activation import build_miniqmt_quote_ingress_activation_from_env
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
 from .selection import StrategyPackageSelectionResult, StrategyPackageSelectionService
 from .service import StrategyRuntimeReleaseService
@@ -2005,10 +2006,12 @@ def build_simulation_lifecycle_scheduler_from_env(
         provider: SimulationRunContextProvider = ProductionSimulationRunContextProvider()
     else:
         provider = FailFastSimulationRunContextProvider()
+    quote_ingress_activation = build_miniqmt_quote_ingress_activation_from_env()
     return SimulationLifecycleScheduler(
         repository=repository,
         context_provider=provider,
         trading_calendar_service=TradingCalendarStatusService(),
+        miniqmt_quote_ingress_activation=quote_ingress_activation,
     )
 
 
@@ -2098,12 +2101,34 @@ class SimulationLifecycleScheduler:
         performance_service: StrategyPerformanceProjectionService | None = None,
         trading_calendar_service: Any | None = None,
         miniqmt_quote_context_adapter: Any | None = None,
+        b0_quote_v2_controller_factory: Any | None = None,
+        miniqmt_quote_ingress_activation: Any | None = None,
         selection_inference_timeout_seconds: float | None = None,
         selection_inference_max_workers: int | None = None,
     ) -> None:
+        activation_factory = (
+            getattr(miniqmt_quote_ingress_activation, "controller_factory", None)
+            if miniqmt_quote_ingress_activation is not None
+            else None
+        )
+        if (
+            b0_quote_v2_controller_factory is not None
+            and activation_factory is not None
+            and b0_quote_v2_controller_factory is not activation_factory
+        ):
+            raise ValueError("scheduler quote activation and explicit B0_QUOTE_V2 controller factories conflict")
+        effective_b0_factory = b0_quote_v2_controller_factory or activation_factory
         self.repository = repository or SimulationRuntimeRepository()
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
-        self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(repository=self.repository)
+        self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
+            repository=self.repository,
+            b0_quote_v2_controller_factory=effective_b0_factory,
+        )
+        if orchestrator is not None and effective_b0_factory is not None:
+            existing_factory = getattr(orchestrator, "b0_quote_v2_controller_factory", None)
+            if existing_factory is not None and existing_factory is not effective_b0_factory:
+                raise ValueError("scheduler and orchestrator B0_QUOTE_V2 controller factories conflict")
+            orchestrator.b0_quote_v2_controller_factory = effective_b0_factory
         self.context_provider = context_provider or FailFastSimulationRunContextProvider()
         self.performance_service = performance_service or StrategyPerformanceProjectionService()
         self._selection_inference_timeout_seconds = (
@@ -2134,6 +2159,8 @@ class SimulationLifecycleScheduler:
         else:
             self.trading_calendar_service = TradingCalendarStatusService()
         self._miniqmt_quote_context_adapter = miniqmt_quote_context_adapter
+        self._miniqmt_quote_ingress_activation = miniqmt_quote_ingress_activation
+        self._b0_quote_v2_controller_factory = effective_b0_factory
 
     def status(self) -> dict[str, Any]:
         provider_status = _context_provider_status(self.context_provider)
@@ -2165,6 +2192,12 @@ class SimulationLifecycleScheduler:
                 "live_forbidden": True,
             },
             "miniqmt_quote_context": self._miniqmt_quote_context_health(),
+            "miniqmt_quote_ingress_activation": self._miniqmt_quote_ingress_activation_health(),
+            "b0_quote_v2_controllers": (
+                self._b0_quote_v2_controller_factory.health()
+                if self._b0_quote_v2_controller_factory is not None
+                else {"status": "DISABLED", "controller_count": 0}
+            ),
             "binding_watchdog": {
                 "timeout_env_var": SIMULATION_BINDING_WATCHDOG_TIMEOUT_ENV,
                 "timeout_seconds": self._timeout_seconds_from_env(
@@ -2259,6 +2292,64 @@ class SimulationLifecycleScheduler:
                 "message": "configured MiniQMT quote context health is not a mapping",
             }
         return dict(result)
+
+    def _miniqmt_quote_ingress_activation_health(self) -> dict[str, Any]:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return {
+                "schema_version": "miniqmt_quote_ingress_activation_v1",
+                "status": "UNCONFIGURED",
+                "factory_available": False,
+            }
+        health = getattr(activation, "health", None)
+        if not callable(health):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation has no health method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_HEALTH",
+                },
+            )
+        payload = health()
+        if not isinstance(payload, dict):
+            raise RuntimeConfigInvalidError(
+                "MiniQMT quote ingress activation health must be a mapping",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_HEALTH",
+                },
+            )
+        return dict(payload)
+
+    def _advance_miniqmt_quote_ingress_lifecycle(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        begin_epoch = getattr(activation, "begin_lifecycle_epoch", None)
+        if not callable(begin_epoch):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation lacks its scheduler lifecycle method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_LIFECYCLE",
+                },
+            )
+        begin_epoch()
+
+    def shutdown_miniqmt_quote_ingress(self) -> None:
+        activation = self._miniqmt_quote_ingress_activation
+        if activation is None:
+            return
+        shutdown = getattr(activation, "shutdown", None)
+        if not callable(shutdown):
+            raise RuntimeConfigInvalidError(
+                "configured MiniQMT quote ingress activation has no shutdown method",
+                context={
+                    "reason_code": "MINIQMT_QUOTE_INGRESS_ACTIVATION_INVALID",
+                    "stage": "MINIQMT_QUOTE_INGRESS_ACTIVATION_SHUTDOWN",
+                },
+            )
+        shutdown()
 
     def shutdown_selection_inference(self, *, wait: bool = True) -> None:
         self._selection_inference_executor.shutdown(wait=wait, cancel_futures=not wait)
@@ -2403,6 +2494,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         as_of_time = self._scheduler_time(as_of_time)
         self._refresh_miniqmt_quote_context_lifecycle()
+        self._advance_miniqmt_quote_ingress_lifecycle()
         stale_run_results = self._terminalize_stale_miniqmt_active_runs(
             trade_date=trade_date,
             broker_backend=broker_backend,
@@ -3086,6 +3178,7 @@ class SimulationLifecycleScheduler:
         self._ensure_lifecycle_trading_day(trade_date=trade_date)
         if as_of_time is not None:
             as_of_time = self._scheduler_time(as_of_time)
+        self._advance_miniqmt_quote_ingress_lifecycle()
         terminalized = self._terminalize_post_close_miniqmt_runs(
             trade_date=trade_date,
             broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
@@ -3957,6 +4050,11 @@ class SimulationLifecycleScheduler:
             order_remark_prefix=source.order_remark_prefix,
             approval_state=source.approval_state,
             binding_metadata=binding_metadata,
+            miniqmt_quote_control=(
+                dict(source.binding_config_json["miniqmt_quote_control"])
+                if isinstance(source.binding_config_json.get("miniqmt_quote_control"), dict)
+                else None
+            ),
             effective_from=trade_date,
             effective_to=trade_date,
             created_by=created_by,
@@ -6804,7 +6902,10 @@ class SimulationLifecycleScheduler:
                     "binding_id": binding.binding_id,
                 },
             )
-        bridge = MiniQMTExecutionBridge(managed_order_service=context.managed_order_service)
+        bridge = MiniQMTExecutionBridge(
+            managed_order_service=context.managed_order_service,
+            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
+        )
         return bridge.drive_event_loop_ticks(
             plan=plan,
             binding=binding,
@@ -7422,6 +7523,9 @@ class SimulationLifecycleScheduler:
         side_effect_evidence: dict[str, Any],
     ) -> dict[str, Any]:
         batch_succeeded = SimulationLifecycleScheduler._mini_qmt_batch_succeeded(run.run_payload_json)
+        pending_event_loop = SimulationLifecycleScheduler._miniqmt_pending_event_loop_evidence(
+            run.run_payload_json
+        )
         terminal_capacity_residual = (
             bool(batch_residual_summary.get("noncompensating_residual"))
             and int(batch_residual_summary.get("capacity_residual_count") or 0) > 0
@@ -7432,6 +7536,9 @@ class SimulationLifecycleScheduler:
         if open_order_count > 0:
             status = "PENDING"
             reason = "miniqmt_open_orders_pending_after_reconciliation"
+        elif pending_event_loop["eligible"]:
+            status = "PENDING"
+            reason = "miniqmt_event_loop_pending_after_reconciliation_warning"
         elif run_status_gate.get("status") != "SUCCEEDED":
             status = "blocked"
             reason = "miniqmt_reconciliation_run_status_gate_not_succeeded"
@@ -7461,6 +7568,105 @@ class SimulationLifecycleScheduler:
             "open_order_count": open_order_count,
             "pending_open_orders": open_order_count > 0,
             "broker_side_effect_count": broker_side_effect_count,
+            "pending_event_loop": pending_event_loop,
+        }
+
+    @staticmethod
+    def _miniqmt_pending_event_loop_evidence(payload: dict[str, Any]) -> dict[str, Any]:
+        batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
+        runtime_evidence = batch.get("runtime_evidence") if isinstance(batch.get("runtime_evidence"), dict) else {}
+        payload_batch_id = str(payload.get("qmt_batch_id") or "").strip()
+        result_batch_id = str(batch.get("batch_id") or "").strip()
+        runtime_id = str(runtime_evidence.get("runtime_id") or "").strip()
+        source = str(runtime_evidence.get("source") or "").strip()
+        payload_batch_status = str(payload.get("qmt_batch_status") or "").strip().upper()
+        result_batch_status = str(batch.get("batch_status") or "").strip().upper()
+        accepted_sources = {
+            "simulation_runtime_event_loop_submit",
+            "simulation_runtime_event_loop_tick_driver",
+        }
+        conflicts: list[str] = []
+
+        def required_count(raw: Any, field: str) -> int | None:
+            if raw is None:
+                conflicts.append(f"{field}_missing")
+                return None
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+                conflicts.append(f"{field}_invalid")
+                return None
+            return raw
+
+        if not payload_batch_id:
+            conflicts.append("payload_batch_id_missing")
+        if not result_batch_id:
+            conflicts.append("result_batch_id_missing")
+        if payload_batch_id and result_batch_id and payload_batch_id != result_batch_id:
+            conflicts.append("batch_id_conflict")
+        if payload_batch_status != OrderBatchStatus.SUBMITTING.value:
+            conflicts.append("payload_batch_not_submitting")
+        if result_batch_status != OrderBatchStatus.SUBMITTING.value:
+            conflicts.append("result_batch_not_submitting")
+        if payload_batch_status and result_batch_status and payload_batch_status != result_batch_status:
+            conflicts.append("batch_status_conflict")
+        if not runtime_id:
+            conflicts.append("runtime_id_missing")
+        if source not in accepted_sources:
+            conflicts.append("runtime_evidence_source_invalid")
+
+        pending_counts = {
+            "payload_pending_intents": required_count(payload.get("pending_intents"), "payload_pending_intents"),
+            "result_pending": required_count(batch.get("pending"), "result_pending"),
+            "result_pending_child_trigger_count": required_count(
+                batch.get("pending_child_trigger_count"),
+                "result_pending_child_trigger_count",
+            ),
+            "runtime_pending_algo_count": required_count(
+                runtime_evidence.get("pending_algo_count"),
+                "runtime_pending_algo_count",
+            ),
+        }
+        valid_pending_counts = [value for value in pending_counts.values() if value is not None]
+        pending_count = pending_counts["runtime_pending_algo_count"]
+        if len(valid_pending_counts) == len(pending_counts) and len(set(valid_pending_counts)) != 1:
+            conflicts.append("pending_count_conflict")
+        if pending_count == 0:
+            conflicts.append("no_pending_algos")
+
+        failure_counts = {
+            "payload_failed_intents": required_count(payload.get("failed_intents"), "payload_failed_intents"),
+            "result_failed": required_count(batch.get("failed"), "result_failed"),
+            "runtime_rejected_child_count": required_count(
+                runtime_evidence.get("rejected_child_count"),
+                "runtime_rejected_child_count",
+            ),
+        }
+        valid_failure_counts = [value for value in failure_counts.values() if value is not None]
+        failed_count = max(valid_failure_counts) if valid_failure_counts else None
+        if any(value > 0 for value in valid_failure_counts):
+            conflicts.append("failed_or_rejected_algos_present")
+
+        active_count = required_count(runtime_evidence.get("active_algo_count"), "runtime_active_algo_count")
+        if active_count is not None and pending_count is not None and active_count < pending_count:
+            conflicts.append("active_algo_count_below_pending")
+        return {
+            "schema_version": "miniqmt_pending_event_loop_evidence_v1",
+            "eligible": not conflicts,
+            "batch_id": payload_batch_id or result_batch_id or None,
+            "runtime_id": runtime_id or None,
+            "runtime_evidence_source": source or None,
+            "batch_status": payload_batch_status or result_batch_status or None,
+            "active_algo_count": active_count,
+            "pending_algo_count": pending_count,
+            "failed_or_rejected_count": failed_count,
+            "identity_sources": {
+                "payload_batch_id": payload_batch_id or None,
+                "result_batch_id": result_batch_id or None,
+                "payload_batch_status": payload_batch_status or None,
+                "result_batch_status": result_batch_status or None,
+            },
+            "pending_count_sources": pending_counts,
+            "failure_count_sources": failure_counts,
+            "conflicts": conflicts,
         }
 
     @staticmethod
@@ -8055,6 +8261,10 @@ class SimulationLifecycleBackgroundScheduler:
                 graceful,
                 thread_alive,
             )
+        shutdown_quote_ingress = getattr(self.lifecycle_scheduler, "shutdown_miniqmt_quote_ingress", None)
+        if callable(shutdown_quote_ingress):
+            shutdown_quote_ingress()
+            logger.info("Simulation runtime scheduler MiniQMT quote ingress stopped")
         logger.info("Simulation runtime scheduler stopped")
         return self.status()
 

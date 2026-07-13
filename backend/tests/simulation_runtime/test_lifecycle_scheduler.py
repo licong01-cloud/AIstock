@@ -5406,6 +5406,242 @@ def test_scheduler_miniqmt_reconcile_warning_marks_run_retryable() -> None:
     assert reconciliation["raw_strategy_lot_quantities"]["SchedulerQMT"]["000003.SZ"] == 77
 
 
+def test_miniqmt_reconciliation_warning_keeps_durable_event_loop_pending() -> None:
+    run = SimpleNamespace(
+        run_payload_json={
+            "qmt_batch_id": "qmtbatch_bug628",
+            "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+            "broker_called": True,
+            "submitted_intents": 13,
+            "failed_intents": 0,
+            "pending_intents": 16,
+            "qmt_batch_result": {
+                "batch_id": "qmtbatch_bug628",
+                "batch_status": OrderBatchStatus.SUBMITTING.value,
+                "succeeded": 13,
+                "failed": 0,
+                "pending": 16,
+                "pending_child_trigger_count": 16,
+                "runtime_evidence": {
+                    "source": "simulation_runtime_event_loop_submit",
+                    "runtime_id": "mqrt_bug628",
+                    "active_algo_count": 29,
+                    "pending_algo_count": 16,
+                    "submitted_child_count": 13,
+                    "rejected_child_count": 0,
+                },
+            },
+        }
+    )
+
+    gate = SimulationLifecycleScheduler._miniqmt_submit_result_gate(
+        run=run,
+        run_status_gate={"status": "WARNING", "reason": "strategy_scope_has_blocking_issues"},
+        batch_residual_summary={},
+        open_order_evidence={"open_order_count": 0},
+        side_effect_evidence={"broker_side_effect_count": 13},
+    )
+
+    assert gate["status"] == "PENDING"
+    assert gate["reason"] == "miniqmt_event_loop_pending_after_reconciliation_warning"
+    assert gate["pending_event_loop"] == {
+        "schema_version": "miniqmt_pending_event_loop_evidence_v1",
+        "eligible": True,
+        "batch_id": "qmtbatch_bug628",
+        "runtime_id": "mqrt_bug628",
+        "runtime_evidence_source": "simulation_runtime_event_loop_submit",
+        "batch_status": OrderBatchStatus.SUBMITTING.value,
+        "active_algo_count": 29,
+        "pending_algo_count": 16,
+        "failed_or_rejected_count": 0,
+        "identity_sources": {
+            "payload_batch_id": "qmtbatch_bug628",
+            "result_batch_id": "qmtbatch_bug628",
+            "payload_batch_status": OrderBatchStatus.SUBMITTING.value,
+            "result_batch_status": OrderBatchStatus.SUBMITTING.value,
+        },
+        "pending_count_sources": {
+            "payload_pending_intents": 16,
+            "result_pending": 16,
+            "result_pending_child_trigger_count": 16,
+            "runtime_pending_algo_count": 16,
+        },
+        "failure_count_sources": {
+            "payload_failed_intents": 0,
+            "result_failed": 0,
+            "runtime_rejected_child_count": 0,
+        },
+        "conflicts": [],
+    }
+
+
+def test_miniqmt_post_close_pending_algos_are_retryable_not_fake_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "qmt_batch_id": "qmtbatch_bug633",
+        "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+        "broker_called": True,
+        "submitted_intents": 26,
+        "failed_intents": 0,
+        "pending_intents": 3,
+        "qmt_batch_result": {
+            "batch_id": "qmtbatch_bug633",
+            "batch_status": OrderBatchStatus.SUBMITTING.value,
+            "succeeded": 26,
+            "failed": 0,
+            "pending": 3,
+            "pending_child_trigger_count": 3,
+            "runtime_evidence": {
+                "source": "simulation_runtime_event_loop_tick_driver",
+                "runtime_id": "mqrt_bug633",
+                "active_algo_count": 29,
+                "pending_algo_count": 3,
+                "submitted_child_count": 26,
+                "rejected_child_count": 0,
+            },
+        },
+        "miniqmt_event_loop_tick_driver": {
+            "pending_parent_intent_ids": ["intent_a", "intent_b", "intent_c"],
+        },
+    }
+    run = SimpleNamespace(
+        run_id="simrun_bug633",
+        trade_date=TRADE_DATE,
+        strategy_id="strategy_bug633",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        run_payload_json=payload,
+    )
+
+    class _Repository:
+        status: SimulationDailyRunStatus | None = None
+        payload_patch: dict[str, Any] | None = None
+
+        def update_simulation_daily_run(self, run_id: str, *, status, payload_patch, payload_unset=None):  # noqa: ANN001, ANN201, ARG002
+            assert run_id == run.run_id
+            self.status = status
+            self.payload_patch = payload_patch
+            return SimpleNamespace(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                strategy_id=run.strategy_id,
+                broker_backend=run.broker_backend,
+                status=status,
+                run_payload_json={**payload, **payload_patch},
+            )
+
+    repository = _Repository()
+    scheduler = object.__new__(SimulationLifecycleScheduler)
+    scheduler.repository = repository
+    monkeypatch.setattr(
+        scheduler,
+        "_fresh_miniqmt_post_close_payload",
+        lambda **_kwargs: (payload, {"schema_version": "miniqmt_post_close_fresh_reconcile_v1"}),
+    )
+
+    result = scheduler._post_close_terminalize_miniqmt_run(  # noqa: SLF001
+        run=run,
+        as_of_time=datetime(2026, 5, 21, 15, 1),
+    )
+
+    assert result["status"] == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert result["reason"] == "miniqmt_post_close_event_loop_pending_algos_untriggered"
+    assert repository.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    terminalization = repository.payload_patch["miniqmt_post_close_terminalization"]
+    assert terminalization["audit_state"] == "failed_retryable_after_close"
+    assert terminalization["event_loop_pending_after_close"] == {
+        "schema_version": "miniqmt_event_loop_pending_after_close_v1",
+        "reason_code": "MINIQMT_EVENT_LOOP_PENDING_ALGOS_MARKET_CLOSED",
+        "stage": "MINIQMT_POST_CLOSE_TERMINALIZATION",
+        "reason": "event_loop_algorithms_remained_running_without_child_order_until_market_close",
+        "pending_intents": 3,
+        "pending_parent_intent_ids": ["intent_a", "intent_b", "intent_c"],
+        "qmt_batch_id": "qmtbatch_bug633",
+        "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+    }
+
+
+def test_miniqmt_reconciliation_warning_rejects_unproven_pending_event_loop() -> None:
+    run = SimpleNamespace(
+        run_payload_json={
+            "qmt_batch_id": "qmtbatch_bug628_invalid",
+            "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+            "broker_called": True,
+            "failed_intents": 0,
+            "pending_intents": 16,
+            "qmt_batch_result": {
+                "batch_id": "qmtbatch_bug628_invalid",
+                "batch_status": OrderBatchStatus.SUBMITTING.value,
+                "failed": 0,
+                "pending": 16,
+                "pending_child_trigger_count": 16,
+                "runtime_evidence": {
+                    "source": "simulation_runtime_event_loop_submit",
+                    "active_algo_count": 29,
+                    "pending_algo_count": 16,
+                    "rejected_child_count": 0,
+                },
+            },
+        }
+    )
+
+    gate = SimulationLifecycleScheduler._miniqmt_submit_result_gate(
+        run=run,
+        run_status_gate={"status": "WARNING", "reason": "strategy_scope_has_blocking_issues"},
+        batch_residual_summary={},
+        open_order_evidence={"open_order_count": 0},
+        side_effect_evidence={"broker_side_effect_count": 13},
+    )
+
+    assert gate["status"] == "blocked"
+    assert gate["pending_event_loop"]["eligible"] is False
+    assert gate["pending_event_loop"]["conflicts"] == ["runtime_id_missing"]
+
+
+def test_miniqmt_reconciliation_warning_rejects_conflicting_durable_evidence() -> None:
+    run = SimpleNamespace(
+        run_payload_json={
+            "qmt_batch_id": "qmtbatch_bug628_payload",
+            "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+            "broker_called": True,
+            "failed_intents": 0,
+            "pending_intents": 16,
+            "qmt_batch_result": {
+                "batch_id": "qmtbatch_bug628_result",
+                "batch_status": OrderBatchStatus.FAILED.value,
+                "failed": 0,
+                "pending": 15,
+                "pending_child_trigger_count": 16,
+                "runtime_evidence": {
+                    "source": "simulation_runtime_event_loop_submit",
+                    "runtime_id": "mqrt_bug628_conflict",
+                    "active_algo_count": 29,
+                    "pending_algo_count": 16,
+                    "rejected_child_count": 0,
+                },
+            },
+        }
+    )
+
+    gate = SimulationLifecycleScheduler._miniqmt_submit_result_gate(
+        run=run,
+        run_status_gate={"status": "WARNING", "reason": "strategy_scope_has_blocking_issues"},
+        batch_residual_summary={},
+        open_order_evidence={"open_order_count": 0},
+        side_effect_evidence={"broker_side_effect_count": 13},
+    )
+
+    assert gate["status"] == "blocked"
+    assert gate["pending_event_loop"]["eligible"] is False
+    assert gate["pending_event_loop"]["conflicts"] == [
+        "batch_id_conflict",
+        "result_batch_not_submitting",
+        "batch_status_conflict",
+        "pending_count_conflict",
+    ]
+
+
 def test_scheduler_broker_backend_filter_limits_tick_scope() -> None:
     release, _, qmt_binding, repo = _release_and_bindings()
     scheduler = SimulationLifecycleScheduler(

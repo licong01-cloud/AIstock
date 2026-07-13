@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
+from dotenv import dotenv_values
 from fastapi import HTTPException
 
 from backend.config_manager_compat import ConfigManager
@@ -94,6 +96,60 @@ def test_config_manager_env_read_failure_is_loud_not_defaulted(tmp_path) -> None
 
     with pytest.raises(RuntimeError, match="CONFIG_ENV_READ_FAILED"):
         manager.read_env()
+
+
+def test_config_manager_roundtrips_quotes_backslashes_json_and_multiline_values(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "EXISTING_EXTERNAL_KEY='seed'\nMINIQMT_TCA_ACTIVE_READ_VERSION='seed-version'\n",
+        encoding="utf-8",
+    )
+    manager = ConfigManager(env_file)
+    values = {
+        "MINIQMT_XTQUANT_DIR": 'C:\\Program Files\\QMT\\bin\\"xtquant"\\',
+        "MINIQMT_TCA_ACTIVE_READ_VERSION": '{"schema":"v1","path":"C:\\\\QMT\\\\evidence","owner":"operator\'s"}',
+        "EXISTING_EXTERNAL_KEY": "first line\nsecond line with 'single' and \\\\server\\share",
+    }
+
+    assert manager.write_env(values)
+
+    assert {key: manager.read_env()[key] for key in values} == values
+    parsed = dotenv_values(env_file, interpolate=False)
+    assert {key: parsed[key] for key in values} == values
+
+    old_environment = {key: os.environ.get(key) for key in values}
+    try:
+        manager.reload_config()
+        assert {key: os.environ[key] for key in values} == values
+    finally:
+        for key, old_value in old_environment.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
+
+
+def test_config_manager_rejects_malformed_env_without_rewriting_or_defaulting(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    malformed = 'MINIQMT_XTQUANT_DIR="C:\\QMT\\"embedded"\\xtquant" trailing\n'
+    env_file.write_text(malformed, encoding="utf-8")
+    manager = ConfigManager(env_file)
+
+    with pytest.raises(RuntimeError, match=r"CONFIG_ENV_PARSE_FAILED: .*line 1"):
+        manager.read_env()
+    with pytest.raises(RuntimeError, match=r"CONFIG_ENV_PARSE_FAILED: .*line 1"):
+        manager.write_env({"MINIQMT_ADAPTIVE_IS_QUOTE_INGRESS_ENABLED": "false"})
+    with pytest.raises(RuntimeError, match=r"CONFIG_ENV_PARSE_FAILED: .*line 1"):
+        manager.reload_config()
+
+    assert env_file.read_text(encoding="utf-8") == malformed
+
+
+def test_config_manager_reload_missing_file_is_loud(tmp_path) -> None:
+    manager = ConfigManager(tmp_path / ".env")
+
+    with pytest.raises(RuntimeError, match="CONFIG_ENV_RELOAD_FAILED"):
+        manager.reload_config()
 
 
 def test_config_save_reports_reload_failure_instead_of_false_success(monkeypatch: pytest.MonkeyPatch) -> None:

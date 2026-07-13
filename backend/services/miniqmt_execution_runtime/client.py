@@ -9,7 +9,7 @@ import math
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from backend.execution_algos.board_lot import board_lot_rule
 from backend.execution_algos.vnpy_style import get_vnpy_style_asset, is_vnpy_style_algo
@@ -55,6 +55,14 @@ from backend.services.trading_core.miniqmt_vnpy_execution import (
 )
 from backend.services.trading_core.models import OrderIntent, OrderSide, OrderType
 
+from .b0_quote_v2 import (
+    B0QuoteV2Controller,
+    B0QuoteV2ControllerFactory,
+    B0QuoteV2RevisionV1,
+    ParentQuoteControlAssignmentV1,
+    QuoteControlBindingV1,
+    source_build_manifest,
+)
 from .config import MiniQMTExecutionRuntimeKind
 from .gateway import MiniQMTGateway, MiniQMTGatewayCancelAck, MiniQMTGatewayOrderAck, QmtClientMiniQMTEventLoopGateway
 from .models import (
@@ -291,10 +299,12 @@ class MiniQMTExecutionRuntimeClient:
         repository: MiniQMTExecutionRuntimeRepository | None = None,
         strategy_ledger_repository: Any | None = None,
         runtime_kind: MiniQMTExecutionRuntimeKind | str | None = None,
+        b0_quote_v2_controller_factory: B0QuoteV2ControllerFactory | None = None,
     ) -> None:
         self.repository = repository or default_miniqmt_execution_runtime_repository()
         self.runtime_kind = _normalize_runtime_kind(runtime_kind)
         self.strategy_ledger_repository = strategy_ledger_repository
+        self.b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
         if self.strategy_ledger_repository is None:
             self.strategy_ledger_repository = QmtStrategyLedgerRepository()
 
@@ -635,6 +645,38 @@ class MiniQMTExecutionRuntimeClient:
                     "algo_code": algo_code,
                 },
             )
+        quote_revision, quote_assignments = _b0_quote_v2_assignments(
+            policy_context=policy_context,
+            parent_intent_ids={intent.intent_id for intent in parent_intents},
+        )
+        if quote_revision is not None and self.b0_quote_v2_controller_factory is None:
+            raise BrokerSubmitError(
+                "B0_QUOTE_V2 submit requires the scheduler-owned controller factory",
+                context={
+                    "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                    "stage": "ADAPTER",
+                    "runtime_id": runtime_id,
+                    "broker_called": False,
+                },
+            )
+        if quote_revision is not None:
+            assert self.b0_quote_v2_controller_factory is not None
+            assert_new_assignment = getattr(
+                self.b0_quote_v2_controller_factory,
+                "assert_accepts_new_assignments",
+                None,
+            )
+            if not callable(assert_new_assignment):
+                raise BrokerSubmitError(
+                    "B0_QUOTE_V2 controller factory lacks the required admission contract",
+                    context={
+                        "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                        "stage": "ADAPTER",
+                        "runtime_id": runtime_id,
+                        "broker_called": False,
+                    },
+                )
+            assert_new_assignment()
         gateway = QmtClientMiniQMTEventLoopGateway(
             qmt_client=qmt_client,
             strategy_name=strategy_name,
@@ -654,10 +696,28 @@ class MiniQMTExecutionRuntimeClient:
                 "oms_authority": "qmt_strategy_ledger",
                 "algo_code": algo_code,
                 "account_id": account_id,
+                **(
+                    {
+                        "quote_control": dict(policy_context["quote_control"]),
+                    }
+                    if quote_revision is not None
+                    else {}
+                ),
             },
         )
         runtime.start()
         runtime.recover()
+        controller: B0QuoteV2Controller | None = None
+        if quote_revision is not None:
+            assert self.b0_quote_v2_controller_factory is not None
+            controller = self.b0_quote_v2_controller_factory.get(runtime.config.runtime_id)
+            if controller is None:
+                controller = self.b0_quote_v2_controller_factory.create(
+                    runtime=runtime,
+                    assignments=quote_assignments,
+                    symbols=tuple(sorted({intent.symbol for intent in parent_intents})),
+                )
+                runtime.bind_b0_quote_v2_controller(controller)
         existing_child_ids = {
             child.child_order_id
             for child in self.repository.list_child_orders(runtime.config.runtime_id, active_only=False)
@@ -707,11 +767,15 @@ class MiniQMTExecutionRuntimeClient:
                 preflight=result.preflight,
                 source=source,
             )
-            tick_payload = _required_event_loop_tick_payload(
-                intent=intent,
-                quote_provider=quote_provider,
-                qmt_client=qmt_client,
-                source=source,
+            tick_payload = (
+                _required_event_loop_tick_payload(
+                    intent=intent,
+                    quote_provider=quote_provider,
+                    qmt_client=qmt_client,
+                    source=source,
+                )
+                if controller is None
+                else {}
             )
             child_context = (
                 child_context_factory(intent, index)
@@ -726,10 +790,14 @@ class MiniQMTExecutionRuntimeClient:
                 side=intent.side,
                 target_quantity=int(intent.quantity),
                 algo_code=algo_code,
-                limit_price=_limit_price_for_event_loop(
-                    intent=intent,
-                    tick_payload=tick_payload,
-                    algo_config=dict(policy_json.get("algo_config") or {}),
+                limit_price=(
+                    _limit_price_for_event_loop(
+                        intent=intent,
+                        tick_payload=tick_payload,
+                        algo_config=dict(policy_json.get("algo_config") or {}),
+                    )
+                    if controller is None
+                    else _b0_quote_v2_initial_limit_price(intent)
                 ),
                 algo_config=dict(policy_json.get("algo_config") or {}),
                 min_volume=1 if intent.side == OrderSide.SELL else None,
@@ -741,12 +809,23 @@ class MiniQMTExecutionRuntimeClient:
                     "execution_policy_sha256": policy_context.get("policy_sha256"),
                     "event_loop_submit": True,
                     "qmt_batch_id": batch_id,
-                    "quote_source": tick_payload.get("source") or tick_payload.get("quote_source"),
-                    "marketable_limit_reference_price": _execution_reference_price(intent=intent, tick_payload=tick_payload),
+                    "quote_source": (
+                        tick_payload.get("source") or tick_payload.get("quote_source")
+                        if controller is None
+                        else "B0_QUOTE_V2_NORMALIZED"
+                    ),
+                    "marketable_limit_reference_price": (
+                        _execution_reference_price(intent=intent, tick_payload=tick_payload)
+                        if controller is None
+                        else _b0_quote_v2_initial_limit_price(intent)
+                    ),
                     "marketable_limit_policy": dict(policy_json.get("algo_config") or {}),
                 },
             )
-            gateway.on_tick(tick_payload)
+            if controller is None:
+                gateway.on_tick(tick_payload)
+        if controller is not None:
+            controller.lifecycle_tick()
         runtime_evidence = self._evidence(runtime, source=source)
         new_children = tuple(
             child
@@ -801,7 +880,11 @@ class MiniQMTExecutionRuntimeClient:
                 strategy_slot_id=strategy_slot_id,
                 source=source,
             )
-        results = tuple(results_by_parent_id[intent.intent_id] for intent in parent_intents if intent.intent_id in results_by_parent_id)
+        results = tuple(
+            results_by_parent_id[intent.intent_id]
+            for intent in parent_intents
+            if intent.intent_id in results_by_parent_id
+        )
         results = self._event_loop_results_with_unsubmitted_residuals(
             requests=preflight_result.requests,
             results=results,
@@ -848,6 +931,7 @@ class MiniQMTExecutionRuntimeClient:
         order_remark_prefix: str,
         account_id: str | None = None,
         quote_provider: Callable[[str], dict[str, Any] | None] | None = None,
+        policy_context: dict[str, Any] | None = None,
         managed_request_factory: Callable[[MiniQMTChildOrder, int], ManagedOrderRequest] | None = None,
         managed_order_service: QmtManagedOrderService | None = None,
         as_of_time: datetime | None = None,
@@ -907,6 +991,36 @@ class MiniQMTExecutionRuntimeClient:
                 "account_id": account_id,
             },
         )
+        all_runtime_instances = tuple(self.repository.list_algo_instances(runtime_id, active_only=False))
+        quote_revision, quote_assignments = _b0_quote_v2_assignments(
+            policy_context=policy_context or {},
+            parent_intent_ids={instance.parent_intent_id for instance in all_runtime_instances},
+        )
+        controller: B0QuoteV2Controller | None = None
+        if quote_revision is not None:
+            if self.b0_quote_v2_controller_factory is None:
+                raise BrokerSubmitError(
+                    "B0_QUOTE_V2 tick driver requires the scheduler-owned controller factory",
+                    context={
+                        "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                        "stage": "ADAPTER",
+                        "runtime_id": runtime_id,
+                        "broker_called": False,
+                    },
+                )
+            controller = self.b0_quote_v2_controller_factory.get(runtime_id)
+            if controller is None:
+                recovering_active = _b0_quote_v2_recovering_active(
+                    algo_instances=all_runtime_instances,
+                    active_child_orders=tuple(self.repository.list_child_orders(runtime_id, active_only=True)),
+                )
+                controller = self.b0_quote_v2_controller_factory.create(
+                    runtime=runtime,
+                    assignments=quote_assignments,
+                    symbols=tuple(sorted({instance.symbol for instance in all_runtime_instances})),
+                    recovering_active=recovering_active,
+                )
+                runtime.bind_b0_quote_v2_controller(controller)
         before_children = tuple(self.repository.list_child_orders(runtime_id, active_only=False))
         before_child_ids = {child.child_order_id for child in before_children}
         active_instances = tuple(
@@ -921,7 +1035,11 @@ class MiniQMTExecutionRuntimeClient:
         tick_event_count = 0
         failed_quote_symbols: list[str] = []
         errors: list[dict[str, Any]] = []
-        for symbol in sorted(instance_by_symbol):
+        if controller is not None:
+            controller.lifecycle_tick(now_utc=as_of_time or datetime.now(UTC))
+            quote_count = len(instance_by_symbol)
+            tick_event_count = len(instance_by_symbol)
+        for symbol in () if controller is not None else sorted(instance_by_symbol):
             instance = instance_by_symbol[symbol]
             try:
                 probe_intent = _event_loop_probe_intent_for_algo(instance, trade_date=trade_date)
@@ -931,13 +1049,20 @@ class MiniQMTExecutionRuntimeClient:
                     qmt_client=qmt_client,
                     source=source,
                 )
-                policy = dict(instance.metadata.get("marketable_limit_policy") or instance.metadata.get("algo_config") or {})
+                policy = dict(
+                    instance.metadata.get("marketable_limit_policy") or instance.metadata.get("algo_config") or {}
+                )
                 tail_sweep = _event_loop_tail_sweep_enabled(policy, as_of_time=as_of_time)
                 cross_ticks = (
                     _positive_int_config(
                         policy,
                         "tail_sweep_cross_ticks",
-                        max(2, _positive_int_config(policy, "marketable_limit_cross_ticks", DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS)),
+                        max(
+                            2,
+                            _positive_int_config(
+                                policy, "marketable_limit_cross_ticks", DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS
+                            ),
+                        ),
                     )
                     if tail_sweep
                     else None
@@ -952,7 +1077,11 @@ class MiniQMTExecutionRuntimeClient:
                 runtime.reprice_pending_vnpy_algo(
                     algo_instance_id=instance.algo_instance_id,
                     limit_price=limit_price,
-                    reason_code=("MINIQMT_EVENT_LOOP_TAIL_SWEEP_MARKETABLE_LIMIT" if tail_sweep else "MINIQMT_EVENT_LOOP_TICK_MARKETABLE_REPRICE"),
+                    reason_code=(
+                        "MINIQMT_EVENT_LOOP_TAIL_SWEEP_MARKETABLE_LIMIT"
+                        if tail_sweep
+                        else "MINIQMT_EVENT_LOOP_TICK_MARKETABLE_REPRICE"
+                    ),
                     stage=("MINIQMT_EVENT_LOOP_TAIL_SWEEP" if tail_sweep else "MINIQMT_EVENT_LOOP_TICK_REPRICE"),
                     metadata={
                         "as_of_time": as_of_time.isoformat() if isinstance(as_of_time, datetime) else None,
@@ -1040,11 +1169,7 @@ class MiniQMTExecutionRuntimeClient:
                 if managed_request_factory is not None
                 else _managed_request_from_event_loop_child(child, index=request_index, trade_date=trade_date)
             )
-            batch_id = str(
-                child.metadata.get("qmt_batch_id")
-                or request.metadata.get("qmt_batch_id")
-                or ""
-            ).strip()
+            batch_id = str(child.metadata.get("qmt_batch_id") or request.metadata.get("qmt_batch_id") or "").strip()
             if not batch_id:
                 raise BrokerSubmitError(
                     "MiniQMT event_loop tick driver cannot sync child without qmt_batch_id",
@@ -1153,9 +1278,7 @@ class MiniQMTExecutionRuntimeClient:
             return None
         requests = tuple(_event_loop_requests_from_batch(batch))
         stored_results = tuple(
-            _result_from_dict(item)
-            for item in (batch.result_json or {}).get("results", ())
-            if isinstance(item, dict)
+            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
         )
         for request, result in zip(requests, stored_results, strict=False):
             if _parent_id_from_request(request) == parent_intent_id:
@@ -1448,10 +1571,7 @@ class MiniQMTExecutionRuntimeClient:
             if callable(helper):
                 return list(helper(requests))
             return [managed_order_service.preview_order(request) for request in requests]
-        return [
-            self._event_loop_preview_order(request, managed_order_service=None)
-            for request in requests
-        ]
+        return [self._event_loop_preview_order(request, managed_order_service=None) for request in requests]
 
     def _event_loop_existing_batch_result(
         self,
@@ -1475,9 +1595,7 @@ class MiniQMTExecutionRuntimeClient:
         if not stored_requests:
             return None
         stored_results = tuple(
-            _result_from_dict(item)
-            for item in (batch.result_json or {}).get("results", ())
-            if isinstance(item, dict)
+            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
         )
         metadata = batch.metadata if isinstance(batch.metadata, dict) else {}
         effective_batch_id = batch.batch_id
@@ -1517,7 +1635,10 @@ class MiniQMTExecutionRuntimeClient:
             retry_of_batch_id=effective_batch_id,
             requests=tuple(stored_requests),
             results=tuple(results),
-            request_by_parent_intent_id={str(request.metadata.get("runtime_parent_intent_id") or request.order_remark): request for request in stored_requests},
+            request_by_parent_intent_id={
+                str(request.metadata.get("runtime_parent_intent_id") or request.order_remark): request
+                for request in stored_requests
+            },
             submit_parent_intent_ids=frozenset(),
         )
 
@@ -1558,9 +1679,7 @@ class MiniQMTExecutionRuntimeClient:
         managed_order_service: QmtManagedOrderService | None,
     ) -> MiniQMTEventLoopPreflightResult | None:
         stored_results = tuple(
-            _result_from_dict(item)
-            for item in (batch.result_json or {}).get("results", ())
-            if isinstance(item, dict)
+            _result_from_dict(item) for item in (batch.result_json or {}).get("results", ()) if isinstance(item, dict)
         )
         if len(stored_results) != len(requests):
             return None
@@ -1677,7 +1796,11 @@ class MiniQMTExecutionRuntimeClient:
             runtime_evidence=runtime_evidence,
             source=source,
         )
-        if existing is not None and isinstance(existing.metadata, dict) and existing.metadata.get("dependent_buy_deferred"):
+        if (
+            existing is not None
+            and isinstance(existing.metadata, dict)
+            and existing.metadata.get("dependent_buy_deferred")
+        ):
             metadata["dependent_buy_retry"] = True
         upsert(
             OrderBatchRecord(
@@ -1699,7 +1822,15 @@ class MiniQMTExecutionRuntimeClient:
                 },
                 metadata=metadata,
                 created_at=created_at,
-                submitted_at=now if status in {OrderBatchStatus.SUBMITTING, OrderBatchStatus.SUCCEEDED, OrderBatchStatus.PARTIAL, OrderBatchStatus.FAILED} else None,
+                submitted_at=now
+                if status
+                in {
+                    OrderBatchStatus.SUBMITTING,
+                    OrderBatchStatus.SUCCEEDED,
+                    OrderBatchStatus.PARTIAL,
+                    OrderBatchStatus.FAILED,
+                }
+                else None,
                 completed_at=now,
             )
         )
@@ -1720,7 +1851,9 @@ class MiniQMTExecutionRuntimeClient:
         source: str = "paper_v2_vnpy_miniqmt",
     ) -> MiniQMTAlgoExecutionResult:
         self._reject_event_loop_compiler_lifecycle(source=source, operation="execute_paper_vnpy_intent")
-        policy_json = execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
+        policy_json = (
+            execution_policy_context.get("policy_json") if isinstance(execution_policy_context, dict) else None
+        )
         if not isinstance(policy_json, dict):
             raise BrokerSubmitError("MiniQMTExecutionRuntime vn.py client requires policy_json")
         algo_code = str(policy_json.get("algo_code") or "").strip().upper()
@@ -1828,7 +1961,8 @@ class MiniQMTExecutionRuntimeClient:
     ) -> MiniQMTExecutionRuntime:
         return MiniQMTExecutionRuntime(
             config=MiniQMTExecutionRuntimeConfig(
-                runtime_id=runtime_id or f"mqrt_{_short_hash([account_group_id, trade_date.isoformat(), runtime_config_hash])}",
+                runtime_id=runtime_id
+                or f"mqrt_{_short_hash([account_group_id, trade_date.isoformat(), runtime_config_hash])}",
                 account_group_id=account_group_id,
                 trade_date=trade_date,
                 runtime_config_hash=runtime_config_hash,
@@ -1837,9 +1971,7 @@ class MiniQMTExecutionRuntimeClient:
             repository=self.repository,
             gateway=gateway,
             strategy_ledger_repository=(
-                self.strategy_ledger_repository
-                if self.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP
-                else None
+                self.strategy_ledger_repository if self.runtime_kind == MiniQMTExecutionRuntimeKind.EVENT_LOOP else None
             ),
             account_id=account_id or account_group_id,
         )
@@ -1887,7 +2019,9 @@ class MiniQMTExecutionRuntimeClient:
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
-            completed_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED),
+            completed_algo_count=sum(
+                1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
+            ),
             pending_algo_count=_pending_algo_count(algo_instances, child_orders),
             source=source,
         )
@@ -1938,7 +2072,9 @@ class MiniQMTExecutionRuntimeClient:
             submitted_child_count=_submitted_child_count(child_orders),
             rejected_child_count=sum(1 for item in child_orders if item.status == MiniQMTChildOrderStatus.REJECTED),
             active_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.ACTIVE),
-            completed_algo_count=sum(1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED),
+            completed_algo_count=sum(
+                1 for item in algo_instances if item.status == MiniQMTAlgoInstanceStatus.COMPLETED
+            ),
             pending_algo_count=_pending_algo_count(algo_instances, child_orders),
             source=source,
         )
@@ -1988,14 +2124,18 @@ class MiniQMTExecutionRuntimeClient:
             update={
                 "status": status,
                 "broker_order_id": managed_result.qmt_order_id or child.broker_order_id,
-                "submitted_at": datetime.now(UTC) if managed_result.success and child.submitted_at is None else child.submitted_at,
+                "submitted_at": datetime.now(UTC)
+                if managed_result.success and child.submitted_at is None
+                else child.submitted_at,
                 "metadata": {
                     **dict(child.metadata),
                     "source": source,
                     "managed_order_result": managed_result.to_dict(),
                     "broker_called": managed_result.broker_called,
                     "broker_synced_child_status": status.value,
-                    **({"broker_order_ledger": _ledger_order_payload(ledger_order)} if ledger_order is not None else {}),
+                    **(
+                        {"broker_order_ledger": _ledger_order_payload(ledger_order)} if ledger_order is not None else {}
+                    ),
                 },
             }
         )
@@ -2133,7 +2273,9 @@ class PaperV2MiniQMTRuntimeGateway:
         if result is None or result.handle is None:
             return MiniQMTGatewayCancelAck(False, order.broker_order_id, "child order has no paper handle")
         ack = self.broker.cancel(result.handle)
-        return MiniQMTGatewayCancelAck(bool(ack.accepted), order.broker_order_id, ack.reason, ack.model_dump(mode="json"))
+        return MiniQMTGatewayCancelAck(
+            bool(ack.accepted), order.broker_order_id, ack.reason, ack.model_dump(mode="json")
+        )
 
     def require_result(self, child_order_id: str) -> PaperMiniQMTRuntimeChildResult:
         return self._results_by_child_id[child_order_id]
@@ -2142,7 +2284,8 @@ class PaperV2MiniQMTRuntimeGateway:
         return [
             result
             for result in self._results_by_child_id.values()
-            if result.child_intent.metadata.get("parent_intent_id") == intent_id or result.child_intent.intent_id == intent_id
+            if result.child_intent.metadata.get("parent_intent_id") == intent_id
+            or result.child_intent.intent_id == intent_id
         ]
 
 
@@ -2249,12 +2392,12 @@ def _managed_vnpy_child_metadata(
     source: str,
     execution_policy_context: dict[str, Any],
 ) -> dict[str, Any]:
-        return {
-            "source": source,
-            "managed_parent_intent_id": intent.intent_id,
-            "account_id": str(intent.metadata.get("account_id") or intent.metadata.get("broker_account_id") or "").strip(),
-            "package_id": intent.package_id,
-            "portfolio_id": intent.portfolio_id,
+    return {
+        "source": source,
+        "managed_parent_intent_id": intent.intent_id,
+        "account_id": str(intent.metadata.get("account_id") or intent.metadata.get("broker_account_id") or "").strip(),
+        "package_id": intent.package_id,
+        "portfolio_id": intent.portfolio_id,
         "target_weight": intent.metadata.get("target_weight"),
         "order_type": OrderType.LIMIT.value,
         "limit_price": intent.limit_price,
@@ -2268,7 +2411,9 @@ def _managed_vnpy_child_metadata(
 def _event_loop_child_metadata(*, intent: OrderIntent, trade_date: date, source: str, index: int) -> dict[str, Any]:
     prefix = str(intent.metadata.get("order_remark_prefix") or "eventloop").strip()[:20] or "eventloop"
     order_remark = str(intent.metadata.get("order_remark") or f"{prefix}-{_short_hash([intent.intent_id, index])[:12]}")
-    strategy_name = str(intent.metadata.get("strategy_name") or intent.metadata.get("strategy_id") or intent.portfolio_id)
+    strategy_name = str(
+        intent.metadata.get("strategy_name") or intent.metadata.get("strategy_id") or intent.portfolio_id
+    )
     return {
         "source": source,
         "managed_parent_intent_id": intent.intent_id,
@@ -2309,7 +2454,9 @@ def _managed_request_signature(request: ManagedOrderRequest) -> dict[str, Any]:
 def _paper_intent_from_runtime_child(order: MiniQMTChildOrder) -> OrderIntent:
     metadata = dict(order.metadata or {})
     parent_metadata = dict(metadata.get("parent_intent_metadata") or {})
-    order_type = OrderType(str(metadata.get("order_type") or (OrderType.LIMIT.value if order.price > 0 else OrderType.MARKET.value)))
+    order_type = OrderType(
+        str(metadata.get("order_type") or (OrderType.LIMIT.value if order.price > 0 else OrderType.MARKET.value))
+    )
     limit_price = float(order.price) if order_type == OrderType.LIMIT else None
     trade_date_raw = metadata.get("target_trade_date")
     trade_date = date.fromisoformat(str(trade_date_raw)) if trade_date_raw else datetime.now(UTC).date()
@@ -2402,7 +2549,9 @@ def _shared_handle(result: PaperMiniQMTRuntimeChildResult) -> MiniQMTChildOrderH
     return MiniQMTChildOrderHandle(
         handle_id=result.handle.handle_id,
         intent_id=result.handle.intent_id,
-        native_order_id=str(result.native_context.get("miniqmt_order_id") or result.native_context.get("qmt_order_id") or "")
+        native_order_id=str(
+            result.native_context.get("miniqmt_order_id") or result.native_context.get("qmt_order_id") or ""
+        )
         or None,
         native_context=dict(result.native_context),
     )
@@ -2457,6 +2606,149 @@ def _limit_price_for_event_loop(
     )
 
 
+def _b0_quote_v2_initial_limit_price(intent: OrderIntent) -> float:
+    metadata = dict(intent.metadata or {})
+    for candidate in (
+        intent.limit_price,
+        metadata.get("target_reference_price"),
+        metadata.get("reference_price"),
+    ):
+        if candidate is None:
+            continue
+        try:
+            value = float(candidate)
+        except (TypeError, ValueError) as exc:
+            raise BrokerSubmitError(
+                "B0_QUOTE_V2 parent reference price is invalid",
+                context={
+                    "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                    "stage": "ADAPTER",
+                    "parent_intent_id": intent.intent_id,
+                    "broker_called": False,
+                },
+            ) from exc
+        if math.isfinite(value) and value > 0:
+            return value
+    raise BrokerSubmitError(
+        "B0_QUOTE_V2 parent requires an immutable positive reference or limit price",
+        context={
+            "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+            "stage": "ADAPTER",
+            "parent_intent_id": intent.intent_id,
+            "broker_called": False,
+        },
+    )
+
+
+def _b0_quote_v2_assignments(
+    *,
+    policy_context: Mapping[str, Any],
+    parent_intent_ids: set[str],
+) -> tuple[B0QuoteV2RevisionV1 | None, dict[str, ParentQuoteControlAssignmentV1]]:
+    raw = policy_context.get("quote_control")
+    if raw is None:
+        return None, {}
+    if not isinstance(raw, Mapping) or set(raw) != {"binding", "revision", "assignments"}:
+        raise BrokerSubmitError(
+            "execution plan quote_control payload is not exact",
+            context={
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "stage": "ADAPTER",
+                "broker_called": False,
+            },
+        )
+    binding_payload = raw.get("binding")
+    if not isinstance(binding_payload, Mapping):
+        raise BrokerSubmitError(
+            "execution plan quote_control binding is missing",
+            context={
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "stage": "ADAPTER",
+                "broker_called": False,
+            },
+        )
+    binding = QuoteControlBindingV1.from_binding_config({"miniqmt_quote_control": binding_payload})
+    if binding.control_revision.value == "LEGACY_B0":
+        if raw.get("revision") is not None:
+            raise BrokerSubmitError(
+                "LEGACY_B0 quote_control cannot carry a B0_QUOTE_V2 revision",
+                context={
+                    "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                    "stage": "ADAPTER",
+                    "broker_called": False,
+                },
+            )
+        return None, {}
+    revision_payload = raw.get("revision")
+    assignments_payload = raw.get("assignments")
+    if not isinstance(revision_payload, Mapping) or not isinstance(assignments_payload, list):
+        raise BrokerSubmitError(
+            "B0_QUOTE_V2 quote_control requires frozen revision and assignments",
+            context={
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "stage": "ADAPTER",
+                "broker_called": False,
+            },
+        )
+    revision = B0QuoteV2RevisionV1.from_payload(revision_payload)
+    manifest = source_build_manifest()
+    expected_hashes = {
+        "adapter_sha256": manifest.adapter_sha256,
+        "code_sha256": manifest.code_sha256,
+        "evidence_schema_sha256": manifest.evidence_schema_sha256,
+    }
+    conflicts = {
+        field_name: {"expected": expected, "received": getattr(revision, field_name)}
+        for field_name, expected in expected_hashes.items()
+        if getattr(revision, field_name) != expected
+    }
+    if conflicts:
+        raise BrokerSubmitError(
+            "B0_QUOTE_V2 frozen build/schema manifest differs from runtime readback",
+            context={
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "stage": "ADAPTER",
+                "manifest_conflicts": conflicts,
+                "broker_called": False,
+            },
+        )
+    assignments: dict[str, ParentQuoteControlAssignmentV1] = {}
+    for payload in assignments_payload:
+        if not isinstance(payload, Mapping):
+            raise BrokerSubmitError(
+                "B0_QUOTE_V2 assignment list contains a non-object",
+                context={
+                    "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                    "stage": "ADAPTER",
+                    "broker_called": False,
+                },
+            )
+        assignment = ParentQuoteControlAssignmentV1.from_plan_payload(payload, revision=revision)
+        if assignment.parent_intent_id in assignments:
+            raise BrokerSubmitError(
+                "B0_QUOTE_V2 plan contains duplicate parent assignments",
+                context={
+                    "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                    "stage": "ADAPTER",
+                    "parent_intent_id": assignment.parent_intent_id,
+                    "broker_called": False,
+                },
+            )
+        assignments[assignment.parent_intent_id] = assignment
+    if set(assignments) != parent_intent_ids:
+        raise BrokerSubmitError(
+            "B0_QUOTE_V2 assignment parent set differs from runtime parent set",
+            context={
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "stage": "ADAPTER",
+                "missing_parent_intent_ids": sorted(parent_intent_ids - set(assignments)),
+                "unknown_parent_intent_ids": sorted(set(assignments) - parent_intent_ids),
+                "broker_called": False,
+            },
+        )
+    return revision, assignments
+
+
 def _marketable_limit_price(
     *,
     intent: OrderIntent,
@@ -2471,11 +2763,15 @@ def _marketable_limit_price(
     configured band is converted into a passive cap so this tick cannot submit
     a bad order; the next broker tick will re-evaluate it.
     """
-    cross_ticks = _positive_int_config(
-        algo_config,
-        "marketable_limit_cross_ticks",
-        DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS,
-    ) if cross_ticks_override is None else cross_ticks_override
+    cross_ticks = (
+        _positive_int_config(
+            algo_config,
+            "marketable_limit_cross_ticks",
+            DEFAULT_MARKETABLE_LIMIT_CROSS_TICKS,
+        )
+        if cross_ticks_override is None
+        else cross_ticks_override
+    )
     protection_band_pct = _positive_float_config(
         algo_config,
         "marketable_limit_protection_band_pct",
@@ -2488,8 +2784,16 @@ def _marketable_limit_price(
         intent=intent,
         stage=stage,
     )
-    candidate = opposite_price + tick_size * cross_ticks if intent.side == OrderSide.BUY else opposite_price - tick_size * cross_ticks
-    protected_cap = reference_price * (1.0 + protection_band_pct) if intent.side == OrderSide.BUY else reference_price * (1.0 - protection_band_pct)
+    candidate = (
+        opposite_price + tick_size * cross_ticks
+        if intent.side == OrderSide.BUY
+        else opposite_price - tick_size * cross_ticks
+    )
+    protected_cap = (
+        reference_price * (1.0 + protection_band_pct)
+        if intent.side == OrderSide.BUY
+        else reference_price * (1.0 - protection_band_pct)
+    )
     out_of_band = candidate > protected_cap if intent.side == OrderSide.BUY else candidate < protected_cap
     price = protected_cap if out_of_band else candidate
     price = _apply_exchange_price_bounds(price=price, side=intent.side, tick_payload=tick_payload)
@@ -2858,7 +3162,9 @@ def _tick_payload_for_runtime(
     if quote:
         payload = dict(quote)
         payload.setdefault("symbol", intent.symbol)
-        payload.setdefault("price", payload.get("last_price") or payload.get("ask_price_1") or payload.get("bid_price_1"))
+        payload.setdefault(
+            "price", payload.get("last_price") or payload.get("ask_price_1") or payload.get("bid_price_1")
+        )
         return payload
     price = float(intent.limit_price or 0.0)
     if price <= 0:
@@ -2911,7 +3217,9 @@ def _managed_request_from_event_loop_child(
         mode=str(metadata.get("mode") or "SIM").strip().upper(),
         package_id=_optional_str(metadata.get("package_id") or parent_metadata.get("package_id")),
         selection_run_id=_optional_str(metadata.get("selection_run_id") or parent_metadata.get("selection_run_id")),
-        target_weight=Decimal(str(metadata.get("target_weight"))) if metadata.get("target_weight") is not None else None,
+        target_weight=Decimal(str(metadata.get("target_weight")))
+        if metadata.get("target_weight") is not None
+        else None,
         metadata={
             **parent_metadata,
             **metadata,
@@ -2930,7 +3238,9 @@ def _request_by_parent(
     del parent_by_id
     result: dict[str, ManagedOrderRequest] = {}
     for request in requests:
-        parent_id = str(request.metadata.get("runtime_parent_intent_id") or request.metadata.get("execution_plan_intent_id") or "").strip()
+        parent_id = str(
+            request.metadata.get("runtime_parent_intent_id") or request.metadata.get("execution_plan_intent_id") or ""
+        ).strip()
         if parent_id:
             result[parent_id] = request
     return result
@@ -2938,9 +3248,7 @@ def _request_by_parent(
 
 def _parent_id_from_request(request: ManagedOrderRequest) -> str:
     return str(
-        request.metadata.get("runtime_parent_intent_id")
-        or request.metadata.get("execution_plan_intent_id")
-        or ""
+        request.metadata.get("runtime_parent_intent_id") or request.metadata.get("execution_plan_intent_id") or ""
     ).strip()
 
 
@@ -2948,7 +3256,9 @@ def _event_loop_requests_from_batch(batch: OrderBatchRecord) -> list[ManagedOrde
     orders = batch.request_json.get("orders") if isinstance(batch.request_json, dict) else None
     if not isinstance(orders, list):
         return []
-    return _batch_submission_order([_managed_request_from_payload(order) for order in orders if isinstance(order, dict)])
+    return _batch_submission_order(
+        [_managed_request_from_payload(order) for order in orders if isinstance(order, dict)]
+    )
 
 
 def _logical_batch_id_for_event_loop_batch(batch: OrderBatchRecord) -> str | None:
@@ -3034,11 +3344,15 @@ def _event_loop_probe_intent_for_algo(
     trade_date: date,
 ) -> OrderIntent:
     metadata = dict(instance.metadata or {})
-    child_context = metadata.get("runtime_child_context") if isinstance(metadata.get("runtime_child_context"), dict) else {}
+    child_context = (
+        metadata.get("runtime_child_context") if isinstance(metadata.get("runtime_child_context"), dict) else {}
+    )
     return OrderIntent(
         intent_id=instance.parent_intent_id,
         package_id=str(child_context.get("package_id") or metadata.get("package_id") or instance.strategy_slot_id),
-        portfolio_id=str(child_context.get("portfolio_id") or metadata.get("portfolio_id") or instance.strategy_slot_id),
+        portfolio_id=str(
+            child_context.get("portfolio_id") or metadata.get("portfolio_id") or instance.strategy_slot_id
+        ),
         symbol=instance.symbol,
         side=instance.side,
         quantity=max(int(instance.target_quantity), 1),
@@ -3175,6 +3489,22 @@ def _event_loop_batch_status(
     return OrderBatchStatus.PREFLIGHT_FAILED
 
 
+def _b0_quote_v2_recovering_active(
+    *,
+    algo_instances: tuple[MiniQMTExecutionAlgoInstance, ...],
+    active_child_orders: tuple[MiniQMTChildOrder, ...],
+) -> bool:
+    """Allow drain recovery only when durable active execution facts exist."""
+
+    return bool(
+        active_child_orders
+        or any(
+            instance.status in {MiniQMTAlgoInstanceStatus.ACTIVE, MiniQMTAlgoInstanceStatus.PAUSED}
+            for instance in algo_instances
+        )
+    )
+
+
 def _event_loop_preflight_passed(
     requests: tuple[ManagedOrderRequest, ...],
     results: tuple[ManagedOrderSubmitResult, ...],
@@ -3251,7 +3581,9 @@ def _persist_event_loop_tca_batch_observations(
                         "execution_plan_hash": request.metadata.get("execution_plan_hash"),
                     }
                 )
-        logical_tca_scope_hash = canonical_json_sha256({"batch_id": batch_id, "parents": sorted(scope_rows, key=lambda item: item["parent_intent_id"])})
+        logical_tca_scope_hash = canonical_json_sha256(
+            {"batch_id": batch_id, "parents": sorted(scope_rows, key=lambda item: item["parent_intent_id"])}
+        )
         policy = resolve_tca_benchmark_policy(policy_context)
     except TcaCaptureConfigurationError as exc:
         for request in requests:
@@ -3298,7 +3630,9 @@ def _persist_event_loop_tca_batch_observations(
             plan_id = str(request.metadata.get("execution_plan_id") or "").strip()
             plan_hash = str(request.metadata.get("execution_plan_hash") or "").strip()
             if not plan_id or not plan_hash:
-                raise ValueError("execution_plan_id/execution_plan_hash missing from canonical managed request metadata")
+                raise ValueError(
+                    "execution_plan_id/execution_plan_hash missing from canonical managed request metadata"
+                )
             arrival_context = arrival_capture_context_by_parent.get(parent_id)
             if not isinstance(arrival_context, dict):
                 raise ValueError("first event-loop quote capture context is missing")
@@ -3319,7 +3653,11 @@ def _persist_event_loop_tca_batch_observations(
                 parent_intent_id=parent_id,
                 arrival_capture=arrival.model_dump(mode="json"),
             )
-            if getattr(outcome, "value", outcome) in {CaptureMergeOutcome.CONFLICT.value, CaptureMergeOutcome.IDENTITY_DRIFT.value, CaptureMergeOutcome.NOT_FOUND.value}:
+            if getattr(outcome, "value", outcome) in {
+                CaptureMergeOutcome.CONFLICT.value,
+                CaptureMergeOutcome.IDENTITY_DRIFT.value,
+                CaptureMergeOutcome.NOT_FOUND.value,
+            }:
                 LOGGER.error(
                     "TCA arrival merge failed reason_code=ADAPTIVE_IS_TCA_CAPTURE_MERGE_%s stage=CAPTURE batch_id=%s parent_intent_id=%s",
                     getattr(outcome, "value", outcome),
@@ -3330,12 +3668,16 @@ def _persist_event_loop_tca_batch_observations(
                 parent_intent_id=parent_id,
                 batch_id=batch_id,
                 eligibility_as_of=datetime.now(UTC),
-                request_quantity_before_cash=request_quantity_before_cash_by_parent.get(parent_id, int(request.quantity)),
+                request_quantity_before_cash=request_quantity_before_cash_by_parent.get(
+                    parent_id, int(request.quantity)
+                ),
                 request_quantity_after_cash=int(request.quantity),
                 preflight_result=result.preflight.to_dict(),
                 is_dependent_buy=_is_dependent_buy_proceeds_deferred(request, result.preflight),
                 is_capacity_residual=_is_capacity_residual_skipped(request, result.preflight),
-                dependency_parent_ids=tuple(str(item) for item in request.metadata.get("dependent_parent_intent_ids", ()) if str(item).strip()),
+                dependency_parent_ids=tuple(
+                    str(item) for item in request.metadata.get("dependent_parent_intent_ids", ()) if str(item).strip()
+                ),
                 deadline_context=resolve_execution_deadline(
                     schedule_window=(
                         policy_context.get("policy_json", {}).get("schedule_window", {})

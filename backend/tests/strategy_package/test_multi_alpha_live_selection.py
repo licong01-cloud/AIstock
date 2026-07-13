@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -54,6 +56,49 @@ TRADE_DATE = date(2024, 7, 2)
 TRADING_DAYS = [date(2024, 5, 1) + timedelta(days=offset) for offset in range(63)]
 
 
+def _sha256(payload) -> str:  # noqa: ANN001
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _calendar_context(
+    *,
+    trade_date: date,
+    window_start_date: str,
+    required_window: int,
+    calendar_version: str = "market.trading_calendar.v1",
+) -> dict:
+    calendar_source = "market.trading_calendar"
+    calendar_identity_hash = _sha256(
+        {
+            "dataset_id": calendar_source,
+            "effective_trade_date": trade_date.isoformat(),
+            "calendar_version": calendar_version,
+            "calendar_source": calendar_source,
+        }
+    )
+    window_context = {
+        "window_start_date": window_start_date,
+        "required_window": required_window,
+        "window_resolution": "model_required_window",
+    }
+    window_lineage_hash = _sha256({"calendar_identity_hash": calendar_identity_hash, **window_context})
+    return {
+        "calendar_version": calendar_version,
+        "calendar_identity_hash": calendar_identity_hash,
+        "calendar_hash": window_lineage_hash,
+        "calendar_source": calendar_source,
+        **window_context,
+        "window_lineage_hash": window_lineage_hash,
+    }
+
+
 class FakeResolver:
     def __init__(self) -> None:
         self.load_calls: list[dict] = []
@@ -92,10 +137,12 @@ class FakeProvider:
         *,
         universe_count_by_leg: dict[str, int] | None = None,
         universe_input_hash_by_leg: dict[str, str] | None = None,
+        input_context_overrides_by_leg: dict[str, dict] | None = None,
     ) -> None:
         self.scores_by_leg = scores_by_leg
         self.universe_count_by_leg = universe_count_by_leg or {}
         self.universe_input_hash_by_leg = universe_input_hash_by_leg or {}
+        self.input_context_overrides_by_leg = input_context_overrides_by_leg or {}
         self.calls: list[dict] = []
 
     def run(self, **kwargs):  # noqa: ANN001, ANN201
@@ -104,6 +151,20 @@ class FakeProvider:
         trade_date = kwargs["cutoff_date"] or kwargs["trade_date"]
         observed_at = datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc)
         scores = deepcopy(self.scores_by_leg.get(leg_id, []))
+        calendar_context = _calendar_context(
+            trade_date=trade_date,
+            window_start_date="2024-03-01",
+            required_window=60,
+        )
+        input_context = {
+            "requested_trade_date": trade_date.isoformat(),
+            "effective_trade_date": trade_date.isoformat(),
+            "score_trade_date": trade_date.isoformat(),
+            "pit_mode": "stock_universe_pit_v1",
+            **calendar_context,
+            "universe_input_hash": self.universe_input_hash_by_leg.get(leg_id, "5" * 64),
+        }
+        input_context.update(self.input_context_overrides_by_leg.get(leg_id, {}))
         return LiveInferenceResult(
             scores=scores,
             metadata={"leg_id": leg_id, "seed_run_id": kwargs["workspace"].seed_run_id},
@@ -134,20 +195,11 @@ class FakeProvider:
                     "source_role": "trading_calendar",
                     "dataset_id": "market.trading_calendar",
                     "row_count": 2,
-                    "content_hash": "4" * 64,
+                    "content_hash": input_context["calendar_hash"],
                     "first_observed_at": observed_at,
                 },
             ],
-            input_context={
-                "requested_trade_date": trade_date.isoformat(),
-                "effective_trade_date": trade_date.isoformat(),
-                "score_trade_date": trade_date.isoformat(),
-                "pit_mode": "stock_universe_pit_v1",
-                "calendar_version": "market.trading_calendar.v1",
-                "calendar_hash": "4" * 64,
-                "calendar_source": "market.trading_calendar",
-                "universe_input_hash": self.universe_input_hash_by_leg.get(leg_id, "5" * 64),
-            },
+            input_context=input_context,
         )
 
 
@@ -239,6 +291,7 @@ def _artifact_service(
     *,
     universe_count_by_leg: dict[str, int] | None = None,
     universe_input_hash_by_leg: dict[str, str] | None = None,
+    input_context_overrides_by_leg: dict[str, dict] | None = None,
 ):  # noqa: ANN001
     artifact_repo = InMemorySelectionScoreArtifactRepository()
     resolver = FakeResolver()
@@ -250,6 +303,7 @@ def _artifact_service(
         },
         universe_count_by_leg=universe_count_by_leg,
         universe_input_hash_by_leg=universe_input_hash_by_leg,
+        input_context_overrides_by_leg=input_context_overrides_by_leg,
     )
     service = StrategyPackageSelectionArtifactService(
         package_repository=package_repo,
@@ -300,8 +354,8 @@ def test_multi_alpha_live_selection_artifact_is_authoritative_and_deterministic(
     assert first.metadata["component_artifacts"][A1_LEG]["child_package_id"] is None
     assert first.metadata["seed_run_ids"] == {A1_LEG: [A1_SEED], FUND_LEG: [FUND_SEED]}
     assert first.metadata["normalization_method"] == "zscore"
-    assert first.metadata["provider_version"] == "multi_alpha_live_selection_provider_v2"
-    assert MULTI_ALPHA_LIVE_PROVIDER_VERSION == "multi_alpha_live_selection_provider_v2"
+    assert first.metadata["provider_version"] == "multi_alpha_live_selection_provider_v3"
+    assert MULTI_ALPHA_LIVE_PROVIDER_VERSION == "multi_alpha_live_selection_provider_v3"
     assert first.metadata["final_topk"] == 25
     assert first.metadata["component_candidate_universe_size"] == 60
     assert first.metadata["coverage_threshold"] == 25
@@ -478,6 +532,62 @@ def test_multi_alpha_live_selection_fails_loud_when_leg_input_universe_hashes_di
     service, _artifact_repo, _resolver, _provider = _artifact_service(
         package_repo,
         universe_input_hash_by_leg={A1_LEG: "5" * 64, FUND_LEG: "6" * 64},
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        _generate(service, parent, runtime_config)
+
+    assert _reason(excinfo.value) == "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH"
+
+
+def test_multi_alpha_live_selection_allows_distinct_per_leg_history_windows() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        input_context_overrides_by_leg={
+            A1_LEG: _calendar_context(trade_date=TRADE_DATE, window_start_date="2024-03-01", required_window=60),
+            FUND_LEG: _calendar_context(trade_date=TRADE_DATE, window_start_date="2023-07-01", required_window=250),
+        },
+    )
+
+    artifact = _generate(service, parent, runtime_config)
+
+    assert artifact.status.value == "SUCCEEDED"
+    windows = artifact.metadata["per_leg_window_lineage"]
+    assert windows[A1_LEG]["required_window"] == 60
+    assert windows[FUND_LEG]["required_window"] == 250
+    assert windows[A1_LEG]["window_lineage_hash"] != windows[FUND_LEG]["window_lineage_hash"]
+
+
+def test_multi_alpha_live_selection_fails_when_shared_calendar_identity_differs() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    mismatched_context = _calendar_context(
+        trade_date=TRADE_DATE,
+        window_start_date="2023-07-01",
+        required_window=250,
+        calendar_version="market.trading_calendar.v2",
+    )
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        input_context_overrides_by_leg={FUND_LEG: mismatched_context},
+    )
+
+    with pytest.raises(DataUnavailableError) as excinfo:
+        _generate(service, parent, runtime_config)
+
+    assert _reason(excinfo.value) == "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH"
+
+
+def test_multi_alpha_live_selection_fails_when_leg_requested_trade_date_differs() -> None:
+    package_repo, parent = _make_parent(live_weight_policy=False)
+    runtime_config = _runtime_config()
+    service, _artifact_repo, _resolver, _provider = _artifact_service(
+        package_repo,
+        input_context_overrides_by_leg={
+            FUND_LEG: {"requested_trade_date": (TRADE_DATE - timedelta(days=1)).isoformat()},
+        },
     )
 
     with pytest.raises(DataUnavailableError) as excinfo:

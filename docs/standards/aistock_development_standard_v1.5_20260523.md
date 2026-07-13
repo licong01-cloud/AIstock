@@ -449,7 +449,11 @@ python scripts/aistock_guardrail_scan.py --changed-only --fail-on-severity P1
 
 - 严重等级：P0。
 - 适用范围：所有基于已批准设计方案、实施方案、Issue 验收标准、用户明确需求的新功能、修复、UI、数据、MCP、数仓、QE/RP/Paper/HMM 工作流开发。
+- 四项 P0 硬约束：每次设计复核、代码审核、PR 和最终汇报必须分别检查并记录 `no_simplified_delivery`、`no_silent_error`、`no_business_semantic_drift`、`no_unrequested_gate_or_approval`；任一项缺少实现或证据时，均不得报告完成、请求合入或标记 `verified`。
 - 禁止行为：未经用户明确批准，不得将简化版、子集版、POC 版、占位版、mock-only 版本、只实现后端不实现 UI、只实现 mock 页面不接真实 API、只实现实验级而遗漏 loop 级、只实现只读标识而遗漏操作按钮等交付描述为“完成”“可合入”或“符合设计”。
+- 禁止静默错误和假成功：不得使用 `except: pass`、捕获后继续、空值/缓存值/默认业务值回退、伪造成功响应、把缺失输入或持久化失败当作成功等方式掩盖错误。预期失败必须有稳定错误类型或 reason code、结构化上下文、可观测记录和调用方可判定的失败结果；只有设计明确列出的非业务默认值才可使用，且必须有直接测试。
+- 禁止业务语义漂移：未经用户明确要求且未经批准设计明确，不得改变既有决策条件、身份与哈希、数量、价格、方向、状态机、数据来源、所有权、调度时序、事务边界或 broker side effect。确需改变时，必须先前后一致地更新设计、兼容/迁移策略和验收矩阵，并用直接回归证据证明未批准路径保持原语义。
+- 禁止擅自增加门禁或审批：未经用户明确要求且未经批准设计明确，不得新增 approval、RBAC、角色/许可、人工 acknowledge、confirm-run、双人复核或其它运行时人工门禁。schema、身份、完整性、时效性、可交易性、风险硬约束和 LIVE 安全锁等技术 fail-closed 条件不属于审批，但必须源自既有规范或批准设计，作用域必须局部且确定，并在有效数据或配置恢复后自动恢复，不得要求人工确认解除。
 - 阻塞处理：如果设计中的任一功能无法在当前分支完整实现，必须立即停止并向用户报告阻塞、影响范围和需要调整的设计条款；不得自行降级、删减、隐藏或把剩余工作放入未声明的“后续”。
 - 合入前复核：实现完成后必须逐条对照设计文档、Issue `closure_requirements`、用户明确验收点和 UI/API/DB 行为，产出设计验收矩阵，至少包含 `design_item`、`implementation_refs`、`test_or_evidence`、`status`、`gap_or_exception`。
 - 验证要求：涉及 UI 的条款必须提供真实页面或 E2E/截图证据；涉及 API/DB/数仓/MCP 的条款必须提供真实接口、DB side effect、run record 或受控 smoke 证据；mock 测试只能补充交互证明，不能替代真实业务路径验收。

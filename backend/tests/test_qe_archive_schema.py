@@ -39,6 +39,8 @@ def test_qe_archive_schema_declares_required_tables() -> None:
         "qe_archive.run_symbol_summary",
         "qe_archive.run_model_trial",
         "qe_archive.run_model_training_metric",
+        "qe_archive.run_resource_session",
+        "qe_archive.run_resource_phase",
         "qe_archive.run_position",
         "qe_archive.run_order",
         "qe_archive.run_trade",
@@ -165,8 +167,27 @@ def test_qe_archive_schema_keeps_daily_invalid_runs_filterable_and_score_compone
 
 
 def test_qe_archive_schema_version_is_explicit() -> None:
-    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v3_20260628"
+    assert QE_ARCHIVE_SCHEMA_VERSION == "qe_archive_v4_20260713"
     assert "qe_archive.schema_version" in _ddl_text()
+
+
+def test_qe_resource_phase_migration_has_forward_rollback_and_comments() -> None:
+    forward = Path("backend/db/migrations/add_qe_resource_phase_telemetry_20260713.sql").read_text(
+        encoding="utf-8"
+    )
+    rollback = Path(
+        "backend/db/migrations/add_qe_resource_phase_telemetry_20260713.rollback.sql"
+    ).read_text(encoding="utf-8")
+
+    for table in ("run_resource_session", "run_resource_phase"):
+        assert f"CREATE TABLE IF NOT EXISTS qe_archive.{table}" in forward
+        assert f"COMMENT ON TABLE qe_archive.{table}" in forward
+        assert f"DROP TABLE IF EXISTS qe_archive.{table}" in rollback
+    assert "qe_archive_v4_20260713" in forward
+    assert "qe_archive_v4_20260713" in rollback
+    assert "gpu_training_policy TEXT NOT NULL DEFAULT 'exclusive'" in forward
+    assert "gpu_training_policy IN ('exclusive', 'parallel')" in forward
+    assert "COMMENT ON COLUMN qe_archive.run_resource_session.gpu_training_policy" in forward
 
 
 def test_qe_archive_data_quality_treats_missing_version_metadata_as_warning_when_structure_matches() -> None:

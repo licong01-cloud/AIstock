@@ -2301,6 +2301,11 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     for path in (codex_skill, claude_command, ua_skill, ua_chat):
         path.parent.mkdir(parents=True)
         path.write_text("graph-first Code Intelligence aistock_issue_workflow.py understand", encoding="utf-8")
+    authoritative_codex_skill = tmp_path / ".codex" / "skills" / "fix-aistock-issue" / "SKILL.md"
+    authoritative_claude_command = tmp_path / ".claude" / "commands" / "fix-aistock-issue.md"
+    for path in (authoritative_codex_skill, authoritative_claude_command):
+        path.parent.mkdir(parents=True)
+        path.write_text("graph-first Code Intelligence aistock_issue_workflow.py understand", encoding="utf-8")
     monkeypatch.setenv("USERPROFILE", str(home))
     graph_path = tmp_path / ".understand-anything" / "knowledge-graph.json"
     graph_path.parent.mkdir(parents=True)
@@ -2389,6 +2394,56 @@ def test_verify_clients_produces_compact_warning_only_evidence(tmp_path: Path, m
     assert "selected_nodes" not in json.dumps(payload["understand_anything"])
     assert "Code Intelligence Client Verification" in markdown
     assert len(markdown) < 3000
+
+
+def test_client_status_uses_authoritative_content_identity_instead_of_magic_terms(tmp_path: Path) -> None:
+    authoritative = tmp_path / "repo" / "SKILL.md"
+    installed = tmp_path / "profile" / "SKILL.md"
+    authoritative.parent.mkdir(parents=True)
+    installed.parent.mkdir(parents=True)
+    authoritative.write_text("workflow entry without verifier magic words", encoding="utf-8")
+    installed.write_text("workflow entry without verifier magic words", encoding="utf-8")
+
+    current = adapter._client_file_status(
+        installed,
+        ["graph-first", "code intelligence"],
+        authoritative_path=authoritative,
+    )
+
+    assert current["status"] == "ready"
+    assert current["verification"] == "authoritative_sha256"
+    assert current["missing_terms"] == []
+    assert current["installed_sha256"] == current["authoritative_sha256"]
+
+    installed.write_text("different installed workflow", encoding="utf-8")
+    stale = adapter._client_file_status(installed, authoritative_path=authoritative)
+    assert stale["status"] == "stale"
+    assert stale["installed_sha256"] != stale["authoritative_sha256"]
+
+    authority_missing = adapter._client_file_status(
+        installed,
+        ["workflow"],
+        authoritative_path=tmp_path / "missing-authority" / "SKILL.md",
+    )
+    assert authority_missing["status"] == "authority_missing"
+    assert authority_missing["verification"] == "authoritative_sha256"
+
+
+def test_ua_plugin_discovery_checks_profile_and_system_home(tmp_path: Path, monkeypatch) -> None:
+    profile_home = tmp_path / "profile"
+    system_home = tmp_path / "system-home"
+    plugin_root = system_home / ".understand-anything" / "repo" / "understand-anything-plugin"
+    plugin_root.mkdir(parents=True)
+    monkeypatch.setenv("USERPROFILE", str(profile_home))
+    monkeypatch.setenv("HOME", str(profile_home))
+    monkeypatch.setenv("HOMEDRIVE", str(system_home.anchor or system_home))
+    monkeypatch.setenv("HOMEPATH", str(system_home).removeprefix(system_home.anchor))
+
+    candidates = adapter._ua_plugin_root_candidates(profile_home)
+
+    assert adapter._first_existing_dir(candidates) == plugin_root
+    assert profile_home / ".understand-anything" / "repo" / "understand-anything-plugin" in candidates
+    assert system_home / ".understand-anything" / "repo" / "understand-anything-plugin" in candidates
 
 
 

@@ -48,7 +48,7 @@ from backend.services.trading_core.errors import (
 
 
 LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE = "live_multi_alpha_inference_v1"
-MULTI_ALPHA_LIVE_PROVIDER_VERSION = "multi_alpha_live_selection_provider_v2"
+MULTI_ALPHA_LIVE_PROVIDER_VERSION = "multi_alpha_live_selection_provider_v3"
 
 REASON_RUNTIME_NOT_ENABLED = "multi_alpha_runtime_not_enabled"
 REASON_LEG_MISSING = "multi_alpha_leg_missing"
@@ -643,6 +643,7 @@ class MultiAlphaLivePredictionProvider:
                 "final_topk": topk,
                 "component_candidate_universe_size": component_candidate_universe_size,
                 "parent_input_universe_count": aggregate_input_context["parent_input_universe_count"],
+                "per_leg_window_lineage": aggregate_input_context["per_leg_window_lineage"],
                 "coverage_threshold": coverage_threshold,
                 "weight_policy": _weight_policy(manifest),
                 "weights": weight_artifact.weights,
@@ -1659,17 +1660,26 @@ def _aggregate_parent_leg_input_context(
     """Prove all parent legs were inferred against one compatible PIT context."""
 
     required_fields = (
+        "requested_trade_date",
         "effective_trade_date",
         "score_trade_date",
         "pit_mode",
         "calendar_version",
-        "calendar_hash",
+        "calendar_identity_hash",
         "calendar_source",
+    )
+    window_fields = (
+        "window_start_date",
+        "required_window",
+        "window_resolution",
+        "window_lineage_hash",
+        "calendar_hash",
     )
     baseline: dict[str, Any] | None = None
     baseline_universe_hash: str | None = None
     baseline_universe_count: int | None = None
     per_leg_universe_counts: dict[str, int] = {}
+    per_leg_window_lineage: dict[str, dict[str, Any]] = {}
     for leg_id, execution in sorted(leg_executions.items()):
         result = execution.live_result
         raw_context = getattr(result, "input_context", None)
@@ -1678,7 +1688,7 @@ def _aggregate_parent_leg_input_context(
                 "MULTI_ALPHA leg inference is missing an input context",
                 context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE", "leg_id": leg_id},
             )
-        missing = [name for name in required_fields if not raw_context.get(name)]
+        missing = [name for name in (*required_fields, *window_fields) if raw_context.get(name) in (None, "")]
         if missing:
             raise DataUnavailableError(
                 "MULTI_ALPHA leg input context is incomplete",
@@ -1727,6 +1737,91 @@ def _aggregate_parent_leg_input_context(
                 },
             )
         candidate = {field: raw_context[field] for field in required_fields}
+        if str(candidate["requested_trade_date"]) != requested_trade_date.isoformat():
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg input context does not match the parent requested trade date",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_LINEAGE_MISMATCH",
+                    "leg_id": leg_id,
+                    "parent_requested_trade_date": requested_trade_date.isoformat(),
+                    "leg_requested_trade_date": str(candidate["requested_trade_date"]),
+                },
+            )
+        expected_calendar_identity_hash = _canonical_sha256(
+            {
+                "dataset_id": candidate["calendar_source"],
+                "effective_trade_date": candidate["effective_trade_date"],
+                "calendar_version": candidate["calendar_version"],
+                "calendar_source": candidate["calendar_source"],
+            }
+        )
+        if candidate["calendar_identity_hash"] != expected_calendar_identity_hash:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg calendar identity hash is invalid",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            )
+        raw_required_window = raw_context["required_window"]
+        if isinstance(raw_required_window, bool):
+            raw_required_window = None
+        try:
+            required_window = int(raw_required_window)
+        except (TypeError, ValueError) as exc:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg history window is invalid",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            ) from exc
+        if required_window <= 0:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg history window must be positive",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            )
+        try:
+            window_start_date = date.fromisoformat(str(raw_context["window_start_date"]))
+            effective_trade_date = date.fromisoformat(str(candidate["effective_trade_date"]))
+        except ValueError as exc:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg window dates are invalid",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            ) from exc
+        if window_start_date > effective_trade_date:
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg history window starts after its effective trade date",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            )
+        window_lineage = {
+            "window_start_date": window_start_date.isoformat(),
+            "required_window": required_window,
+            "window_resolution": str(raw_context["window_resolution"]),
+        }
+        expected_window_hash = _canonical_sha256(
+            {"calendar_identity_hash": candidate["calendar_identity_hash"], **window_lineage}
+        )
+        if (
+            raw_context["window_lineage_hash"] != expected_window_hash
+            or raw_context["calendar_hash"] != expected_window_hash
+        ):
+            raise DataUnavailableError(
+                "MULTI_ALPHA leg history window lineage hash is invalid",
+                context={
+                    "reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE",
+                    "leg_id": leg_id,
+                },
+            )
         if baseline is None:
             baseline = candidate
         elif candidate != baseline:
@@ -1755,17 +1850,22 @@ def _aggregate_parent_leg_input_context(
                 },
             )
         per_leg_universe_counts[leg_id] = universe_count
+        per_leg_window_lineage[leg_id] = {
+            **window_lineage,
+            "window_lineage_hash": expected_window_hash,
+        }
     if baseline is None or baseline_universe_hash is None or baseline_universe_count is None:
         raise DataUnavailableError(
             "MULTI_ALPHA parent has no leg input contexts",
             context={"reason_code": "ADVISORY_PHASE0A2C_SOURCE_RECEIPT_INCOMPLETE"},
         )
     return {
-        "requested_trade_date": requested_trade_date.isoformat(),
         **baseline,
+        "calendar_hash": baseline["calendar_identity_hash"],
         "universe_input_hash": baseline_universe_hash,
         "parent_input_universe_count": baseline_universe_count,
         "per_leg_universe_counts": per_leg_universe_counts,
+        "per_leg_window_lineage": per_leg_window_lineage,
     }
 
 

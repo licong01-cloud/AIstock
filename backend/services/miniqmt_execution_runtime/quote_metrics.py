@@ -73,6 +73,10 @@ class QuoteEvidenceMetricsEmitter:
             ("miniqmt_quote_consumer_restart_total", "consumer_restart_total", None),
             ("miniqmt_quote_valid_depth_ratio", "valid_depth_ratio", None),
             ("miniqmt_quote_action_ready_ratio", "action_ready_ratio", None),
+            ("miniqmt_b0_quote_v2_assignment_conflicts_total", "b0_quote_v2_assignment_conflicts_total", None),
+            ("miniqmt_b0_quote_v2_pending_actions", "b0_quote_v2_pending_actions", None),
+            ("miniqmt_b0_quote_v2_durable_to_submit_latency_ms", "b0_quote_v2_durable_to_submit_latency_ms", None),
+            ("miniqmt_b0_quote_v2_duplicate_prevented_total", "b0_quote_v2_duplicate_prevented_total", None),
             ("miniqmt_b0_quote_v2_parity_violations_total", "b0_quote_v2_parity_violations_total", None),
         )
         for metric_name, key, label_key in ingress_metric_fields:

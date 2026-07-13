@@ -389,6 +389,39 @@ def test_qe_archive_query_factor_usage_path(archive_mcp):
     assert captured["query"] == {"limit": "12", "min_runs": "2"}
 
 
+def test_qe_archive_query_resource_phases_path_is_bounded(archive_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["path"] = request.url.path
+        captured["query"] = dict(request.url.params)
+        return {"status": "success", "data": []}
+
+    _swap(
+        archive_mcp,
+        archive_mcp.LoopbackApiClient(
+            base_url="http://127.0.0.1/api/v1/qe-archive",
+            env_name="test",
+            transport=_mock_transport(handler),
+        ),
+    )
+    result = archive_mcp.qe_archive_query_resource_phases(
+        task_id="qe_task",
+        loop_index=2,
+        source_run_key="qe_task_L2",
+        limit=999,
+    )
+
+    assert result["status"] == "success"
+    assert captured["path"].endswith("/qe-archive/resource-phases")
+    assert captured["query"] == {
+        "task_id": "qe_task",
+        "loop_index": "2",
+        "source_run_key": "qe_task_L2",
+        "limit": "200",
+    }
+
+
 def test_qe_archive_analytics_view_tools_use_compact_paths(archive_mcp):
     captured = []
 

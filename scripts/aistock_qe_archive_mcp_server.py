@@ -44,6 +44,26 @@ def qe_archive_health() -> dict[str, Any]:
 
 
 @mcp.tool()
+def qe_archive_query_resource_phases(
+    run_id: str | None = None,
+    task_id: str | None = None,
+    loop_index: int | None = None,
+    source_run_key: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    return _client().get(
+        "/resource-phases",
+        params={
+            "run_id": run_id,
+            "task_id": task_id,
+            "loop_index": loop_index,
+            "source_run_key": source_run_key,
+            "limit": max(1, min(int(limit), 200)),
+        },
+    )
+
+
+@mcp.tool()
 def qe_archive_list_runs(status: str | None = None, run_type: str | None = None, search: str | None = None, limit: int = 20) -> dict[str, Any]:
     return _client().get("/runs", params={"status": status, "run_type": run_type, "search": search, "limit": limit})
 

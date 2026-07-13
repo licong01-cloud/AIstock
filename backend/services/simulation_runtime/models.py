@@ -13,6 +13,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.models import OrderSide
+from backend.services.miniqmt_execution_runtime.b0_quote_v2 import (
+    QUOTE_CONTROL_BINDING_KEY,
+    QuoteControlBindingV1,
+)
 
 
 DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID = "platform_default_daily_strategy_profile_v1"
@@ -163,6 +167,7 @@ SIMULATION_RELEASE_BINDING_CONFIG_KEYS = frozenset(
         "strategy_name",
         "order_remark_prefix",
         "approval_state",
+        QUOTE_CONTROL_BINDING_KEY,
         "metadata",
     }
 )
@@ -264,6 +269,7 @@ def assert_binding_payload_boundary(payload: dict[str, Any], *, context: dict[st
             "SimulationReleaseBinding cannot contain alpha-core or runtime-policy fields",
             context={**(context or {}), "forbidden_paths": matches, "forbidden_keys": sorted(forbidden)},
         )
+    QuoteControlBindingV1.from_binding_config(payload)
 
 
 def assert_selection_only_payload_boundary(payload: dict[str, Any], *, context: dict[str, Any] | None = None) -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -266,7 +266,6 @@ class InMemorySourceAvailabilityLedger:
     def __init__(self, *, now_provider: Callable[[], datetime] | None = None) -> None:
         self._events_by_hash: dict[str, SourceAvailabilityEvent] = {}
         self._events_by_chain: dict[str, list[SourceAvailabilityEvent]] = {}
-        self._successor_by_hash: dict[str, str] = {}
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def append(self, request: SourceAvailabilityEventRequest) -> SourceAvailabilityEvent:
@@ -287,12 +286,9 @@ class InMemorySourceAvailabilityLedger:
                 context={"partition_chain_key": request.derived_partition_chain_key, "event_revision_no": request.event_revision_no},
             )
         event = SourceAvailabilityEvent.from_request(request, first_observed_at=self._now_provider())
-        if chain:
-            self._validate_successor(event=event, predecessor=chain[-1])
+        validate_source_availability_event_chain((*chain, event))
         chain.append(event)
         self._events_by_hash[event.event_content_hash] = event
-        if request.predecessor_event_hash is not None:
-            self._successor_by_hash[request.predecessor_event_hash] = event.event_content_hash
         return event
 
     def select_as_of(
@@ -336,22 +332,53 @@ class InMemorySourceAvailabilityLedger:
             )
         return terminal
 
-    def _validate_successor(self, *, event: SourceAvailabilityEvent, predecessor: SourceAvailabilityEvent) -> None:
+
+def validate_source_availability_event_chain(
+    events: Iterable[SourceAvailabilityEvent],
+    *,
+    expected_partition_chain_key: str | None = None,
+) -> tuple[SourceAvailabilityEvent, ...]:
+    """Validate and order one immutable availability chain using the ledger rules."""
+
+    by_revision: dict[int, SourceAvailabilityEvent] = {}
+    chain_key = expected_partition_chain_key
+    for event in events:
+        if canonical_json_sha256(event.input.content_payload()) != event.event_content_hash:
+            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "source event content hash is invalid")
+        if chain_key is None:
+            chain_key = event.partition_chain_key
+        if event.partition_chain_key != chain_key or event.event_revision_no in by_revision:
+            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "source events do not form one unique partition chain")
+        by_revision[event.event_revision_no] = event
+
+    ordered = tuple(by_revision[number] for number in sorted(by_revision))
+    for index, event in enumerate(ordered, start=1):
         item = event.input
+        if event.event_revision_no != index:
+            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "source event chain has a revision gap")
+        if index == 1:
+            if event.event_type is not SourceAvailabilityEventType.INGESTED or item.predecessor_event_hash is not None:
+                raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "first source event must be INGESTED without predecessor")
+            continue
+
+        predecessor = ordered[index - 2]
         if item.predecessor_event_hash != predecessor.event_content_hash:
             raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "predecessor must be the prior event in the same chain")
         if item.partition_key_hash != predecessor.input.partition_key_hash:
             raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "successor partition key differs from predecessor")
-        if predecessor.event_content_hash in self._successor_by_hash:
-            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "predecessor already has a successor")
+        if event.formal_available_at < predecessor.formal_available_at:
+            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "source event availability time cannot move backwards")
         if item.event_type is SourceAvailabilityEventType.REVALIDATED:
             if predecessor.event_type is not SourceAvailabilityEventType.INVALIDATED:
                 raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "REVALIDATED requires an INVALIDATED predecessor")
         elif predecessor.event_type is SourceAvailabilityEventType.INVALIDATED:
             raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "INVALIDATED predecessor requires REVALIDATED successor")
-        if item.event_type in {SourceAvailabilityEventType.CORRECTED, SourceAvailabilityEventType.REVALIDATED}:
-            if item.revision_id == predecessor.input.revision_id or item.partition_content_hash == predecessor.input.partition_content_hash:
-                raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "corrected or revalidated event requires new revision and content hash")
+        if item.event_type in {SourceAvailabilityEventType.CORRECTED, SourceAvailabilityEventType.REVALIDATED} and (
+            item.revision_id == predecessor.input.revision_id
+            or item.partition_content_hash == predecessor.input.partition_content_hash
+        ):
+            raise SourceLedgerError(REASON_EVENT_CHAIN_INVALID, "corrected or revalidated event requires new revision and content hash")
+    return ordered
 
 
 def source_partition_chain_key(*, dataset_name: str, source_role: str, partition_key: dict[str, Any]) -> str:

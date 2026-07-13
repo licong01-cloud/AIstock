@@ -4,6 +4,7 @@ from datetime import date
 
 import pytest
 
+from backend.execution_algos.adaptive_is.reasons import QuoteContractError
 from backend.services.miniqmt_execution_runtime import (
     InMemoryMiniQMTExecutionRuntimeRepository,
     MiniQMTChildOrderStatus,
@@ -17,6 +18,7 @@ from backend.services.miniqmt_execution_runtime import (
 )
 from backend.services.qmt_strategy_ledger.models import STATUS_OPEN_LIKE, STATUS_PART_SUCC
 from backend.services.trading_core.models import OrderSide
+from backend.tests.miniqmt_execution_runtime.test_b0_quote_v2_adapter import CLOCK_AT, _runtime_controller
 
 
 class _CallbackQmtClient:
@@ -130,3 +132,24 @@ def test_event_loop_gateway_rejects_malformed_callbacks_loudly() -> None:
 
     with pytest.raises(MiniQMTGatewayEventSourceError, match="MINIQMT_EVENT_LOOP_TICK_SYMBOL_MISSING"):
         gateway.on_tick({"last_price": 10.2})
+
+
+def test_legacy_and_b0_quote_v2_parent_never_share_or_switch_quote_source() -> None:
+    legacy_runtime, legacy_repository, _legacy_gateway = _runtime()
+    legacy_runtime.start()
+    legacy_runtime.on_tick(symbol="000001.SZ", price=10.2)
+    assert MiniQMTExecutionEventType.TICK in {
+        event.event_type for event in legacy_repository.list_events(legacy_runtime.config.runtime_id)
+    }
+
+    controller, b0_runtime, b0_gateway, b0_repository = _runtime_controller()
+    with pytest.raises(QuoteContractError, match="B0_QUOTE_V2"):
+        b0_runtime.on_tick(symbol="000001.SZ", price=10.2)
+
+    controller.lifecycle_tick(now_utc=CLOCK_AT)
+
+    assert len(b0_gateway.submitted_orders) == 1
+    assert all(
+        event.event_type != MiniQMTExecutionEventType.TICK
+        for event in b0_repository.list_events(b0_runtime.config.runtime_id, include_archived=True)
+    )

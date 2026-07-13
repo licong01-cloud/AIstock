@@ -14,6 +14,8 @@ indexing order.
 
 from __future__ import annotations
 
+import gc
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -32,6 +34,7 @@ from qlib.utils import get_or_create_path
 
 _DEFAULT_VRAM_MARGIN_BYTES = 512 * 1024**2
 _DEFAULT_WORKING_MEMORY_MULTIPLIER = 4
+_DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES = 256 * 1024**2
 _GATS_ADJACENCY_OFF = "off"
 _GATS_ADJACENCY_INDUSTRY_BIAS = "industry_bias"
 _GATS_ADJACENCY_MODES = {_GATS_ADJACENCY_OFF, _GATS_ADJACENCY_INDUSTRY_BIAS}
@@ -43,6 +46,29 @@ _GATS_INDUSTRY_EMBEDDING_MODES = {_GATS_INDUSTRY_EMBEDDING_OFF, _GATS_INDUSTRY_E
 _GATS_L2_INDUSTRY_CLASSES = 200
 _MISSING_INDUSTRY_ID = _GATS_L2_INDUSTRY_CLASSES
 _GATS_INDUSTRY_EMBEDDING_CLASSES = _GATS_L2_INDUSTRY_CLASSES + 1
+
+
+try:
+    from qe_runtime_resource import (
+        publish_gpu_phase_release as _publish_gpu_phase_release,
+        record_gpu_resident_state as _record_gpu_resident_state,
+        transition_resource_phase as _transition_resource_phase,
+    )
+except ModuleNotFoundError as exc:  # old/non-runner environments remain compatible
+    if exc.name != "qe_runtime_resource":
+        raise
+
+    def _transition_resource_phase(_phase, *, metadata=None):
+        return None
+
+    def _record_gpu_resident_state(*, requested, active, fallback_reason_code=None):
+        return None
+
+    def _publish_gpu_phase_release(_proof):
+        enabled = (os.environ.get("QE_PHASE_PIPELINE_ENABLED") or "").strip().lower()
+        if enabled in {"1", "true", "yes", "on"}:
+            print("[ERROR] reason_code=QE_GPU_PHASE_HELPER_MISSING release_event_not_published=true")
+        return False
 
 
 def _normalise_on_off(value, *, name):
@@ -215,8 +241,17 @@ class EfficientGATs(QlibGATs):
         self.gpu_resident_working_memory_multiplier = int(
             kwargs.pop("gpu_resident_working_memory_multiplier", _DEFAULT_WORKING_MEMORY_MULTIPLIER)
         )
+        self.gpu_phase_release_tolerance_bytes = int(
+            kwargs.pop("gpu_phase_release_tolerance_bytes", _DEFAULT_GPU_PHASE_RELEASE_TOLERANCE_BYTES)
+        )
+        if self.gpu_phase_release_tolerance_bytes < 0:
+            raise ValueError(
+                "reason_code=efficient_gats_gpu_phase_release_tolerance_invalid: "
+                f"value={self.gpu_phase_release_tolerance_bytes} expected_non_negative_int"
+            )
         self.gpu_resident_active = False
         self.gpu_resident_last_fallback = None
+        self.gpu_phase_release_last_proof = None
         self.gats_adjacency_last_event = None
         self.gats_adjacency_events = []
         self._industry_code_to_id = {}
@@ -253,6 +288,11 @@ class EfficientGATs(QlibGATs):
         self.gpu_resident_active = False
         payload = {"reason_code": reason_code, **details}
         self.gpu_resident_last_fallback = payload
+        _record_gpu_resident_state(
+            requested=bool(self.gpu_resident),
+            active=False,
+            fallback_reason_code=reason_code,
+        )
         message = " ".join(f"{key}={value}" for key, value in payload.items())
         self.logger.warning("EfficientGATs GPU resident fallback: %s", message)
         print(message)
@@ -504,6 +544,56 @@ class EfficientGATs(QlibGATs):
     def _release_cached_cuda_blocks(self):
         if self.device.type == "cuda" and torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def _capture_gpu_phase_release_baseline(self):
+        if self.device.type != "cuda" or not torch.cuda.is_available():
+            return {
+                "release_baseline_allocated_bytes": 0,
+                "release_baseline_reserved_bytes": 0,
+            }
+        torch.cuda.synchronize(self.device)
+        gc.collect()
+        torch.cuda.empty_cache()
+        return {
+            "release_baseline_allocated_bytes": int(torch.cuda.memory_allocated(self.device)),
+            "release_baseline_reserved_bytes": int(torch.cuda.memory_reserved(self.device)),
+        }
+
+    def _finalize_gpu_phase_release(self, baseline, *, predict_error=None):
+        baseline = dict(baseline or {})
+        tolerance = int(self.gpu_phase_release_tolerance_bytes)
+        if self.device.type != "cuda" or not torch.cuda.is_available():
+            proof = {
+                **baseline,
+                "cuda_allocated_bytes_after": 0,
+                "cuda_reserved_bytes_after": 0,
+                "release_tolerance_bytes": tolerance,
+                "release_check_passed": predict_error is None,
+            }
+        else:
+            torch.cuda.synchronize(self.device)
+            gc.collect()
+            torch.cuda.empty_cache()
+            allocated_after = int(torch.cuda.memory_allocated(self.device))
+            reserved_after = int(torch.cuda.memory_reserved(self.device))
+            allocated_limit = int(baseline.get("release_baseline_allocated_bytes") or 0) + tolerance
+            reserved_limit = int(baseline.get("release_baseline_reserved_bytes") or 0) + tolerance
+            proof = {
+                **baseline,
+                "cuda_allocated_bytes_after": allocated_after,
+                "cuda_reserved_bytes_after": reserved_after,
+                "release_tolerance_bytes": tolerance,
+                "release_check_passed": (
+                    predict_error is None
+                    and allocated_after <= allocated_limit
+                    and reserved_after <= reserved_limit
+                ),
+            }
+        if predict_error is not None:
+            proof["predict_error"] = str(predict_error)
+        self.gpu_phase_release_last_proof = proof
+        _publish_gpu_phase_release(proof)
+        return proof
 
     def _can_activate_gpu_resident(self, resident_segments):
         if not self.gpu_resident:
@@ -808,6 +898,8 @@ class EfficientGATs(QlibGATs):
         evals_result=dict(),
         save_path=None,
     ):
+        _transition_resource_phase("train")
+        _record_gpu_resident_state(requested=bool(self.gpu_resident), active=False)
         if not self.gpu_resident:
             return self._fit_streaming(dataset, evals_result, save_path)
 
@@ -828,10 +920,15 @@ class EfficientGATs(QlibGATs):
         if not self._can_activate_gpu_resident(resident_cpu):
             return self._fit_streaming(dataset, evals_result, save_path)
 
+        train_resident = None
+        valid_resident = None
         try:
             train_resident = self._move_segment_to_gpu(train_cpu)
             valid_resident = self._move_segment_to_gpu(valid_cpu)
         except RuntimeError as exc:
+            train_resident = None
+            valid_resident = None
+            gc.collect()
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
             self._loud_gpu_resident_fallback(
@@ -843,6 +940,7 @@ class EfficientGATs(QlibGATs):
 
         self.gpu_resident_active = True
         self.gpu_resident_last_fallback = None
+        _record_gpu_resident_state(requested=True, active=True)
         self.logger.info(
             "EfficientGATs GPU resident mode active: train_rows=%s valid_rows=%s model_size=%.4f MB",
             train_resident["tensor"].shape[0],
@@ -858,76 +956,108 @@ class EfficientGATs(QlibGATs):
         evals_result["train"] = []
         evals_result["valid"] = []
 
-        self._load_pretrained_base_model()
+        try:
+            self._load_pretrained_base_model()
 
-        self.logger.info("training...")
-        self.fitted = True
-
-        for step in range(self.n_epochs):
-            self.logger.info("Epoch%d:", step)
             self.logger.info("training...")
-            self.train_epoch(train_resident)
-            self.logger.info("evaluating...")
-            train_loss, train_score = self.test_epoch(train_resident)
-            val_loss, val_score = self.test_epoch(valid_resident)
-            self.logger.info("train %.6f, valid %.6f" % (train_score, val_score))
-            evals_result["train"].append(train_score)
-            evals_result["valid"].append(val_score)
+            self.fitted = True
 
-            if val_score > best_score:
-                best_score = val_score
-                stop_steps = 0
-                best_epoch = step
-                best_param = copy.deepcopy(self.GAT_model.state_dict())
-            else:
-                stop_steps += 1
-                if stop_steps >= self.early_stop:
-                    self.logger.info("early stop")
-                    break
+            for step in range(self.n_epochs):
+                self.logger.info("Epoch%d:", step)
+                self.logger.info("training...")
+                self.train_epoch(train_resident)
+                self.logger.info("evaluating...")
+                train_loss, train_score = self.test_epoch(train_resident)
+                val_loss, val_score = self.test_epoch(valid_resident)
+                self.logger.info("train %.6f, valid %.6f" % (train_score, val_score))
+                evals_result["train"].append(train_score)
+                evals_result["valid"].append(val_score)
 
-        self.logger.info("best score: %.6lf @ %d" % (best_score, best_epoch))
-        self.GAT_model.load_state_dict(best_param)
-        torch.save(best_param, save_path)
+                if val_score > best_score:
+                    best_score = val_score
+                    stop_steps = 0
+                    best_epoch = step
+                    best_param = copy.deepcopy(self.GAT_model.state_dict())
+                else:
+                    stop_steps += 1
+                    if stop_steps >= self.early_stop:
+                        self.logger.info("early stop")
+                        break
 
-        if self.use_gpu:
-            torch.cuda.empty_cache()
+            self.logger.info("best score: %.6lf @ %d" % (best_score, best_epoch))
+            self.GAT_model.load_state_dict(best_param)
+            torch.save(best_param, save_path)
+        finally:
+            train_resident = None
+            valid_resident = None
+            train_cpu = None
+            valid_cpu = None
+            resident_cpu = None
+            gc.collect()
+            if self.use_gpu:
+                torch.cuda.empty_cache()
 
     def predict(self, dataset):
         if not self.fitted:
             raise ValueError("model is not fitted yet!")
-        if not self.gpu_resident:
-            return self._predict_streaming(dataset)
-
+        _transition_resource_phase("predict")
         self._release_cached_cuda_blocks()
-
-        dl_test = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
-        dl_test.config(fillna_type="ffill+bfill")
-        test_cpu = self._preload_segment_to_cpu(dl_test, segment_name="test")
-
-        if not self._can_activate_gpu_resident([test_cpu]):
-            return self._predict_streaming(dataset)
-
+        release_baseline = self._capture_gpu_phase_release_baseline()
+        predict_error = None
+        test_cpu = None
+        test_resident = None
+        data = None
+        feature = None
+        industry_ids = None
+        pred = None
         try:
-            test_resident = self._move_segment_to_gpu(test_cpu)
-        except RuntimeError as exc:
-            if self.device.type == "cuda":
-                torch.cuda.empty_cache()
-            self._loud_gpu_resident_fallback(
-                "efficient_gats_gpu_resident_predict_preload_failed",
-                error=str(exc),
-                **self._resident_estimate([test_cpu]),
-            )
-            return self._predict_streaming(dataset)
+            if not self.gpu_resident:
+                return self._predict_streaming(dataset)
 
-        self.GAT_model.eval()
-        preds = []
-        for data, industry_ids in self._iter_resident_batches(test_resident, shuffle=False, include_industry=True):
-            feature = data.narrow(2, 0, data.shape[2] - 1)
-            with torch.no_grad():
-                pred = self.GAT_model(feature, industry_ids=industry_ids).detach().cpu().numpy()
-            preds.append(pred)
+            dl_test = dataset.prepare("test", col_set=["feature", "label"], data_key=DataHandlerLP.DK_I)
+            dl_test.config(fillna_type="ffill+bfill")
+            test_cpu = self._preload_segment_to_cpu(dl_test, segment_name="test")
 
-        return pd.Series(np.concatenate(preds), index=dl_test.get_index())
+            if not self._can_activate_gpu_resident([test_cpu]):
+                return self._predict_streaming(dataset)
+
+            try:
+                test_resident = self._move_segment_to_gpu(test_cpu)
+            except RuntimeError as exc:
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
+                self._loud_gpu_resident_fallback(
+                    "efficient_gats_gpu_resident_predict_preload_failed",
+                    error=str(exc),
+                    **self._resident_estimate([test_cpu]),
+                )
+                return self._predict_streaming(dataset)
+
+            self.GAT_model.eval()
+            preds = []
+            for data, industry_ids in self._iter_resident_batches(
+                test_resident,
+                shuffle=False,
+                include_industry=True,
+            ):
+                feature = data.narrow(2, 0, data.shape[2] - 1)
+                with torch.no_grad():
+                    pred = self.GAT_model(feature, industry_ids=industry_ids).detach().cpu().numpy()
+                preds.append(pred)
+
+            return pd.Series(np.concatenate(preds), index=dl_test.get_index())
+        except Exception as exc:
+            predict_error = exc
+            raise
+        finally:
+            pred = None
+            feature = None
+            data = None
+            industry_ids = None
+            test_resident = None
+            test_cpu = None
+            gc.collect()
+            self._finalize_gpu_phase_release(release_baseline, predict_error=predict_error)
 
     def _predict_streaming(self, dataset):
         if not self._industry_side_channel_enabled():

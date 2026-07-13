@@ -8,7 +8,7 @@ from datetime import date, datetime
 from typing import Any
 
 from backend.services.miniqmt_execution_runtime.repository import MiniQMTExecutionRuntimeRepository
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 from .models import ExecutionPlan, SimulationBrokerBackend, SimulationDailyRun, SimulationDailyRunStatus
 from .repository import InMemorySimulationRuntimeRepository, SimulationRuntimeRepository
@@ -27,6 +27,20 @@ TERMINAL_RUN_STATUSES = frozenset(
         SimulationDailyRunStatus.CANCELLED,
     }
 )
+
+
+def _required_scheduler_status_mapping(status: dict[str, Any], key: str) -> dict[str, Any]:
+    value = status.get(key)
+    if not isinstance(value, dict):
+        raise RuntimeConfigInvalidError(
+            f"scheduler status {key} must be a mapping",
+            context={
+                "reason_code": "SIMULATION_SCHEDULER_STATUS_INVALID",
+                "stage": "SCHEDULER_STATUS_PROJECTION",
+                "field": key,
+            },
+        )
+    return dict(value)
 
 
 def _quote_evidence(event: Any) -> dict[str, Any] | None:
@@ -226,6 +240,14 @@ class SimulationRuntimeOpsService:
             "context_provider_mode": status.get("context_provider_mode"),
             "data_source": status.get("data_source"),
             "data_source_policy": status.get("data_source_policy") or {},
+            "miniqmt_quote_ingress_activation": _required_scheduler_status_mapping(
+                status,
+                "miniqmt_quote_ingress_activation",
+            ),
+            "b0_quote_v2_controllers": _required_scheduler_status_mapping(
+                status,
+                "b0_quote_v2_controllers",
+            ),
             "account_slot_persistence": {
                 "enabled": True,
                 "release_binding_columns": ["account_group_id", "strategy_slot_id"],

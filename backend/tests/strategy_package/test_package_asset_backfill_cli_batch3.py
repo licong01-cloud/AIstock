@@ -165,22 +165,42 @@ def test_env_loader_does_not_override_existing_env(tmp_path, monkeypatch: pytest
     env_file = tmp_path / ".env"
     env_file.write_text("TDX_DB_HOST=file-host\n", encoding="utf-8")
     monkeypatch.setenv("TDX_DB_HOST", "existing-host")
+    monkeypatch.setenv("AISTOCK_PACKAGE_ASSET_STORE_ROOT", "existing-assets")
 
     cli._load_env_file(env_file)  # noqa: SLF001
 
     assert os.environ["TDX_DB_HOST"] == "existing-host"
+    assert os.environ["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] == "existing-assets"
 
 
-def test_env_loader_ignores_missing_comments_and_malformed_lines(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+def test_env_loader_uses_env_file_project_root_for_package_assets(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     cli._load_env_file(None)  # noqa: SLF001
     cli._load_env_file(tmp_path / "missing.env")  # noqa: SLF001
     env_file = tmp_path / ".env"
-    env_file.write_text("\n# comment\nBAD\nTDX_DB_NAME='scratch'\n", encoding="utf-8")
+    env_file.write_text("\n# comment\nTDX_DB_NAME='scratch'\n", encoding="utf-8")
     monkeypatch.delenv("TDX_DB_NAME", raising=False)
+    monkeypatch.delenv("AISTOCK_PACKAGE_ASSET_STORE_ROOT", raising=False)
 
     cli._load_env_file(env_file)  # noqa: SLF001
 
     assert os.environ["TDX_DB_NAME"] == "scratch"
+    assert os.environ["AISTOCK_PACKAGE_ASSET_STORE_ROOT"] == str(
+        tmp_path / "rdagent_assets" / "package_assets"
+    )
+
+
+def test_env_loader_rejects_malformed_env_instead_of_using_partial_values(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # noqa: ANN001
+    env_file = tmp_path / ".env"
+    env_file.write_text("TDX_DB_HOST='valid'\nBROKEN_KEY\n", encoding="utf-8")
+    monkeypatch.delenv("TDX_DB_HOST", raising=False)
+
+    with pytest.raises(RuntimeError, match="CONFIG_ENV_VALUE_MISSING"):
+        cli._load_env_file(env_file)  # noqa: SLF001
+
+    assert "TDX_DB_HOST" not in os.environ
 
 
 def test_env_conn_factory_sets_readonly_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:

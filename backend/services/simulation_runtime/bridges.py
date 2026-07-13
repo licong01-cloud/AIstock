@@ -148,9 +148,11 @@ class MiniQMTExecutionBridge:
         *,
         managed_order_service: QmtManagedOrderService,
         runtime_client: MiniQMTExecutionRuntimeClient | None = None,
+        b0_quote_v2_controller_factory: Any | None = None,
     ) -> None:
         self._managed_order_service = managed_order_service
         self._runtime_client = runtime_client or MiniQMTExecutionRuntimeClient()
+        self._b0_quote_v2_controller_factory = b0_quote_v2_controller_factory
 
     def build_managed_order_requests(
         self,
@@ -346,6 +348,7 @@ class MiniQMTExecutionBridge:
             repository=self._runtime_client.repository,
             strategy_ledger_repository=strategy_ledger_repository,
             runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
         )
         return event_loop_client.submit_event_loop_vnpy_parent_intents(
             parent_intents=vnpy_kwargs["parent_intents"],
@@ -418,6 +421,7 @@ class MiniQMTExecutionBridge:
             repository=self._runtime_client.repository,
             strategy_ledger_repository=strategy_ledger_repository,
             runtime_kind=MiniQMTExecutionRuntimeKind.EVENT_LOOP,
+            b0_quote_v2_controller_factory=self._b0_quote_v2_controller_factory,
         )
         return event_loop_client.drive_event_loop_ticks(
             account_group_id=str(vnpy_kwargs["account_group_id"]),
@@ -429,6 +433,7 @@ class MiniQMTExecutionBridge:
             order_remark_prefix=str(kwargs.get("order_remark_prefix") or binding.order_remark_prefix or "aistock"),
             account_id=str(binding.broker_account_id or ""),
             quote_provider=None,
+            policy_context=vnpy_kwargs["policy_context"],
             managed_request_factory=vnpy_kwargs["managed_request_factory"],
             managed_order_service=self._managed_order_service,
             as_of_time=as_of_time,
@@ -740,6 +745,7 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
     if not is_vnpy_style_algo(algo_code):
         return None
     policy_json = {**dict(policy_json), "algo_code": algo_code}
+    quote_control = plan.plan_payload_json.get("quote_control")
     return {
         "validated_execution_policy_id": str(
             payload.get("validated_execution_policy_id")
@@ -755,6 +761,7 @@ def _vnpy_policy_context_from_plan(plan: ExecutionPlan) -> dict[str, Any] | None
         "algo_code": algo_code,
         "policy_json": policy_json,
         "source": "simulation_runtime_execution_plan",
+        **({"quote_control": dict(quote_control)} if isinstance(quote_control, dict) else {}),
     }
 
 
