@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/stock_universe_pit_service.py",
     "backend/services/quantevolver/config_composer.py",
+    "scripts/build_stock_universe_pit_spans.py",
     "backend/tests/test_stock_universe_pit_service.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
     "tests/aistock_validation/bugs/20260713_BUG-635-st-pit-qe.json",
