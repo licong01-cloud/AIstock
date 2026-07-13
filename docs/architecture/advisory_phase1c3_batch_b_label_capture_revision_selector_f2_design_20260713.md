@@ -608,6 +608,10 @@ SelectedLabelMappingRepository
 任何异常都不得返回 COMPLETE。已经持久化的 CAS blob、label version 或 mapping 保持不可变，显式
 recovery batch 通过 request hash 复用它们；禁止回滚成旧 revision或覆盖首次 locator。
 
+`LabelBuilder.run()` 在异常边界只输出一条包含 `capture_batch_id`、稳定 `reason_code`、异常类型和
+traceback 的 ERROR 日志；仅当 FAILED 状态转换自身失败时再输出一条专用 ERROR 日志。成功路径、
+逐候选路径和校验通过路径不输出日志，也不记录完整 payload，避免无诊断价值的日志噪声。
+
 ### 7.3 PENDING 后成熟修订
 
 - 使用新的 `label_as_of_ts` 和新的 exact label SourceRevisionSet；
@@ -805,18 +809,18 @@ Batch B 没有生产数据或 schema side effect。代码 rollback 只能通过�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | planned `label_capture.py` admission context and existing observation/capture models | historic identity/hash parity fixtures | design_ready | none |
-| F-102 | planned exact v1 preservation in `capture_foundation.py` | existing v1 model dump/canonical bytes/hash/state regression | design_ready | none |
-| F-103 | planned `build_label_capture_binding()`、`LabelCaptureBinding` and `LabelCaptureBatchRequestV2` | local model validation plus admission-context set count/hash closure, canonical hash/recovery/different-batch identity fixtures | design_ready | none |
-| F-104 | Batch B in-memory dispatch; Batch C Postgres discriminator/migration | changed SQL zero-diff in Batch B; Batch C ownership assertion | design_ready | none |
-| F-105 | planned candidate enumerator in `label_builder.py` | full-depth/rank/symbol/single/multi-alpha/empty fixtures | design_ready | none |
-| F-106 | planned universe plan/raw row/coverage contracts | exact-source/parity/empty/denominator fixtures | design_ready | none |
-| F-107 | planned append/version/header/payload in-memory repository | serial/concurrent/URI/fork/gap/transition tests | design_ready | none |
-| F-108 | planned label selector and immutable mapping repository | as-of terminal/exact/latest/no-fallback tests | design_ready | none |
-| F-109 | planned LabelBuilder orchestration | real local CAS plus legal COMPLETE and explicit gap fixtures | design_ready | none |
-| F-110 | frozen shared boundary and no runtime registration | zero-diff/import and CI/nightly receipts | design_ready | none |
-| F-111 | §5 WSL-only future training constraint; Batch B training N/A | training API/Windows training path static scan | design_ready | none |
-| F-112 | §3/§8/§11/§13 | approval/auth/current-control/silent-fallback/DESIGN-COMPLIANCE scan | design_ready | none |
+| F-101 | `label_capture.py` admission context; existing observation/capture contracts | immutable object canonical revalidation; sealed request/source-plan substitution rejection; historic identity/source receipt fixtures | batch_b_verified | none |
+| F-102 | `capture_foundation.py` exact v1 preservation plus v2 in-memory union | existing v1 capture regression; v2 tagged parser/create/acquire/membership/complete/recover fixtures | batch_b_verified | none |
+| F-103 | `build_label_capture_binding()`、`LabelCaptureBinding` and `LabelCaptureBatchRequestV2` | local field/hash checks; admission-context set closure; canonical recovery identity and drift fixtures | batch_b_verified | none |
+| F-104 | Batch B in-memory dispatch only; no changed PostgreSQL path | changed-file/forbidden-import scan; v2 Postgres/migration remains Batch C | batch_b_verified | none |
+| F-105 | `label_builder.py` alpha_raw enumerator | rank/symbol/stage bundle; native multi-alpha legs with different lookback/window and component evidence membership; valid/invalid empty candidate fixtures | batch_b_verified | none |
+| F-106 | universe constituent/plan/raw-row/coverage contracts | Builder-side frozen constituent reconstruction; canonical tamper, exact source binding, duplicate/policy conflict and denominator fixtures | batch_b_verified | none |
+| F-107 | append/version/header/payload in-memory repository | serial/concurrent/URI retry, Builder terminal predecessor/recovery reuse, stale predecessor, transition and closure fixtures | batch_b_verified | none |
+| F-108 | terminal-first selector and immutable mapping repository | canonical selector revalidation; as-of terminal, exact mismatch, unavailable no-fallback, reason normalization/hash and collision fixtures | batch_b_verified | none |
+| F-109 | `LabelBuilder` orchestration | real local CAS; observation/stage/component/label/mapping/universe membership closure; legal COMPLETE, explicit gap, failed-capture and concise diagnostic-log fixtures | batch_b_verified | none |
+| F-110 | frozen shared boundary and no runtime registration | changed-file scope, import scan, Advisory Phase 1 regression (173 passed, 3 skipped) | batch_b_verified | none |
+| F-111 | §5 WSL-only future training constraint; Batch B training N/A | training API/Windows training static scan; no training code path | batch_b_verified | none |
+| F-112 | §3/§8/§11/§13 | approval/auth/current-control/silent-fallback/DESIGN-COMPLIANCE scan; automatic legal COMPLETE fixtures | batch_b_verified | none |
 
 ## 17. Production Gates / 生产状态（全部 noop，不新增门禁）
 
@@ -837,7 +841,12 @@ selection_paper_simulation_qmt_impact = none
 门禁。未来若确需新增运行时环境拒绝机制，必须先单独描述检查位置、触发条件、合法输入可通过证明和
 业务影响，等待用户确认；Batch B 不实现该机制。
 
-## 18. 开工条件
+## 18. Batch B 实现状态
+
+本分支已完成 B1-B4 的纯 Python/in-memory 实现和本地验证；它仍待独立代码审查、提交和合入。
+Batch C/D、任何 PostgreSQL migration/DDL、runtime activation、模型训练和共享消费者接线均未开始。
+
+## 19. 开发前置条件（历史记录，已满足）
 
 进入 Batch B 代码开发前必须同时满足：
 
@@ -845,7 +854,9 @@ selection_paper_simulation_qmt_impact = none
 - 父级 Batch B/Batch C 边界已同步；
 - F-101..F-112 均有 matrix row 且无未批准偏差；
 - 当前 `main` 包含 Batch A merge commit；
-- worktree 从最新 `origin/main` 创建；
+- worktree 基于开工时的 `origin/main` 创建；在后续提交/合入前需按仓库流程同步当时的
+  `origin/main`，该项不是运行时业务门禁；
 - 无需 DDL、数据库写入、服务重启或训练环境准备。
 
-满足以上条件只表示 Batch B 可以开工，不表示 Batch B 或 Phase 1C-3 已实现完成。
+这些条件曾表示 Batch B 可以开工；当前仅证明 Batch B 已完成本分支的实现和验证，不表示
+Phase 1C-3 已完成。
