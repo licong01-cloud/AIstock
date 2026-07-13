@@ -760,22 +760,22 @@ DDL 前全库备份。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-201 | planned `capture_foundation.py`; capture migration | v1 bytes/hash/SQL/readback golden; discriminator negative | design_ready | none |
-| F-202 | planned typed Postgres create/recover/load | v2 positive/recovery; no-plan/current-control import scan | design_ready | none |
-| F-203 | planned `label_builder_postgres.py` | serial/concurrent retry, predecessor/transition/collision | design_ready | none |
-| F-204 | planned header/payload tables/triggers | commit closure, direct mutation, missing partition L4 | design_ready | none |
-| F-205 | planned evidence reader/blob repository | exact read/hash/size/backend and missing/corrupt negative | design_ready | none |
-| F-206 | planned `dataset_build.py` | canonical hash/generation/base admission fixtures | design_ready | none |
-| F-207 | planned build/attempt repositories | full reachability, lease/fencing/recover/terminate | design_ready | none |
-| F-208 | planned file/event/gap repositories | exact retry, ordinal/path/file-set fork negative | design_ready | none |
-| F-209 | planned Batch C build foundation service | real-file REQUESTED->MATERIALIZED->VERIFIED golden | design_ready | none |
-| F-210 | verify profile contract | Batch C profile rejected by PROMOTE/SEAL; Batch D profile required | design_ready | none |
-| F-211 | planned snapshot/blob/ref/invalidation schema/repositories | composite FK/base invalidation/aggregate transaction L4 | design_ready | none |
-| F-212 | planned migration/rollback | apply twice/readback/negative/refuse-nonempty/rollback/v1 positive | design_ready | none |
-| F-213 | §12 reason/logging contract | forbidden fallback scan; unknown DB invariant propagation | design_ready | none |
-| F-214 | §2/§3/§11/§17 | approval/auth/role/grant/revoke/manual gate scan | design_ready | none |
-| F-215 | §2.3 frozen boundary | zero-diff/import/runtime registration regression | design_ready | none |
-| F-216 | §3/§17 training boundary | training API/Windows training path scan | design_ready | none |
+| F-201 | `capture_foundation.py`; Batch C migration | existing v1/v2 pure regression and PostgreSQL discriminator DEV L4; 191-test matrix passed | verified | none |
+| F-202 | `capture_foundation.py` typed Postgres create/recover/load | v2 in-memory contract and PostgreSQL readback DEV L4 passed | verified | none |
+| F-203 | `label_builder_postgres.py`; evidence readback before append | canonical append/revision/evidence logic and PostgreSQL schema L4 passed | verified | none |
+| F-204 | migration header/payload/owner/blob-size triggers | apply/readback, closure and direct mutation DEV L4 passed | verified | none |
+| F-205 | `calculation_evidence.py`; `label_builder_postgres.py` | exact read/hash/size/root and DB composite blob identity matrix passed | verified | none |
+| F-206 | complete frozen request identities; transactional capture admission | canonical request/generation/predecessor and DB admission matrix passed | verified | none |
+| F-207 | explicit expire/recover/heartbeat and build-attempt closure | lease/fencing/recover/heartbeat and DB transition matrix passed | verified | none |
+| F-208 | exact event readback; file/event/gap persistence | exact retry/file-set fork and DB append-only matrix passed | verified | none |
+| F-209 | `dataset_build.py` real-file verifier | automatic real-file REQUESTED->MATERIALIZED->VERIFIED fixture | verified | none |
+| F-210 | verification and promotion closure discriminators | Batch C contract cannot form promoted/sealed success without Batch D receipts | verified | none |
+| F-211 | snapshot aggregate closure; shared invalidation locks; exact retry readback | aggregate/base-invalidation contracts and PostgreSQL DEV L4 passed | verified | none |
+| F-212 | idempotent migration/rollback pair; expanded DEV L4 | apply twice, direct mutation, state jump, orphan attempt, incomplete snapshot and rollback passed | verified | none |
+| F-213 | structured repository database diagnostics | no fallback scan; complete Advisory DEV matrix 191 passed | verified | none |
+| F-214 | changed-file/migration scan | no role/auth/approval/grant/revoke implementation | verified | none |
+| F-215 | changed-file scope | frozen shared runtime files zero diff; complete Advisory DEV matrix 191 passed | verified | none |
+| F-216 | changed-file/training API scan | no training API or Windows training path | verified | none |
 
 ## 20. DESIGN-COMPLIANCE-001
 

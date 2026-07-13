@@ -12,7 +12,7 @@ from enum import Enum
 import logging
 from math import isfinite
 from threading import RLock
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -459,6 +459,16 @@ def _validate_header_payload(
             REASON_LABEL_HEADER_PAYLOAD_CLOSURE_INVALID,
             "label authority header and payload do not close over one immutable version",
         )
+
+
+class OutcomeLabelRepository(Protocol):
+    """One logical authority contract shared by in-memory and PostgreSQL repositories."""
+
+    def append(self, *, request: LabelAppendRequest, created_by_capture_batch_id: str) -> OutcomeLabelVersion: ...
+    def get(self, label_version_id: str) -> OutcomeLabelVersion | None: ...
+    def chain_for(self, label_key: str) -> tuple[OutcomeLabelVersion, ...]: ...
+    def header_for(self, label_version_id: str) -> OutcomeLabelAuthorityHeader | None: ...
+    def payload_for(self, label_version_id: str) -> OutcomeLabelPayload | None: ...
 
 
 _ALLOWED_TRANSITIONS: dict[MaturityStatus, frozenset[MaturityStatus]] = {

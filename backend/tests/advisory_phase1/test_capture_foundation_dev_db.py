@@ -40,6 +40,8 @@ from backend.services.advisory_phase1.trace_outbox import ExpectedTraceIdentity,
 _ENV_FILE = Path("F:/Dev/AIstock/.env")
 _MIGRATION = Path("backend/db/migrations/add_advisory_phase1_capture_foundation_20260713.sql")
 _ROLLBACK = Path("backend/db/migrations/add_advisory_phase1_capture_foundation_20260713.rollback.sql")
+_BATCH_C_MIGRATION = Path("backend/db/migrations/add_advisory_phase1c3_label_snapshot_foundation_20260713.sql")
+_BATCH_C_ROLLBACK = Path("backend/db/migrations/add_advisory_phase1c3_label_snapshot_foundation_20260713.rollback.sql")
 _NOW = datetime(2026, 7, 13, 2, 0, tzinfo=timezone.utc)
 
 
@@ -267,10 +269,13 @@ def test_capture_foundation_l4_dev_db_apply_readback_and_rollback() -> None:
     conn = psycopg2.connect(**_dev_dsn(), connect_timeout=5)
     conn.autocommit = True
     applied = False
+    applied_batch_c = False
     try:
         _apply_sql(conn, _ROLLBACK)
         _apply_sql(conn, _MIGRATION)
         applied = True
+        _apply_sql(conn, _BATCH_C_MIGRATION)
+        applied_batch_c = True
         conn.autocommit = False
 
         @contextmanager
@@ -412,6 +417,10 @@ def test_capture_foundation_l4_dev_db_apply_readback_and_rollback() -> None:
             conn.rollback()
     finally:
         try:
+            if applied_batch_c:
+                conn.rollback()
+                conn.autocommit = True
+                _apply_sql(conn, _BATCH_C_ROLLBACK)
             if applied:
                 conn.rollback()
                 conn.autocommit = True

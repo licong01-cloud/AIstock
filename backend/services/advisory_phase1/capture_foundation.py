@@ -270,6 +270,34 @@ def capture_request_hash(request: CaptureBatchRequestLike) -> str:
     return str(request.capture_request_hash)
 
 
+def _capture_binding_payload(request: CaptureBatchRequestLike) -> dict[str, Any]:
+    """Return the persisted binding payload for one explicitly typed request."""
+
+    return request.binding.model_dump(mode="json")
+
+
+def _capture_control_binding_event_hash(request: CaptureBatchRequestLike) -> str:
+    """Persist historical control provenance without reading current control state."""
+
+    if isinstance(request, CaptureBatchRequest):
+        return request.binding.control_binding_event_hash
+    if isinstance(request, LabelCaptureBatchRequestV2):
+        return request.binding.source_control_binding_event_hash
+    raise TypeError(f"unsupported capture request type: {type(request)!r}")
+
+
+def _capture_handoff_readiness_hash(request: CaptureBatchRequestLike) -> str:
+    return request.binding.handoff_readiness_hash
+
+
+def _capture_admission_scope_id(request: CaptureBatchRequestLike) -> str:
+    return request.binding.admission_scope_id
+
+
+def _capture_admission_scope_hash(request: CaptureBatchRequestLike) -> str:
+    return request.binding.admission_scope_hash
+
+
 def parse_capture_batch_request_payload(payload: Mapping[str, Any]) -> CaptureBatchRequestLike:
     """Parse one explicitly tagged raw payload without a schema fallback path.
 
@@ -377,7 +405,7 @@ class TraceCaptureGap(BaseModel):
 
 
 class CaptureBatchRepository(Protocol):
-    def create(self, request: CaptureBatchRequest) -> CaptureBatch: ...
+    def create(self, request: CaptureBatchRequestLike) -> CaptureBatch: ...
 
     def acquire(self, *, capture_batch_id: str, expected_row_version: int, lease_seconds: int) -> CaptureBatch: ...
 
@@ -406,7 +434,7 @@ class CaptureBatchRepository(Protocol):
     def recover(
         self,
         *,
-        request: CaptureBatchRequest,
+        request: CaptureBatchRequestLike,
         predecessor_capture_batch_id: str,
         expected_predecessor_row_version: int,
         predecessor_fencing_token: int,
@@ -470,6 +498,11 @@ class InMemoryCaptureBatchRepository:
             raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture recovery requires a terminal predecessor")
         if capture_request_hash(predecessor.request) != capture_request_hash(request):
             raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor semantics")
+        if (
+            capture_request_schema(predecessor.request) != capture_request_schema(request)
+            or capture_request_purpose(predecessor.request) != capture_request_purpose(request)
+        ):
+            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor schema")
         if request.capture_batch_id in self._batches:
             existing = self._batches[request.capture_batch_id]
             if existing.predecessor_capture_batch_id == predecessor_capture_batch_id and existing.request == request:
@@ -730,7 +763,7 @@ class PostgresCaptureBatchRepository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or _transactional_conn_factory
 
-    def create(self, request: CaptureBatchRequest) -> CaptureBatch:
+    def create(self, request: CaptureBatchRequestLike) -> CaptureBatch:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -745,7 +778,7 @@ class PostgresCaptureBatchRepository:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture batch id has different content")
                 cur.execute(
                     "SELECT 1 FROM app.advisory_capture_batch WHERE capture_request_hash = %s FOR UPDATE",
-                    (request.capture_request_hash,),
+                    (capture_request_hash(request),),
                 )
                 if cur.fetchone() is not None:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture retry requires explicit recovery from its predecessor")
@@ -755,23 +788,27 @@ class PostgresCaptureBatchRepository:
                         INSERT INTO app.advisory_capture_batch (
                             capture_batch_id, capture_request_hash, request_payload_jsonb, binding_jsonb,
                             control_binding_event_hash, handoff_readiness_hash, admission_scope_id,
-                            admission_scope_hash, capture_status, row_version, fencing_token, capture_attempt_no
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, 1)
+                            admission_scope_hash, capture_request_schema_version, capture_purpose,
+                            capture_status, row_version, fencing_token, capture_attempt_no
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, 1)
                         RETURNING *
                         """,
                         (
                             request.capture_batch_id,
-                            request.capture_request_hash,
+                            capture_request_hash(request),
                             psycopg2.extras.Json(canonicalize(request.canonical_payload())),
-                            psycopg2.extras.Json(canonicalize(request.binding.model_dump(mode="json"))),
-                            request.binding.control_binding_event_hash,
-                            request.binding.handoff_readiness_hash,
-                            request.binding.admission_scope_id,
-                            request.binding.admission_scope_hash,
+                            psycopg2.extras.Json(canonicalize(_capture_binding_payload(request))),
+                            _capture_control_binding_event_hash(request),
+                            _capture_handoff_readiness_hash(request),
+                            _capture_admission_scope_id(request),
+                            _capture_admission_scope_hash(request),
+                            capture_request_schema(request),
+                            capture_request_purpose(request),
                         ),
                     )
                     row = dict(cur.fetchone())
-                    self._insert_plans(cur, request)
+                    if isinstance(request, CaptureBatchRequest):
+                        self._insert_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "database rejected capture batch identity") from exc
                 return self._load_locked(cur, row)
@@ -944,7 +981,7 @@ class PostgresCaptureBatchRepository:
     def recover(
         self,
         *,
-        request: CaptureBatchRequest,
+        request: CaptureBatchRequestLike,
         predecessor_capture_batch_id: str,
         expected_predecessor_row_version: int,
         predecessor_fencing_token: int,
@@ -961,14 +998,19 @@ class PostgresCaptureBatchRepository:
                     CaptureBatchStatus.ABORTED.value,
                 }:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_STATE_INVALID, "capture recovery requires a terminal predecessor")
-                if str(predecessor["capture_request_hash"]) != request.capture_request_hash:
+                if str(predecessor["capture_request_hash"]) != capture_request_hash(request):
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor semantics")
+                if (
+                    str(predecessor["capture_request_schema_version"]) != capture_request_schema(request)
+                    or str(predecessor["capture_purpose"]) != capture_request_purpose(request)
+                ):
+                    raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "capture recovery request does not match predecessor schema")
                 cur.execute(
                     """
                     SELECT 1 FROM app.advisory_capture_batch
                     WHERE capture_request_hash = %s AND capture_status IN ('PLANNED', 'RUNNING') FOR UPDATE
                     """,
-                    (request.capture_request_hash,),
+                    (capture_request_hash(request),),
                 )
                 if cur.fetchone() is not None:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "same capture request already has an active batch")
@@ -985,26 +1027,30 @@ class PostgresCaptureBatchRepository:
                         INSERT INTO app.advisory_capture_batch (
                             capture_batch_id, capture_request_hash, request_payload_jsonb, binding_jsonb,
                             control_binding_event_hash, handoff_readiness_hash, admission_scope_id,
-                            admission_scope_hash, capture_status, row_version, fencing_token,
-                            capture_attempt_no, predecessor_capture_batch_id
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, %s, %s)
+                            admission_scope_hash, capture_request_schema_version, capture_purpose,
+                            capture_status, row_version, fencing_token, capture_attempt_no,
+                            predecessor_capture_batch_id
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', 1, 1, %s, %s)
                         RETURNING *
                         """,
                         (
                             request.capture_batch_id,
-                            request.capture_request_hash,
+                            capture_request_hash(request),
                             psycopg2.extras.Json(canonicalize(request.canonical_payload())),
-                            psycopg2.extras.Json(canonicalize(request.binding.model_dump(mode="json"))),
-                            request.binding.control_binding_event_hash,
-                            request.binding.handoff_readiness_hash,
-                            request.binding.admission_scope_id,
-                            request.binding.admission_scope_hash,
+                            psycopg2.extras.Json(canonicalize(_capture_binding_payload(request))),
+                            _capture_control_binding_event_hash(request),
+                            _capture_handoff_readiness_hash(request),
+                            _capture_admission_scope_id(request),
+                            _capture_admission_scope_hash(request),
+                            capture_request_schema(request),
+                            capture_request_purpose(request),
                             next_attempt,
                             predecessor_capture_batch_id,
                         ),
                     )
                     row = dict(cur.fetchone())
-                    self._insert_plans(cur, request)
+                    if isinstance(request, CaptureBatchRequest):
+                        self._insert_plans(cur, request)
                 except psycopg2.IntegrityError as exc:
                     raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "database rejected capture recovery") from exc
                 return self._load_locked(cur, row)
@@ -1083,20 +1129,42 @@ class PostgresCaptureBatchRepository:
 
     @staticmethod
     def _load_locked(cur: Any, row: Mapping[str, Any]) -> CaptureBatch:
-        cur.execute(
-            "SELECT * FROM app.advisory_capture_plan WHERE capture_batch_id = %s ORDER BY plan_hash FOR KEY SHARE",
-            (row["capture_batch_id"],),
-        )
-        plans = tuple(
-            CapturePlan.model_validate(canonicalize(dict(item["plan_payload_jsonb"])))
-            for item in cur.fetchall()
-        )
-        request = CaptureBatchRequest(
-            capture_batch_id=str(row["capture_batch_id"]),
-            binding=TraceCaptureBinding.model_validate(canonicalize(dict(row["binding_jsonb"]))),
-            plans=plans,
-            capture_request_hash=str(row["capture_request_hash"]),
-        )
+        schema_version = str(row["capture_request_schema_version"])
+        purpose = str(row["capture_purpose"])
+        payload = canonicalize(dict(row["request_payload_jsonb"]))
+        binding_payload = canonicalize(dict(row["binding_jsonb"]))
+        if schema_version == CAPTURE_BATCH_SCHEMA_VERSION and purpose == OBSERVATION_CAPTURE_PURPOSE:
+            cur.execute(
+                "SELECT * FROM app.advisory_capture_plan WHERE capture_batch_id = %s ORDER BY plan_hash FOR KEY SHARE",
+                (row["capture_batch_id"],),
+            )
+            plans = tuple(
+                CapturePlan.model_validate(canonicalize(dict(item["plan_payload_jsonb"])))
+                for item in cur.fetchall()
+            )
+            if not plans:
+                raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "v1 capture batch is missing capture plans")
+            request = CaptureBatchRequest(
+                capture_batch_id=str(row["capture_batch_id"]),
+                binding=TraceCaptureBinding.model_validate(binding_payload),
+                plans=plans,
+                capture_request_hash=str(row["capture_request_hash"]),
+            )
+        elif schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION and purpose == LABEL_CAPTURE_PURPOSE:
+            cur.execute(
+                "SELECT 1 FROM app.advisory_capture_plan WHERE capture_batch_id = %s FOR KEY SHARE",
+                (row["capture_batch_id"],),
+            )
+            if cur.fetchone() is not None:
+                raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "v2 label capture batch cannot contain capture plans")
+            payload["binding"] = binding_payload
+            payload["capture_batch_id"] = str(row["capture_batch_id"])
+            payload["capture_request_hash"] = str(row["capture_request_hash"])
+            request = LabelCaptureBatchRequestV2.model_validate(payload)
+        else:
+            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "unsupported persisted capture schema or purpose")
+        if capture_request_hash(request) != str(row["capture_request_hash"]):
+            raise SourceLedgerError(REASON_CAPTURE_BATCH_CONFLICT, "persisted capture request hash does not match payload")
         return CaptureBatch(
             request=request,
             status=CaptureBatchStatus(str(row["capture_status"])),
