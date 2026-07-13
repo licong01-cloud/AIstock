@@ -405,19 +405,21 @@ class QERuntimeResourceMonitor:
                 return
             terminal = "completed" if status == "completed" else "failed"
             if error:
-                self._phase.metadata["terminal_error"] = error
+                self._phase.metadata["terminal_error_type"] = error
             self._publish_current(terminal)
             terminal_event = self._base_event(terminal, terminal)
             terminal_event["reason_code"] = (
                 "QE_RESOURCE_RUN_COMPLETED" if terminal == "completed" else "QE_RESOURCE_RUN_FAILED"
             )
             if error:
-                terminal_event["metadata"] = {"error": error}
+                terminal_event["metadata"] = {"error_type": error}
             self._publish(terminal_event)
             self._finished = True
             self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(2.0, self.sample_interval * 2))
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                print("[ERROR] reason_code=QE_RESOURCE_SAMPLER_STOP_TIMEOUT")
         self._write_local()
 
     def _publish_current(self, phase_status: str) -> None:
@@ -468,7 +470,7 @@ class QERuntimeResourceMonitor:
                     timeout=self.upload_timeout,
                 )
                 if response.status_code >= 400:
-                    raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+                    raise RuntimeError(f"HTTP_{response.status_code}")
                 self._sequence_no = int(event["sequence_no"])
                 self._events.append(dict(event))
                 self._write_local()
@@ -478,23 +480,25 @@ class QERuntimeResourceMonitor:
                 if attempt < 3:
                     time.sleep(min(2.0, 0.25 * (2 ** (attempt - 1))))
         self._upload_broken = True
+        error_type = type(error).__name__ if error is not None else "UnknownError"
         marker = {
             "schema_version": "qe_runtime_resource_upload_failure_v1",
             "reason_code": "QE_RESOURCE_EVENT_UPLOAD_FAILED",
             "session_id": self.session_id,
             "sequence_no": event.get("sequence_no"),
             "phase": event.get("phase"),
-            "error": f"{type(error).__name__}: {error}",
+            "error_type": error_type,
+            "retry_attempts": 3,
             "written_at": _utc_now(),
         }
         _atomic_json(Path.cwd() / UPLOAD_FAILURE_FILE, marker)
         failed_event = dict(event)
-        failed_event["upload_error"] = marker["error"]
+        failed_event["upload_error_type"] = error_type
         self._events.append(failed_event)
         self._write_local()
         print(
             "[ERROR] reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED "
-            f"session_id={self.session_id} phase={event.get('phase')} error={marker['error']}"
+            f"session_id={self.session_id} phase={event.get('phase')} error_type={error_type}"
         )
 
     def _write_local(self) -> None:

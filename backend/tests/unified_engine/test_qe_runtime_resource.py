@@ -90,7 +90,7 @@ def test_runtime_resource_upload_failure_is_loud_and_release_remains_closed(monk
     qrr._RESOURCE_SECRET_CACHE = None
 
     def failing_post(*_args, **_kwargs):
-        raise TimeoutError("backend unavailable")
+        raise TimeoutError("backend unavailable X-QE-Resource-Token=secret-token")
 
     monkeypatch.setattr(qrr.requests, "post", failing_post)
     monkeypatch.setattr(
@@ -118,4 +118,11 @@ def test_runtime_resource_upload_failure_is_loud_and_release_remains_closed(monk
     assert released is False
     failure = json.loads((tmp_path / qrr.UPLOAD_FAILURE_FILE).read_text(encoding="utf-8"))
     assert failure["reason_code"] == "QE_RESOURCE_EVENT_UPLOAD_FAILED"
-    assert "reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED" in capsys.readouterr().out
+    assert failure["error_type"] == "TimeoutError"
+    failure_text = json.dumps(failure)
+    resource_text = (tmp_path / qrr.RESOURCE_FILE).read_text(encoding="utf-8")
+    console_text = capsys.readouterr().out
+    assert "secret-token" not in failure_text
+    assert "secret-token" not in resource_text
+    assert "secret-token" not in console_text
+    assert "reason_code=QE_RESOURCE_EVENT_UPLOAD_FAILED" in console_text

@@ -1436,7 +1436,7 @@ def main():
     try:
         _run_main(args)
     except Exception as exc:
-        finish_resource_monitor(status="failed", error=f"{type(exc).__name__}: {exc}")
+        finish_resource_monitor(status="failed", error=type(exc).__name__)
         raise
     else:
         finish_resource_monitor(status="completed")
