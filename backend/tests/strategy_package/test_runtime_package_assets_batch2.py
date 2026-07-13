@@ -394,6 +394,25 @@ def test_selection_health_marks_missing_package_model_code_not_runnable(tmp_path
     assert blocked["context"]["missing_relative_paths"] == ["model.py"]
 
 
+def test_selection_health_does_not_fallback_when_package_preflight_is_unavailable(tmp_path: Path) -> None:
+    store = LocalPackageAssetStore(tmp_path / "asset_store")
+    manifest = _frozen_manifest(store)
+    package_repo = InMemoryStrategyPackageRepository()
+    record = package_repo.save_manifest(manifest)
+
+    class ResolverWithoutPreflight:
+        def load_source_for_strategy_package(self, **_kwargs: Any) -> None:
+            raise AssertionError("package-owned assets must not fall back to source loading")
+
+    health = SelectionPackageHealthService(runtime_source_resolver=ResolverWithoutPreflight()).summarize(record)
+
+    assert health["status"] == "BLOCKED"
+    assert health["runnable"] is False
+    blocked = next(item for item in health["checks"] if item["name"] == "live_inference_preflight")
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["context"]["reason_code"] == "live_inference_preflight_unavailable"
+
+
 def test_package_asset_params_with_model_code_materialize_successfully(tmp_path: Path) -> None:
     store = LocalPackageAssetStore(tmp_path / "asset_store")
     model_py = b"class LSTM_10D_hs64_d02:\n    pass\nmodel_cls = LSTM_10D_hs64_d02\n"

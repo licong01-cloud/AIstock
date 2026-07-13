@@ -73,17 +73,25 @@ class SelectionPackageHealthService:
                     },
                 }
             )
-        elif self._auto_generate(config) or self._has_package_owned_runtime_assets(manifest):
-            checks.append(self._source_resolution_check(record, runtime_config=config))
         else:
-            checks.append(
-                {
-                    "name": "source_resolves",
-                    "status": UNKNOWN,
-                    "message": "not checked until live artifact auto-generation is requested",
-                    "context": {},
-                }
-            )
+            package_owned_runtime_assets = self._has_package_owned_runtime_assets(manifest)
+            if self._auto_generate(config) or package_owned_runtime_assets:
+                checks.append(
+                    self._source_resolution_check(
+                        record,
+                        runtime_config=config,
+                        require_preflight=package_owned_runtime_assets,
+                    )
+                )
+            else:
+                checks.append(
+                    {
+                        "name": "source_resolves",
+                        "status": UNKNOWN,
+                        "message": "not checked until live artifact auto-generation is requested",
+                        "context": {},
+                    }
+                )
 
         checks.extend(self._deferred_runtime_checks(self._hmm_artifact_check(manifest, config, trade_date)))
         extra_checks: list[dict[str, Any]] = []
@@ -141,10 +149,7 @@ class SelectionPackageHealthService:
 
     @staticmethod
     def _has_package_owned_runtime_assets(manifest: Any) -> bool:
-        try:
-            return manifest_has_frozen_runtime_assets(manifest)
-        except Exception:
-            return False
+        return manifest_has_frozen_runtime_assets(manifest) or getattr(manifest, "runtime_assets", None) is not None
 
     @staticmethod
     def _contract_check(manifest: Any) -> dict[str, Any]:
@@ -334,7 +339,13 @@ class SelectionPackageHealthService:
             },
         }
 
-    def _source_resolution_check(self, record: Any, *, runtime_config: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _source_resolution_check(
+        self,
+        record: Any,
+        *,
+        runtime_config: dict[str, Any] | None = None,
+        require_preflight: bool = False,
+    ) -> dict[str, Any]:
         if self.runtime_source_resolver is None:
             return {
                 "name": "source_resolves",
@@ -387,6 +398,22 @@ class SelectionPackageHealthService:
                     },
                 }
 
+            if require_preflight:
+                return {
+                    "name": "live_inference_preflight",
+                    "status": BLOCKED,
+                    "severity": "runtime_blocker",
+                    "message": "package-owned runtime assets require live inference preflight support",
+                    "context": {
+                        "package_id": record.package_id,
+                        "source_type": record.source_type,
+                        "source_id": record.source_id,
+                        "loop_id": record.loop_id,
+                        "run_id": record.run_id,
+                        "reason_code": "live_inference_preflight_unavailable",
+                    },
+                }
+
             source_loader = getattr(self.runtime_source_resolver, "load_source_for_strategy_package", None)
             if callable(source_loader):
                 source_loader(
@@ -398,6 +425,22 @@ class SelectionPackageHealthService:
             else:
                 self.runtime_source_resolver.load_source(record.source_id)
         except TradingCoreError as exc:
+            if require_preflight:
+                return {
+                    "name": "live_inference_preflight",
+                    "status": BLOCKED,
+                    "severity": "runtime_blocker",
+                    "message": exc.message,
+                    "context": {
+                        "package_id": record.package_id,
+                        "source_type": record.source_type,
+                        "source_id": record.source_id,
+                        "loop_id": record.loop_id,
+                        "run_id": record.run_id,
+                        "reason_code": exc.error_code,
+                        **exc.context,
+                    },
+                }
             return {"name": "source_resolves", "status": WARN, "severity": "runtime_warning", "message": exc.message, "context": exc.context}
         return {
             "name": "source_resolves",
