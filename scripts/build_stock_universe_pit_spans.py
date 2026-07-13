@@ -1008,9 +1008,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     "inserted_events": len(events),
                 }
             conn.commit()
-            with conn.cursor() as cur:
-                cur.execute("SELECT market.refresh_data_stats();")
-            conn.commit()
+            # Ingestion owns global data-stat refreshes. Calling the catalog-wide
+            # refresh here makes a small PIT rebuild scan unrelated large tables
+            # such as moneyflow_ts and can abort strict live selection.
 
     report_dir = Path(args.reports_dir)
     stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")

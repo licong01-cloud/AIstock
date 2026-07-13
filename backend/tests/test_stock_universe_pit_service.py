@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 
 from scripts import build_stock_universe_pit_spans as pit_builder
 
@@ -258,3 +259,51 @@ def test_ensure_rebuilds_dirty_same_range_for_source_fingerprint_policy(monkeypa
     assert captured["write_mode"] == "replace"
     assert captured["incremental_from"] is None
     assert captured["refresh_policy"] == "source_fingerprint"
+
+
+def test_ensure_preserves_later_shared_coverage_for_shorter_refresh_request(monkeypatch) -> None:
+    service = StockUniversePitService()
+    captured: dict[str, object] = {}
+    source = {"source": "current-live-fingerprint"}
+
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(
+        service,
+        "compute_source_fingerprint",
+        lambda *, end_date=None: source if end_date == dt.date(2026, 7, 13) else (_ for _ in ()).throw(
+            AssertionError(f"fingerprint requested for regressed end_date={end_date}")
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "get_status",
+        lambda *, universe_key="shsz_st_pit_active_v1": {
+            "status": "ready",
+            "dirty": True,
+            "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+            "scope": "st_only_active",
+            "start_date": dt.date(2018, 8, 1),
+            "end_date": dt.date(2026, 7, 13),
+            "source_fingerprint_sha256": "old-fingerprint",
+            "last_build_summary": {"validation": {"overlap_error_count": 0}},
+        },
+    )
+
+    def fake_rebuild(**kwargs):
+        captured.update(kwargs)
+        return {"universe_key": kwargs["universe_key"], "status": "ready", "rebuilt": True}
+
+    monkeypatch.setattr(service, "rebuild_st_pit_universe", fake_rebuild)
+
+    result = service.ensure_st_pit_universe(
+        end_date=dt.date(2026, 6, 30),
+        refresh_policy="source_fingerprint",
+    )
+
+    assert result["status"] == "ready"
+    assert captured["end_date"] == dt.date(2026, 7, 13)
+
+
+def test_pit_rebuild_paths_do_not_refresh_global_data_stats() -> None:
+    assert "refresh_data_stats" not in inspect.getsource(StockUniversePitService.rebuild_st_pit_universe)
+    assert "refresh_data_stats" not in inspect.getsource(pit_builder.build)

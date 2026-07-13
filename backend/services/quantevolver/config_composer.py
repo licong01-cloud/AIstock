@@ -1174,11 +1174,14 @@ class ConfigComposer:
             StockUniversePitService,
         )
 
+        # QE only consumes a historical slice. It must not initialize or rebuild
+        # the shared live-selection PIT cache to its shorter backtest boundary.
         StockUniversePitService().ensure_st_pit_universe(
             universe_key=profile.st_universe_key,
             start_date=DEFAULT_ST_PIT_START_DATE,
             end_date=backtest_end,
             strict=profile.strict_data_ready,
+            rebuild_if_stale=False,
             refresh_policy="coverage",
         )
 

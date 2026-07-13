@@ -684,6 +684,79 @@ def test_qe_risk_policy_runtime_prepares_local_artifact(monkeypatch):
     assert custom_params["quote_universe_codes"] == ["000001.SZ", "600000.SH"]
 
 
+def test_qe_risk_policy_requires_existing_pit_coverage_without_rebuild(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+    from backend.services.stock_universe_pit_service import StockUniversePitService
+
+    ensure_calls = []
+
+    def fake_ensure(_self, **kwargs):
+        ensure_calls.append(kwargs)
+        return {"status": "ready", "rebuilt": False}
+
+    class FakeCursor:
+        sql = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, _params):
+            self.sql = sql
+
+        def fetchall(self):
+            if "FROM market.trading_calendar" in self.sql:
+                return [(pd.Timestamp("2021-07-01").date(),), (pd.Timestamp("2021-12-31").date(),)]
+            if "FROM market.stock_universe_pit_spans" in self.sql:
+                return []
+            raise AssertionError(f"unexpected fetchall SQL: {self.sql}")
+
+        def fetchone(self):
+            if "FROM market.stock_universe_pit_state" in self.sql:
+                return (
+                    "shsz_st_pit_active_v1",
+                    "st_pub_next_trade_restore_active_l_v1",
+                    "st_only_active",
+                    "ready",
+                    False,
+                    "fingerprint",
+                    None,
+                )
+            raise AssertionError(f"unexpected fetchone SQL: {self.sql}")
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def cursor(self):
+            return FakeCursor()
+
+    monkeypatch.setattr(StockUniversePitService, "ensure_st_pit_universe", fake_ensure)
+    monkeypatch.setattr(composer_module, "get_conn", lambda: FakeConn())
+
+    artifact = ConfigComposer()._build_qe_risk_policy_artifact(
+        DATA_SPLIT,
+        {"risk_policy": {"enabled": True, "providers": ["st_pit"]}},
+    )
+
+    assert json.loads(artifact)["end_date"] == DATA_SPLIT["backtest_end"]
+    assert ensure_calls == [
+        {
+            "universe_key": "shsz_st_pit_active_v1",
+            "start_date": pd.Timestamp("2018-08-01").date(),
+            "end_date": pd.Timestamp(DATA_SPLIT["backtest_end"]).date(),
+            "strict": True,
+            "rebuild_if_stale": False,
+            "refresh_policy": "coverage",
+        }
+    ]
+
+
 def test_qe_risk_policy_runtime_defaults_and_overwrites_stale_quote_universe(monkeypatch):
     composer = ConfigComposer()
 
