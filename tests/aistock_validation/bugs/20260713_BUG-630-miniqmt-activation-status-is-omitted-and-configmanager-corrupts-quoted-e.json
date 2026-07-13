@@ -32,8 +32,8 @@
   "expected": "The scheduler status API exposes exact MiniQMT quote activation and B0 controller health, and ConfigManager round-trips every registered/unknown env value without parse loss or silent fallback.",
   "first_seen_at": "2026-07-13T09:16:47.514945Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ec2d41e71bc6524c8c1ff70675a06d6ff6548bcb",
+  "fixed_at": "2026-07-13T09:40:27.284535Z",
   "github_issue_number": 2036,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2036",
   "last_seen_at": "2026-07-13T09:16:47.514945Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2037",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -60,6 +61,10 @@
     "fingerprint": "cb7ff3da65c8808dce38e00c",
     "source_event_id": "FE-20260713-cb7ff3da65c8"
   },
+  "validation_evidence": [
+    "PR #2037 required CI checks -> 17 passed, 0 failed",
+    "direct tests -> 55 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
