@@ -47,6 +47,31 @@ def test_local_cas_writes_real_bytes_and_exact_retry_returns_same_blob(tmp_path)
     target = tmp_path / "outside-repository-evidence" / "blobs" / "sha256" / first.sha256[:2] / first.sha256
     assert target.read_bytes() == bundle.canonical_bytes()
     assert hashlib.sha256(target.read_bytes()).hexdigest() == first.sha256
+    assert store.get(
+        uri=first.uri,
+        sha256=first.sha256,
+        size_bytes=first.size_bytes,
+        store_backend_hash=first.store_backend_hash,
+    ) == bundle
+
+
+def test_local_cas_reader_rejects_uri_outside_the_content_addressed_root(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    store = LocalCalculationEvidenceStore(
+        root=tmp_path / "outside-repository-evidence",
+        repository_root=tmp_path / "repository",
+        store_identity=_store_identity(),
+    )
+    stored = store.put(_bundle())
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(_bundle().canonical_bytes())
+
+    with pytest.raises(CalculationEvidenceStoreError, match=REASON_STORE_INVALID):
+        store.get(
+            uri=outside.as_uri(),
+            sha256=stored.sha256,
+            size_bytes=stored.size_bytes,
+            store_backend_hash=stored.store_backend_hash,
+        )
 
 
 def test_existing_hash_path_with_different_bytes_is_a_conflict(tmp_path) -> None:  # type: ignore[no-untyped-def]

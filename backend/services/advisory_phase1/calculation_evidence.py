@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.outcome_engine import CalculationEvidenceBundle
@@ -109,6 +110,57 @@ class LocalCalculationEvidenceStore:
             size_bytes=len(payload),
             store_backend_hash=self._store_backend_hash,
         )
+
+    def get(
+        self,
+        *,
+        uri: str,
+        sha256: str,
+        size_bytes: int,
+        store_backend_hash: str,
+    ) -> CalculationEvidenceBundle:
+        """Read one exact evidence blob without accepting arbitrary filesystem paths."""
+
+        if store_backend_hash != self._store_backend_hash:
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence store backend identity does not match")
+        if len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256):
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence sha256 is invalid")
+        if size_bytes < 1:
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence size must be positive")
+        target = self._target_from_uri(uri=uri, sha256=sha256)
+        try:
+            payload = target.read_bytes()
+        except OSError as error:
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, f"cannot read calculation evidence: {error}") from error
+        if len(payload) != size_bytes or hashlib.sha256(payload).hexdigest() != sha256:
+            raise CalculationEvidenceStoreError(REASON_CAS_CONTENT_CONFLICT, "calculation evidence bytes do not match descriptor")
+        try:
+            import json
+
+            decoded = json.loads(payload.decode("utf-8"))
+            bundle = CalculationEvidenceBundle.model_validate(decoded)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise CalculationEvidenceStoreError(REASON_CAS_CONTENT_CONFLICT, "calculation evidence payload is invalid") from error
+        if bundle.evidence_hash != sha256:
+            raise CalculationEvidenceStoreError(REASON_CAS_CONTENT_CONFLICT, "calculation evidence canonical hash is invalid")
+        return bundle
+
+    def _target_from_uri(self, *, uri: str, sha256: str) -> Path:
+        parsed = urlparse(uri)
+        if parsed.scheme != "file" or parsed.netloc not in ("", "localhost"):
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence uri must be a local file uri")
+        raw_path = unquote(parsed.path)
+        if os.name == "nt" and len(raw_path) >= 3 and raw_path[0] == "/" and raw_path[2] == ":":
+            raw_path = raw_path[1:]
+        path = Path(raw_path)
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as error:
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence uri cannot be resolved") from error
+        expected = (self._root / "blobs" / "sha256" / sha256[:2] / sha256).resolve()
+        if resolved != expected or self._root not in resolved.parents:
+            raise CalculationEvidenceStoreError(REASON_STORE_INVALID, "evidence uri is outside the configured content-addressed store")
+        return resolved
 
     def _compare_existing(self, target: Path, expected: bytes, expected_hash: str) -> None:
         try:
