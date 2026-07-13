@@ -93,6 +93,8 @@ class _PhaseAggregate:
     started_monotonic: float = field(default_factory=time.monotonic)
     sample_count: int = 0
     process_rss_peak_bytes: int = 0
+    process_pss_peak_bytes: int = 0
+    process_pss_complete_sample_count: int = 0
     process_vm_hwm_peak_bytes: int = 0
     gpu_memory_used_peak_bytes: int = 0
     gpu_process_memory_peak_bytes: int = 0
@@ -113,6 +115,12 @@ class _PhaseAggregate:
                 if error not in recorded and len(recorded) < 20:
                     recorded.append(error)
         self.process_rss_peak_bytes = max(self.process_rss_peak_bytes, int(sample.get("process_rss_bytes") or 0))
+        if sample.get("process_pss_complete") and sample.get("process_pss_bytes") is not None:
+            self.process_pss_peak_bytes = max(
+                self.process_pss_peak_bytes,
+                int(sample["process_pss_bytes"]),
+            )
+            self.process_pss_complete_sample_count += 1
         self.process_vm_hwm_peak_bytes = max(
             self.process_vm_hwm_peak_bytes,
             int(sample.get("process_vm_hwm_bytes") or 0),
@@ -140,9 +148,30 @@ class _PhaseAggregate:
             self.gpu_device_index = int(sample["gpu_device_index"])
         if sample.get("gpu_name"):
             self.gpu_name = str(sample["gpu_name"])
+        for component in ("device", "process"):
+            availability_key = f"gpu_{component}_sample_available"
+            if sample.get(availability_key) is True:
+                count_key = f"gpu_{component}_sample_success_count"
+                self.metadata[count_key] = int(self.metadata.get(count_key) or 0) + 1
 
     def event_fields(self) -> dict[str, Any]:
         ended_at = _utc_now()
+        metadata = dict(self.metadata)
+        metadata.update(
+            {
+                "process_rss_semantics": (
+                    "sum_of_process_tree_rss; shared_pages_may_be_counted_once_per_process"
+                ),
+                "process_pss_semantics": (
+                    "sum_of_process_tree_pss; shared_pages_are_proportionally_apportioned"
+                ),
+                "process_pss_peak_bytes": self.process_pss_peak_bytes or None,
+                "process_pss_complete_sample_count": self.process_pss_complete_sample_count,
+                "process_capacity_metric": (
+                    "process_pss_peak_bytes" if self.process_pss_complete_sample_count else None
+                ),
+            }
+        )
         return {
             "started_at": self.started_at,
             "ended_at": ended_at,
@@ -160,7 +189,7 @@ class _PhaseAggregate:
             "gpu_utilization_peak_pct": self.gpu_utilization_peak_pct if self.sample_count else None,
             "cuda_allocated_peak_bytes": self.cuda_allocated_peak_bytes or None,
             "cuda_reserved_peak_bytes": self.cuda_reserved_peak_bytes or None,
-            "metadata": dict(self.metadata),
+            "metadata": metadata,
         }
 
 
@@ -252,16 +281,35 @@ class QERuntimeResourceMonitor:
     def _collect_sample(self) -> dict[str, Any]:
         sample = self._process_sample()
         errors: list[str] = []
-        for reason_code, sampler in (
-            ("QE_RESOURCE_GPU_SAMPLE_FAILED", self._gpu_sample),
-            ("QE_RESOURCE_CUDA_SAMPLE_FAILED", self._torch_sample),
-        ):
+
+        gpu_samplers = (
+            ("device", self._gpu_device_sample),
+            (
+                "process",
+                lambda: self._gpu_process_sample(set(sample.get("process_pids") or [])),
+            ),
+        )
+        for component, sampler in gpu_samplers:
             try:
                 sample.update(sampler())
             except Exception as exc:
-                error = f"{reason_code}:{type(exc).__name__}"
+                error = f"QE_RESOURCE_GPU_SAMPLE_FAILED:{component}:{type(exc).__name__}"
                 errors.append(error)
-                print(f"[ERROR] reason_code={reason_code} error={type(exc).__name__}: {exc}")
+                sample[f"gpu_{component}_sample_available"] = False
+                print(
+                    "[ERROR] reason_code=QE_RESOURCE_GPU_SAMPLE_FAILED "
+                    f"component={component} error={type(exc).__name__}: {exc}"
+                )
+
+        try:
+            sample.update(self._torch_sample())
+        except Exception as exc:
+            error = f"QE_RESOURCE_CUDA_SAMPLE_FAILED:{type(exc).__name__}"
+            errors.append(error)
+            print(
+                "[ERROR] reason_code=QE_RESOURCE_CUDA_SAMPLE_FAILED "
+                f"error={type(exc).__name__}: {exc}"
+            )
         if errors:
             sample["resource_sample_errors"] = errors
         return sample
@@ -276,11 +324,27 @@ class QERuntimeResourceMonitor:
             return 0
         return 0
 
+    @staticmethod
+    def _read_pss(pid: int) -> int | None:
+        try:
+            for line in Path(f"/proc/{pid}/smaps_rollup").read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines():
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) * 1024
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+            return None
+        return None
+
     def _process_sample(self) -> dict[str, Any]:
         pid = os.getpid()
         if psutil is None:
+            pss = self._read_pss(pid)
             return {
                 "process_rss_bytes": 0,
+                "process_pss_bytes": pss,
+                "process_pss_complete": pss is not None,
                 "process_vm_hwm_bytes": self._read_vm_hwm(pid),
                 "process_pids": [pid],
                 "process_sampler": "proc_current_only",
@@ -288,6 +352,8 @@ class QERuntimeResourceMonitor:
         root = psutil.Process(pid)
         processes = [root, *root.children(recursive=True)]
         rss = 0
+        pss = 0
+        pss_sampled_pids = 0
         hwm = 0
         pids: list[int] = []
         for process in processes:
@@ -295,18 +361,23 @@ class QERuntimeResourceMonitor:
                 pids.append(process.pid)
                 rss += int(process.memory_info().rss)
                 hwm = max(hwm, self._read_vm_hwm(process.pid))
+                process_pss = self._read_pss(process.pid)
+                if process_pss is not None:
+                    pss += process_pss
+                    pss_sampled_pids += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return {
             "process_rss_bytes": rss,
+            "process_pss_bytes": pss if pss_sampled_pids else None,
+            "process_pss_complete": bool(pids) and pss_sampled_pids == len(pids),
             "process_vm_hwm_bytes": hwm,
             "process_pids": pids,
             "process_sampler": "psutil_process_tree",
         }
 
-    def _gpu_sample(self) -> dict[str, Any]:
+    def _gpu_device_sample(self) -> dict[str, Any]:
         gpu_index = int(_env("QE_GPU_DEVICE_INDEX") or 0)
-        result: dict[str, Any] = {"gpu_device_index": gpu_index}
         query = subprocess.run(
             [
                 "nvidia-smi",
@@ -325,16 +396,18 @@ class QERuntimeResourceMonitor:
             raise RuntimeError("nvidia-smi GPU query returned no rows")
         try:
             name, memory_mib, utilization = [part.strip() for part in query.stdout.splitlines()[0].split(",", 2)]
-            result.update(
-                {
-                    "gpu_name": name,
-                    "gpu_memory_used_bytes": int(float(memory_mib)) * 1024 * 1024,
-                    "gpu_utilization_pct": float(utilization),
-                }
-            )
+            return {
+                "gpu_device_index": gpu_index,
+                "gpu_name": name,
+                "gpu_memory_used_bytes": int(float(memory_mib)) * 1024 * 1024,
+                "gpu_utilization_pct": float(utilization),
+                "gpu_device_sample_available": True,
+            }
         except (TypeError, ValueError) as exc:
             raise RuntimeError("nvidia-smi GPU query returned an invalid row") from exc
 
+    @staticmethod
+    def _gpu_process_sample(process_pids: set[int]) -> dict[str, Any]:
         process_query = subprocess.run(
             [
                 "nvidia-smi",
@@ -350,7 +423,6 @@ class QERuntimeResourceMonitor:
             raise RuntimeError(
                 f"nvidia-smi process query failed with exit_code={process_query.returncode}"
             )
-        process_pids = set(self._process_sample().get("process_pids") or [])
         process_memory_mib = 0
         invalid_rows = 0
         for line in process_query.stdout.splitlines():
@@ -365,8 +437,10 @@ class QERuntimeResourceMonitor:
                 invalid_rows += 1
         if invalid_rows:
             raise RuntimeError(f"nvidia-smi process query returned invalid_rows={invalid_rows}")
-        result["gpu_process_memory_bytes"] = process_memory_mib * 1024 * 1024
-        return result
+        return {
+            "gpu_process_memory_bytes": process_memory_mib * 1024 * 1024,
+            "gpu_process_sample_available": True,
+        }
 
     @staticmethod
     def _torch_sample() -> dict[str, Any]:
