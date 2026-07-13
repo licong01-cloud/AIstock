@@ -816,6 +816,7 @@ class MultiAlphaLivePredictionProvider:
                 runtime_config=seed_config,
                 path_converter=win_to_wsl_path if inference_backend == "wsl" else None,
                 cache_namespace=f"leg_{leg_slice.leg_id}",
+                verify_model_code_contract=False,
             )
             result = self.live_inference_provider.run(
                 workspace=prepared,

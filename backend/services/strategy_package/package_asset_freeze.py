@@ -1159,9 +1159,18 @@ class PackageAssetFreezeService:
         module_names: list[str] = []
         if conf_module_name:
             module_names.append(conf_module_name)
-        pickle_refs = pickled_model_code_references_from_params_bytes(model_weight_data)
+        pickle_refs = pickled_model_code_references_from_params_bytes(
+            model_weight_data,
+            include_all_modules=True,
+        )
         for ref in pickle_refs:
-            if ref.module_name not in module_names:
+            if (
+                ref.module_name not in module_names
+                and (
+                    ref.module_name in _LOCAL_PICKLED_MODEL_MODULES
+                    or self._workspace_model_module_exists(manifest, ref.module_name)
+                )
+            ):
                 module_names.append(ref.module_name)
 
         if not module_names:
@@ -1235,6 +1244,13 @@ class PackageAssetFreezeService:
                 )
             )
         return True, assets, records
+
+    def _workspace_model_module_exists(self, manifest: StrategyPackageManifest, module_name: str) -> bool:
+        try:
+            self.source.workspace_file_bytes(manifest, _module_relpath(module_name))
+        except DataUnavailableError:
+            return False
+        return True
 
     def _model_code_assets_from_existing_closure(
         self,
@@ -1927,11 +1943,17 @@ class PickledModelCodeReference:
 def pickled_model_code_references_from_params_bytes(
     data: bytes,
     module_names: Iterable[str] | None = None,
+    *,
+    include_all_modules: bool = False,
 ) -> list[PickledModelCodeReference]:
     """Return local model-code references embedded in pickle/torch params bytes."""
 
-    modules = {str(item).strip() for item in (module_names or _LOCAL_PICKLED_MODEL_MODULES) if str(item).strip()}
-    if not data or not modules:
+    modules = (
+        None
+        if include_all_modules
+        else {str(item).strip() for item in (module_names or _LOCAL_PICKLED_MODEL_MODULES) if str(item).strip()}
+    )
+    if not data or modules == set():
         return []
     found: dict[tuple[str, str | None], PickledModelCodeReference] = {}
     for payload in _pickle_payloads_from_params_bytes(data):
@@ -1961,7 +1983,7 @@ def _pickle_arg_text(value: Any) -> str:
 
 def _pickle_payload_model_refs(
     payload: bytes,
-    module_names: set[str],
+    module_names: set[str] | None,
 ) -> list[PickledModelCodeReference]:
     import pickletools
 
@@ -2023,10 +2045,10 @@ def _record_pickle_ref(
     found: dict[tuple[str, str | None], PickledModelCodeReference],
     module: str,
     class_name: str | None,
-    module_names: set[str],
+    module_names: set[str] | None,
 ) -> None:
     module_text = str(module or "").strip()
-    if module_text not in module_names:
+    if not module_text or (module_names is not None and module_text not in module_names):
         return
     class_text = str(class_name or "").strip() or None
     found[(module_text, class_text)] = PickledModelCodeReference(module_text, class_text)
@@ -2034,9 +2056,11 @@ def _record_pickle_ref(
 
 def _fallback_pickle_payload_model_refs(
     payload: bytes,
-    module_names: set[str],
+    module_names: set[str] | None,
 ) -> list[PickledModelCodeReference]:
     found: dict[tuple[str, str | None], PickledModelCodeReference] = {}
+    if module_names is None:
+        return []
     for module in module_names:
         encoded = module.encode("utf-8")
         if (

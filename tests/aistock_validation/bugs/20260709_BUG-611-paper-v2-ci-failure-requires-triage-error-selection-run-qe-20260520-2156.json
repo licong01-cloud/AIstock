@@ -7,7 +7,19 @@
     "backend/tests/selection_center",
     "backend/tests/strategy_package",
     "tests/aistock_validation/bugs/20260709_BUG-611-paper-v2-ci-failure-requires-triage-error-selection-run-qe-20260520-2156.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/selection_center/service.py",
+    "backend/services/simulation_runtime/selection.py",
+    "backend/services/strategy_package/asset_eligibility.py",
+    "backend/services/strategy_package/components.py",
+    "backend/services/strategy_package/frozen_runtime_self_check.py",
+    "backend/services/strategy_package/live_inference.py",
+    "backend/services/strategy_package/multi_alpha_live.py",
+    "backend/services/strategy_package/multi_alpha_promotion.py",
+    "backend/services/strategy_package/package_asset_backfill.py",
+    "backend/services/strategy_package/package_asset_freeze.py",
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/strategy_package/service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-611",
@@ -27,10 +39,16 @@
       "timestamp": "2026-07-09T02:21:35.706016Z"
     },
     {
-      "timestamp": "2026-07-09T02:37:27.294154+00:00",
-      "actor": "codex",
       "action": "codex_fix_preflight_runnable_guard",
-      "note": "Codex triage: root cause is package-owned runtime asset incompleteness, not a pipeline/toolchain failure. pkg_378eb9c91e104c64935404e257e932ee params.pkl references model.LSTM_10D_hs64_d02 but materialized package runtime has no model.py; Selection Center health now runs package-owned live inference preflight and marks this blocker non-runnable so E2E does not select it as a runnable package."
+      "actor": "codex",
+      "note": "Codex triage: root cause is package-owned runtime asset incompleteness, not a pipeline/toolchain failure. pkg_378eb9c91e104c64935404e257e932ee params.pkl references model.LSTM_10D_hs64_d02 but materialized package runtime has no model.py; Selection Center health now runs package-owned live inference preflight and marks this blocker non-runnable so E2E does not select it as a runnable package.",
+      "timestamp": "2026-07-09T02:37:27.294154+00:00"
+    },
+    {
+      "action": "scope_expanded_for_root_cause_fix",
+      "actor": "codex",
+      "note": "User-authorized BUG-611 root-cause repair centralizes one-time StrategyPackage runtime asset admission across single-alpha, multi-alpha, model-code-required and model-code-free packages; removes repeated Selection/LocalSim/MiniQMT asset preflight.",
+      "timestamp": "2026-07-13T19:12:23.973026Z"
     }
   ],
   "evidence_uris": [

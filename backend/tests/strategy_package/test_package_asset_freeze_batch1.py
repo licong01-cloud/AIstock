@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from backend.services.strategy_package.manifest import compute_manifest_sha256, freeze_manifest
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    runtime_asset_admission_status,
+)
 from backend.services.strategy_package.package_asset import StrategyPackageAssetType
 from backend.services.strategy_package.package_asset_freeze import (
     PackageAssetBytes,
@@ -23,7 +27,19 @@ from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 
 class NoopFrozenRuntimeSelfCheck:
     def assert_manifest_self_contained(self, manifest):  # noqa: ANN001, ANN201
-        return None
+        return FrozenRuntimeSelfCheckResult(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=len(manifest.factor_set),
+            dynamic_factor_count=len(manifest.factor_set),
+            alpha158_alias_count=0,
+            factor_order_count=len(manifest.factor_set),
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+        )
 
 
 class FakeResolver:
@@ -133,6 +149,8 @@ def test_create_from_qe_experiment_freezes_runtime_assets_and_is_idempotent(tmp_
         StrategyPackageAssetType.MODEL_WEIGHT,
     ]
     manifest = first.current_manifest()
+    assert runtime_asset_admission_status(manifest)[0] is True
+    assert service.asset_eligibility.summarize(first).eligible is True
     assert all(factor.asset_ref and factor.sha256 for factor in manifest.factor_set)
     assert manifest.runtime_assets is not None
     assert manifest.runtime_assets.alpha158.enabled is False

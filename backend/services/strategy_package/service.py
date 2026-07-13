@@ -17,7 +17,7 @@ from .candidate import (
     CandidateStrategyPackageStatus,
 )
 from .asset_eligibility import StrategyPackageAssetEligibilityService
-from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService, attach_runtime_asset_admission
 from .execution_policy import (
     BACKTEST_SUCCESS_STATUSES,
     ExecutionPolicyValidationStatus,
@@ -131,8 +131,8 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
 
     def create_from_qe_evolution_loop(
         self,
@@ -149,8 +149,8 @@ class StrategyPackageService:
         )
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
 
     def create_from_candidate(
         self,
@@ -182,8 +182,14 @@ class StrategyPackageService:
         manifest = freeze_manifest(manifest.model_copy(update={"source": source, "manifest_sha256": None}))
         frozen_assets = self.asset_freezer.freeze_manifest_assets(manifest)
         self.validator.validate_manifest(frozen_assets.manifest)
-        self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
-        return self.repository.save_manifest_with_assets(frozen_assets.manifest, frozen_assets.assets)
+        admitted_manifest = self._attach_runtime_asset_admission(frozen_assets.manifest)
+        return self.repository.save_manifest_with_assets(admitted_manifest, frozen_assets.assets)
+
+    def _attach_runtime_asset_admission(self, manifest: StrategyPackageManifest) -> StrategyPackageManifest:
+        self_check = self.frozen_runtime_self_check.assert_manifest_self_contained(manifest)
+        admitted = attach_runtime_asset_admission(manifest, self_check)
+        self.validator.validate_manifest(admitted)
+        return admitted
 
     def save_manifest(self, manifest: StrategyPackageManifest) -> StrategyPackageRecord:
         self.validator.validate_manifest(manifest)

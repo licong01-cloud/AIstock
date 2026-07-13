@@ -12,9 +12,6 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import pytest
-
-from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.selection_center.tradability import TradabilityFilter
@@ -62,6 +59,8 @@ class _ResolverStubBase:
     def prepare_workspace(self, **_kwargs: Any) -> Any:
         from pathlib import Path
 
+        self.prepare_calls.append(_kwargs)
+
         class _Prepared:
             workspace_path = Path(".")
             factor_order_path = Path(".")
@@ -87,6 +86,7 @@ class _PassingPreflightResolver(_ResolverStubBase):
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.prepare_calls: list[dict[str, Any]] = []
 
     def require_preflight_or_raise(self, **kwargs: Any) -> LiveInferencePreflightResult:
         self.calls.append(kwargs)
@@ -108,6 +108,7 @@ class _BlockingPreflightResolver(_ResolverStubBase):
 
     def __init__(self, *, blocked_check: str = PREFLIGHT_CHECK_CONF_YAML) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.prepare_calls: list[dict[str, Any]] = []
         self._blocked_check = blocked_check
 
     def require_preflight_or_raise(self, **kwargs: Any) -> LiveInferencePreflightResult:
@@ -263,7 +264,7 @@ def test_selection_run_skips_preflight_when_auto_generate_disabled() -> None:
     assert provider.calls == []  # live inference NOT invoked
 
 
-def test_selection_run_invokes_preflight_when_auto_generate_enabled() -> None:
+def test_selection_run_does_not_repeat_asset_preflight_when_auto_generate_enabled() -> None:
     resolver = _PassingPreflightResolver()
     provider = _SpyLiveInferenceProvider()
     service, manifest = _build_service(resolver=resolver, provider=provider)
@@ -283,80 +284,31 @@ def test_selection_run_invokes_preflight_when_auto_generate_enabled() -> None:
         }),
     )
 
-    assert len(resolver.calls) == 1
-    call = resolver.calls[0]
-    assert call["source_type"] == manifest.source.source_type.value
-    assert call["source_id"] == manifest.source.source_id
-    assert call["loop_id"] == manifest.source.loop_id
-    assert provider.calls, "live inference provider should run when preflight passes"
+    assert resolver.calls == []
+    assert resolver.prepare_calls[0]["verify_model_code_contract"] is False
+    assert provider.calls, "live inference provider should consume admitted assets without another preflight"
 
 
-def test_selection_run_fails_fast_when_preflight_blocks() -> None:
+def test_selection_run_never_calls_legacy_blocking_preflight() -> None:
     resolver = _BlockingPreflightResolver(blocked_check=PREFLIGHT_CHECK_CONF_YAML)
     provider = _SpyLiveInferenceProvider()
     service, manifest = _build_service(resolver=resolver, provider=provider)
 
-    with pytest.raises(LiveInferencePreflightError) as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 3),
-            data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({
-                "selection_artifact_config": {
-                    "auto_generate": True,
-                    "inference_backend": "local",
-                    "include_reference_price": False,
-                    "pit_mode": "NONE",
-                },
-                "runtime_profile": {"selection": {"top_k": 1}},
-            }),
-        )
-
-    err = exc_info.value
-    assert err.error_code == "LIVE_INFERENCE_PREFLIGHT_FAILED"
-    assert err.context["blocked_check"] == PREFLIGHT_CHECK_CONF_YAML
-    payload = err.context["preflight"]
-    assert payload["passed"] is False
-    assert any(
-        check["name"] == PREFLIGHT_CHECK_CONF_YAML and check["status"] == "BLOCKED"
-        for check in payload["checks"]
+    service.run_single_package(
+        package_id=manifest.package_id,
+        trade_date=date(2024, 1, 3),
+        data_source="DB_HISTORICAL",
+        runtime_config=versioned_selection_runtime_config({
+            "selection_artifact_config": {
+                "auto_generate": True,
+                "inference_backend": "local",
+                "include_reference_price": False,
+                "pit_mode": "NONE",
+            },
+            "runtime_profile": {"selection": {"top_k": 1}},
+        }),
     )
 
-    # The run is persisted as FAILED with the structured error captured.
-    runs = service.repository.list_runs(limit=10)
-    assert runs and runs[0].status == SelectionRunStatus.FAILED
-    assert runs[0].error is not None
-    assert runs[0].error["error_code"] == "LIVE_INFERENCE_PREFLIGHT_FAILED"
-
-    # Critically: live inference was NEVER invoked (no 30-minute hang).
-    assert provider.calls == []
-    assert len(resolver.calls) == 1
-
-
-def test_selection_run_preflight_failure_carries_strategy_package_source_identity() -> None:
-    """The preflight error must include enough source identity for the UI to
-    rebuild a ReadinessFailureCard without round-tripping back to the API."""
-
-    resolver = _BlockingPreflightResolver(blocked_check=PREFLIGHT_CHECK_CONF_YAML)
-    provider = _SpyLiveInferenceProvider()
-    service, manifest = _build_service(resolver=resolver, provider=provider)
-
-    with pytest.raises(LiveInferencePreflightError) as exc_info:
-        service.run_single_package(
-            package_id=manifest.package_id,
-            trade_date=date(2024, 1, 3),
-            data_source="DB_HISTORICAL",
-            runtime_config=versioned_selection_runtime_config({
-                "selection_artifact_config": {
-                    "auto_generate": True,
-                    "inference_backend": "local",
-                    "include_reference_price": False,
-                    "pit_mode": "NONE",
-                },
-                "runtime_profile": {"selection": {"top_k": 1}},
-            }),
-        )
-    ctx = exc_info.value.context
-    assert ctx["source_type"] == manifest.source.source_type.value
-    assert ctx["source_id"] == manifest.source.source_id
-    assert ctx["loop_id"] == manifest.source.loop_id
+    assert resolver.calls == []
+    assert resolver.prepare_calls[0]["verify_model_code_contract"] is False
+    assert provider.calls

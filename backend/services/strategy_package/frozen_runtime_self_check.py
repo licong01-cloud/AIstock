@@ -6,18 +6,28 @@ import json
 import os
 import subprocess
 import tempfile
+import hashlib
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
+from backend.services.trading_core.errors import (
+    DataUnavailableError,
+    PackageAssetInvalidError,
+    StrategyPackageValidationError,
+    TradingCoreError,
+)
 
 from .live_inference import QEExperimentRuntimeAssetResolver, win_to_wsl_path
+from .manifest import freeze_manifest
 from .models import AlphaMode, StrategyPackageManifest
 from .package_asset_store import PackageAssetStore
 
 ModelLoader = Callable[[Path], tuple[Any, str, Any, int]]
+
+RUNTIME_ASSET_ADMISSION_KEY = "runtime_asset_admission"
+RUNTIME_ASSET_ADMISSION_SCHEMA = "strategy_package_runtime_asset_admission_v1"
 
 
 @dataclass(frozen=True)
@@ -55,6 +65,188 @@ class FrozenRuntimeSelfCheckResult:
         if self.combined_signal_smoke is not None:
             context["combined_signal_smoke"] = self.combined_signal_smoke
         return context
+
+
+def attach_runtime_asset_admission(
+    manifest: StrategyPackageManifest,
+    result: FrozenRuntimeSelfCheckResult,
+) -> StrategyPackageManifest:
+    """Persist the one-time frozen-asset self-check receipt in the manifest.
+
+    The receipt is keyed by the immutable asset closure rather than by the final
+    manifest hash because adding the receipt itself changes that hash.  Later
+    Selection/LocalSim/MiniQMT paths may trust this receipt and must not rerun
+    model-code discovery or frozen-runtime self-checks.
+    """
+
+    if result.package_id != manifest.package_id:
+        raise StrategyPackageValidationError(
+            "runtime asset admission result belongs to another StrategyPackage",
+            context={
+                "reason_code": "strategy_package_runtime_asset_admission_package_mismatch",
+                "package_id": manifest.package_id,
+                "self_check_package_id": result.package_id,
+            },
+        )
+    if not _is_sha256(result.manifest_sha256):
+        raise StrategyPackageValidationError(
+            "runtime asset admission requires a frozen self-check manifest hash",
+            context={
+                "reason_code": "strategy_package_runtime_asset_admission_self_check_hash_invalid",
+                "package_id": manifest.package_id,
+                "self_check_manifest_sha256": result.manifest_sha256,
+            },
+        )
+    if result.origin != "package_asset":
+        raise StrategyPackageValidationError(
+            "runtime asset admission self-check must use package-owned assets",
+            context={
+                "reason_code": "strategy_package_runtime_asset_admission_origin_invalid",
+                "package_id": manifest.package_id,
+                "origin": result.origin,
+            },
+        )
+
+    source_evidence = json.loads(json.dumps(manifest.source_evidence or {}, ensure_ascii=False, default=str))
+    source_evidence.pop(RUNTIME_ASSET_ADMISSION_KEY, None)
+    receipt = {
+        "schema_version": RUNTIME_ASSET_ADMISSION_SCHEMA,
+        "passed": True,
+        "persisted_for_simulation_admission": True,
+        "package_id": manifest.package_id,
+        "alpha_mode": manifest.alpha_mode.value,
+        "self_check_manifest_sha256": result.manifest_sha256,
+        "asset_closure_sha256": runtime_asset_closure_sha256(manifest),
+        "model_code_contract": _model_code_contract(manifest),
+        "self_check_summary": {
+            "origin": result.origin,
+            "model_kind": result.model_kind,
+            "model_expected_features": result.model_expected_features,
+            "dynamic_factor_count": result.dynamic_factor_count,
+            "alpha158_alias_count": result.alpha158_alias_count,
+            "factor_order_count": result.factor_order_count,
+            "feature_count_delta": result.feature_count_delta,
+            "model_probe_backend": result.model_probe_backend,
+            "leg_count": len(result.leg_results or {}),
+            "combined_signal_smoke_schema": (
+                (result.combined_signal_smoke or {}).get("schema_version")
+                if isinstance(result.combined_signal_smoke, dict)
+                else None
+            ),
+        },
+    }
+    source_evidence[RUNTIME_ASSET_ADMISSION_KEY] = receipt
+    return freeze_manifest(
+        manifest.model_copy(
+            update={
+                "source_evidence": source_evidence,
+                "manifest_sha256": None,
+            }
+        )
+    )
+
+
+def runtime_asset_admission_status(manifest: StrategyPackageManifest) -> tuple[bool, dict[str, Any]]:
+    """Validate only persisted admission identity; never read or materialize assets."""
+
+    receipt = (manifest.source_evidence or {}).get(RUNTIME_ASSET_ADMISSION_KEY)
+    context: dict[str, Any] = {
+        "package_id": manifest.package_id,
+        "manifest_sha256": manifest.manifest_sha256,
+        "schema_version": receipt.get("schema_version") if isinstance(receipt, dict) else None,
+    }
+    if not isinstance(receipt, dict):
+        return False, {**context, "reason_code": "strategy_package_runtime_asset_admission_missing"}
+    expected_closure = runtime_asset_closure_sha256(manifest)
+    expected_model_contract = _model_code_contract(manifest)
+    failures: list[str] = []
+    if receipt.get("schema_version") != RUNTIME_ASSET_ADMISSION_SCHEMA:
+        failures.append("schema_version")
+    if receipt.get("passed") is not True or receipt.get("persisted_for_simulation_admission") is not True:
+        failures.append("passed")
+    if receipt.get("package_id") != manifest.package_id:
+        failures.append("package_id")
+    if receipt.get("alpha_mode") != manifest.alpha_mode.value:
+        failures.append("alpha_mode")
+    if not _is_sha256(receipt.get("self_check_manifest_sha256")):
+        failures.append("self_check_manifest_sha256")
+    if receipt.get("asset_closure_sha256") != expected_closure:
+        failures.append("asset_closure_sha256")
+    if receipt.get("model_code_contract") != expected_model_contract:
+        failures.append("model_code_contract")
+    if failures:
+        return False, {
+            **context,
+            "reason_code": "strategy_package_runtime_asset_admission_invalid",
+            "invalid_fields": failures,
+            "expected_asset_closure_sha256": expected_closure,
+            "actual_asset_closure_sha256": receipt.get("asset_closure_sha256"),
+        }
+    return True, {
+        **context,
+        "reason_code": "strategy_package_runtime_asset_admission_passed",
+        "asset_closure_sha256": expected_closure,
+        "self_check_manifest_sha256": receipt.get("self_check_manifest_sha256"),
+    }
+
+
+def require_runtime_asset_admission(manifest: StrategyPackageManifest) -> dict[str, Any]:
+    passed, context = runtime_asset_admission_status(manifest)
+    if not passed:
+        raise PackageAssetInvalidError(
+            "StrategyPackage has not completed one-time runtime asset admission",
+            context=context,
+        )
+    return context
+
+
+def runtime_asset_closure_sha256(manifest: StrategyPackageManifest) -> str:
+    payload = {
+        "package_id": manifest.package_id,
+        "alpha_mode": manifest.alpha_mode.value,
+        "factors": [
+            {
+                "factor_id": factor.factor_id,
+                "required": factor.required,
+                "asset_ref": factor.asset_ref,
+                "sha256": factor.sha256,
+            }
+            for factor in manifest.factor_set
+        ],
+        "models": _model_code_contract(manifest),
+        "runtime_assets": manifest.runtime_assets.model_dump(mode="json") if manifest.runtime_assets is not None else None,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _model_code_contract(manifest: StrategyPackageManifest) -> list[dict[str, Any]]:
+    model_assets = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    return [
+        {
+            "model_id": model.model_id,
+            "model_type": model.model_type,
+            "asset_ref": model.asset_ref,
+            "sha256": model.sha256,
+            "model_code_required": model.model_code_required,
+            "model_code_assets": [
+                {
+                    "module_name": asset.module_name,
+                    "relative_path": asset.relative_path,
+                    "required": asset.required,
+                    "asset_ref": asset.asset_ref,
+                    "sha256": asset.sha256,
+                }
+                for asset in sorted(model.model_code_assets, key=lambda item: (item.relative_path, item.module_name))
+            ],
+        }
+        for model in sorted(model_assets, key=lambda item: item.model_id)
+    ]
+
+
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return len(text) == 64 and all(ch in "0123456789abcdef" for ch in text)
 
 
 @dataclass(frozen=True)

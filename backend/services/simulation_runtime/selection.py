@@ -55,11 +55,9 @@ from backend.services.selection_center.runtime_profile import (
 )
 from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
-from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-    LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.repository import StrategyPackageRepository
@@ -214,7 +212,6 @@ class DailySelectionSignalService:
                 except DataUnavailableError:
                     continue
 
-        self._require_live_inference_preflight(record=record, runtime_config=runtime_config)
         self.selection_artifact_service.generate_from_live_inference(
             package_id=record.package_id,
             trade_date=trade_date,
@@ -223,29 +220,6 @@ class DailySelectionSignalService:
             include_reference_price=bool(artifact_config.get("include_reference_price", True)),
             cutoff_date=cutoff_date,
         )
-
-    def _require_live_inference_preflight(
-        self,
-        *,
-        record: Any,
-        runtime_config: dict[str, Any],
-    ) -> LiveInferencePreflightResult:
-        resolver = getattr(self.selection_artifact_service, "runtime_asset_resolver", None)
-        if resolver is None or not hasattr(resolver, "require_preflight_or_raise"):
-            raise ArtifactGenerationFailedError(
-                "selection_artifact_service.runtime_asset_resolver is not preflight-capable",
-                context={"package_id": record.package_id},
-            )
-        return resolver.require_preflight_or_raise(
-            source_type=record.source_type,
-            source_id=record.source_id,
-            loop_id=record.loop_id,
-            run_id=record.run_id,
-            runtime_config=runtime_config,
-            manifest=record.current_manifest(),
-            package_id=record.package_id,
-        )
-
 
 class StrategyPackageSelectionService:
     """Broker-neutral StrategyPackage selection entry shared by all simulators."""
@@ -263,7 +237,6 @@ class StrategyPackageSelectionService:
         package_health_service: SelectionPackageHealthService | Any | None = None,
         repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         signal_service: DailySelectionSignalService | None = None,
-        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
         phase1_trace_capture_service: Phase1TraceCaptureService | Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
@@ -281,7 +254,6 @@ class StrategyPackageSelectionService:
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
             hmm_runtime=getattr(self.runtime, "hmm_runtime", None),
         )
-        self.asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
         self.repository = repository or SimulationRuntimeRepository()
         self.signal_service = signal_service or DailySelectionSignalService(
             runtime=self.runtime,
@@ -790,7 +762,6 @@ class StrategyPackageSelectionService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -813,7 +784,6 @@ class StrategyPackageSelectionService:
                 trade_date=trade_date,
                 data_source=data_source,
             )
-            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health

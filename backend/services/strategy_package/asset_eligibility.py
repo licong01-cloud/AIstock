@@ -9,6 +9,7 @@ from typing import Any
 from backend.services.paper_trading_v2.models import BrokerBackendId
 from backend.services.trading_core.errors import PackageAssetInvalidError, StrategyPackageValidationError
 
+from .frozen_runtime_self_check import runtime_asset_admission_status
 from .manifest import compute_manifest_sha256
 from .models import PackageStatus, SelectionScoreArtifactStatus
 from .validators import StrategyPackageValidator
@@ -214,6 +215,21 @@ class StrategyPackageAssetEligibilityService:
                     {"package_id": package_id},
                 )
             )
+
+        admission_passed, admission_context = runtime_asset_admission_status(manifest)
+        checks.append(
+            _check(
+                "runtime_asset_admission",
+                "PASS" if admission_passed else "FAIL",
+                "hard",
+                (
+                    "one-time StrategyPackage runtime asset admission passed"
+                    if admission_passed
+                    else "StrategyPackage must complete one-time runtime asset admission before Selection or simulation"
+                ),
+                admission_context,
+            )
+        )
 
         actual: str | None = None
         try:

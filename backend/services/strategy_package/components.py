@@ -11,7 +11,7 @@ from typing import Any, Callable, Iterable
 from backend.services.model_store import ModelStoreService, PredictionArtifactStore
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 
-from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService, require_runtime_asset_admission
 from .manifest import freeze_manifest
 from .models import (
     AlphaMode,
@@ -276,7 +276,7 @@ class StrategyPackageComponentService:
                 )
             child_manifest = child.current_manifest()
             if manifest_has_frozen_runtime_assets(child_manifest):
-                self.frozen_runtime_self_check.assert_manifest_self_contained(child_manifest)
+                require_runtime_asset_admission(child_manifest)
             records.append(
                 StrategyPackageComponentRecord(
                     parent_package_id=parent_package_id,

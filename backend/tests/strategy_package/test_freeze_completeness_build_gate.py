@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import pickle
 import sys
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -74,6 +75,20 @@ def _pickled_model_instance_payload(tmp_path: Path) -> bytes:
         return pickle.dumps(module.LSTM_10D_hs64_d02(), protocol=4)
     finally:
         sys.modules.pop("model", None)
+        sys.path.remove(str(module_root))
+
+
+def _pickled_custom_module_payload(tmp_path: Path) -> bytes:
+    module_root = tmp_path / "pickle_custom_module"
+    module_root.mkdir()
+    (module_root / "custom_net.py").write_text("class CustomNet:\n    pass\n", encoding="utf-8")
+    sys.path.insert(0, str(module_root))
+    try:
+        sys.modules.pop("custom_net", None)
+        module = importlib.import_module("custom_net")
+        return pickle.dumps(module.CustomNet(), protocol=4)
+    finally:
+        sys.modules.pop("custom_net", None)
         sys.path.remove(str(module_root))
 
 
@@ -338,6 +353,37 @@ def test_pickled_local_model_freezes_code_without_pt_model_uri(tmp_path: Path) -
         sys.modules.pop("model", None)
         sys.path.remove(str(prepared.model_params_path.parent))
     assert type(loaded).__name__ == "LSTM_10D_hs64_d02"
+
+
+def test_pickled_arbitrary_local_module_freezes_code_without_pt_model_uri(tmp_path: Path) -> None:
+    model_py = b"class CustomNet:\n    pass\n"
+    frozen = _freezer(
+        tmp_path,
+        conf_bytes=b"task: {}\n",
+        model_params=_pickled_custom_module_payload(tmp_path),
+        model_code_files={"custom_net.py": model_py},
+    ).freeze_manifest_assets(_manifest("pickle_custom_module"))
+
+    model = frozen.manifest.model_asset
+    assert isinstance(model, ModelAsset)
+    assert model.model_code_required is True
+    assert [(asset.module_name, asset.relative_path) for asset in model.model_code_assets] == [
+        ("custom_net", "custom_net.py")
+    ]
+
+
+def test_standard_library_pickled_model_does_not_require_model_code(tmp_path: Path) -> None:
+    frozen = _freezer(
+        tmp_path,
+        conf_bytes=b"task: {}\n",
+        model_params=pickle.dumps(Counter({"x": 1}), protocol=4),
+        model_code_files={},
+    ).freeze_manifest_assets(_manifest("stdlib_model"))
+
+    model = frozen.manifest.model_asset
+    assert isinstance(model, ModelAsset)
+    assert model.model_code_required is False
+    assert model.model_code_assets == []
 
 
 def test_pickled_local_model_missing_source_code_fails_closed(tmp_path: Path) -> None:

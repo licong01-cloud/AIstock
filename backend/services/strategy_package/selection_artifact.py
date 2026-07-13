@@ -1124,6 +1124,7 @@ class StrategyPackageSelectionArtifactService:
             source=source,
             runtime_config=runtime_config,
             path_converter=win_to_wsl_path if inference_backend == "wsl" else None,
+            verify_model_code_contract=False,
         )
 
         artifacts: list[SelectionScoreArtifact] = []

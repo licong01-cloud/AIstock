@@ -1832,6 +1832,7 @@ class QEExperimentRuntimeAssetResolver:
         runtime_config: dict[str, Any] | None = None,
         path_converter: Callable[[str], str] | None = None,
         cache_namespace: str | None = None,
+        verify_model_code_contract: bool = True,
     ) -> PreparedInferenceWorkspace:
         config = runtime_config or {}
         artifact_config = config.get("selection_artifact_config") or config.get("selection_artifact") or {}
@@ -1867,13 +1868,17 @@ class QEExperimentRuntimeAssetResolver:
             model_source_path=model_source_path,
             model_dest_dir=workspace_path / "model",
         )
-        referenced_model_modules = _require_model_code_for_pickled_local_modules(
-            model_params_path=model_dest,
-            model_code_roots=[workspace_path / "model"],
-            package_id=source.package_id or package_id,
-            experiment_id=source.experiment_id,
-            source_workspace_type=source.source_workspace_type,
-            phase="prepare_workspace",
+        referenced_model_modules = (
+            _require_model_code_for_pickled_local_modules(
+                model_params_path=model_dest,
+                model_code_roots=[workspace_path / "model"],
+                package_id=source.package_id or package_id,
+                experiment_id=source.experiment_id,
+                source_workspace_type=source.source_workspace_type,
+                phase="runtime_asset_admission",
+            )
+            if verify_model_code_contract
+            else []
         )
         dataset_processor_source = self._resolve_dataset_processor_path(
             source=source,

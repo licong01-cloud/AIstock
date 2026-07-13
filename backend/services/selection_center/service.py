@@ -29,7 +29,6 @@ from backend.services.strategy_package.selection_artifact import (
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SCOPE,
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
-    LiveInferencePreflightResult,
 )
 from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.service import StrategyPackageService
@@ -145,7 +144,6 @@ class SelectionCenterService:
             calendar_provider=self.calendar_provider,
             risk_policy_service=self.risk_policy_service,
             package_health_service=self.package_health_service,
-            asset_eligibility_service=self.asset_eligibility_service,
             repository=selection_evidence_repository,
         )
 
@@ -284,7 +282,6 @@ class SelectionCenterService:
         package_health: dict[str, dict[str, Any]] = {}
         for package_id in package_ids:
             record = self.package_repository.get(package_id)
-            asset_eligibility = self.asset_eligibility_service.require_eligible(record)
             manifest = record.current_manifest()
             raw_package_config = self._package_runtime_config(config, package_id)
             variant = self._resolve_runtime_variant(record, raw_package_config)
@@ -301,7 +298,6 @@ class SelectionCenterService:
                 trade_date=trade_date,
                 data_source=data_source,
             )
-            health["asset_eligibility"] = asset_eligibility.to_dict()
             records_by_id[package_id] = record
             package_configs[package_id] = package_config
             package_health[package_id] = health
@@ -522,15 +518,6 @@ class SelectionCenterService:
                 except DataUnavailableError:
                     continue
 
-        # Cold-start preflight (P0-F / Codex doc P0-4): fail fast on missing
-        # QE source / node / conf.yaml / factors / model params BEFORE
-        # generate_from_live_inference triggers the heavy materialization
-        # path that historically hung for 30+ minutes.
-        self._require_live_inference_preflight(
-            record=record,
-            runtime_config=runtime_config,
-        )
-
         self.selection_artifact_service.generate_from_live_inference(
             package_id=record.package_id,
             trade_date=trade_date,
@@ -538,36 +525,6 @@ class SelectionCenterService:
             runtime_config=runtime_config,
             include_reference_price=bool(artifact_config.get("include_reference_price", True)),
             cutoff_date=cutoff_date,
-        )
-
-    def _require_live_inference_preflight(
-        self,
-        *,
-        record: Any,
-        runtime_config: dict[str, Any],
-    ) -> LiveInferencePreflightResult:
-        """Run live inference cold-start preflight; raise typed error on fail.
-
-        Hardens Selection Center against the historical 30+ cold-start
-        timeouts (audit doc §0/§7 P0-4). The resolver is sourced from the
-        injected ``selection_artifact_service`` so tests can swap a fake
-        resolver via the existing dependency-injection seam.
-        """
-
-        resolver = getattr(self.selection_artifact_service, "runtime_asset_resolver", None)
-        if resolver is None or not hasattr(resolver, "require_preflight_or_raise"):
-            raise ArtifactGenerationFailedError(
-                "selection_artifact_service.runtime_asset_resolver is not preflight-capable",
-                context={"package_id": record.package_id},
-            )
-        return resolver.require_preflight_or_raise(
-            source_type=record.source_type,
-            source_id=record.source_id,
-            loop_id=record.loop_id,
-            run_id=record.run_id,
-            runtime_config=runtime_config,
-            manifest=record.current_manifest(),
-            package_id=record.package_id,
         )
 
     def resolve_point_in_time_context(

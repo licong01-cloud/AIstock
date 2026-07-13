@@ -20,7 +20,10 @@ from backend.services.strategy_package.asset_eligibility import (
     MULTI_ALPHA_SIGNAL_ADMISSION_SCHEMA,
     MULTI_ALPHA_SIGNAL_SELF_CHECK_PASSED,
 )
-from backend.services.strategy_package.frozen_runtime_self_check import FrozenRuntimeSelfCheckResult
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    runtime_asset_admission_status,
+)
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     Alpha158SchemaAsset,
@@ -913,6 +916,7 @@ def test_asset_eligibility_uses_persisted_signal_evidence_for_local_and_minqmt_w
     result = _promote(service, child_a1, child_fund)
 
     eligibility = service.component_service.repository.get(result.package.package_id)
+    assert runtime_asset_admission_status(eligibility.current_manifest())[0] is True
     class RaiseAdmissionReader:
         def get_eligible(self, **_kwargs):  # noqa: ANN003, ANN201
             raise AssertionError("legacy paper dry-run admission must not be read")

@@ -16,7 +16,7 @@ from backend.services.qe_archive.multi_alpha_provenance import MultiAlphaProvena
 from backend.services.trading_core.errors import DataUnavailableError, StrategyPackageValidationError, TradingCoreError
 
 from .components import StrategyPackageComponentService
-from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService
+from .frozen_runtime_self_check import FrozenRuntimeSelfCheckService, attach_runtime_asset_admission
 from .manifest import freeze_manifest
 from .models import (
     AlphaCombinationPolicy,
@@ -271,6 +271,8 @@ class MultiAlphaPackagePromotionService:
             self_check_result,
             provider_version=MULTI_ALPHA_PROMOTION_PROVIDER_VERSION,
         )
+        parent_manifest = attach_runtime_asset_admission(parent_manifest, self_check_result)
+        self.validator.validate_manifest(parent_manifest)
         parent = self.package_repository.save_manifest_with_assets(parent_manifest, frozen_assets.assets)
         parent = self.package_repository.update_artifact_refs(
             parent.package_id,

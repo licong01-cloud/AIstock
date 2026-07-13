@@ -4,6 +4,10 @@ import logging
 from datetime import date, datetime, timezone
 
 import psycopg2
+from backend.services.strategy_package.frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckResult,
+    attach_runtime_asset_admission,
+)
 from backend.services.strategy_package.manifest import compute_manifest_json_sha256, freeze_manifest
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.model_state import ModelRetrainJobStatus, ModelStalenessStatus, StrategyPackageModelState
@@ -106,9 +110,29 @@ def _seed_paper_ready_package(service: StrategyPackageService, package_id: str) 
     _record_stable_seed_runs(service, package_id, completed_at=completed_at)
 
 
+def _admitted_manifest(manifest):  # noqa: ANN001, ANN202
+    frozen = freeze_manifest(manifest.model_copy(update={"manifest_sha256": None}))
+    return attach_runtime_asset_admission(
+        frozen,
+        FrozenRuntimeSelfCheckResult(
+            package_id=frozen.package_id,
+            manifest_sha256=frozen.manifest_sha256,
+            origin="package_asset",
+            model_kind="unit",
+            model_expected_features=len(frozen.factor_set),
+            dynamic_factor_count=len(frozen.factor_set),
+            alpha158_alias_count=0,
+            factor_order_count=len(frozen.factor_set),
+            feature_count_delta=0,
+            model_params_path="unit://params.pkl",
+            model_probe_backend="unit",
+        ),
+    )
+
+
 def test_strategy_package_repository_persists_frozen_manifest_and_status_flow() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED}))
+    manifest = _admitted_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.BACKTEST_APPROVED}))
     saved = repo.save_manifest(manifest)
 
     service = StrategyPackageService(repository=repo)
@@ -595,7 +619,7 @@ def test_postgres_repository_recovers_duplicate_source_version_race(monkeypatch)
 
 def test_strategy_package_execution_policy_requires_backtest_contract_and_hash() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
+    manifest = _admitted_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
     repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 
@@ -717,7 +741,7 @@ def test_strategy_package_execution_policy_stores_unregistered_algo_as_runtime_c
 
 def test_asset_eligibility_accepts_paper_status_as_formal_lifecycle_state() -> None:
     repo = InMemoryStrategyPackageRepository()
-    manifest = freeze_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
+    manifest = _admitted_manifest(make_manifest().model_copy(update={"package_status": PackageStatus.PAPER_ENABLED}))
     record = repo.save_manifest(manifest)
     service = StrategyPackageService(repository=repo)
 

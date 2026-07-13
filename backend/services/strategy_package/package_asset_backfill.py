@@ -14,6 +14,11 @@ from backend.services.trading_core.errors import (
 )
 
 from .manifest import freeze_manifest
+from .frozen_runtime_self_check import (
+    FrozenRuntimeSelfCheckService,
+    attach_runtime_asset_admission,
+    runtime_asset_admission_status,
+)
 from .models import AlphaMode, FactorAsset, ModelAsset, StrategyPackageComponentRecord, StrategyPackageManifest
 from .package_asset import StrategyPackageAssetRecord, StrategyPackageAssetType
 from .package_asset_freeze import (
@@ -106,9 +111,15 @@ class PackageAssetBackfillService:
         *,
         repository: StrategyPackageRepository | Any | None = None,
         asset_freezer: PackageAssetFreezeService | None = None,
+        frozen_runtime_self_check: FrozenRuntimeSelfCheckService | Any | None = None,
     ) -> None:
         self.repository = repository or StrategyPackageRepository()
         self.asset_freezer = asset_freezer or PackageAssetFreezeService()
+        self.frozen_runtime_self_check = (
+            frozen_runtime_self_check
+            or getattr(self.asset_freezer, "frozen_runtime_self_check", None)
+            or FrozenRuntimeSelfCheckService(asset_store=getattr(self.asset_freezer, "asset_store", None))
+        )
 
     def build_plan(
         self,
@@ -421,11 +432,13 @@ class PackageAssetBackfillService:
         desired = desired_manifest.model_copy(update={"manifest_sha256": None, "package_status": record.package_status})
         try:
             frozen_candidate = freeze_manifest(desired)
+            admission_passed, _admission_context = runtime_asset_admission_status(frozen_candidate)
             if (
                 manifest_has_frozen_runtime_assets(frozen_candidate)
                 and frozen_candidate.manifest_sha256 == record.manifest_sha256
                 and self._ledger_covers(frozen_candidate)
                 and not self._manifest_missing_pickled_model_code_assets(frozen_candidate)
+                and admission_passed
             ):
                 return PackageAssetBackfillItem(
                     package_id=record.package_id,
@@ -438,9 +451,11 @@ class PackageAssetBackfillService:
                     frozen_manifest=frozen_candidate,
                 )
             frozen_assets = self.asset_freezer.freeze_manifest_assets(desired)
+            self_check_result = self.frozen_runtime_self_check.assert_manifest_self_contained(frozen_assets.manifest)
+            admitted_manifest = attach_runtime_asset_admission(frozen_assets.manifest, self_check_result)
             if (
-                frozen_assets.manifest.manifest_sha256 == record.manifest_sha256
-                and self._ledger_covers(frozen_assets.manifest)
+                admitted_manifest.manifest_sha256 == record.manifest_sha256
+                and self._ledger_covers(admitted_manifest)
             ):
                 return PackageAssetBackfillItem(
                     package_id=record.package_id,
@@ -450,7 +465,7 @@ class PackageAssetBackfillService:
                     new_manifest_sha256=record.manifest_sha256,
                     status=STATUS_SKIPPED_ALREADY_FROZEN,
                     asset_count=len(frozen_assets.assets),
-                    frozen_manifest=frozen_assets.manifest,
+                    frozen_manifest=admitted_manifest,
                     assets=frozen_assets.assets,
                 )
         except Exception as exc:  # noqa: BLE001 - per-package source failures are part of the report.
@@ -465,16 +480,16 @@ class PackageAssetBackfillService:
             package_name=record.package_name,
             alpha_mode=record.alpha_mode.value,
             old_manifest_sha256=record.manifest_sha256,
-            new_manifest_sha256=frozen_assets.manifest.manifest_sha256,
+            new_manifest_sha256=admitted_manifest.manifest_sha256,
             status=STATUS_PLANNED_FREEZE,
             asset_count=len(frozen_assets.assets),
-            frozen_manifest=frozen_assets.manifest,
+            frozen_manifest=admitted_manifest,
             assets=frozen_assets.assets,
             context={
                 "old_manifest_sha256": record.manifest_sha256,
-                "new_manifest_sha256": frozen_assets.manifest.manifest_sha256,
+                "new_manifest_sha256": admitted_manifest.manifest_sha256,
                 "asset_refs": _asset_key_payload(frozen_assets.assets),
-                "model_code_repair": _model_code_repair_payload(desired, frozen_assets.manifest),
+                "model_code_repair": _model_code_repair_payload(desired, admitted_manifest),
             },
         )
 

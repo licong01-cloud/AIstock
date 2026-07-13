@@ -51,7 +51,7 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     UnsupportedFeatureError,
 )
-from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
 
 
 class NoopRefreshAudit:
@@ -292,7 +292,7 @@ def ready_manifest_with_scores(package_name: str, symbol: str, score: float, ran
             },
         }
     )
-    frozen = freeze_manifest(manifest)
+    frozen = admit_manifest_for_test(manifest)
     seed_test_authoritative_artifact(frozen, rows)
     return frozen
 
@@ -308,7 +308,7 @@ def ready_manifest_with_score_rows(package_name: str, rows: list[dict]):
             },
         }
     )
-    frozen = freeze_manifest(manifest)
+    frozen = admit_manifest_for_test(manifest)
     seed_test_authoritative_artifact(frozen, rows)
     return frozen
 
