@@ -7,6 +7,7 @@
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
 > 实施进度：P1-A 已由 PR #1988 合入，P1-B 已由 PR #1994 合入，P1-C 已由 PR #2005 合入（merge `47817a63`），P1-D 已由 PR #2011 合入（merge `03ed6615`），P1-E 已由 PR #2019 合入（merge `fa0e97bf`）。Production activation wiring 已按 §8.7 完成实现并由 §13.6 验收，源代码合入状态必须以对应 PR 与 `main` readback 为准；production DDL/config/restart/binding 持久化、真实 SIM 和 broker side effect 仍分别由用户授权和执行。
+> 多 Alpha `B0_QUOTE_V2` pilot 的生产预注册见 §13.6.1；在对应代码合入、进程 readback 与 binding DML 完成前，当前运行仍不得宣称已经切换。
 >
 > 本文不宣布任何 Adaptive IS 下单能力已经实现或启用。
 
@@ -1817,6 +1818,27 @@ LEGACY run 被原地切换、真实 SIM feed/broker 已运行或 Phase 1 运行�
 | scheduler epoch/watchdog/status/shutdown ownership | `SimulationLifecycleScheduler::{_advance_miniqmt_quote_ingress_lifecycle,_miniqmt_quote_ingress_activation_health,shutdown_miniqmt_quote_ingress}`；background shutdown | direct lifecycle/post-close 每 tick 一次、health exact mapping、shutdown idempotent/stopped rejection；background executor shutdown regression通过 | implemented_verified | 不创建第二 scheduler/gateway；read API 不构造/repair；生命周期异常不吞掉、不改 run status 为假成功 |
 | immutable binding create 与 unattended roll-forward | `StrategyRuntimeReleaseService.create_binding(miniqmt_quote_control=...)`；`scheduler.py::_roll_forward_unattended_binding` | exact `QuoteControlBindingV1` canonical readback、非 MiniQMT loud reject、历史 omitted identity 保持、B0 next-date roll-forward revision exact 保持；P1-E binding/adapter/restart/parity/Phase0B + activation matrix `56 passed` | implemented_verified | 不复制 policy 阈值、不读/新增 approval gate；不修改当前 binding/run/plan；实际 production release/binding 创建仍需用户另行授权 |
 | quality、coverage 与跨模块回归 | changed-only ruff/compile/diff/guardrail、ownership、L0/module-registry/F2；activation direct、schema/config/ingress、Paper/Selection/Package、simulation L2 | activation `12 passed`，含真实 client fresh submit 在 runtime/gateway/QMT 前拒绝与 durable-active tick driver 经 drain delegate 恢复；statement `88.89%`、branch `74.19%`；schema/config/ingress `60 passed`；`paper_v2_backend=905 passed, 2 skipped, 2 xfailed`；simulation L2 `238 passed, 4 failed`，同 4 个失败在未修改 main exact nodeid 复现 | implemented_verified | 4 个基线失败仍为两个 deferred-buy 旧断言、retired compiler-route 异常类型和 operator fixture 账户依赖；未改任务外业务逻辑来制造绿色 |
+
+#### 13.6.1 现有多 Alpha StrategyPackage 的 B0 pilot 生产预注册（2026-07-13）
+
+本记录在目标交易日 `2026-07-14` 前冻结 pilot identity 与数值。它复用现有
+`pkg_ma_8ec5e389fa2c5e484a1ac7e9` / manifest
+`f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016`，只创建新的
+immutable runtime release/binding，不创建或修改 StrategyPackage，不改变选股、目标仓位、数量、价格、
+`SNIPER_MINIQMT`、tail、fallback 或 broker authority 语义。
+
+| design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| source observation / pilot preregistration | runtime `mqrt_sim_a02d3f2bdd17624043c2fae8`；`miniqmt_b0_quote_v2_pilot.py::build_pilot_artifacts` | 2026-07-13 MiniQMT gateway `TICK=1505`；transport lag p99 `16719.207ms`、max `55830.979ms`；p99 向上注册 20s，55s 异常仍 fail closed；不把测试 fixture 数值冒充生产 observation | implemented_verified | none |
+| exact quote policy | `_build_execution_policy`、`QuoteContractPolicy.from_execution_policy` | receive/source/exchange `20000ms`；negative skew `1000ms`；clock divergence `1000ms`；dependency-group skew `20000ms`；auction `OBSERVE_ONLY`；production dry-run exact policy/hash readback；六项均 required 且进入 immutable hash | implemented_verified | none |
+| TCA benchmark policy | `_build_execution_policy`、`TcaBenchmarkPolicy`、Phase 0A §3.2.2 | version `miniqmt_execution_tca_benchmark_v1`；max age `10000ms`；arrival forward `2000ms`；clock skew `1000ms`；transport `3000ms`；direct schema tests；只影响 TCA quality | implemented_verified | none |
+| mark policy | `quote_evidence_policy`、`B0QuoteV2RevisionV1` | `miniqmt_execution_tca_mark_selector_v1`；`markout_max_lag_ms=10000`；revision/readback direct tests；缺合法 quote 写 `UNAVAILABLE` | implemented_verified | none |
+| policy/revision identity | `decision.py::_immutable_execution_policy_json`、`source_build_manifest()`、`B0QuoteV2RevisionV1` | execution policy id `b0_quote_v2:SNIPER_MINIQMT:ma_8ec5e389:20260714:v1`；binding `miniqmt_quote_control_binding_v1/B0_QUOTE_V2`；nested immutable `policy_json` execution-plan direct test；plan 保留 version/hash envelope | implemented_verified | none |
+| production tool and transaction | `scripts/miniqmt_b0_quote_v2_pilot.py` | dry-run 默认；全部业务值 required；同 strategy/date 冲突反例；advisory transaction lock、release+binding rollback、independent readback、idempotent already-current tests；production dry-run `conflicts=[]`；不调用 broker、不创建 package | implemented_verified | none |
+| activation state separation | source PR/merge、运行进程 readback、production DML/readback、正常交易日 SIM evidence | DESIGN-COMPLIANCE-001、F2 validator、CI、live scheduler/quote diagnostics/Phase 0B v2 query 分阶段记录；代码/dry-run 不得冒充已激活 | implemented_verified | none |
+
+截至本记录写入时，production activation 的事实状态仍为：待 source merge、用户重启、binding DML/readback
+与 `2026-07-14` 正常交易日实际 SIM evidence；此状态说明不构成验收矩阵缺口，也不得被改写为已切换。
 
 DESIGN-COMPLIANCE-001 四项结论：
 
