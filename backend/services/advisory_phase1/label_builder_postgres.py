@@ -16,7 +16,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
-from backend.services.advisory_phase0a.policy import canonical_json_sha256
+from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.calculation_evidence import CalculationEvidenceStoreError, LocalCalculationEvidenceStore
 from backend.services.advisory_phase1.label_builder import (
     LabelAppendRequest,
@@ -53,6 +53,16 @@ logger = logging.getLogger(__name__)
 REASON_LABEL_PARTITION_MISSING = "ADVISORY_PHASE1C3_LABEL_PARTITION_MISSING"
 REASON_CALCULATION_EVIDENCE_INVALID = "ADVISORY_PHASE1C3_CALCULATION_EVIDENCE_INVALID"
 REASON_DATABASE_INVARIANT_VIOLATION = "ADVISORY_PHASE1C3_DATABASE_INVARIANT_VIOLATION"
+
+
+def _same_calculation_evidence(left: CalculationEvidenceBundle, right: CalculationEvidenceBundle) -> bool:
+    """Compare the canonical persisted contract, not Python JSON wrapper types."""
+
+    return left.canonical_bytes() == right.canonical_bytes()
+
+
+def _same_outcome_label_version(left: OutcomeLabelVersion, right: OutcomeLabelVersion) -> bool:
+    return canonicalize(left.model_dump(mode="python")) == canonicalize(right.model_dump(mode="python"))
 
 
 class CalculationEvidenceReader(Protocol):
@@ -117,7 +127,10 @@ class PostgresOutcomeLabelRepository:
             )
         except CalculationEvidenceStoreError as error:
             raise LabelBuilderError(REASON_CALCULATION_EVIDENCE_INVALID, "calculation evidence readback failed") from error
-        if persisted_evidence != request.outcome_result.calculation_evidence:
+        if not _same_calculation_evidence(
+            persisted_evidence,
+            request.outcome_result.calculation_evidence,
+        ):
             raise LabelBuilderError(REASON_CALCULATION_EVIDENCE_INVALID, "calculation evidence readback differs from label result")
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -148,10 +161,9 @@ class PostgresOutcomeLabelRepository:
                 loaded = self._select_by_version_locked(cur, str(version.label_version_id))
                 if loaded is None:
                     raise LabelBuilderError(REASON_LABEL_HEADER_PAYLOAD_CLOSURE_INVALID, "label append did not persist complete authority")
-                if loaded != version:
+                if not _same_outcome_label_version(loaded, version):
                     raise LabelBuilderError(REASON_LABEL_HEADER_PAYLOAD_CLOSURE_INVALID, "label append readback differs from persisted authority")
                 return loaded
-
     def get(self, label_version_id: str) -> OutcomeLabelVersion | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

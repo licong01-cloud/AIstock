@@ -41,13 +41,17 @@ Batch D 完成只表示一个真实 fixture/development snapshot 能从权威历
   attempt；不存在未验证文件直接 seal 的合法入口。
 - `requirements.txt` 已固定 `pyarrow==21.0.0`，Batch D 不需要新增 Python 依赖。
 
-### 2.2 当前缺口
+### 2.2 实现完成状态
 
-- 尚无 `snapshot_writer.py`、全量 Parquet verifier 或 dataset local CAS。
-- `complete_verify()` 明确只签发 `PHASE1C3_BATCH_C_FILESET_FOUNDATION_V1`，不能签发 Batch D full receipt。
-- 尚无 repository `complete_promote()`，所以当前不存在真实 `VERIFIED -> PROMOTED` 正向链。
-- 尚无 manifest/promotion receipt 的 canonical model、durable local publication 或完整 crash-retry oracle。
-- 尚无真实 SEALED golden；Phase 1C-3 不能标记完成。
+- `snapshot_writer.py` 已实现完整 logical role schema、确定性 Parquet writer、全量 verifier 和单一只读
+  `REPEATABLE READ` source view。
+- Batch C foundation verify 与 Batch D `PHASE1C3_BATCH_D_FULL_PARQUET_V1` full receipt 保持独立，foundation
+  receipt 不能进入 promotion/seal。
+- repository 已实现真实 `VERIFIED -> PROMOTED -> SEALED` 正向链、attempt fencing、event retry、CAS reopen
+  和 exact aggregate readback。
+- manifest、promotion receipt、seal receipt、dataset local CAS 与 crash-retry oracle 已实现并覆盖负向测试。
+- 已在配置的 DEV PostgreSQL 与 repo-external filesystem 上生成首个真实 SEALED golden：
+  `advbuild_f653865b960cfb6852df3aeb` / `advsnap_c7fade46a6b842118b111d89`。
 
 ### 2.3 冻结的运行边界
 
@@ -622,7 +626,8 @@ ADVISORY_PHASE1C3_SEAL_READBACK_CONFLICT
 
 ### 23.3 L2 DEV PostgreSQL
 
-- 使用现有 DEV DB env 连接，不猜测连接参数；不运行 migration。
+- 使用现有 DEV DB env 连接，不猜测连接参数；基础 migration 只由显式 DEV/release workflow 执行，golden CLI
+  自身不运行 migration。
 - 从真实 COMPLETE fixture captures/labels 创建 frozen request，执行一条完整 build 到 SEALED。
 - 验证 source transaction split-view 防护、attempt fencing、full verify receipt、promotion CAS、seal membership/readback。
 - 对每个 checkpoint crash 注入并 resume；无半成品被视为成功。
@@ -718,24 +723,24 @@ orphan bytes 保留待 Phase 1I GC，不做危险自动删除。Batch C schema �
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-301 | `snapshot_writer.py` schema/role registries | schema descriptor golden + authority-column parity | design_ready | none |
-| F-302 | deterministic writer config and row batching | two-write byte equality for every role | design_ready | none |
-| F-303 | PostgreSQL source reader/materialization coordinator | split-view and bounded cursor DEV tests | design_ready | none |
-| F-304 | existing evidence store reader + outcome evidence mapper | missing/conflict/owner/policy closure tests | design_ready | none |
-| F-305 | `MaterializationReceipt`; existing attempt file repository | real close/reopen/file-set exact tests | design_ready | none |
-| F-306 | `FullParquetVerifier` | corruption/schema/sort/relational full-read matrix | design_ready | none |
-| F-307 | `complete_full_verify()` separate from Batch C `complete_verify()` | cross-contract rejection tests | design_ready | none |
-| F-308 | shared local CAS primitive; `LocalFilesystemDatasetStore` | real filesystem exact retry/conflict/durability tests | design_ready | none |
-| F-309 | manifest/promotion/seal canonical models | canonical bytes and crash-retry identity golden | design_ready | none |
-| F-310 | `complete_promote()` repository transaction | CAS reopen + fencing/checkpoint DEV tests | design_ready | none |
-| F-311 | receipt-driven assembly + existing `save_sealed_snapshot()` | full membership/readback/rollback DEV tests | design_ready | none |
-| F-312 | CLI resume and attempt recovery | checkpoint-by-checkpoint crash injection | design_ready | none |
-| F-313 | base validator and partition reuse planner | unchanged reuse/changed rewrite/invalidation tests | design_ready | none |
-| F-314 | exact capability manifest builder | multidimensional mismatch and readiness tests | design_ready | none |
-| F-315 | offline CLI on DEV DB/store | two real materialization outputs byte-equal; one real SEALED golden/readback | design_ready | none |
-| F-316 | error propagation, reason codes, complete implementation | no fallback/fake-success scan + negative tests | design_ready | none |
-| F-317 | changed-file/source scan | no approval/RBAC/role/grant/revoke/manual gate | design_ready | none |
-| F-318 | frozen path diff + direct regressions | shared runtime zero-diff and no-training evidence | design_ready | none |
+| F-301 | `snapshot_writer.py` schema/role registries | every-role schema descriptor golden; DEV/production information-schema parity exact | verified | none |
+| F-302 | deterministic writer config and bounded row batching | two-write actual byte equality across 24 files; 65,536-row/128-MiB fail-closed contract | verified | none |
+| F-303 | PostgreSQL source reader/materialization coordinator | DEV build used one read-only repeatable-read source transaction; server-cursor/spool/final-count tests passed | verified | none |
+| F-304 | descriptor-derived evidence store reader + outcome evidence mapper | DEV typed evidence CAS roundtrip plus canonical URI/hash/size and negative tests | verified | none |
+| F-305 | typed `MaterializationReceipt`; attempt file repository | DEV materialization content set `d8faaf0c...` plus forged-receipt rejection | verified | none |
+| F-306 | `FullParquetVerifier` | DEV read-only receipt `97913a8c...`; corruption/schema/sort/relational full-read matrix | verified | none |
+| F-307 | `complete_full_verify()` separate from Batch C `complete_verify()` | cross-contract and hand-built-receipt rejection tests | verified | none |
+| F-308 | shared `LocalContentAddressedStore` | real repo-external filesystem exact retry/conflict/path/capacity/durability tests | verified | none |
+| F-309 | manifest/promotion/seal canonical models | canonical bytes, forged hash, duplicate identity and exact retry tests | verified | none |
+| F-310 | `complete_promote()` repository transaction | DEV checkpoint reached PROMOTED after actual CAS reopen; fencing/crash tests passed | verified | none |
+| F-311 | receipt-driven assembly + `save_sealed_snapshot()` | DEV aggregate sealed as `advsnap_c7fade46a6b842118b111d89`; CLI exact readback passed | verified | none |
+| F-312 | CLI resume and attempt recovery | DEV failed attempts resumed without event collision; all checkpoint/timeout crash injection tests passed | verified | none |
+| F-313 | base validator and partition reuse planner | unchanged reuse, changed rewrite contract, invalidation recheck tests | verified | none |
+| F-314 | exact capability manifest builder | full-dimension mismatch and three readiness=false tests | verified | none |
+| F-315 | offline CLI on DEV DB/store | 24-file actual byte/metadata equality; one build completed SEALED and comparison staging was cleaned | verified | none |
+| F-316 | error propagation, reason codes, complete implementation | real DEV defects failed explicitly; no fallback/fake-success scan and recovery tests passed | verified | none |
+| F-317 | changed-file/source scan | no approval/RBAC/grant/revoke/manual gate; actor remains diagnostic only | verified | none |
+| F-318 | frozen path diff + direct regressions | changed paths remain Advisory Batch D only; Selection/Paper/simulation/QMT/training/runtime zero-diff | verified | none |
 
 ## 28. DESIGN-COMPLIANCE-001
 
