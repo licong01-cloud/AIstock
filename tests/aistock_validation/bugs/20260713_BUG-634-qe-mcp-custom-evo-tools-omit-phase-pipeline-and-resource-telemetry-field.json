@@ -1,8 +1,10 @@
 {
-  "actual": "QE MCP schemas omit both fields; create/update default them to false and cannot configure the model-aware GPU phase pipeline through MCP.",
+  "actual": "The active Codex MCP tool snapshot omitted both fields even though commit b4bc9116 had already added them to the gateway module. Restarting FastAPI did not refresh the client-owned MCP schema snapshot.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260713_BUG-634-qe-mcp-custom-evo-tools-omit-phase-pipeline-and-resource-telemetry-field.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/mcp/test_gateway_profiles.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-634",
@@ -13,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-07-13T12:05:46.796944Z",
-  "description": "QE MCP schemas omit both fields; create/update default them to false and cannot configure the model-aware GPU phase pipeline through MCP.",
+  "description": "A long-lived Codex MCP session continued to expose the pre-b4bc9116 custom_evo tool schemas after the repository and FastAPI runtime were updated. Fresh gateway introspection exposes both fields correctly, so the remaining defect is stale client schema activation plus missing end-to-end schema regression coverage.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,9 +25,11 @@
     }
   ],
   "evidence_uris": [
-    "runtime task qe_20260713_195926_11e3 required direct PUT before MCP launch"
+    "runtime task qe_20260713_195926_11e3 required direct PUT before MCP launch",
+    "commit b4bc9116 adds both fields to create/update/append/rerun gateway wrappers",
+    "python debug_tools/mcp/list_tools_smoke.py --server aistock-qe reports both fields for all four tools"
   ],
-  "expected": "QE MCP create, update, append, and rerun tools expose and faithfully forward phase_pipeline_enabled and resource_telemetry_enabled, preserving the backend invariant that phase pipeline requires telemetry.",
+  "expected": "Fresh QE MCP sessions expose and faithfully forward phase_pipeline_enabled and resource_telemetry_enabled for create, update, append, and rerun; schema-level regression tests fail if either property disappears. Operators reconnect the MCP client after gateway code updates.",
   "first_seen_at": "2026-07-13T12:05:46.796944Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -40,7 +44,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "Call qe_custom_evo_create_pending for a GPU task requiring phase pipelining, then qe_custom_evo_get_config; phase_pipeline_enabled and resource_telemetry_enabled are false and the MCP schema rejects either field.",
+  "reproduce_command": "Compare the long-lived Codex tool schema with `python debug_tools/mcp/list_tools_smoke.py --server aistock-qe` after updating to b4bc9116: the active session omits the two fields while fresh gateway introspection includes them.",
   "required_verification": [
     "l0"
   ],
@@ -51,7 +55,7 @@
   "suspected_modules": [
     "quantevolver"
   ],
-  "title": "QE MCP custom_evo tools omit phase pipeline and resource telemetry fields",
+  "title": "QE MCP client retains stale custom_evo phase-pipeline schema after gateway update",
   "trigger_condition": {
     "fingerprint": "20201169f4542d0b3fdca98e",
     "source_event_id": "FE-20260713-20201169f454"
