@@ -7,7 +7,8 @@
     "backend/services/quantevolver/templates/read_exp_res.py",
     "backend/services/quantevolver/config_composer.py",
     "tests/aistock_validation/bugs/20260713_BUG-625-qe-benchmark-loader-partial-hs300-benchmark-backtest-end.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/tests/quantevolver/test_benchmark_from_bin_bug625.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-625",
