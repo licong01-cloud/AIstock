@@ -690,29 +690,46 @@ def _extract_return_curves(recorder) -> dict:
                 denom[denom == 0] = 1
                 result["cumulative_portfolio_with_cost"] = (nav * (exc_wc + 1) / denom).tolist()
 
-        # --- Benchmark NAV (from "bench" column if present, fallback to parquet) ---
+        # --- Benchmark NAV (BUG-625/方案A: 原生 bench 列优先；缺失从回测 Qlib bin 读 000300.SH) ---
+        # 绝对收益与 excess 口径分离：excess 仅在 benchmark 完整覆盖 report 全区间时计算；
+        # partial benchmark 不得静默填0/截断，改为记 excess_unavailable_reason 并跳过 excess。
         bench_ret = None
         bench_cols = [col_lower[k] for k in col_lower if k == "bench"]
         if bench_cols:
             _raw_bench = pd.to_numeric(df[bench_cols[0]], errors="coerce")
-            if _raw_bench.notna().any():
-                bench_ret = _raw_bench.fillna(0)
+            if len(_raw_bench) > 0 and _raw_bench.notna().all():
+                bench_ret = _raw_bench  # native, complete — no silent fill
+            elif _raw_bench.notna().any():
+                print("[WARN] native bench column has NaN; re-deriving from Qlib bin (no fill-0)")
 
-        # Fallback: bench 列全为 None/NaN（benchmark=~ 导致），从本地 parquet 加载
+        # Fallback: 原生 bench 列缺失/不全 → 从回测所用 Qlib bin 读 000300.SH（与价格同源，覆盖到数据末日）
         if bench_ret is None:
-            _bench_path = Path(__file__).parent / "benchmark_sh000300.parquet"
-            if _bench_path.exists():
-                try:
-                    _bench_df = pd.read_parquet(_bench_path)
-                    _bench_sr = _bench_df["bench"]
-                    _bench_sr.index = pd.to_datetime(_bench_sr.index)
-                    # 对齐到 report 日期
-                    _report_dates = pd.to_datetime(df.index)
-                    _bench_aligned = _bench_sr.reindex(_report_dates).fillna(0)
-                    bench_ret = _bench_aligned
-                    print(f"[INFO] Loaded benchmark from parquet fallback: {_bench_path.name}")
-                except Exception as _e:
-                    print(f"Warning: failed to load benchmark parquet: {_e}")
+            _report_dates = pd.to_datetime(df.index)
+            try:
+                from qlib.data import D
+                _rs = str(_report_dates.min().date())
+                _re = str(_report_dates.max().date())
+                _bf = D.features(["000300.SH"], ["$close/Ref($close,1)-1"], start_time=_rs, end_time=_re, freq="day")
+                if _bf is not None and not _bf.empty:
+                    _bsr = _bf.iloc[:, 0].droplevel("instrument")
+                    _bsr.index = pd.to_datetime(_bsr.index)
+                    _aligned = _bsr.reindex(_report_dates)
+                    _missing = int(_aligned.isna().sum())
+                    if _missing == 0:
+                        bench_ret = _aligned
+                        print("[INFO] Loaded benchmark from Qlib bin (000300.SH) for excess")
+                    else:
+                        result["excess_unavailable_reason"] = (
+                            f"benchmark_bin_incomplete: {_missing}/{len(_report_dates)} report day(s) "
+                            f"missing 000300.SH in [{_rs},{_re}]"
+                        )
+                        print(f"[WARN] excess metrics unavailable: {result['excess_unavailable_reason']}")
+                else:
+                    result["excess_unavailable_reason"] = f"benchmark_bin_empty: 000300.SH absent in [{_rs},{_re}]"
+                    print(f"[WARN] excess metrics unavailable: {result['excess_unavailable_reason']}")
+            except Exception as _e:
+                result["excess_unavailable_reason"] = f"benchmark_load_error: {type(_e).__name__}: {_e}"
+                print(f"[WARN] excess metrics unavailable: {result['excess_unavailable_reason']}")
 
         if bench_ret is not None:
             result["cumulative_benchmark"] = (1 + bench_ret).cumprod().tolist()
