@@ -5475,6 +5475,93 @@ def test_miniqmt_reconciliation_warning_keeps_durable_event_loop_pending() -> No
     }
 
 
+def test_miniqmt_post_close_pending_algos_are_retryable_not_fake_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "qmt_batch_id": "qmtbatch_bug633",
+        "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+        "broker_called": True,
+        "submitted_intents": 26,
+        "failed_intents": 0,
+        "pending_intents": 3,
+        "qmt_batch_result": {
+            "batch_id": "qmtbatch_bug633",
+            "batch_status": OrderBatchStatus.SUBMITTING.value,
+            "succeeded": 26,
+            "failed": 0,
+            "pending": 3,
+            "pending_child_trigger_count": 3,
+            "runtime_evidence": {
+                "source": "simulation_runtime_event_loop_tick_driver",
+                "runtime_id": "mqrt_bug633",
+                "active_algo_count": 29,
+                "pending_algo_count": 3,
+                "submitted_child_count": 26,
+                "rejected_child_count": 0,
+            },
+        },
+        "miniqmt_event_loop_tick_driver": {
+            "pending_parent_intent_ids": ["intent_a", "intent_b", "intent_c"],
+        },
+    }
+    run = SimpleNamespace(
+        run_id="simrun_bug633",
+        trade_date=TRADE_DATE,
+        strategy_id="strategy_bug633",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        status=SimulationDailyRunStatus.INTRADAY_RUNNING,
+        run_payload_json=payload,
+    )
+
+    class _Repository:
+        status: SimulationDailyRunStatus | None = None
+        payload_patch: dict[str, Any] | None = None
+
+        def update_simulation_daily_run(self, run_id: str, *, status, payload_patch, payload_unset=None):  # noqa: ANN001, ANN201, ARG002
+            assert run_id == run.run_id
+            self.status = status
+            self.payload_patch = payload_patch
+            return SimpleNamespace(
+                run_id=run.run_id,
+                trade_date=run.trade_date,
+                strategy_id=run.strategy_id,
+                broker_backend=run.broker_backend,
+                status=status,
+                run_payload_json={**payload, **payload_patch},
+            )
+
+    repository = _Repository()
+    scheduler = object.__new__(SimulationLifecycleScheduler)
+    scheduler.repository = repository
+    monkeypatch.setattr(
+        scheduler,
+        "_fresh_miniqmt_post_close_payload",
+        lambda **_kwargs: (payload, {"schema_version": "miniqmt_post_close_fresh_reconcile_v1"}),
+    )
+
+    result = scheduler._post_close_terminalize_miniqmt_run(  # noqa: SLF001
+        run=run,
+        as_of_time=datetime(2026, 5, 21, 15, 1),
+    )
+
+    assert result["status"] == SimulationDailyRunStatus.FAILED_RETRYABLE.value
+    assert result["reason"] == "miniqmt_post_close_event_loop_pending_algos_untriggered"
+    assert repository.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    terminalization = repository.payload_patch["miniqmt_post_close_terminalization"]
+    assert terminalization["audit_state"] == "failed_retryable_after_close"
+    assert terminalization["event_loop_pending_after_close"] == {
+        "schema_version": "miniqmt_event_loop_pending_after_close_v1",
+        "reason_code": "MINIQMT_EVENT_LOOP_PENDING_ALGOS_MARKET_CLOSED",
+        "stage": "MINIQMT_POST_CLOSE_TERMINALIZATION",
+        "reason": "event_loop_algorithms_remained_running_without_child_order_until_market_close",
+        "pending_intents": 3,
+        "pending_parent_intent_ids": ["intent_a", "intent_b", "intent_c"],
+        "qmt_batch_id": "qmtbatch_bug633",
+        "qmt_batch_status": OrderBatchStatus.SUBMITTING.value,
+    }
+
+
 def test_miniqmt_reconciliation_warning_rejects_unproven_pending_event_loop() -> None:
     run = SimpleNamespace(
         run_payload_json={

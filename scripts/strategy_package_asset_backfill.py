@@ -23,6 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.services.strategy_package.package_asset_backfill import PackageAssetBackfillService  # noqa: E402
+from backend.config_manager_compat import ConfigManager  # noqa: E402
 from backend.services.strategy_package.package_asset_freeze import (  # noqa: E402
     PackageAssetFreezeService,
     StrategyPackageAssetSource,
@@ -97,12 +98,13 @@ class AssetBackfillScriptError(RuntimeError):
 def _load_env_file(path: Path | None) -> None:
     if path is None or not path.exists():
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
-            continue
-        key, value = text.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    env_file = path.resolve()
+    for key, value in ConfigManager(env_file).read_env().items():
+        os.environ.setdefault(key, value)
+    os.environ.setdefault(
+        "AISTOCK_PACKAGE_ASSET_STORE_ROOT",
+        str(env_file.parent / "rdagent_assets" / "package_assets"),
+    )
 
 
 def _db_config(*, target_db: str) -> dict[str, Any]:
