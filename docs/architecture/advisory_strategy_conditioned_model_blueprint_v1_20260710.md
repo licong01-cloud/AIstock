@@ -990,7 +990,7 @@ ADVISORY_RESEARCH_EVIDENCE_UNAVAILABLE
 - 正向要求：合法数据必须贯通 capture -> label -> build -> publish golden E2E。
 - 发布/回滚：DDL 只在开发/发布阶段执行；运行时 source/capture/label/build/snapshot/GC 全部由已设计程序、事务和状态机自动约束，无人工审批。
 - 详细设计等级：F2。
-- 已形成详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`；当前仅 `design_ready`，未执行 DDL、DML、store 配置、快照构建或调度激活。
+- 已形成父级详细设计：`docs/architecture/advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`。Phase 1C-3 Batch D 已由 PR `#2056` 合入，并在 DEV PostgreSQL 与 repo-external filesystem 形成真实 SEALED golden；这只证明 fixture/development 离线数据集闭环，不表示生产 observer、生产历史数据积累、模型训练或 runtime consumer 已启用。下一子阶段 Phase 1D 已形成实施级详细设计 `docs/architecture/advisory_phase1d_source_availability_observer_capacity_f2_design_20260714.md`，当前仍为 `design_ready`，未执行 Phase 1D DDL/DML、容量探针或 observer 激活。
 
 ### Phase 0B：基线质量与可建模性审计
 
