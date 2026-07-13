@@ -30,8 +30,8 @@
   "expected": "The read-only status API forwards the exact active selection policy and reports submit mode consistently with its top-level default_submit value, without changing scheduler, broker, or order behavior.",
   "first_seen_at": "2026-07-11T14:11:04.840681Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "106ca3f4d994be9e163b37057d3571fbb96bbb01",
+  "fixed_at": "2026-07-13T17:12:13.801543Z",
   "github_issue_number": 1971,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1971",
   "last_seen_at": "2026-07-11T14:11:04.840681Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1972",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "de75889c6df4c092826ecc71",
     "source_event_id": "FE-20260711-de75889c6df4"
   },
+  "validation_evidence": [
+    "PR #1972 merged; commit 106ca3f4 is in main; GitHub issue #1971 closed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
