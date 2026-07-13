@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-13T03:12:15.299812Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "8893320ad98ec39642755710aca8bb7a07a716cd",
+  "fixed_at": "2026-07-13T03:44:43.374587Z",
   "github_issue_number": 2025,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2025",
   "last_seen_at": "2026-07-13T03:12:15.299812Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2026",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -48,7 +49,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -57,6 +58,9 @@
     "fingerprint": "340d2fb8b07b2ecc2ea91a0a",
     "source_event_id": "FE-20260713-340d2fb8b07b"
   },
+  "validation_evidence": [
+    "PR #2026 required checks passed; local targeted matrix 3 passed; l0 and validation_module_registry_l0 passed; verify-clients clients_ready=4/4"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
