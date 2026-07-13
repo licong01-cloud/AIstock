@@ -6,8 +6,14 @@ so that we can manage the project `.env` file via FastAPI.
 
 from __future__ import annotations
 
+import io
+import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Tuple
+
+from dotenv.parser import parse_stream
 
 from backend.miniqmt_quote_contract_env import (
     QUOTE_INGRESS_ENV_METADATA,
@@ -18,6 +24,73 @@ from backend.miniqmt_quote_contract_env import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = PROJECT_ROOT / ".env"
+_ENV_KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
+
+
+def _read_env_values(env_file: Path) -> Dict[str, str]:
+    config: Dict[str, str] = {}
+    with env_file.open("r", encoding="utf-8") as stream:
+        for binding in parse_stream(stream):
+            if binding.error:
+                raise RuntimeError(
+                    f"CONFIG_ENV_PARSE_FAILED: {env_file}: line {binding.original.line}"
+                )
+            if binding.key is None:
+                continue
+            if binding.value is None:
+                raise RuntimeError(
+                    f"CONFIG_ENV_VALUE_MISSING: {env_file}: line {binding.original.line}"
+                )
+            config[binding.key] = binding.value
+    return config
+
+
+def _format_env_assignment(key: str, value: object) -> str:
+    if _ENV_KEY_PATTERN.fullmatch(key) is None:
+        raise ValueError(f"CONFIG_ENV_KEY_INVALID: {key!r}")
+    raw_value = str(value)
+    escaped = raw_value.replace("\\", "\\\\").replace("'", "\\'")
+    candidates = (f"{key}={raw_value}", f"{key}='{escaped}'")
+    for candidate in candidates:
+        bindings = list(
+            parse_stream(
+                io.StringIO(
+                    f"{candidate}\n__AISTOCK_ENV_SERIALIZER_SENTINEL__=ok\n"
+                )
+            )
+        )
+        if (
+            len(bindings) == 2
+            and not bindings[0].error
+            and bindings[0].key == key
+            and bindings[0].value == raw_value
+            and not bindings[1].error
+            and bindings[1].key == "__AISTOCK_ENV_SERIALIZER_SENTINEL__"
+            and bindings[1].value == "ok"
+        ):
+            return candidate
+    raise RuntimeError(f"CONFIG_ENV_VALUE_UNREPRESENTABLE: {key}")
+
+
+def _render_env_document(lines: list[str]) -> str:
+    rendered: list[str] = []
+    for line in lines:
+        if not line or line.startswith("#"):
+            rendered.append(line)
+            continue
+        key, separator, quoted_value = line.partition("=")
+        if not separator or not quoted_value.startswith('"') or not quoted_value.endswith('"'):
+            raise RuntimeError(f"CONFIG_ENV_RENDER_INVALID: {key or '<missing-key>'}")
+        rendered.append(_format_env_assignment(key, quoted_value[1:-1]))
+    return "\n".join(rendered)
+
+
+def _mismatched_env_keys(expected: Dict[str, str], actual: Dict[str, str]) -> list[str]:
+    return sorted(
+        key
+        for key in set(expected) | set(actual)
+        if expected.get(key) != actual.get(key)
+    )
 
 
 class ConfigManager:
@@ -370,28 +443,14 @@ class ConfigManager:
     def read_env(self) -> Dict[str, str]:
         """Read .env file and fill missing keys with defaults."""
 
-        config: Dict[str, str] = {}
         if not self.env_file.exists():
-            for key, info in self.default_config.items():
-                config[key] = str(info.get("value", ""))
-            return config
+            return {
+                key: str(info.get("value", ""))
+                for key, info in self.default_config.items()
+            }
 
         try:
-            with self.env_file.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    if "=" not in line:
-                        continue
-                    key, value = line.split("=", 1)
-                    key = key.strip()
-                    value = value.strip()
-                    if value.startswith("\"") and value.endswith("\""):
-                        value = value[1:-1]
-                    elif value.startswith("'") and value.endswith("'"):
-                        value = value[1:-1]
-                    config[key] = value
+            config = _read_env_values(self.env_file)
         except OSError as exc:
             raise RuntimeError(f"CONFIG_ENV_READ_FAILED: {self.env_file}") from exc
 
@@ -605,8 +664,42 @@ class ConfigManager:
                 for key in preserved_unknown:
                     lines.append(f'{key}="{config[key]}"')
 
-            with self.env_file.open("w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
+            rendered_document = _render_env_document(lines)
+            temp_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    newline="\n",
+                    prefix=f".{self.env_file.name}.",
+                    suffix=".tmp",
+                    dir=self.env_file.parent,
+                    delete=False,
+                ) as stream:
+                    temp_path = Path(stream.name)
+                    stream.write(rendered_document)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+
+                preflight_values = _read_env_values(temp_path)
+                preflight_mismatches = _mismatched_env_keys(config, preflight_values)
+                if preflight_mismatches:
+                    raise RuntimeError(
+                        f"CONFIG_ENV_WRITE_PREFLIGHT_MISMATCH: {preflight_mismatches}"
+                    )
+
+                os.replace(temp_path, self.env_file)
+                temp_path = None
+
+                readback_values = _read_env_values(self.env_file)
+                readback_mismatches = _mismatched_env_keys(config, readback_values)
+                if readback_mismatches:
+                    raise RuntimeError(
+                        f"CONFIG_ENV_WRITE_READBACK_MISMATCH: {readback_mismatches}"
+                    )
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
 
             return True
         except OSError as exc:
@@ -657,7 +750,11 @@ class ConfigManager:
         try:
             from dotenv import load_dotenv
 
-            load_dotenv(dotenv_path=self.env_file, override=True)
+            if not self.env_file.exists():
+                raise RuntimeError(f"CONFIG_ENV_RELOAD_FAILED: {self.env_file}")
+            self.read_env()
+            if not load_dotenv(dotenv_path=self.env_file, override=True):
+                raise RuntimeError(f"CONFIG_ENV_RELOAD_FAILED: {self.env_file}")
         except (ImportError, OSError) as exc:
             raise RuntimeError(f"CONFIG_ENV_RELOAD_FAILED: {self.env_file}") from exc
 
