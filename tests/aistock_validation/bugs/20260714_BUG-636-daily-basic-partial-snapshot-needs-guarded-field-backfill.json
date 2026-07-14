@@ -22,12 +22,18 @@
   ],
   "evidence_uris": [],
   "expected": "Operators can preview and atomically backfill missing daily_basic fields for one explicit trade date without deleting rows, overwriting non-NULL values, or accepting an incomplete provider snapshot.",
+  "fix_commit": "d7d37e57ad58b4fb8bf4d2735d98f4cba914df53",
+  "fixed_at": "2026-07-14T02:38:11.569705Z",
   "github_issue_number": 2072,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2072",
   "module": "scripts",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2073",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
   "reproduce_command": "python scripts/backfill_tushare_daily_basic_fields.py --trade-date 2026-07-13",
   "required_verification": [
     "l0",
@@ -36,7 +42,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "scripts"
   ],
@@ -44,5 +50,8 @@
   "trigger_condition": {
     "fingerprint": "fdde572c2e439b39565eee6a",
     "source_event_id": "FE-20260714-fdde572c2e43"
-  }
+  },
+  "validation_evidence": [
+    "GitHub required checks -> passed"
+  ]
 }
