@@ -1,6 +1,7 @@
 {
   "actual": "data_sync_target_due repeatedly submits index_daily throughout the night and trading session; running work becomes invisible after the 60-second created_at window; duplicate rows are inserted before duplicate_running is detected; original 2026-07-13 targets are retried against 2026-07-14 and reuse the 16:50 schedule_id.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/services/data_sync_targets.py",
     "backend/services/audit_backed_data_health.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
