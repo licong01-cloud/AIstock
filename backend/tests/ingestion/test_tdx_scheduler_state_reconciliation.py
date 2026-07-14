@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import backend.db.init_tushare_schedules as schedule_catalog_module
 import backend.ingestion.tdx_scheduler as scheduler_module
 from backend.db.init_tushare_schedules import _DEFAULT_SCHEDULES, _validate_default_schedules
 from backend.ingestion.tdx_scheduler import TDXScheduler
@@ -36,6 +37,17 @@ def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_uniq
                 {"dataset": "stock_basic", "mode": "incremental", "frequency": "daily"},
             ]
         )
+
+
+def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch):
+    duplicate = dict(next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "stock_basic"))
+    duplicate["mode"] = "incremental"
+    monkeypatch.setattr(schedule_catalog_module, "_DEFAULT_SCHEDULES", [*_DEFAULT_SCHEDULES, duplicate])
+
+    catalog = schedule_catalog_module.get_default_schedule_catalog()
+
+    assert catalog["complete"] is False
+    assert "mode-insensitive default dataset has multiple schedules: stock_basic" in catalog["errors"]
 
 
 def test_schedule_hygiene_reports_without_automatic_cleanup():
