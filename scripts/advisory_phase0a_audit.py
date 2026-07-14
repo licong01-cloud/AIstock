@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -16,6 +16,7 @@ if __package__ in {None, ""}:  # Support direct ``python scripts/...`` execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.services.advisory_phase0a.audit_service import AdvisoryPhase0AAuditService, write_receipt_artifacts
+from backend.services.advisory_phase0a.evidence_projection_postgres import AdvisoryPostgresEvidenceProjection
 from backend.services.advisory_phase0a.models import AuditRequest, Phase0AAuditError, Phase0APolicyRegistry
 from backend.services.advisory_phase0a.policy import (
     POLICY_REGISTRY_ROOT,
@@ -23,12 +24,7 @@ from backend.services.advisory_phase0a.policy import (
     canonical_json_sha256,
     load_frozen_policy_registry,
 )
-from backend.services.advisory_phase0a.resolvers import AuditReaders, PostgresReadOnlySourceProbe
-from backend.services.advisory_program import AdvisoryProgramPGRepository
-from backend.services.selection_center.repository import SelectionCenterRepository
-from backend.services.simulation_runtime.repository import SimulationRuntimeRepository
-from backend.services.strategy_package.repository import StrategyPackageRepository
-from backend.services.strategy_package.selection_artifact import StrategyPackageSelectionArtifactRepository
+from backend.services.advisory_phase0a.resolvers import AuditReaders
 
 
 TARGET_PROD = "prod"
@@ -142,20 +138,22 @@ def _load_policy_for_request(*, request: AuditRequest, registry_root: Path | Non
     return policy
 
 
-def _readers_from_env(*, env_file: Path | None, target_db: str) -> AuditReaders:
+@contextmanager
+def _readers_from_env(*, env_file: Path | None, target_db: str) -> Iterator[AuditReaders]:
     def factory() -> Iterator[Any]:
         return _env_conn_factory(env_file=env_file, target_db=target_db)
 
-    source_probe = PostgresReadOnlySourceProbe(factory)
-    return AuditReaders(
-        advisory=AdvisoryProgramPGRepository(conn_factory=factory),
-        package=StrategyPackageRepository(conn_factory=factory),
-        evidence=SimulationRuntimeRepository(conn_factory=factory),
-        score_artifact=StrategyPackageSelectionArtifactRepository(conn_factory=factory),
-        selection_run=SelectionCenterRepository(conn_factory=factory),
-        source_probe=source_probe,
-        calendar=source_probe,
-    )
+    projection = AdvisoryPostgresEvidenceProjection(factory)
+    with projection.snapshot() as snapshot:
+        yield AuditReaders(
+            advisory=snapshot,
+            package=snapshot,
+            evidence=snapshot,
+            score_artifact=snapshot,
+            selection_run=snapshot,
+            source_probe=snapshot,
+            calendar=snapshot,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -234,8 +232,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        service = AdvisoryPhase0AAuditService(readers=_readers_from_env(env_file=args.env_file, target_db=args.target_db), policy=policy)
-        receipt = service.audit(request)
+        reader_context = _readers_from_env(env_file=args.env_file, target_db=args.target_db)
+        if not hasattr(reader_context, "__enter__"):
+            reader_context = nullcontext(reader_context)
+        with reader_context as readers:
+            service = AdvisoryPhase0AAuditService(readers=readers, policy=policy)
+            receipt = service.audit(request)
         destination = write_receipt_artifacts(
             receipt=receipt,
             request=request,
