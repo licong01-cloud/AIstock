@@ -1,1 +1,3 @@
 backend/db/migrations/add_advisory_phase1f_schema_canonicalization_20260714.sql text eol=lf
+backend/db/migrations/add_advisory_phase1f1_observation_partition_prepare_20260714.sql text eol=lf
+backend/db/migrations/add_advisory_phase1f1_observation_partition_cutover_20260714.sql text eol=lf

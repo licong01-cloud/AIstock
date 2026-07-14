@@ -129,6 +129,9 @@ def _exit_for_reason(reason_code: str) -> int:
         "PHASE1F_POSTGRES_VERSION_UNSUPPORTED",
         "PHASE1F_MIGRATION_HASH_MISMATCH",
         "PHASE1F_PARTITION_BOUND_MISMATCH",
+        "ADVISORY_PHASE1F1_PREDECESSOR_SCHEMA_INVALID",
+        "ADVISORY_PHASE1F1_PARENT_DATE_UNRESOLVED",
+        "ADVISORY_PHASE1F1_CATALOG_DRIFTED",
     }:
         return EXIT_DRIFT
     if reason_code in {
@@ -137,9 +140,17 @@ def _exit_for_reason(reason_code: str) -> int:
         "PHASE1F_DDL_EXECUTION_FAILED",
         "PHASE1F_TRANSACTION_VERIFY_FAILED",
         "PHASE1F_MIGRATION_FILE_MISSING",
+        "ADVISORY_PHASE1F1_COPY_MISMATCH",
+        "ADVISORY_PHASE1F1_PARTITION_MISSING",
     }:
         return EXIT_DDL
-    if reason_code in {"PHASE1F_POST_COMMIT_VERIFY_FAILED", "PHASE1F_RECEIPT_STORE_FAILED"}:
+    if reason_code in {
+        "PHASE1F_POST_COMMIT_VERIFY_FAILED",
+        "PHASE1F_RECEIPT_STORE_FAILED",
+        "ADVISORY_PHASE1F1_VIEW_CONTRACT_MISMATCH",
+        "ADVISORY_PHASE1F1_POST_COMMIT_VERIFY_FAILED",
+        "ADVISORY_PHASE1F1_POST_FAILURE_VERIFY_FAILED",
+    }:
         return EXIT_POST_VERIFY_STORE
     return EXIT_REQUEST_CONTRACT
 
@@ -150,7 +161,9 @@ def _plan(args: argparse.Namespace) -> int:
     store = ReleaseSchemaReceiptStore(args.receipt_root)
     plan, receipt = plan_release_schema(config=config, contract=contract, request=request)
     plan_artifact = store.write_plan(identity=plan.plan_content_hash, payload=plan.model_dump(mode="json"))
-    receipt_artifact = store.write_receipt(identity=receipt.receipt_content_hash, payload=receipt.model_dump(mode="json"))
+    receipt_artifact = store.write_receipt(
+        identity=receipt.receipt_content_hash, payload=receipt.model_dump(mode="json")
+    )
     _emit(
         {
             "operation": "PLAN",
@@ -260,7 +273,13 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_POST_VERIFY_STORE
     except Exception as exc:  # pragma: no cover - top-level diagnostic boundary.
         LOGGER.exception("Phase 1F release schema CLI failed with %s", type(exc).__name__)
-        _emit({"error_code": "PHASE1F_INTERNAL_ERROR", "reason_code": "PHASE1F_INTERNAL_ERROR", "message": type(exc).__name__})
+        _emit(
+            {
+                "error_code": "PHASE1F_INTERNAL_ERROR",
+                "reason_code": "PHASE1F_INTERNAL_ERROR",
+                "message": type(exc).__name__,
+            }
+        )
         return EXIT_INTERNAL
 
 

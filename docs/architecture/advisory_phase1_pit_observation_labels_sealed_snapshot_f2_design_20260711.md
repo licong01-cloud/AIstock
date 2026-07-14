@@ -2109,8 +2109,8 @@ Phase 1B 实施验收表：
 ### 22.9 Phase 1F：Release schema verification
 
 - 唯一v1实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`；代码已由 PR `#2114` 合入，DEV persistent L3 已完成 plan/apply/verify/exact-reapply，v1 managed/prerequisite均为`COMPATIBLE`、receipt中`downstream_ready=true`。后续复核发现v1 contract未覆盖本设计的lineage/candidate分区且错误冻结两个局部content hash全局唯一，因此该receipt不能被Phase 1G persistent DML直接消费。
-- 修正设计为 `docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`，当前`design_ready / implementation_not_started`。它通过全局identity + 月分区payload + compatibility view修复，不改变snapshot只读结果；DEV/production DDL均尚未执行。
-- 在开发/发布流程按冻结 SHA 和依赖顺序应用、重放并完整验证 dataset foundation migrations、31 个逻辑关系、columns/constraints/indexes/functions/triggers/comments 与显式 capacity 日期范围生成的历史月分区；不创建 authority tables/roles/approval/authorization。
+- 修正设计已完成代码并通过 disposable PostgreSQL L2：它通过全局identity + 月分区payload + compatibility view修复，不改变snapshot只读结果；DEV/production DDL均尚未执行。
+- 在开发/发布流程按冻结 SHA 和依赖顺序应用、重放并完整验证 dataset foundation migrations、35 个逻辑关系、columns/constraints/indexes/functions/triggers/comments 与显式 capacity 日期范围生成的历史月分区；不创建 authority tables/roles/approval/authorization。
 - 运行进程只使用 Advisory-owned read-only catalog verifier，无 DDL executor reference 或 DDL 入口；本阶段不执行 source ledger、capture/label DML、文件写入、observer activation 或模型训练。
 - schema verification 不依赖业务 row count、Phase 1E persistent L4、capacity `MEASURED`、Parquet 或模型状态；合法空库结构与 `PARTIAL` capacity 可通过。DEV/production apply 分开报告，生产 DDL 只在用户明确授权的独立操作中执行，不新增应用审批功能或每次 DDL 前全库备份要求。
 
