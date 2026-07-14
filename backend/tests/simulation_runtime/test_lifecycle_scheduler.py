@@ -8151,9 +8151,16 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
         )
     }
     paper_repo = FakePaperRepository(portfolio, positions=positions, cash=980_000)
+    package_manifest_loads: list[str] = []
+
+    def unexpected_package_manifest_load(package_id: str) -> StrategyPackageManifest:
+        package_manifest_loads.append(package_id)
+        raise AssertionError("ordinary LocalSIM binding must remain pinned to portfolio frozen manifest")
+
     provider = ProductionSimulationRunContextProvider(
         paper_repository_factory=lambda: paper_repo,
         price_loader=lambda symbols, trade_date: {symbol: 10.5 for symbol in symbols},
+        package_manifest_loader=unexpected_package_manifest_load,
         pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
     )
     binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
@@ -8166,7 +8173,242 @@ def test_production_context_provider_builds_localsim_broker_from_persisted_paper
     assert ctx.local_broker.query_account().cash == Decimal("980000")
     assert ctx.local_broker.query_positions()["000001.SZ"].quantity == 1000
     assert ctx.local_broker.query_positions()["000001.SZ"].available_quantity == 1000
+    assert ctx.manifest is manifest
+    assert ctx.context_diagnostics["manifest_identity"] == {
+        "schema_version": "localsim_manifest_identity_resolution_v1",
+        "source": "paper_v2_portfolio_frozen_manifest",
+        "package_id": release.package_id,
+        "manifest_sha256": release.manifest_sha256,
+        "strategy_package_revalidation_performed": False,
+    }
+    assert package_manifest_loads == []
     assert ctx.context_diagnostics["localsim_tplus1_settlement"]["settled_position_count"] == 0
+
+
+def test_production_context_provider_loads_authoritative_manifest_for_verified_localsim_successor():
+    """A BUG-639 successor uses one current manifest across context and LocalSIM broker."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    source_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    first_successor_manifest_sha256 = "manifest_after_first_controlled_package_update"
+    first_successor_release, first_successor_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256=first_successor_manifest_sha256,
+    )
+    authoritative_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256="manifest_after_second_controlled_package_update",
+    )
+    successor_release, successor_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=first_successor_release,
+        source_binding=first_successor_binding,
+        authoritative_manifest_sha256=authoritative_manifest.manifest_sha256 or "",
+        repository=runtime_repository,
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=source_manifest)
+    paper_repo = FakePaperRepository(portfolio, positions={}, cash=1_000_000)
+    package_manifest_loads: list[str] = []
+
+    def load_package_manifest(package_id: str) -> StrategyPackageManifest:
+        package_manifest_loads.append(package_id)
+        return authoritative_manifest
+
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: paper_repo,
+        package_manifest_loader=load_package_manifest,
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    ctx = provider.load_context(
+        runtime_release=successor_release,
+        binding=successor_binding,
+        trade_date=TRADE_DATE,
+    )
+
+    assert package_manifest_loads == [source_release.package_id]
+    assert ctx.manifest is authoritative_manifest
+    assert ctx.local_broker is not None
+    assert ctx.local_broker._manifest is authoritative_manifest
+    assert ctx.context_diagnostics["manifest_identity"] == {
+        "schema_version": "localsim_manifest_identity_resolution_v1",
+        "source": "strategy_package_current_manifest",
+        "package_id": source_release.package_id,
+        "manifest_sha256": authoritative_manifest.manifest_sha256,
+        "source_release_manifest_sha256": first_successor_manifest_sha256,
+        "extends_binding_id": first_successor_binding.binding_id,
+        "extends_release_id": first_successor_release.release_id,
+        "source_binding_readback_id": first_successor_binding.binding_id,
+        "source_release_readback_id": first_successor_release.release_id,
+        "strategy_package_revalidation_performed": False,
+    }
+
+
+def test_production_context_provider_does_not_substitute_package_manifest_for_unmarked_localsim_mismatch():
+    """An arbitrary LocalSIM mismatch remains pinned and fails before package lookup."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    source_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, unmarked_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256="manifest_after_unmarked_update",
+        binding_metadata_override={},
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=source_manifest)
+    package_manifest_loads: list[str] = []
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=lambda package_id: package_manifest_loads.append(package_id),
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="LocalSim manifest hash does not match runtime release binding"):
+        provider.load_context(
+            runtime_release=successor_release,
+            binding=unmarked_binding,
+            trade_date=TRADE_DATE,
+        )
+
+    assert package_manifest_loads == []
+
+
+def test_production_context_provider_rejects_malformed_localsim_successor_lineage_before_package_lookup():
+    """The successor marker alone cannot authorize a current-package substitution."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    source_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, malformed_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256="manifest_after_controlled_update",
+        binding_metadata_patch={"source_release_manifest_sha256": "unrelated_predecessor_manifest"},
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=source_manifest)
+    package_manifest_loads: list[str] = []
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=lambda package_id: package_manifest_loads.append(package_id),
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="successor lineage is invalid") as exc_info:
+        provider.load_context(
+            runtime_release=successor_release,
+            binding=malformed_binding,
+            trade_date=TRADE_DATE,
+        )
+
+    assert "release.metadata.source_release_manifest_sha256" in exc_info.value.context["violations"]
+    assert (
+        "validation_evidence.manifest_identity.source_release_manifest_sha256"
+        in exc_info.value.context["violations"]
+    )
+    assert package_manifest_loads == []
+
+
+def test_production_context_provider_requires_persisted_localsim_successor_source_records():
+    """Successor metadata must read back its exact source release and binding before package lookup."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    source_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, successor_binding, _ = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256="manifest_with_missing_source_readback",
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=source_manifest)
+    package_manifest_loads: list[str] = []
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=lambda package_id: package_manifest_loads.append(package_id),
+        runtime_repository=InMemorySimulationRuntimeRepository(),
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="failed to read LocalSim successor source release and binding"):
+        provider.load_context(
+            runtime_release=successor_release,
+            binding=successor_binding,
+            trade_date=TRADE_DATE,
+        )
+
+    assert package_manifest_loads == []
+
+
+def test_env_builder_shares_runtime_repository_with_production_context_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production context source-lineage readback must use the scheduler's repository authority."""
+    import backend.services.simulation_runtime.scheduler as scheduler_module
+
+    repository = InMemorySimulationRuntimeRepository()
+    monkeypatch.setenv("SIMULATION_RUNTIME_CONTEXT_PROVIDER", "production")
+    monkeypatch.setattr(scheduler_module, "build_miniqmt_quote_ingress_activation_from_env", lambda: None)
+
+    scheduler = scheduler_module.build_simulation_lifecycle_scheduler_from_env(repository=repository)
+
+    assert scheduler.repository is repository
+    assert isinstance(scheduler.context_provider, scheduler_module.ProductionSimulationRunContextProvider)
+    assert scheduler.context_provider._runtime_repository is repository
+
+
+def test_production_context_provider_rejects_wrong_authoritative_manifest_for_valid_localsim_successor():
+    """A verified lineage still fails loud when the package repository returns another hash."""
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    source_release = _make_test_release()
+    source_binding = _make_test_binding(source_release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    source_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256=source_release.manifest_sha256,
+    )
+    successor_release, successor_binding, runtime_repository = _make_localsim_manifest_successor(
+        source_release=source_release,
+        source_binding=source_binding,
+        authoritative_manifest_sha256="expected_authoritative_manifest",
+    )
+    wrong_manifest = _frozen_manifest(
+        package_id=source_release.package_id,
+        manifest_sha256="unexpected_current_manifest",
+    )
+    portfolio = _make_localsim_portfolio(source_release=source_release, manifest=source_manifest)
+    provider = ProductionSimulationRunContextProvider(
+        paper_repository_factory=lambda: FakePaperRepository(portfolio, positions={}, cash=1_000_000),
+        package_manifest_loader=lambda package_id: wrong_manifest,
+        runtime_repository=runtime_repository,
+        pre_trade_tradability_provider=FakePreTradeTradabilityProvider(),
+    )
+
+    with pytest.raises(DataUnavailableError, match="LocalSim manifest hash does not match runtime release binding"):
+        provider.load_context(
+            runtime_release=successor_release,
+            binding=successor_binding,
+            trade_date=TRADE_DATE,
+        )
 
 
 def test_production_context_provider_settles_localsim_tplus1_positions_for_trade_date():
@@ -8619,5 +8861,111 @@ def _make_test_binding(release, *, broker_backend):
             "capital_allocation": 1_000_000.0,
             "approval_state": "DRAFT",
             "metadata": {},
+        },
+    )
+
+
+def _make_localsim_manifest_successor(
+    *,
+    source_release,
+    source_binding,
+    authoritative_manifest_sha256: str,
+    repository: InMemorySimulationRuntimeRepository | None = None,
+    binding_metadata_patch: dict[str, Any] | None = None,
+    binding_metadata_override: dict[str, Any] | None = None,
+):
+    repository = repository or InMemorySimulationRuntimeRepository()
+    repository.save_strategy_runtime_release(source_release)
+    repository.save_simulation_release_binding(source_binding)
+    release_service = StrategyRuntimeReleaseService(repository=repository)
+    release_metadata = SimulationLifecycleScheduler._roll_forward_release_metadata(
+        source_release=source_release,
+        source_binding=source_binding,
+        trade_date=TRADE_DATE,
+        authoritative_manifest_sha256=authoritative_manifest_sha256,
+    )
+    validation_evidence = SimulationLifecycleScheduler._roll_forward_validation_evidence(
+        source_release=source_release,
+        source_binding=source_binding,
+        trade_date=TRADE_DATE,
+        authoritative_manifest_sha256=authoritative_manifest_sha256,
+    )
+    execution_policy = source_release.release_config_json.get("execution_policy")
+    execution_policy_json = (
+        execution_policy.get("policy_json")
+        if isinstance(execution_policy, dict) and isinstance(execution_policy.get("policy_json"), dict)
+        else None
+    )
+    successor_release = release_service.create_release(
+        package_id=source_release.package_id,
+        manifest_sha256=authoritative_manifest_sha256,
+        base_release_id=source_release.release_id,
+        runtime_profile_id=source_release.runtime_profile_id,
+        runtime_profile_version_id=source_release.runtime_profile_version_id,
+        runtime_profile_sha256=source_release.runtime_profile_sha256,
+        daily_strategy_profile_version_id=source_release.daily_strategy_profile_version_id,
+        execution_policy_version_id=source_release.execution_policy_version_id,
+        execution_policy_sha256=source_release.execution_policy_sha256,
+        tail_policy_version_id=source_release.tail_policy_version_id,
+        tail_policy_sha256=source_release.tail_policy_sha256,
+        execution_policy_json=execution_policy_json,
+        validation_state=source_release.validation_state,
+        validation_evidence=validation_evidence,
+        release_metadata=release_metadata,
+        effective_from=TRADE_DATE,
+        effective_to=TRADE_DATE,
+        created_by="simulation_lifecycle_scheduler.localsim_roll_forward",
+        created_reason="unit-test LocalSIM manifest successor",
+    )
+    generated_binding_metadata = SimulationLifecycleScheduler._roll_forward_binding_metadata(
+        source_release=source_release,
+        source_binding=source_binding,
+        new_release=successor_release,
+        trade_date=TRADE_DATE,
+        authoritative_manifest_sha256=authoritative_manifest_sha256,
+    )
+    if binding_metadata_override is not None:
+        binding_metadata = dict(binding_metadata_override)
+    else:
+        binding_metadata = dict(generated_binding_metadata)
+        binding_metadata.update(binding_metadata_patch or {})
+    successor_binding = release_service.create_binding(
+        strategy_id=source_binding.strategy_id,
+        release=successor_release,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        capital_allocation=float(source_binding.capital_allocation),
+        broker_account_id=source_binding.broker_account_id,
+        strategy_name=source_binding.strategy_name,
+        approval_state=source_binding.approval_state,
+        binding_metadata=binding_metadata,
+        effective_from=TRADE_DATE,
+        effective_to=TRADE_DATE,
+        created_by="simulation_lifecycle_scheduler.localsim_roll_forward",
+        created_reason="unit-test LocalSIM manifest successor binding",
+    )
+    return successor_release, successor_binding, repository
+
+
+def _make_localsim_portfolio(
+    *,
+    source_release,
+    manifest: StrategyPackageManifest,
+) -> PaperPortfolio:
+    return PaperPortfolio(
+        portfolio_id="strat1",
+        portfolio_name="LocalSIM manifest successor test portfolio",
+        package_id=source_release.package_id,
+        manifest_sha256=manifest.manifest_sha256 or "",
+        frozen_manifest=manifest,
+        initial_cash=1_000_000,
+        start_date=TRADE_DATE,
+        data_source=MinuteDataSource.DB_HISTORICAL,
+        execution_policy={
+            "validated_execution_policy_id": source_release.execution_policy_version_id,
+            "policy_sha256": source_release.execution_policy_sha256,
+            "policy_json": {
+                "algo_code": "CLOSE_PRICE",
+                "algo_config": {"allow_partial_fill": True},
+            },
         },
     )
