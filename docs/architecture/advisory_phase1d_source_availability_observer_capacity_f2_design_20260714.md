@@ -29,8 +29,10 @@ Parquet、CAS、promotion 和 seal 到达 `SEALED`。Phase 1D 不重复实现 sn
 Advisory evidence、独立 worker 和离线容量探针。但它不接入 StrategyPackage、Selection、
 Paper v2、模拟盘、QMT、荐股 consumer、模型训练或交易执行。
 
-本文当前交付仅为详细设计。未实现代码、未新增 DDL、未启用 observer、未读取或写入生产
-数据库，也未启动 scheduler。
+本文设计对应代码已由 PR `#2067` 合入并完成 DEV migration、真实 PostgreSQL E2E、容量探针、
+rollback-no-residue 与 F2 验收。生产 DDL 仍为 `pending`，observer 未激活，未读取或写入生产
+数据库，也未启动 scheduler。下一阶段实施级设计为
+`docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md`。
 
 ## 2. Parent Baseline / 父级基线与当前事实
 
