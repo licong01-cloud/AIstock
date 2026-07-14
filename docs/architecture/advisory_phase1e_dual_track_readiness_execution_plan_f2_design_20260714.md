@@ -1077,7 +1077,7 @@ receipt中`downstream_ready=true`，生产DDL仍为独立`pending`状态。后�
 lineage/candidate月分区且错误设置局部content hash全局唯一，因此不能被Phase 1G persistent DML直接
 消费。Phase 1F.1修正设计为
 `docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`，
-当前代码与DEV/production DDL均未开始。上述schema事实也不替代本阶段仍缺少的真实single/multi Alpha
+当前 Phase 1F.1 schema代码已完成并通过 disposable PostgreSQL L2；DEV/production DDL均未执行。上述schema事实也不替代本阶段仍缺少的真实single/multi Alpha
 persistent L4输入。
 
 Phase 1G 的唯一实施级详细设计为

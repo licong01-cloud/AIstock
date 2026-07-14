@@ -29,8 +29,8 @@ Phase 1 自有表和仓库外制品目录。
 design_status = design_ready
 implementation_status = not_started
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
-phase1f1_schema_design = design_ready_implementation_not_started
-phase1g_code_start_state = pending_phase1f1_v2_schema_implementation
+phase1f1_schema_code = complete_disposable_l2_passed
+phase1g_code_start_state = pending_phase1f1_v2_dev_receipt_for_persistent_dml
 phase1f_production_ddl = pending_separate_explicit_execution
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 dev_advisory_program_count = 0_as_of_2026_07_14
@@ -878,7 +878,7 @@ COMPATIBLE schema
 设计可标记 `design_ready` 的条件：
 
 1. F-701至F-730全部 `design_ready`，无未批准exception/TODO。
-2. Phase 1F v1 DEV、Phase 1F.1 pending implementation和Phase 1E pending real input状态同步。
+2. Phase 1F v1 DEV、Phase 1F.1 code complete（DEV DDL未执行）和Phase 1E pending real input状态同步。
 3. outbox recovery、DSE projection、source replay和positive reachability前后一致。
 4. F2 validator、文档引用和`git diff --check`通过。
 5. 无额外角色、审批、授权、备份、shared runtime或DDL设计。

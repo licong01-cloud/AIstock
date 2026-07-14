@@ -21,8 +21,9 @@ Phase 1G 设计复核发现两个父级一致性缺口：
 
 ```text
 design_status = design_ready
-implementation_status = not_started
+implementation_status = code_complete
 phase1f_v1_dev_receipt = compatible_but_contract_incomplete_for_phase1g
+disposable_postgresql_l2 = passed
 dev_ddl = not_executed
 production_ddl = not_executed
 business_dml = none
@@ -188,7 +189,10 @@ catalog contract冻结 view definition hash。snapshot writer 的 `SELECT * ... 
 
 ## 6. Forward Migration 算法
 
-新增两个frozen migrations，中间由executor-managed typed partition operation连接：
+新增两个frozen migrations，中间由executor-managed typed partition operation连接。既有 Phase 1F v1 的
+`add_advisory_phase1f_schema_canonicalization_20260714.sql`原登记为 order 70；v2 release registry 保留其
+字节和 SHA-256 不变，但将其 contract 排序号规范为 order 55，以避免与本阶段的 typed partition order 70
+冲突，并确保新库仍执行既有 canonicalization：
 
 ```text
 backend/db/migrations/add_advisory_phase1f1_observation_partition_prepare_20260714.sql
@@ -200,6 +204,11 @@ plan先用只读query从旧lineage/candidate父链计算`Phase1F1LegacyMonthInve
 decision month set和inventory hash。它不读取候选payload内容、不写数据库，也不成为业务数据authority。
 目标month set是显式capacity range与legacy month set的并集，保证任何既有row都可搬迁且不创建default
 partition。无法唯一解析date时plan直接失败。
+
+v2 contract同时冻结v1 registry文件名、v1 `contract_content_hash`以及必须精确匹配的lineage、stage-candidate、
+stage-evidence relation scope。verifier仅在三个scope按v1 contract完整核对relation/column/constraint/index/
+trigger/comment且零差异时，才把普通表到compatibility view的`r -> v`转换和旧content-hash UNIQUE识别为
+order 80可修复状态。仅同名、仅relkind相同、同名但定义不同或额外子对象均为unknown drift，不得进入cutover。
 
 order 60 `prepare`在单个file-wrapped transaction中：
 
@@ -214,9 +223,10 @@ order 80 `cutover`使用SHA冻结的SQL template与executor-managed单事务。e
 拼接、任意SQL或运行时重算后覆盖plan值：
 
 1. 锁定旧 lineage、stage candidate、stage evidence及必要父表，拒绝并发 writer。
-2. 重算legacy inventory并与plan hash一致，防止prepare与cutover之间出现未计划writer；任一变化回滚。
+2. executor在同一锁内重算canonical legacy inventory并与plan hash一致；template再次核对冻结row counts和
+   legacy/target month set，防止prepare与cutover之间出现未计划writer；任一变化回滚。
 3. 从旧表按稳定PK顺序插入identity与payload，保留全部timestamp/decimal/JSON/hash。
-4. 用双向anti-join和逐列`IS DISTINCT FROM`对账；old-only、new-only或内容差异任一非零即抛错。
+4. 用双向`EXCEPT ALL`进行NULL-safe逐列对账；old-only、new-only或内容差异任一非零即抛错。
 5. 验证每月row count总和、全局identity count与旧表一致。
 6. 删除旧物理表并创建同名compatibility views。
 7. 删除stage evidence全局`UNIQUE(content_hash)`并建立普通索引；candidate content-hash UNIQUE随旧
@@ -235,14 +245,19 @@ Phase 1F registry升级为新 schema version：
 
 ```text
 order 10..50 = existing frozen migrations
+order 55 = existing frozen schema-canonicalization migration (v1 registry order 70, source/SHA unchanged)
 order 60 = FILE_WRAPPED prepare migration
 order 70 = EXECUTOR_MANAGED typed month partitions for lineage/candidate/label payload parents
 order 80 = EXECUTOR_MANAGED frozen cutover SQL template + typed legacy inventory parameters
 ```
 
 release plan/apply receipt新增`legacy_inventory_hash`、旧两表row counts、legacy/target month set hashes以及
-order 60/70/80逐项状态。executor在order 80 transaction开始后先设置/绑定typed parameters，再由template
-重算数据库inventory并比较；template不能从current rows自行生成“新的期望值”。
+order 60/70/80逐项状态。executor在order 80 transaction开始并持锁后重算canonical inventory hash，匹配
+后设置transaction-local typed parameters；template只重算并比较数据库row counts/month set，不能从
+current rows自行生成“新的期望值”。
+
+v2 registry的`predecessor_contract`必须引用repository内冻结v1 registry并固定其content hash与exact
+relation scope；v1 contract不得声明该字段。predecessor文件、hash或scope任一不一致均为contract error。
 
 v2 catalog closure必须包含：
 
@@ -331,11 +346,13 @@ ADVISORY_PHASE1F1_VIEW_CONTRACT_MISMATCH
 ADVISORY_PHASE1F1_PARTITION_MISSING
 ADVISORY_PHASE1F1_CATALOG_DRIFTED
 ADVISORY_PHASE1F1_POST_COMMIT_VERIFY_FAILED
+ADVISORY_PHASE1F1_POST_FAILURE_VERIFY_FAILED
 ```
 
 日志只记录 target label、去敏 DB identity、plan/migration hash、row counts、partition、operation stage和
-稳定 reason；unexpected exception保留后台 traceback。不得输出完整 row payload、候选列表、密码或
-无价值逐行成功日志。失败非零退出，不生成成功 receipt。
+稳定 reason；unexpected exception及失败后的catalog readback exception保留后台 traceback。post-failure
+readback失败必须作为第二条结构化error进入FAILED receipt，不得回退成未说明的旧catalog事实。不得输出
+完整 row payload、候选列表、密码或无价值逐行成功日志。失败非零退出，不生成成功 receipt。
 
 ## 12. Implementation Plan / 实施方案与文件
 
@@ -346,6 +363,7 @@ backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset
 backend/services/advisory_phase1/release_schema_contract.py
 backend/services/advisory_phase1/release_schema_verify_postgres.py
 backend/services/advisory_phase1/release_schema_apply_postgres.py
+scripts/advisory_phase1_release_schema.py
 backend/tests/advisory_phase1/test_release_schema*.py
 backend/tests/advisory_phase1/test_phase1f1_*.py
 docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md
@@ -360,7 +378,7 @@ Phase 1F.1不得修改 snapshot writer、Selection、inference、模拟盘、Pap
 
 - migrations/registry SHA/order/dependency/contract canonicalization与legacy inventory hash。
 - no shared imports、no DML/runtime/role/approval/backup/static scan。
-- v1 exact predecessor与unknown drift分类。
+- frozen v1 predecessor hash/scope、exact predecessor与unknown child/relation drift分类。
 - content hash重复的合法 stage/candidate fixtures。
 - compatibility view列名/type/order contract。
 
@@ -369,11 +387,12 @@ Phase 1F.1不得修改 snapshot writer、Selection、inference、模拟盘、Pap
 1. fresh v2 full-order apply，prepare/partitions/cutover与三个历史月parents/partitions完整。
 2. 从含重复 stage/candidate content hash的v1 fixture迁移成功。
 3. lineage/candidate migration前后双向逐行一致。
-4. compatibility view与旧 relation dump/hash一致，snapshot writer输出hash一致。
+4. compatibility view与旧 relation dump/hash一致；同一fixture通过真实snapshot reader、冻结Arrow schema
+   与deterministic Parquet writer得到逐文件bytes/hash一致。
 5. orphan date、prepare后legacy inventory变化、row mismatch、wrong partition、view drift分别失败；
    cutover事务完整回滚且旧authority仍可读。
 6. v2 verify/exact reapply fingerprint一致、第二次DDL为false。
-7. relation/view/partition immutable triggers拒绝非法mutation。
+7. physical identity/payload parent/partition immutable triggers拒绝非法mutation，compatibility view拒绝DML。
 8. database/container销毁，零 DEV/production连接。
 
 ### 13.3 L3 Persistent DEV
@@ -433,26 +452,26 @@ exact v1 schema + complete existing rows + explicit month range
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-630 | §1 | receipt/contract status check | design_ready | none |
-| F-631 | §5.4-5.5 | duplicate content-hash tests | design_ready | none |
-| F-632 | §5.2、§5.4 | partition catalog tests | design_ready | none |
-| F-633 | §5.1、§5.3 | global identity concurrency tests | design_ready | none |
-| F-634 | §5.6、§10 | view/snapshot parity | design_ready | none |
-| F-635 | §6 | prepare/partition/cutover E2E | design_ready | none |
-| F-636 | §6、§9、§11 | drift/orphan failure tests | design_ready | none |
-| F-637 | §7 | full catalog closure | design_ready | none |
-| F-638 | §7、§14 | v2 receipt consumer tests | design_ready | none |
-| F-639 | §3.2、§8、§9 | runtime DDL denylist | design_ready | none |
-| F-640 | §10 | frozen shared-path sentinels | design_ready | none |
-| F-641 | §3.2、§10、§12 | changed-path/dependency scan | design_ready | none |
-| F-642 | §1、§8、§10 | role/approval/backup scan | design_ready | none |
-| F-643 | §8 | exact env resolver tests | design_ready | none |
-| F-644 | §9 | new-plan/stale-plan/reapply tests | design_ready | none |
-| F-645 | §13-14 | positive duplicate/cross-month/empty tests | design_ready | none |
-| F-646 | §13.2 | rollback/container-destroy evidence | design_ready | none |
-| F-647 | §8、§13.3 | separate execution-state report | design_ready | none |
-| F-648 | §1、§4-7、§10 | parent reference check | design_ready | none |
-| F-649 | §2、§6、§17 | full-scope compliance review | design_ready | none |
+| F-630 | `release_schema_contract.py`, `release_schema_apply_postgres.py` | historical v1 parser + v2 plan/receipt tests | verified | none |
+| F-631 | v2 migration prepare/cutover, v2 registry | L2 scoped duplicate stage/candidate content-hash test | verified | none |
+| F-632 | v2 payload parents, typed partition planner | L0 planner + L2 cross-month physical partition assertions | verified | none |
+| F-633 | identity PK/UK/FK contract | L2 duplicate lineage natural key and candidate identity rejection | verified | none |
+| F-634 | cutover compatibility views, view definition hash | L2 pre/post `SELECT *` parity plus real snapshot reader/Arrow/Parquet bytes and hash parity; compatibility view DML rejection | verified | none |
+| F-635 | orders 55/60/70/80, typed executor actions | L2 v1 forward apply, atomic cutover failure and exact resume | verified | none |
+| F-636 | frozen v1 predecessor contract/scope, typed legacy inventory and stable reasons | L2 unknown v1 child drift, isolated legacy remnant, compatibility-view definition drift, orphan and stale inventory failures | verified | none |
+| F-637 | v2 registry, catalog projection/verifier | v2 registry hash/load and full L2 catalog verify/reapply | verified | none |
+| F-638 | v2 plan/receipt schema records inventory | receipt contract explicitly distinguishes v1/v2 and carries frozen inventory for the later Phase 1G consumer | verified | none |
+| F-639 | release-only executor modules | import-boundary and runtime-DDL static tests | verified | none |
+| F-640 | scoped Advisory Phase 1 paths only | changed-path/import denylist checks prove no shared runtime file changed | verified | none |
+| F-641 | no API/UI/scheduler/dependency edits | changed-path static review | verified | none |
+| F-642 | no role/approval/backup implementation | existing no-approval/no-backup static test | verified | none |
+| F-643 | existing exact env resolver and release CLI | resolver unit test; no DEV/production connection in this batch | verified | none |
+| F-644 | frozen plan revalidation and v2 receipt | L2 verify/exact-reapply and legacy-inventory stale-plan test | verified | none |
+| F-645 | full v1-to-v2 migration path | L2 empty, cross-month, duplicate-hash and identity cases | verified | none |
+| F-646 | single-transaction cutover executor and structured failure readback | L2 injected copy mismatch/CREATE VIEW failure, rollback/resume and post-failure readback traceback/receipt evidence | verified | none |
+| F-647 | release CLI/status separation | explicit code/L2/DEV/production state documented | verified | none |
+| F-648 | this design plus parent status updates | parent-reference audit | verified | none |
+| F-649 | full v2 migration/registry/verifier/test scope | DESIGN-COMPLIANCE-001 review | verified | none |
 
 ## 17. DESIGN-COMPLIANCE-001
 

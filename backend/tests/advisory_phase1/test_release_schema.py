@@ -19,10 +19,12 @@ from backend.services.advisory_phase1.release_schema_contract import (
     RequestedOperation,
     TargetLabel,
     canonical_json_sha256,
-    normalize_sql,
     load_release_schema_contract,
+    load_predecessor_release_schema_contract,
     make_release_plan_request,
+    normalize_sql,
     plan_month_partitions,
+    plan_month_partitions_for_contracts,
 )
 from backend.services.advisory_phase1.release_schema_receipt_store import (
     REASON_RECEIPT_COLLISION,
@@ -42,17 +44,17 @@ from backend.services.advisory_phase1.release_schema_apply_postgres import _pend
 from scripts.advisory_phase1_release_schema import EXIT_DDL, EXIT_POST_VERIFY_STORE, _exit_for_reason, _parser
 
 
-def test_registry_is_full_frozen_contract_with_six_file_migrations() -> None:
+def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cutover_steps() -> None:
     contract = load_release_schema_contract()
-    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v1"
-    assert len(contract.required_relations) == 31
-    assert len(contract.required_columns) == 585
-    assert len(contract.required_constraints) == 270
-    assert len(contract.required_indexes) == 97
-    assert len(contract.required_functions) == 31
-    assert len(contract.required_triggers) == 59
-    assert len(contract.required_comments) == 187
-    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 70]
+    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v2"
+    assert len(contract.required_relations) == 35
+    assert len(contract.required_columns) == 635
+    assert len(contract.required_constraints) == 274
+    assert len(contract.required_indexes) == 101
+    assert len(contract.required_functions) == 33
+    assert len(contract.required_triggers) == 63
+    assert len(contract.required_comments) == 149
+    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 55, 60, 70, 80]
     assert [item.transaction_mode.value for item in contract.managed_migrations] == [
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
@@ -60,18 +62,59 @@ def test_registry_is_full_frozen_contract_with_six_file_migrations() -> None:
         "FILE_WRAPPED",
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
+        "FILE_WRAPPED",
+        "EXECUTOR_MANAGED",
+        "EXECUTOR_MANAGED",
+    ]
+    assert [item.executor_action.value for item in contract.managed_migrations] == [
+        "SQL_FILE",
+        "SQL_FILE",
+        "SQL_FILE",
+        "SQL_FILE",
+        "SQL_FILE",
+        "SQL_FILE",
+        "SQL_FILE",
+        "CREATE_PARTITIONS",
+        "CUTOVER",
+    ]
+    assert [item.parent_relation for item in contract.partition_contracts] == [
+        "advisory_outcome_label_payload",
+        "advisory_signal_observation_lineage_payload",
+        "advisory_signal_stage_candidate_payload",
     ]
     assert all(item.declared_object_ids for item in contract.managed_migrations)
-    declared_objects = {object_id for migration in contract.managed_migrations for object_id in migration.declared_object_ids}
+    declared_objects = {
+        object_id for migration in contract.managed_migrations for object_id in migration.declared_object_ids
+    }
     assert declared_objects == contract.object_ids()
     assert [(item.object_id, item.repairable_by_orders) for item in contract.repairable_drift_variants] == [
-        ("constraint:app.advisory_source_revision_member.advisory_source_revision_member_check2", (70,)),
+        ("constraint:app.advisory_source_revision_member.advisory_source_revision_member_check2", (55,)),
         ("function:app.verify_advisory_source_revision_member_event()", (20,)),
     ]
+    assert contract.predecessor_contract is not None
+    assert contract.predecessor_contract.exact_relations == (
+        "app.advisory_signal_observation_lineage",
+        "app.advisory_signal_stage_candidate",
+        "app.advisory_signal_stage_evidence",
+    )
+    predecessor = load_predecessor_release_schema_contract(contract)
+    assert predecessor is not None
+    assert predecessor.contract_content_hash == contract.predecessor_contract.contract_content_hash
     for migration in contract.managed_migrations:
-        source = Path(migration.relative_path)
-        assert source.is_file()
-        assert hashlib.sha256(source.read_bytes()).hexdigest() == migration.file_sha256
+        if migration.executor_action.value == "CREATE_PARTITIONS":
+            assert migration.relative_path is None
+            assert migration.file_sha256 is None
+            assert migration.partition_parent_relations == (
+                "app.advisory_outcome_label_payload",
+                "app.advisory_signal_observation_lineage_payload",
+                "app.advisory_signal_stage_candidate_payload",
+            )
+        else:
+            assert migration.relative_path is not None
+            assert migration.file_sha256 is not None
+            source = Path(migration.relative_path)
+            assert source.is_file()
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == migration.file_sha256
     assert contract.ddl_session_policy == DdlSessionPolicy(
         lock_timeout_ms=10_000,
         statement_timeout_ms=900_000,
@@ -80,10 +123,28 @@ def test_registry_is_full_frozen_contract_with_six_file_migrations() -> None:
 
 
 def test_registry_hash_rejects_any_mutated_object_contract() -> None:
-    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v1.json")
+    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v2.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["required_columns"][0]["data_type"] = "integer"
     with pytest.raises(Exception, match="contract_content_hash"):
+        ReleaseSchemaContract.model_validate(payload)
+
+
+def test_historical_v1_contract_remains_parseable_but_cannot_declare_v2_executor_semantics() -> None:
+    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v1.json")
+    contract = load_release_schema_contract(path)
+    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v1"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["managed_migrations"][0]["executor_action"] = "CUTOVER"
+    with pytest.raises(Exception, match="v1 contract cannot declare typed executor actions"):
+        ReleaseSchemaContract.model_validate(payload)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["predecessor_contract"] = {
+        "relative_path": path.name,
+        "contract_content_hash": contract.contract_content_hash,
+        "exact_relations": ["app.advisory_signal_observation_lineage"],
+    }
+    with pytest.raises(Exception, match="v1 contract cannot declare a predecessor contract"):
         ReleaseSchemaContract.model_validate(payload)
 
 
@@ -105,13 +166,24 @@ def test_external_calendar_prerequisite_is_exact_and_is_not_a_managed_relation()
 def test_observer_migration_closure_is_present_in_registry_before_apply() -> None:
     contract = load_release_schema_contract()
     observer_relations = {
-        item.name for item in contract.required_relations if item.name.startswith("advisory_source_observer") or item.name == "advisory_source_observation_receipt"
+        item.name
+        for item in contract.required_relations
+        if item.name.startswith("advisory_source_observer") or item.name == "advisory_source_observation_receipt"
     }
     assert observer_relations == {"advisory_source_observer_cursor", "advisory_source_observation_receipt"}
     assert len([item for item in contract.required_columns if item.relation in observer_relations]) == 31
     assert len([item for item in contract.required_constraints if item.relation in observer_relations]) == 19
     assert len([item for item in contract.required_indexes if item.relation in observer_relations]) == 6
-    assert len([item for item in contract.required_functions if item.name.endswith("observer_cursor_update") or "observation_receipt" in item.name]) == 3
+    assert (
+        len(
+            [
+                item
+                for item in contract.required_functions
+                if item.name.endswith("observer_cursor_update") or "observation_receipt" in item.name
+            ]
+        )
+        == 3
+    )
     assert len([item for item in contract.required_triggers if item.relation in observer_relations]) == 3
     assert len([item for item in contract.required_comments if item.relation in observer_relations]) == 3
 
@@ -128,6 +200,23 @@ def test_month_partition_plan_is_inclusive_across_calendar_year() -> None:
         ("advisory_outcome_label_payload_202601", date(2026, 1, 1), date(2026, 2, 1)),
         ("advisory_outcome_label_payload_202602", date(2026, 2, 1), date(2026, 3, 1)),
     ]
+
+
+def test_phase1f1_partition_plan_expands_each_declared_parent_without_name_collisions() -> None:
+    contract = load_release_schema_contract()
+    partitions = plan_month_partitions_for_contracts(
+        partition_contracts=contract.partition_contracts,
+        target_months=(date(2026, 6, 1), date(2026, 7, 1)),
+    )
+    assert len(partitions) == 6
+    assert {(item.parent_relation, item.name) for item in partitions} == {
+        ("advisory_outcome_label_payload", "advisory_outcome_label_payload_202606"),
+        ("advisory_outcome_label_payload", "advisory_outcome_label_payload_202607"),
+        ("advisory_signal_observation_lineage_payload", "advisory_signal_observation_lineage_payload_202606"),
+        ("advisory_signal_observation_lineage_payload", "advisory_signal_observation_lineage_payload_202607"),
+        ("advisory_signal_stage_candidate_payload", "advisory_signal_stage_candidate_payload_202606"),
+        ("advisory_signal_stage_candidate_payload", "advisory_signal_stage_candidate_payload_202607"),
+    }
 
 
 def test_release_plan_request_is_hash_bound_to_contract_and_does_not_require_phase1e_plan() -> None:
@@ -190,15 +279,14 @@ def test_sql_normalizer_preserves_quoted_and_dollar_quoted_semantics() -> None:
 
 def test_catalog_fingerprint_evidence_has_total_count_and_every_kind_hash() -> None:
     contract = load_release_schema_contract()
-    partitions = plan_month_partitions(
-        partition_contract=contract.partition_contract,
-        history_start_trade_date=date(2026, 6, 1),
-        history_end_trade_date=date(2026, 8, 31),
+    partitions = plan_month_partitions_for_contracts(
+        partition_contracts=contract.partition_contracts,
+        target_months=(date(2026, 6, 1), date(2026, 7, 1), date(2026, 8, 1)),
     )
     evidence = expected_managed_catalog_evidence(contract=contract, expected_partitions=partitions)
     assert evidence.object_count == sum(evidence.per_kind_counts.values())
-    assert evidence.per_kind_counts["relations"] == 31
-    assert evidence.per_kind_counts["partitions"] == 3
+    assert evidence.per_kind_counts["relations"] == 35
+    assert evidence.per_kind_counts["partitions"] == 9
     assert set(evidence.per_kind_hashes) == set(evidence.per_kind_counts)
 
 
@@ -221,6 +309,8 @@ def test_cli_operation_lineage_and_error_exit_contract_are_explicit() -> None:
     assert args.requested_operation == "verify"
     assert _exit_for_reason("PHASE1F_TRANSACTION_VERIFY_FAILED") == EXIT_DDL
     assert _exit_for_reason("PHASE1F_POST_COMMIT_VERIFY_FAILED") == EXIT_POST_VERIFY_STORE
+    assert _exit_for_reason("ADVISORY_PHASE1F1_COPY_MISMATCH") == EXIT_DDL
+    assert _exit_for_reason("ADVISORY_PHASE1F1_POST_COMMIT_VERIFY_FAILED") == EXIT_POST_VERIFY_STORE
 
 
 def test_receipt_store_is_atomic_idempotent_and_rejects_same_identity_different_content() -> None:
@@ -232,7 +322,9 @@ def test_receipt_store_is_atomic_idempotent_and_rejects_same_identity_different_
         second = store.write_plan(identity=identity, payload=payload)
         assert not first.idempotent and second.idempotent
         with pytest.raises(ReleaseSchemaReceiptStoreError) as error:
-            store.write_plan(identity=identity, payload={"schema_version": "test", "plan_content_hash": identity, "value": 2})
+            store.write_plan(
+                identity=identity, payload={"schema_version": "test", "plan_content_hash": identity, "value": 2}
+            )
         assert error.value.reason_code == REASON_RECEIPT_COLLISION
 
 

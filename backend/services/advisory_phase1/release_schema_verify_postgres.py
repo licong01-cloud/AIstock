@@ -34,6 +34,7 @@ from backend.services.advisory_phase1.release_schema_contract import (
     ReleaseSchemaContract,
     TargetLabel,
     canonical_json_sha256,
+    load_predecessor_release_schema_contract,
     normalize_sql,
     REASON_CONTRACT_INVALID,
     REASON_PREREQUISITE_SCHEMA_DRIFTED,
@@ -179,7 +180,9 @@ def _hash_text(value: str | None) -> str:
 def _normalized_function_body(definition: str) -> str:
     """Extract a PL/pgSQL body without erasing expressions or statements."""
 
-    match = re.search(r"\bAS\s+\$(?P<tag>[A-Za-z0-9_]*)\$(?P<body>.*?)\$(?P=tag)\$", definition, flags=re.IGNORECASE | re.DOTALL)
+    match = re.search(
+        r"\bAS\s+\$(?P<tag>[A-Za-z0-9_]*)\$(?P<body>.*?)\$(?P=tag)\$", definition, flags=re.IGNORECASE | re.DOTALL
+    )
     if match is None:
         normalized = normalize_sql(definition)
     else:
@@ -280,7 +283,9 @@ def _identity(cursor: Any, *, config: DatabaseConnectionConfig) -> DatabaseIdent
     )
 
 
-def _relation_names(contract: ReleaseSchemaContract, prerequisite_relations: Sequence[PrerequisiteRelationSpec]) -> tuple[tuple[str, str], ...]:
+def _relation_names(
+    contract: ReleaseSchemaContract, prerequisite_relations: Sequence[PrerequisiteRelationSpec]
+) -> tuple[tuple[str, str], ...]:
     values = {(item.schema, item.name) for item in contract.required_relations}
     values.update((item.schema, item.name) for item in prerequisite_relations)
     return tuple(sorted(values))
@@ -300,8 +305,12 @@ def project_catalog(
     relation_pairs = _relation_names(contract, prereqs)
     schemas = sorted({schema for schema, _ in relation_pairs})
     names = sorted({name for _, name in relation_pairs})
-    function_pairs = tuple(sorted({(item.schema, item.name, item.identity_arguments) for item in contract.required_functions}))
-    partition_parent = contract.partition_contract
+    function_pairs = tuple(
+        sorted({(item.schema, item.name, item.identity_arguments) for item in contract.required_functions})
+    )
+    partition_parent_keys = tuple(
+        sorted(f"{item.schema}.{item.parent_relation}" for item in contract.partition_contracts)
+    )
     with connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
         identity = _identity(cursor, config=config)
         cursor.execute(
@@ -310,7 +319,8 @@ def project_catalog(
                    CASE WHEN pt.partrelid IS NULL THEN NULL ELSE pt.partstrat::text END AS partition_strategy,
                    pg_get_partkeydef(c.oid) AS partition_key,
                    c.relispartition AS is_partition,
-                   pg_get_expr(c.relpartbound, c.oid, true) AS partition_bound
+                   pg_get_expr(c.relpartbound, c.oid, true) AS partition_bound,
+                   CASE WHEN c.relkind = 'v' THEN pg_get_viewdef(c.oid, true) ELSE NULL END AS view_definition
               FROM pg_catalog.pg_class c
               JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
               LEFT JOIN pg_catalog.pg_partitioned_table pt ON pt.partrelid = c.oid
@@ -331,6 +341,9 @@ def project_catalog(
                     "partition_key": normalize_sql(row["partition_key"]),
                     "is_partition": bool(row["is_partition"]),
                     "partition_bound": normalize_sql(row["partition_bound"]),
+                    "definition_sha256": _hash_text(normalize_sql(row["view_definition"]))
+                    if row["view_definition"] is not None
+                    else None,
                 }
             )
         cursor.execute(
@@ -529,10 +542,9 @@ def project_catalog(
               JOIN pg_catalog.pg_namespace pn ON pn.oid = parent.relnamespace
               JOIN pg_catalog.pg_class child ON child.oid = inh.inhrelid
               JOIN pg_catalog.pg_namespace cn ON cn.oid = child.relnamespace
-             WHERE pn.nspname = %s
-               AND parent.relname = %s
+             WHERE (pn.nspname || '.' || parent.relname) = ANY(%s)
             """,
-            (partition_parent.schema, partition_parent.parent_relation),
+            (list(partition_parent_keys),),
         )
         partitions = [
             {
@@ -567,7 +579,10 @@ class CatalogVerification:
 
     @property
     def downstream_ready(self) -> bool:
-        return self.managed_schema_status is ManagedSchemaStatus.COMPATIBLE and self.prerequisite_status is PrerequisiteStatus.COMPATIBLE
+        return (
+            self.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
+            and self.prerequisite_status is PrerequisiteStatus.COMPATIBLE
+        )
 
 
 def _expected_partition_payload(partition: MonthPartition) -> dict[str, Any]:
@@ -612,12 +627,24 @@ def expected_managed_catalog_evidence(
             "relation",
             "name",
         ),
-        "constraints": _sort_specs([_spec_payload(item) for item in contract.required_constraints], "schema", "relation", "name"),
-        "indexes": _sort_specs([_spec_payload(item) for item in contract.required_indexes], "schema", "relation", "name"),
-        "functions": _sort_specs([_spec_payload(item) for item in contract.required_functions], "schema", "name", "identity_arguments"),
-        "triggers": _sort_specs([_spec_payload(item) for item in contract.required_triggers], "schema", "relation", "name"),
-        "comments": _sort_specs([_spec_payload(item) for item in contract.required_comments], "schema", "relation", "column"),
-        "partitions": _sort_specs([_expected_partition_payload(item) for item in expected_partitions], "schema", "name"),
+        "constraints": _sort_specs(
+            [_spec_payload(item) for item in contract.required_constraints], "schema", "relation", "name"
+        ),
+        "indexes": _sort_specs(
+            [_spec_payload(item) for item in contract.required_indexes], "schema", "relation", "name"
+        ),
+        "functions": _sort_specs(
+            [_spec_payload(item) for item in contract.required_functions], "schema", "name", "identity_arguments"
+        ),
+        "triggers": _sort_specs(
+            [_spec_payload(item) for item in contract.required_triggers], "schema", "relation", "name"
+        ),
+        "comments": _sort_specs(
+            [_spec_payload(item) for item in contract.required_comments], "schema", "relation", "column"
+        ),
+        "partitions": _sort_specs(
+            [_expected_partition_payload(item) for item in expected_partitions], "schema", "name"
+        ),
     }
     return _catalog_fingerprint_evidence(payload)
 
@@ -634,10 +661,24 @@ def observed_managed_catalog_evidence(
     """Describe the actual managed projection, including semantic extras as drift evidence."""
 
     managed_relations = {(item.schema, item.name) for item in contract.required_relations}
-    expected_partition_names = {item.name for item in expected_partitions}
+    relation_specs = {(item.schema, item.name): item for item in contract.required_relations}
+    expected_partition_names = {(item.schema, item.parent_relation, item.name) for item in expected_partitions}
     payload = {
         "relations": _sort_specs(
-            [item for item in projection.relations if (item["schema"], item["name"]) in managed_relations], "schema", "name"
+            [
+                {
+                    **{
+                        key: item.get(key)
+                        for key in _expected_relation_payload(relation_specs[(item["schema"], item["name"])])
+                    },
+                    "is_partition": item.get("is_partition"),
+                    "partition_bound": item.get("partition_bound"),
+                }
+                for item in projection.relations
+                if (item["schema"], item["name"]) in managed_relations
+            ],
+            "schema",
+            "name",
         ),
         "columns": _sort_specs(
             [
@@ -650,23 +691,36 @@ def observed_managed_catalog_evidence(
             "name",
         ),
         "constraints": _sort_specs(
-            [item for item in projection.constraints if (item["schema"], item["relation"]) in managed_relations], "schema", "relation", "name"
+            [item for item in projection.constraints if (item["schema"], item["relation"]) in managed_relations],
+            "schema",
+            "relation",
+            "name",
         ),
         "indexes": _sort_specs(
-            [item for item in projection.indexes if (item["schema"], item["relation"]) in managed_relations], "schema", "relation", "name"
+            [item for item in projection.indexes if (item["schema"], item["relation"]) in managed_relations],
+            "schema",
+            "relation",
+            "name",
         ),
         "functions": _sort_specs(list(projection.functions), "schema", "name", "identity_arguments"),
         "triggers": _sort_specs(
-            [item for item in projection.triggers if (item["schema"], item["relation"]) in managed_relations], "schema", "relation", "name"
+            [item for item in projection.triggers if (item["schema"], item["relation"]) in managed_relations],
+            "schema",
+            "relation",
+            "name",
         ),
         "comments": _sort_specs(
-            [item for item in projection.comments if (item["schema"], item["relation"]) in managed_relations], "schema", "relation", "column"
+            [item for item in projection.comments if (item["schema"], item["relation"]) in managed_relations],
+            "schema",
+            "relation",
+            "column",
         ),
         "partitions": _sort_specs(
             [
                 item
                 for item in projection.partitions
-                if item["name"] in expected_partition_names or str(item.get("partition_bound") or "").upper().startswith("DEFAULT")
+                if (item["schema"], item["parent_relation"], item["name"]) in expected_partition_names
+                or str(item.get("partition_bound") or "").upper().startswith("DEFAULT")
             ],
             "schema",
             "name",
@@ -685,32 +739,28 @@ def observed_managed_catalog_fingerprint(
     ).total_sha256
 
 
-def subset_catalog_fingerprint(
-    *, verification: CatalogVerification, object_ids: Sequence[str]
-) -> str:
+def subset_catalog_fingerprint(*, verification: CatalogVerification, object_ids: Sequence[str]) -> str:
     """Hash only differences relevant to one frozen migration subset."""
 
     selected = set(object_ids)
     projection = verification.projection
-    values = [
-        item.model_dump(mode="python")
-        for item in verification.managed_differences
-        if item.object_id in selected
-    ]
+    values = [item.model_dump(mode="python") for item in verification.managed_differences if item.object_id in selected]
     payload = {
-        "relations": [
-            item for item in projection.relations if f"relation:{item['schema']}.{item['name']}" in selected
-        ],
+        "relations": [item for item in projection.relations if f"relation:{item['schema']}.{item['name']}" in selected],
         "columns": [
             _without_fields(item, "ordinal")
             for item in projection.columns
             if f"column:{item['schema']}.{item['relation']}.{item['name']}" in selected
         ],
         "constraints": [
-            item for item in projection.constraints if f"constraint:{item['schema']}.{item['relation']}.{item['name']}" in selected
+            item
+            for item in projection.constraints
+            if f"constraint:{item['schema']}.{item['relation']}.{item['name']}" in selected
         ],
         "indexes": [
-            item for item in projection.indexes if f"index:{item['schema']}.{item['relation']}.{item['name']}" in selected
+            item
+            for item in projection.indexes
+            if f"index:{item['schema']}.{item['relation']}.{item['name']}" in selected
         ],
         "functions": [
             item
@@ -718,12 +768,15 @@ def subset_catalog_fingerprint(
             if f"function:{item['schema']}.{item['name']}({item['identity_arguments']})" in selected
         ],
         "triggers": [
-            item for item in projection.triggers if f"trigger:{item['schema']}.{item['relation']}.{item['name']}" in selected
+            item
+            for item in projection.triggers
+            if f"trigger:{item['schema']}.{item['relation']}.{item['name']}" in selected
         ],
         "comments": [
             item
             for item in projection.comments
-            if f"comment:{item['schema']}.{item['relation']}.{item['column'] if item['column'] is not None else '__table__'}" in selected
+            if f"comment:{item['schema']}.{item['relation']}.{item['column'] if item['column'] is not None else '__table__'}"
+            in selected
         ],
         "differences": sorted(values, key=lambda item: item["object_id"]),
     }
@@ -753,6 +806,7 @@ def _compare_specs(
     include_unexpected: bool,
     ignored_payload_fields: tuple[str, ...] = (),
     repairable_drift_variants: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
+    repairable_unexpected_objects: Mapping[str, tuple[int, ...]] | None = None,
 ) -> list[CatalogDifference]:
     actual_by_key = _index_actual(actual, *fields)
     expected_by_key = {_tuple_key(_spec_payload(item), *fields): item for item in expected}
@@ -798,6 +852,7 @@ def _compare_specs(
                         expected=None,
                         actual=dict(observed),
                         reason_code=reason_drifted,
+                        repairable_by_orders=(repairable_unexpected_objects or {}).get(f"{kind}:{identity}", ()),
                     )
                 )
     return differences
@@ -817,6 +872,8 @@ def _expected_relation_payload(spec: Any) -> dict[str, Any]:
                 "partition_key": spec.partition_key,
             }
         )
+    if getattr(spec, "definition_sha256", None) is not None:
+        payload["definition_sha256"] = spec.definition_sha256
     return payload
 
 
@@ -848,18 +905,63 @@ def _compare_relations(
                         expected=expected_payload,
                         actual=actual_payload,
                         reason_code=reason_drifted,
+                        repairable_by_orders=(),
                     )
                 )
     return differences
 
 
+def _difference_relation_key(object_id: str) -> str | None:
+    kind, separator, identity = object_id.partition(":")
+    if not separator:
+        return None
+    if kind == "relation":
+        return identity
+    if kind not in {"column", "constraint", "index", "trigger", "comment"}:
+        return None
+    parts = identity.split(".")
+    return ".".join(parts[:2]) if len(parts) >= 2 else None
+
+
+def _exact_predecessor_scope_is_compatible(
+    *,
+    connection: Any,
+    config: DatabaseConnectionConfig,
+    contract: ReleaseSchemaContract,
+    expected_partitions: Sequence[MonthPartition],
+) -> bool:
+    predecessor = load_predecessor_release_schema_contract(contract)
+    spec = contract.predecessor_contract
+    if predecessor is None or spec is None:
+        return False
+    predecessor_parents = {(item.schema, item.parent_relation) for item in predecessor.partition_contracts}
+    predecessor_partitions = tuple(
+        item for item in expected_partitions if (item.schema, item.parent_relation) in predecessor_parents
+    )
+    verification = verify_catalog(
+        connection=connection,
+        config=config,
+        contract=predecessor,
+        expected_partitions=predecessor_partitions,
+    )
+    exact_relations = set(spec.exact_relations)
+    return not any(
+        _difference_relation_key(item.object_id) in exact_relations for item in verification.managed_differences
+    )
+
+
 def _compare_partitions(
-    *, contract: ReleaseSchemaContract, expected_partitions: Sequence[MonthPartition], actual: Sequence[Mapping[str, Any]]
+    *,
+    contract: ReleaseSchemaContract,
+    expected_partitions: Sequence[MonthPartition],
+    actual: Sequence[Mapping[str, Any]],
 ) -> list[CatalogDifference]:
-    expected_by_name = {item.name: item for item in expected_partitions}
-    actual_by_name = {str(item["name"]): dict(item) for item in actual}
+    expected_by_name = {(item.schema, item.parent_relation, item.name): item for item in expected_partitions}
+    actual_by_name = {
+        (str(item["schema"]), str(item["parent_relation"]), str(item["name"])): dict(item) for item in actual
+    }
     differences: list[CatalogDifference] = []
-    for name, item in expected_by_name.items():
+    for key, item in expected_by_name.items():
         expected_bound = normalize_sql(
             f"FOR VALUES FROM ('{item.lower_bound.isoformat()}') TO ('{item.upper_bound.isoformat()}')"
         )
@@ -867,10 +969,10 @@ def _compare_partitions(
             "parent_schema": item.schema,
             "parent_relation": item.parent_relation,
             "schema": item.schema,
-            "name": name,
+            "name": item.name,
             "partition_bound": expected_bound,
         }
-        observed = actual_by_name.get(name)
+        observed = actual_by_name.get(key)
         if observed is None:
             differences.append(
                 CatalogDifference(
@@ -878,7 +980,7 @@ def _compare_partitions(
                     category="MISSING",
                     expected=expected_payload,
                     reason_code=REASON_MANAGED_SCHEMA_MISSING,
-                    repairable_by_orders=contract.partition_contract.repairable_by_orders,
+                    repairable_by_orders=contract.partition_contract_for(item).repairable_by_orders,
                 )
             )
         elif {key: observed.get(key) for key in expected_payload} != expected_payload:
@@ -908,7 +1010,9 @@ def _compare_partitions(
 def _prerequisite_differences(
     *, contract: ReleaseSchemaContract, projection: CatalogProjection
 ) -> list[CatalogDifference]:
-    expected_relations = tuple(contract.phase0a_prerequisite_relations) + tuple(contract.external_readonly_prerequisite_relations)
+    expected_relations = tuple(contract.phase0a_prerequisite_relations) + tuple(
+        contract.external_readonly_prerequisite_relations
+    )
     differences = _compare_relations(
         expected=expected_relations,
         actual=projection.relations,
@@ -957,7 +1061,8 @@ def verify_catalog(
         config=config,
         contract=contract,
         expected_partitions=expected_partitions,
-        prerequisite_relations=tuple(contract.phase0a_prerequisite_relations) + tuple(contract.external_readonly_prerequisite_relations),
+        prerequisite_relations=tuple(contract.phase0a_prerequisite_relations)
+        + tuple(contract.external_readonly_prerequisite_relations),
     )
     projection = CatalogProjection(
         database_identity=projection.database_identity,
@@ -974,6 +1079,25 @@ def verify_catalog(
         (item.object_id, item.actual_payload_sha256): item.repairable_by_orders
         for item in contract.repairable_drift_variants
     }
+    actual_relations = {(str(item["schema"]), str(item["name"])): item for item in projection.relations}
+    has_cutover_predecessor = any(
+        item.relkind == "v"
+        and item.repairable_by_orders
+        and (observed := actual_relations.get((item.schema, item.name))) is not None
+        and observed.get("relkind") == "r"
+        for item in contract.required_relations
+    )
+    predecessor_scope_is_exact = has_cutover_predecessor and _exact_predecessor_scope_is_compatible(
+        connection=connection,
+        config=config,
+        contract=contract,
+        expected_partitions=expected_partitions,
+    )
+    repairable_unexpected_objects = (
+        {item.object_id: item.repairable_by_orders for item in contract.repairable_unexpected_objects}
+        if predecessor_scope_is_exact
+        else {}
+    )
     major = projection.database_identity.server_version_num // 10_000
     if major not in contract.supported_postgres_major_versions:
         unsupported = CatalogDifference(
@@ -1026,6 +1150,7 @@ def verify_catalog(
             include_unexpected=True,
             ignored_payload_fields=("ordinal",),
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
     managed.extend(
@@ -1038,6 +1163,7 @@ def verify_catalog(
             reason_drifted=REASON_MANAGED_SCHEMA_DRIFTED,
             include_unexpected=True,
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
     managed.extend(
@@ -1050,6 +1176,7 @@ def verify_catalog(
             reason_drifted=REASON_MANAGED_SCHEMA_DRIFTED,
             include_unexpected=True,
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
     managed.extend(
@@ -1062,6 +1189,7 @@ def verify_catalog(
             reason_drifted=REASON_MANAGED_SCHEMA_DRIFTED,
             include_unexpected=False,
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
     managed.extend(
@@ -1074,6 +1202,7 @@ def verify_catalog(
             reason_drifted=REASON_MANAGED_SCHEMA_DRIFTED,
             include_unexpected=True,
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
     managed.extend(
@@ -1086,24 +1215,51 @@ def verify_catalog(
             reason_drifted=REASON_MANAGED_SCHEMA_DRIFTED,
             include_unexpected=False,
             repairable_drift_variants=repairable_drift_variants,
+            repairable_unexpected_objects=repairable_unexpected_objects,
         )
     )
-    managed.extend(_compare_partitions(contract=contract, expected_partitions=expected_partitions, actual=projection.partitions))
+    managed.extend(
+        _compare_partitions(contract=contract, expected_partitions=expected_partitions, actual=projection.partitions)
+    )
     missing_relation_orders = {
         item.object_id.removeprefix("relation:"): item.repairable_by_orders
         for item in managed
         if item.category == "MISSING" and item.object_id.startswith("relation:")
     }
+    relation_repair_orders = {
+        f"{item.schema}.{item.name}": item.repairable_by_orders for item in contract.required_relations
+    }
+    cutover_relation_orders = {
+        item.object_id.removeprefix("relation:"): relation_repair_orders[item.object_id.removeprefix("relation:")]
+        for item in managed
+        if item.category == "DRIFTED"
+        and item.object_id.startswith("relation:")
+        and item.expected is not None
+        and item.actual is not None
+        and item.expected.get("relkind") == "v"
+        and item.actual.get("relkind") == "r"
+        and predecessor_scope_is_exact
+        and relation_repair_orders.get(item.object_id.removeprefix("relation:"))
+    }
     repaired_children: list[CatalogDifference] = []
     for item in managed:
-        relation_key: str | None = None
-        parts = item.object_id.split(":", 1)
-        if len(parts) == 2 and parts[0] in {"column", "constraint", "index", "trigger", "comment"}:
-            relation_parts = parts[1].split(".")
-            if len(relation_parts) >= 2:
-                relation_key = ".".join(relation_parts[:2])
-        if item.category == "MISSING" and relation_key in missing_relation_orders:
-            repaired_children.append(item.model_copy(update={"repairable_by_orders": missing_relation_orders[relation_key]}))
+        relation_key = _difference_relation_key(item.object_id)
+        if (
+            item.category == "DRIFTED"
+            and relation_key in cutover_relation_orders
+            and item.object_id.startswith("relation:")
+        ):
+            repaired_children.append(
+                item.model_copy(update={"repairable_by_orders": cutover_relation_orders[relation_key]})
+            )
+        elif item.category == "MISSING" and relation_key in missing_relation_orders:
+            repaired_children.append(
+                item.model_copy(update={"repairable_by_orders": missing_relation_orders[relation_key]})
+            )
+        elif item.category in {"MISSING", "DRIFTED", "UNEXPECTED"} and relation_key in cutover_relation_orders:
+            repaired_children.append(
+                item.model_copy(update={"repairable_by_orders": cutover_relation_orders[relation_key]})
+            )
         else:
             repaired_children.append(item)
     managed = repaired_children
@@ -1117,11 +1273,14 @@ def verify_catalog(
         managed_status = ManagedSchemaStatus.COMPATIBLE
     elif not existing_managed_relations:
         managed_status = ManagedSchemaStatus.ABSENT
-    elif all(item.category in {"MISSING", "DRIFTED"} and item.repairable_by_orders for item in managed):
+    elif all(item.category in {"MISSING", "DRIFTED", "UNEXPECTED"} and item.repairable_by_orders for item in managed):
         managed_status = ManagedSchemaStatus.PARTIAL_ADDITIVE
     else:
         managed_status = ManagedSchemaStatus.DRIFTED
-    prereq = sorted(_prerequisite_differences(contract=contract, projection=projection), key=lambda item: (item.category, item.object_id))
+    prereq = sorted(
+        _prerequisite_differences(contract=contract, projection=projection),
+        key=lambda item: (item.category, item.object_id),
+    )
     if not prereq:
         prerequisite_status = PrerequisiteStatus.COMPATIBLE
     elif any(item.category == "DRIFTED" for item in prereq):
@@ -1141,4 +1300,6 @@ def verify_database_catalog(
     *, config: DatabaseConnectionConfig, contract: ReleaseSchemaContract, expected_partitions: Sequence[MonthPartition]
 ) -> CatalogVerification:
     with readonly_catalog_connection(config) as connection:
-        return verify_catalog(connection=connection, config=config, contract=contract, expected_partitions=expected_partitions)
+        return verify_catalog(
+            connection=connection, config=config, contract=contract, expected_partitions=expected_partitions
+        )

@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -18,9 +18,11 @@ import psycopg2
 import psycopg2.sql
 
 from backend.services.advisory_phase1.release_schema_contract import (
+    CONTRACT_SCHEMA_VERSION_V2,
     CatalogDifference,
     CatalogFingerprintEvidence,
     DatabaseIdentity,
+    ExecutorAction,
     ManagedMigration,
     ManagedSchemaStatus,
     MigrationExecutionResult,
@@ -29,6 +31,7 @@ from backend.services.advisory_phase1.release_schema_contract import (
     OperationStatus,
     PendingDdlOperation,
     PrerequisiteStatus,
+    Phase1F1LegacyMonthInventory,
     ReleaseSchemaContract,
     ReleaseSchemaPlan,
     ReleaseSchemaPlanRequest,
@@ -37,6 +40,7 @@ from backend.services.advisory_phase1.release_schema_contract import (
     TransactionMode,
     canonical_json_sha256,
     plan_month_partitions,
+    plan_month_partitions_for_contracts,
     REASON_DATABASE_IDENTITY_MISMATCH,
 )
 from backend.services.advisory_phase1.release_schema_verify_postgres import (
@@ -64,6 +68,14 @@ REASON_TRANSACTION_VERIFY_FAILED = "PHASE1F_TRANSACTION_VERIFY_FAILED"
 REASON_POST_COMMIT_VERIFY_FAILED = "PHASE1F_POST_COMMIT_VERIFY_FAILED"
 REASON_MIGRATION_FILE_MISSING = "PHASE1F_MIGRATION_FILE_MISSING"
 REASON_MIGRATION_HASH_MISMATCH = "PHASE1F_MIGRATION_HASH_MISMATCH"
+REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID = "ADVISORY_PHASE1F1_PREDECESSOR_SCHEMA_INVALID"
+REASON_PHASE1F1_PARENT_DATE_UNRESOLVED = "ADVISORY_PHASE1F1_PARENT_DATE_UNRESOLVED"
+REASON_PHASE1F1_COPY_MISMATCH = "ADVISORY_PHASE1F1_COPY_MISMATCH"
+REASON_PHASE1F1_VIEW_CONTRACT_MISMATCH = "ADVISORY_PHASE1F1_VIEW_CONTRACT_MISMATCH"
+REASON_PHASE1F1_PARTITION_MISSING = "ADVISORY_PHASE1F1_PARTITION_MISSING"
+REASON_PHASE1F1_CATALOG_DRIFTED = "ADVISORY_PHASE1F1_CATALOG_DRIFTED"
+REASON_PHASE1F1_POST_COMMIT_VERIFY_FAILED = "ADVISORY_PHASE1F1_POST_COMMIT_VERIFY_FAILED"
+REASON_PHASE1F1_POST_FAILURE_VERIFY_FAILED = "ADVISORY_PHASE1F1_POST_FAILURE_VERIFY_FAILED"
 
 
 class ReleaseSchemaApplyError(RuntimeError):
@@ -106,13 +118,24 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _validate_request(*, request: ReleaseSchemaPlanRequest, contract: ReleaseSchemaContract, config: DatabaseConnectionConfig) -> None:
-    if request.release_schema_version != contract.release_schema_version or request.contract_content_hash != contract.contract_content_hash:
-        raise ReleaseSchemaApplyError(REASON_PLAN_CONTRACT_MISMATCH, "request contract identity does not match repository registry")
+def _validate_request(
+    *, request: ReleaseSchemaPlanRequest, contract: ReleaseSchemaContract, config: DatabaseConnectionConfig
+) -> None:
+    if (
+        request.release_schema_version != contract.release_schema_version
+        or request.contract_content_hash != contract.contract_content_hash
+    ):
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH, "request contract identity does not match repository registry"
+        )
     if request.ddl_session_policy_hash != contract.ddl_session_policy_hash:
-        raise ReleaseSchemaApplyError(REASON_PLAN_CONTRACT_MISMATCH, "request DDL policy hash does not match repository registry")
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH, "request DDL policy hash does not match repository registry"
+        )
     if request.target_label is not config.target_label:
-        raise ReleaseSchemaApplyError(REASON_DATABASE_IDENTITY_MISMATCH, "request target label does not match resolved env target")
+        raise ReleaseSchemaApplyError(
+            REASON_DATABASE_IDENTITY_MISMATCH, "request target label does not match resolved env target"
+        )
 
 
 def _diagnostics(differences: Sequence[CatalogDifference]) -> tuple[dict[str, Any], ...]:
@@ -131,17 +154,184 @@ def _build_plan_model(payload: dict[str, Any]) -> ReleaseSchemaPlan:
     return ReleaseSchemaPlan.model_validate(payload)
 
 
+def _phase1f1_month_start(value: date) -> date:
+    return date(value.year, value.month, 1)
+
+
+def _phase1f1_capacity_months(*, history_start_trade_date: date, history_end_trade_date: date) -> tuple[date, ...]:
+    if history_start_trade_date > history_end_trade_date:
+        raise ReleaseSchemaApplyError(
+            REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID,
+            "history start date must not follow history end date",
+            transaction_stage="LEGACY_INVENTORY_CAPACITY",
+        )
+    months: list[date] = []
+    current = _phase1f1_month_start(history_start_trade_date)
+    final = _phase1f1_month_start(history_end_trade_date)
+    while current <= final:
+        months.append(current)
+        current = date(current.year + 1, 1, 1) if current.month == 12 else date(current.year, current.month + 1, 1)
+    return tuple(months)
+
+
+def _phase1f1_predecessor_layout(cursor: Any) -> str:
+    cursor.execute(
+        """
+        SELECT c.relname AS name, c.relkind AS relkind
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'app'
+           AND c.relname = ANY(%s)
+        """,
+        (["advisory_signal_observation_lineage", "advisory_signal_stage_candidate"],),
+    )
+    rows = {str(row[0]): str(row[1]) for row in cursor.fetchall()}
+    expected_names = {"advisory_signal_observation_lineage", "advisory_signal_stage_candidate"}
+    if not rows:
+        return "ABSENT"
+    if set(rows) != expected_names:
+        raise ReleaseSchemaApplyError(
+            REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID,
+            "legacy lineage and stage-candidate relations must be both present or both absent",
+            transaction_stage="LEGACY_INVENTORY_LAYOUT",
+            actual={"relations": rows},
+        )
+    kinds = set(rows.values())
+    if kinds == {"r"}:
+        return "V1_TABLES"
+    if kinds == {"v"}:
+        return "V2_VIEWS"
+    raise ReleaseSchemaApplyError(
+        REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID,
+        "legacy relation names must be both ordinary tables or both compatibility views",
+        transaction_stage="LEGACY_INVENTORY_LAYOUT",
+        actual={"relations": rows},
+    )
+
+
+def _phase1f1_legacy_inventory_from_cursor(
+    *, cursor: Any, request: ReleaseSchemaPlanRequest, treat_absent_as_empty_v1: bool = False
+) -> Phase1F1LegacyMonthInventory:
+    capacity_months = _phase1f1_capacity_months(
+        history_start_trade_date=request.history_start_trade_date,
+        history_end_trade_date=request.history_end_trade_date,
+    )
+    observed_layout = _phase1f1_predecessor_layout(cursor)
+    predecessor_layout = observed_layout
+    if observed_layout == "ABSENT" and treat_absent_as_empty_v1:
+        # A fresh release plan runs the existing frozen foundation migrations before
+        # the Phase 1F.1 cutover, which deterministically creates empty v1 tables.
+        predecessor_layout = "V1_TABLES"
+    lineage_row_count = 0
+    candidate_row_count = 0
+    legacy_months: tuple[date, ...] = ()
+    if observed_layout == "V1_TABLES":
+        cursor.execute(
+            """
+            WITH resolved AS (
+                SELECT observation.decision_as_of_trade_date
+                  FROM app.advisory_signal_observation_lineage lineage
+                  LEFT JOIN app.advisory_signal_observation_version observation_version
+                    ON observation_version.observation_version_id = lineage.observation_version_id
+                  LEFT JOIN app.advisory_signal_observation observation
+                    ON observation.canonical_signal_id = observation_version.canonical_signal_id
+            )
+            SELECT count(*)::bigint,
+                   count(*) FILTER (WHERE decision_as_of_trade_date IS NULL)::bigint,
+                   ARRAY(
+                       SELECT DISTINCT date_trunc('month', decision_as_of_trade_date)::date
+                         FROM resolved
+                        WHERE decision_as_of_trade_date IS NOT NULL
+                        ORDER BY 1
+                   )
+              FROM resolved
+            """
+        )
+        lineage_count, lineage_unresolved, lineage_months = cursor.fetchone()
+        cursor.execute(
+            """
+            WITH resolved AS (
+                SELECT observation.decision_as_of_trade_date
+                  FROM app.advisory_signal_stage_candidate candidate
+                  LEFT JOIN app.advisory_signal_stage_evidence stage_evidence
+                    ON stage_evidence.stage_evidence_id = candidate.stage_evidence_id
+                  LEFT JOIN app.advisory_signal_observation_version observation_version
+                    ON observation_version.observation_version_id = stage_evidence.observation_version_id
+                  LEFT JOIN app.advisory_signal_observation observation
+                    ON observation.canonical_signal_id = observation_version.canonical_signal_id
+            )
+            SELECT count(*)::bigint,
+                   count(*) FILTER (WHERE decision_as_of_trade_date IS NULL)::bigint,
+                   ARRAY(
+                       SELECT DISTINCT date_trunc('month', decision_as_of_trade_date)::date
+                         FROM resolved
+                        WHERE decision_as_of_trade_date IS NOT NULL
+                        ORDER BY 1
+                   )
+              FROM resolved
+            """
+        )
+        candidate_count, candidate_unresolved, candidate_months = cursor.fetchone()
+        if int(lineage_unresolved) or int(candidate_unresolved):
+            raise ReleaseSchemaApplyError(
+                REASON_PHASE1F1_PARENT_DATE_UNRESOLVED,
+                "legacy lineage or candidate rows cannot resolve a canonical decision date",
+                transaction_stage="LEGACY_INVENTORY_DATES",
+                actual={
+                    "lineage_unresolved": int(lineage_unresolved),
+                    "candidate_unresolved": int(candidate_unresolved),
+                },
+            )
+        lineage_row_count = int(lineage_count)
+        candidate_row_count = int(candidate_count)
+        legacy_months = tuple(sorted({*tuple(lineage_months or ()), *tuple(candidate_months or ())}))
+    target_months = tuple(sorted({*capacity_months, *legacy_months}))
+    payload: dict[str, Any] = {
+        "schema_version": "advisory_phase1f1_legacy_month_inventory_v1",
+        "predecessor_layout": predecessor_layout,
+        "lineage_row_count": lineage_row_count,
+        "candidate_row_count": candidate_row_count,
+        "legacy_months": legacy_months,
+        "target_months": target_months,
+        "legacy_months_hash": canonical_json_sha256(legacy_months),
+        "target_months_hash": canonical_json_sha256(target_months),
+    }
+    payload["legacy_inventory_hash"] = canonical_json_sha256(payload)
+    return Phase1F1LegacyMonthInventory.model_validate(payload)
+
+
+def _phase1f1_legacy_inventory(
+    *, config: DatabaseConnectionConfig, contract: ReleaseSchemaContract, request: ReleaseSchemaPlanRequest
+) -> Phase1F1LegacyMonthInventory | None:
+    if contract.schema_version != CONTRACT_SCHEMA_VERSION_V2:
+        return None
+    with readonly_catalog_connection(config) as connection:
+        with connection.cursor() as cursor:
+            return _phase1f1_legacy_inventory_from_cursor(
+                cursor=cursor,
+                request=request,
+                treat_absent_as_empty_v1=True,
+            )
+
+
 def build_release_schema_plan(
     *, config: DatabaseConnectionConfig, contract: ReleaseSchemaContract, request: ReleaseSchemaPlanRequest
 ) -> ReleaseSchemaPlan:
     """Build an immutable release plan from the current read-only catalog state."""
 
     _validate_request(request=request, contract=contract, config=config)
-    expected_partitions = plan_month_partitions(
-        partition_contract=contract.partition_contract,
-        history_start_trade_date=request.history_start_trade_date,
-        history_end_trade_date=request.history_end_trade_date,
-    )
+    legacy_inventory = _phase1f1_legacy_inventory(config=config, contract=contract, request=request)
+    if legacy_inventory is None:
+        expected_partitions = plan_month_partitions(
+            partition_contract=contract.partition_contract,
+            history_start_trade_date=request.history_start_trade_date,
+            history_end_trade_date=request.history_end_trade_date,
+        )
+    else:
+        expected_partitions = plan_month_partitions_for_contracts(
+            partition_contracts=contract.partition_contracts,
+            target_months=legacy_inventory.target_months,
+        )
     verification = verify_database_catalog(config=config, contract=contract, expected_partitions=expected_partitions)
     pre_evidence = observed_managed_catalog_evidence(
         projection=verification.projection,
@@ -158,7 +348,9 @@ def build_release_schema_plan(
         expected_partitions=expected_partitions,
     )
     payload: dict[str, Any] = {
-        "schema_version": "advisory_phase1f_release_plan_v1",
+        "schema_version": "advisory_phase1f_release_plan_v2"
+        if contract.schema_version == CONTRACT_SCHEMA_VERSION_V2
+        else "advisory_phase1f_release_plan_v1",
         "request": request.model_dump(mode="python"),
         "database_identity": verification.projection.database_identity.model_dump(mode="python"),
         "release_schema_version": contract.release_schema_version,
@@ -176,6 +368,7 @@ def build_release_schema_plan(
         "managed_differences": [item.model_dump(mode="python") for item in verification.managed_differences],
         "prerequisite_differences": [item.model_dump(mode="python") for item in verification.prerequisite_differences],
         "expected_partitions": [item.model_dump(mode="python") for item in expected_partitions],
+        "legacy_inventory": legacy_inventory.model_dump(mode="python") if legacy_inventory is not None else None,
         "pending_ddl_operations": [item.model_dump(mode="python") for item in pending],
     }
     return _build_plan_model(payload)
@@ -192,7 +385,7 @@ def _pending_operations(
     else:
         known_orders = {item.order for item in contract.managed_migrations}
         for difference in verification.managed_differences:
-            if difference.category not in {"MISSING", "DRIFTED"}:
+            if difference.category not in {"MISSING", "DRIFTED", "UNEXPECTED"}:
                 continue
             pending_orders.update(order for order in difference.repairable_by_orders if order in known_orders)
     # Replaying the source/capture base migration replaces two functions later
@@ -202,13 +395,13 @@ def _pending_operations(
     if 30 in pending_orders:
         pending_orders.add(40)
     operations = [PendingDdlOperation(kind="MIGRATION", migration_order=order) for order in sorted(pending_orders)]
-    missing_partition_names = {
-        difference.object_id.removeprefix("partition:app.")
+    missing_partition_ids = {
+        difference.object_id
         for difference in verification.managed_differences
         if difference.category == "MISSING" and difference.object_id.startswith("partition:")
     }
     for partition in expected_partitions:
-        if partition.name in missing_partition_names:
+        if partition.object_id in missing_partition_ids:
             operations.append(
                 PendingDdlOperation(
                     kind="PARTITION",
@@ -238,6 +431,7 @@ def _try_database_clock(config: DatabaseConnectionConfig) -> datetime | None:
             "phase1f database clock unavailable target=%s exception_type=%s",
             config.target_label.value,
             type(exc).__name__,
+            exc_info=True,
         )
         return None
 
@@ -249,12 +443,17 @@ def _identity_matches(left: DatabaseIdentity, right: DatabaseIdentity) -> bool:
 def _revalidate_plan(
     *, plan: ReleaseSchemaPlan, config: DatabaseConnectionConfig, contract: ReleaseSchemaContract
 ) -> ReleaseSchemaPlan:
-    if plan.contract_content_hash != contract.contract_content_hash or plan.release_schema_version != contract.release_schema_version:
+    if (
+        plan.contract_content_hash != contract.contract_content_hash
+        or plan.release_schema_version != contract.release_schema_version
+    ):
         raise ReleaseSchemaApplyError(REASON_PLAN_CONTRACT_MISMATCH, "plan contract identity does not match registry")
     _validate_request(request=plan.request, contract=contract, config=config)
     current = build_release_schema_plan(config=config, contract=contract, request=plan.request)
     if not _identity_matches(plan.database_identity, current.database_identity):
-        raise ReleaseSchemaApplyError(REASON_DATABASE_IDENTITY_MISMATCH, "database identity changed since plan creation")
+        raise ReleaseSchemaApplyError(
+            REASON_DATABASE_IDENTITY_MISMATCH, "database identity changed since plan creation"
+        )
     if plan.pre_catalog_fingerprint != current.pre_catalog_fingerprint:
         raise ReleaseSchemaApplyError(REASON_PLAN_STALE, "catalog fingerprint changed since plan creation")
     if plan.plan_content_hash != current.plan_content_hash:
@@ -263,6 +462,13 @@ def _revalidate_plan(
 
 
 def _load_frozen_migration(migration: ManagedMigration) -> bytes:
+    if migration.relative_path is None or migration.file_sha256 is None:
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH,
+            f"migration order {migration.order} does not declare a frozen SQL source",
+            migration_order=migration.order,
+            transaction_stage="LOAD_MIGRATION",
+        )
     root = _repo_root()
     source = (root / migration.relative_path).resolve()
     try:
@@ -306,6 +512,15 @@ def _timeout_reason(exc: BaseException) -> str:
         return REASON_DDL_LOCK_TIMEOUT
     if pgcode == "57014" or "statement timeout" in detail:
         return REASON_DDL_STATEMENT_TIMEOUT
+    for reason in (
+        REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID,
+        REASON_PHASE1F1_PARENT_DATE_UNRESOLVED,
+        REASON_PHASE1F1_COPY_MISMATCH,
+        REASON_PHASE1F1_VIEW_CONTRACT_MISMATCH,
+        REASON_PHASE1F1_PARTITION_MISSING,
+    ):
+        if reason.lower() in detail:
+            return reason
     return REASON_DDL_EXECUTION_FAILED
 
 
@@ -328,9 +543,21 @@ def _set_session_policy(cursor: Any, *, contract: ReleaseSchemaContract, local: 
     cursor.execute(f"{keyword} statement_timeout = %s", (f"{contract.ddl_session_policy.statement_timeout_ms}ms",))
 
 
-def _subset_differences(verification: CatalogVerification, migration: ManagedMigration) -> tuple[CatalogDifference, ...]:
+def _subset_differences(
+    verification: CatalogVerification, migration: ManagedMigration
+) -> tuple[CatalogDifference, ...]:
     selected = set(migration.declared_object_ids)
-    return tuple(item for item in verification.managed_differences if item.object_id in selected)
+    partition_parents = set(migration.partition_parent_relations)
+    return tuple(
+        item
+        for item in verification.managed_differences
+        if item.object_id in selected
+        or (
+            item.object_id.startswith("partition:")
+            and item.expected is not None
+            and f"{item.expected.get('parent_schema')}.{item.expected.get('parent_relation')}" in partition_parents
+        )
+    )
 
 
 def _execute_executor_managed_migration(
@@ -379,6 +606,112 @@ def _execute_executor_managed_migration(
             cause=exc,
             migration_order=migration.order,
             transaction_stage="EXECUTOR_MANAGED_DDL",
+        ) from exc
+
+
+def _phase1f1_bind_cutover_inventory(
+    *, cursor: Any, expected: Phase1F1LegacyMonthInventory, request: ReleaseSchemaPlanRequest
+) -> None:
+    cursor.execute(
+        "LOCK TABLE app.advisory_signal_observation_lineage, app.advisory_signal_stage_candidate, "
+        "app.advisory_signal_stage_evidence IN ACCESS EXCLUSIVE MODE"
+    )
+    actual = _phase1f1_legacy_inventory_from_cursor(cursor=cursor, request=request)
+    if actual.predecessor_layout != "V1_TABLES":
+        raise ReleaseSchemaApplyError(
+            REASON_PHASE1F1_PREDECESSOR_SCHEMA_INVALID,
+            "cutover requires the exact v1 physical predecessor tables",
+            transaction_stage="CUTOVER_PREDECESSOR_LAYOUT",
+            expected={"predecessor_layout": "V1_TABLES"},
+            actual={"predecessor_layout": actual.predecessor_layout},
+        )
+    if actual.legacy_inventory_hash != expected.legacy_inventory_hash:
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_STALE,
+            "legacy inventory changed after the plan was frozen",
+            transaction_stage="CUTOVER_LEGACY_INVENTORY",
+            expected={"legacy_inventory_hash": expected.legacy_inventory_hash},
+            actual={"legacy_inventory_hash": actual.legacy_inventory_hash},
+        )
+    values = {
+        "app.phase1f1_legacy_inventory_hash": expected.legacy_inventory_hash,
+        "app.phase1f1_lineage_row_count": str(expected.lineage_row_count),
+        "app.phase1f1_candidate_row_count": str(expected.candidate_row_count),
+        "app.phase1f1_legacy_months": ",".join(item.isoformat() for item in expected.legacy_months),
+        "app.phase1f1_target_months": ",".join(item.isoformat() for item in expected.target_months),
+    }
+    for name, value in values.items():
+        cursor.execute("SELECT set_config(%s, %s, true)", (name, value))
+
+
+def _execute_phase1f1_cutover_migration(
+    *,
+    config: DatabaseConnectionConfig,
+    contract: ReleaseSchemaContract,
+    migration: ManagedMigration,
+    expected_partitions: Sequence[MonthPartition],
+    legacy_inventory: Phase1F1LegacyMonthInventory | None,
+    request: ReleaseSchemaPlanRequest,
+) -> None:
+    if legacy_inventory is None:
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH,
+            "v2 cutover requires frozen legacy inventory",
+            migration_order=migration.order,
+            transaction_stage="CUTOVER_PRECONDITION",
+        )
+    source = _load_frozen_migration(migration)
+    try:
+        text = source.decode("utf-8")
+        with _writable_connection(config, autocommit=False) as connection:
+            try:
+                with connection.cursor() as cursor:
+                    _set_session_policy(cursor, contract=contract, local=True)
+                    _phase1f1_bind_cutover_inventory(cursor=cursor, expected=legacy_inventory, request=request)
+                    cursor.execute(text)
+                in_transaction = verify_catalog(
+                    connection=connection,
+                    config=config,
+                    contract=contract,
+                    expected_partitions=expected_partitions,
+                )
+                subset_differences = _subset_differences(in_transaction, migration)
+                if subset_differences:
+                    difference = subset_differences[0]
+                    reason_code = (
+                        REASON_PHASE1F1_VIEW_CONTRACT_MISMATCH
+                        if difference.object_id.startswith(
+                            (
+                                "relation:app.advisory_signal_observation_lineage",
+                                "relation:app.advisory_signal_stage_candidate",
+                                "column:app.advisory_signal_observation_lineage",
+                                "column:app.advisory_signal_stage_candidate",
+                            )
+                        )
+                        else REASON_TRANSACTION_VERIFY_FAILED
+                    )
+                    raise ReleaseSchemaApplyError(
+                        reason_code,
+                        f"subset catalog verification failed before commit at order {migration.order}",
+                        migration_order=migration.order,
+                        object_id=difference.object_id,
+                        transaction_stage="CUTOVER_PRE_COMMIT_VERIFY",
+                        expected=difference.expected,
+                        actual=difference.actual,
+                    )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+    except ReleaseSchemaApplyError:
+        raise
+    except BaseException as exc:
+        raise ReleaseSchemaApplyError(
+            _timeout_reason(exc),
+            f"migration order {migration.order} failed",
+            cause=exc,
+            migration_order=migration.order,
+            transaction_stage="CUTOVER_DDL",
         ) from exc
 
 
@@ -463,13 +796,16 @@ def _receipt(
     prerequisite_status: PrerequisiteStatus,
     managed_differences: Sequence[CatalogDifference],
     prerequisite_differences: Sequence[CatalogDifference],
+    legacy_inventory: Phase1F1LegacyMonthInventory | None,
     errors: Sequence[dict[str, Any]],
     started_at: datetime,
     finished_at: datetime,
     ddl_executed: bool,
 ) -> ReleaseSchemaReceipt:
     payload: dict[str, Any] = {
-        "schema_version": "advisory_phase1f_release_receipt_v1",
+        "schema_version": "advisory_phase1f_release_receipt_v2"
+        if legacy_inventory is not None
+        else "advisory_phase1f_release_receipt_v1",
         "operation": operation,
         "requested_operation": requested_operation,
         "database_identity": identity.model_dump(mode="python"),
@@ -486,9 +822,11 @@ def _receipt(
         "operation_status": operation_status,
         "managed_schema_status": managed_status,
         "prerequisite_status": prerequisite_status,
-        "downstream_ready": managed_status is ManagedSchemaStatus.COMPATIBLE and prerequisite_status is PrerequisiteStatus.COMPATIBLE,
+        "downstream_ready": managed_status is ManagedSchemaStatus.COMPATIBLE
+        and prerequisite_status is PrerequisiteStatus.COMPATIBLE,
         "managed_differences": [item.model_dump(mode="python") for item in managed_differences],
         "prerequisite_differences": [item.model_dump(mode="python") for item in prerequisite_differences],
+        "legacy_inventory": legacy_inventory.model_dump(mode="python") if legacy_inventory is not None else None,
         "diagnostics": list(_diagnostics(prerequisite_differences)),
         "errors": list(errors),
         "started_at": started_at,
@@ -528,6 +866,7 @@ def plan_release_schema(
         prerequisite_status=plan.prerequisite_status,
         managed_differences=plan.managed_differences,
         prerequisite_differences=plan.prerequisite_differences,
+        legacy_inventory=plan.legacy_inventory,
         errors=(),
         started_at=started,
         finished_at=finished,
@@ -544,7 +883,9 @@ def verify_release_schema_plan(
     started = _database_clock(config)
     current = _revalidate_plan(plan=plan, config=config, contract=contract)
     if current.request.requested_operation is not RequestedOperation.VERIFY:
-        raise ReleaseSchemaApplyError(REASON_PLAN_CONTRACT_MISMATCH, "verify requires a plan explicitly bound to VERIFY")
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH, "verify requires a plan explicitly bound to VERIFY"
+        )
     verification = verify_database_catalog(
         config=config,
         contract=contract,
@@ -556,7 +897,11 @@ def verify_release_schema_plan(
         contract=contract,
         expected_partitions=current.expected_partitions,
     )
-    status = OperationStatus.SUCCESS if verification.managed_schema_status is not ManagedSchemaStatus.UNSUPPORTED else OperationStatus.FAILED
+    status = (
+        OperationStatus.SUCCESS
+        if verification.managed_schema_status is not ManagedSchemaStatus.UNSUPPORTED
+        else OperationStatus.FAILED
+    )
     errors: tuple[dict[str, Any], ...] = ()
     if status is OperationStatus.FAILED:
         errors = ({"reason_code": REASON_POSTGRES_VERSION_UNSUPPORTED, "exception_type": "UnsupportedPostgres"},)
@@ -579,6 +924,7 @@ def verify_release_schema_plan(
         prerequisite_status=verification.prerequisite_status,
         managed_differences=verification.managed_differences,
         prerequisite_differences=verification.prerequisite_differences,
+        legacy_inventory=current.legacy_inventory,
         errors=errors,
         started_at=started,
         finished_at=finished,
@@ -598,7 +944,9 @@ def apply_release_schema_plan(
     if current.managed_schema_status in {ManagedSchemaStatus.DRIFTED, ManagedSchemaStatus.UNSUPPORTED}:
         difference = current.managed_differences[0] if current.managed_differences else None
         raise ReleaseSchemaApplyError(
-            REASON_SCHEMA_DRIFTED,
+            REASON_PHASE1F1_CATALOG_DRIFTED
+            if contract.schema_version == CONTRACT_SCHEMA_VERSION_V2
+            else REASON_SCHEMA_DRIFTED,
             "drifted or unsupported managed schema cannot be applied",
             object_id=difference.object_id if difference is not None else None,
             transaction_stage="PREFLIGHT_CATALOG",
@@ -606,22 +954,33 @@ def apply_release_schema_plan(
             actual=difference.actual if difference is not None else None,
         )
     pending_migration_orders = {
-        item.migration_order for item in current.pending_ddl_operations if item.kind == "MIGRATION" and item.migration_order is not None
+        item.migration_order
+        for item in current.pending_ddl_operations
+        if item.kind == "MIGRATION" and item.migration_order is not None
+    }
+    requested_partition_keys = {
+        (str(item.partition_name), item.lower_bound, item.upper_bound)
+        for item in current.pending_ddl_operations
+        if item.kind == "PARTITION"
+        and item.partition_name is not None
+        and item.lower_bound is not None
+        and item.upper_bound is not None
     }
     pending_partitions = [
-        MonthPartition(
-            schema=contract.partition_contract.schema,
-            parent_relation=contract.partition_contract.parent_relation,
-            name=str(item.partition_name),
-            lower_bound=item.lower_bound,
-            upper_bound=item.upper_bound,
-        )
-        for item in current.pending_ddl_operations
-        if item.kind == "PARTITION" and item.partition_name is not None and item.lower_bound is not None and item.upper_bound is not None
+        item
+        for item in current.expected_partitions
+        if (item.name, item.lower_bound, item.upper_bound) in requested_partition_keys
     ]
+    if len(pending_partitions) != len(requested_partition_keys):
+        raise ReleaseSchemaApplyError(
+            REASON_PLAN_CONTRACT_MISMATCH,
+            "plan contains a partition operation not declared by the frozen partition contract",
+            transaction_stage="PREFLIGHT_PARTITION_PLAN",
+        )
     results: list[MigrationExecutionResult] = []
     executed_hashes: list[str] = []
     executed_partitions: list[MonthPartition] = []
+    remaining_partitions = list(pending_partitions)
     ddl_executed = False
     last_verification = verify_database_catalog(
         config=config,
@@ -630,7 +989,9 @@ def apply_release_schema_plan(
     )
     try:
         for migration in contract.managed_migrations:
-            pre_subset = subset_catalog_fingerprint(verification=last_verification, object_ids=migration.declared_object_ids)
+            pre_subset = subset_catalog_fingerprint(
+                verification=last_verification, object_ids=migration.declared_object_ids
+            )
             if migration.order not in pending_migration_orders:
                 now = _database_clock(config)
                 results.append(
@@ -646,10 +1007,36 @@ def apply_release_schema_plan(
                 )
                 continue
             migration_started = _database_clock(config)
-            LOGGER.info("phase1f release migration started target=%s order=%s", config.target_label.value, migration.order)
+            LOGGER.info(
+                "phase1f release migration started target=%s order=%s", config.target_label.value, migration.order
+            )
             committed = False
             try:
-                if migration.transaction_mode is TransactionMode.EXECUTOR_MANAGED:
+                if migration.executor_action is ExecutorAction.CREATE_PARTITIONS:
+                    parent_keys = set(migration.partition_parent_relations)
+                    migration_partitions = [
+                        item for item in remaining_partitions if f"{item.schema}.{item.parent_relation}" in parent_keys
+                    ]
+                    if not migration_partitions:
+                        raise ReleaseSchemaApplyError(
+                            REASON_PHASE1F1_PARTITION_MISSING,
+                            f"migration order {migration.order} was pending without declared partitions",
+                            migration_order=migration.order,
+                            transaction_stage="PARTITION_PRECONDITION",
+                        )
+                    _execute_partitions(config=config, contract=contract, partitions=migration_partitions)
+                    executed_partitions.extend(migration_partitions)
+                    remaining_partitions = [item for item in remaining_partitions if item not in migration_partitions]
+                elif migration.executor_action is ExecutorAction.CUTOVER:
+                    _execute_phase1f1_cutover_migration(
+                        config=config,
+                        contract=contract,
+                        migration=migration,
+                        expected_partitions=current.expected_partitions,
+                        legacy_inventory=current.legacy_inventory,
+                        request=current.request,
+                    )
+                elif migration.transaction_mode is TransactionMode.EXECUTOR_MANAGED:
                     _execute_executor_managed_migration(
                         config=config,
                         contract=contract,
@@ -659,7 +1046,8 @@ def apply_release_schema_plan(
                 else:
                     _execute_file_wrapped_migration(config=config, contract=contract, migration=migration)
                 committed = True
-                executed_hashes.append(migration.file_sha256)
+                if migration.file_sha256 is not None:
+                    executed_hashes.append(migration.file_sha256)
                 ddl_executed = True
                 results.append(
                     MigrationExecutionResult(
@@ -670,7 +1058,9 @@ def apply_release_schema_plan(
                         started_at=migration_started,
                     )
                 )
-                LOGGER.info("phase1f release migration committed target=%s order=%s", config.target_label.value, migration.order)
+                LOGGER.info(
+                    "phase1f release migration committed target=%s order=%s", config.target_label.value, migration.order
+                )
                 last_verification = verify_database_catalog(
                     config=config,
                     contract=contract,
@@ -680,7 +1070,9 @@ def apply_release_schema_plan(
                 if subset_differences:
                     difference = subset_differences[0]
                     raise ReleaseSchemaApplyError(
-                        REASON_POST_COMMIT_VERIFY_FAILED,
+                        REASON_PHASE1F1_POST_COMMIT_VERIFY_FAILED
+                        if contract.schema_version == CONTRACT_SCHEMA_VERSION_V2
+                        else REASON_POST_COMMIT_VERIFY_FAILED,
                         f"subset catalog readback failed at order {migration.order}",
                         migration_order=migration.order,
                         object_id=difference.object_id,
@@ -699,12 +1091,16 @@ def apply_release_schema_plan(
                     }
                 )
             except BaseException as exc:
-                failure = exc if isinstance(exc, ReleaseSchemaApplyError) else ReleaseSchemaApplyError(
-                    _timeout_reason(exc),
-                    f"migration order {migration.order} failed",
-                    cause=exc,
-                    migration_order=migration.order,
-                    transaction_stage="POST_COMMIT_SUBSET_READBACK" if committed else "MIGRATION_DDL",
+                failure = (
+                    exc
+                    if isinstance(exc, ReleaseSchemaApplyError)
+                    else ReleaseSchemaApplyError(
+                        _timeout_reason(exc),
+                        f"migration order {migration.order} failed",
+                        cause=exc,
+                        migration_order=migration.order,
+                        transaction_stage="POST_COMMIT_SUBSET_READBACK" if committed else "MIGRATION_DDL",
+                    )
                 )
                 LOGGER.error(
                     "phase1f release migration failed target=%s order=%s reason=%s exception_type=%s",
@@ -736,10 +1132,14 @@ def apply_release_schema_plan(
                         )
                     )
                 raise failure
-        if pending_partitions:
-            LOGGER.info("phase1f release partitions started target=%s count=%s", config.target_label.value, len(pending_partitions))
-            _execute_partitions(config=config, contract=contract, partitions=pending_partitions)
-            executed_partitions.extend(pending_partitions)
+        if remaining_partitions:
+            LOGGER.info(
+                "phase1f release partitions started target=%s count=%s",
+                config.target_label.value,
+                len(remaining_partitions),
+            )
+            _execute_partitions(config=config, contract=contract, partitions=remaining_partitions)
+            executed_partitions.extend(remaining_partitions)
             ddl_executed = True
             last_verification = verify_database_catalog(
                 config=config,
@@ -754,7 +1154,9 @@ def apply_release_schema_plan(
         if final_verification.managed_schema_status is not ManagedSchemaStatus.COMPATIBLE:
             difference = final_verification.managed_differences[0] if final_verification.managed_differences else None
             raise ReleaseSchemaApplyError(
-                REASON_POST_COMMIT_VERIFY_FAILED,
+                REASON_PHASE1F1_POST_COMMIT_VERIFY_FAILED
+                if contract.schema_version == CONTRACT_SCHEMA_VERSION_V2
+                else REASON_POST_COMMIT_VERIFY_FAILED,
                 "full catalog verification is not compatible after apply",
                 object_id=difference.object_id if difference is not None else None,
                 transaction_stage="FINAL_CATALOG_READBACK",
@@ -768,7 +1170,9 @@ def apply_release_schema_plan(
         )
         if post_evidence.total_sha256 != current.expected_final_catalog_fingerprint:
             raise ReleaseSchemaApplyError(
-                REASON_POST_COMMIT_VERIFY_FAILED,
+                REASON_PHASE1F1_POST_COMMIT_VERIFY_FAILED
+                if contract.schema_version == CONTRACT_SCHEMA_VERSION_V2
+                else REASON_POST_COMMIT_VERIFY_FAILED,
                 "post-apply catalog fingerprint differs from contract",
                 transaction_stage="FINAL_CATALOG_FINGERPRINT",
                 expected={"catalog_fingerprint": current.expected_final_catalog_fingerprint},
@@ -794,6 +1198,7 @@ def apply_release_schema_plan(
             prerequisite_status=final_verification.prerequisite_status,
             managed_differences=final_verification.managed_differences,
             prerequisite_differences=final_verification.prerequisite_differences,
+            legacy_inventory=current.legacy_inventory,
             errors=(),
             started_at=started,
             finished_at=finished,
@@ -814,7 +1219,9 @@ def apply_release_schema_plan(
             failure.expected,
             failure.actual,
             type(failure.cause or failure).__name__,
+            exc_info=True,
         )
+        receipt_errors: list[dict[str, Any]] = [failure.receipt_error()]
         try:
             final_verification = verify_database_catalog(
                 config=config,
@@ -826,7 +1233,25 @@ def apply_release_schema_plan(
                 contract=contract,
                 expected_partitions=current.expected_partitions,
             )
-        except Exception:
+        except Exception as readback_error:
+            LOGGER.error(
+                "phase1f post-failure catalog readback failed target=%s database=%s exception_type=%s",
+                config.target_label.value,
+                current.database_identity.current_database,
+                type(readback_error).__name__,
+                exc_info=True,
+            )
+            receipt_errors.append(
+                {
+                    "reason_code": REASON_PHASE1F1_POST_FAILURE_VERIFY_FAILED,
+                    "exception_type": type(readback_error).__name__,
+                    "migration_order": failure.migration_order,
+                    "object_id": failure.object_id,
+                    "transaction_stage": "POST_FAILURE_CATALOG_READBACK",
+                    "expected": None,
+                    "actual": None,
+                }
+            )
             final_verification = last_verification
             post_evidence = None
         finished = _try_database_clock(config) or started
@@ -849,7 +1274,8 @@ def apply_release_schema_plan(
             prerequisite_status=final_verification.prerequisite_status,
             managed_differences=final_verification.managed_differences,
             prerequisite_differences=final_verification.prerequisite_differences,
-            errors=(failure.receipt_error(),),
+            legacy_inventory=current.legacy_inventory,
+            errors=tuple(receipt_errors),
             started_at=started,
             finished_at=finished,
             ddl_executed=ddl_executed,

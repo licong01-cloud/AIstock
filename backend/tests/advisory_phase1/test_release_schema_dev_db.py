@@ -6,6 +6,7 @@ AIstock ``.env`` file and destroys every test database plus the whole container.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -14,6 +15,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import psycopg2
@@ -26,7 +28,11 @@ import backend.services.advisory_phase1.release_schema_apply_postgres as apply_m
 from backend.services.advisory_phase1.release_schema_apply_postgres import (
     REASON_DDL_EXECUTION_FAILED,
     REASON_DDL_LOCK_TIMEOUT,
+    REASON_PLAN_STALE,
     REASON_POST_COMMIT_VERIFY_FAILED,
+    REASON_PHASE1F1_CATALOG_DRIFTED,
+    REASON_PHASE1F1_COPY_MISMATCH,
+    REASON_PHASE1F1_POST_FAILURE_VERIFY_FAILED,
     ReleaseSchemaApplyError,
     _execute_executor_managed_migration,
     _execute_file_wrapped_migration,
@@ -51,6 +57,10 @@ from backend.services.advisory_phase1.release_schema_verify_postgres import (
     DatabaseConnectionConfig,
     readonly_catalog_connection,
     verify_catalog,
+)
+from backend.services.advisory_phase1.snapshot_writer import (
+    DeterministicParquetWriter,
+    PostgresSnapshotSourceReader,
 )
 
 
@@ -139,7 +149,9 @@ def disposable_postgres() -> Iterator[DisposablePostgres]:
         yield server
     finally:
         _docker("rm", "--force", name, check=False)
-        assert _docker("inspect", name, check=False).returncode != 0, "disposable PostgreSQL container was not destroyed"
+        assert _docker("inspect", name, check=False).returncode != 0, (
+            "disposable PostgreSQL container was not destroyed"
+        )
 
 
 @pytest.fixture
@@ -221,6 +233,111 @@ def _fresh_apply(config: DatabaseConnectionConfig):
     return contract, receipt
 
 
+def _apply_v1_predecessor(config: DatabaseConnectionConfig):
+    contract = load_release_schema_contract(
+        Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v1.json")
+    )
+    partitions = plan_month_partitions(
+        partition_contract=contract.partition_contract,
+        history_start_trade_date=date(2026, 6, 1),
+        history_end_trade_date=date(2026, 8, 31),
+    )
+    for migration in contract.managed_migrations:
+        if migration.transaction_mode.value == "EXECUTOR_MANAGED":
+            _execute_executor_managed_migration(
+                config=config,
+                contract=contract,
+                migration=migration,
+                expected_partitions=partitions,
+            )
+        else:
+            _execute_file_wrapped_migration(config=config, contract=contract, migration=migration)
+    return contract
+
+
+def _seed_v1_cross_month_lineage_and_candidates(config: DatabaseConnectionConfig) -> None:
+    _execute(
+        config,
+        """
+        SET session_replication_role = replica;
+        WITH seed(suffix, decision_date) AS (
+            VALUES ('a'::text, DATE '2026-06-15'), ('b'::text, DATE '2026-07-15')
+        )
+        INSERT INTO app.advisory_signal_observation (
+            canonical_signal_id, signal_schema_version, stable_signal_semantics_hash,
+            canonical_signal_scope_hash, decision_as_of_trade_date, selection_as_of_trade_date,
+            target_trade_date, decision_cutoff_ts, package_id, manifest_sha256, alpha_mode,
+            selection_runtime_semantics_hash, package_effective_config_hash, calendar_version, calendar_hash
+        )
+        SELECT 'signal-' || suffix, 'advisory_canonical_signal_v1', repeat('s', 64), repeat(suffix, 64),
+               decision_date, decision_date, decision_date + 1, '2026-06-15 08:00:00+08',
+               'package-' || suffix, repeat('m', 64), 'multi_alpha', repeat('r', 64),
+               repeat('c', 64), 'calendar-v1', repeat('k', 64)
+          FROM seed;
+
+        WITH seed(suffix) AS (VALUES ('a'::text), ('b'::text))
+        INSERT INTO app.advisory_signal_observation_version (
+            observation_version_id, canonical_signal_id, observation_schema_version, observation_revision_no,
+            supersedes_observation_version_id, signal_source_revision_set_id, signal_source_revision_set_hash,
+            phase0a_signal_context_hash, evidence_bundle_hash, stage_evidence_bundle_hash,
+            selection_evidence_id, selection_evidence_hash, selection_run_id, selection_run_content_hash,
+            selection_score_artifact_id, selection_score_artifact_hash, runtime_profile_version_id,
+            runtime_profile_version_hash, hmm_snapshot_id, hmm_snapshot_hash, hmm_snapshot_status,
+            risk_policy_hash, universe_policy_hash, symbol_normalization_policy_hash, valid_no_candidate,
+            observation_status, evidence_available_at, observation_content_hash, created_by_capture_batch_id
+        )
+        SELECT 'version-' || suffix, 'signal-' || suffix, 'advisory_signal_observation_version_v1', 1,
+               NULL, 'revision-' || suffix, repeat('v', 64), repeat('p', 64), repeat('e', 64), repeat('b', 64),
+               'selection-evidence-' || suffix, repeat('q', 64), 'selection-run-' || suffix, repeat('u', 64),
+               'artifact-' || suffix, repeat('a', 64), 'profile-' || suffix, repeat('f', 64),
+               NULL, NULL, 'NOT_APPLICABLE', repeat('r', 64), repeat('u', 64), repeat('n', 64), FALSE,
+               'COMPLETE', '2026-06-15 09:00:00+08', repeat('o', 63) || suffix, 'capture-' || suffix
+          FROM seed;
+
+        WITH seed(suffix) AS (VALUES ('a'::text), ('b'::text))
+        INSERT INTO app.advisory_signal_stage_evidence (
+            stage_evidence_id, observation_version_id, stage, capability_status, input_count, output_count,
+            excluded_count, observed_max_rank, source_artifact_id, source_artifact_hash, content_hash,
+            semantic_hash, score_direction, tie_break_policy_id, tie_break_policy_hash, reason_codes
+        )
+        SELECT 'stage-' || suffix, 'version-' || suffix, 'selection_effective', 'FULL', 1, 1, 0, 1,
+               'artifact-' || suffix, repeat('a', 64), repeat('h', 63) || suffix, repeat('z', 64),
+               'DESC', 'tie-v1', repeat('t', 64), '[]'::jsonb
+          FROM seed;
+
+        WITH seed(suffix) AS (VALUES ('a'::text), ('b'::text))
+        INSERT INTO app.advisory_signal_observation_lineage (
+            lineage_id, canonical_signal_id, observation_version_id, phase0a_audit_id,
+            phase0a_audit_manifest_hash, handoff_readiness_hash, admission_scope_id, admission_scope_hash,
+            audit_target_id, target_scope_hash, capability, stable_signal_semantics_hash,
+            canonical_signal_scope_hash, phase0a_signal_context_hash, oos_interval_id, oos_interval_hash,
+            evidence_scope, signal_evidence_level, effective_cutoff_date, program_id, binding_version_id,
+            lineage_source_type, source_run_id, review_run_id, list_version_id, lineage_content_hash
+        )
+        SELECT 'lineage-' || suffix, 'signal-' || suffix, 'version-' || suffix, 'audit-' || suffix,
+               repeat('a', 64), repeat('h', 64), 'scope-' || suffix, repeat('s', 64),
+               'target-' || suffix, repeat('t', 64), 'FULL', repeat('s', 64), repeat(suffix, 64),
+               repeat('p', 64), 'oos-' || suffix, repeat('i', 64), 'RETROSPECTIVE_RESEARCH_ONLY',
+               'FULL', DATE '2026-06-14', 'program-' || suffix, 'binding-' || suffix,
+               'PHASE0A_AUDIT', 'source-run-' || suffix, NULL, NULL, repeat('l', 63) || suffix
+          FROM seed;
+
+        WITH seed(suffix) AS (VALUES ('a'::text), ('b'::text))
+        INSERT INTO app.advisory_signal_stage_candidate (
+            stage_evidence_id, symbol, membership_status, rank, score_decimal, input_rank,
+            input_score_decimal, exclusion_reason_code, component_capability,
+            component_evidence_schema_version, component_evidence_json, component_evidence_hash,
+            component_reason_codes, candidate_content_hash
+        )
+        SELECT 'stage-' || suffix, '00000' || CASE WHEN suffix = 'a' THEN '1' ELSE '2' END || '.SZ',
+               'INCLUDED', 1, 1.250000000000, 1, 1.250000000000, NULL, 'NOT_APPLICABLE',
+               NULL, NULL, NULL, '[]'::jsonb, repeat('d', 63) || suffix
+          FROM seed;
+        SET session_replication_role = origin;
+        """,
+    )
+
+
 def _execute(config: DatabaseConnectionConfig, sql_text: str) -> None:
     connection = psycopg2.connect(**config.connect_kwargs())
     connection.autocommit = True
@@ -231,7 +348,78 @@ def _execute(config: DatabaseConnectionConfig, sql_text: str) -> None:
         connection.close()
 
 
-def test_full_frozen_apply_verify_reapply_and_evidence(database_factory: Callable[..., DatabaseConnectionConfig]) -> None:
+def _snapshot_compatibility_artifacts(config: DatabaseConnectionConfig, root: Path) -> tuple[tuple[Any, ...], ...]:
+    reader = PostgresSnapshotSourceReader(conn_factory=lambda: None, evidence_reader=None)
+    writer = DeterministicParquetWriter()
+    connection = psycopg2.connect(**config.connect_kwargs())
+    artifacts: list[tuple[Any, ...]] = []
+    queries = {
+        "lineage": """
+            SELECT lineage.*, observation.decision_as_of_trade_date AS snapshot_decision_date
+              FROM app.advisory_signal_observation_lineage lineage
+              JOIN app.advisory_signal_observation_version observation_version
+                ON observation_version.observation_version_id = lineage.observation_version_id
+              JOIN app.advisory_signal_observation observation
+                ON observation.canonical_signal_id = observation_version.canonical_signal_id
+             ORDER BY observation.decision_as_of_trade_date, lineage.canonical_signal_id,
+                      lineage.observation_version_id, lineage.lineage_id
+        """,
+        "stage_candidates": """
+            SELECT candidate.*, observation.decision_as_of_trade_date AS snapshot_decision_date
+              FROM app.advisory_signal_stage_candidate candidate
+              JOIN app.advisory_signal_stage_evidence stage_evidence
+                ON stage_evidence.stage_evidence_id = candidate.stage_evidence_id
+              JOIN app.advisory_signal_observation_version observation_version
+                ON observation_version.observation_version_id = stage_evidence.observation_version_id
+              JOIN app.advisory_signal_observation observation
+                ON observation.canonical_signal_id = observation_version.canonical_signal_id
+             ORDER BY observation.decision_as_of_trade_date, candidate.stage_evidence_id, candidate.symbol
+        """,
+    }
+    try:
+        connection.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+        for role, query in queries.items():
+            raw_rows = reader._query(connection, query, (), name=f"phase1f1_{role}")
+            try:
+                logical_rows = [
+                    reader._logical(role, raw, decision_date=raw["snapshot_decision_date"]) for raw in raw_rows
+                ]
+            finally:
+                raw_rows.close()
+            groups: dict[tuple[tuple[str, str], ...], list[Any]] = {}
+            for row in logical_rows:
+                groups.setdefault(tuple(sorted(row.partition_key.items())), []).append(row)
+            for ordinal, (partition_items, rows) in enumerate(sorted(groups.items()), start=1):
+                path = root / f"{role}-{ordinal:03d}.parquet"
+                descriptor = writer.write_parquet(
+                    path=path,
+                    logical_path=f"{role}/{ordinal:03d}.parquet",
+                    logical_role=role,
+                    partition_key=dict(partition_items),
+                    ordinal=ordinal,
+                    rows=sorted(rows, key=lambda item: item.sort_key),
+                )
+                artifacts.append(
+                    (
+                        role,
+                        partition_items,
+                        descriptor.sha256,
+                        descriptor.size_bytes,
+                        descriptor.row_count,
+                        descriptor.schema_fingerprint,
+                        descriptor.partition_content_hash,
+                        path.read_bytes(),
+                    )
+                )
+        connection.rollback()
+        return tuple(sorted(artifacts, key=lambda item: (item[0], item[1])))
+    finally:
+        connection.close()
+
+
+def test_full_frozen_apply_verify_reapply_and_evidence(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
     config = database_factory()
     contract, first = _fresh_apply(config)
     assert first.ddl_executed
@@ -254,7 +442,441 @@ def test_full_frozen_apply_verify_reapply_and_evidence(database_factory: Callabl
     assert reapply.post_catalog_fingerprint == first.post_catalog_fingerprint
 
 
-def test_missing_external_prerequisite_does_not_block_managed_apply(database_factory: Callable[..., DatabaseConnectionConfig]) -> None:
+def test_phase1f1_v1_rows_migrate_across_months_preserve_views_and_allow_scoped_duplicate_hashes(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+    tmp_path: Path,
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _seed_v1_cross_month_lineage_and_candidates(config)
+    v1_snapshot_artifacts = _snapshot_compatibility_artifacts(config, tmp_path / "v1")
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT * FROM app.advisory_signal_observation_lineage ORDER BY lineage_id")
+            v1_lineage_rows = cursor.fetchall()
+            lineage_columns = tuple(column.name for column in cursor.description)
+            cursor.execute("SELECT * FROM app.advisory_signal_stage_candidate ORDER BY stage_evidence_id, symbol")
+            v1_candidate_rows = cursor.fetchall()
+            candidate_columns = tuple(column.name for column in cursor.description)
+    finally:
+        connection.close()
+
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    assert plan.managed_schema_status is ManagedSchemaStatus.PARTIAL_ADDITIVE
+    assert plan.legacy_inventory is not None
+    assert plan.legacy_inventory.predecessor_layout == "V1_TABLES"
+    assert plan.legacy_inventory.lineage_row_count == 2
+    assert plan.legacy_inventory.candidate_row_count == 2
+    assert plan.legacy_inventory.legacy_months == (date(2026, 6, 1), date(2026, 7, 1))
+    assert [item.migration_order for item in plan.pending_ddl_operations if item.kind == "MIGRATION"] == [60, 70, 80]
+
+    receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert receipt.operation_status.value == "SUCCESS"
+    assert receipt.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
+    assert receipt.legacy_inventory == plan.legacy_inventory
+    assert _snapshot_compatibility_artifacts(config, tmp_path / "v2") == v1_snapshot_artifacts
+
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relkind FROM pg_class WHERE oid = 'app.advisory_signal_observation_lineage'::regclass"
+            )
+            assert cursor.fetchone()[0] == "v"
+            cursor.execute("SELECT relkind FROM pg_class WHERE oid = 'app.advisory_signal_stage_candidate'::regclass")
+            assert cursor.fetchone()[0] == "v"
+            cursor.execute("SELECT * FROM app.advisory_signal_observation_lineage ORDER BY lineage_id")
+            assert tuple(column.name for column in cursor.description) == lineage_columns
+            assert cursor.fetchall() == v1_lineage_rows
+            cursor.execute("SELECT * FROM app.advisory_signal_stage_candidate ORDER BY stage_evidence_id, symbol")
+            assert tuple(column.name for column in cursor.description) == candidate_columns
+            assert cursor.fetchall() == v1_candidate_rows
+            cursor.execute(
+                """
+                SELECT tableoid::regclass::text
+                  FROM app.advisory_signal_observation_lineage_payload
+                 ORDER BY decision_as_of_trade_date
+                """
+            )
+            assert [row[0] for row in cursor.fetchall()] == [
+                "app.advisory_signal_observation_lineage_payload_202606",
+                "app.advisory_signal_observation_lineage_payload_202607",
+            ]
+            cursor.execute(
+                """
+                SELECT tableoid::regclass::text
+                  FROM app.advisory_signal_stage_candidate_payload
+                 ORDER BY decision_as_of_trade_date
+                """
+            )
+            assert [row[0] for row in cursor.fetchall()] == [
+                "app.advisory_signal_stage_candidate_payload_202606",
+                "app.advisory_signal_stage_candidate_payload_202607",
+            ]
+
+            with pytest.raises(psycopg2.Error):
+                cursor.execute(
+                    "UPDATE app.advisory_signal_observation_lineage SET source_run_id = source_run_id "
+                    "WHERE lineage_id = 'lineage-a'"
+                )
+            connection.rollback()
+
+            with pytest.raises(psycopg2.Error):
+                cursor.execute(
+                    "UPDATE app.advisory_signal_observation_lineage_identity SET source_run_id = 'mutated' "
+                    "WHERE lineage_id = 'lineage-a'"
+                )
+            connection.rollback()
+            with pytest.raises(psycopg2.Error):
+                cursor.execute(
+                    "UPDATE app.advisory_signal_stage_candidate_payload SET rank = 2 "
+                    "WHERE stage_evidence_id = 'stage-a'"
+                )
+            connection.rollback()
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cursor.execute(
+                    """
+                    INSERT INTO app.advisory_signal_observation_lineage_identity (
+                        lineage_id, decision_as_of_trade_date, observation_version_id, phase0a_audit_id,
+                        admission_scope_id, program_id, binding_version_id, lineage_source_type,
+                        source_run_id, lineage_content_hash
+                    ) VALUES (
+                        'lineage-a-duplicate', DATE '2026-06-15', 'version-a', 'audit-a', 'scope-a',
+                        'program-a', 'binding-a', 'PHASE0A_AUDIT', 'source-run-a', repeat('y', 64)
+                    )
+                    """
+                )
+            connection.rollback()
+            with pytest.raises(psycopg2.errors.UniqueViolation):
+                cursor.execute(
+                    """
+                    INSERT INTO app.advisory_signal_stage_candidate_identity (
+                        stage_evidence_id, symbol, decision_as_of_trade_date
+                    ) VALUES ('stage-a', '000001.SZ', DATE '2026-06-15')
+                    """
+                )
+            connection.rollback()
+
+            cursor.execute(
+                """
+                INSERT INTO app.advisory_signal_stage_evidence (
+                    stage_evidence_id, observation_version_id, stage, capability_status, input_count, output_count,
+                    excluded_count, observed_max_rank, source_artifact_id, source_artifact_hash, content_hash,
+                    semantic_hash, score_direction, tie_break_policy_id, tie_break_policy_hash, reason_codes
+                ) VALUES (
+                    'stage-a-duplicate', 'version-a', 'advisory_model', 'FULL', 1, 1, 0, 1,
+                    'artifact-duplicate', repeat('a', 64), repeat('h', 63) || 'a', repeat('z', 64),
+                    'DESC', 'tie-v1', repeat('t', 64), '[]'::jsonb
+                )
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO app.advisory_signal_stage_candidate_identity (
+                    stage_evidence_id, symbol, decision_as_of_trade_date
+                ) VALUES ('stage-a-duplicate', '000001.SZ', DATE '2026-06-15')
+                """
+            )
+            cursor.execute(
+                """
+                INSERT INTO app.advisory_signal_stage_candidate_payload (
+                    decision_as_of_trade_date, stage_evidence_id, symbol, membership_status, rank,
+                    score_decimal, input_rank, input_score_decimal, exclusion_reason_code,
+                    component_capability, component_evidence_schema_version, component_evidence_json,
+                    component_evidence_hash, component_reason_codes, candidate_content_hash
+                ) VALUES (
+                    DATE '2026-06-15', 'stage-a-duplicate', '000001.SZ', 'INCLUDED', 1,
+                    1.250000000000, 1, 1.250000000000, NULL, 'NOT_APPLICABLE', NULL, NULL,
+                    NULL, '[]'::jsonb, repeat('d', 63) || 'a'
+                )
+                """
+            )
+            cursor.execute(
+                "SELECT count(*) FROM app.advisory_signal_stage_evidence WHERE content_hash = repeat('h', 63) || 'a'"
+            )
+            assert cursor.fetchone()[0] == 2
+            cursor.execute(
+                "SELECT count(*) FROM app.advisory_signal_stage_candidate_payload WHERE candidate_content_hash = repeat('d', 63) || 'a'"
+            )
+            assert cursor.fetchone()[0] == 2
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_phase1f1_cutover_failure_rolls_back_copy_and_resumes_from_prepared_state(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _seed_v1_cross_month_lineage_and_candidates(config)
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    _execute(
+        config,
+        """
+        CREATE FUNCTION public.phase1f1_fail_cutover_view() RETURNS event_trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF TG_TAG = 'CREATE VIEW' THEN
+                RAISE EXCEPTION 'PHASE1F1_TEST_CUTOVER_VIEW_FAILURE';
+            END IF;
+        END;
+        $$;
+        CREATE EVENT TRIGGER phase1f1_fail_cutover_view ON ddl_command_start
+            EXECUTE FUNCTION public.phase1f1_fail_cutover_view();
+        """,
+    )
+    try:
+        failed = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    finally:
+        _execute(
+            config,
+            "DROP EVENT TRIGGER IF EXISTS phase1f1_fail_cutover_view; DROP FUNCTION IF EXISTS public.phase1f1_fail_cutover_view()",
+        )
+    assert failed.operation_status.value == "FAILED"
+    assert any(
+        item.order == 60 and item.status is MigrationExecutionStatus.COMMITTED for item in failed.per_migration_results
+    )
+    assert any(
+        item.order == 70 and item.status is MigrationExecutionStatus.COMMITTED for item in failed.per_migration_results
+    )
+    assert any(
+        item.order == 80 and item.status is MigrationExecutionStatus.FAILED for item in failed.per_migration_results
+    )
+
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relkind FROM pg_class WHERE oid = 'app.advisory_signal_observation_lineage'::regclass"
+            )
+            assert cursor.fetchone()[0] == "r"
+            cursor.execute("SELECT relkind FROM pg_class WHERE oid = 'app.advisory_signal_stage_candidate'::regclass")
+            assert cursor.fetchone()[0] == "r"
+            cursor.execute("SELECT count(*) FROM app.advisory_signal_observation_lineage_identity")
+            assert cursor.fetchone()[0] == 0
+            cursor.execute("SELECT count(*) FROM app.advisory_signal_stage_candidate_identity")
+            assert cursor.fetchone()[0] == 0
+    finally:
+        connection.close()
+
+    _, resume_request = _request(config)
+    resume_plan = build_release_schema_plan(config=config, contract=contract, request=resume_request)
+    assert resume_plan.managed_schema_status is ManagedSchemaStatus.PARTIAL_ADDITIVE
+    assert [item.migration_order for item in resume_plan.pending_ddl_operations if item.kind == "MIGRATION"] == [80]
+    resumed = apply_release_schema_plan(plan=resume_plan, config=config, contract=contract)
+    assert resumed.operation_status.value == "SUCCESS"
+    assert resumed.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
+
+
+def test_phase1f1_legacy_inventory_change_invalidates_the_frozen_plan_before_ddl(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _seed_v1_cross_month_lineage_and_candidates(config)
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    _execute(
+        config,
+        """
+        INSERT INTO app.advisory_signal_stage_candidate (
+            stage_evidence_id, symbol, membership_status, rank, score_decimal, input_rank,
+            input_score_decimal, exclusion_reason_code, component_capability,
+            component_evidence_schema_version, component_evidence_json, component_evidence_hash,
+            component_reason_codes, candidate_content_hash
+        ) VALUES (
+            'stage-a', '000003.SZ', 'INCLUDED', 2, 0.750000000000, 2, 0.750000000000,
+            NULL, 'NOT_APPLICABLE', NULL, NULL, NULL, '[]'::jsonb, repeat('x', 64)
+        )
+        """,
+    )
+    with pytest.raises(ReleaseSchemaApplyError) as error:
+        apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert error.value.reason_code == REASON_PLAN_STALE
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regclass('app.advisory_signal_observation_lineage_identity')")
+            assert cursor.fetchone()[0] is None
+    finally:
+        connection.close()
+
+
+def test_phase1f1_orphan_legacy_parent_date_fails_during_read_only_plan_build(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _seed_v1_cross_month_lineage_and_candidates(config)
+    _execute(
+        config,
+        """
+        SET session_replication_role = replica;
+        INSERT INTO app.advisory_signal_observation_lineage (
+            lineage_id, canonical_signal_id, observation_version_id, phase0a_audit_id,
+            phase0a_audit_manifest_hash, handoff_readiness_hash, admission_scope_id, admission_scope_hash,
+            audit_target_id, target_scope_hash, capability, stable_signal_semantics_hash,
+            canonical_signal_scope_hash, phase0a_signal_context_hash, oos_interval_id, oos_interval_hash,
+            evidence_scope, signal_evidence_level, effective_cutoff_date, program_id, binding_version_id,
+            lineage_source_type, source_run_id, review_run_id, list_version_id, lineage_content_hash
+        ) VALUES (
+            'lineage-orphan', 'signal-a', 'missing-version', 'audit-orphan', repeat('a', 64), repeat('h', 64),
+            'scope-orphan', repeat('s', 64), 'target-orphan', repeat('t', 64), 'FULL', repeat('s', 64),
+            repeat('o', 64), repeat('p', 64), 'oos-orphan', repeat('i', 64), 'RETROSPECTIVE_RESEARCH_ONLY',
+            'FULL', DATE '2026-06-14', 'program-orphan', 'binding-orphan', 'PHASE0A_AUDIT',
+            'source-run-orphan', NULL, NULL, repeat('z', 64)
+        );
+        SET session_replication_role = origin;
+        """,
+    )
+    contract, request = _request(config)
+    with pytest.raises(ReleaseSchemaApplyError) as error:
+        build_release_schema_plan(config=config, contract=contract, request=request)
+    assert error.value.reason_code == "ADVISORY_PHASE1F1_PARENT_DATE_UNRESOLVED"
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT to_regclass('app.advisory_signal_observation_lineage_identity')")
+            assert cursor.fetchone()[0] is None
+    finally:
+        connection.close()
+
+
+def test_phase1f1_unknown_v1_child_drift_is_not_silently_repaired(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _execute(
+        config,
+        "ALTER TABLE app.advisory_signal_observation_lineage "
+        "ADD CONSTRAINT phase1f1_unknown_lineage_check CHECK (lineage_id <> '')",
+    )
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    assert plan.managed_schema_status is ManagedSchemaStatus.DRIFTED
+    assert not plan.pending_ddl_operations
+    assert any(
+        item.object_id == "constraint:app.advisory_signal_observation_lineage.phase1f1_unknown_lineage_check"
+        and not item.repairable_by_orders
+        for item in plan.managed_differences
+    )
+    with pytest.raises(ReleaseSchemaApplyError) as error:
+        apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert error.value.reason_code == REASON_PHASE1F1_CATALOG_DRIFTED
+
+
+def test_phase1f1_isolated_legacy_unique_remnant_is_drift_not_unrunnable_partial(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    contract, _ = _fresh_apply(config)
+    _execute(
+        config,
+        "ALTER TABLE app.advisory_signal_stage_evidence "
+        "ADD CONSTRAINT advisory_signal_stage_evidence_content_hash_key UNIQUE (content_hash)",
+    )
+    _, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    assert plan.managed_schema_status is ManagedSchemaStatus.DRIFTED
+    assert not plan.pending_ddl_operations
+
+
+def test_phase1f1_copy_mismatch_rolls_back_before_authority_swap(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    _seed_v1_cross_month_lineage_and_candidates(config)
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    prepare = next(item for item in contract.managed_migrations if item.order == 60)
+    cutover = next(item for item in contract.managed_migrations if item.order == 80)
+    _execute_file_wrapped_migration(config=config, contract=contract, migration=prepare)
+    apply_module._execute_partitions(
+        config=config,
+        contract=contract,
+        partitions=plan.expected_partitions,
+    )
+    _execute(
+        config,
+        """
+        CREATE FUNCTION public.phase1f1_drop_candidate_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            RETURN NULL;
+        END;
+        $$;
+        CREATE TRIGGER phase1f1_drop_candidate_copy
+            BEFORE INSERT ON app.advisory_signal_stage_candidate_payload
+            FOR EACH ROW EXECUTE FUNCTION public.phase1f1_drop_candidate_copy();
+        """,
+    )
+    with pytest.raises(ReleaseSchemaApplyError) as error:
+        apply_module._execute_phase1f1_cutover_migration(
+            config=config,
+            contract=contract,
+            migration=cutover,
+            expected_partitions=plan.expected_partitions,
+            legacy_inventory=plan.legacy_inventory,
+            request=request,
+        )
+    assert error.value.reason_code == REASON_PHASE1F1_COPY_MISMATCH
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT relkind FROM pg_class WHERE oid = 'app.advisory_signal_observation_lineage'::regclass"
+            )
+            assert cursor.fetchone()[0] == "r"
+            cursor.execute("SELECT count(*) FROM app.advisory_signal_observation_lineage_identity")
+            assert cursor.fetchone()[0] == 0
+            cursor.execute("SELECT count(*) FROM app.advisory_signal_stage_candidate_identity")
+            assert cursor.fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_phase1f1_post_failure_readback_error_is_logged_and_recorded(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = database_factory()
+    _apply_v1_predecessor(config)
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    original_verify = apply_module.verify_database_catalog
+    state = {"cutover_failed": False}
+
+    def fail_cutover(**_: Any) -> None:
+        state["cutover_failed"] = True
+        raise ReleaseSchemaApplyError(REASON_DDL_EXECUTION_FAILED, "injected cutover failure")
+
+    def fail_post_failure_readback(**kwargs: Any) -> Any:
+        if state["cutover_failed"]:
+            raise RuntimeError("injected post-failure readback failure")
+        return original_verify(**kwargs)
+
+    monkeypatch.setattr(apply_module, "_execute_phase1f1_cutover_migration", fail_cutover)
+    monkeypatch.setattr(apply_module, "verify_database_catalog", fail_post_failure_readback)
+    with caplog.at_level(logging.ERROR, logger=apply_module.LOGGER.name):
+        receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert receipt.operation_status.value == "FAILED"
+    assert [item["reason_code"] for item in receipt.errors] == [
+        REASON_DDL_EXECUTION_FAILED,
+        REASON_PHASE1F1_POST_FAILURE_VERIFY_FAILED,
+    ]
+    readback_records = [item for item in caplog.records if "post-failure catalog readback failed" in item.getMessage()]
+    assert len(readback_records) == 1
+    assert readback_records[0].exc_info is not None
+
+
+def test_missing_external_prerequisite_does_not_block_managed_apply(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
     config = database_factory(prerequisite=False)
     _, receipt = _fresh_apply(config)
     assert receipt.prerequisite_status is PrerequisiteStatus.MISSING
@@ -272,6 +894,30 @@ DRIFT_CASES = (
     "ALTER TABLE app.advisory_source_observer_cursor DISABLE TRIGGER trg_verify_advisory_source_observer_cursor_update",
     "CREATE OR REPLACE FUNCTION app.verify_advisory_source_observer_cursor_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
     "DROP TABLE app.advisory_outcome_label_payload_202606; CREATE TABLE app.advisory_outcome_label_payload_202606 PARTITION OF app.advisory_outcome_label_payload FOR VALUES FROM ('2026-06-02') TO ('2026-07-01')",
+    """
+    CREATE OR REPLACE VIEW app.advisory_signal_stage_candidate AS
+    SELECT identity.stage_evidence_id,
+           identity.symbol,
+           payload.membership_status,
+           payload.rank,
+           payload.score_decimal,
+           payload.input_rank,
+           payload.input_score_decimal,
+           payload.exclusion_reason_code,
+           payload.component_capability,
+           payload.component_evidence_schema_version,
+           payload.component_evidence_json,
+           payload.component_evidence_hash,
+           payload.component_reason_codes,
+           payload.candidate_content_hash,
+           payload.created_at
+      FROM app.advisory_signal_stage_candidate_identity identity
+      JOIN app.advisory_signal_stage_candidate_payload payload
+        ON payload.stage_evidence_id = identity.stage_evidence_id
+       AND payload.symbol = identity.symbol
+       AND payload.decision_as_of_trade_date = identity.decision_as_of_trade_date
+     WHERE identity.symbol IS NOT NULL
+    """,
 )
 
 
@@ -290,7 +936,7 @@ def test_catalog_drift_matrix_is_rejected(
     assert plan.pending_ddl_operations == ()
     with pytest.raises(ReleaseSchemaApplyError) as error:
         apply_release_schema_plan(plan=plan, config=config, contract=contract)
-    assert error.value.reason_code == "PHASE1F_SCHEMA_DRIFTED"
+    assert error.value.reason_code == REASON_PHASE1F1_CATALOG_DRIFTED
 
 
 def test_committed_migration_remains_recorded_when_readback_fails(
@@ -344,7 +990,9 @@ def test_partial_failure_receipt_and_exact_resume(
     monkeypatch.setattr(apply_module, "_execute_file_wrapped_migration", fail_order_30)
     failed = apply_release_schema_plan(plan=plan, config=config, contract=contract)
     assert failed.operation_status.value == "FAILED"
-    assert [item.order for item in failed.per_migration_results if item.status is MigrationExecutionStatus.COMMITTED] == [10, 20]
+    assert [
+        item.order for item in failed.per_migration_results if item.status is MigrationExecutionStatus.COMMITTED
+    ] == [10, 20]
     assert failed.per_migration_results[-1].order == 30
     assert failed.per_migration_results[-1].status is MigrationExecutionStatus.FAILED
 
@@ -352,7 +1000,7 @@ def test_partial_failure_receipt_and_exact_resume(
     _, resume_request = _request(config)
     resume_plan = build_release_schema_plan(config=config, contract=contract, request=resume_request)
     pending_orders = [item.migration_order for item in resume_plan.pending_ddl_operations if item.kind == "MIGRATION"]
-    assert pending_orders == [30, 40, 50, 70]
+    assert pending_orders == [30, 40, 50, 55, 60, 70, 80]
     resumed = apply_release_schema_plan(plan=resume_plan, config=config, contract=contract)
     assert resumed.operation_status.value == "SUCCESS"
     assert resumed.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
@@ -429,7 +1077,9 @@ def test_current_migration_is_atomic_on_mid_file_failure(
         connection.close()
 
 
-def test_lock_timeout_has_no_retry_and_resume_succeeds(database_factory: Callable[..., DatabaseConnectionConfig]) -> None:
+def test_lock_timeout_has_no_retry_and_resume_succeeds(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
     config = database_factory()
     contract, request = _request(config)
     partitions = plan_month_partitions(
@@ -475,7 +1125,9 @@ def test_lock_timeout_has_no_retry_and_resume_succeeds(database_factory: Callabl
     assert resumed.operation_status.value == "SUCCESS"
 
 
-def test_session_policy_and_statement_timeout_classification(database_factory: Callable[..., DatabaseConnectionConfig]) -> None:
+def test_session_policy_and_statement_timeout_classification(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
     config = database_factory()
     contract = load_release_schema_contract()
     connection = psycopg2.connect(**config.connect_kwargs())
@@ -489,7 +1141,10 @@ def test_session_policy_and_statement_timeout_classification(database_factory: C
     finally:
         connection.rollback()
         connection.close()
-    assert _timeout_reason(psycopg2.errors.QueryCanceled("canceling statement due to statement timeout")) == "PHASE1F_DDL_STATEMENT_TIMEOUT"
+    assert (
+        _timeout_reason(psycopg2.errors.QueryCanceled("canceling statement due to statement timeout"))
+        == "PHASE1F_DDL_STATEMENT_TIMEOUT"
+    )
 
 
 class _CursorSpy:
@@ -522,7 +1177,9 @@ class _ConnectionSpy:
         return _CursorSpy(self._connection.cursor(*args, **kwargs), self._statements)
 
 
-def test_verifier_query_spy_is_catalog_only_and_read_only(database_factory: Callable[..., DatabaseConnectionConfig]) -> None:
+def test_verifier_query_spy_is_catalog_only_and_read_only(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
     config = database_factory()
     contract = load_release_schema_contract()
     partitions = plan_month_partitions(
@@ -544,5 +1201,9 @@ def test_verifier_query_spy_is_catalog_only_and_read_only(database_factory: Call
     normalized = [" ".join(statement.lower().split()) for statement in statements]
     assert normalized
     assert all(statement.startswith("select ") for statement in normalized)
-    assert not any(token in statement for statement in normalized for token in ("insert ", "update ", "delete ", "alter ", "create ", "drop "))
+    assert not any(
+        token in statement
+        for statement in normalized
+        for token in ("insert ", "update ", "delete ", "alter ", "create ", "drop ")
+    )
     assert not any(" from app." in statement or " from market." in statement for statement in normalized)
