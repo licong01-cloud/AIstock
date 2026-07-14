@@ -14,6 +14,7 @@ from fastapi import APIRouter, Body, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 import requests
 
+from ..db.init_tushare_schedules import get_default_schedule_catalog
 from ..db.pg_pool import get_conn
 from ..ingestion.tdx_scheduler import scheduler  # 1:1 复用现有调度器实现
 from ..services.tushare_dataset_specs import DATASET_REGISTRY
@@ -1025,19 +1026,23 @@ def _upsert_ingestion_schedule_entry(
 
 
 def _ensure_default_ingestion_schedules() -> List[Dict[str, Any]]:
-    defaults = [
-        # 说明：
-        # - kline_daily_raw / kline_minute_raw 的初始化和增量
-        #   已统一切换为 Go 实现（init: /api/ingestion/init，incremental: /api/ingestion/incremental），
-        #   不再通过 Python 调度器执行，因此这里不再为它们创建默认 schedule，
-        #   以避免误触发 Python 版脚本。
-        ("stock_moneyflow_ts", "incremental", "daily", True, {}),
-        ("kline_weekly", "incremental", "daily", True, {}),
-        ("anns_metadata", "incremental", "1h", True, _anns_metadata_incremental_options()),
-    ]
+    catalog = get_default_schedule_catalog()
+    if not catalog["complete"]:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "default schedule catalog is incomplete", "errors": catalog["errors"]},
+        )
     items: List[Dict[str, Any]] = []
-    for ds, md, freq, en, opts in defaults:
-        items.append(_upsert_ingestion_schedule_entry(ds, md, freq, en, opts))
+    for template in catalog["templates"]:
+        items.append(
+            _upsert_ingestion_schedule_entry(
+                template["dataset"],
+                template["mode"],
+                template["frequency"],
+                template["enabled"],
+                template["options"],
+            )
+        )
     scheduler.refresh_schedules()
     return items
 

@@ -4,6 +4,7 @@
     "backend/db/init_tushare_schedules.py",
     "backend/services/local_data_management.py",
     "backend/routers/ingestion.py",
+    "backend/tests/test_local_data_management_facade.py",
     "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],

@@ -19,6 +19,7 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from psycopg2.extras import RealDictCursor
 
+from backend.db.init_tushare_schedules import get_default_schedule_catalog
 from backend.db.pg_pool import get_conn
 from backend.routers import ingestion
 
@@ -33,18 +34,6 @@ CONFIRM_BY_RISK = {
     "destructive": LOCAL_DATA_CONFIRM_DELETE,
     "repair_apply": LOCAL_DATA_CONFIRM_REPAIR,
 }
-
-DEFAULT_SCHEDULE_TEMPLATES: list[dict[str, Any]] = [
-    {"dataset": "stock_moneyflow_ts", "mode": "incremental", "frequency": "daily", "enabled": True, "options": {}},
-    {"dataset": "kline_weekly", "mode": "incremental", "frequency": "daily", "enabled": True, "options": {}},
-    {
-        "dataset": "anns_metadata",
-        "mode": "incremental",
-        "frequency": "1h",
-        "enabled": True,
-        "options": {"lookback_days": 2, "source": "eastmoney", "workers": 1, "request_sleep": 0.05, "skip_auto_range": True},
-    },
-]
 
 STATUS_LABELS = {
     "fresh": "正常",
@@ -358,12 +347,18 @@ class LocalDataManagementService:
         return self._source("GET /api/ingestion/schedule", self.source.list_ingestion_schedules, "local_data_list_schedules", "read_only")
 
     def get_schedule_defaults(self) -> dict[str, Any]:
+        catalog = self._validated_default_schedule_catalog()
+        templates = catalog["templates"]
         return self._response(
             operation="local_data_get_schedule_defaults",
             risk_level="read_only",
             source_endpoint="local default schedule template",
-            data={"items": list(DEFAULT_SCHEDULE_TEMPLATES)},
-            summary=f"当前推荐默认计划包含 {len(DEFAULT_SCHEDULE_TEMPLATES)} 个任务。",
+            data={
+                "items": templates,
+                "catalog_version": catalog["version"],
+                "catalog_fingerprint": catalog["fingerprint"],
+            },
+            summary=f"当前推荐默认计划包含 {len(templates)} 个任务。",
         )
 
     def get_preset_stats(self) -> dict[str, Any]:
@@ -402,9 +397,15 @@ class LocalDataManagementService:
         return self._source("DELETE /api/ingestion/schedule/{id}", self.source.delete_ingestion_schedule, "local_data_delete_schedule", "destructive", schedule_id=uuid.UUID(str(schedule_id)))
 
     def plan_schedule_reset(self, *, delete_missing: bool = False) -> dict[str, Any]:
+        if delete_missing:
+            raise HTTPException(
+                status_code=400,
+                detail="destructive schedule reset is disabled; review and delete one schedule explicitly if required",
+            )
+        catalog = self._validated_default_schedule_catalog()
         current = self.source.list_ingestion_schedules().get("items") or []
         current_by_key = {(item.get("dataset"), item.get("mode")): item for item in current}
-        desired_by_key = {(item.get("dataset"), item.get("mode")): item for item in DEFAULT_SCHEDULE_TEMPLATES}
+        desired_by_key = {(item.get("dataset"), item.get("mode")): item for item in catalog["templates"]}
         actions: list[dict[str, Any]] = []
         for key, desired in desired_by_key.items():
             existing = current_by_key.get(key)
@@ -418,11 +419,13 @@ class LocalDataManagementService:
             }
             if diff:
                 actions.append({"action": "update", "key": list(key), "schedule_id": existing.get("schedule_id"), "diff": diff, "desired": desired})
-        if delete_missing:
-            for key, existing in current_by_key.items():
-                if key not in desired_by_key:
-                    actions.append({"action": "delete", "key": list(key), "schedule_id": existing.get("schedule_id"), "current": existing})
-        plan = {"plan_id": self._plan_id({"actions": actions, "delete_missing": delete_missing}), "actions": actions, "delete_missing": delete_missing}
+        plan_payload = {
+            "actions": actions,
+            "delete_missing": False,
+            "catalog_version": catalog["version"],
+            "catalog_fingerprint": catalog["fingerprint"],
+        }
+        plan = {"plan_id": self._plan_id(plan_payload), **plan_payload}
         return self._response(
             operation="local_data_plan_schedule_reset",
             risk_level="plan_only",
@@ -432,10 +435,18 @@ class LocalDataManagementService:
         )
 
     def apply_schedule_reset(self, *, plan: dict[str, Any] | None, confirm_change: str | None, confirm_delete: str | None = None) -> dict[str, Any]:
-        plan_data = plan or self.plan_schedule_reset(delete_missing=False)["data"]
+        canonical_plan = self.plan_schedule_reset(delete_missing=False)["data"]
+        plan_data = plan or canonical_plan
         actions = list(plan_data.get("actions") or [])
         destructive = any(action.get("action") == "delete" for action in actions)
-        self._require("destructive" if destructive else "write_control_plane", confirm_delete if destructive else confirm_change)
+        if destructive:
+            raise HTTPException(status_code=400, detail="destructive schedule reset actions are not supported")
+        if plan_data != canonical_plan:
+            raise HTTPException(
+                status_code=409,
+                detail="schedule reset plan is stale or does not match the current canonical catalog; regenerate the plan",
+            )
+        self._require("write_control_plane", confirm_change)
         results: list[dict[str, Any]] = []
         for action in actions:
             if action.get("action") in {"create", "update"}:
@@ -452,6 +463,14 @@ class LocalDataManagementService:
             data={"plan_id": plan_data.get("plan_id"), "applied": results, "post_check": self.source.list_ingestion_schedules()},
             summary=f"计划任务重置已执行 {len(results)} 个变更，并已复查。",
         )
+
+    @staticmethod
+    def _validated_default_schedule_catalog() -> dict[str, Any]:
+        catalog = get_default_schedule_catalog()
+        if not catalog.get("complete"):
+            errors = "; ".join(str(item) for item in catalog.get("errors") or []) or "empty catalog"
+            raise HTTPException(status_code=503, detail=f"default schedule catalog is incomplete: {errors}")
+        return catalog
 
     def run_source_test(self, *, payload: dict[str, Any] | None, confirm_run: str | None) -> dict[str, Any]:
         self._require("run_data_job", confirm_run)
