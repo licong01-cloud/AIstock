@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v4.2（长期趋势评价层 F2 详细设计对齐，2026-07-14）
+- 当前版本：v4.3（长期趋势评价层 QE-only 硬隔离，2026-07-14）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -77,7 +77,7 @@
 
 ### 2.4 v4 路线补全边界
 
-第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向：当前 QE 运行、数据集、因子库、生产 DB 和运行时不因本次文档更新发生变化。v4.2 进一步用 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 冻结 F-014 的计算、制品、数仓、API/MCP/UI 和历史结果评价契约；该设计完成不等于运行代码、DDL、重启或 R6 评价已经执行。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
+第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向：当前 QE 运行、数据集、因子库、生产 DB 和运行时不因本次文档更新发生变化。v4.2 进一步用 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 冻结 F-014 的计算、制品、数仓、API/MCP/UI 和历史结果评价契约；v4.3 把该能力收紧为 QE-only：只由 QE task/Loop 显式触发，只读 QE dataset，只写 QE 专属 CAS namespace 与三张 additive evaluation 表，只在 `/quantevolver`、`/qe-archive` 和 QE MCP 展示。通用 Prediction Store、既有 Archive 通用表以及 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 的服务、表、缓存、调度和 UI 均不得修改。该设计完成不等于运行代码、DDL、重启或 R6 评价已经执行。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
 
 ## 3. 证据口径与基线因子
 
@@ -551,7 +551,7 @@ h20 继续作为当前模型对照的统一信号标签，但它不能单独代�
 
 Type A 超跌反弹与 Type B 长期趋势保持独立因子选择、标签头、调仓和退出逻辑；旧多 Alpha 腿只能作为组合相关性/风险基线，不能作为 Type B 演进母体。
 
-F-014 的可实施详细设计已固化在 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`。该设计明确复用现有 Recorder、Prediction Store、QE Archive、资源阶段和 Loop UI；使用 feature/outcome 双快照身份、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 CAS Parquet，PostgreSQL 只保存评价身份、状态、标量/小曲线和制品指针。当前状态仅为 `DESIGN_READY`，不得写成 evaluator 已实现或 R6 已完成长期评价。
+F-014 的可实施详细设计已固化在 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`。该设计只读复用现有 Recorder/prediction pointer 和 `qe_archive.run` 父身份，不扩展通用 Prediction Store 或既有 Archive 通用 writer/schema；使用 feature/outcome 双快照身份、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 QE-only CAS Parquet，PostgreSQL 只通过三张 additive `run_evaluation*` 表保存评价身份、状态、标量和制品指针。能力只在 QE task/Loop、QE Archive、QE MCP 与对应 UI 内可见，不接入任何交易或选股运行时。当前状态仅为 `DESIGN_READY`，不得写成 evaluator 已实现或 R6 已完成长期评价。
 
 ### 9.7 PIT 关系模型路线
 
@@ -654,7 +654,7 @@ post-R6 的默认顺序为：R6 同口径收口 → GATs+LGBM 融合 → 两层�
 - GATs/LGBM 同 seed、同 split 预测对齐 receipt，以及 prediction/portfolio fusion 的权重冻结、正交性、成本后组合和 leave-one-leg-out 报告；
 - 两层板块→个股模型的板块评分、板块 Recall、板块内排序、集中度/轮动成本及一层模型对照；
 - 与 Advisory Phase 8 对齐的 20–180 日、MFE/MAE、有序目标、time-to-hit、生存、右删失、捕获率和假退出报告；
-- F-014 详细设计：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`，覆盖同一 evaluator 的正常 Loop/`long_trend_only`、双快照、CAS、数仓、API/MCP/UI、失败语义和重启恢复；
+- F-014 详细设计：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`，覆盖同一 evaluator 的正常 Loop/`long_trend_only`、双快照、QE-only CAS/三表数仓、QE API/MCP/UI、失败语义、重启恢复和非 QE 模块零影响门禁；
 - HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
 - 动态/多关系图的逐关系消融；概念方向则先交付独立 PIT 数据设计与数据门禁，未通过前不交付模型“成功”结论；
 - 每个方向独立的实验卡、停止条件、失败归因、资源类、并行策略和归档状态；不得用单次最好 loop 代替方向结论。
@@ -678,7 +678,7 @@ post-R6 的默认顺序为：R6 同口径收口 → GATs+LGBM 融合 → 两层�
 | F-011 | 零隐式生产副作用 | 本批不写生产 DB、不应用生产 DDL、不 promotion active、不重启服务、不启动 QE/模拟盘/实时交易。 |
 | F-012 | 验证与状态分离 | 定向单测、F2 设计校验、diff 检查和 receipt 通过；合并、candidate、DDL、promotion、实验、运行时状态分别报告。 |
 | F-013 | 组合与两层决策增量 | 同口径 GATs+LGBM prediction/portfolio fusion 和板块→个股两层基线；冻结权重/风险预算，报告正交性、成本、容量、暴露与 leave-one-leg-out。 |
-| F-014 | 长期趋势目标一致性 | h20 对照之外，按 Advisory Phase 8 报告 20–180 日、有序右尾目标、MFE/MAE、time-to-hit、生存、右删失、捕获率和假退出；Type A/B 标签与生命周期隔离。 |
+| F-014 | 长期趋势目标一致性 | h20 对照之外，按 Advisory Phase 8 报告 20–180 日、有序右尾目标、MFE/MAE、time-to-hit、生存、右删失、捕获率和假退出；Type A/B 标签与生命周期隔离；计算、CAS、表、API/MCP/UI 只属于 QE，非 QE 模块零变化。 |
 | F-015 | PIT 关系模型 | HIST-industry、动态加权图和多关系图只消费逐日 PIT 关系；mapping/stock_index fail-fast；R4 二值真码邻接不重复；新架构先通过 composer/资源 canary。 |
 | F-016 | 概念多关系前置门禁 | 概念成员先完成多成员、有效区间、可用时点与 source version 的 PIT 数据设计/验收；通过后才允许 HIST-concept、HATS/多关系图或超图实验。 |
 | F-017 | 研究调度与制品隔离 | 模型类决定串并行；共享 cache 原子写/锁/损坏重建和 recorder 隔离先验收；后端重启不终止或重复启动已运行 worker。 |
@@ -785,7 +785,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
 | F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
 | F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | 融合/两层实验卡、同口径 prediction receipt、固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_CANARY_COMPLETE | 用户于 2026-07-14 明确批准执行并写入历史融合 canary；两腿 prediction fusion 已完成全量对齐、正交性、等权 rank/zscore 和信号级 h20 receipt。未创建 QE 实验，未执行 portfolio fusion；正式 R6 同口径配对、成本后组合、容量、风险预算和 leave-one-leg-out 仍 pending。 |
-| F-014 | 本文 9.6、11.6、Phase G0-E；`qe_long_trend_evaluation_f2_design_20260714.md`；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit；双快照、CAS、数仓/API/MCP/UI 与重启恢复契约 | APPROVED_BY_USER: DESIGN_READY | 用户于 2026-07-14 明确要求先完成设计；F2 详细设计与 20 项 DAI 已完成。运行代码、生产 DDL、服务重启和 R6 实际评价未在本次文档任务中执行。 |
+| F-014 | 本文 9.6、11.6、Phase G0-E；`qe_long_trend_evaluation_f2_design_20260714.md`；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit；双快照、QE-only CAS/三表数仓/API/MCP/UI、重启恢复与 non-QE zero-impact 契约 | APPROVED_BY_USER: DESIGN_READY | 用户于 2026-07-14 明确要求先完成设计并限定只在 QE 环境运行；F2 详细设计 v1.1 与 21 项 DAI 已完成。运行代码、生产 DDL、服务重启和 R6 实际评价未在本次文档任务中执行。 |
 | F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；未来 HIST PIT relation、mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 二值同业邻接已测试且 RankIC 无增益；动态/层次关系尚未实现。 |
 | F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放验收，随后才有 HIST-concept/HATS/超图证据 | APPROVED_BY_USER: DEFERRED_TO_CONCEPT_DATASET | 当前概念成员 PIT 数据集未入库，不允许静态快照或聚合板块数据替代。 |
 | F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品和 restart recovery 定向验证 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 本次只冻结调度门禁，不修改正在运行的 QE、worker 或并行配置。 |

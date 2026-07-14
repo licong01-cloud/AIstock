@@ -1,10 +1,10 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.0
+- 版本：v1.1
 - 日期：2026-07-14
 - 状态：`DESIGN_READY`
 - 任务分级：`T3 / F2`
-- 模块：`QuantEvolver / QE Archive / Prediction Store / QE UI`
+- 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
 - 当前阶段：只交付设计；不修改运行代码，不创建实验，不执行 DDL，不重启服务
 - 上位蓝图：`docs/analysis/sector_rotation_factors_develop_spec_20260710.md` 第 9.6 节与 F-014
@@ -26,7 +26,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 4. 板块轮动信号究竟改善板块选择、板块内排序，还是只增加行业集中；
 5. 最新一年、最近六个月和板块集中行情中的结果是否仍成立。
 
-当前 QE 的 `read_exp_res.py` 已从 Recorder 提取 IC、收益曲线、交易诊断、预测诊断、Top20/Top50 单一标签收益和账户收益；`PredictionArtifactStore` 已以 CAS 形式保存 `pred.pkl/label.pkl/params.pkl`；QE Archive 已有通用 `run_metric`、`run_curve`、`run_artifact`、`raw_payload` 和 reproducibility manifest；Loop UI 已能读取 `enhanced_metrics`。因此本设计不建设第二套实验系统，而是在这些现有入口上增加一个版本化的长期趋势评价能力。
+当前 QE 的 `read_exp_res.py` 已从 Recorder 提取 IC、收益曲线、交易诊断、预测诊断、Top20/Top50 单一标签收益和账户收益；`PredictionArtifactStore` 已以 CAS 形式保存 `pred.pkl/label.pkl/params.pkl`；QE Archive 已有 run identity 和 reproducibility manifest；Loop UI 已能读取 `enhanced_metrics`。这些代码只作为现状与实现模式参考。本能力不得改变通用 Prediction Store 的 artifact 映射，也不得改变 QE Archive 已有 `run_metric/run_curve/run_artifact/raw_payload` 或 Paper v2 扩展表；长期评价使用 QE 专属 CAS namespace 和 additive 评价表。
 
 长期评价是实验结果诊断，不是训练标签、因子独立指标、因子缓存、相关性计算、荐股模型或模拟盘运行逻辑。评价失败不能伪装成成功，也不能反向把已经成功的训练/回测标记为失败；它必须形成独立、可查询、可重试的失败状态和 reason code。
 
@@ -41,7 +41,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 3. 从 Qlib position/trade artifact 重建持仓 episode，计算趋势捕获率、退出后机会和 false early-exit；
 4. 使用信号日 PIT `l2_code_id` 输出板块分解、板块集中和板块内/板块间归因；
 5. 支持实验完成时自动评价，以及对已完成 R6 等历史 Loop 做 `long_trend_only` 结果评价；两种入口复用同一引擎和身份契约；
-6. 将小型汇总指标固化到 QE Archive，将逐信号和逐 episode 明细固化为 CAS Parquet，不把百万级明细写入 PostgreSQL；
+6. 将小型汇总指标固化到 QE 专属 evaluation 表，将逐信号和逐 episode 明细固化为 QE 专属 CAS Parquet，不把百万级明细写入 PostgreSQL；
 7. 在 QE Loop 详情、QE Archive 比较页和只读 QE MCP 中展示相同结果、成熟度和失败原因；
 8. 保证后台重启不终止已提交到计算节点的评价任务，不重复启动，不重复归档。
 
@@ -60,6 +60,9 @@ label_h = close[T+h+1] / close[T+1] - 1
 7. 不接入概念板块；当前只使用申万 L2 PIT `l2_code_id`，未来概念数据沿独立 PIT 数据设计接入。
 8. 不使用当前数据覆盖旧实验的原始特征快照；结果观察快照只允许是原快照本身或经过重叠区间一致性验证的严格扩展版本。
 9. 不把旧 Type A 超跌反弹包作为 Type B 演进母体；旧包只可作为组合相关性或风险基线。
+10. 不修改或复用 Selection、Advisory、Paper v2、模拟盘、QMT、StrategyPackage 的服务、路由、表、缓存、调度器、环境变量或 artifact namespace。
+11. 不给共享 `qe_archive.run_metric/run_curve/run_artifact/raw_payload` 增加字段或改变 writer；不扩展通用 `/prediction-store` 上传协议。
+12. 不在 FastAPI/Windows 后端进程中读取 H5 或执行指标计算；计算只能在 QE workspace 的 WSL/远端 QE compute node 内运行。
 
 ## 4. Current Code Baseline and Gaps / 现行代码与差距
 
@@ -70,8 +73,8 @@ label_h = close[T+h+1] / close[T+1] - 1
 | 日线数据 | `daily_pv.h5`、`BacktestBaseDataMemoryCache` | 复用 allowlist、只读和文件哈希思想 | 需要只加载 `daily_pv/sector_data` 的严格评价 reader；不得加载全部因子文件 |
 | 结果提取 | `templates/read_exp_res.py` | 将长期评价 receipt 接入 `enhanced_metrics` | 现有 Top-K 只消费单一 `label.pkl`，无法给出多期限路径 |
 | 结果补算 | `results_only_retry.py` | 增加 `long_trend_only` 模式 | 当前只补 IC/RankIC/portfolio summary，未读取结果观察快照 |
-| 预测制品 | `model_store/artifact_store.py`、`routers/prediction_store.py` | 复用 CAS、原子 manifest 和 SHA-256 | 当前上传接口和文件名只覆盖 prediction/label/params |
-| 数仓 | `qe_archive.run_metric/run_curve/run_artifact/raw_payload` | 标量、曲线和制品指针继续复用 | 缺评价版本、任务状态和 `evaluation_id` 关联键 |
+| 预测制品 | `model_store/artifact_store.py`、`routers/prediction_store.py` | 只参考 CAS、原子 manifest 和 SHA-256 模式 | 通用接口保持不变；新增 QE-only evaluation store/route |
+| 数仓 | `qe_archive.run` 和 reproducibility manifest | 只复用 `run_id` 作为只读父身份 | 新增独立 evaluation/metric/artifact 表，不修改现有通用表 |
 | 资源阶段 | `qe_resource_phase_service.py` | 增加 CPU 评价阶段和现有认证/sequence/outbox 语义 | 当前状态机只有 bootstrap/train/predict/backtest/finalize |
 | Loop UI | `LoopDetailPanel.tsx`、`loopDiagnostics.ts` | 增加长期趋势页签和进度 | 当前没有长期成熟度、barrier、capture 展示 |
 | Archive UI/API | `qe-archive/api.ts`、`qe_archive.py` | 增加有界对比查询 | 当前 Top-K API 无 horizon/evaluation vintage 维度 |
@@ -82,7 +85,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 
 | ID | 验收项 |
 |---|---|
-| F-001 | 长期评价复用现有 QE Loop/Recorder/Prediction Store/QE Archive 主链，不建设平行实验系统。 |
+| F-001 | 长期评价只挂接 QE Loop/Recorder/QE run identity，不建设平行实验系统，也不接入任何非 QE 运行链。 |
 | F-002 | 评价配置使用不可变 profile，首版固定 20/40/60/120/180D、30%/50%/70% 和全期/126D/252D 切片；任意参数不得在 test 结果后重选。 |
 | F-003 | 信号收益严格使用 `close[T+h+1]/close[T+1]-1`，与训练标签逐点一致；entry、terminal 和交易日历边界有直接 oracle。 |
 | F-004 | close-path 与 qfq high/low path 分开；日线 high/low 只标记 path diagnostic，不冒充 executable outcome。 |
@@ -93,15 +96,16 @@ label_h = close[T+h+1] / close[T+1] - 1
 | F-009 | episode 层从 position/trade artifact 重建真实持仓周期，输出 capture ratio、extended capture、post-exit opportunity 和 false early-exit。 |
 | F-010 | 最近 126/252 个信号交易日和全期为冻结切片；所有申万 L2 分板块输出明细制品，页面不靠硬编码“科技”日期或名称。 |
 | F-011 | 重叠 horizon 使用按信号日聚类的 block bootstrap/HAC；多 horizon/barrier 同时报 raw p 与 BH-FDR q，不用逐行独立样本显著性。 |
-| F-012 | 百万级逐信号和逐 episode 明细写 CAS Parquet；PostgreSQL 只保存评价身份、状态、标量/小曲线和制品指针。 |
-| F-013 | 新增 `qe_archive.run_evaluation` 并给 `run_metric` 增加 nullable `evaluation_id`；原有 run/metric 查询和旧数据保持兼容。 |
+| F-012 | 百万级逐信号和逐 episode 明细写 QE 专属 CAS Parquet；PostgreSQL 只保存 QE 评价身份、状态、标量和制品指针。 |
+| F-013 | 新增 `qe_archive.run_evaluation/run_evaluation_metric/run_evaluation_artifact`；不 ALTER 或改写既有 run_metric/run_curve/run_artifact/raw_payload/Paper 表。 |
 | F-014 | 自动评价和 `long_trend_only` 历史补算使用同一 evaluator、profile、数据身份、制品 schema 和入仓 writer。 |
-| F-015 | 评价任务使用持久化状态、fencing、认证 sequence 和原子制品发布；后端重启不终止 worker、不重复运行、不重复归档。 |
+| F-015 | 评价任务使用 QE 专属持久化状态、fencing、认证 sequence 和原子制品发布；不注册全局 scheduler，后端重启不终止 worker、不重复运行、不重复归档。 |
 | F-016 | 评价失败不回写训练/回测成功为失败，但必须在 Loop、Archive 和 MCP 显示 `failed + reason_code`，并使长期趋势证据门禁为 false。 |
 | F-017 | Loop UI 展示 horizon、barrier、成熟度、板块、episode capture 和错误；Archive UI 支持跨 run/seed/model 对比。 |
 | F-018 | QE MCP 只提供有界只读查询；不新增通过 MCP 写生产 DB、启动交易或自动晋级的路径。 |
-| F-019 | 默认对既有任务关闭；显式 profile 或 Type B 实验卡开启后生效，不改变既有模型输出和回测结果。 |
+| F-019 | 默认对既有任务关闭；仅 QE task/Loop 的显式 profile 生效，无 startup side effect，不改变既有模型输出和回测结果。 |
 | F-020 | 实施必须通过 DESIGN-COMPLIANCE-001 四项复核、真实制品 E2E、DEV DB E2E、UI E2E、重启恢复和 extension snapshot oracle。 |
+| F-021 | 代码所有权和运行依赖执行 QE-only allowlist；静态 import/route/schema 回归证明 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 和通用 Prediction Store 零变化。 |
 
 ## 6. Architecture / 架构
 
@@ -116,9 +120,9 @@ QE Loop train/predict/backtest completed
        -> signal observation wide Parquet
        -> holding episode Parquet
        -> compact receipt JSON
-  -> PredictionArtifactStore CAS atomic publish
+  -> QELongTrendArtifactStore QE-only CAS atomic publish
   -> qlib_results_enhanced.json.long_trend_diagnostics
-  -> qe_archive.run_evaluation + run_metric/run_curve + run_artifact
+  -> qe_archive.run_evaluation + run_evaluation_metric + run_evaluation_artifact
   -> Loop detail / QE Archive / read-only MCP
 ```
 
@@ -133,8 +137,8 @@ QE Loop train/predict/backtest completed
 | `templates/qe_long_trend_eval.py` | 计算节点 wrapper；加载本地 Recorder/数据、写临时制品、上报阶段 |
 | `config_composer.py` | 将 profile、dataset identity 和 evaluator 源码 hash 写入 workspace/execution manifest |
 | `results_only_retry.py` | `long_trend_only` 历史评价入口；不训练、不回测 |
-| `PredictionArtifactStore` | 评价明细 CAS、manifest、SHA-256 和原子发布 |
-| `QEArchivePayloadExtractor/Repository` | evaluation receipt 和标量/曲线入仓 |
+| `long_trend_artifact_store.py` | QE 专属 artifact namespace、manifest、SHA-256 和原子发布；不调用通用 Prediction Store writer |
+| `long_trend_evaluation_repository.py` | 只写三张 evaluation 表；只读 `qe_archive.run` 父身份 |
 | `qe_resource_phase_service.py` | `long_trend_eval` 阶段、资源、sequence、重启恢复 |
 | API/MCP/UI | 创建/查询评价任务，展示同一权威结果 |
 
@@ -145,6 +149,39 @@ QE Loop train/predict/backtest completed
 3. 历史 R6 使用独立 `long_trend_only` 请求；只读预测和数据，生成新 evaluation identity。
 4. 评价任务失败不触发 Loop 训练重试，不修改模型、预测、回测或 MLflow Recorder。
 5. 任何代码发布、生产 DDL、后端重启和评价任务启动分别执行并分别汇报。
+
+### 6.4 QE-only 硬隔离
+
+运行时允许的调用链固定为：
+
+```text
+QE task/Loop or QE long_trend_only API
+  -> backend.services.quantevolver.long_trend_*
+  -> QE workspace worker on WSL/remote QE node
+  -> QE_DATASET_CONTRACT_ID snapshot
+  -> qe_archive.run_evaluation* + QE-only artifact namespace
+  -> /quantevolver or /qe-archive read UI/MCP
+```
+
+允许修改的代码 ownership：
+
+- `backend/services/quantevolver/long_trend_*` 和必要的 QE composer/result/resource glue；
+- QE 专属 router 或现有 `quantevolver_evolution.py` 的 QE 路由；
+- additive `qe_archive.run_evaluation*` migration/init 定义；
+- QE Archive read-only MCP 的新查询工具；
+- `/quantevolver/**` 与 `/qe-archive/**` 页面。
+
+禁止 import、调用或写入：
+
+- `backend/services/selection_center/**`、`backend/services/advisory*`；
+- `backend/services/paper_trading/**`、Paper v2 表和页面；
+- `backend/infra/qmt_client.py`、QMT/MiniQMT/实盘或模拟盘路由；
+- `backend/services/strategy_package/**` 的运行、promotion 或资产 writer；
+- live Selection/Paper PIT universe、持仓、订单、现金、荐股列表和运行缓存；
+- 通用 `PredictionArtifactStore.write_artifacts()`、`/prediction-store` 上传协议和已有 manifest；
+- 全局 startup scheduler、定时任务目录和非 QE 环境变量。
+
+全部新环境变量使用 `QE_LONG_TREND_` 前缀；全部计算 worker 必须同时具有 QE task/Loop identity、`QE_DATASET_CONTRACT_ID` 和 QE workspace root。任一身份缺失以 `QELT_NON_QE_SOURCE_REJECTED` 拒绝。FastAPI 只做派发、callback、持久化和查询，不加载 H5、不创建进程内全量价格缓存。DDL 只 additive 新表/索引，不 ALTER 现有 Paper/Selection/Advisory/通用 Archive 表。
 
 ## 7. Contracts / 契约
 
@@ -281,7 +318,7 @@ post_exit_mfe        = max qfq high after exit through entry+180 / exit_close_qf
 
 该 return 只评价退出时点对 qfq 收盘路径的捕获，不冒充真实成交收益。原始 ratio 不裁剪；UI 可另给可视化范围，但数仓保存原值和异常标记。只有 trade artifact 明确提供并通过价格基准、数量和费用 reconciliation 时，才另存 `execution_gross_return/execution_net_return`；缺费用时不得以 close return 或 gross 冒充 net。组合成本后收益继续以 Qlib portfolio report 为权威。
 
-历史结果的 episode source resolver 固定为：原始 Recorder position/trade artifact → 经完整性校验的 QE Archive position/trade 行 → Prediction Store 中未来新增的 position/trade artifact。三者都不可用时以 `QELT_POSITION_ARTIFACT_MISSING` 失败，不从 Top-K 列表猜持仓。R6 preflight 必须在真正执行评价前证明至少一个权威来源仍可读取。
+历史结果的 episode source resolver 固定为：原始 Recorder position/trade artifact → 经完整性校验的 QE Archive position/trade 行 → QE-only CAS 中由 QE run 产生的 position/trade artifact。三者都不可用时以 `QELT_POSITION_ARTIFACT_MISSING` 失败，不从 Top-K 列表猜持仓，也不向通用 Prediction Store 增加 artifact。R6 preflight 必须在真正执行评价前证明至少一个权威来源仍可读取。
 
 `false_early_exit=true` 的冻结定义：episode 在 180D 内已经退出，退出前最高 close stage 低于最终 180D 最高 close stage，且最终至少达到 HIT30。开放 episode、强制退市/数据缺口 episode 和未成熟 episode不进入该比例分母。
 
@@ -349,19 +386,19 @@ cost_quality, episode_quality_flags
 
 `read_exp_res.py` 只校验并挂载 receipt 的 compact summary，不在该大文件中重复计算长期指标。
 
-### 8.4 CAS 扩展
+### 8.4 QE-only CAS namespace
 
-复用 `PredictionArtifactStore` 的 blob、atomic manifest 和 SHA-256 实现，增加显式 allowlist：
+新增 `backend/services/quantevolver/long_trend_artifact_store.py`，只服务 QE 长期趋势评价，并使用独立根目录 `QE_LONG_TREND_ARTIFACT_STORE_ROOT`、run key `qelt_<evaluation_id>` 和 manifest schema `qe_long_trend_artifact_manifest_v1`。允许复用安全 path component、SHA-256、临时文件加原子 rename、manifest compare-and-swap 等算法模式，但不得调用或修改通用 `PredictionArtifactStore` writer、`/prediction-store` 上传协议、既有 prediction manifest 或其 artifact 映射。
 
-- `portfolio_positions` → `positions_normal_1day.pkl`，作为 full profile 的必需输入制品；
-- `portfolio_indicators`/`portfolio_trades` → 对应 Qlib artifact，存在时用于费用和交易 reconciliation；
+QE-only allowlist：
+
+- `portfolio_positions` → 原 Recorder 中的 `positions_normal_1day.pkl`，作为 full profile 的必需输入制品；
+- `portfolio_indicators`/`portfolio_trades` → 原 Recorder 中的对应 Qlib artifact，存在时用于费用和交易 reconciliation；
 - `long_trend_signal_observations` → Parquet；
 - `long_trend_holding_episodes` → Parquet；
 - `long_trend_evaluation_receipt` → JSON。
 
-评价制品使用独立 CAS run key：`qelt_<evaluation_id>`。不得把多 evaluation version 写成同一 prediction run 的同名 artifact，也不得把未知 artifact 默认命名为 `params.pkl`。
-
-新 full-backtest Loop 在 Recorder 完成后必须与 pred/label 一起持久化 position artifact；trade/indicator 在源 Recorder 存在时同步持久化。上传成功前不能宣称该 run 具备可长期补算能力。历史 run 不伪造回填：只有原 Recorder、完整 Archive rows 或已有 CAS 输入中至少一个来源通过 hash/行数/date coverage 校验才可评价。
+`pred.pkl/label.pkl` 仍按既有只读 pointer/download 契约读取，不修改其 manifest。新 full-backtest Loop 只在 QE workspace 内把 position/trade/indicator 复制到 QE-only namespace；上传成功前不能宣称该 run 具备可长期补算能力。历史 run 不伪造回填：只有原 Recorder、完整 QE Archive rows 或已有 QE-only CAS 输入中至少一个来源通过 hash/行数/date coverage 校验才可评价。不得把多 evaluation version 写成同一 prediction run 的同名 artifact，也不得把未知 artifact 默认命名为 `params.pkl`。
 
 ### 8.5 DB schema
 
@@ -401,16 +438,38 @@ cost_quality, episode_quality_flags
  input_manifest_sha256, evaluator_source_sha256)
 ```
 
-`qe_archive.run_metric` 增加 nullable `evaluation_id` FK 和索引。长期标量继续写该通用表：
+新增 `qe_archive.run_evaluation_metric`，不 ALTER `qe_archive.run_metric`：
 
-- `metric_scope`: `long_trend_signal`、`long_trend_episode`、`long_trend_sector`、`long_trend_maturity`；
-- `horizon`: 20/40/60/120/180；
-- `period_start/period_end`: slice 边界；
-- `value_num/value_text/value_json`: 复用现有字段；
-- `source_payload_path`: receipt 中的确定性 JSON path；
-- `quality_flag`: ok/insufficient_maturity/coverage_rejected/censored_only。
+| 字段 | 类型 | 约束/说明 |
+|---|---|---|
+| `evaluation_metric_id` | BIGSERIAL | PK |
+| `evaluation_id` | TEXT | FK `run_evaluation(evaluation_id)`，ON DELETE CASCADE |
+| `metric_key/metric_scope` | TEXT | 指标名；scope 为 signal/episode/sector/maturity |
+| `period_start/period_end` | DATE | slice 边界，可空 |
+| `horizon` | INTEGER | 20/40/60/120/180，可空 |
+| `sector_code` | TEXT | 申万 L2，可空 |
+| `dimension_key` | TEXT | 非空；由 scope/slice/horizon/sector 规范化编码 |
+| `value_num/value_text/value_json` | DOUBLE PRECISION/TEXT/JSONB | 三者按 metric schema 互斥使用 |
+| `unit/direction` | TEXT | 单位与越大越好/越小越好语义 |
+| `source_payload_path` | TEXT | receipt 中的确定性 JSON path |
+| `quality_flag` | TEXT | ok/insufficient_maturity/coverage_rejected/censored_only |
 
-逐信号和逐 episode 行不进入 `run_metric`。`run_artifact.metadata` 保存 `evaluation_id`，不再新建重复 artifact 表。
+唯一键为 `(evaluation_id, metric_key, dimension_key)`，避免 nullable 维度破坏幂等；repository 必须重算并校验 `dimension_key`，不能信任客户端输入。按 `evaluation_id/metric_scope/horizon/sector_code` 建查询索引。逐信号和逐 episode 行不进入 PostgreSQL。
+
+新增 `qe_archive.run_evaluation_artifact`，不复用或改写 `qe_archive.run_artifact`：
+
+| 字段 | 类型 | 约束/说明 |
+|---|---|---|
+| `evaluation_artifact_id` | BIGSERIAL | PK |
+| `evaluation_id` | TEXT | FK `run_evaluation(evaluation_id)`，ON DELETE CASCADE |
+| `artifact_type/artifact_uri` | TEXT | QE-only allowlist 类型与 URI |
+| `sha256/schema_sha256` | TEXT | 内容和列 schema hash |
+| `size_bytes/row_count` | BIGINT | 大小与行数，可空 |
+| `status` | TEXT | staged/published/failed |
+| `metadata` | JSONB | 不存秘密，只存可复核元数据 |
+| `created_at` | TIMESTAMPTZ | 创建时间 |
+
+唯一键为 `(evaluation_id, artifact_type, sha256)`。三张新表均由 `long_trend_evaluation_repository.py` 独占写入；repository 只读取 `qe_archive.run` 的父身份，并在创建前验证 `source_system=quantevolver`、允许的 QE `run_type`、task/Loop identity 和 dataset contract。非 QE run 即使存在同名 `run_id` 也必须以 `QELT_NON_QE_SOURCE_REJECTED` 拒绝。
 
 ### 8.6 Identity and idempotency
 
@@ -441,6 +500,8 @@ created -> bootstrap -> long_trend_eval -> finalize -> completed
 
 `long_trend_eval` 不占 GPU lease，记录 CPU time、RSS/VmHWM、读取字节、输出行数和 artifact size。评价 profile 关闭时保持现有状态机，不插入伪阶段。
 
+阶段只能由 QE task/Loop completion hook 或 QE `long_trend_only` API 显式创建；不得注册全局 startup/cron scheduler，也不得从 Selection、Advisory、Paper、模拟盘、QMT 或 StrategyPackage 生命周期触发。自动评价仅表示已显式选择 profile 的 QE task 在其回测完成后进入下一 QE phase，不是平台级自动扫描。
+
 ### 9.2 并发和内存
 
 1. 每节点 `cpu_postprocess` 默认 1 并发，避免多个任务同时全量读取 fixed-format H5。
@@ -454,7 +515,7 @@ created -> bootstrap -> long_trend_eval -> finalize -> completed
 1. `run_evaluation` 在派发前写 queued；worker 取得 fencing attempt 后改 running。
 2. callback 复用每运行随机 token、任务/Loop/节点绑定和单调 sequence。
 3. worker 本地 outbox 保存阶段/terminal receipt；后端恢复后幂等重放。
-4. 后端启动只做状态 reconciliation，不调用远端 kill，不重新启动仍存活 worker。
+4. QE 服务恢复路径只 reconciliation 已存在的 `run_evaluation`，不扫描非 QE 表、不调用远端 kill、不重新启动仍存活 worker；普通后端启动不得自动创建新评价。
 5. 只有 CAS manifest、DB metrics 和 evaluation terminal receipt 三方 hash 一致时写 succeeded。
 
 ## 10. API / MCP / UI Contracts
@@ -481,7 +542,7 @@ POST body 只允许：
 
 不提供 `force` 覆盖。相同 identity 返回已有任务；profile、outcome snapshot 或 evaluator version 改变会自然生成新 identity。
 
-查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code` 过滤和有界 limit；默认 compact，不返回 Parquet 明细。
+创建 API 先验证 task/Loop、`qe_archive.run`、QE dataset contract 与 QE workspace identity；任何非 QuantEvolver/QE 来源返回 `QELT_NON_QE_SOURCE_REJECTED`。查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code` 过滤和有界 limit；默认 compact，不返回 Parquet 明细。通用 `/prediction-store` API、Paper/Selection/Advisory API 和 route registration 不变。
 
 ### 10.2 QE Archive MCP
 
@@ -506,6 +567,8 @@ Loop 详情增加“长期趋势”页签：
 
 任务创建页只提供 profile 开关和 profile 说明，不允许编辑冻结参数。页面刷新从 DB 状态恢复进度，不依赖浏览器内存。
 
+前端改动只允许落在 `/quantevolver/**` 与 `/qe-archive/**` 页面、其专属 API client 和测试中；不得改动 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 页面或其共享业务状态。若需要通用展示组件，只可无副作用复用，不得向组件注入长期评价的全局 context/provider。
+
 ### 10.4 QE Archive UI
 
 增加跨 run 对比表，主键显示 run、model、seed、factor set、training label horizon、evaluation as-of；支持 horizon 和 sector 过滤。不同 outcome vintage 默认不混排，用户显式选择同一 as-of 或同一 snapshot 后才能横向比较。
@@ -514,6 +577,7 @@ Loop 详情增加“长期趋势”页签：
 
 | reason_code | 条件 | 行为 |
 |---|---|---|
+| `QELT_NON_QE_SOURCE_REJECTED` | 来源不是允许的 QE task/Loop/run，或缺 QE dataset/workspace identity | 创建前拒绝；不触碰非 QE 状态 |
 | `QELT_PROFILE_INVALID` | profile 未注册或 hash 不一致 | 拒绝创建 |
 | `QELT_PROFILE_UNSUPPORTED_RUN_MODE` | train-only、非日线或无 full backtest | 创建前拒绝 |
 | `QELT_PREDICTION_ARTIFACT_MISSING` | pred 缺失 | evaluation failed；Loop 原状态不变 |
@@ -537,7 +601,7 @@ Loop 详情增加“长期趋势”页签：
 
 ## 12. Implementation Plan / 实施方案
 
-### Phase 1：共享契约与纯计算引擎
+### Phase 1：QE 专属契约与纯计算引擎
 
 1. 新增 profile/DTO/reason-code/identity 模块；
 2. 新增严格 price/sector reader，只读 QE snapshot；
@@ -550,16 +614,16 @@ Loop 详情增加“长期趋势”页签：
 1. ConfigComposer 固化 profile、feature snapshot 和 evaluator source SHA；
 2. worker wrapper 接入 normal Loop 与 `long_trend_only`；
 3. 资源状态机加入 `long_trend_eval`，实现 CPU postprocess 单槽、outbox 和恢复；
-4. PredictionArtifactStore/API 增加三种评价 artifact allowlist；
+4. 新增 QE-only `QELongTrendArtifactStore`、独立 root/manifest/allowlist；通用 Prediction Store 保持只读回归目标；
 5. `read_exp_res.py` 只校验和挂载 compact receipt。
 
 ### Phase 3：数仓、API 与 MCP
 
 1. 添加 migration/rollback/init schema 同步；
-2. 添加 `RunEvaluationRecord`、repository 和事务 writer；
-3. PayloadExtractor 解析长期 metrics，并给 `run_metric` 绑定 evaluation_id；
+2. 添加 `RunEvaluationRecord/RunEvaluationMetricRecord/RunEvaluationArtifactRecord`、专属 repository 和三表事务 writer；
+3. 由长期评价 receipt writer 直接解析并写专属表；通用 PayloadExtractor、run_metric/run_artifact writer 不变；
 4. 实现有界 analytics API 和只读 MCP；
-5. 对旧 Archive payload、旧 prediction manifest 和旧 run_metric 做兼容回归。
+5. 对旧 Archive payload、旧 prediction manifest、旧 run_metric/run_artifact 和非 QE 路由/schema 做零变化回归。
 
 ### Phase 4：UI 与历史 R6 路径
 
@@ -575,7 +639,8 @@ Loop 详情增加“长期趋势”页签：
 2. 使用真实非生产 Recorder + snapshot 完成 worker → CAS → DEV DB → API/MCP → UI E2E；
 3. 验证后端重启、重复 callback、CAS/DB 中途失败和恢复；
 4. 在不启动训练的条件下，用一个已完成 Loop 做结果-only smoke；
-5. DESIGN-COMPLIANCE-001、F2 validator 和生产门禁 receipt 全部完成后才可请求代码合入。
+5. 执行 ownership/import/route/schema 静态隔离门禁，证明非 QE 模块和通用 Prediction Store 无改动；
+6. DESIGN-COMPLIANCE-001、F2 validator 和生产门禁 receipt 全部完成后才可请求代码合入。
 
 ## 13. Verification Plan / 验证方案
 
@@ -591,17 +656,20 @@ Loop 详情增加“长期趋势”页签：
 - episode open/close/add/reduce/re-entry；
 - false early-exit；
 - block bootstrap/HAC/BH-FDR deterministic seed；
-- identity hash 和 extension snapshot overlap parity。
+- identity hash 和 extension snapshot overlap parity；
+- 非 QE source、缺 QE dataset/workspace identity 的 fail-fast；
+- import ownership allowlist，禁止 QE 长期评价依赖任何 live/Paper/Selection/Advisory/QMT runtime。
 
 ### 13.2 L2
 
 - ConfigComposer normal/all/selected/retry/rerun 路径；
 - resource phase transition、auth、sequence、restart/outbox；
-- PredictionArtifactStore allowlist、atomic CAS、hash conflict；
+- QE-only artifact store allowlist、atomic CAS、hash conflict；
 - migration apply/readback/rollback（DEV DB）；
-- repository evaluation + run_metric transaction；
-- PayloadExtractor 新旧 payload compatibility；
-- API/MCP bounded response 和错误映射。
+- repository 三张 evaluation 表事务；
+- 通用 Prediction Store manifest/API、Archive PayloadExtractor、run_metric/run_artifact schema 快照零变化；
+- API/MCP bounded response、QE source preflight 和错误映射；
+- `git diff --name-only` ownership allowlist，以及 Selection/Advisory/Paper/模拟盘/QMT/StrategyPackage route/schema regression。
 
 ### 13.3 L3
 
@@ -614,7 +682,7 @@ completed Recorder
  -> long-trend worker
  -> CAS artifacts
  -> qlib_results_enhanced receipt
- -> qe_archive.run_evaluation/run_metric/run_artifact
+ -> qe_archive.run_evaluation/run_evaluation_metric/run_evaluation_artifact
  -> API/MCP/UI readback
 ```
 
@@ -648,13 +716,14 @@ completed Recorder
 | evaluator 失败被 UI 隐藏 | 假成功 | 独立状态/reason、Loop/Archive/MCP 同步展示 |
 | 自动评价阻塞下一训练 | 降低实验吞吐 | GPU release 后 CPU 后处理，独立资源槽 |
 | 多评价版本混排 | 错误横向比较 | UI 默认同 outcome vintage/snapshot |
+| 复用共享 store/table 产生跨模块耦合 | Paper/Selection/Advisory 被 schema 或 writer 变更波及 | QE-only CAS、三张 additive 表、ownership/import/route/schema 零变化门禁 |
 
 ## 15. Rollout / Rollback / 发布回滚
 
 ### 15.1 发布顺序
 
 1. 合入纯计算引擎、tests 和 default-off config；
-2. 合入 CAS allowlist、资源阶段和数仓 migration；
+2. 合入 QE-only CAS、资源阶段和三张 additive 数仓表 migration；
 3. 在 DEV DB apply/readback/rollback；
 4. 合入 API/MCP/UI，但生产 profile 保持关闭；
 5. 明确授权后应用生产 DDL并验证；
@@ -669,7 +738,7 @@ completed Recorder
 3. 回滚应用代码和 UI；已有 evaluation/metric/artifact 保持只读；
 4. additive DB 对象默认保留，除非另有明确 DDL 回滚授权；
 5. 不删除 pred/label、Recorder、QE run、历史评价或 CAS blob；
-6. 回滚不得影响 Selection、Paper v2 或模拟盘。
+6. 回滚不得影响 Selection、Advisory、Paper v2、模拟盘、QMT、StrategyPackage 或通用 Prediction Store。
 
 ## 16. Production Gates / 生产门禁
 
@@ -681,6 +750,7 @@ completed Recorder
 | runtime restart | 未执行 | 合入、DDL、重启分开授权 |
 | experiment/evaluation execution | 未执行 | canary 和 R6 批量评价分开授权 |
 | production data write | 未执行 | 仅经 versioned migration 和评价 writer；不导出数据库 |
+| `non_qe_impact_gate` | `design_verified_zero_scope` | ownership/import/route/schema 回归全部通过后才能请求合入；非 QE 变更必须为零 |
 
 本设计不引入人工 approval/RBAC/双人复核。schema、hash、数据身份、成熟度和制品完整性属于自动技术门禁；合法输入恢复后可自动重新执行。
 
@@ -690,7 +760,7 @@ completed Recorder
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | `read_exp_res.py`、Prediction Store、QE Archive 复用架构 | 第 4、6 节代码映射 | design_ready | none |
+| F-001 | QE task/Loop → QE worker → QE-only store/tables/UI | 第 4、6、9、10 节代码映射 | design_ready | none |
 | F-002 | `long_trend_evaluation_contract.py` profile registry | profile hash/override unit plan | design_ready | none |
 | F-003 | `long_trend_evaluation.py` return oracle | label parity tests | design_ready | none |
 | F-004 | close/path projection 分层字段 | entry-day high/low exclusion tests | design_ready | none |
@@ -701,8 +771,8 @@ completed Recorder
 | F-009 | episode engine | position/trade reconstruction tests | design_ready | none |
 | F-010 | slice/sector artifact schema | 126/252D + per-L2 tests | design_ready | none |
 | F-011 | block bootstrap/HAC/BH-FDR | deterministic statistical fixtures | design_ready | none |
-| F-012 | CAS Parquet + compact DB | artifact size/row/hash E2E | design_ready | none |
-| F-013 | `run_evaluation` + `run_metric.evaluation_id` | DEV migration/repository tests | design_ready | none |
+| F-012 | QE-only CAS Parquet + compact DB | namespace/manifest/size/row/hash E2E | design_ready | none |
+| F-013 | 三张 additive `run_evaluation*` 表 | DEV migration/repository + shared-schema snapshot tests | design_ready | none |
 | F-014 | normal + `long_trend_only` shared engine | path parity tests | design_ready | none |
 | F-015 | resource phase/outbox/fencing | restart/duplicate callback E2E | design_ready | none |
 | F-016 | independent evaluation status/reason | failed evaluator with completed Loop test | design_ready | none |
@@ -710,37 +780,45 @@ completed Recorder
 | F-018 | bounded read-only MCP | manifest and response-bound tests | design_ready | none |
 | F-019 | default-off compatibility | old task/config/backtest regression | design_ready | none |
 | F-020 | full delivery controls | F2 validator、DEV DB E2E、design compliance matrix | design_ready | none |
+| F-021 | QE-only ownership/import/runtime isolation | non-QE diff allowlist + route/schema/static-import regression | design_ready | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
 - [x] `no_simplified_delivery`：设计覆盖计算、制品、数仓、API、MCP、UI、历史补算和真实 E2E，不接受脚本-only 或后端-only 交付。
 - [x] `no_silent_error`：缺输入、快照漂移、覆盖不足、制品/DB 失败和身份冲突均有稳定 reason code。
-- [x] `no_business_semantic_drift`：评价 default-off，不改变训练标签、模型、回测、交易、因子、Selection 或 Paper。
+- [x] `no_business_semantic_drift`：评价 default-off，只由 QE task/Loop 显式触发；不改变训练标签、模型、回测结果、因子，也不触碰 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 或通用 Prediction Store。
 - [x] `no_unrequested_gate_or_approval`：只增加自动技术真值校验，不增加人工审批或角色。
 - [x] 数据集、预测、评价、数仓和 UI 使用同一 evaluation identity。
+- [x] QE-only CAS namespace、三张 additive evaluation 表和 ownership allowlist 消除共享 writer/schema 副作用；非 QE route/schema/import 以回归测试证明零变化。
 - [x] 代码合入、生产 DDL、服务重启、canary 和 R6 批量评价保持分离。
 
 ## 19. Existing-Code Implementation Anchors / 现有代码实施锚点
+
+允许修改/新增的 QE ownership：
 
 - `backend/services/quantevolver/qe_dataset_contract.py`
 - `backend/services/quantevolver/config_composer.py`
 - `backend/services/quantevolver/templates/read_exp_res.py`
 - `backend/services/quantevolver/results_only_retry.py`
 - `backend/services/quantevolver/qe_resource_phase_service.py`
-- `backend/services/quantevolver/backtest_base_data_memory_cache.py`
+- `backend/services/quantevolver/long_trend_*.py`（新增）
+- `backend/services/qe_archive/long_trend_*.py`（新增专属 model/repository/query）
+- `backend/routers/quantevolver*.py` 与 `backend/routers/qe_archive.py` 的专属 endpoint registration
+- `backend/mcp/modules/qe_archive.py` 的只读长期评价 query
+- `frontend/src/app/quantevolver/**`、`frontend/src/app/qe-archive/**` 及其专属 API client/test
+- versioned `backend/migrations/qe_long_trend_evaluation_f2_*.sql` 和 rollback/init mirror
+- 与上述 ownership 一一对应的定向测试
+
+只读实现参考/零变化回归锚点，不允许为本能力修改：
+
 - `backend/services/model_store/artifact_store.py`
 - `backend/routers/prediction_store.py`
-- `backend/services/qe_archive/models.py`
+- 通用 Prediction Store manifest/schema/API tests
 - `backend/services/qe_archive/payload_extractor.py`
-- `backend/services/qe_archive/repository.py`
-- `backend/routers/qe_archive.py`
-- `backend/mcp/modules/qe_archive.py`
-- `frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx`
-- `frontend/src/app/quantevolver/evolution/components/loopDiagnostics.ts`
-- `frontend/src/lib/qe-archive/api.ts`
-- `frontend/src/app/qe-archive/page.tsx`
-- `backend/tests/quantevolver/test_read_exp_res_topk_metrics.py`
-- `backend/tests/unified_engine/test_qe_results_only_retry.py`
-- `backend/tests/unified_engine/test_qe_resource_phase_service.py`
-- `backend/tests/test_model_store_prediction_store.py`
-- `backend/tests/test_qe_prediction_store_backfill.py`
+- 既有 `qe_archive.run_metric/run_curve/run_artifact/raw_payload` model/repository/writer/schema
+- `backend/services/selection_center/**`
+- `backend/services/advisory*`
+- `backend/services/paper_trading/**`
+- `backend/infra/qmt_client.py` 及 QMT/MiniQMT route
+- `backend/services/strategy_package/**` runtime/promotion/writer
+- Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 前端页面和 API client
