@@ -61,7 +61,41 @@ DEFAULT_SCHEDULER_WINDOWS = (
     {"window_id": "pre_open", "label": "\u76d8\u524d", "start": "08:50", "end": "09:10", "action": "readiness"},
     {"window_id": "selection", "label": "\u9009\u80a1", "start": "09:10", "end": "09:20", "action": "selection_evidence"},
     {"window_id": "planning", "label": "\u8c03\u4ed3", "start": "09:20", "end": "09:25", "action": "execution_plan"},
-    {"window_id": "execution", "label": "\u76d8\u4e2d/\u5c3e\u76d8", "start": "09:25", "end": "15:00", "action": "submit"},
+    {
+        "window_id": "opening_auction_observe",
+        "label": "\u5f00\u76d8\u96c6\u5408\u7ade\u4ef7\u89c2\u5bdf",
+        "start": "09:25",
+        "end": "09:30",
+        "action": "observe_only",
+    },
+    {
+        "window_id": "execution",
+        "label": "\u4e0a\u5348\u8fde\u7eed\u7ade\u4ef7",
+        "start": "09:30",
+        "end": "11:30",
+        "action": "submit",
+    },
+    {
+        "window_id": "lunch_recess",
+        "label": "\u5348\u95f4\u4f11\u5e02",
+        "start": "11:30",
+        "end": "13:00",
+        "action": "market_wait",
+    },
+    {
+        "window_id": "execution_afternoon",
+        "label": "\u4e0b\u5348\u8fde\u7eed\u7ade\u4ef7",
+        "start": "13:00",
+        "end": "14:57",
+        "action": "submit",
+    },
+    {
+        "window_id": "closing_auction_observe",
+        "label": "\u6536\u76d8\u96c6\u5408\u7ade\u4ef7\u89c2\u5bdf",
+        "start": "14:57",
+        "end": "15:00",
+        "action": "observe_only",
+    },
     {
         "window_id": "post_close_reconcile",
         "label": "Post-close reconcile",
@@ -70,7 +104,9 @@ DEFAULT_SCHEDULER_WINDOWS = (
         "action": "eod_reconcile",
     },
 )
-MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW = "MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW"
+SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW = "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW"
+# Import compatibility only. New durable evidence uses the broker-neutral code.
+MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW = SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW
 LOGGER = logging.getLogger(__name__)
 
 
@@ -610,9 +646,33 @@ class SimulationLifecycleOrchestrator:
                     "LocalSim execution requires an injected LocalSim broker",
                     context={"run_id": run.run_id, "plan_id": plan.plan_id},
                 )
+            binder = getattr(local_broker, "bind_execution_plan", None)
+            if callable(binder):
+                binder(plan=plan, as_of_time=scheduler_time(as_of_time))
+            begin_batch = getattr(local_broker, "begin_plan_submission", None)
+            commit_batch = getattr(local_broker, "commit_plan_submission", None)
+            rollback_batch = getattr(local_broker, "rollback_plan_submission", None)
+            batch_started = False
             try:
+                if callable(begin_batch):
+                    begin_batch(plan_id=plan.plan_id)
+                    batch_started = True
                 local_result = self.local_bridge.submit_plan(plan=plan, broker=local_broker)
+                if batch_started:
+                    if not callable(commit_batch):
+                        raise RuntimeConfigInvalidError(
+                            "LocalSim atomic plan submission is missing commit support",
+                            context={"plan_id": plan.plan_id, "run_id": run.run_id},
+                        )
+                    commit_batch(plan_id=plan.plan_id)
             except Exception as exc:
+                if batch_started:
+                    if not callable(rollback_batch):
+                        raise RuntimeConfigInvalidError(
+                            "LocalSim atomic plan submission is missing rollback support",
+                            context={"plan_id": plan.plan_id, "run_id": run.run_id},
+                        ) from exc
+                    rollback_batch(plan_id=plan.plan_id)
                 self.mark_submit_failure(run=run, stage="LOCAL_SIM_SUBMIT_FAILED", exc=exc)
                 raise
             submitted = self.repository.update_simulation_daily_run(
@@ -770,7 +830,7 @@ class SimulationLifecycleOrchestrator:
             previous_submitted_intents = 0
         payload = {
             "schema_version": "simulation_submit_window_gate_v1",
-            "reason_code": MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
+            "reason_code": SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW,
             "reason": "real_broker_submit_outside_execution_window_rejected",
             "run_id": run.run_id,
             "plan_id": execution_plan.plan_id,
@@ -809,7 +869,7 @@ class SimulationLifecycleOrchestrator:
                 "submit_window_gate": payload,
                 "durable_residual": payload,
                 "submit_failure": {
-                    "stage": MINIQMT_SUBMIT_OUTSIDE_TRADING_WINDOW,
+                    "stage": SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW,
                     "type": type(exc).__name__,
                     "message": str(exc),
                     "context": payload,

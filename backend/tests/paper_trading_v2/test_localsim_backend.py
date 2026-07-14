@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -263,6 +264,113 @@ class FullFillExecutionEngine:
             reason=fill.reason,
         )
         return final_order, [fill], [event]
+
+
+class TwoFillExecutionEngine:
+    def execute_order(self, *, order, minute_bars, algo_code, algo_config, market_context, allow_partial_fill):
+        fills = [
+            Fill(
+                order_id=order.order_id,
+                symbol=order.symbol,
+                side=order.side,
+                quantity=100,
+                price=10.0,
+                trade_time=minute_bars[index].bar_time,
+                bar_time=minute_bars[index].bar_time,
+                reason="unit split fill",
+            )
+            for index in range(2)
+        ]
+        final_order = order.model_copy(
+            update={
+                "status": OrderStatus.FILLED,
+                "filled_quantity": 200,
+                "avg_fill_price": 10.0,
+                "updated_at": fills[-1].trade_time,
+            }
+        )
+        return final_order, fills, []
+
+
+class ObservedMarketDataProvider(FakeMarketDataProvider):
+    def load_observed_intraday(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        source: MinuteDataSource,
+        until_time: datetime,
+        require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        source_input = self.inputs_by_symbol[symbol]
+        return MinuteExecutionMarketInput(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            minute_bars=[bar for bar in source_input.minute_bars if bar.bar_time <= until_time],
+            market_context={**source_input.market_context, "data_source": source.value},
+        )
+
+
+def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None:
+    historical = _make_market_input("000001.SZ", bar_count=3)
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=33)
+    cursor = as_of - timedelta(minutes=2)
+    backend, _, _ = _build_backend(
+        data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider,
+        execution_engine=FullFillExecutionEngine(),
+    )
+    plan = SimpleNamespace(
+        plan_id="plan_causal_unit",
+        target_trade_date=TRADE_DATE,
+        plan_payload_json={
+            "local_sim_execution_causality": {
+                "schema_version": "local_sim_execution_causality_v1",
+                "eligible_bar_after": cursor.isoformat(),
+            }
+        },
+    )
+
+    backend.bind_execution_plan(plan=plan, as_of_time=as_of)
+    handle = backend.submit_order_intent(_buy_intent(backend))
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+
+    assert len(snapshot["fills"]) == 1
+    assert snapshot["fills"][0].bar_time == as_of
+
+
+def test_localsim_plan_batch_rolls_back_all_orders_and_callbacks_on_later_failure() -> None:
+    provider = FakeMarketDataProvider(unavailable_symbols={"000002.SZ"})
+    backend, _, _ = _build_backend(provider=provider, execution_engine=FullFillExecutionEngine())
+    callback_events: list[FillEvent] = []
+    backend.subscribe_fill_callback(callback_events.append)
+    cash_before = backend.query_account().cash
+
+    backend.begin_plan_submission(plan_id="plan_atomic_unit")
+    backend.submit_order_intent(_buy_intent(backend, symbol="000001.SZ"))
+    with pytest.raises(BrokerConnectivityError):
+        backend.submit_order_intent(_buy_intent(backend, symbol="000002.SZ"))
+    backend.rollback_plan_submission(plan_id="plan_atomic_unit")
+
+    assert backend.query_account().cash == cash_before
+    assert backend.export_execution_snapshot()["orders"] == ()
+    assert backend.export_execution_snapshot()["fills"] == ()
+    assert callback_events == []
+
+
+def test_localsim_single_order_rolls_back_earlier_fill_when_later_fill_fails() -> None:
+    backend, _, _ = _build_backend(initial_cash=1_500, execution_engine=TwoFillExecutionEngine())
+
+    with pytest.raises(BrokerRejectedError):
+        backend.submit_order_intent(_buy_intent(backend, quantity=200))
+
+    snapshot = backend.export_execution_snapshot()
+    assert backend.query_account().cash == Decimal("1500.0")
+    assert snapshot["fills"] == ()
+    assert snapshot["cash_entries"] == ()
+    assert snapshot["positions"] == {}
 
 
 # ---------------------------------------------------------------------------

@@ -834,6 +834,31 @@ def test_pre_trade_tdx_quote_blocks_buy_at_limit_up_with_reason_code() -> None:
     assert status["quote_evidence"]["blocked_sides"] == ["BUY"]
 
 
+def test_pre_trade_limit_up_without_known_side_preserves_directional_evidence() -> None:
+    provider = pre_trade_provider(
+        make_tdx_quote(
+            server_time="2026-06-16 10:00:00",
+            close=11_000,
+            pre_close=10_000,
+            high_price=11_000,
+            ask_price=0,
+            ask_volume=0,
+        )
+    )
+
+    status = provider.get_statuses(
+        ["000001.SZ"],
+        date(2026, 6, 16),
+        require_realtime_quote=True,
+        as_of_time=datetime(2026, 6, 16, 10, 0, 0),
+    )["000001.SZ"]
+
+    assert status["is_tradable"] is True
+    assert status["reason_code"] == "OK"
+    assert status["quote_evidence"]["blocked_sides"] == ["BUY"]
+    assert status["quote_evidence"]["limit_state_reason_code"] == "REALTIME_QUOTE_LIMIT_STATE_REQUIRES_SIDE"
+
+
 def test_pre_trade_tdx_quote_blocks_sell_at_limit_down_with_reason_code() -> None:
     provider = pre_trade_provider(
         make_tdx_quote(

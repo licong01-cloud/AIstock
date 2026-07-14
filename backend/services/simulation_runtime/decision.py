@@ -47,6 +47,8 @@ TRADABILITY_BLOCK_REASON_CODES = frozenset(
         "SUSPENDED_BY_SUSPEND_D",
         "NO_TRADABLE_REALTIME_QUOTE",
         "REALTIME_QUOTE_MISSING",
+        "LIMIT_UP_BUY_BLOCKED",
+        "LIMIT_DOWN_SELL_BLOCKED",
     }
 )
 
@@ -188,6 +190,28 @@ class TradingRuleService:
                     tplus1_available_quantity=available,
                     decision="REJECT",
                     reason_code=_tradability_reason_code(tradability_status),
+                )
+            quote_evidence = tradability_status.get("quote_evidence")
+            blocked_sides = {
+                str(value).strip().upper()
+                for value in (quote_evidence.get("blocked_sides") or [])
+            } if isinstance(quote_evidence, dict) else set()
+            if side_value.value in blocked_sides:
+                return self._build_decision(
+                    symbol=symbol,
+                    market_board=market_board,
+                    side=side_value,
+                    requested_quantity=max(requested, 0),
+                    legal_quantity=0,
+                    lot_rule={"min_quantity": min_qty, "increment": increment},
+                    price_limit_rule=effective_price_limit_rule,
+                    tplus1_available_quantity=available,
+                    decision="REJECT",
+                    reason_code=(
+                        "LIMIT_UP_BUY_BLOCKED"
+                        if side_value == OrderSide.BUY
+                        else "LIMIT_DOWN_SELL_BLOCKED"
+                    ),
                 )
 
         if requested <= 0:

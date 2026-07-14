@@ -522,12 +522,91 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
     )
     assert len(paper_repo.list_fills_for_run(run.run_id)) == 1
     assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 1
+    PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
+        session.session_id,
+        as_of_time=datetime(2024, 1, 2, 9, 31),
+    )
+    waiting_events = [
+        event
+        for event in paper_repo.list_session_events(session.session_id)
+        if event["event_type"] == "LIVE_WAITING_FOR_BAR"
+    ]
+    assert len(waiting_events) == 1
 
     PaperTradingSessionRunner(repository=paper_repo, live_executor=live_executor).tick(
         session.session_id,
         as_of_time=datetime(2024, 1, 2, 9, 32),
     )
     assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 2
+
+
+def test_live_day_with_terminal_orders_and_zero_fills_succeeds_as_no_trade() -> None:
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={"paper_v2_session": {"signal_data_source": "DB_HISTORICAL"}},
+    )
+    run = paper_repo.create_run(
+        PaperRun(
+            portfolio_id=portfolio_id,
+            trade_date=date(2024, 1, 2),
+            status=RunStatus.RUNNING,
+            data_source=MinuteDataSource.TDX_REALTIME,
+            runtime_config={
+                "validated_execution_policy": {
+                    "policy_json": {"algo_code": "TWAP", "algo_config": {"allow_partial_fill": True}},
+                }
+            },
+        )
+    )
+    order = OMS().create_order(
+        OrderIntent(
+            package_id="pkg_test",
+            portfolio_id=portfolio_id,
+            symbol="000001.SZ",
+            side=OrderSide.BUY,
+            quantity=100,
+            target_trade_date=run.trade_date,
+        )
+    ).model_copy(update={"status": OrderStatus.CANCELLED})
+    paper_repo.save_order(run.run_id, order)
+    paper_repo.save_order_execution_state(
+        OrderExecutionState(
+            session_id=session.session_id,
+            run_id=run.run_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            trade_date=run.trade_date,
+            algo_code="TWAP",
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            status=OrderStatus.CANCELLED.value,
+        )
+    )
+    executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(make_bars()),
+    )
+
+    progress = executor._finalize_live_day(
+        session,
+        run,
+        as_of_time=datetime(2024, 1, 2, 15, 1),
+    )
+
+    assert paper_repo.get_run(run.run_id).status == RunStatus.SUCCEEDED
+    assert progress.session.status == PaperSessionStatus.LIVE_WAITING_NEXT_TRADING_DAY
+    event = next(
+        item
+        for item in paper_repo.list_session_events(session.session_id)
+        if item["event_type"] == "LIVE_DAY_FINALIZED"
+    )
+    assert event["context"]["no_trade_day"] is True
+    assert event["context"]["no_trade_reason_code"] == "TERMINAL_ORDERS_WITHOUT_FILLS"
 
 
 def test_live_session_tick_keeps_cursor_and_cash_writes_in_local_sim_transaction() -> None:
