@@ -27,8 +27,8 @@
   "expected": "The qlib page response contracts declare moneyflow_unit_contract exactly once in the correct interface and frontend TypeScript compilation succeeds.",
   "first_seen_at": "2026-07-14T17:55:17.310272Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bac7ec0bfc29c468b8a2d517ff6e8c5a53fcb5e2",
+  "fixed_at": "2026-07-14T18:04:56.819867Z",
   "github_issue_number": 2136,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2136",
   "last_seen_at": "2026-07-14T17:55:17.310272Z",
@@ -36,6 +36,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2137",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -46,7 +47,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -83,6 +84,12 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "npm ci from lockfile + npx tsc --noEmit -> passed",
+    "eslint qlib page -> passed",
+    "nox l0 validation_module_registry_l0 -> passed",
+    "GitHub CI -> 14 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
