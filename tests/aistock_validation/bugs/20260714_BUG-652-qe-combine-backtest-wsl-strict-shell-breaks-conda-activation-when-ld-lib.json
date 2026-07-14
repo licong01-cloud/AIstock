@@ -30,8 +30,8 @@
   "expected": "Activate the configured Conda environment before enabling nounset, then retain strict fail-loud shell behavior for the actual qrun and artifact-read commands.",
   "first_seen_at": "2026-07-14T16:26:33.468213Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b4bfbaf7c1e1408d39186f6c2db4fc4ca06aaa35",
+  "fixed_at": "2026-07-14T17:33:43.455146Z",
   "github_issue_number": 2130,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2130",
   "last_seen_at": "2026-07-14T16:26:33.468213Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2131",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "7c03a41fd5e629274b43bb4f",
     "source_event_id": "FE-20260714-7c03a41fd5e6"
   },
+  "validation_evidence": [
+    "PR #2131 CI all green; local 41 tests plus WSL Conda strict-mode smoke passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
