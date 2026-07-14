@@ -516,7 +516,7 @@ Label as-of terminal resolution：
 
 唯一约束为 `(canonical_signal_id, observation_revision_no)`、`supersedes_observation_version_id` 唯一和 `observation_content_hash` 唯一。predecessor 必须属于同一 signal 且 revision 恰好小 1。
 
-### 8.3 `app.advisory_signal_observation_lineage`
+### 8.3 `app.advisory_signal_observation_lineage` logical projection
 
 | 字段 | 语义 |
 |---|---|
@@ -525,7 +525,7 @@ Label as-of terminal resolution：
 | `phase0a_audit_id/manifest_hash` | exact Phase 0A audit |
 | `handoff_readiness_hash/admission_scope_hash` | exact automatic scope readiness identity |
 | `audit_target_id/target_scope_hash` | Phase 0A aggregate target |
-| `admission_scope_id/hash` | exact approved context/interval/capability/date scope |
+| `admission_scope_id/hash` | exact admitted context/interval/capability/date scope |
 | `capability` | scope 内 exact capability |
 | `stable_signal_semantics_hash/canonical_signal_scope_hash` | interval semantics 与 per-signal stable identity |
 | `phase0a_signal_context_hash` | exact evidence-rich context |
@@ -540,6 +540,9 @@ Label as-of terminal resolution：
 | `created_at` | audit timestamp |
 
 唯一约束：`(observation_version_id, phase0a_audit_id, admission_scope_id, program_id, binding_version_id, lineage_source_type, source_run_id)`。
+
+物理实现由非分区`...lineage_identity`保留全局PK/natural key，`...lineage_payload`按决策月分区；
+同名relation是只读compatibility view并精确输出上述逻辑列。Phase 1G只写physical identity/payload。
 
 Phase 0B 和 coverage 的经济样本计数按 `canonical_signal_id` 去重；snapshot 通过 §13 映射表选择唯一 observation version 和相应 lineage scope。
 
@@ -576,7 +579,10 @@ reason_codes
 
 唯一约束：`(observation_version_id, stage)`。stage evidence 是 observation version 的组成部分，后续补齐 stage 必须生成新 observation version，不能更新旧行。
 
-### 9.3 `app.advisory_signal_stage_candidate`
+`content_hash` 是stage局部内容摘要，不是全局row identity；不同observation version可以合法具有相同
+stage content hash。数据库只建立普通content-hash索引，不能用全局UNIQUE阻断该情况。
+
+### 9.3 `app.advisory_signal_stage_candidate` logical projection
 
 一行保存某 stage 的一个股票状态：
 
@@ -595,6 +601,10 @@ component_evidence_hash
 candidate_content_hash
 PRIMARY KEY(stage_evidence_id, symbol)
 ```
+
+物理实现由非分区`...stage_candidate_identity`保留`(stage_evidence_id,symbol)`全局identity，
+`...stage_candidate_payload`按决策月分区；同名relation是只读compatibility view。逻辑字段和hash语义
+仍由本节定义，Phase 1G不得把view作为可写authority。
 
 规则：
 
@@ -624,6 +634,8 @@ combined_score_decimal/combined_score_content_hash
 - weight/score 使用 canonical decimal；手工跨包组合继续拒绝。
 - multi-alpha candidate 必须有 schema/json/hash，且 `candidate_content_hash` 必须包含 component hash；single-alpha 固定 `component_capability=NOT_APPLICABLE`、payload/hash 为 NULL。
 - `stage_evidence.content_hash = hash(stage summary + sorted candidate_content_hashes)`；`observation_version.stage_evidence_bundle_hash = hash(sorted stage_evidence.content_hashes)`。leg/weight/variant 任一变化必须产生新 stage/observation version。
+- `candidate_content_hash`是局部候选内容摘要，不是跨stage/observation全局identity；数据库row identity为
+  `(stage_evidence_id,symbol)`，相同局部内容在不同identity中允许重复。
 
 ### 9.4 `SelectionStageTraceSink`
 
@@ -1086,7 +1098,7 @@ v1 仅允许版本化模板访问：
 
 Phase 1 不新增 HTTP API、UI 或 MCP 契约。未来 operator 入口仅为受控 CLI；任何在线读取能力留给后续 Advisory inference/API 专项设计。
 
-### 13.2 新表清单
+### 13.2 新 relation 清单
 
 ```text
 app.advisory_phase1_control_binding_event
@@ -1097,11 +1109,15 @@ app.advisory_capture_batch
 app.advisory_capture_batch_evidence_membership
 app.advisory_signal_observation
 app.advisory_signal_observation_version
-app.advisory_signal_observation_lineage
+app.advisory_signal_observation_lineage_identity
+app.advisory_signal_observation_lineage_payload
+app.advisory_signal_observation_lineage  # read-only compatibility view
 app.advisory_selection_stage_trace_outbox
 app.advisory_selection_stage_trace_delivery_event
 app.advisory_signal_stage_evidence
-app.advisory_signal_stage_candidate
+app.advisory_signal_stage_candidate_identity
+app.advisory_signal_stage_candidate_payload
+app.advisory_signal_stage_candidate  # read-only compatibility view
 app.advisory_outcome_label
 app.advisory_dataset_build
 app.advisory_dataset_build_attempt
@@ -1372,8 +1388,14 @@ v1 quarantine 仅是持久化逻辑状态，不移动、不改名 CAS blob，因
 
 - canonical signal：`(package_id,manifest_sha256,decision_as_of_trade_date)`；version：`(canonical_signal_id,observation_revision_no)`。
 - lineage：`(program_id,decision_as_of_trade_date)`、binding、audit target；lineage 表冗余 decision date 只用于分区/索引并受 FK/trigger 一致性校验。
-- stage candidate、outcome label 和 lineage 使用 PostgreSQL native RANGE 月分区，分区键为冗余 `decision_as_of_trade_date`；不在实施时临时改选 Timescale。
-- stage candidate：`(observation_version_id,stage_evidence_id,rank,symbol)`；label：`(canonical_signal_id,symbol,horizon,projection)`、`label_key_hash/revision_no`、maturity/event/source available-at。
+- stage candidate payload、outcome label payload和lineage payload使用PostgreSQL native RANGE月分区，
+  分区键为冗余`decision_as_of_trade_date`；不在实施时临时改选Timescale。lineage/candidate使用非分区
+  identity table保证跨月全局ID/natural-key唯一，partitioned payload保存高增长内容；同名只读
+  compatibility view保持既有snapshot projection列契约。
+- stage candidate identity：`(stage_evidence_id,symbol)`；payload索引：
+  `(decision_as_of_trade_date,stage_evidence_id,rank,symbol)`；label：
+  `(canonical_signal_id,symbol,horizon,projection)`、`label_key_hash/revision_no`、maturity/event/source
+  available-at。具体forward layout由Phase 1F.1详细设计冻结。
 - source availability：`(dataset_name,source_role,partition_key_hash,event_revision_no)` 与 `(partition_chain_key,event_revision_no)` 唯一；revision member：`(source_revision_set_id,member_key)` 唯一，其中 `member_key` 固定 source role、dataset、query/bound parameter、partition 与 availability requirement，允许同一物理 partition 以不同且可审计的消费角色进入同一 revision set。
 - capture：status/date/scope；build：lifecycle/checkpoint/logical key/generation；attempt：build/state/lease expiry/fencing；snapshot：content/manifest/sealed_at；invalidation：snapshot/date。
 - 分区预创建只由开发/发布 migration 完成；retention 由 maintenance CLI 处理既有分区内的数据/制品。缺目标 partition 时 fail-closed，运行时不得创建分区或执行任何隐式 DDL。
@@ -2086,15 +2108,19 @@ Phase 1B 实施验收表：
 
 ### 22.9 Phase 1F：Release schema verification
 
-- 唯一实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`，当前状态为 `design_ready`，代码尚未开始。
+- 唯一v1实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`；代码已由 PR `#2114` 合入，DEV persistent L3 已完成 plan/apply/verify/exact-reapply，v1 managed/prerequisite均为`COMPATIBLE`、receipt中`downstream_ready=true`。后续复核发现v1 contract未覆盖本设计的lineage/candidate分区且错误冻结两个局部content hash全局唯一，因此该receipt不能被Phase 1G persistent DML直接消费。
+- 修正设计为 `docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`，当前`design_ready / implementation_not_started`。它通过全局identity + 月分区payload + compatibility view修复，不改变snapshot只读结果；DEV/production DDL均尚未执行。
 - 在开发/发布流程按冻结 SHA 和依赖顺序应用、重放并完整验证 dataset foundation migrations、31 个逻辑关系、columns/constraints/indexes/functions/triggers/comments 与显式 capacity 日期范围生成的历史月分区；不创建 authority tables/roles/approval/authorization。
 - 运行进程只使用 Advisory-owned read-only catalog verifier，无 DDL executor reference 或 DDL 入口；本阶段不执行 source ledger、capture/label DML、文件写入、observer activation 或模型训练。
 - schema verification 不依赖业务 row count、Phase 1E persistent L4、capacity `MEASURED`、Parquet 或模型状态；合法空库结构与 `PARTIAL` capacity 可通过。DEV/production apply 分开报告，生产 DDL 只在用户明确授权的独立操作中执行，不新增应用审批功能或每次 DDL 前全库备份要求。
 
 ### 22.10 Phase 1G：Source ledger 与 observation capture DML
 
-- source event、revision set 与 observation capture 使用强类型 request、batch、事务和 receipt。
-- target 级执行；失败不自动重试，不触碰现有 Selection/Advisory/Paper 数据。
+- 唯一实施级详细设计为 `docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`，当前为 `design_ready / implementation_not_started`；代码开始前必须先完成Phase 1F.1 v2 schema实现，persistent DEV DML还需v2 DEV receipt。
+- Phase 1G 不新增 source availability event；它在 Phase 1E 相同 cutoff 重放 source resolution，逐 hash 一致后冻结 revision set。source event 的生产权仍唯一属于 Phase 1D observer。
+- immutable DSE/artifact/package 仅通过 Advisory-owned read-only projection 消费；不调用 Selection、策略包 validator/asset loader/inference，不改变 Selection、荐股、模拟盘、Paper、QE/RD-Agent/Qlib/QMT。
+- control binding 自动 get-or-append exact；observation/version/lineage/stage/candidate/membership/delivery 使用强类型 request、单 plan PostgreSQL 原子事务和 immutable receipt。single Alpha 与原生 multi Alpha 各 Program 独立执行，失败显式、正常重跑自动收敛，无自动 retry loop、角色、审批或人工改库。
+- 本阶段不执行 DDL、不读取回测或 Paper 数据、不训练模型。DEV transactional 验证与 persistent real dual-track L4 分开报告，生产 DML 只在后续独立明确执行中发生。
 
 ### 22.11 Phase 1H：Label/universe DML 与 evidence
 
