@@ -19,7 +19,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psycopg2
 import psycopg2.extras as pgx
-from psycopg2 import errors as pg_errors
 import requests
 from requests import exceptions as req_exc
 try:
@@ -42,6 +41,8 @@ DB_CFG = dict(
 # - kline_daily_raw: 未复权日线（与 ingest_full_daily_raw 对齐）
 # - kline_minute_raw: 1 分钟线
 SUPPORTED_DATASETS = {"kline_daily_raw", "kline_minute_raw"}
+EXPECTED_MINUTE_BARS_PER_TRADING_DAY = 240
+CHINA_TZ = dt.timezone(dt.timedelta(hours=8))
 EXCHANGE_MAP = {"sh": "SH", "sz": "SZ", "bj": "BJ"}
 
 
@@ -190,11 +191,14 @@ def fetch_daily_raw(code: str, start: str, end: str, limit: Optional[int] = None
     - 返回按交易日期升序排列的列表。
     """
     params: Dict[str, Any] = {"code": code, "type": "day"}
-    if limit is not None and limit > 0:
+    if limit is not None:
         try:
-            params["limit"] = int(limit)
-        except (TypeError, ValueError):
-            pass
+            parsed_limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid daily kline limit: {limit!r}") from exc
+        if parsed_limit <= 0:
+            raise ValueError(f"daily kline limit must be positive: {parsed_limit}")
+        params["limit"] = parsed_limit
     data = http_get("/api/kline-all/tdx", params=params)
     payload = data.get("data") if isinstance(data, dict) else None
     if isinstance(payload, dict):
@@ -236,27 +240,61 @@ def fetch_minute(code: str, trade_date: dt.date) -> List[Dict[str, Any]]:
 
 
 def fetch_minute_range(code: str, start: dt.date, end: dt.date) -> List[Dict[str, Any]]:
-    """Fetch 1-minute K-bars for a symbol within [start, end] via /api/kline-history.
+    """Fetch true 1-minute OHLC bars for a symbol within [start, end].
 
-    为避免触及 limit=800 的上限，调用方应保证 (end-start) 的跨度不超过数日；
-    本函数仅负责单次 /api/kline-history 调用并返回原始列表。
+    Uses /api/kline-all/tdx and filters locally because the legacy history endpoint ignores dates.
     """
     if start > end:
-        return []
-    params = {
-        "code": code,
-        "type": "minute1",
-        "start_date": start.strftime("%Y%m%d"),
-        "end_date": end.strftime("%Y%m%d"),
-        "limit": 800,
-    }
-    data = http_get("/api/kline-history", params=params)
-    payload = data.get("data") if isinstance(data, dict) else None
+        raise ValueError(f"minute range start {start} is after end {end}")
+    params = {"code": code, "type": "minute1"}
+    data = http_get("/api/kline-all/tdx", params=params)
+    if not isinstance(data, dict) or "data" not in data:
+        raise RuntimeError("TDX /api/kline-all/tdx response is missing data")
+    payload = data["data"]
     if isinstance(payload, dict):
-        items = payload.get("List") or payload.get("list") or []
+        if "list" in payload:
+            items = payload["list"]
+        elif "List" in payload:
+            items = payload["List"]
+        else:
+            raise RuntimeError("TDX /api/kline-all/tdx data is missing list")
+    elif isinstance(payload, list):
+        items = payload
     else:
-        items = payload or []
-    return list(items) if isinstance(items, list) else []
+        raise RuntimeError("TDX /api/kline-all/tdx data has invalid schema")
+    if not isinstance(items, list):
+        raise RuntimeError("TDX /api/kline-all/tdx list has invalid schema")
+
+    selected: List[Tuple[str, str, Dict[str, Any]]] = []
+    malformed_rows: List[int] = []
+    start_key = start.isoformat()
+    end_key = end.isoformat()
+    for index, row in enumerate(items):
+        if not isinstance(row, dict):
+            malformed_rows.append(index)
+            continue
+        trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
+        trade_date = _to_date(trade_time)
+        if trade_date is None:
+            malformed_rows.append(index)
+            continue
+        try:
+            dt.date.fromisoformat(trade_date)
+        except ValueError:
+            malformed_rows.append(index)
+            continue
+        if trade_date < start_key or trade_date > end_key:
+            continue
+        selected.append((trade_date, str(trade_time or ""), dict(row)))
+
+    if malformed_rows:
+        raise RuntimeError(
+            "TDX /api/kline-all/tdx returned rows without a valid trade timestamp: "
+            f"count={len(malformed_rows)} sample_indexes={malformed_rows[:5]}"
+        )
+
+    selected.sort(key=lambda item: (item[0], item[1]))
+    return [row for _, _, row in selected]
 
 
 def upsert_daily_raw(conn, ts_code: str, bars: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
@@ -305,15 +343,14 @@ def _combine_trade_time(trade_date: dt.date, value: Any) -> Optional[str]:
     try:
         dt_obj = dt.datetime.fromisoformat(cleaned)
         if dt_obj.tzinfo is None:
-            dt_obj = dt_obj.replace(tzinfo=dt.timezone.utc)
+            dt_obj = dt_obj.replace(tzinfo=CHINA_TZ)
         return dt_obj.isoformat()
     except ValueError:
         pass
     for fmt in ("%H:%M:%S", "%H:%M"):
         try:
             time_obj = dt.datetime.strptime(text, fmt).time()
-            tzinfo = dt.timezone(dt.timedelta(hours=8))
-            return dt.datetime.combine(trade_date, time_obj).replace(tzinfo=tzinfo).isoformat()
+            return dt.datetime.combine(trade_date, time_obj).replace(tzinfo=CHINA_TZ).isoformat()
         except ValueError:
             continue
     return None
@@ -326,22 +363,59 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
         "open_li=EXCLUDED.open_li, high_li=EXCLUDED.high_li, low_li=EXCLUDED.low_li, close_li=EXCLUDED.close_li, volume_hand=EXCLUDED.volume_hand, amount_li=EXCLUDED.amount_li"
     )
     values: List[Tuple[Any, ...]] = []
+    invalid_rows: List[Dict[str, Any]] = []
+    seen_trade_times: set[str] = set()
     last_ts: Optional[str] = None
-    for row in bars:
+    for index, row in enumerate(bars):
         if not isinstance(row, dict):
+            invalid_rows.append({"index": index, "reason": "row_not_object"})
             continue
         trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
         trade_time_iso = _combine_trade_time(trade_date, trade_time)
-        open_li = row.get("Open") or row.get("open")
-        high_li = row.get("High") or row.get("high")
-        low_li = row.get("Low") or row.get("low")
-        close_li = row.get("Close") or row.get("close") or row.get("Price") or row.get("price")
-        volume_hand = row.get("Volume") or row.get("volume") or 0
-        amount_li = row.get("Amount") or row.get("amount") or 0
-        if trade_time_iso is None or close_li is None:
+        open_li = row["Open"] if "Open" in row else row.get("open")
+        high_li = row["High"] if "High" in row else row.get("high")
+        low_li = row["Low"] if "Low" in row else row.get("low")
+        close_li = row["Close"] if "Close" in row else row.get("close")
+        volume_hand = row["Volume"] if "Volume" in row else row.get("volume")
+        amount_li = row["Amount"] if "Amount" in row else row.get("amount")
+        missing_fields = [
+            field
+            for field, value in (
+                ("trade_time", trade_time_iso),
+                ("open", open_li),
+                ("high", high_li),
+                ("low", low_li),
+                ("close", close_li),
+                ("volume", volume_hand),
+                ("amount", amount_li),
+            )
+            if value is None
+        ]
+        if missing_fields:
+            invalid_rows.append({"index": index, "reason": "missing_required_fields", "fields": missing_fields})
             continue
+        parsed_trade_time = dt.datetime.fromisoformat(trade_time_iso)
+        if parsed_trade_time.astimezone(CHINA_TZ).date() != trade_date:
+            invalid_rows.append(
+                {
+                    "index": index,
+                    "reason": "trade_date_mismatch",
+                    "trade_time": trade_time_iso,
+                    "expected_date": trade_date.isoformat(),
+                }
+            )
+            continue
+        if trade_time_iso in seen_trade_times:
+            invalid_rows.append({"index": index, "reason": "duplicate_trade_time", "trade_time": trade_time_iso})
+            continue
+        seen_trade_times.add(trade_time_iso)
         last_ts = trade_time_iso if last_ts is None or trade_time_iso > last_ts else last_ts
         values.append((trade_time_iso, ts_code, "1m", open_li, high_li, low_li, close_li, volume_hand, amount_li, "none", "tdx_api"))
+    if invalid_rows:
+        raise ValueError(
+            f"invalid minute OHLC payload for {ts_code} {trade_date}: "
+            f"count={len(invalid_rows)} samples={invalid_rows[:5]}"
+        )
     if not values:
         return 0, None
     with conn.cursor() as cur:
@@ -370,8 +444,8 @@ def update_job_summary(conn, job_id: uuid.UUID, patch: Dict[str, Any]) -> None:
         if row and row[0]:
             try:
                 base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
-            except Exception:
-                base = {}
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"ingestion job {job_id} has invalid summary JSON") from exc
         for k, v in (patch or {}).items():
             if isinstance(v, (int, float)) and isinstance(base.get(k), (int, float)):
                 base[k] = type(base.get(k))(base.get(k, 0) + v)
@@ -426,8 +500,8 @@ def finish_job(conn, job_id: uuid.UUID, status: str, summary: Dict[str, Any]) ->
         if row and row[0]:
             try:
                 base = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
-            except Exception:
-                base = {}
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"ingestion job {job_id} has invalid summary JSON") from exc
         base.update(summary or {})
         cur.execute(
             """
@@ -558,6 +632,432 @@ def log_error(
         )
 
 
+def _stats_add(stats: Dict[str, Any], key: str, value: int) -> None:
+    current = stats.get(key, 0)
+    stats[key] = int(current) + int(value) if isinstance(current, (int, float)) else int(value)
+
+
+def is_trading_day(conn, trade_date: dt.date) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_trading
+              FROM market.trading_calendar
+             WHERE cal_date=%s
+            """,
+            (trade_date,),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise RuntimeError(f"market.trading_calendar has no authority row for {trade_date}")
+    if not isinstance(row[0], bool):
+        raise RuntimeError(f"market.trading_calendar has invalid is_trading for {trade_date}: {row[0]!r}")
+    return bool(row[0])
+
+
+def get_expected_minute_codes(conn, trade_date: dt.date, ts_codes: List[str]) -> List[str]:
+    if not ts_codes:
+        return []
+    requested_codes = sorted(set(ts_codes))
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ts_code, list_date, delist_date
+              FROM market.stock_basic
+             WHERE ts_code = ANY(%s)
+             ORDER BY ts_code
+            """,
+            (requested_codes,),
+        )
+        stock_rows = cur.fetchall()
+
+    stock_by_code = {str(row[0]): row for row in stock_rows if row and row[0]}
+    missing_codes = [ts_code for ts_code in requested_codes if ts_code not in stock_by_code]
+    if missing_codes:
+        raise RuntimeError(
+            "market.stock_basic is missing requested TDX stock codes: "
+            f"count={len(missing_codes)} samples={missing_codes[:10]}"
+        )
+
+    active_codes: List[str] = []
+    invalid_list_dates: List[str] = []
+    for ts_code in requested_codes:
+        row = stock_by_code[ts_code]
+        list_date = row[1]
+        delist_date = row[2]
+        if isinstance(list_date, dt.datetime):
+            list_date = list_date.date()
+        elif isinstance(list_date, str):
+            list_date = dt.date.fromisoformat(list_date)
+        if isinstance(delist_date, dt.datetime):
+            delist_date = delist_date.date()
+        elif isinstance(delist_date, str):
+            delist_date = dt.date.fromisoformat(delist_date)
+        if not isinstance(list_date, dt.date):
+            invalid_list_dates.append(ts_code)
+            continue
+        if list_date <= trade_date and (delist_date is None or delist_date > trade_date):
+            active_codes.append(ts_code)
+
+    if invalid_list_dates:
+        raise RuntimeError(
+            "market.stock_basic has no valid list_date for requested codes: "
+            f"count={len(invalid_list_dates)} samples={invalid_list_dates[:10]}"
+        )
+    if not active_codes:
+        return []
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT ts_code
+              FROM market.suspend_d
+             WHERE trade_date=%s
+               AND ts_code = ANY(%s)
+               AND suspend_type='S'
+            """,
+            (trade_date, active_codes),
+        )
+        suspended_codes = {str(row[0]) for row in cur.fetchall() if row and row[0]}
+    return [ts_code for ts_code in active_codes if ts_code not in suspended_codes]
+
+
+def get_minute_day_stats(conn, trade_date: dt.date, ts_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+    if not ts_codes:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH localized AS (
+                SELECT ts_code,
+                       (trade_time AT TIME ZONE 'Asia/Shanghai')::date AS trade_date,
+                       (trade_time AT TIME ZONE 'Asia/Shanghai')::time AS trade_time_local,
+                       open_li, high_li, low_li, close_li, volume_hand, amount_li
+                  FROM market.kline_minute_raw
+                 WHERE freq='1m'
+                   AND ts_code = ANY(%s)
+                   AND trade_time >= (%s::date + TIME '00:00') AT TIME ZONE 'Asia/Shanghai'
+                   AND trade_time < ((%s::date + 1) + TIME '00:00') AT TIME ZONE 'Asia/Shanghai'
+            )
+            SELECT ts_code,
+                   COUNT(*)::int AS total_bars,
+                   COUNT(*) FILTER (
+                       WHERE EXTRACT(SECOND FROM trade_time_local)=0
+                         AND (
+                              (trade_time_local BETWEEN TIME '09:31' AND TIME '11:30')
+                              OR (trade_time_local BETWEEN TIME '13:01' AND TIME '15:00')
+                         )
+                   )::int AS core_session_bars,
+                   COUNT(*) FILTER (WHERE trade_time_local=TIME '09:30')::int AS opening_bar_count,
+                   COUNT(*) FILTER (
+                       WHERE NOT (
+                           (
+                               EXTRACT(SECOND FROM trade_time_local)=0
+                               AND (
+                                   (trade_time_local BETWEEN TIME '09:31' AND TIME '11:30')
+                                   OR (trade_time_local BETWEEN TIME '13:01' AND TIME '15:00')
+                               )
+                           )
+                           OR trade_time_local=TIME '09:30'
+                       )
+                   )::int AS unexpected_session_bars,
+                   COUNT(*) FILTER (
+                       WHERE open_li IS NULL OR high_li IS NULL OR low_li IS NULL OR close_li IS NULL
+                          OR volume_hand IS NULL OR amount_li IS NULL
+                   )::int AS invalid_payload_bars,
+                   MIN(trade_time_local)::text AS first_time,
+                   MAX(trade_time_local)::text AS last_time
+              FROM localized
+             GROUP BY ts_code
+            """,
+            (list(ts_codes), trade_date, trade_date),
+        )
+        rows = cur.fetchall()
+    return {
+        str(row[0]): {
+            "total_bars": int(row[1]),
+            "core_session_bars": int(row[2]),
+            "opening_bar_count": int(row[3]),
+            "unexpected_session_bars": int(row[4]),
+            "invalid_payload_bars": int(row[5]),
+            "first_time": str(row[6]) if row[6] is not None else None,
+            "last_time": str(row[7]) if row[7] is not None else None,
+        }
+        for row in rows
+        if row and row[0] is not None
+    }
+
+
+def find_minute_day_gaps(
+    conn,
+    trade_date: dt.date,
+    expected_codes: List[str],
+    expected_bars: int = EXPECTED_MINUTE_BARS_PER_TRADING_DAY,
+) -> List[Dict[str, Any]]:
+    day_stats = get_minute_day_stats(conn, trade_date, expected_codes)
+    gaps: List[Dict[str, Any]] = []
+    for ts_code in expected_codes:
+        observed = day_stats.get(
+            ts_code,
+            {
+                "total_bars": 0,
+                "core_session_bars": 0,
+                "opening_bar_count": 0,
+                "unexpected_session_bars": 0,
+                "invalid_payload_bars": 0,
+                "first_time": None,
+                "last_time": None,
+            },
+        )
+        opening_bar_count = int(observed["opening_bar_count"])
+        expected_total = expected_bars + opening_bar_count
+        is_complete = (
+            int(observed["core_session_bars"]) == expected_bars
+            and opening_bar_count in (0, 1)
+            and int(observed["total_bars"]) == expected_total
+            and int(observed["unexpected_session_bars"]) == 0
+            and int(observed["invalid_payload_bars"]) == 0
+            and observed["last_time"] == "15:00:00"
+            and observed["first_time"] == ("09:30:00" if opening_bar_count else "09:31:00")
+        )
+        if not is_complete:
+            gaps.append(
+                {
+                    "ts_code": ts_code,
+                    "actual_bars": int(observed["total_bars"]),
+                    "expected_bars": expected_bars,
+                    "accepted_total_bars": [expected_bars, expected_bars + 1],
+                    **observed,
+                }
+            )
+    return gaps
+
+
+def filter_minute_bars_for_date(values: List[Dict[str, Any]], trade_date: dt.date) -> List[Dict[str, Any]]:
+    target = trade_date.isoformat()
+    selected: List[Dict[str, Any]] = []
+    for row in values:
+        if not isinstance(row, dict):
+            continue
+        trade_time = row.get("TradeTime") or row.get("trade_time") or row.get("Time") or row.get("time")
+        if _to_date(trade_time) == target:
+            selected.append(row)
+    return selected
+
+
+def retry_minute_day_gaps(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    trade_date: dt.date,
+    gaps: List[Dict[str, Any]],
+    stats: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    failures: List[Dict[str, Any]] = []
+    for gap in gaps:
+        ts_code = str(gap["ts_code"])
+        code = ts_code.split(".")[0]
+        try:
+            values = fetch_minute_range(code, trade_date, trade_date)
+            day_bars = filter_minute_bars_for_date(values, trade_date)
+            if not day_bars:
+                log_error(
+                    conn,
+                    run_id,
+                    dataset,
+                    ts_code,
+                    "minute completeness retry returned no bars",
+                    detail={"date": trade_date.isoformat(), **gap},
+                )
+                continue
+            inserted, last_ts = upsert_minute(conn, ts_code, trade_date, day_bars)
+            _stats_add(stats, "inserted_rows", inserted)
+            if inserted > 0:
+                last_dt = dt.datetime.fromisoformat(last_ts) if last_ts else None
+                upsert_state(conn, dataset, ts_code, trade_date, last_dt, None)
+                upsert_checkpoint(
+                    conn,
+                    run_id,
+                    dataset,
+                    ts_code,
+                    trade_date,
+                    last_ts,
+                    {"repair": "minute_completeness", "actual_bars_before": gap.get("actual_bars")},
+                )
+                try:
+                    update_job_summary(conn, job_id, {"inserted_rows": int(inserted)})
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} {trade_date} job_summary_update failed: {summary_exc}",
+                    )
+            log_ingestion(
+                conn,
+                job_id,
+                "info",
+                f"run {run_id} {dataset} {ts_code} {trade_date} completeness_retry inserted={inserted}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            try:
+                conn.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001
+                log_ingestion(
+                    conn,
+                    job_id,
+                    "warning",
+                    f"run {run_id} {dataset} {ts_code} {trade_date} rollback failed after retry error: {rollback_exc}",
+                )
+            err = str(exc)
+            log_error(
+                conn,
+                run_id,
+                dataset,
+                ts_code,
+                f"minute completeness retry failed: {err}",
+                detail={"date": trade_date.isoformat(), **gap},
+            )
+            log_ingestion(
+                conn,
+                job_id,
+                "error",
+                f"run {run_id} {dataset} {ts_code} {trade_date} completeness_retry failed: {err}",
+            )
+            failures.append(
+                {
+                    **gap,
+                    "reason": "completeness_retry_failed",
+                    "error": err,
+                }
+            )
+    return failures
+
+
+def validate_minute_day_and_repair(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    ts_codes: List[str],
+    trade_date: dt.date,
+    stats: Dict[str, Any],
+    expected_bars: int = EXPECTED_MINUTE_BARS_PER_TRADING_DAY,
+) -> List[Dict[str, Any]]:
+    try:
+        if not is_trading_day(conn, trade_date):
+            return []
+        expected_codes = get_expected_minute_codes(conn, trade_date, ts_codes)
+    except Exception as exc:  # noqa: BLE001
+        detail = {
+            "date": trade_date.isoformat(),
+            "reason": "minute_completeness_authority_unavailable",
+            "error": str(exc),
+        }
+        log_error(conn, run_id, dataset, None, "minute completeness authority unavailable", detail=detail)
+        log_ingestion(
+            conn,
+            job_id,
+            "error",
+            f"run {run_id} {dataset} {trade_date} completeness authority unavailable: {exc}",
+        )
+        _stats_add(stats, "completeness_failed_codes", max(len(ts_codes), 1))
+        return [{"ts_code": None, "actual_bars": 0, "expected_bars": expected_bars, **detail}]
+
+    if not expected_codes:
+        log_ingestion(
+            conn,
+            job_id,
+            "info",
+            f"run {run_id} {dataset} {trade_date} completeness skipped: no listed non-suspended requested codes",
+        )
+        return []
+
+    try:
+        gaps = find_minute_day_gaps(conn, trade_date, expected_codes, expected_bars)
+    except Exception as exc:  # noqa: BLE001
+        detail = {
+            "date": trade_date.isoformat(),
+            "reason": "minute_completeness_readback_failed",
+            "error": str(exc),
+        }
+        log_error(conn, run_id, dataset, None, "minute completeness readback failed", detail=detail)
+        log_ingestion(
+            conn,
+            job_id,
+            "error",
+            f"run {run_id} {dataset} {trade_date} completeness readback failed: {exc}",
+        )
+        _stats_add(stats, "completeness_failed_codes", len(expected_codes))
+        return [
+            {"ts_code": ts_code, "actual_bars": 0, "expected_bars": expected_bars, **detail}
+            for ts_code in expected_codes
+        ]
+    if not gaps:
+        log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {trade_date} completeness ok codes={len(expected_codes)}")
+        return []
+
+    _stats_add(stats, "completeness_initial_gap_codes", len(gaps))
+    retry_failures = retry_minute_day_gaps(conn, run_id, job_id, dataset, trade_date, gaps, stats)
+    try:
+        remaining = find_minute_day_gaps(conn, trade_date, expected_codes, expected_bars)
+    except Exception as exc:  # noqa: BLE001
+        detail = {
+            "date": trade_date.isoformat(),
+            "reason": "minute_completeness_post_retry_readback_failed",
+            "error": str(exc),
+        }
+        log_error(conn, run_id, dataset, None, "minute completeness post-retry readback failed", detail=detail)
+        remaining = [
+            {"ts_code": ts_code, "actual_bars": 0, "expected_bars": expected_bars, **detail}
+            for ts_code in expected_codes
+        ]
+    remaining_codes = {str(gap.get("ts_code")) for gap in remaining}
+    remaining.extend(
+        failure
+        for failure in retry_failures
+        if str(failure.get("ts_code")) not in remaining_codes
+    )
+    if remaining:
+        _stats_add(stats, "completeness_failed_codes", len(remaining))
+        for gap in remaining:
+            log_error(
+                conn,
+                run_id,
+                dataset,
+                gap.get("ts_code"),
+                "minute completeness check failed after retry",
+                detail={"date": trade_date.isoformat(), **gap},
+            )
+        log_ingestion(
+            conn,
+            job_id,
+            "error",
+            f"run {run_id} {dataset} {trade_date} completeness failed gaps={json.dumps(remaining, ensure_ascii=False)}",
+        )
+    else:
+        _stats_add(stats, "completeness_repaired_codes", len(gaps))
+        log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {trade_date} completeness repaired codes={len(gaps)}")
+    return remaining
+
+
+def validate_minute_range_and_repair(
+    conn,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    dataset: str,
+    ts_codes: List[str],
+    start_date: dt.date,
+    end_date: dt.date,
+    stats: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    remaining: List[Dict[str, Any]] = []
+    for trade_date in date_range(start_date, end_date):
+        remaining.extend(validate_minute_day_and_repair(conn, run_id, job_id, dataset, ts_codes, trade_date, stats))
+    return remaining
+
+
 def ingest_daily_raw(
     conn,
     codes: List[str],
@@ -565,7 +1065,7 @@ def ingest_daily_raw(
     start_override: Optional[dt.date],
     batch_size: int,
     job_id_opt: Optional[str] = None,
-) -> None:
+) -> bool:
     """Incremental ingestion for kline_daily_raw (未复权日线)。"""
     dataset = "kline_daily_raw"
     params = {
@@ -624,7 +1124,8 @@ def ingest_daily_raw(
     if tqdm is not None:
         try:
             pbar = tqdm(total=len(codes), desc="kline_daily_raw incr", unit="code")
-        except Exception:
+        except Exception as pbar_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} daily progress initialization failed: {pbar_exc}")
             pbar = None
     for batch in chunked(codes, batch_size):
         for ts_code in batch:
@@ -647,21 +1148,36 @@ def ingest_daily_raw(
                 stats["success_codes"] += 1
                 try:
                     update_job_summary(conn, job_id, {"inserted_rows": int(inserted), "success_codes": 1})
-                except Exception:
-                    pass
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} job_summary_update failed: {summary_exc}",
+                    )
                 ok = True
                 log_ingestion(conn, job_id, "info", f"run {run_id} {dataset} {ts_code} inserted={inserted}")
             except Exception as exc:  # noqa: BLE001
                 try:
                     conn.rollback()
-                except Exception:
-                    pass
+                except Exception as rollback_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} rollback failed after ingestion error: {rollback_exc}",
+                    )
                 err = str(exc)
                 stats["failed_codes"] += 1
                 try:
                     update_job_summary(conn, job_id, {"failed_codes": 1})
-                except Exception:
-                    pass
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} job_summary_update failed: {summary_exc}",
+                    )
                 log_error(
                     conn,
                     run_id,
@@ -677,18 +1193,20 @@ def ingest_daily_raw(
             if pbar is not None:
                 try:
                     pbar.update(1)
-                except Exception:
-                    pass
+                except Exception as pbar_exc:  # noqa: BLE001
+                    log_ingestion(conn, job_id, "warning", f"run {run_id} daily progress update failed: {pbar_exc}")
+                    pbar = None
     if pbar is not None:
         try:
             pbar.close()
-        except Exception:
-            pass
+        except Exception as pbar_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} daily progress close failed: {pbar_exc}")
     status = "success" if stats["failed_codes"] == 0 else "failed"
     finish_run(conn, run_id, status, stats)
     finish_job(conn, job_id, status, {"run_id": str(run_id), "stats": stats})
     log_ingestion(conn, job_id, "info", f"run {run_id} finished status={status} stats={json.dumps(stats, ensure_ascii=False)}")
     print(f"[DONE] daily_raw status={status} stats={stats}")
+    return status == "success"
 
 
 def ingest_minute(
@@ -699,7 +1217,7 @@ def ingest_minute(
     batch_size: int,
     max_empty: int,
     job_id_opt: Optional[str] = None,
-) -> None:
+) -> bool:
     dataset = "kline_minute_raw"
     params = {
         "target_date": target_date.isoformat(),
@@ -715,12 +1233,15 @@ def ingest_minute(
     params["job_id"] = str(job_id)
     run_id = create_run(conn, dataset, params)
     stats = {"total_codes": 0, "success_codes": 0, "failed_codes": 0, "inserted_rows": 0}
+    failed_ts_codes: set[str] = set()
+    task_ids_by_code: Dict[str, uuid.UUID] = {}
     update_job_summary(conn, job_id, {"total_codes": len(codes), "success_codes": 0, "failed_codes": 0, "inserted_rows": 0})
     pbar = None
     if tqdm is not None:
         try:
             pbar = tqdm(total=len(codes), desc="kline_minute_raw incr", unit="code")
-        except Exception:
+        except Exception as pbar_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} minute progress initialization failed: {pbar_exc}")
             pbar = None
     for batch in chunked(codes, batch_size):
         for ts_code in batch:
@@ -736,24 +1257,34 @@ def ingest_minute(
                     range_start = target_date
             if range_start > range_end:
                 task_id = create_task(conn, job_id, dataset, ts_code, range_start, range_end)
+                task_ids_by_code[ts_code] = task_id
                 complete_task(conn, task_id, True, 100.0, None)
                 stats["total_codes"] += 1
                 stats["success_codes"] += 1
                 try:
                     update_job_summary(conn, job_id, {"success_codes": 1})
-                except Exception:
-                    pass
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} job_summary_update failed: {summary_exc}",
+                    )
                 if pbar is not None:
                     try:
                         pbar.update(1)
-                    except Exception:
-                        pass
+                    except Exception as pbar_exc:  # noqa: BLE001
+                        log_ingestion(conn, job_id, "warning", f"run {run_id} minute progress update failed: {pbar_exc}")
+                        pbar = None
                 continue
             task_id = create_task(conn, job_id, dataset, ts_code, range_start, range_end)
+            task_ids_by_code[ts_code] = task_id
             code_failed = False
             err: Optional[str] = None
             empty_streak = 0
-            window_days = 3  # 每次最多抓取约 3 天，避免分钟条数超过 limit=800
+            # /api/kline-all/tdx 已在服务端分页拉取最多 24000 根；一次请求后本地按目标范围过滤，
+            # 不能按 3 天窗口重复下载同一份完整历史。
+            window_days = max((range_end - range_start).days + 1, 1)
             cur_start = range_start
             while cur_start <= range_end:
                 cur_end = min(range_end, cur_start + dt.timedelta(days=window_days - 1))
@@ -858,35 +1389,101 @@ def ingest_minute(
                 cur_start = cur_end + dt.timedelta(days=1)
 
             if code_failed:
+                failed_ts_codes.add(ts_code)
                 stats["failed_codes"] += 1
                 try:
                     update_job_summary(conn, job_id, {"failed_codes": 1})
-                except Exception:
-                    pass
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} job_summary_update failed: {summary_exc}",
+                    )
             else:
                 stats["success_codes"] += 1
                 try:
                     update_job_summary(conn, job_id, {"success_codes": 1})
-                except Exception:
-                    pass
+                except Exception as summary_exc:  # noqa: BLE001
+                    log_ingestion(
+                        conn,
+                        job_id,
+                        "warning",
+                        f"run {run_id} {dataset} {ts_code} job_summary_update failed: {summary_exc}",
+                    )
             ok = not code_failed
             complete_task(conn, task_id, ok, 100.0 if ok else 0.0, None if ok else err)
             stats["total_codes"] += 1
             if pbar is not None:
                 try:
                     pbar.update(1)
-                except Exception:
-                    pass
+                except Exception as pbar_exc:  # noqa: BLE001
+                    log_ingestion(conn, job_id, "warning", f"run {run_id} minute progress update failed: {pbar_exc}")
+                    pbar = None
     if pbar is not None:
         try:
             pbar.close()
-        except Exception:
-            pass
-    status = "success" if stats["failed_codes"] == 0 else "failed"
+        except Exception as pbar_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} minute progress close failed: {pbar_exc}")
+    validation_start = start_override or target_date
+    remaining_gaps = validate_minute_range_and_repair(
+        conn,
+        run_id,
+        job_id,
+        dataset,
+        codes,
+        validation_start,
+        target_date,
+        stats,
+    )
+    if remaining_gaps:
+        has_universe_failure = any(not gap.get("ts_code") for gap in remaining_gaps)
+        failed_gap_codes = {str(gap["ts_code"]) for gap in remaining_gaps if gap.get("ts_code")}
+        if has_universe_failure:
+            failed_gap_codes.update(codes)
+        failed_ts_codes.update(failed_gap_codes)
+        failure_by_code = {
+            str(gap["ts_code"]): gap
+            for gap in remaining_gaps
+            if gap.get("ts_code")
+        }
+        for failed_code in failed_gap_codes:
+            task_id = task_ids_by_code.get(failed_code)
+            if task_id is None:
+                continue
+            gap = failure_by_code.get(failed_code)
+            error_text = (
+                "minute completeness validation failed: "
+                + json.dumps(gap, ensure_ascii=False, default=str)
+                if gap is not None
+                else "minute completeness authority or universe validation failed"
+            )
+            complete_task(conn, task_id, False, 0.0, error_text)
+        try:
+            update_job_summary(conn, job_id, {"completeness_failed_codes": len(failed_gap_codes)})
+        except Exception as summary_exc:  # noqa: BLE001
+            log_ingestion(conn, job_id, "warning", f"run {run_id} {dataset} final job_summary_update failed: {summary_exc}")
+
+    stats["failed_codes"] = len(failed_ts_codes)
+    stats["success_codes"] = max(int(stats["total_codes"]) - stats["failed_codes"], 0)
+    status = "success" if stats["failed_codes"] == 0 and not remaining_gaps else "failed"
     finish_run(conn, run_id, status, stats)
-    finish_job(conn, job_id, status, {"run_id": str(run_id), "stats": stats})
+    finish_job(
+        conn,
+        job_id,
+        status,
+        {
+            "run_id": str(run_id),
+            "stats": stats,
+            "total_codes": stats["total_codes"],
+            "success_codes": stats["success_codes"],
+            "failed_codes": stats["failed_codes"],
+            "inserted_rows": stats["inserted_rows"],
+        },
+    )
     log_ingestion(conn, job_id, "info", f"run {run_id} finished status={status} stats={json.dumps(stats, ensure_ascii=False)}")
     print(f"[DONE] minute status={status} stats={stats}")
+    return status == "success"
 
 
 def main() -> None:
@@ -933,11 +1530,19 @@ def main() -> None:
                 cur.execute("SET synchronous_commit = off")
                 cur.execute("SET work_mem = '256MB'")
 
+        dataset_results: List[bool] = []
         if "kline_daily_raw" in datasets:
-            ingest_daily_raw(conn, codes, target_date, start_override, args.batch_size, args.job_id)
+            dataset_results.append(
+                ingest_daily_raw(conn, codes, target_date, start_override, args.batch_size, args.job_id)
+            )
 
         if "kline_minute_raw" in datasets:
-            ingest_minute(conn, codes, target_date, start_override, args.batch_size, args.max_empty, args.job_id)
+            dataset_results.append(
+                ingest_minute(conn, codes, target_date, start_override, args.batch_size, args.max_empty, args.job_id)
+            )
+
+    if not dataset_results or not all(dataset_results):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
