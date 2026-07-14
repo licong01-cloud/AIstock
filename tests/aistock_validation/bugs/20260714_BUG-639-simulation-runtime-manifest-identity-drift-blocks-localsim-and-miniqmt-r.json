@@ -2,9 +2,11 @@
   "actual": "LocalSIM is FAILED_RETRYABLE for manifest_sha256 despite matching trade/cutoff dates; one MiniQMT binding has ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT, one has quote depth invalid, and one remains reconciliation pending. Ingress is READY but subscription inactive and controller_count is zero.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260714_BUG-639-simulation-runtime-manifest-identity-drift-blocks-localsim-and-miniqmt-r.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
   ],
-  "assigned_agent": null,
+  "assigned_agent": "Codex",
   "bug_id": "BUG-639",
   "closed_at": null,
   "closure_requirements": [
@@ -27,7 +29,7 @@
   ],
   "expected": "LocalSIM reuses valid daily selection evidence whose canonical manifest identity matches the bound release; MiniQMT validates the same frozen assignment identity against runtime readback and autonomously resumes or reconciles retryable bindings, while deterministic conflicts fail loudly with complete diagnostics.",
   "first_seen_at": "2026-07-14T05:33:54.848091Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-639-simulation-runtime-manifest-identity-drift-block-20260714",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2083,
@@ -42,7 +44,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "GET http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -154,5 +157,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }
