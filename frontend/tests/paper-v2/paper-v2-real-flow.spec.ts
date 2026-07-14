@@ -10,13 +10,6 @@ const PREFERRED_PACKAGE_MARKERS = (
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
-const RETIRED_PACKAGE_MARKERS = (
-  process.env.PAPER_V2_E2E_RETIRED_PACKAGE_MARKERS
-  || "qe_20260513_151128_12ea"
-)
-  .split(",")
-  .map((item) => item.trim())
-  .filter(Boolean);
 let replayTradeDate = process.env.PAPER_V2_E2E_TRADE_DATE || "";
 const ACTIVATION_TRADE_DATE = process.env.PAPER_V2_E2E_ACTIVATION_DATE || "2026-04-28";
 const HMM_UNCOVERED_TRADE_DATE = process.env.PAPER_V2_E2E_HMM_UNCOVERED_DATE || "2026-04-29";
@@ -155,18 +148,17 @@ function packagePreference(pkg: PackageSummary): number {
   return idx >= 0 ? idx : PREFERRED_PACKAGE_MARKERS.length + 1;
 }
 
-function isRetiredValidationPackage(pkg: PackageSummary): boolean {
-  const haystack = `${pkg.package_name || ""} ${pkg.source_id || ""}`.toLowerCase();
-  return pkg.package_status === "RETIRED"
-    || RETIRED_PACKAGE_MARKERS.some((marker) => haystack.includes(marker.toLowerCase()));
-}
-
 async function discoverValidationPackages(request: APIRequestContext): Promise<PackageSummary[]> {
   const selectable = await listSelectablePackages(request);
+  const leakedRetiredPackageIds = selectable
+    .filter((pkg) => String(pkg.package_status || "").toUpperCase() === "RETIRED")
+    .map((pkg) => pkg.package_id);
+  expect(
+    leakedRetiredPackageIds,
+    "Selection Center selectable-packages must not expose RETIRED StrategyPackages",
+  ).toEqual([]);
   const runnable = selectable
     .filter((pkg) => pkg.selection_health?.runnable === true)
-    // Historical packages with incomplete frozen assets must not make Nightly fail.
-    .filter((pkg) => !isRetiredValidationPackage(pkg))
     .sort((a, b) => packagePreference(a) - packagePreference(b));
   if (runnable.length >= 2) {
     return runnable.slice(0, Math.min(3, runnable.length));
