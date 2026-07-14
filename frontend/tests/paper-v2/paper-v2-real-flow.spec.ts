@@ -5,7 +5,14 @@ const TDX_BASE = process.env.TDX_BASE_URL || "http://127.0.0.1:19080";
 const LEGACY_QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012"];
 const PREFERRED_PACKAGE_MARKERS = (
   process.env.PAPER_V2_E2E_PACKAGE_MARKERS
-  || "qe_20260601_172505_fe17,qe_20260520_215627_abbc,qe_20260513_151128_12ea"
+  || "qe_20260601_172505_fe17,qe_20260520_215627_abbc"
+)
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+const RETIRED_PACKAGE_MARKERS = (
+  process.env.PAPER_V2_E2E_RETIRED_PACKAGE_MARKERS
+  || "qe_20260513_151128_12ea"
 )
   .split(",")
   .map((item) => item.trim())
@@ -148,10 +155,18 @@ function packagePreference(pkg: PackageSummary): number {
   return idx >= 0 ? idx : PREFERRED_PACKAGE_MARKERS.length + 1;
 }
 
+function isRetiredValidationPackage(pkg: PackageSummary): boolean {
+  const haystack = `${pkg.package_name || ""} ${pkg.source_id || ""}`.toLowerCase();
+  return pkg.package_status === "RETIRED"
+    || RETIRED_PACKAGE_MARKERS.some((marker) => haystack.includes(marker.toLowerCase()));
+}
+
 async function discoverValidationPackages(request: APIRequestContext): Promise<PackageSummary[]> {
   const selectable = await listSelectablePackages(request);
   const runnable = selectable
     .filter((pkg) => pkg.selection_health?.runnable === true)
+    // Historical packages with incomplete frozen assets must not make Nightly fail.
+    .filter((pkg) => !isRetiredValidationPackage(pkg))
     .sort((a, b) => packagePreference(a) - packagePreference(b));
   if (runnable.length >= 2) {
     return runnable.slice(0, Math.min(3, runnable.length));
