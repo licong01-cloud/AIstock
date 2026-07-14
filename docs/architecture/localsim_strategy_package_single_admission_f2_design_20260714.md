@@ -247,6 +247,11 @@ rtk git diff --check
 - StrategyPackage admission、multi-alpha、Paper runner 与 QMT binding 相关小矩阵：`67 passed`。
 - changed Python files：Ruff PASS、`py_compile` PASS；`git diff --check` PASS。
 - F2 workflow validator：PASS，`design_items=12`、`matrix_rows=12`、`warnings=0`。
+- Validation Center deterministic receipt：
+  - L0 `valjob_20260714_102036_5b17a0d0` PASS。
+  - `simulation_core_l2` `valjob_20260714_102035_3d842fa6` 为 `260 passed / 7 failed`；在未修改的 canonical main 上精确重跑同一 7 个 nodeid，结果同为 7/7 failed，证明是当前 main 的既有 scheduler/MiniQMT OMS/旧 schedule-window 断言基线，不是本分支回归。
+  - `paper_v2_l3` 因 Validation Center runner 未启用且资源预算不足明确 deferred；由 GitHub CI/nightly 承接，不把 deferred 报告为 PASS。
+  - 请求的 DeepSeek planner 未实际调用，receipt 明确为 `provider=deterministic`、`llm_invoked=false`；不把它描述为 LLM 设计评审通过。
 
 ### DESIGN-COMPLIANCE-001
 
