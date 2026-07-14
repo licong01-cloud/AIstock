@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 import yaml
 
+import backend.services.multi_alpha.combine_backtest as combine_backtest_module
 from backend.routers.multi_alpha import CombineBacktestRunRequest
 from backend.services.multi_alpha.combine_backtest import (
     COMBINE_BACKTEST_CONFIRM,
@@ -226,6 +227,135 @@ def _runtime_template(tmp_path: Path) -> Path:
     for runtime_file in ("qrun_limit_minute.py", "read_exp_res.py"):
         (template / runtime_file).write_text("# test runtime placeholder\n", encoding="utf-8")
     return template
+
+
+def test_submit_preflights_missing_runtime_template_before_persisting_run(tmp_path: Path) -> None:
+    repo = InMemoryCombineBacktestRepository()
+    service = MultiAlphaCombineBacktestService(
+        panel_builder=RaisingPanelBuilder(),  # type: ignore[arg-type]
+        prediction_loader=lambda _run_id: _pred(1.0),
+        repository=repo,
+        workspace_root=tmp_path / "macb",
+    )
+    payload = _payload()
+    payload["backtest_config"] = {
+        "node_id": "wsl2-5080",
+        "node_parallelism": {"wsl2-5080": 1},
+        "runtime_template_dir": str(tmp_path / "missing-runtime"),
+    }
+
+    with pytest.raises(MultiAlphaCombineBacktestError) as excinfo:
+        service.submit_run(payload)
+
+    assert excinfo.value.reason_code == "pred_backtest_runtime_template_missing"
+    assert repo.runs == {}
+
+
+def test_prepare_runtime_template_routes_unreadable_wsl_link_through_wsl_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    template = _runtime_template(tmp_path)
+    inaccessible = template / "bak_basic.h5"
+    inaccessible.write_text("test stand-in", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    copied: list[tuple[Path, Path]] = []
+
+    monkeypatch.setattr(
+        combine_backtest_module,
+        "_find_unreadable_runtime_template_entry",
+        lambda _src: (inaccessible, OSError(1920, "inaccessible WSL reparse point")),
+    )
+
+    def fake_wsl_copy(*, src: Path, workspace: Path, backtest_config: dict) -> None:
+        copied.append((src, workspace))
+        workspace.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            if item.is_file():
+                shutil.copy2(item, workspace / item.name)
+
+    monkeypatch.setattr(combine_backtest_module, "_copy_runtime_template_via_wsl", fake_wsl_copy)
+
+    combine_backtest_module.prepare_pred_backtest_workspace(
+        workspace=workspace,
+        backtest_config={"runtime_template_dir": str(template)},
+    )
+
+    assert copied == [(template, workspace)]
+    assert (workspace / "conf.yaml").exists()
+    assert (workspace / "bak_basic.h5").read_text(encoding="utf-8") == "test stand-in"
+
+
+def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(combine_backtest_module, "_is_windows_host", lambda: True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    qrun_command, read_command, read_env = combine_backtest_module._default_local_pred_backtest_commands(
+        workspace=workspace,
+        pred_name="combined_prediction.pkl",
+        backtest_config={
+            "wsl_distro": "Ubuntu",
+            "wsl_conda_sh": "/home/test/miniconda3/etc/profile.d/conda.sh",
+            "wsl_conda_env": "rdagent-gpu",
+        },
+    )
+
+    assert qrun_command[:4] == ["wsl", "-d", "Ubuntu", "bash"]
+    assert "conda activate rdagent-gpu" in qrun_command[-1]
+    assert ". ./.factor_env" in qrun_command[-1]
+    assert "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl" in qrun_command[-1]
+    assert read_command[:4] == ["wsl", "-d", "Ubuntu", "bash"]
+    assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in read_command[-1]
+    assert read_env is None
+
+
+def test_prepare_runtime_template_preserves_real_drvfs_linux_symlink(tmp_path: Path) -> None:
+    if sys.platform != "win32" or shutil.which("wsl") is None:
+        pytest.skip("Windows + WSL is required for the DrvFS symlink regression")
+    if subprocess.run(["wsl", "-d", "Ubuntu", "true"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("Ubuntu WSL distro is unavailable")
+
+    template = _runtime_template(tmp_path)
+    workspace = tmp_path / "workspace"
+    source_link = template / "bak_basic.h5"
+    copied_link = workspace / "bak_basic.h5"
+    source_link_wsl = combine_backtest_module.win_to_wsl_path(str(source_link))
+    copied_link_wsl = combine_backtest_module.win_to_wsl_path(str(copied_link))
+    subprocess.run(
+        [
+            "wsl",
+            "-d",
+            "Ubuntu",
+            "bash",
+            "-lc",
+            f"ln -s /etc/hosts {combine_backtest_module.shlex.quote(source_link_wsl)}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        combine_backtest_module.prepare_pred_backtest_workspace(
+            workspace=workspace,
+            backtest_config={"runtime_template_dir": str(template), "wsl_distro": "Ubuntu"},
+        )
+        readlink = subprocess.run(
+            ["wsl", "-d", "Ubuntu", "readlink", copied_link_wsl],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert readlink.stdout.strip() == "/etc/hosts"
+    finally:
+        subprocess.run(
+            ["wsl", "-d", "Ubuntu", "rm", "-f", source_link_wsl, copied_link_wsl],
+            check=False,
+            capture_output=True,
+        )
 
 
 class RaisingPanelBuilder:

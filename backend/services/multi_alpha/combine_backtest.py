@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,7 @@ import requests
 import yaml
 
 from backend.db.pg_pool import get_conn
+from backend.infra.wsl_qlib_runner import win_to_wsl_path
 from backend.services.model_store import ModelStoreService, PredictionStoreError
 from backend.services.multi_alpha.combiner import CombinerLeg, MultiAlphaCombiner, MultiAlphaCombinerError
 from backend.services.multi_alpha.orthogonality import MultiAlphaOrthogonalityError, normalize_prediction_frame
@@ -51,6 +53,7 @@ ACTIVE_QE_LOOP_STATUSES = ("running", "processing")
 DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS = 45 * 60
 DEFAULT_READ_EXP_TIMEOUT_SECONDS = 15 * 60
 DEFAULT_RUN_TIMEOUT_GRACE_SECONDS = 5 * 60
+DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS = 15 * 60
 RUN_HEARTBEAT_REASON_CODE = "combine_backtest_running"
 _NODE_RESERVATIONS: dict[str, int] = {}
 _NODE_RESERVATIONS_LOCK = threading.Lock()
@@ -235,8 +238,13 @@ class ShellPredBacktestExecutor:
         command = backtest_config.get("command")
         if command is None:
             error_context = _pred_backtest_error_context(workspace=workspace, node_id=node_id, backtest_config=backtest_config)
+            qrun_command, read_command, read_env = _default_local_pred_backtest_commands(
+                workspace=workspace,
+                pred_name=pred_pkl.name,
+                backtest_config=backtest_config,
+            )
             qrun = run_command(
-                [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_pkl.name],
+                qrun_command,
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("timeout_seconds", DEFAULT_PRED_BACKTEST_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_qrun",
@@ -248,14 +256,12 @@ class ShellPredBacktestExecutor:
                     reason_code="pred_backtest_failed",
                     context={**error_context, "stderr_tail": (qrun.stderr or "")[-1000:]},
                 )
-            env = dict(os.environ)
-            env["QE_REQUIRE_RECORDER_ID"] = "1"
             read_exp = run_command(
-                [sys.executable, "read_exp_res.py"],
+                read_command,
                 cwd=workspace,
                 timeout_seconds=int(backtest_config.get("read_timeout_seconds", DEFAULT_READ_EXP_TIMEOUT_SECONDS)),
                 log_prefix="pred_backtest_read_exp_res",
-                env=env,
+                env=read_env,
                 error_context={**error_context, "stage": "read_exp_res"},
             )
             if read_exp.returncode != 0:
@@ -283,30 +289,31 @@ class ShellPredBacktestExecutor:
 
 
 def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
-    """Copy an explicitly configured qrun runtime template, then verify required files."""
+    """Copy an explicitly configured qrun runtime template, then verify required files.
 
-    template_dir = backtest_config.get("runtime_template_dir") or os.getenv("AISTOCK_MULTI_ALPHA_QRUN_TEMPLATE_DIR")
-    if template_dir:
-        src = Path(str(template_dir))
-        if not src.exists() or not src.is_dir():
-            raise MultiAlphaCombineBacktestError(
-                f"runtime_template_dir does not exist or is not a directory: {src}",
-                reason_code="pred_backtest_runtime_template_missing",
-                context={"runtime_template_dir": str(src), "workspace": str(workspace)},
-            )
-        for item in src.iterdir():
-            target = workspace / item.name
-            if item.is_file():
-                if not target.exists():
-                    shutil.copy2(item, target)
-            elif item.is_dir() and bool(backtest_config.get("copy_runtime_dirs")) and not target.exists():
-                shutil.copytree(item, target)
+    Completed QE workspaces on DrvFS contain Linux symlinks to WSL-native
+    factor-data files.  Windows Python cannot stat those reparse points, so a
+    native ``shutil`` copy is invalid.  Route only that layout through WSL
+    ``cp -a`` so links keep their Linux targets; every other layout retains the
+    original native copy path.
+    """
 
-    missing = [
-        name
-        for name in ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py")
-        if not (workspace / name).exists()
-    ]
+    src = _runtime_template_source(backtest_config=backtest_config, workspace=workspace)
+    if src is not None:
+        unreadable = _find_unreadable_runtime_template_entry(src)
+        if unreadable is not None:
+            if not _is_windows_host():
+                item, exc = unreadable
+                raise MultiAlphaCombineBacktestError(
+                    f"runtime template entry is unreadable: {item}: {type(exc).__name__}: {exc}",
+                    reason_code="pred_backtest_runtime_template_entry_unreadable",
+                    context={"runtime_template_dir": str(src), "entry": str(item), "workspace": str(workspace)},
+                ) from exc
+            _copy_runtime_template_via_wsl(src=src, workspace=workspace, backtest_config=backtest_config)
+        else:
+            _copy_runtime_template_native(src=src, workspace=workspace, backtest_config=backtest_config)
+
+    missing = [name for name in _required_runtime_files() if not (workspace / name).exists()]
     if missing:
         raise MultiAlphaCombineBacktestError(
             "pred-backtest runtime is incomplete; provide backtest_config.runtime_template_dir "
@@ -314,6 +321,218 @@ def prepare_pred_backtest_workspace(*, workspace: Path, backtest_config: Mapping
             reason_code="pred_backtest_runtime_missing",
             context={"workspace": str(workspace), "missing": missing},
         )
+
+
+def preflight_pred_backtest_runtime(*, backtest_config: Mapping[str, Any], node_id: str) -> None:
+    """Reject unusable local runtime templates before a run row is created."""
+
+    if bool(backtest_config.get("parse_only")):
+        return
+    src = _runtime_template_source(backtest_config=backtest_config, workspace=None)
+    if src is None:
+        raise MultiAlphaCombineBacktestError(
+            "pred-backtest requires backtest_config.runtime_template_dir or AISTOCK_MULTI_ALPHA_QRUN_TEMPLATE_DIR",
+            reason_code="pred_backtest_runtime_template_missing",
+            context={"node_id": node_id},
+        )
+    missing = [name for name in _required_runtime_files() if not (src / name).exists()]
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            "pred-backtest runtime template is incomplete",
+            reason_code="pred_backtest_runtime_missing",
+            context={"runtime_template_dir": str(src), "missing": missing, "node_id": node_id},
+        )
+    unreadable = _find_unreadable_runtime_template_entry(src)
+    if unreadable is not None:
+        if not _is_windows_host():
+            item, exc = unreadable
+            raise MultiAlphaCombineBacktestError(
+                f"runtime template entry is unreadable: {item}: {type(exc).__name__}: {exc}",
+                reason_code="pred_backtest_runtime_template_entry_unreadable",
+                context={"runtime_template_dir": str(src), "entry": str(item), "node_id": node_id},
+            ) from exc
+        _probe_runtime_template_via_wsl(src=src, backtest_config=backtest_config, unreadable=unreadable)
+    if _is_windows_host() and node_id.lower().startswith("wsl") and backtest_config.get("command") is None:
+        _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
+
+
+def _runtime_template_source(*, backtest_config: Mapping[str, Any], workspace: Path | None) -> Path | None:
+    template_dir = backtest_config.get("runtime_template_dir") or os.getenv("AISTOCK_MULTI_ALPHA_QRUN_TEMPLATE_DIR")
+    if not template_dir:
+        return None
+    src = Path(str(template_dir))
+    if not src.exists() or not src.is_dir():
+        raise MultiAlphaCombineBacktestError(
+            f"runtime_template_dir does not exist or is not a directory: {src}",
+            reason_code="pred_backtest_runtime_template_missing",
+            context={"runtime_template_dir": str(src), "workspace": str(workspace) if workspace is not None else None},
+        )
+    return src
+
+
+def _required_runtime_files() -> tuple[str, ...]:
+    return ("conf.yaml", "qrun_limit_minute.py", "read_exp_res.py")
+
+
+def _find_unreadable_runtime_template_entry(src: Path) -> tuple[Path, OSError] | None:
+    for item in src.iterdir():
+        try:
+            item.is_file()
+            item.is_dir()
+        except OSError as exc:
+            return item, exc
+    return None
+
+
+def _copy_runtime_template_native(*, src: Path, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
+    for item in src.iterdir():
+        target = workspace / item.name
+        if item.is_file():
+            if not target.exists():
+                shutil.copy2(item, target)
+        elif item.is_dir() and bool(backtest_config.get("copy_runtime_dirs")) and not target.exists():
+            shutil.copytree(item, target)
+
+
+def _copy_runtime_template_via_wsl(*, src: Path, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
+    distro, _conda_sh, _conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=False)
+    workspace.mkdir(parents=True, exist_ok=True)
+    src_wsl = win_to_wsl_path(str(src.resolve()))
+    workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
+    script = _wsl_template_validation_script(src_wsl) + f"; cp -a -n -- {shlex.quote(src_wsl + '/.')} {shlex.quote(workspace_wsl + '/')}"
+    completed = run_command(
+        ["wsl", "-d", distro, "bash", "-lc", script],
+        cwd=workspace,
+        timeout_seconds=int(
+            backtest_config.get("runtime_template_copy_timeout_seconds", DEFAULT_RUNTIME_TEMPLATE_COPY_TIMEOUT_SECONDS)
+        ),
+        log_prefix="pred_backtest_runtime_copy",
+        error_context={"runtime_template_dir": str(src), "workspace": str(workspace), "stage": "runtime_template_copy"},
+    )
+    if completed.returncode != 0:
+        raise MultiAlphaCombineBacktestError(
+            f"WSL runtime template copy failed with exit_code={completed.returncode}",
+            reason_code="pred_backtest_runtime_template_copy_failed",
+            context={
+                "runtime_template_dir": str(src),
+                "workspace": str(workspace),
+                "stderr_tail": (completed.stderr or "")[-1000:],
+            },
+        )
+
+
+def _probe_runtime_template_via_wsl(
+    *,
+    src: Path,
+    backtest_config: Mapping[str, Any],
+    unreadable: tuple[Path, OSError],
+) -> None:
+    distro, _conda_sh, _conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=False)
+    src_wsl = win_to_wsl_path(str(src.resolve()))
+    try:
+        completed = subprocess.run(
+            ["wsl", "-d", distro, "bash", "-lc", _wsl_template_validation_script(src_wsl)],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        item, windows_exc = unreadable
+        raise MultiAlphaCombineBacktestError(
+            f"WSL runtime template preflight could not inspect {item}: {type(exc).__name__}: {exc}",
+            reason_code="pred_backtest_runtime_template_preflight_failed",
+            context={"runtime_template_dir": str(src), "entry": str(item), "windows_error": str(windows_exc)},
+        ) from exc
+    if completed.returncode != 0:
+        item, windows_exc = unreadable
+        raise MultiAlphaCombineBacktestError(
+            f"WSL runtime template preflight failed with exit_code={completed.returncode}",
+            reason_code="pred_backtest_runtime_template_preflight_failed",
+            context={
+                "runtime_template_dir": str(src),
+                "entry": str(item),
+                "windows_error": str(windows_exc),
+                "stderr_tail": (completed.stderr or "")[-1000:],
+            },
+        )
+
+
+def _wsl_template_validation_script(src_wsl: str) -> str:
+    src_q = shlex.quote(src_wsl)
+    required_checks = "; ".join(f"test -f {shlex.quote(src_wsl + '/' + name)}" for name in _required_runtime_files())
+    return (
+        "set -euo pipefail; "
+        f"test -d {src_q}; "
+        f"for item in {src_q}/* {src_q}/.[!.]* {src_q}/..?*; do "
+        "if [ -L \"$item\" ] && [ ! -e \"$item\" ]; then echo \"broken runtime symlink: $item\" >&2; exit 42; fi; "
+        "done; "
+        + required_checks
+    )
+
+
+def _is_windows_host() -> bool:
+    return os.name == "nt"
+
+
+def _wsl_runtime_settings(
+    *, backtest_config: Mapping[str, Any], require_conda: bool
+) -> tuple[str, str | None, str | None]:
+    if shutil.which("wsl") is None:
+        raise MultiAlphaCombineBacktestError(
+            "WSL executable is required for the selected local QE node",
+            reason_code="pred_backtest_wsl_unavailable",
+        )
+    distro = str(backtest_config.get("wsl_distro") or os.getenv("QLIB_WSL_DISTRO") or "").strip()
+    conda_sh = str(backtest_config.get("wsl_conda_sh") or os.getenv("QLIB_WSL_CONDA_SH") or "").strip()
+    conda_env = str(
+        backtest_config.get("wsl_conda_env")
+        or backtest_config.get("conda_env")
+        or os.getenv("QLIB_WSL_CONDA_ENV")
+        or ""
+    ).strip()
+    missing = [name for name, value in (("QLIB_WSL_DISTRO", distro),) if not value]
+    if require_conda:
+        missing.extend(name for name, value in (("QLIB_WSL_CONDA_SH", conda_sh), ("QLIB_WSL_CONDA_ENV", conda_env)) if not value)
+    if missing:
+        raise MultiAlphaCombineBacktestError(
+            f"missing WSL runtime configuration: {missing}",
+            reason_code="pred_backtest_wsl_config_missing",
+            context={"missing": missing},
+        )
+    return distro, conda_sh or None, conda_env or None
+
+
+def _default_local_pred_backtest_commands(
+    *, workspace: Path, pred_name: str, backtest_config: Mapping[str, Any]
+) -> tuple[list[str], list[str], Mapping[str, str] | None]:
+    if not _is_windows_host():
+        read_env = dict(os.environ)
+        read_env["QE_REQUIRE_RECORDER_ID"] = "1"
+        return (
+            [sys.executable, "qrun_limit_minute.py", "conf.yaml", "--pred-backtest", pred_name],
+            [sys.executable, "read_exp_res.py"],
+            read_env,
+        )
+    distro, conda_sh, conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
+    workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
+    prefix = (
+        "set -euo pipefail; "
+        f"source {shlex.quote(str(conda_sh))}; "
+        f"conda activate {shlex.quote(str(conda_env))}; "
+        f"cd {shlex.quote(workspace_wsl)}; "
+        "if [ -f .factor_env ]; then . ./.factor_env; fi; "
+    )
+    qrun_script = prefix + f"python qrun_limit_minute.py conf.yaml --pred-backtest {shlex.quote(pred_name)}"
+    read_script = prefix + "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py"
+    return (
+        ["wsl", "-d", distro, "bash", "-lc", qrun_script],
+        ["wsl", "-d", distro, "bash", "-lc", read_script],
+        None,
+    )
 
 
 def apply_pred_backtest_overrides(*, workspace: Path, backtest_config: Mapping[str, Any]) -> None:
@@ -1068,6 +1287,11 @@ class MultiAlphaCombineBacktestService:
         request = parse_request(payload)
         if run_async is not None:
             request = _replace_request(request, run_async=run_async)
+        if self._executor is None:
+            preflight_pred_backtest_runtime(
+                backtest_config=request.backtest_config,
+                node_id=str(request.backtest_config.get("node_id") or "wsl2-5080"),
+            )
         roster_hash = roster_hash_for(request.roster)
         run_id = make_run_id(roster_hash=roster_hash, oos_start=request.oos_start, oos_end=request.oos_end, ts=self._clock())
         self._repository.create_run(run_id=run_id, request=request, roster_hash=roster_hash)
