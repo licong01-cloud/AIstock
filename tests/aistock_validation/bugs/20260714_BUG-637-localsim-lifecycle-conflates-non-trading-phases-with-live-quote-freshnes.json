@@ -38,8 +38,8 @@
   "expected": "Selection and planning are independent of current-day realtime quotes. A canonical Asia/Shanghai market-phase model distinguishes pre-open, auction, continuous trading, lunch, close auction, and post-close. Non-executable phases return explicit waiting outcomes without stale failures. Submit performs fresh side-aware validation for every plan intent, preserves no silent fallback, and delayed/restart LocalSIM consumes only bars after its durable causality cursor. LocalSIM batch execution and persistence remain consistent on partial failure, valid no-trade days are modeled explicitly, and wait diagnostics are cadence-deduplicated.",
   "first_seen_at": "2026-07-14T04:06:33.921739Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ff0555a0492bfa9761ccd48f10c4efde08de170c",
+  "fixed_at": "2026-07-14T04:55:01.088698Z",
   "github_issue_number": 2076,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2076",
   "last_seen_at": "2026-07-14T04:06:33.921739Z",
@@ -47,6 +47,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2078",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -58,7 +59,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P0",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -67,6 +68,9 @@
     "fingerprint": "f53b8b8408b3f4db25352630",
     "source_event_id": "FE-20260714-f53b8b8408b3"
   },
+  "validation_evidence": [
+    "PR #2078 all 14 checks passed; paper_v2_backend passed; local targeted matrix 236 passed; l0 and validation_module_registry_l0 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
