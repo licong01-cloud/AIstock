@@ -100,6 +100,119 @@ def test_immutable_dataset_snapshot_never_repairs_or_extends_existing_key(monkey
         )
 
 
+def test_wait_for_ready_state_retries_initial_missing_state_until_peer_is_ready(monkeypatch) -> None:
+    service = StockUniversePitService()
+    building_state = {
+        "status": "building",
+        "dirty": True,
+        "source_fingerprint_sha256": "dataset-fingerprint",
+    }
+    states = iter(
+        [
+            {"status": "missing", "dirty": True},
+            building_state,
+            _ready_immutable_state(),
+        ]
+    )
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: next(states))
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.time.sleep", lambda _seconds: None)
+
+    state, reason = service._wait_for_ready_state(
+        universe_key=QE_SNAPSHOT_KEY,
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 6, 30),
+        rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+        source_sha="dataset-fingerprint",
+        refresh_policy="coverage",
+        timeout_seconds=1.0,
+        retryable_reasons=frozenset({"missing_state", "status_building"}),
+    )
+
+    assert state == _ready_immutable_state()
+    assert reason == "ready"
+
+
+def test_wait_for_ready_state_keeps_terminal_contract_failures_loud(monkeypatch) -> None:
+    service = StockUniversePitService()
+    invalid_state = _ready_immutable_state()
+    invalid_state["rule_version"] = "unexpected-rule"
+    calls = 0
+
+    def get_status(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return invalid_state
+
+    monkeypatch.setattr(service, "get_status", get_status)
+
+    state, reason = service._wait_for_ready_state(
+        universe_key=QE_SNAPSHOT_KEY,
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 6, 30),
+        rule_version=DEFAULT_ST_PIT_RULE_VERSION,
+        source_sha="dataset-fingerprint",
+        refresh_policy="coverage",
+        timeout_seconds=180.0,
+        retryable_reasons=frozenset({"missing_state", "status_building"}),
+    )
+
+    assert state is None
+    assert reason == "rule_version_changed"
+    assert calls == 1
+
+
+def test_rebuild_lock_loser_waits_across_initial_missing_state(monkeypatch) -> None:
+    service = StockUniversePitService()
+    captured: dict[str, object] = {}
+
+    class LockCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def execute(self, _query, _params):
+            return None
+
+        def fetchone(self):
+            return (False,)
+
+    class LockConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def cursor(self):
+            return LockCursor()
+
+    def wait_for_ready_state(**kwargs):
+        captured.update(kwargs)
+        return _ready_immutable_state(), "ready"
+
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: {"status": "missing", "dirty": True})
+    monkeypatch.setattr(service, "_wait_for_ready_state", wait_for_ready_state)
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", lambda: LockConnection())
+
+    result = service.rebuild_st_pit_universe(
+        universe_key=QE_SNAPSHOT_KEY,
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 6, 30),
+        source_fingerprint={"fingerprint_end_date": "2026-06-30"},
+        source_fingerprint_sha256="dataset-fingerprint",
+        skip_if_ready=True,
+        refresh_policy="coverage",
+        lock_wait_seconds=180.0,
+    )
+
+    assert result["rebuilt"] is False
+    assert result["reason"] == "built_by_peer:ready"
+    assert captured["retryable_reasons"] == frozenset({"missing_state", "status_building"})
+
+
 def test_needs_rebuild_ignores_dirty_for_coverage_policy() -> None:
     service = StockUniversePitService()
 

@@ -467,7 +467,9 @@ class StockUniversePitService:
         refresh_policy: str,
         timeout_seconds: float,
         poll_seconds: float = DEFAULT_ST_PIT_LOCK_POLL_SECONDS,
+        retryable_reasons: frozenset[str] | None = None,
     ) -> tuple[dict[str, Any] | None, str]:
+        retryable = frozenset({"status_building"}) if retryable_reasons is None else retryable_reasons
         deadline = time.monotonic() + max(timeout_seconds, 0.0)
         last_reason = "not_checked"
         while time.monotonic() <= deadline:
@@ -483,7 +485,7 @@ class StockUniversePitService:
             last_reason = reason
             if not needs_rebuild:
                 return state, reason
-            if reason != "status_building":
+            if reason not in retryable:
                 return None, reason
             time.sleep(max(poll_seconds, 0.1))
         return None, f"lock_wait_timeout:{last_reason}"
@@ -635,6 +637,10 @@ class StockUniversePitService:
                     source_sha=source_sha,
                     refresh_policy=refresh_policy,
                     timeout_seconds=lock_wait_seconds,
+                    # The advisory-lock owner may not have inserted its first
+                    # ``building`` row yet.  Only this lock-loser path may
+                    # treat that initial missing state as transient.
+                    retryable_reasons=frozenset({"missing_state", "status_building"}),
                 )
                 if peer_state is not None:
                     return {
