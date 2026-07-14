@@ -45,6 +45,9 @@ DSE 予以替代。
 Phase 1F.1已完成其partition/hash修正，但2026-07-15 Phase 1G开工复核发现outbox natural key及
 capture-gap identity缺少scope。该新缺口由Phase 1G详细设计§5.4/§21 G0的独立Phase 1F.2 contract负责，
 不改写Phase 1F/1F.1历史receipt，也不构成审批或人工门禁。
+Phase 1F.2唯一实施级设计为
+`advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`，当前
+`design_ready / implementation_not_started / DEV_DDL_not_executed`。
 
 ## 2. 目标
 

@@ -34,7 +34,7 @@ phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
 phase1g_code_start_state = blocked_pending_phase1f2_scope_aware_trace_identity_contract
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
 phase1f2_schema = scope_aware_outbox_and_gap_contract_frozen_not_implemented_or_applied
-phase1f2_standalone_f2_design = required_before_g0_implementation
+phase1f2_standalone_f2_design = design_ready_2026_07_15
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 dev_advisory_program_count = 0_as_of_2026_07_14
 phase1g_dev_dml = not_executed
@@ -249,9 +249,10 @@ Phase 1F.2必须独立完成：frozen migration SHA、registry contract、unknow
 PostgreSQL legacy gap readback、单scope retry、双scope同Selection outbox与gap正向用例、DEV
 plan/apply/new-verify/new-exact-reapply。Production
 DDL仍只在用户对该次DDL明确要求后执行；Phase 1G plan/capture模块不得import release executor或运行DDL。
-本节冻结Phase 1G依赖的最小正确契约；G0编码前还必须形成独立Phase 1F.2 F2详细设计，逐项定义v3
-registry predecessor closure、constraint/index名称、legacy row兼容、migration/rollback边界和验收矩阵，
-不得在Phase 1G业务代码PR中临时发明DDL。
+本节冻结Phase 1G依赖的最小正确契约；独立Phase 1F.2 F2详细设计已经逐项定义v3 registry predecessor
+closure、constraint/index名称、legacy row兼容、migration/rollback边界和验收矩阵：
+`advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`。G0实现必须逐项
+消费其F-650至F-679，不得在Phase 1G业务代码PR中临时发明DDL或改用简化contract。
 在Phase 1F.2 DEV receipt达到`COMPATIBLE/COMPATIBLE/downstream_ready=true`前，不开始Phase 1G业务代码，
 避免交付一个已知无法支持多Program的部分实现。
 
@@ -1008,7 +1009,7 @@ Phase 1F.2 COMPATIBLE schema
 
 ### G0：Phase 1F.2 Scope-aware Trace Identity Release
 
-- 先形成独立Phase 1F.2 F2详细设计并通过Design Acceptance/F2结构校验；
+- 独立Phase 1F.2 F2详细设计已形成并通过Design Acceptance/F2结构校验；
 - frozen migration把outbox唯一键扩展为包含`admission_scope_hash`，并为gap增加legacy/v2 scope布局；
 - 同步registry/verifier、legacy/v2 identity、natural key、gap persistence和exact read SQL；
 - disposable PostgreSQL legacy gap兼容、同scope retry、双scope同Selection outbox/gap矩阵；

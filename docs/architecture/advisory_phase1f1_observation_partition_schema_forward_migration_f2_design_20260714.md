@@ -35,7 +35,9 @@ runtime_activation = none
 
 2026-07-15 Phase 1G开工一致性复核确认：本设计定义的partition/hash scope已完整交付，但既有
 outbox natural key和capture-gap identity未包含scope。该后续缺口不否定本设计或既有DDL receipt；它由
-Phase 1G详细设计§5.4/§21 G0定义的独立Phase 1F.2 forward contract修正。Phase 1F.2尚未实现或应用。
+Phase 1G详细设计§5.4/§21 G0定义的独立Phase 1F.2 forward contract修正。其唯一实施级设计为
+`advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`，当前设计完成但
+尚未实现或应用。
 
 任务分级为 `T3 / F2`。本设计只修正 Advisory Phase 1 自有 schema/release contract，不增加用户、
 角色、RBAC、审批、授权链、人工确认表、双人复核或 DDL 前数据库导出/全库备份要求。数据库日常备份
@@ -288,7 +290,7 @@ v2 catalog closure必须包含：
 - 不设计 backup precondition、approval row、role check或人工确认 token。
 - production DDL不在代码合入或 DEV验证时自动执行。
 
-### 8.1 Production Status / 生产状态
+### 8.1 Production Gates (State Reporting Only, No Approval) / 生产状态
 
 本标题用于F2交付状态分离，不表示新增应用门禁：
 
