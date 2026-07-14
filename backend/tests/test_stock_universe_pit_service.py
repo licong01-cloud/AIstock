@@ -3,13 +3,101 @@ from __future__ import annotations
 import datetime as dt
 import inspect
 
+import pytest
+
 from scripts import build_stock_universe_pit_spans as pit_builder
 
 from backend.services.stock_universe_pit_service import (
     DEFAULT_ST_PIT_RULE_VERSION,
+    StockUniversePitError,
     StockUniversePitService,
     _fingerprint_sha256,
 )
+
+
+QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
+
+
+def _ready_immutable_state() -> dict[str, object]:
+    return {
+        "universe_key": QE_SNAPSHOT_KEY,
+        "status": "ready",
+        "dirty": False,
+        "rule_version": DEFAULT_ST_PIT_RULE_VERSION,
+        "scope": "st_only_active",
+        "start_date": dt.date(2018, 8, 1),
+        "end_date": dt.date(2026, 6, 30),
+        "source_fingerprint_sha256": "dataset-fingerprint",
+        "last_build_summary": {"validation": {"overlap_error_count": 0}},
+    }
+
+
+def test_immutable_dataset_snapshot_reuses_existing_state_without_source_refresh(monkeypatch) -> None:
+    service = StockUniversePitService()
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: _ready_immutable_state())
+    monkeypatch.setattr(
+        service,
+        "compute_source_fingerprint",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("immutable snapshot must not refresh source")),
+    )
+    monkeypatch.setattr(
+        service,
+        "rebuild_st_pit_universe",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("immutable snapshot must not rebuild")),
+    )
+
+    result = service.ensure_immutable_dataset_snapshot(
+        universe_key=QE_SNAPSHOT_KEY,
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 6, 30),
+    )
+
+    assert result["rebuilt"] is False
+    assert result["source_fingerprint_sha256"] == "dataset-fingerprint"
+
+
+def test_immutable_dataset_snapshot_bootstraps_only_a_missing_exact_key(monkeypatch) -> None:
+    service = StockUniversePitService()
+    source = {"fingerprint_end_date": "2026-06-30"}
+    states = iter([{"status": "missing", "dirty": True}, _ready_immutable_state()])
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: next(states))
+    monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: source)
+    monkeypatch.setattr(service, "rebuild_st_pit_universe", lambda **kwargs: captured.update(kwargs) or {})
+
+    result = service.ensure_immutable_dataset_snapshot(
+        universe_key=QE_SNAPSHOT_KEY,
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 6, 30),
+    )
+
+    assert result["rebuilt"] is True
+    assert captured["write_mode"] == "replace"
+    assert captured["incremental_from"] is None
+    assert captured["end_date"] == dt.date(2026, 6, 30)
+
+
+def test_immutable_dataset_snapshot_never_repairs_or_extends_existing_key(monkeypatch) -> None:
+    service = StockUniversePitService()
+    invalid_state = _ready_immutable_state()
+    invalid_state["dirty"] = True
+    invalid_state["end_date"] = dt.date(2026, 7, 13)
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: invalid_state)
+    monkeypatch.setattr(
+        service,
+        "rebuild_st_pit_universe",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("existing immutable key must never rebuild")),
+    )
+
+    with pytest.raises(StockUniversePitError, match="publish a new dataset contract"):
+        service.ensure_immutable_dataset_snapshot(
+            universe_key=QE_SNAPSHOT_KEY,
+            start_date=dt.date(2018, 8, 1),
+            end_date=dt.date(2026, 6, 30),
+        )
 
 
 def test_needs_rebuild_ignores_dirty_for_coverage_policy() -> None:

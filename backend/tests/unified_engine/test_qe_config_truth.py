@@ -52,6 +52,11 @@ from backend.services.quantevolver.stock_pool_sync import (
     prepare_stock_pool_loop_payload,
     sync_stock_pool_to_remote_node,
 )
+from backend.services.quantevolver.qe_dataset_contract import (
+    QE_DATASET_SIGNAL_END_DATE,
+    QE_DATASET_START_DATE,
+    QE_ST_PIT_UNIVERSE_KEY,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
@@ -677,14 +682,14 @@ def test_qe_risk_policy_runtime_prepares_local_artifact(monkeypatch):
     )
 
     assert artifact.startswith('{"enabled": true')
-    assert calls == [(DATA_SPLIT, "shsz_st_pit_active_v1")]
+    assert calls == [(DATA_SPLIT, QE_ST_PIT_UNIVERSE_KEY)]
     assert custom_params["risk_policy_enabled"] is True
     assert custom_params["risk_policy_file"] == RISK_POLICY_FILE
     assert custom_params["risk_policy_strict"] is True
     assert custom_params["quote_universe_codes"] == ["000001.SZ", "600000.SH"]
 
 
-def test_qe_risk_policy_requires_existing_pit_coverage_without_rebuild(monkeypatch):
+def test_qe_risk_policy_uses_immutable_dataset_pit_snapshot(monkeypatch):
     import backend.services.quantevolver.config_composer as composer_module
     from backend.services.stock_universe_pit_service import StockUniversePitService
 
@@ -716,7 +721,7 @@ def test_qe_risk_policy_requires_existing_pit_coverage_without_rebuild(monkeypat
         def fetchone(self):
             if "FROM market.stock_universe_pit_state" in self.sql:
                 return (
-                    "shsz_st_pit_active_v1",
+                    QE_ST_PIT_UNIVERSE_KEY,
                     "st_pub_next_trade_restore_active_l_v1",
                     "st_only_active",
                     "ready",
@@ -736,7 +741,7 @@ def test_qe_risk_policy_requires_existing_pit_coverage_without_rebuild(monkeypat
         def cursor(self):
             return FakeCursor()
 
-    monkeypatch.setattr(StockUniversePitService, "ensure_st_pit_universe", fake_ensure)
+    monkeypatch.setattr(StockUniversePitService, "ensure_immutable_dataset_snapshot", fake_ensure)
     monkeypatch.setattr(composer_module, "get_conn", lambda: FakeConn())
 
     artifact = ConfigComposer()._build_qe_risk_policy_artifact(
@@ -747,12 +752,10 @@ def test_qe_risk_policy_requires_existing_pit_coverage_without_rebuild(monkeypat
     assert json.loads(artifact)["end_date"] == DATA_SPLIT["backtest_end"]
     assert ensure_calls == [
         {
-            "universe_key": "shsz_st_pit_active_v1",
-            "start_date": pd.Timestamp("2018-08-01").date(),
-            "end_date": pd.Timestamp(DATA_SPLIT["backtest_end"]).date(),
-            "strict": True,
-            "rebuild_if_stale": False,
-            "refresh_policy": "coverage",
+            "universe_key": QE_ST_PIT_UNIVERSE_KEY,
+            "start_date": QE_DATASET_START_DATE,
+            "end_date": QE_DATASET_SIGNAL_END_DATE,
+            "bootstrap_if_missing": True,
         }
     ]
 
@@ -780,7 +783,7 @@ def test_qe_risk_policy_runtime_defaults_and_overwrites_stale_quote_universe(mon
     )
 
     assert json.loads(artifact)["enabled"] is True
-    assert custom_params["risk_policy"]["st_universe_key"] == "shsz_st_pit_active_v1"
+    assert custom_params["risk_policy"]["st_universe_key"] == QE_ST_PIT_UNIVERSE_KEY
     assert custom_params["quote_universe_codes"] == ["000001.SZ"]
 
 

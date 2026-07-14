@@ -25,6 +25,7 @@ DEFAULT_ST_PIT_REFRESH_POLICY = "coverage"
 SUPPORTED_ST_PIT_REFRESH_POLICIES = {"coverage", "source_fingerprint"}
 DEFAULT_ST_PIT_LOCK_WAIT_SECONDS = 180.0
 DEFAULT_ST_PIT_LOCK_POLL_SECONDS = 1.0
+IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX = "shsz_st_pit_qe_dataset_"
 
 
 class StockUniversePitError(RuntimeError):
@@ -246,6 +247,128 @@ class StockUniversePitService:
         if not row:
             return {"universe_key": universe_key, "status": "missing", "dirty": True}
         return dict(row)
+
+    def ensure_immutable_dataset_snapshot(
+        self,
+        *,
+        universe_key: str,
+        start_date: dt.date,
+        end_date: dt.date,
+        rule_version: str = DEFAULT_ST_PIT_RULE_VERSION,
+        bootstrap_if_missing: bool = True,
+        lock_wait_seconds: float = DEFAULT_ST_PIT_LOCK_WAIT_SECONDS,
+    ) -> dict[str, Any]:
+        """Return one exact ST PIT snapshot without refreshing it from live data.
+
+        A dataset contract receives a new ``universe_key`` whenever its source
+        dataset changes.  The only write permitted here is first-time bootstrap
+        of a missing key.  Existing snapshots are validated byte-contract style:
+        they are never extended, rebuilt because an upstream source changed, or
+        repaired in place.  A bad snapshot therefore fails fast and requires a
+        new dataset contract id.
+        """
+
+        if not universe_key.startswith(IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX):
+            raise ValueError(
+                "immutable QE ST PIT universe key must start with "
+                f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX!r}: {universe_key!r}"
+            )
+        if end_date < start_date:
+            raise ValueError(f"ST PIT snapshot end date {end_date} is earlier than {start_date}")
+
+        self.ensure_tables()
+        state = self.get_status(universe_key=universe_key)
+        bootstrapped = False
+        if state.get("status") == "missing":
+            if not bootstrap_if_missing:
+                raise StockUniversePitError(
+                    f"immutable QE ST PIT snapshot is missing: {universe_key}"
+                )
+            source = self.compute_source_fingerprint(end_date=end_date)
+            source_sha = _fingerprint_sha256(source)
+            self.rebuild_st_pit_universe(
+                universe_key=universe_key,
+                start_date=start_date,
+                end_date=end_date,
+                rule_version=rule_version,
+                source_fingerprint=source,
+                source_fingerprint_sha256=source_sha,
+                write_mode="replace",
+                incremental_from=None,
+                skip_if_ready=True,
+                refresh_policy="coverage",
+                lock_wait_seconds=lock_wait_seconds,
+            )
+            state = self.get_status(universe_key=universe_key)
+            bootstrapped = True
+        elif state.get("status") == "building":
+            state, wait_reason = self._wait_for_ready_state(
+                universe_key=universe_key,
+                start_date=start_date,
+                end_date=end_date,
+                rule_version=rule_version,
+                source_sha=str(state.get("source_fingerprint_sha256") or ""),
+                refresh_policy="coverage",
+                timeout_seconds=lock_wait_seconds,
+            )
+            if state is None:
+                raise StockUniversePitError(
+                    f"immutable QE ST PIT snapshot did not become ready: {universe_key} ({wait_reason})"
+                )
+
+        def _state_date(name: str) -> dt.date | None:
+            value = state.get(name)
+            if isinstance(value, dt.datetime):
+                return value.date()
+            if isinstance(value, dt.date):
+                return value
+            if isinstance(value, str):
+                try:
+                    return dt.date.fromisoformat(value)
+                except ValueError:
+                    return None
+            return None
+
+        violations: list[str] = []
+        if state.get("status") != "ready":
+            violations.append(f"status={state.get('status')!r}")
+        if bool(state.get("dirty")):
+            violations.append("dirty=true")
+        if state.get("rule_version") != rule_version:
+            violations.append(f"rule_version={state.get('rule_version')!r}")
+        if state.get("scope") != DEFAULT_ST_PIT_SCOPE:
+            violations.append(f"scope={state.get('scope')!r}")
+        if _state_date("start_date") != start_date:
+            violations.append(f"start_date={state.get('start_date')!r}")
+        if _state_date("end_date") != end_date:
+            violations.append(f"end_date={state.get('end_date')!r}")
+        if not str(state.get("source_fingerprint_sha256") or ""):
+            violations.append("source_fingerprint_sha256=empty")
+        summary = state.get("last_build_summary") or {}
+        validation = summary.get("validation") if isinstance(summary, dict) else None
+        if isinstance(validation, dict):
+            for key in (
+                "invalid_span_count",
+                "overlap_error_count",
+                "event_action_violation_count",
+                "terminal_reentry_violation_count",
+            ):
+                if int(validation.get(key, 0) or 0) > 0:
+                    violations.append(f"{key}={validation.get(key)!r}")
+        if violations:
+            raise StockUniversePitError(
+                "immutable QE ST PIT snapshot contract violation; publish a new dataset contract instead "
+                f"of mutating this key: {universe_key}: {', '.join(violations)}"
+            )
+
+        return {
+            "universe_key": universe_key,
+            "status": "ready",
+            "rebuilt": bootstrapped,
+            "reason": "immutable_dataset_snapshot_bootstrapped" if bootstrapped else "immutable_dataset_snapshot_ready",
+            "source_fingerprint_sha256": state["source_fingerprint_sha256"],
+            "state": state,
+        }
 
     def mark_dirty(
         self,

@@ -11,14 +11,18 @@ import psycopg2.extras as pgx
 from ...db.pg_pool import get_conn
 from ..stock_universe_pit_service import (
     DEFAULT_ST_PIT_RULE_VERSION,
-    DEFAULT_ST_PIT_START_DATE,
-    DEFAULT_ST_PIT_UNIVERSE_KEY,
     DEFAULT_ST_PIT_REFRESH_POLICY,
     StockUniversePitService,
 )
+from .qe_dataset_contract import (
+    QE_DATASET_SIGNAL_END_DATE,
+    QE_DATASET_START_DATE,
+    QE_ST_PIT_UNIVERSE_KEY,
+    require_qe_dataset_window,
+)
 
 
-OFFICIAL_FACTOR_UNIVERSE_KEY = DEFAULT_ST_PIT_UNIVERSE_KEY
+OFFICIAL_FACTOR_UNIVERSE_KEY = QE_ST_PIT_UNIVERSE_KEY
 OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION = DEFAULT_ST_PIT_RULE_VERSION
 OFFICIAL_FACTOR_SNAPSHOT_UNIVERSE_MODE = "st_pit_window_union_v1"
 OFFICIAL_FACTOR_INDEX_POLICY = "st_pit_buy_eligible_reindexed_v1"
@@ -77,7 +81,7 @@ class FactorUniverseMetadata:
 
 
 class FactorUniverseMaskService:
-    """Shared ST PIT universe service for factor metrics and caches."""
+    """Dataset-pinned ST PIT universe service for QE metrics and caches."""
 
     def __init__(self, pit_service: Optional[StockUniversePitService] = None) -> None:
         self._pit_service = pit_service or StockUniversePitService()
@@ -91,10 +95,21 @@ class FactorUniverseMaskService:
         strict: bool = True,
         refresh_policy: str = DEFAULT_ST_PIT_REFRESH_POLICY,
     ) -> dict[str, Any]:
+        start = _as_date(start_date)
+        end = _as_date(end_date)
+        if universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY:
+            require_qe_dataset_window(start_date=start, end_date=end)
+            return self._pit_service.ensure_immutable_dataset_snapshot(
+                universe_key=universe_key,
+                start_date=QE_DATASET_START_DATE,
+                end_date=QE_DATASET_SIGNAL_END_DATE,
+                rule_version=OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
+                bootstrap_if_missing=True,
+            )
         return self._pit_service.ensure_st_pit_universe(
             universe_key=universe_key,
-            start_date=_as_date(start_date),
-            end_date=_as_date(end_date),
+            start_date=start,
+            end_date=end,
             rule_version=OFFICIAL_FACTOR_UNIVERSE_RULE_VERSION,
             strict=strict,
             rebuild_if_stale=True,
@@ -137,6 +152,7 @@ class FactorUniverseMaskService:
             start_date=start,
             end_date=end,
             refresh_policy=refresh_policy,
+            immutable=universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY,
         ):
             raise RuntimeError(f"ST PIT universe is not ready: {state}")
         meta = FactorUniverseMetadata(
@@ -161,9 +177,10 @@ class FactorUniverseMaskService:
         start_date: dt.date,
         end_date: dt.date,
         refresh_policy: str,
+        immutable: bool = False,
     ) -> bool:
         status = state.get("status")
-        if refresh_policy == "source_fingerprint":
+        if immutable or refresh_policy == "source_fingerprint":
             if status != "ready" or bool(state.get("dirty")):
                 return False
         elif status not in {"ready", "dirty"}:
