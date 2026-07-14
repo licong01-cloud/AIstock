@@ -82,6 +82,9 @@ class FakeSource:
     def list_ingestion_jobs(self, limit=50, active_only=False):
         return {"items": [{"job_id": str(self.job_id), "status": "running", "meta": {"dataset": "daily_basic"}}]}
 
+    def get_ingestion_job(self, job_id):
+        return {"job_id": str(job_id), "status": "running", "meta": {"dataset": "daily_basic"}}
+
     def get_active_alerts(self, severity_min="warning", limit=50):
         return {"alerts": [{"alert_id": "alert_1", "severity": "warning", "title": "测试告警"}], "count": 1}
 
@@ -168,6 +171,9 @@ class EmptyCursor:
     def fetchall(self):
         return []
 
+    def fetchone(self):
+        return None
+
 
 class EmptyConnection:
     def __enter__(self):
@@ -193,6 +199,85 @@ def test_overview_returns_human_summary_and_business_impact() -> None:
     assert "QE" in result["data"]["affected_modules"]
     assert result["data"]["stale_dataset_count"] == 1
     assert result["trace"]["source_endpoint"] == "local-data composite"
+
+
+def test_overview_counts_active_jobs_and_targets_independently_from_preview_limits() -> None:
+    class VisibilitySource(FakeSource):
+        def list_ingestion_jobs(self, limit=50, active_only=False):
+            if active_only:
+                return {
+                    "items": [
+                        {"job_id": str(uuid.uuid4()), "status": "running", "meta": {"dataset": "daily_basic"}}
+                        for _ in range(6)
+                    ]
+                }
+            return {"items": [{"job_id": str(uuid.uuid4()), "status": "success", "meta": {"dataset": "stock_basic"}}]}
+
+    class VisibilityService(LocalDataManagementService):
+        def _fetch_overview_counts(self):  # type: ignore[override]
+            return {"active_job_count": 6, "retry_target_count": 22, "blocked_target_count": 1}
+
+    result = VisibilityService(connection_provider=EmptyConnection, source=VisibilitySource()).overview()
+
+    assert result["data"]["running_job_count"] == 6
+    assert result["data"]["retry_target_count"] == 22
+    assert result["data"]["blocked_target_count"] == 1
+    assert len(result["data"]["active_jobs"]) == 6
+    assert result["data"]["recent_jobs"][0]["status"] == "success"
+
+
+def test_dataset_status_fetches_latest_job_for_that_dataset_directly() -> None:
+    latest_job_id = uuid.uuid4()
+
+    class DatasetSource(FakeSource):
+        def list_ingestion_jobs(self, limit=50, active_only=False):
+            raise AssertionError("dataset status must not filter a globally bounded job list")
+
+        def get_ingestion_job(self, job_id):
+            assert job_id == latest_job_id
+            return {"job_id": str(job_id), "status": "success", "meta": {"dataset": "daily_basic"}}
+
+    class DatasetService(LocalDataManagementService):
+        def _fetch_latest_job_id(self, dataset):  # type: ignore[override]
+            assert dataset == "daily_basic"
+            return latest_job_id
+
+    result = DatasetService(connection_provider=EmptyConnection, source=DatasetSource()).dataset_status("daily_basic")
+
+    assert result["data"]["last_job"]["job_id"] == str(latest_job_id)
+    assert result["data"]["last_job"]["meta"]["dataset"] == "daily_basic"
+
+
+def test_visibility_queries_use_aggregate_counts_and_status_aware_target_order() -> None:
+    executed: list[tuple[str, object]] = []
+
+    class RecordingCursor(EmptyCursor):
+        def execute(self, sql, params=None):
+            executed.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return {"active_job_count": 6, "retry_target_count": 22, "blocked_target_count": 1}
+
+    class RecordingConnection(EmptyConnection):
+        def cursor(self, **_kwargs):
+            return RecordingCursor()
+
+    service = LocalDataManagementService(connection_provider=RecordingConnection, source=FakeSource())
+
+    assert service._fetch_overview_counts() == {
+        "active_job_count": 6,
+        "retry_target_count": 22,
+        "blocked_target_count": 1,
+    }
+    assert service._fetch_targets(limit=3) == []
+
+    count_sql = executed[0][0]
+    target_sql = executed[1][0]
+    assert "SELECT COUNT(*) FROM market.ingestion_jobs" in count_sql
+    assert "SELECT COUNT(*) FROM market.data_sync_targets" in count_sql
+    assert "CASE target_status" in target_sql
+    assert "WHEN 'final_blocked' THEN 0" in target_sql
+    assert "updated_at DESC" in target_sql
 
 
 def test_confirmed_write_refuses_to_call_source_without_confirmation() -> None:
