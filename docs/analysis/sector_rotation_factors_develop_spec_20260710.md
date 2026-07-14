@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v4.1（post-R6 研究路线与历史融合 canary receipt，2026-07-14）
+- 当前版本：v4.2（长期趋势评价层 F2 详细设计对齐，2026-07-14）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -77,7 +77,7 @@
 
 ### 2.4 v4 路线补全边界
 
-第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向：当前 QE 运行、数据集、因子库、生产 DB 和运行时不因本次文档更新发生变化。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
+第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向：当前 QE 运行、数据集、因子库、生产 DB 和运行时不因本次文档更新发生变化。v4.2 进一步用 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 冻结 F-014 的计算、制品、数仓、API/MCP/UI 和历史结果评价契约；该设计完成不等于运行代码、DDL、重启或 R6 评价已经执行。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
 
 ## 3. 证据口径与基线因子
 
@@ -551,6 +551,8 @@ h20 继续作为当前模型对照的统一信号标签，但它不能单独代�
 
 Type A 超跌反弹与 Type B 长期趋势保持独立因子选择、标签头、调仓和退出逻辑；旧多 Alpha 腿只能作为组合相关性/风险基线，不能作为 Type B 演进母体。
 
+F-014 的可实施详细设计已固化在 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`。该设计明确复用现有 Recorder、Prediction Store、QE Archive、资源阶段和 Loop UI；使用 feature/outcome 双快照身份、extension-only 历史价格校验和右删失；逐信号/episode 明细进入 CAS Parquet，PostgreSQL 只保存评价身份、状态、标量/小曲线和制品指针。当前状态仅为 `DESIGN_READY`，不得写成 evaluator 已实现或 R6 已完成长期评价。
+
 ### 9.7 PIT 关系模型路线
 
 1. **HIST-industry canary**：基于 `market.sw_index_member` 生成逐日 PIT `stock2concept`/稀疏成员矩阵，补齐 composer 分支、`stock_index` 对齐、每日截面 batch、fit/predict、归档与回测契约。第一轮只验证 wiring、资源和同口径基线；禁止静态行业快照。
@@ -652,6 +654,7 @@ post-R6 的默认顺序为：R6 同口径收口 → GATs+LGBM 融合 → 两层�
 - GATs/LGBM 同 seed、同 split 预测对齐 receipt，以及 prediction/portfolio fusion 的权重冻结、正交性、成本后组合和 leave-one-leg-out 报告；
 - 两层板块→个股模型的板块评分、板块 Recall、板块内排序、集中度/轮动成本及一层模型对照；
 - 与 Advisory Phase 8 对齐的 20–180 日、MFE/MAE、有序目标、time-to-hit、生存、右删失、捕获率和假退出报告；
+- F-014 详细设计：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`，覆盖同一 evaluator 的正常 Loop/`long_trend_only`、双快照、CAS、数仓、API/MCP/UI、失败语义和重启恢复；
 - HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
 - 动态/多关系图的逐关系消融；概念方向则先交付独立 PIT 数据设计与数据门禁，未通过前不交付模型“成功”结论；
 - 每个方向独立的实验卡、停止条件、失败归因、资源类、并行策略和归档状态；不得用单次最好 loop 代替方向结论。
@@ -708,7 +711,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 
 1. 冻结 R6 完整归档，核对同 seed/同 split/同数据快照的 GATs、LGBM 和关系开关配对；失败/不完整 loop 不进入择优。
 2. 先用已归档预测执行第 9.4 节融合，再执行第 9.5 节两层板块→个股基线；两项均不以扩大风险预算换取收益。第 9.4.1 节历史信号 canary 已完成，只证明管线与排序增量；正式 R6 portfolio fusion 仍待同口径预测完整归档和节点容量释放。
-3. 对单腿与组合统一补第 9.6 节长期趋势指标，确认 h20 强度是否能转化为 60–180 日右尾捕获；不能转化则回到因子/标签而不是继续堆模型容量。
+3. 按 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 对单腿与组合统一补第 9.6 节长期趋势指标，确认 h20 强度是否能转化为 60–180 日右尾捕获；不能转化则回到因子/标签而不是继续堆模型容量。F2 设计已就绪，代码、DDL、重启和实际评价仍按独立任务与门禁执行。
 
 ### Phase G0-F：PIT 关系模型 canary
 
@@ -782,7 +785,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
 | F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
 | F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | 融合/两层实验卡、同口径 prediction receipt、固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_CANARY_COMPLETE | 用户于 2026-07-14 明确批准执行并写入历史融合 canary；两腿 prediction fusion 已完成全量对齐、正交性、等权 rank/zscore 和信号级 h20 receipt。未创建 QE 实验，未执行 portfolio fusion；正式 R6 同口径配对、成本后组合、容量、风险预算和 leave-one-leg-out 仍 pending。 |
-| F-014 | 本文 9.6、11.6、Phase G0-E；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit 报告 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 当前 h20 实验不能替代长期趋势验收；需独立标签成熟度和 OOS 证据。 |
+| F-014 | 本文 9.6、11.6、Phase G0-E；`qe_long_trend_evaluation_f2_design_20260714.md`；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit；双快照、CAS、数仓/API/MCP/UI 与重启恢复契约 | APPROVED_BY_USER: DESIGN_READY | 用户于 2026-07-14 明确要求先完成设计；F2 详细设计与 20 项 DAI 已完成。运行代码、生产 DDL、服务重启和 R6 实际评价未在本次文档任务中执行。 |
 | F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；未来 HIST PIT relation、mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 二值同业邻接已测试且 RankIC 无增益；动态/层次关系尚未实现。 |
 | F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放验收，随后才有 HIST-concept/HATS/超图证据 | APPROVED_BY_USER: DEFERRED_TO_CONCEPT_DATASET | 当前概念成员 PIT 数据集未入库，不允许静态快照或聚合板块数据替代。 |
 | F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品和 restart recovery 定向验证 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 本次只冻结调度门禁，不修改正在运行的 QE、worker 或并行配置。 |
@@ -790,7 +793,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 ## 16. Rollout / Rollback / 发布回滚
 
 - Rollout：本批准备并提交向后兼容的代码能力与设计文档 PR；candidate artifact 留在隔离、gitignored 目录。AIstock 与 RD-Agent 分仓 PR、分仓验证，merge 仍需明确授权，不能把“PR 已提交”写成“已合入”。
-- Schema rollout：新增列全部 nullable；生产 DDL 由独立变更窗口执行，先备份/演练，再迁移、回填与查询验收。本批仅交付迁移能力，不执行。
+- Schema rollout：新增列全部 nullable；生产 DDL 由独立变更窗口执行，依赖既有每日备份，不在 DDL 前额外导出数据库；按版本化 migration 完成迁移、回填与查询验收。本批仅交付迁移能力，不执行。
 - Data rollout：只有 candidate receipt 通过且用户单独批准，才允许 candidate → active；必须原子切换路径/配置并保留上一 active 快照。
 - Rollback：代码按各仓 PR revert；schema 新列可先停止写读而不立即 drop；active 数据回切上一快照；任何回滚不得删除试验台账或验证 receipt。
 - Runtime rollback：本批没有重启或启用动作，因此不存在需要执行的运行时回滚；若后续启用，必须另写启动前检查与恢复步骤。
