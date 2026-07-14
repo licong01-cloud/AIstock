@@ -35,8 +35,12 @@ from backend.services.advisory_phase0a.historical_research import (
     _conflict_error,
     _program_run_from_outcome,
 )
+from backend.services.advisory_phase0a.evidence_projection import (
+    ProjectedHistoricalEvidenceV2,
+    canonical_evidence_json_sha256,
+    validate_projected_historical_evidence_v2,
+)
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
-from backend.services.selection_center.prospective_evidence import DailySelectionEvidenceV2Payload, canonical_evidence_json_sha256
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
 
@@ -235,20 +239,19 @@ class PersistedHistoricalSelectionEvidenceAdapter:
                     "decision_trade_date": decision_trade_date.isoformat(),
                 },
             )
-        parsed: list[tuple[dict[str, Any], DailySelectionEvidenceV2Payload]] = []
+        parsed: list[tuple[dict[str, Any], ProjectedHistoricalEvidenceV2]] = []
         for raw in rows:
             row = dict(raw)
-            try:
-                payload = DailySelectionEvidenceV2Payload.model_validate(row["evidence_payload_json"])
-            except Exception as exc:  # noqa: BLE001
+            payload = validate_projected_historical_evidence_v2(dict(row.get("evidence_payload_json") or {}))
+            if payload is None:
                 raise RuntimeConfigInvalidError(
                     "stored DailySelectionEvidence v2 is invalid",
                     context={
                         "reason_code": REASON_PROGRAM_EVIDENCE_INVALID,
                         "program_id": context.program_id,
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "error": "advisory projection DTO validation failed",
                     },
-                ) from exc
+                )
             PersistedHistoricalSelectionEvidenceAdapter._assert_context_matches(
                 context=context,
                 payload=payload,
@@ -268,7 +271,7 @@ class PersistedHistoricalSelectionEvidenceAdapter:
         row, payload = parsed[0]
         candidate_lineage = payload.phase0a_candidate_lineage
         source_watermark_hash = canonical_evidence_json_sha256(
-            [item.model_dump(mode="json") for item in payload.phase0a_source_evidence]
+            payload.phase0a_source_evidence
         )
         candidates = [
             HistoricalResearchCandidate(
@@ -294,7 +297,7 @@ class PersistedHistoricalSelectionEvidenceAdapter:
     def _assert_context_matches(
         *,
         context: HistoricalResearchProgramContext,
-        payload: DailySelectionEvidenceV2Payload,
+        payload: ProjectedHistoricalEvidenceV2,
         decision_trade_date: date,
     ) -> None:
         lineage = dict(payload.phase0a_package_lineage or {})
@@ -305,7 +308,7 @@ class PersistedHistoricalSelectionEvidenceAdapter:
             or payload.phase0a_candidate_lineage.get("manifest_sha256") != context.manifest_sha256
             or binding_ref.get("binding_id") != context.binding_version_id
             or binding_ref.get("binding_hash") != context.binding_payload_hash
-            or config_chain.package_effective_config_hash != context.effective_runtime_config_hash
+            or config_chain.get("package_effective_config_hash") != context.effective_runtime_config_hash
         ):
             raise RuntimeConfigInvalidError(
                 "stored DailySelectionEvidence does not match the dated Program context",
@@ -313,30 +316,57 @@ class PersistedHistoricalSelectionEvidenceAdapter:
             )
         decision_clock = payload.decision_clock
         if (
-            decision_clock.decision_as_of_trade_date != decision_trade_date
-            or decision_clock.selection_as_of_trade_date != decision_trade_date
-            or decision_clock.effective_cutoff_date != decision_trade_date
+            _payload_date(decision_clock.get("decision_as_of_trade_date")) != decision_trade_date
+            or _payload_date(decision_clock.get("selection_as_of_trade_date")) != decision_trade_date
+            or _payload_date(decision_clock.get("effective_cutoff_date")) != decision_trade_date
         ):
             raise RuntimeConfigInvalidError(
                 "stored DailySelectionEvidence decision clock does not match the requested historical date",
                 context={"program_id": context.program_id, "reason_code": REASON_PROGRAM_EVIDENCE_INVALID},
             )
-        if config_chain.binding_base_available_at > decision_clock.decision_cutoff_ts:
+        binding_available_at = _payload_datetime(config_chain.get("binding_base_available_at"))
+        decision_cutoff = _payload_datetime(decision_clock.get("decision_cutoff_ts"))
+        if binding_available_at is None or decision_cutoff is None or binding_available_at > decision_cutoff:
             raise RuntimeConfigInvalidError(
                 "dated Program binding was not available by the frozen decision cutoff",
                 context={"program_id": context.program_id, "reason_code": REASON_PROGRAM_EVIDENCE_INVALID},
             )
         for receipt in payload.phase0a_source_evidence:
-            available_at = receipt.available_at or receipt.first_observed_at
-            if available_at is None or available_at > decision_clock.decision_cutoff_ts:
+            available_at = _payload_datetime(receipt.get("available_at")) or _payload_datetime(receipt.get("first_observed_at"))
+            if available_at is None or available_at > decision_cutoff:
                 raise RuntimeConfigInvalidError(
                     "historical source receipt was not available by the frozen decision cutoff",
                     context={
                         "program_id": context.program_id,
-                        "dataset_id": receipt.dataset_id,
+                        "dataset_id": receipt.get("dataset_id"),
                         "reason_code": REASON_PROGRAM_EVIDENCE_INVALID,
                     },
                 )
+
+
+def _payload_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _payload_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else None
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else None
+    return None
 
 
 class PostgresHistoricalResearchRepository:

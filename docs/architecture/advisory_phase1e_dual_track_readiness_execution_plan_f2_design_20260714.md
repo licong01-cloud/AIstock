@@ -29,15 +29,29 @@ Selection/Paper/模拟盘运行链。
 当前交付状态：
 
 ```text
-implementation_status = design_ready
-code_implementation = not_started
-database_read_or_write = none
-production_ddl_gate = noop
-production_frontend_dependency_gate = noop
-production_backend_dependency_gate = noop
+implementation_status = code_complete_pending_real_dev_input
+code_implementation = E1-E5 implemented; E6 real DEV dual-track E2E blocked_by_input
+database_read_or_write = DEV read-only schema checks plus transactional stateful DML validation; rolled back with zero residue; no DDL or persistent DML
+production_ddl = none
+production_frontend_dependency = none
+production_backend_dependency = none
 runtime_activation = noop
 model_training = none
 ```
+
+2026-07-14 implementation record:
+
+- E1-E5 are implemented in the Advisory-owned paths in Section 11. Local contract, store, CLI,
+  isolation, and existing Phase 0A regression suites pass; the implementation does not modify
+  Selection Center, StrategyPackage runtime, Paper, simulation, QE, RD-Agent, Qlib, API, UI, or DDL.
+- DEV schema-contract validation used only `F:\Dev\AIstock\.env` and a `REPEATABLE READ READ ONLY`
+  transaction: all referenced tables/columns and normalized Selection queries exist. The existing
+  stateful historical-runner L4 then wrote through application repositories inside one DEV transaction,
+  verified exact retry, rolled back, and confirmed zero temporary Program/receipt residue. Production was
+  opened only for read-only input inventory; no production data was written.
+- DEV currently contains zero `app.advisory_research_batch_receipt` rows. Therefore L4 is
+  `blocked_by_input`; no fixture, replay, current selection result, or mock can stand in for a
+  completed immutable historical receipt.
 
 ## 2. Parent Baseline / 父级基线与当前事实
 
@@ -153,7 +167,14 @@ selection evidence、model artifact 或交易信号。
 5. Phase 1E 使用独立进程/CLI、独立 artifact namespace、独立错误边界；失败不能改变、阻塞、
    重试或终止 Selection、模拟盘、Paper 或 QE 任务。
 6. persisted DSE/package schema 可以作为输入契约，但 parser/DTO 必须位于 Advisory-owned
-   evidence projection，不能复用会导入或执行共享 runtime 的模块。
+   evidence projection，不能复用会导入或执行共享 runtime 的模块。DSE parser 必须完整复制
+   producer 的字段、约束、跨字段 invariant 和 canonical dump语义；禁止只校验 Advisory当前读取的
+   字段子集。直接 parity测试必须证明有效 payload dump一致，且 producer拒绝的 payload不能被
+   Advisory投影接受。
+7. normalized Selection run projection必须完整还原 `mode/status/package_results/aggregate_results/
+   excluded_results/manifest lineage/error` 以及候选 display/price-guidance字段，使既有
+   `selection_run_content_hash` 与共享 repository readback一致；不得把 raw SQL行直接当候选 DTO，
+   不得通过遗漏字段改变 hash。
 
 当前 Phase 0A `resolvers.py`/CLI 仍直接引用 Selection、Simulation 与 StrategyPackage 类型/仓储；
 未来 Phase 1E 实现必须先在 Advisory 模块内完成 read-only projection/DTO 边界，并让 Phase 1E
@@ -230,6 +251,15 @@ request_hash
   `audit_target_id=p1e_target_<evidence_request_hash[:20]>`，禁止 UUID、wall-clock 或 batch position。
 - semantic hash 不包含 invocation id、wall-clock 或 output path；相同输入得到相同 hash。
 
+Implementation clarifications applied by the code:
+
+- `capacity_request_ref` and `capacity_receipt_ref` are canonical content-hash references. The
+  compiler compares them with the loaded request/receipt before deriving a scope hash; a file path
+  or arbitrary label cannot silently represent capacity evidence.
+- A historical `selection_score_artifact_id` is read by its exact immutable id. Phase 1E must not
+  infer an old artifact from a latest-N package list, and the per-Program/date audit sees only the
+  exact artifact that matched the historical Program run.
+
 ### 5.2 最小计划单元
 
 计划具有两个不混淆的最小单元：
@@ -270,7 +300,8 @@ plan hashes，不具有跨 scope authority。
 historical_batch_id / batch_key / receipt_hash
 historical_program_run_id / program_payload_sha256
 binding_version_id / binding_payload_hash
-package_id / manifest_sha256 / alpha_mode / resolved_style_family / style_assignment_policy_hash
+package_id / manifest_sha256 / alpha_mode / manifest_alpha_component_ids[] /
+resolved_style_family / style_assignment_policy_hash
 selection_evidence_id / evidence_hash
 selection_artifact_id / artifact_payload_hash
 source_watermark_hash
@@ -328,6 +359,10 @@ resource_budget_ref
   现有 canonical contract 明确排除时才允许存在；否则必须为 NULL。
 - template 必须列出每个后置字段的来源类型、schema、producer operation 和 hash 校验方式；
   output slot 不允许 `None`、空字符串、零 hash 或 fixture placeholder。
+- 每个 `required_output_slots` / `unresolved_input_refs` member 必须遵守
+  `advisory_phase1e_output_slot_v1` metadata schema，显式包含 `slot`、`source_type`、
+  `slot_schema_version`、`producer_operation` 和 `hash_validation`。这是 Phase 1E 对未来
+  output provenance 的 metadata contract，不声称或伪造未来 Phase 1G/1H/1I payload schema。
 - `SOURCE_RESOLUTION` 保存完整 `SourceRequirementSet` 和 read-only resolution receipt hash。
 - source resolution 为 `RESEARCH_READY` 或具有 source revision set 的 `PARTIAL` 时，才可形成
   完整 `CapturePlan`。observation operation 仍保存 `CaptureBatchRequest` template：Phase 1G 必须
@@ -370,6 +405,12 @@ resource_budget_ref
 既有 canonical model复算。registry没有覆盖某个真实 manifest component时返回明确 missing，不
 允许省略该腿或使用 generic query。resolution 使用 in-memory requirement-set/receipt 对象和
 read-only ledger adapter；Phase 1E 不调用 PostgreSQL requirement repository 的 save/append DML。
+
+对 native multi Alpha parent，`Phase1EEvidenceBinding` 从已持久化 manifest projection 冻结排序的
+`manifest_alpha_component_ids[]`，每条 registry template 必须声明一个对应的
+`alpha_component_id`，并且每个 leg 至少有一条 template。template 允许 leg 间不同
+`bound_parameters`/lookback/window，但不允许未绑定 leg 的父包 generic template、缺少 leg或多出
+未知 leg。这是 source plan completeness 的自动数据事实，不重新验证 package asset/model，也不是审批。
 
 Phase 1E 不重复 StrategyPackage admission。package/manifest/asset-closure/leg-lineage只做已持久化
 identity/hash 等值核对；禁止调用 package validator、asset loader、model loader、live inference、
@@ -457,6 +498,8 @@ Phase1EPlanBatchReceipt
 batch receipt 是导航/覆盖汇总索引，不改变 scope plan 状态或 hash。新增、删除、失败一个
 Program/date 不得重写其他 scope plan。`all_scope_workloads_covered` 只聚合各 admission scope
 既有 coverage 结论；batch 不执行、不授权并发，也不把多个 scope 的业务数据合并。
+`batch_request_hash` 必须等于 `Phase1ERevalidationBatchRequest.invocation_request_hash`，不得根据
+成功生成的 plans反推。即使所有 scope失败，不同请求也必须保持不同的请求身份。
 
 ## 6. Dual-Track Revalidation Algorithm / 双轨复验算法
 
@@ -465,7 +508,8 @@ Program/date 不得重写其他 scope plan。`all_scope_workloads_covered` 只�
 
 每个 `ProgramDateRequest` 按以下顺序执行；不得把多个 Program/date 合入同一 audit target：
 
-1. 从请求引用读取 historical batch receipt 和 program run，完整重算 receipt/program hash。
+1. 从请求引用读取 historical batch receipt 和 program run，完整重算 receipt hash，并按既有
+   `_program_payload_hash` 权威字段集合重算 Program hash；非空但不匹配的 hash同样拒绝。
 2. 经 Advisory read-only projection 解析当日有效 binding、manifest identity 和 package metadata；
    只断言已验证类型为单 Alpha或原生多 Alpha父包，不调用包 validator/inference/asset loader。
 3. 对 program run 的 binding/package/manifest/policy/runtime/source/evidence/artifact refs 与数据库
@@ -480,7 +524,9 @@ Program/date 不得重写其他 scope plan。`all_scope_workloads_covered` 只�
    read-only source resolution；不得根据当前最新 market row补造 available-at。
 7. 组装完整 request 或显式 template，计算逐 role workload并验证 Phase 1D capacity request
    覆盖该 workload。`BLOCKED`/diagnostic unit不形成 source/capture final request，且不得影响其他 unit。
-8. canonical serialize、计算 plan hash、原子写入 artifact store并完整 readback。
+8. canonical serialize、计算 plan hash；只有该 Program/date 的 `REPEATABLE READ READ ONLY`
+   snapshot 成功关闭后，该 scope plans才进入可发布集合。关闭异常必须记录 unexpected failure并
+   丢弃同 scope全部 plans，不得同时产生成功 plan和失败记录。随后原子写入 artifact store并完整 readback。
 9. 所有 unit完成后写 batch receipt；unexpected error输出非零退出和 traceback/context。batch
    组合变化不得改变任何已存在 scope plan hash。
 
@@ -543,6 +589,12 @@ capacity receipt 后自动通过。coverage=false 不删除 audit/source plan，
 若差异涉及 role row/DB transaction bound，则对应 capture/label operation也为 `DEFERRED`；若
 唯一缺口是 Parquet bytes measurement，则按 §7.3 允许 bounded DB DML和 staging measurement，
 publish仍 deferred。这是测量范围一致性，不是审批或人工门禁。
+
+`capacity_workload_covered=true` 只表示 receipt 为 `MEASURED`，且五个 role 的 row/logical
+byte/Parquet byte 都已覆盖 scope workload。`PARTIAL` 永远保留 `false` 和精确
+`missing_capacity_measurements`，不被当作 full coverage；仅当缺口全部属于已列出的
+Parquet/store measurement 时，Phase 1E 可把 observation 保留为后续 bounded Phase 1G/1H
+semantic template，label/store 仍为 `DEFERRED`。这不是运行时授权，也不触发任何执行。
 
 ### 7.3 解除 PARTIAL capacity 的循环依赖
 
@@ -608,6 +660,10 @@ Phase 1E 不新增数据库 migration。计划写入配置指定的 AIstock-owne
 
 ## 10. Error And Logging Contract / 错误与日志
 
+`compile-batch` preserves successful independent scope plans and their batch receipt, but when one
+or more `failed_input_scopes` are present it emits `ok=false`, `status=partial`, and exits with code
+`3`. This is diagnostic visibility, not an approval or an additional runtime gate.
+
 稳定 reason codes 至少包括：
 
 ```text
@@ -624,10 +680,12 @@ ADVISORY_PHASE1E_TARGET_HAS_NO_ADMISSION_SCOPE
 ADVISORY_PHASE1E_FORMAL_SCOPE_NOT_HISTORICAL_INPUT
 ADVISORY_PHASE1E_AUDIT_HANDOFF_MISMATCH
 ADVISORY_PHASE1E_AUDIT_ARTIFACT_CONFLICT
+ADVISORY_PHASE1E_POLICY_REGISTRY_HASH_MISMATCH
 ADVISORY_PHASE1E_SOURCE_RESOLUTION_BLOCKED
 ADVISORY_PHASE1E_SOURCE_RESOLUTION_CONFLICT
 ADVISORY_PHASE1E_CAPACITY_MEASUREMENT_PARTIAL
 ADVISORY_PHASE1E_CAPACITY_INSUFFICIENT
+ADVISORY_PHASE1E_CAPACITY_REFERENCE_MISMATCH
 ADVISORY_PHASE1E_CAPACITY_WORKLOAD_NOT_COVERED
 ADVISORY_PHASE1E_REQUEST_TEMPLATE_INCOMPLETE
 ADVISORY_PHASE1E_PLAN_ARTIFACT_CONFLICT
@@ -648,21 +706,24 @@ payload 或无关逐行日志。expected business gap 记录一次摘要；unexp
 backend/services/advisory_phase1/readiness_plan.py
 backend/services/advisory_phase1/readiness_plan_postgres.py
 backend/services/advisory_phase1/readiness_plan_store.py
-backend/services/advisory_phase1/__init__.py
 backend/services/advisory_phase0a/evidence_projection.py
 backend/services/advisory_phase0a/evidence_projection_postgres.py
 backend/services/advisory_phase0a/resolvers.py              # DTO/protocol import boundary only
 backend/services/advisory_phase0a/historical_research_postgres.py  # projection contract only
 scripts/advisory_phase0a_audit.py                            # read-only projection wiring only
 scripts/advisory_phase1e_readiness_plan.py
-tests/backend/test_advisory_phase1e_readiness_plan.py
-tests/backend/test_advisory_phase1e_readiness_plan_postgres.py
-tests/backend/test_advisory_phase1e_readiness_plan_store.py
-tests/backend/test_advisory_phase1e_readiness_plan_cli.py
-tests/backend/test_advisory_phase1e_runtime_isolation.py
-tests/backend/test_advisory_phase0a_evidence_projection.py
+backend/tests/advisory_phase1/test_readiness_plan.py
+backend/tests/advisory_phase1/test_readiness_plan_postgres.py
+backend/tests/advisory_phase1/test_readiness_plan_store.py
+backend/tests/advisory_phase1/test_readiness_plan_cli.py
+backend/tests/advisory_phase1/test_readiness_plan_isolation.py
+backend/tests/advisory_phase0a/test_evidence_projection.py
 docs/architecture/...phase1e...
 ```
+
+`backend/services/advisory_phase1/__init__.py` remains unchanged. Eager Phase 1E exports from that
+package would alter the existing shared import graph, so Phase 1E is intentionally imported through
+its concrete Advisory-owned modules only.
 
 如实现发现必须修改 Phase 0A/Phase 1既有 typed contract，只能先修订本文与父设计并说明兼容
 策略，不得在代码中静默扩 scope。以下路径冻结：
@@ -692,10 +753,17 @@ migration、requirements 或模型依赖。
 
 ### E1：Typed contracts and canonical hashes
 
+Implementation status: completed and covered by local deterministic-hash/request-template tests.
+
 实现 request、evidence binding、planned operation、scope plan 和 batch receipt；覆盖排序、hash、
 完整 request/template 互斥和 output slot schema。
 
 ### E2：Read-only evidence projection and isolation
+
+Implementation status: completed. The projection uses Advisory-owned full DSE/SelectionRun parity
+DTOs and fixed read-only SQL; normalized Selection `run`/result/exclusion tables, candidate display and
+price-guidance restoration, exact artifact lookup, valid-dump parity and producer-rejection parity are
+covered by regression tests.
 
 在 Advisory Phase 0A内建立 DTO/protocol + fixed-SQL projection，移除 Phase 1E路径对 Selection、
 StrategyPackage runtime、Simulation、Paper、QE/RD-Agent/Qlib modules 的 imports。用 hash parity
@@ -703,25 +771,43 @@ StrategyPackage runtime、Simulation、Paper、QE/RD-Agent/Qlib modules 的 impo
 
 ### E3：Revalidation orchestration
 
+Implementation status: completed. Program/date snapshots, authoritative Program-hash recomputation,
+dated binding resolution, policy-hash matching, target diagnostics, post-close publication and
+per-scope failure isolation are implemented without a shared runtime import.
+
 实现 receipt/dataset binding readback、确定性 per Program/date audit、target diagnostic、既有
 Phase 0A handoff调用和 scope isolation。数据库连接只从项目 `.env`/既有 pool读取，不猜测
 host、port、dbname 或 credential。
 
 ### E4：Source and downstream plan compiler
 
+Implementation status: completed for planning only. It emits complete typed requests only when all
+authoritative fields exist, otherwise explicit semantic templates/missing slots; it does not run
+capture, labels, datasets, or storage builds.
+
 复用 source resolution/capture/label typed models；生成完整 request 或无占位符 template；绑定
 capacity receipt并输出明确 missing evidence。
 
 ### E5：Content-addressed store and CLI
 
+Implementation status: completed. The standalone CLI reads DEV/prod connection configuration only
+from the selected env file and the store performs no-replace publication/readback.
+
 实现原子 store、full readback、`compile-batch/verify-plan/inspect-plan` 和结构化错误；保持 standalone。
 
 ### E6：Real DEV dual-track validation
+
+Implementation status: `blocked_by_input`. DEV has no immutable historical research batch receipt;
+the required single-Alpha and native multi-Alpha E2E cases must run after real completed receipts
+and their explicit Phase 1E input artifacts exist.
 
 使用当前测试单 Alpha Program 与原生多 Alpha Program 的显式已完成历史日期和真实 immutable
 receipt，验证同 batch 独立 plan、dated binding、source gap、capacity PARTIAL 和 exact retry。
 
 ### E7：Design compliance review
+
+Implementation status: local review completed; final F2 delivery review remains pending only for
+the L4 real-DEV evidence named above.
 
 逐项映射 F-501 至 F-520，执行 F2 validator、frozen-path/import scan、测试和差异检查。任何 gap
 不得用 TODO、mock-only、fixture-only 或静默 fallback 宣称完成。
@@ -739,25 +825,42 @@ receipt，验证同 batch 独立 plan、dated binding、source gap、capacity PA
 ### 13.2 L1 Pure contract tests
 
 - canonical order、same input same hash、field mutation hash change、timezone/date rejection。
+- Advisory DSE完整 DTO 与 producer有效 payload canonical dump parity；stage、clock、config hash、
+  universe或 source receipt任一非法时两者都拒绝，旧字段子集不能通过。
+- normalized SelectionRun可由共享 SelectionRun模型完整反序列化，canonical dump及
+  `selection_run_content_hash`一致，包含 exclusions/error/display/price-guidance。
 - 同一 Program/date 在单独 batch与加入其他 Program的 batch中 scope/audit/plan hashes完全相同。
+- `batch_request_hash == invocation_request_hash`；全部 scope失败时不同请求仍不碰撞。
 - 同一 Program跨 binding/manifest切换的两个 `ProgramDateRequest` 正向通过且 identity独立。
 - target无 admission scopes、FORMAL manual scope均生成 target diagnostic，不从 batch丢失。
 - multiple Program/date/scope 不合并，单 scope failure isolation；capture request不得跨 Program/scope。
 - complete request/template 二选一，missing slot、zero hash、placeholder 和 fixture build拒绝。
-- single/multi alpha parity；多 Alpha各腿不同 lookback/window 正向通过，公共 PIT 冲突拒绝。
+- output slot metadata schema、canonical sort/deduplicate-before-hash、PARTIAL parquet-only
+  staging path 与 non-Parquet measurement negative cases。
+- single/multi alpha parity；多 Alpha各腿不同 lookback/window 正向通过，公共 PIT 冲突拒绝，
+  每个 persisted leg 都必须有显式 registry template，generic/missing-leg negative cases拒绝。
 - `VALID_NO_CANDIDATE` 有证据通过，无证据空列表拒绝。
 - replay/current/latest binding 尝试替代 manual historical receipt 拒绝。
+- receipt hash和 Program payload hash均按权威公式重算；自洽但错误的 Program hash拒绝。
 - package validator/asset loader/live inference/multi-alpha live sentinel 被调用即测试失败；持久化
   closure/lineage hash相同可直接通过。
 - workload role projection与 capacity dominance正反例；小 workload receipt不能覆盖大计划。
 
 ### 13.3 L2 PostgreSQL read-only integration
 
+Current evidence: DEV schema-contract verification passed with `transaction_read_only=on` and
+`transaction_isolation=repeatable read`; all referenced projection tables/columns exist. Referenced
+immutable-row readback, source-state coverage, and connection-error exercises remain
+`blocked_by_input` until a real completed historical receipt exists. Phase 1E intentionally adds no
+fixed statement-timeout condition; connection/transaction failures still return structured errors and a
+nonzero CLI exit.
+
 - PostgreSQL验证 `transaction_read_only=on`，query spy/allowlist证明只有无 row-lock SELECT；对本次
   引用的 immutable package/evidence rows前后hash一致，不全表扫描或误判其他模块并发写入。
 - dated binding、manifest、historical receipt、handoff 和 source ledger完整 readback。
 - source `RESEARCH_READY/PARTIAL/BLOCKED` 三类和 conflict 传播。
-- statement timeout、连接失败和 transaction error 输出 stable reason/context/traceback。
+- connection/transaction error 输出 stable reason/context/traceback；Phase 1E 不新增固定
+  statement-timeout runtime gate。
 
 ### 13.4 L3 Artifact store
 
@@ -768,6 +871,10 @@ receipt，验证同 batch 独立 plan、dated binding、source gap、capacity PA
 - configured root only；项目根目录和 WSL workspace零写入。
 
 ### 13.5 L4 Real DEV dual-track E2E
+
+Current result: `blocked_by_input` on 2026-07-14 because DEV contains zero
+`app.advisory_research_batch_receipt` rows. This is a reported evidence gap, not a successful mock
+substitute and not a runtime admission/approval state.
 
 至少执行：
 
@@ -804,14 +911,14 @@ same batch exact retry and full artifact readback
 每个不变量必须有正向和反向测试。技术条件只验证数据、身份、hash、时间和资源事实；不设计
 用户权限或人工流程。
 
-## 15. Production Gates And Rollout / Rollout And Rollback / 发布与回滚
+## 15. Production Gates (All Noop) And Rollout / Rollout And Rollback / 发布与回滚
 
 本文和未来 Phase 1E 代码均不含 DDL或依赖变更：
 
 ```text
-production_ddl_gate = noop
-production_frontend_dependency_gate = noop
-production_backend_dependency_gate = noop
+production_ddl = none
+production_frontend_dependency = none
+production_backend_dependency = none
 runtime_activation = noop
 ```
 
@@ -847,6 +954,9 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 | capacity 与首个 snapshot循环 | 正常流程永远无法通过 | 真实 DB rows -> bounded staging measurement -> MEASURED -> publish |
 | 并发artifact writer | winner被覆盖或重试永久失败 | atomic no-replace + loser full readback |
 | DB或artifact store失败 | 静默缺 plan | stable reason、nonzero exit、traceback、scope级恢复 |
+| DSE或SelectionRun投影仅保留消费字段 | 非法 evidence通过或内容 hash漂移 | Advisory-owned完整 DTO + producer/dump/hash parity tests |
+| snapshot关闭失败但同 scope plan已入队 | 同一 scope同时成功与失败且 artifact被发布 | post-close admission；关闭失败丢弃同 scope plans |
+| batch请求 hash由成功 plans反推 | 全失败请求碰撞、重试身份漂移 | receipt直接绑定 invocation request hash |
 
 ## 17. Design Acceptance Index
 
@@ -873,6 +983,16 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 
 ## 18. Design Acceptance Matrix
 
+The rows below retain their `design_ready` meaning: the detailed design itself is accepted. Current
+implementation evidence is tracked separately so that design readiness is never conflated with real
+DEV completion:
+
+| implementation_state | coverage | current result |
+|---|---|---|
+| E1-E5 / L0-L3 local | contracts, full DTO/hash projection parity, normalized SQL, store, CLI, isolation, Phase 0A regression | verified locally: 332 passed, 7 skipped; Ruff clean; direct DSE/SelectionRun parity probes pass; DEV schema contract read-only check passed |
+| E6 / L4 real DEV | completed single-Alpha and native multi-Alpha historical receipts plus explicit input artifacts | transactional single-Alpha repository/assembler/runner DML passed and rolled back; persistent dual-track case remains blocked_by_input because DEV has no native multi-Alpha package or DSE/receipt |
+| production | DDL, runtime activation, API/UI or shared-runtime changes | noop; none performed |
+
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-501 | §1、§3、§4 | Advisory projection/import denylist/frozen-path设计 | design_ready | none |
@@ -898,10 +1018,11 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 
 ## 19. DESIGN-COMPLIANCE-001
 
-- [x] `no_simplified_delivery`：设计覆盖真实 receipt、ProgramDate identity、target diagnostic、
-  audit/handoff、source resolution、typed request/template、CAS和真实 DEV双轨；mock/fixture不能替代 L4。
+- [x] `no_simplified_delivery`：设计覆盖完整 DSE/SelectionRun投影等价、真实 receipt、ProgramDate
+  identity、target diagnostic、audit/handoff、source resolution、typed request/template、CAS和真实
+  DEV双轨；字段子集、raw SQL候选、mock/fixture不能替代完整契约或 L4。
 - [x] `no_silent_error`：缺失、冲突、PARTIAL、INSUFFICIENT、transaction和 store错误均具有
-  reason/context；失败不产生空成功或伪 hash。
+  reason/context；snapshot关闭失败不发布同 scope plan，失败不产生空成功或伪 hash。
 - [x] `no_business_semantic_drift`：Advisory projection只读 immutable evidence，不改变选股、
   策略推理、荐股消费、Paper、模拟盘、QE/RD-Agent/Qlib；多 Program独立，不恢复组合模式。
 - [x] `no_unrequested_gate_or_approval`：只复用已有自动数据/hash/resource invariants；无角色、
@@ -916,6 +1037,12 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 
 ## 20. Exit Criteria / 设计与未来代码退出条件
 
+Current implementation exit state: local code, review, read-only DEV schema verification and
+transactional stateful DEV DML validation are complete. Persistent dual-track L4 still requires real
+immutable DEV receipts and explicit request/registry/capacity artifacts. By explicit user confirmation on
+2026-07-14, implementation code may merge as `code_complete_pending_real_dev_input`; this does not mark
+Phase 1E `verified`, activate runtime behavior, or permit a mock/replay/handwritten DSE to replace L4.
+
 本文可标记 `design_ready` 的条件：
 
 1. F-501 至 F-520 全部 `design_ready` 且无未批准 gap、TODO或 exception。
@@ -923,10 +1050,13 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
 3. 父蓝图、Phase 1父设计和 Phase 1D当前真实状态同步。
 4. `git diff --check`通过，且只修改 Phase 1E及父级引用文档。
 
-未来 Phase 1E代码可请求合入的条件：
+Phase 1E代码可请求合入的条件：
 
-1. F-501 至 F-520逐项具有 implementation ref和真实 test/evidence，状态全部 `verified`。
-2. L0-L3通过，L4使用真实 single/multi Program immutable receipts完成；缺输入不得用 mock替代。
+1. F-501 至 F-518、F-520逐项具有 implementation ref和直接 test/evidence；F-519 的 L0-L3、
+   read-only DEV schema和事务型 DEV DML已验证。
+2. 如果 persistent L4 的唯一缺口是环境中不存在真实 single/multi immutable DSE/receipt，用户可
+   明确批准代码以 `code_complete_pending_real_dev_input` 合入；缺输入仍不得用 mock、复制或手写
+   DSE替代，且不得把代码合入报告成 Phase 1E功能完成或 runtime activation。
 3. 正向链 `receipt -> deterministic audit/handoff -> source resolution -> request/template ->
    no-replace CAS plan` 无人工干预；target无 scope也保留 diagnostic。
 4. 相同 Program/date在不同 batch的 audit/scope/plan identity parity通过，dated binding switch通过。
@@ -935,6 +1065,9 @@ Phase 1D 已合入 migration 的生产 DDL和 observer activation 仍是独立�
    QE/RD-Agent/Qlib零行为影响；不使用全表扫描作为门禁。
 6. 策略包 validator/asset/model/inference零调用，逐 role workload受 capacity覆盖，control binding自动。
 7. 无 DDL/依赖/runtime activation；生产状态按 §15报告 `noop`。
+
+Phase 1E可标记功能完成或启用后续真实数据流程的条件仍包括：persistent L4使用真实 single/multi
+Program immutable receipts完成、F-519升级为 `verified`，并保留同 batch/跨 batch identity parity。
 
 Phase 1E完成也不代表 Phase 1数据底座完成、模型可训练、实时荐股可用或任何交易能力可用。
 下一阶段仍按顺序执行 Phase 1F schema verification、Phase 1G observation/source DML、Phase 1H

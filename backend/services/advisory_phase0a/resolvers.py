@@ -6,23 +6,24 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from typing import Any, Protocol
 
-from backend.services.advisory_program import (
-    BINDING_STATUS_DRAFT,
-    PACKAGE_MODE_SINGLE,
-    REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED,
-    AdvisoryProgram,
-    AdvisoryStrategyBindingVersion,
-)
-from backend.services.selection_center.prospective_evidence import (
-    DailySelectionEvidenceV2Payload,
+from .evidence_projection import (
+    AdvisoryProgramProjectionReader,
+    DailySelectionEvidenceProjectionReader,
+    ProjectedAdvisoryProgram,
+    ProjectedBindingVersion,
+    ProjectedDailyEvidenceV2,
+    ProjectedDailySelectionEvidence,
+    ProjectedPackage,
+    ProjectedPackageAsset,
+    ProjectedSelectionRun,
+    ProjectedSelectionScoreArtifact,
+    SelectionRunProjectionReader,
+    SelectionScoreArtifactProjectionReader,
+    StrategyPackageProjectionReader,
     canonical_evidence_json_sha256,
+    projected_manifest_asset_keys,
+    validate_projected_daily_evidence_v2,
 )
-from backend.services.selection_center.models import SelectionRun, SelectionRunStatus
-from backend.services.simulation_runtime.models import DailySelectionEvidence
-from backend.services.strategy_package.package_asset import StrategyPackageAssetRecord
-from backend.services.strategy_package.repository import StrategyPackageRecord, manifest_asset_keys
-from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact
-
 from .models import (
     AssetLedgerEntry,
     AuditTarget,
@@ -93,6 +94,12 @@ REASON_PROSPECTIVE_DSE_V2_REQUIRED = "ADVISORY_PHASE0A2C_ARTIFACT_V2_REQUIRED"
 REASON_PROSPECTIVE_DSE_V2_INVALID = "ADVISORY_PHASE0A2C_STAGE_RECEIPT_INCOMPLETE"
 REASON_PROSPECTIVE_CAPTURE_INELIGIBLE = "ADVISORY_PHASE0A2C_CONTEXT_MISSING"
 
+# Persisted Advisory Program values are projected structurally.  Importing the
+# full lifecycle service here would load Selection/Paper runtime dependencies.
+BINDING_STATUS_DRAFT = "DRAFT"
+PACKAGE_MODE_SINGLE = "single_package"
+REASON_ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED = "ADVISORY_MANUAL_MULTI_PACKAGE_DEPRECATED"
+
 SINGLE_ALPHA_SOURCE_TYPE = "live_qe_model_inference_v1"
 MULTI_ALPHA_SOURCE_TYPE = "live_multi_alpha_inference_v1"
 AUTHORITATIVE_SELECTION_SCOPE = "authoritative_selection"
@@ -104,34 +111,11 @@ _GENERATED_RUNTIME_SOURCES = {
 }
 
 
-class AdvisoryProgramReader(Protocol):
-    def get_program(self, program_id: str) -> AdvisoryProgram: ...
-
-    def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]: ...
-
-
-class StrategyPackageReader(Protocol):
-    def get(self, package_id: str) -> StrategyPackageRecord: ...
-
-    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[StrategyPackageAssetRecord]: ...
-
-
-class DailySelectionEvidenceReader(Protocol):
-    def get_daily_selection_evidence(self, evidence_id: str) -> DailySelectionEvidence: ...
-
-
-class SelectionScoreArtifactReader(Protocol):
-    def list(
-        self,
-        *,
-        package_id: str,
-        manifest_sha256: str | None = None,
-        limit: int = 100,
-    ) -> list[SelectionScoreArtifact]: ...
-
-
-class SelectionRunReader(Protocol):
-    def get_run(self, run_id: str) -> SelectionRun: ...
+AdvisoryProgramReader = AdvisoryProgramProjectionReader
+StrategyPackageReader = StrategyPackageProjectionReader
+DailySelectionEvidenceReader = DailySelectionEvidenceProjectionReader
+SelectionScoreArtifactReader = SelectionScoreArtifactProjectionReader
+SelectionRunReader = SelectionRunProjectionReader
 
 
 class SourceProbe(Protocol):
@@ -242,7 +226,7 @@ class AuditReaders:
 
 @dataclass(frozen=True)
 class BindingResolution:
-    binding: AdvisoryStrategyBindingVersion | None
+    binding: ProjectedBindingVersion | Any | None
     reason_codes: tuple[str, ...] = ()
 
 
@@ -250,11 +234,11 @@ class BindingResolution:
 class ResolvedAuditDay:
     target: AuditTarget
     decision_date: date
-    program: AdvisoryProgram | None = None
-    binding: AdvisoryStrategyBindingVersion | None = None
-    package: StrategyPackageRecord | None = None
-    package_assets: tuple[StrategyPackageAssetRecord, ...] = ()
-    evidence: DailySelectionEvidence | None = None
+    program: ProjectedAdvisoryProgram | Any | None = None
+    binding: ProjectedBindingVersion | Any | None = None
+    package: ProjectedPackage | Any | None = None
+    package_assets: tuple[ProjectedPackageAsset | Any, ...] = ()
+    evidence: ProjectedDailySelectionEvidence | Any | None = None
     phase0a_reason_codes: tuple[str, ...] = ()
     upstream_reason_codes: tuple[str, ...] = ()
 
@@ -318,13 +302,13 @@ def _reason_from_exception(exc: Exception, fallback: str) -> list[str]:
 
 def resolve_as_of_binding(
     *,
-    bindings: list[AdvisoryStrategyBindingVersion],
+    bindings: list[ProjectedBindingVersion | Any],
     decision_date: date,
     target: AuditTarget,
 ) -> BindingResolution:
     """Resolve exactly one explicit historical binding; never fall back to active/latest."""
 
-    candidates: list[AdvisoryStrategyBindingVersion] = []
+    candidates: list[ProjectedBindingVersion | Any] = []
     for binding in bindings:
         if binding.activation_status == BINDING_STATUS_DRAFT:
             continue
@@ -595,12 +579,12 @@ def build_asset_ledger(resolved: ResolvedAuditDay) -> list[AssetLedgerEntry]:
             )
         )
     actual_keys = {
-        (asset.asset_type, asset.asset_ref, asset.asset_sha256)
+        (getattr(asset.asset_type, "value", str(asset.asset_type)), asset.asset_ref, asset.asset_sha256)
         for asset in resolved.package_assets
         if asset.asset_sha256
     }
     try:
-        expected_keys = manifest_asset_keys(resolved.package.manifest)
+        expected_keys = projected_manifest_asset_keys(resolved.package.manifest)
     except Exception:
         entries.append(
             AssetLedgerEntry(
@@ -615,12 +599,12 @@ def build_asset_ledger(resolved: ResolvedAuditDay) -> list[AssetLedgerEntry]:
     else:
         for asset_type, asset_ref, asset_sha256 in sorted(
             expected_keys - actual_keys,
-            key=lambda item: (item[0].value, item[1], item[2]),
+            key=lambda item: (item[0], item[1], item[2]),
         ):
             entries.append(
                 AssetLedgerEntry(
                     package_id=resolved.package.package_id,
-                    asset_type=asset_type.value,
+                    asset_type=asset_type,
                     asset_ref=asset_ref,
                     asset_sha256=asset_sha256,
                     asset_role="required_runtime_closure",
@@ -1056,7 +1040,7 @@ def _manifest_top_k_contract(resolved: ResolvedAuditDay) -> tuple[int | None, li
 def resolve_depth_evidence(
     *,
     resolved: ResolvedAuditDay,
-    artifact: SelectionScoreArtifact | None,
+    artifact: ProjectedSelectionScoreArtifact | Any | None,
 ) -> CandidateDepthEvidence:
     """Audit depth explicitly, never infer a deep pool from a display or final candidate count."""
 
@@ -1195,7 +1179,7 @@ def resolve_source_availability(resolved: ResolvedAuditDay, *, source_probe: Sou
     return rows
 
 
-def _lineage_payload(evidence: DailySelectionEvidence) -> dict[str, Any]:
+def _lineage_payload(evidence: ProjectedDailySelectionEvidence | Any) -> dict[str, Any]:
     payload = evidence.evidence_payload_json or {}
     lineage = payload.get("phase0a_candidate_lineage")
     return lineage if isinstance(lineage, dict) else {}
@@ -1207,7 +1191,7 @@ def _find_score_artifact(
     package_id: str,
     manifest_sha256: str,
     lineage: dict[str, Any],
-) -> SelectionScoreArtifact | None:
+) -> ProjectedSelectionScoreArtifact | Any | None:
     artifact_id = str(lineage.get("selection_score_artifact_id") or "").strip()
     artifact_sha256 = str(lineage.get("selection_score_artifact_sha256") or "").strip()
     if not artifact_id and not artifact_sha256:
@@ -1274,8 +1258,8 @@ def _stage_capability(
 
 def _stage_capabilities(
     *,
-    evidence: DailySelectionEvidence | None,
-    artifact: SelectionScoreArtifact | None,
+    evidence: ProjectedDailySelectionEvidence | Any | None,
+    artifact: ProjectedSelectionScoreArtifact | Any | None,
     hmm: HMMVintageEvidence,
     risk: RiskPolicyEvidence,
 ) -> list[StageCapability]:
@@ -1391,7 +1375,7 @@ def _stage_capabilities(
     return [raw, hmm_stage, risk_stage, effective, advisory]
 
 
-def _selection_run_content_hash(run: SelectionRun | None) -> str | None:
+def _selection_run_content_hash(run: ProjectedSelectionRun | Any | None) -> str | None:
     if run is None:
         return None
     payload = run.model_dump(mode="python")
@@ -1425,17 +1409,14 @@ def _same_stage_content(left: list[dict[str, Any]] | None, right: list[dict[str,
     return left is not None and right is not None and _stage_content_payload(left) == _stage_content_payload(right)
 
 
-def _validated_prospective_dse_v2(evidence: DailySelectionEvidence) -> DailySelectionEvidenceV2Payload | None:
+def _validated_prospective_dse_v2(evidence: ProjectedDailySelectionEvidence | Any) -> ProjectedDailyEvidenceV2 | None:
     payload = evidence.evidence_payload_json or {}
     if payload.get("schema_version") != "daily_selection_evidence_v2":
         return None
-    try:
-        return DailySelectionEvidenceV2Payload.model_validate(payload)
-    except Exception:
-        return None
+    return validate_projected_daily_evidence_v2(payload)
 
 
-def _artifact_v2_hashes_match(artifact: SelectionScoreArtifact) -> bool:
+def _artifact_v2_hashes_match(artifact: ProjectedSelectionScoreArtifact | Any) -> bool:
     """Recompute the immutable raw identities before granting formal authority."""
 
     try:
@@ -1522,8 +1503,8 @@ def resolve_candidate_authority(
         upstream.extend(str(value) for value in upstream_values)
     lineage = _lineage_payload(evidence)
     run_id = str(lineage.get("selection_run_id") or "").strip() or None
-    artifact: SelectionScoreArtifact | None = None
-    run: SelectionRun | None = None
+    artifact: ProjectedSelectionScoreArtifact | Any | None = None
+    run: ProjectedSelectionRun | Any | None = None
     if not run_id:
         reasons.append(REASON_SELECTION_LINEAGE_MISSING)
     else:
@@ -1533,7 +1514,7 @@ def resolve_candidate_authority(
             reasons.append(REASON_SELECTION_RUN_MISMATCH)
     if run is not None:
         if (
-            run.status != SelectionRunStatus.SUCCEEDED
+            getattr(run.status, "value", run.status) != "SUCCEEDED"
             or package.package_id not in run.package_ids
             or run.manifest_sha256_by_package.get(package.package_id) != package.manifest_sha256
         ):
@@ -1551,7 +1532,7 @@ def resolve_candidate_authority(
         reasons.append(REASON_SCORE_ARTIFACT_MISMATCH)
     elif (
         artifact.trade_date != resolved.decision_date
-        or artifact.status.value != "SUCCEEDED"
+        or getattr(artifact.status, "value", artifact.status) != "SUCCEEDED"
         or artifact.metadata.get("source_type") != expected_source
         or artifact.metadata.get("authority_scope") != AUTHORITATIVE_SELECTION_SCOPE
         or artifact.artifact_contract_version != "selection_score_artifact_v2"
@@ -1664,8 +1645,8 @@ def _signal_context_hash(
     *,
     resolved: ResolvedAuditDay,
     hmm: HMMVintageEvidence,
-    artifact: SelectionScoreArtifact | None,
-    run: SelectionRun | None,
+    artifact: ProjectedSelectionScoreArtifact | Any | None,
+    run: ProjectedSelectionRun | Any | None,
     clock: DecisionClockEvidence,
     risk: RiskPolicyEvidence,
     universe: UniverseSurvivorshipEvidence,
