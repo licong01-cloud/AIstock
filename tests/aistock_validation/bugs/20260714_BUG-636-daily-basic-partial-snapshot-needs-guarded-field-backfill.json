@@ -1,0 +1,48 @@
+{
+  "actual": "The 2026-07-13 daily_basic snapshot contained 5602 rows but turnover_rate_f and volume_ratio were fully NULL, causing strict selection to drop every instrument.",
+  "allowed_write_scope": [
+    "scripts/backfill_tushare_daily_basic_fields.py",
+    "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
+    "tests/aistock_validation/bugs/20260714_BUG-636-daily-basic-partial-snapshot-needs-guarded-field-backfill.json"
+  ],
+  "bug_id": "BUG-636",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "description": "The 2026-07-13 daily_basic snapshot contained 5602 rows but turnover_rate_f and volume_ratio were fully NULL, causing strict selection to drop every instrument.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260714-fdde572c2e43",
+      "timestamp": "2026-07-14T02:29:06.999176Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Operators can preview and atomically backfill missing daily_basic fields for one explicit trade date without deleting rows, overwriting non-NULL values, or accepting an incomplete provider snapshot.",
+  "github_issue_number": 2072,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2072",
+  "module": "scripts",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "reproduce_command": "python scripts/backfill_tushare_daily_basic_fields.py --trade-date 2026-07-13",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "scripts"
+  ],
+  "title": "daily_basic partial snapshot needs guarded field backfill",
+  "trigger_condition": {
+    "fingerprint": "fdde572c2e439b39565eee6a",
+    "source_event_id": "FE-20260714-fdde572c2e43"
+  }
+}
