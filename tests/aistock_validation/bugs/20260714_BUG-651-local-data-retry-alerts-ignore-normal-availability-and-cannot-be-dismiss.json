@@ -1,6 +1,11 @@
 {
   "actual": "suspend_d and stock_st_events can reach retry_exhausted alerts when data is not expected to update yet or has no business change; the operator alert has no dismiss action and clicking it navigates away from the current workflow. Analyze dataset availability semantics, suppress non-actionable alerts, and add an accessible non-navigating dismiss control without altering data or production schedules.",
   "allowed_write_scope": [
+    "backend/services/data_refresh_audit.py",
+    "backend/tests/test_dataset_refresh_audit.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "frontend/src/app/DataAlertsToast.tsx",
+    "frontend/tests/local-data/data-alerts-toast.spec.ts",
     "tests/aistock_validation/bugs/20260714_BUG-651-local-data-retry-alerts-ignore-normal-availability-and-cannot-be-dismiss.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -20,6 +25,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260714-9f3263b026cf",
       "timestamp": "2026-07-14T16:12:56.197848Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Scoped BUG-651 implementation to refresh audit monotonicity, zero-row contract regression coverage, and non-navigating alert dismissal.",
+      "timestamp": "2026-07-14T16:32:53.7894456Z"
     }
   ],
   "evidence_uris": [],
@@ -40,7 +51,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
