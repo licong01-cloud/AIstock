@@ -28,8 +28,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-14T07:12:03.089533Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ec1135a4dd511ad767fa1df904c83d70173da556",
+  "fixed_at": "2026-07-14T07:32:13.608795Z",
   "github_issue_number": 2089,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2089",
   "last_seen_at": "2026-07-14T07:12:03.089533Z",
@@ -37,6 +37,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2091",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -47,7 +48,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -56,6 +57,10 @@
     "fingerprint": "02acd481a4721aadcbf56225",
     "source_event_id": "FE-20260714-02acd481a472"
   },
+  "validation_evidence": [
+    "pytest backend/tests/test_stock_universe_pit_service.py -q -> 17 passed",
+    "nox l0 and validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
