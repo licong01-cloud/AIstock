@@ -2,7 +2,9 @@
   "actual": "Concurrent bootstrap of one immutable QE ST PIT snapshot can fail a waiter immediately with ST PIT rebuild is already running and did not become ready within 180s missing_state before the advisory-lock owner inserts the building state. R6 CPU Loop12 failed at 2026-07-14 14:30:16 while the same snapshot became ready at 14:30:17. Waiters must honor the configured timeout across the missing to building transition, exactly one builder may write, failures must remain loud, and QE snapshot handling must not touch live PIT.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260714_BUG-641-qe-immutable-st-pit-bootstrap-waiter-skips-lock-wait-on-missing-state.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_service.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-641",
