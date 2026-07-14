@@ -73,7 +73,7 @@ class QEEvolutionConfig(BaseModel):
     evolution_mode: str = "auto"
     selected_model_id: Optional[str] = None
     selected_factor_keys: Optional[List[str]] = None
-    label_horizon: Optional[int] = Field(None, description="QE training label horizon: 1/3/5/10/20d")
+    label_horizon: Optional[int] = Field(None, description="QE training label horizon: 1/3/5/10/20/30/40/60/120/180d")
     random_seed: Optional[int] = Field(None, description="Fixed seed required for trainable QE loops")
 
 

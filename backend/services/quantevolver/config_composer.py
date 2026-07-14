@@ -71,6 +71,17 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _requires_qe_custom_loaders(
+    *,
+    has_custom_factors: bool,
+    disable_alpha158: bool,
+    custom_params: Optional[Dict[str, Any]],
+) -> bool:
+    """Return whether the generated workspace needs qe_custom_loaders.py."""
+    label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
+    return (has_custom_factors and disable_alpha158) or label_horizon >= 30
+
+
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
     normalized = str(node_id or "").strip().lower()
     return normalized not in _CPU_ONLY_QE_NODE_IDS
@@ -441,10 +452,10 @@ class ConfigComposer:
                 raise ValueError(f"data_split[{key}] 日期格式错误: {data_split[key]}，应为 YYYY-MM-DD") from e
 
         dates = {k: datetime.strptime(data_split[k], "%Y-%m-%d") for k in required}
-        if dates["train_end"] > dates["valid_start"]:
-            raise ValueError(f"train_end ({data_split['train_end']}) 不能晚于 valid_start ({data_split['valid_start']})")
-        if dates["valid_end"] > dates["test_start"]:
-            raise ValueError(f"valid_end ({data_split['valid_end']}) 不能晚于 test_start ({data_split['test_start']})")
+        if dates["train_end"] >= dates["valid_start"]:
+            raise ValueError(f"train_end ({data_split['train_end']}) 必须早于 valid_start ({data_split['valid_start']})")
+        if dates["valid_end"] >= dates["test_start"]:
+            raise ValueError(f"valid_end ({data_split['valid_end']}) 必须早于 test_start ({data_split['test_start']})")
         if dates["test_end"] > datetime.now():
             raise ValueError(f"test_end ({data_split['test_end']}) 不能超过当前日期")
         if data_split.get("backtest_end"):
@@ -1624,8 +1635,12 @@ class ConfigComposer:
             prepare_path = exp_dir / "prepare_factors.py"
             prepare_path.write_text(prepare_factors_py, encoding="utf-8")
 
-        # 如果使用 DynamicFactorsOnlyLoader，复制 QE 独立的 loader 文件到实验目录
-        if has_custom_factors and disable_alpha158:
+        # DynamicFactorsOnlyLoader 和长周期标签成熟度处理器都由该独立模块提供。
+        if _requires_qe_custom_loaders(
+            has_custom_factors=has_custom_factors,
+            disable_alpha158=disable_alpha158,
+            custom_params=custom_params,
+        ):
             self._copy_qe_custom_loaders(exp_dir)
 
         # 复制read_exp_res.py模板
@@ -1973,11 +1988,16 @@ class ConfigComposer:
             if prepare_factors_py:
                 experiment_files["prepare_factors.py"] = prepare_factors_py
 
-        # 3) qe_custom_loaders.py（仅 disable_alpha158 时需要）
-        if has_custom_factors and disable_alpha158:
+        # 3) qe_custom_loaders.py（动态 loader 或长周期标签成熟度处理器需要）
+        if _requires_qe_custom_loaders(
+            has_custom_factors=has_custom_factors,
+            disable_alpha158=disable_alpha158,
+            custom_params=custom_params,
+        ):
             qe_loader_source = Path(__file__).parent / "qe_custom_loaders.py"
-            if qe_loader_source.exists():
-                experiment_files["qe_custom_loaders.py"] = qe_loader_source.read_text(encoding="utf-8")
+            if not qe_loader_source.exists():
+                raise FileNotFoundError(f"QE custom loaders source is missing: {qe_loader_source}")
+            experiment_files["qe_custom_loaders.py"] = qe_loader_source.read_text(encoding="utf-8")
 
         # 4) read_exp_res.py
         experiment_files["read_exp_res.py"] = self._get_read_exp_res_content()
@@ -2687,8 +2707,12 @@ class ConfigComposer:
             prepare_path = exp_dir / "prepare_factors.py"
             prepare_path.write_text(prepare_factors_py, encoding="utf-8")
 
-        # 如果使用 DynamicFactorsOnlyLoader，复制 QE 独立的 loader 文件到实验目录
-        if has_custom_factors and disable_alpha158:
+        # DynamicFactorsOnlyLoader 和长周期标签成熟度处理器都由该独立模块提供。
+        if _requires_qe_custom_loaders(
+            has_custom_factors=has_custom_factors,
+            disable_alpha158=disable_alpha158,
+            custom_params=custom_params,
+        ):
             self._copy_qe_custom_loaders(exp_dir)
 
         # 复制read_exp_res.py模板
@@ -3277,7 +3301,7 @@ class ConfigComposer:
             "model_type", "dataset_cls", "step_len", "num_timesteps", "num_features",
             "quick_train",  # 快速训练模式：控制模型训练参数
             "label_type",   # 训练标签类型：close/open/vwap
-            "label_horizon",  # Training label horizon: 1/3/5/10/20d
+            "label_horizon",  # Training label horizon: 1/3/5/10/20/30/40/60/120/180d
             "stock_pool",   # 股票池文件路径
             "runtime_mode",
             "bar_freq",
@@ -3561,6 +3585,25 @@ class ConfigComposer:
         _label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
         _label_field = _LABEL_FIELDS[_label_type]
         _label_formula = f"Ref({_label_field}, -{_label_horizon + 1}) / Ref({_label_field}, -1) - 1"
+        _requires_label_maturity_purge = _label_horizon >= 30
+
+        def _append_label_maturity_purge() -> None:
+            if not _requires_label_maturity_purge:
+                return
+            lines.append("        - class: LongHorizonLabelMaturityPurge")
+            lines.append("          module_path: qe_custom_loaders")
+            lines.append("          kwargs:")
+            lines.append(f"              label_horizon: {_label_horizon}")
+            for split_key in (
+                "train_start",
+                "train_end",
+                "valid_start",
+                "valid_end",
+                "test_start",
+                "test_end",
+            ):
+                lines.append(f"              {split_key}: {data_split[split_key]}")
+
         if _label_type != "close" or _label_horizon != 1:
             logger.info(
                 "Using non-default training label: "
@@ -3643,6 +3686,7 @@ class ConfigComposer:
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
+            _append_label_maturity_purge()
             lines.append("        - class: DropnaLabel")
             lines.append("        - class: CSZScoreNorm")
             lines.append("          kwargs:")
@@ -3670,6 +3714,7 @@ class ConfigComposer:
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
+            _append_label_maturity_purge()
             lines.append("        - class: DropnaLabel")
             lines.append("        - class: CSZScoreNorm")
             lines.append("          kwargs:")
@@ -3691,6 +3736,7 @@ class ConfigComposer:
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
             lines.append("    learn_processors:")
+            _append_label_maturity_purge()
             lines.append("        - class: DropnaLabel")
             lines.append("        - class: CSRankNorm")
             lines.append("          kwargs:")
@@ -4949,8 +4995,10 @@ class ConfigComposer:
             factor_cache_dir: 节点配置的因子缓存目录（远端节点使用 rsync 同步的路径）。
         """
         env_lines = []
-        if has_custom_factors or use_custom_model:
-            env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
+        # Every generated workspace may contain QE-owned runtime modules such as
+        # the long-horizon label maturity processor.  Keep the workspace import
+        # path explicit instead of relying on the launcher's current directory.
+        env_lines.append(f'export PYTHONPATH="{wsl_path}:${{QLIB_RDAGENT_ROOT_WSL:-.}}:$PYTHONPATH"')
 
         if use_custom_model and model_type_tag:
             if model_type_tag == "TimeSeries":
@@ -5722,8 +5770,7 @@ model_cls = {nn_class_name}
         qe_loader_source = Path(__file__).parent / "qe_custom_loaders.py"
         
         if not qe_loader_source.exists():
-            logger.warning(f"QE custom loaders源文件不存在: {qe_loader_source}")
-            return
+            raise FileNotFoundError(f"QE custom loaders源文件不存在: {qe_loader_source}")
         
         # 复制到实验目录，命名为qe_custom_loaders.py
         qe_loader_dest = exp_dir / "qe_custom_loaders.py"

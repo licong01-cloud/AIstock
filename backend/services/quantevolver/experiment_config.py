@@ -13,7 +13,7 @@ from pydantic import BaseModel, model_validator
 
 from .qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
 
-ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
+ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20, 30, 40, 60, 120, 180)
 DEFAULT_LABEL_HORIZON = 1
 
 QE_DEFAULT_RISK_POLICY: dict[str, Any] = {

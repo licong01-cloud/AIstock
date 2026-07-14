@@ -231,7 +231,7 @@ def test_qe_experiment_validate_config_is_read_only() -> None:
         {
             "factor_names": ["Alpha001"],
             "model_id": "model_lgbm_v1",
-            "custom_params": {"random_seed": 42, "label_horizon": 5},
+            "custom_params": {"random_seed": 42, "label_horizon": 180},
         },
         include_normalized=True,
     )
@@ -240,6 +240,18 @@ def test_qe_experiment_validate_config_is_read_only() -> None:
     assert valid["writes"] is False
     assert valid["validation_mode"] == "mcp_dry_run"
     assert valid["normalized_config"]["custom_params"]["random_seed"] == 42
+    assert valid["normalized_config"]["custom_params"]["label_horizon"] == 180
+
+    invalid_horizon = mcp.tools["qe_experiment_validate_config"](
+        "single_experiment",
+        {
+            "factor_names": ["Alpha001"],
+            "model_id": "model_lgbm_v1",
+            "custom_params": {"label_horizon": 181},
+        },
+    )
+    assert invalid_horizon["valid"] is False
+    assert any("label_horizon" in item for item in invalid_horizon["errors"])
 
     invalid = mcp.tools["qe_experiment_validate_config"](
         "custom_evo",

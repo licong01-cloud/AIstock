@@ -8,18 +8,23 @@ from __future__ import annotations
 
 from backend.db.pg_pool import get_conn
 from backend.services.quantevolver.label_horizon_schema import (
+    ALLOWED_LABEL_HORIZONS,
     CONSTRAINT_NAME,
     ensure_qe_label_horizon_schema,
+    parse_label_horizon_constraint_values,
 )
 
 
-ALLOWED = (1, 3, 5, 10, 20)
+ALLOWED = ALLOWED_LABEL_HORIZONS
 
 
 def _constraint_missing_values(definition: str | None) -> list[int]:
-    if not definition:
-        return list(ALLOWED)
-    return [value for value in ALLOWED if str(value) not in definition]
+    existing = parse_label_horizon_constraint_values(definition)
+    return [value for value in ALLOWED if value not in existing]
+
+
+def _constraint_requires_replacement(definition: str | None) -> bool:
+    return parse_label_horizon_constraint_values(definition) != frozenset(ALLOWED)
 
 
 def run_migration() -> None:
@@ -64,7 +69,7 @@ def run_migration() -> None:
             )
             constraint = cur.fetchone()
             definition = str(constraint[0]) if constraint else None
-            if constraint and _constraint_missing_values(definition):
+            if constraint and _constraint_requires_replacement(definition):
                 cur.execute(
                     f"""
                     ALTER TABLE qe_evolution_tasks
@@ -73,7 +78,7 @@ def run_migration() -> None:
                 )
                 definition = None
 
-            if _constraint_missing_values(definition):
+            if _constraint_requires_replacement(definition):
                 cur.execute(
                     f"""
                     ALTER TABLE qe_evolution_tasks
