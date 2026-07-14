@@ -380,6 +380,7 @@ class ProductionSimulationRunContextProvider:
         qmt_reconciliation_service_factory: Callable[[], QmtStrategyLedgerReconciliationService] | None = None,
         qmt_ledger_repository: Any | None = None,
         package_manifest_loader: Callable[[str], StrategyPackageManifest | dict[str, Any] | None] | None = None,
+        runtime_repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
         pre_trade_tradability_provider: PreTradeTradabilityProvider | Any | None = None,
         enable_localsim_broker: bool | None = None,
         enable_miniqmt_submit: bool | None = None,
@@ -396,6 +397,7 @@ class ProductionSimulationRunContextProvider:
         self._qmt_reconciliation_service_factory = qmt_reconciliation_service_factory
         self._qmt_ledger_repository = qmt_ledger_repository
         self._package_manifest_loader = package_manifest_loader or _default_strategy_package_manifest_loader
+        self._runtime_repository = runtime_repository
         self._pre_trade_tradability_provider_injected = pre_trade_tradability_provider is not None
         self._pre_trade_tradability_provider = pre_trade_tradability_provider or PreTradeTradabilityProvider(
             realtime_quote_fetcher=fetch_tdx_realtime_quotes,
@@ -551,11 +553,11 @@ class ProductionSimulationRunContextProvider:
             ),
             as_of_time=as_of_time,
         )
-        manifest = getattr(portfolio, "frozen_manifest", None)
-        self._validate_manifest_identity(
-            manifest=manifest,
+        manifest, manifest_identity_diagnostics = self._resolve_local_sim_manifest(
+            portfolio_manifest=getattr(portfolio, "frozen_manifest", None),
             runtime_release=runtime_release,
             binding=binding,
+            trade_date=trade_date,
         )
         release_execution_policy_payload = self._release_execution_policy_payload(runtime_release)
         effective_execution_policy_payload = self._resolve_local_sim_execution_policy(
@@ -600,6 +602,7 @@ class ProductionSimulationRunContextProvider:
             target_total_equity=target_total_equity,
             target_equity_context=target_equity_context,
             context_diagnostics={
+                "manifest_identity": manifest_identity_diagnostics,
                 "localsim_tplus1_settlement": settlement_diagnostics,
                 "pre_trade_tradability": self._pre_trade_tradability_diagnostics(pre_trade_tradability),
                 "target_equity_basis": target_equity_context,
@@ -1477,6 +1480,349 @@ class ProductionSimulationRunContextProvider:
             return binding.broker_account_id
         return binding.strategy_id
 
+    def _resolve_local_sim_manifest(
+        self,
+        *,
+        portfolio_manifest: StrategyPackageManifest | None,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> tuple[StrategyPackageManifest | None, dict[str, Any]]:
+        """Resolve one immutable manifest identity for the complete LocalSIM context.
+
+        Ordinary bindings remain pinned to the Paper v2 portfolio manifest.  The
+        StrategyPackage repository is consulted only for an explicit unattended
+        successor lineage whose predecessor identity is independently proven by
+        the portfolio manifest and by the release/binding metadata written during
+        the side-effect-free roll-forward.
+        """
+
+        try:
+            self._validate_manifest_identity(
+                manifest=portfolio_manifest,
+                runtime_release=runtime_release,
+                binding=binding,
+            )
+        except DataUnavailableError:
+            binding_config = binding.binding_config_json if isinstance(binding.binding_config_json, dict) else {}
+            binding_metadata = (
+                binding_config.get("metadata") if isinstance(binding_config.get("metadata"), dict) else {}
+            )
+            if binding_metadata.get("manifest_identity_source") != "strategy_package_current_manifest":
+                raise
+            return self._load_local_sim_successor_manifest(
+                portfolio_manifest=portfolio_manifest,
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+            )
+
+        return portfolio_manifest, {
+            "schema_version": "localsim_manifest_identity_resolution_v1",
+            "source": "paper_v2_portfolio_frozen_manifest",
+            "package_id": portfolio_manifest.package_id if portfolio_manifest is not None else None,
+            "manifest_sha256": portfolio_manifest.manifest_sha256 if portfolio_manifest is not None else None,
+            "strategy_package_revalidation_performed": False,
+        }
+
+    def _load_local_sim_successor_manifest(
+        self,
+        *,
+        portfolio_manifest: StrategyPackageManifest | None,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> tuple[StrategyPackageManifest, dict[str, Any]]:
+        lineage = self._validate_local_sim_successor_manifest_lineage(
+            portfolio_manifest=portfolio_manifest,
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+        )
+        try:
+            raw_manifest = self._package_manifest_loader(binding.package_id)
+        except (DataUnavailableError, RuntimeConfigInvalidError):
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to load authoritative StrategyPackage manifest for LocalSim successor context",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "manifest_sha256": binding.manifest_sha256,
+                    "extends_binding_id": lineage["extends_binding_id"],
+                    "extends_release_id": lineage["extends_release_id"],
+                },
+            ) from exc
+
+        if raw_manifest is None:
+            raise DataUnavailableError(
+                "LocalSim successor context requires the authoritative StrategyPackage manifest",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "manifest_sha256": binding.manifest_sha256,
+                    "extends_binding_id": lineage["extends_binding_id"],
+                    "extends_release_id": lineage["extends_release_id"],
+                },
+            )
+        try:
+            manifest = (
+                raw_manifest
+                if isinstance(raw_manifest, StrategyPackageManifest)
+                else StrategyPackageManifest.model_validate(raw_manifest)
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "authoritative StrategyPackage manifest is invalid for LocalSim successor context",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "manifest_sha256": binding.manifest_sha256,
+                },
+            ) from exc
+
+        self._validate_manifest_identity(
+            manifest=manifest,
+            runtime_release=runtime_release,
+            binding=binding,
+        )
+        return manifest, {
+            "schema_version": "localsim_manifest_identity_resolution_v1",
+            "source": "strategy_package_current_manifest",
+            "package_id": manifest.package_id,
+            "manifest_sha256": manifest.manifest_sha256,
+            "source_release_manifest_sha256": lineage["source_release_manifest_sha256"],
+            "extends_binding_id": lineage["extends_binding_id"],
+            "extends_release_id": lineage["extends_release_id"],
+            "source_binding_readback_id": lineage["source_binding_readback_id"],
+            "source_release_readback_id": lineage["source_release_readback_id"],
+            "strategy_package_revalidation_performed": False,
+        }
+
+    def _validate_local_sim_successor_manifest_lineage(
+        self,
+        *,
+        portfolio_manifest: StrategyPackageManifest | None,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> dict[str, str]:
+        binding_config = binding.binding_config_json if isinstance(binding.binding_config_json, dict) else {}
+        binding_metadata = binding_config.get("metadata") if isinstance(binding_config.get("metadata"), dict) else {}
+        release_config = (
+            runtime_release.release_config_json if isinstance(runtime_release.release_config_json, dict) else {}
+        )
+        release_metadata = release_config.get("metadata") if isinstance(release_config.get("metadata"), dict) else {}
+        validation_evidence = (
+            runtime_release.validation_evidence if isinstance(runtime_release.validation_evidence, dict) else {}
+        )
+        manifest_evidence = (
+            validation_evidence.get("manifest_identity")
+            if isinstance(validation_evidence.get("manifest_identity"), dict)
+            else {}
+        )
+        expected_trade_date = trade_date.isoformat()
+        expected_purpose = "localsim_unattended_daily_roll_forward"
+        extends_release_id = str(binding_metadata.get("extends_release_id") or "").strip()
+        extends_binding_id = str(binding_metadata.get("extends_binding_id") or "").strip()
+        source_manifest_sha256 = str(binding_metadata.get("source_release_manifest_sha256") or "").strip()
+        authoritative_manifest_sha256 = str(binding_metadata.get("authoritative_manifest_sha256") or "").strip()
+
+        violations: list[str] = []
+
+        def require_equal(name: str, actual: Any, expected: Any) -> None:
+            if actual != expected:
+                violations.append(name)
+
+        require_equal("broker_backend", binding.broker_backend, SimulationBrokerBackend.LOCAL_SIM)
+        require_equal("binding.release_id", binding.release_id, runtime_release.release_id)
+        require_equal("binding.release_hash", binding.release_hash, runtime_release.release_hash)
+        require_equal("binding.package_id", binding.package_id, runtime_release.package_id)
+        require_equal("binding.manifest_sha256", binding.manifest_sha256, runtime_release.manifest_sha256)
+        require_equal("binding.metadata.purpose", binding_metadata.get("purpose"), expected_purpose)
+        require_equal("release.metadata.purpose", release_metadata.get("purpose"), expected_purpose)
+        require_equal("binding.metadata.broker_backend", binding_metadata.get("broker_backend"), binding.broker_backend.value)
+        require_equal("binding.metadata.target_trade_date", binding_metadata.get("target_trade_date"), expected_trade_date)
+        require_equal("release.metadata.target_trade_date", release_metadata.get("target_trade_date"), expected_trade_date)
+        require_equal(
+            "binding.metadata.manifest_identity_source",
+            binding_metadata.get("manifest_identity_source"),
+            "strategy_package_current_manifest",
+        )
+        require_equal(
+            "release.metadata.manifest_identity_source",
+            release_metadata.get("manifest_identity_source"),
+            "strategy_package_current_manifest",
+        )
+        require_equal("binding.metadata.manifest_identity_changed", binding_metadata.get("manifest_identity_changed"), True)
+        require_equal("release.metadata.manifest_identity_changed", release_metadata.get("manifest_identity_changed"), True)
+        require_equal("binding.metadata.new_release_id", binding_metadata.get("new_release_id"), runtime_release.release_id)
+        require_equal("binding.metadata.extends_release_id", extends_release_id, runtime_release.base_release_id)
+        require_equal("release.metadata.extends_release_id", release_metadata.get("extends_release_id"), extends_release_id)
+        require_equal("release.metadata.extends_binding_id", release_metadata.get("extends_binding_id"), extends_binding_id)
+        require_equal(
+            "release.metadata.source_release_manifest_sha256",
+            release_metadata.get("source_release_manifest_sha256"),
+            source_manifest_sha256,
+        )
+        require_equal(
+            "release.metadata.authoritative_manifest_sha256",
+            release_metadata.get("authoritative_manifest_sha256"),
+            authoritative_manifest_sha256,
+        )
+        require_equal("binding.metadata.authoritative_manifest_sha256", authoritative_manifest_sha256, binding.manifest_sha256)
+        require_equal("validation_evidence.target_trade_date", validation_evidence.get("target_trade_date"), expected_trade_date)
+        require_equal("validation_evidence.extends_release_id", validation_evidence.get("extends_release_id"), extends_release_id)
+        require_equal("validation_evidence.extends_binding_id", validation_evidence.get("extends_binding_id"), extends_binding_id)
+        require_equal("validation_evidence.manifest_identity.source", manifest_evidence.get("source"), "strategy_package_current_manifest")
+        require_equal(
+            "validation_evidence.manifest_identity.source_release_manifest_sha256",
+            manifest_evidence.get("source_release_manifest_sha256"),
+            source_manifest_sha256,
+        )
+        require_equal(
+            "validation_evidence.manifest_identity.authoritative_manifest_sha256",
+            manifest_evidence.get("authoritative_manifest_sha256"),
+            authoritative_manifest_sha256,
+        )
+        require_equal("validation_evidence.manifest_identity.identity_changed", manifest_evidence.get("identity_changed"), True)
+        require_equal(
+            "validation_evidence.manifest_identity.strategy_package_revalidation_performed",
+            manifest_evidence.get("strategy_package_revalidation_performed"),
+            False,
+        )
+
+        if not extends_release_id:
+            violations.append("binding.metadata.extends_release_id.required")
+        if not extends_binding_id or extends_binding_id == binding.binding_id:
+            violations.append("binding.metadata.extends_binding_id.invalid")
+        if not source_manifest_sha256 or source_manifest_sha256 == authoritative_manifest_sha256:
+            violations.append("binding.metadata.source_release_manifest_sha256.invalid")
+        if portfolio_manifest is None:
+            violations.append("portfolio.frozen_manifest.required")
+        else:
+            require_equal("portfolio.manifest.package_id", portfolio_manifest.package_id, binding.package_id)
+
+        if violations:
+            raise RuntimeConfigInvalidError(
+                "LocalSim authoritative manifest successor lineage is invalid",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "package_id": binding.package_id,
+                    "binding_manifest_sha256": binding.manifest_sha256,
+                    "portfolio_manifest_sha256": (
+                        portfolio_manifest.manifest_sha256 if portfolio_manifest is not None else None
+                    ),
+                    "violations": sorted(set(violations)),
+                },
+            )
+
+        source_readback = self._validate_local_sim_successor_source_records(
+            runtime_release=runtime_release,
+            binding=binding,
+            extends_release_id=extends_release_id,
+            extends_binding_id=extends_binding_id,
+            source_manifest_sha256=source_manifest_sha256,
+        )
+
+        return {
+            "extends_binding_id": extends_binding_id,
+            "extends_release_id": extends_release_id,
+            "source_release_manifest_sha256": source_manifest_sha256,
+            "authoritative_manifest_sha256": authoritative_manifest_sha256,
+            "source_release_readback_id": source_readback["source_release_id"],
+            "source_binding_readback_id": source_readback["source_binding_id"],
+        }
+
+    def _validate_local_sim_successor_source_records(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        extends_release_id: str,
+        extends_binding_id: str,
+        source_manifest_sha256: str,
+    ) -> dict[str, str]:
+        repository = self._runtime_repository or SimulationRuntimeRepository()
+        try:
+            source_release = repository.get_strategy_runtime_release(extends_release_id)
+            source_binding = repository.get_simulation_release_binding(extends_binding_id)
+        except Exception as exc:  # noqa: BLE001
+            raise DataUnavailableError(
+                "failed to read LocalSim successor source release and binding",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "extends_binding_id": extends_binding_id,
+                    "extends_release_id": extends_release_id,
+                },
+            ) from exc
+
+        if source_release is None or source_binding is None:
+            raise DataUnavailableError(
+                "LocalSim successor source release and binding are unavailable",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "extends_binding_id": extends_binding_id,
+                    "extends_release_id": extends_release_id,
+                    "source_release_found": source_release is not None,
+                    "source_binding_found": source_binding is not None,
+                },
+            )
+
+        violations: list[str] = []
+
+        def require_equal(name: str, actual: Any, expected: Any) -> None:
+            if actual != expected:
+                violations.append(name)
+
+        require_equal("source_release.release_id", source_release.release_id, extends_release_id)
+        require_equal("source_binding.binding_id", source_binding.binding_id, extends_binding_id)
+        require_equal("source_binding.release_id", source_binding.release_id, source_release.release_id)
+        require_equal("source_binding.release_hash", source_binding.release_hash, source_release.release_hash)
+        require_equal("source_release.package_id", source_release.package_id, runtime_release.package_id)
+        require_equal("source_binding.package_id", source_binding.package_id, runtime_release.package_id)
+        require_equal("source_release.manifest_sha256", source_release.manifest_sha256, source_manifest_sha256)
+        require_equal("source_binding.manifest_sha256", source_binding.manifest_sha256, source_manifest_sha256)
+        require_equal("source_binding.strategy_id", source_binding.strategy_id, binding.strategy_id)
+        require_equal("source_binding.broker_backend", source_binding.broker_backend, SimulationBrokerBackend.LOCAL_SIM)
+        require_equal(
+            "source_binding.portfolio_id",
+            self._resolve_local_sim_portfolio_id(source_binding),
+            self._resolve_local_sim_portfolio_id(binding),
+        )
+
+        if violations:
+            raise RuntimeConfigInvalidError(
+                "LocalSim authoritative manifest successor source records are inconsistent",
+                context={
+                    "strategy_id": binding.strategy_id,
+                    "binding_id": binding.binding_id,
+                    "release_id": runtime_release.release_id,
+                    "extends_binding_id": extends_binding_id,
+                    "extends_release_id": extends_release_id,
+                    "source_release_manifest_sha256": source_manifest_sha256,
+                    "violations": sorted(set(violations)),
+                },
+            )
+
+        return {
+            "source_release_id": source_release.release_id,
+            "source_binding_id": source_binding.binding_id,
+        }
+
     def _load_strategy_package_manifest(
         self,
         *,
@@ -2068,15 +2414,18 @@ def build_simulation_lifecycle_scheduler_from_env(
     *,
     repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
 ) -> SimulationLifecycleScheduler:
+    resolved_repository = repository or SimulationRuntimeRepository()
     mode = (os.getenv("SIMULATION_RUNTIME_CONTEXT_PROVIDER") or "").strip().lower()
     production_enabled = _env_flag("ENABLE_SIMULATION_RUNTIME_PRODUCTION_PROVIDER", default=False)
     if mode in {"production", "prod"} or production_enabled:
-        provider: SimulationRunContextProvider = ProductionSimulationRunContextProvider()
+        provider: SimulationRunContextProvider = ProductionSimulationRunContextProvider(
+            runtime_repository=resolved_repository,
+        )
     else:
         provider = FailFastSimulationRunContextProvider()
     quote_ingress_activation = build_miniqmt_quote_ingress_activation_from_env()
     return SimulationLifecycleScheduler(
-        repository=repository,
+        repository=resolved_repository,
         context_provider=provider,
         trading_calendar_service=TradingCalendarStatusService(),
         miniqmt_quote_ingress_activation=quote_ingress_activation,
