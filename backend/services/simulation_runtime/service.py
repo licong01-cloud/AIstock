@@ -6,6 +6,7 @@ import re
 from datetime import date
 from typing import Any
 
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 from .models import (
@@ -38,8 +39,18 @@ def _miniqmt_account_group_id(broker_account_id: str | None) -> str | None:
 
 
 class StrategyRuntimeReleaseService:
-    def __init__(self, repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None) -> None:
+    def __init__(
+        self,
+        repository: SimulationRuntimeRepository | InMemorySimulationRuntimeRepository | Any | None = None,
+        *,
+        package_lifecycle_reader: Any | None = None,
+    ) -> None:
         self.repository = repository or SimulationRuntimeRepository()
+        if package_lifecycle_reader is None and isinstance(self.repository, SimulationRuntimeRepository):
+            from backend.services.strategy_package.repository import StrategyPackageRepository
+
+            package_lifecycle_reader = StrategyPackageRepository()
+        self.package_lifecycle_reader = package_lifecycle_reader
 
     def create_release(
         self,
@@ -163,6 +174,7 @@ class StrategyRuntimeReleaseService:
         created_by: str | None = None,
         created_reason: str | None = None,
     ) -> SimulationReleaseBinding:
+        self._require_package_lifecycle_allows_new_binding(release)
         metadata = dict(binding_metadata or {})
         backend = broker_backend if isinstance(broker_backend, SimulationBrokerBackend) else SimulationBrokerBackend(str(broker_backend))
         normalized_account_group_id = _optional_stripped(account_group_id)
@@ -226,6 +238,79 @@ class StrategyRuntimeReleaseService:
             created_reason=created_reason,
         )
         return self.repository.save_simulation_release_binding(binding)
+
+    def _require_package_lifecycle_allows_new_binding(self, release: StrategyRuntimeRelease) -> None:
+        """Check only package lifecycle at the simulation admission boundary.
+
+        StrategyPackage completeness, model assets, and alpha-mode validation
+        belong to the package entry writer and are deliberately not repeated
+        here.  The in-memory repository has no authoritative package store; its
+        tests can inject ``package_lifecycle_reader`` when lifecycle behavior is
+        under test.  Production repositories always receive the canonical
+        StrategyPackage reader above.
+        """
+
+        reader = self.package_lifecycle_reader
+        if reader is None:
+            if isinstance(self.repository, InMemorySimulationRuntimeRepository):
+                return
+            raise RuntimeConfigInvalidError(
+                "simulation binding admission requires the authoritative StrategyPackage lifecycle reader",
+                context={
+                    "reason_code": "SIMULATION_BINDING_PACKAGE_LIFECYCLE_READER_MISSING",
+                    "package_id": release.package_id,
+                    "release_id": release.release_id,
+                },
+            )
+        get_package = getattr(reader, "get", None)
+        if not callable(get_package):
+            raise RuntimeConfigInvalidError(
+                "simulation binding admission StrategyPackage lifecycle reader is invalid",
+                context={
+                    "reason_code": "SIMULATION_BINDING_PACKAGE_LIFECYCLE_READER_INVALID",
+                    "package_id": release.package_id,
+                    "release_id": release.release_id,
+                },
+            )
+        record = get_package(release.package_id)
+        record_package_id = str(getattr(record, "package_id", "") or "").strip()
+        raw_status = getattr(record, "package_status", None)
+        status_value = str(getattr(raw_status, "value", raw_status) or "").strip()
+        if record_package_id != release.package_id or not status_value:
+            raise RuntimeConfigInvalidError(
+                "simulation binding admission StrategyPackage lifecycle identity is incomplete",
+                context={
+                    "reason_code": "SIMULATION_BINDING_PACKAGE_LIFECYCLE_INVALID",
+                    "package_id": release.package_id,
+                    "release_id": release.release_id,
+                    "record_package_id": record_package_id or None,
+                    "package_status": status_value or None,
+                },
+            )
+        try:
+            package_status = PackageStatus(status_value)
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "simulation binding admission StrategyPackage lifecycle status is invalid",
+                context={
+                    "reason_code": "SIMULATION_BINDING_PACKAGE_LIFECYCLE_INVALID",
+                    "package_id": release.package_id,
+                    "release_id": release.release_id,
+                    "record_package_id": record_package_id,
+                    "package_status": status_value,
+                },
+            ) from exc
+        if package_status == PackageStatus.RETIRED:
+            raise RuntimeConfigInvalidError(
+                "retired StrategyPackage cannot create a new simulation release binding",
+                context={
+                    "reason_code": "SIMULATION_BINDING_PACKAGE_RETIRED",
+                    "package_id": release.package_id,
+                    "release_id": release.release_id,
+                    "package_status": PackageStatus.RETIRED.value,
+                    "strategy_package_revalidation_performed": False,
+                },
+            )
 
     @staticmethod
     def daily_strategy_profile_version_id_from_runtime_config(runtime_config: dict[str, Any] | None) -> str:
