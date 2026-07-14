@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v4（post-R6 研究路线补全版，2026-07-14）
+- 当前版本：v4.1（post-R6 研究路线与历史融合 canary receipt，2026-07-14）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -507,6 +507,27 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 
 融合权重和归一化方法只能在 validation 冻结，最终 test 不得重新选权。报告预测 rank 相关、Top-K/行业暴露/换手重合、边际贡献、净 CAGR/Sharpe/Calmar/最大回撤、容量和 leave-one-leg-out。若组合不改善扣费后风险收益或改善只来自扩大风险预算，则停止继续扩展 GATs 单腿。
 
+#### 9.4.1 2026-07-14 历史 prediction-fusion canary receipt
+
+本 canary 只验证历史预测资产的可对齐性、信号正交性和 prediction fusion 管线，不创建 QE 实验、不重新训练模型、不执行组合回测，也不构成 F-013 的正式晋级证据。输入腿固定为 `qe_20260709_055708_fe49_L2`（GATs）与 `qe_20260708_030408_80cd_L1`（LGBM）：两份 `pred.pkl` 各有 `2,260,161` 行、`443` 个共同预测日、`5,120` 个 instrument，预测窗口为 `2024-07-01` 至 `2026-04-28`。
+
+正交性复核得到日截面预测 rank 相关 `0.594975`，Top25 Jaccard `0.036607`；后者等价于每天平均约重合 `1.77/25` 只股票，或以单腿 Top25 为分母约 `7.1%`。因此两腿存在显著选股差异，但低重合本身不证明组合收益提高。
+
+h20 标签只纳入已经成熟的信号日。两腿共有 `2,154,168` 个预测/标签对、`424` 个成熟交易日和 `5,116` 个 instrument，评价窗口截止 `2026-03-31`；两份 label artifact 在全部共同样本上 `max_abs_diff=0`。预测窗口尾部尚未成熟的 19 个信号日没有进入 IC、RankIC 或 Top25 标签统计。
+
+在读取结果前冻结两种等权方案：主方案为 `equal + rank`，敏感性方案为 `equal + zscore`，两腿权重均为 `0.5/0.5`。两腿场景中的 `orthogonality_aware` 会退化为相同的 `0.5/0.5`，因此不重复；`ic_weighted` 与 `risk_parity` 必须留到正式 R6 validation 窗口估权，禁止用本 canary 全段 OOS 选择权重。
+
+| 方案 | h20 RankIC | h20 IC | RankIC 正向率 | Top25 h20 标签均值 |
+|---|---:|---:|---:|---:|
+| GATs 单腿 | 0.102045 | 0.055060 | 77.59% | 0.053662 |
+| LGBM 单腿 | 0.113758 | 0.077744 | 88.21% | 0.072899 |
+| `equal + rank` | 0.119018 | 0.065213 | 84.20% | 0.058810 |
+| `equal + zscore` | 0.121489 | 0.074162 | 84.20% | 0.069291 |
+
+相对 LGBM，`equal + rank` 与 `equal + zscore` 的平均 RankIC 分别增加约 `0.005260`（`+4.6%`）和 `0.007731`（`+6.8%`），但两者的 IC、RankIC 正向率和 Top25 h20 标签均值均未全面超过 LGBM；其中 `equal + zscore` 的 Top25 标签均值仍比 LGBM 低约 `5.0%`。当前结论因此冻结为：**prediction fusion 显示排序增量与正交性，但尚未证明头部收益转换或成本后组合增量**。后续正式判断仍需 R6 同因子、同 seed、同 split、同数据快照的配对预测，并完成固定总风险预算的 portfolio fusion、成本、回撤、容量和 leave-one-leg-out 回测。
+
+执行时 R6 CPU/GPU 节点均有在途任务，节点容量门禁禁止组合回测抢占现有 QE 资源，因此本 canary 没有提交 combine-backtest。该状态是有意的资源隔离，不得记录为组合回测失败。
+
 ### 9.5 两层板块轮动模型
 
 建立一个可解释的 top-down 对照，不直接从全市场一次性挑 Top-K：
@@ -627,6 +648,7 @@ post-R6 的默认顺序为：R6 同口径收口 → GATs+LGBM 融合 → 两层�
 
 ### 11.6 post-R6 研究交付物
 
+- 历史 GATs/LGBM prediction-fusion canary receipt：预测/标签逐行对齐、正交性、Top25 重合、预冻结等权 rank/zscore 与信号级 h20 结果已完成；正式 R6 同口径组合回测仍 pending；
 - GATs/LGBM 同 seed、同 split 预测对齐 receipt，以及 prediction/portfolio fusion 的权重冻结、正交性、成本后组合和 leave-one-leg-out 报告；
 - 两层板块→个股模型的板块评分、板块 Recall、板块内排序、集中度/轮动成本及一层模型对照；
 - 与 Advisory Phase 8 对齐的 20–180 日、MFE/MAE、有序目标、time-to-hit、生存、右删失、捕获率和假退出报告；
@@ -685,7 +707,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 ### Phase G0-E：post-R6 归因与长期趋势闭环
 
 1. 冻结 R6 完整归档，核对同 seed/同 split/同数据快照的 GATs、LGBM 和关系开关配对；失败/不完整 loop 不进入择优。
-2. 先用已归档预测执行第 9.4 节融合，再执行第 9.5 节两层板块→个股基线；两项均不以扩大风险预算换取收益。
+2. 先用已归档预测执行第 9.4 节融合，再执行第 9.5 节两层板块→个股基线；两项均不以扩大风险预算换取收益。第 9.4.1 节历史信号 canary 已完成，只证明管线与排序增量；正式 R6 portfolio fusion 仍待同口径预测完整归档和节点容量释放。
 3. 对单腿与组合统一补第 9.6 节长期趋势指标，确认 h20 强度是否能转化为 60–180 日右尾捕获；不能转化则回到因子/标签而不是继续堆模型容量。
 
 ### Phase G0-F：PIT 关系模型 canary
@@ -759,7 +781,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-010 | QE GATs/LGBM experiment specs | 2×2、STATE、multi-seed OOS 与 L4 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不启动 QE。 |
 | F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
 | F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
-| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | 融合/两层实验卡、同口径 prediction receipt、固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 用户于 2026-07-14 批准写入后续研究方向；尚未由本次文档任务创建或执行实验。 |
+| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | 融合/两层实验卡、同口径 prediction receipt、固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_CANARY_COMPLETE | 用户于 2026-07-14 明确批准执行并写入历史融合 canary；两腿 prediction fusion 已完成全量对齐、正交性、等权 rank/zscore 和信号级 h20 receipt。未创建 QE 实验，未执行 portfolio fusion；正式 R6 同口径配对、成本后组合、容量、风险预算和 leave-one-leg-out 仍 pending。 |
 | F-014 | 本文 9.6、11.6、Phase G0-E；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit 报告 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 当前 h20 实验不能替代长期趋势验收；需独立标签成熟度和 OOS 证据。 |
 | F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；未来 HIST PIT relation、mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 二值同业邻接已测试且 RankIC 无增益；动态/层次关系尚未实现。 |
 | F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放验收，随后才有 HIST-concept/HATS/超图证据 | APPROVED_BY_USER: DEFERRED_TO_CONCEPT_DATASET | 当前概念成员 PIT 数据集未入库，不允许静态快照或聚合板块数据替代。 |
