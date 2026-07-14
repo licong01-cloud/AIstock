@@ -520,9 +520,10 @@ def _default_local_pred_backtest_commands(
     distro, conda_sh, conda_env = _wsl_runtime_settings(backtest_config=backtest_config, require_conda=True)
     workspace_wsl = win_to_wsl_path(str(workspace.resolve()))
     prefix = (
-        "set -euo pipefail; "
+        "set -eo pipefail; "
         f"source {shlex.quote(str(conda_sh))}; "
         f"conda activate {shlex.quote(str(conda_env))}; "
+        "set -u; "
         f"cd {shlex.quote(workspace_wsl)}; "
         "if [ -f .factor_env ]; then . ./.factor_env; fi; "
     )
