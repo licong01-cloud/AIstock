@@ -37,8 +37,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-14T16:12:56.197853Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c11e5523574825b5177897c5433899b040292035",
+  "fixed_at": "2026-07-14T17:43:34.680158Z",
   "github_issue_number": 2128,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2128",
   "last_seen_at": "2026-07-14T16:12:56.197853Z",
@@ -46,6 +46,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2132",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -57,7 +58,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -66,6 +67,11 @@
     "fingerprint": "9f3263b026cf2e597c3b7e15",
     "source_event_id": "FE-20260714-9f3263b026cf"
   },
+  "validation_evidence": [
+    "rebased targeted pytest -> 25 passed",
+    "rebased nox l0 validation_module_registry_l0 -> passed",
+    "GitHub CI after rebase -> 20 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
