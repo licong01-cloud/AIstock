@@ -7,7 +7,14 @@ import pandas as pd
 import pytest
 
 from backend.services.quantevolver.factor_cache_coverage import factor_cache_covers_window
-from backend.services.quantevolver.factor_universe_mask_service import FactorUniverseMaskService
+from backend.services.quantevolver.factor_universe_mask_service import (
+    OFFICIAL_FACTOR_UNIVERSE_KEY,
+    FactorUniverseMaskService,
+)
+from backend.services.quantevolver.qe_dataset_contract import (
+    QE_DATASET_SIGNAL_END_DATE,
+    QE_DATASET_START_DATE,
+)
 from backend.services.quantevolver import qe_eval_v2_metric_engine as engine
 
 
@@ -36,7 +43,7 @@ def test_factor_universe_mask_service_builds_mask_from_spans(monkeypatch: pytest
     assert not mask[:, 2].any()
 
 
-def test_factor_universe_metadata_accepts_dirty_covered_qe_window(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_factor_universe_metadata_rejects_dirty_immutable_qe_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     service = FactorUniverseMaskService()
     captured: dict[str, object] = {}
 
@@ -60,11 +67,36 @@ def test_factor_universe_metadata_accepts_dirty_covered_qe_window(monkeypatch: p
 
     monkeypatch.setattr(service, "ensure_ready", fake_ensure_ready)
 
-    meta = service.metadata(start_date="2018-08-01", end_date="2026-04-30")
+    with pytest.raises(RuntimeError, match="ST PIT universe is not ready"):
+        service.metadata(start_date="2018-08-01", end_date="2026-04-30")
 
     assert captured["refresh_policy"] == "coverage"
-    assert meta["universe_fingerprint_sha256"] == "fp-historical"
-    assert meta["universe_end_date"] == "2026-04-30"
+
+
+def test_factor_universe_uses_exact_qe_dataset_snapshot_without_live_refresh() -> None:
+    captured: dict[str, object] = {}
+
+    class FakePitService:
+        def ensure_immutable_dataset_snapshot(self, **kwargs):
+            captured.update(kwargs)
+            return {"status": "ready", "state": {"status": "ready"}}
+
+        def ensure_st_pit_universe(self, **_kwargs):
+            raise AssertionError("QE must not call the rolling live PIT ensure path")
+
+    result = FactorUniverseMaskService(pit_service=FakePitService()).ensure_ready(
+        start_date="2020-01-01",
+        end_date="2026-06-30",
+    )
+
+    assert result["status"] == "ready"
+    assert captured == {
+        "universe_key": OFFICIAL_FACTOR_UNIVERSE_KEY,
+        "start_date": QE_DATASET_START_DATE,
+        "end_date": QE_DATASET_SIGNAL_END_DATE,
+        "rule_version": "st_pub_next_trade_restore_active_l_v1",
+        "bootstrap_if_missing": True,
+    }
 
 
 def test_factor_universe_metadata_keeps_paper_live_policy_strict(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -322,7 +322,9 @@ def test_qe_prepare_factors_default_window_uses_current_signal_end_and_records_c
     assert "def _is_forbidden_factor_cache_path" not in script
     assert "def _is_official_factor_cache_path_shape" in script
     assert "factor_values_shadow" not in script
-    assert "'data_source_mode': 'backtest_factor_data_dir'" in script
+    assert "'data_source_mode': 'official_offline_backtest_factor_data'" in script
+    assert "_publish_parquet_atomic(cache_path, save_df)" in script
+    assert "with _exclusive_cache_lock('global_meta')" in script
     assert "'universe_fingerprint_sha256': 'fp-test'" in script
     assert "_cache_universe_mismatch" in script
     assert "cache universe mismatch" in script

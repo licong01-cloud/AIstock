@@ -29,6 +29,13 @@ from ..strategy_package.workspace_policy import (
 )
 from .callback_urls import build_aistock_callback_base_url
 from .experiment_config import apply_qe_seed_to_model_params, ensure_qe_risk_policy, normalize_label_horizon
+from .qe_dataset_contract import (
+    QE_DATASET_CONTRACT_ID,
+    QE_DATASET_SIGNAL_END_DATE,
+    QE_DATASET_START_DATE,
+    QE_ST_PIT_UNIVERSE_KEY,
+    require_qe_dataset_window,
+)
 from .runtime_contract import merge_qe_minute_runtime_contract
 from .payload_summary import compact_experiment_row
 
@@ -350,7 +357,7 @@ def _qe_experiment_dir(experiment_name: str) -> Path:
 # portfolio simulation needs one following calendar row, so the default
 # portfolio backtest stops at 2026-06-29 while the provider still contains
 # 2026-06-30 for signal/price lookups.
-QE_DEFAULT_SIGNAL_END = "2026-06-30"
+QE_DEFAULT_SIGNAL_END = QE_DATASET_SIGNAL_END_DATE.isoformat()
 QE_DEFAULT_BACKTEST_END = "2026-06-29"
 
 RDAGENT_DEFAULT_DATA_SPLIT = {
@@ -1168,21 +1175,19 @@ class ConfigComposer:
         backtest_end = self._parse_date(data_split["backtest_end"])
         if backtest_end < backtest_start:
             raise ValueError("backtest_end is earlier than test_start; cannot build QE risk policy")
+        require_qe_dataset_window(start_date=backtest_start, end_date=backtest_end)
 
         from backend.services.stock_universe_pit_service import (
-            DEFAULT_ST_PIT_START_DATE,
             StockUniversePitService,
         )
 
-        # QE only consumes a historical slice. It must not initialize or rebuild
-        # the shared live-selection PIT cache to its shorter backtest boundary.
-        StockUniversePitService().ensure_st_pit_universe(
-            universe_key=profile.st_universe_key,
-            start_date=DEFAULT_ST_PIT_START_DATE,
-            end_date=backtest_end,
-            strict=profile.strict_data_ready,
-            rebuild_if_stale=False,
-            refresh_policy="coverage",
+        # QE consumes a dataset-versioned snapshot.  It never reads, marks dirty,
+        # extends, or rebuilds the rolling live-selection/Paper PIT universe.
+        StockUniversePitService().ensure_immutable_dataset_snapshot(
+            universe_key=QE_ST_PIT_UNIVERSE_KEY,
+            start_date=QE_DATASET_START_DATE,
+            end_date=QE_DATASET_SIGNAL_END_DATE,
+            bootstrap_if_missing=True,
         )
 
         with get_conn() as conn:
@@ -1212,7 +1217,7 @@ class ConfigComposer:
                       AND eligible_end >= %s
                     ORDER BY ts_code, eligible_start, eligible_end
                     """,
-                    (profile.st_universe_key, backtest_end, backtest_start),
+                    (QE_ST_PIT_UNIVERSE_KEY, backtest_end, backtest_start),
                 )
                 spans = [
                     {
@@ -1233,7 +1238,7 @@ class ConfigComposer:
                     FROM market.stock_universe_pit_state
                     WHERE universe_key = %s
                     """,
-                    (profile.st_universe_key,),
+                    (QE_ST_PIT_UNIVERSE_KEY,),
                 )
                 state = cur.fetchone()
 
@@ -1245,14 +1250,15 @@ class ConfigComposer:
             "hard_actions": list(profile.hard_actions),
             "visible_time_mode": profile.visible_time_mode,
             "strict_data_ready": profile.strict_data_ready,
-            "st_universe_key": profile.st_universe_key,
+            "dataset_contract_id": QE_DATASET_CONTRACT_ID,
+            "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
             "start_date": backtest_start.isoformat(),
             "end_date": backtest_end.isoformat(),
             "trade_date_count": len(trade_dates),
             "span_count": len(spans),
             "active_spans": spans,
             "state": {
-                "universe_key": state[0] if state else profile.st_universe_key,
+                "universe_key": state[0] if state else QE_ST_PIT_UNIVERSE_KEY,
                 "rule_version": state[1] if state else None,
                 "scope": state[2] if state else None,
                 "status": state[3] if state else "missing",
@@ -1273,6 +1279,7 @@ class ConfigComposer:
             custom_params,
             source="ConfigComposer._prepare_risk_policy_runtime",
         )
+        custom_params["risk_policy"]["st_universe_key"] = QE_ST_PIT_UNIVERSE_KEY
         if not self._is_qe_risk_policy_enabled(custom_params):
             return custom_params, None
         risk_policy_json = self._build_qe_risk_policy_artifact(data_split, custom_params)
@@ -3965,21 +3972,15 @@ class ConfigComposer:
             "index_policy": OFFICIAL_FACTOR_INDEX_POLICY,
             "coverage_semantics": OFFICIAL_FACTOR_COVERAGE_SEMANTICS,
         }
-        try:
-            metadata = FactorUniverseMaskService().metadata(
-                start_date=start_date,
-                end_date=end_date,
-                refresh_policy="coverage",
+        metadata = FactorUniverseMaskService().metadata(
+            start_date=start_date,
+            end_date=end_date,
+            refresh_policy="coverage",
+        )
+        if not metadata.get("universe_fingerprint_sha256"):
+            raise RuntimeError(
+                "QE immutable ST PIT snapshot has no fingerprint; refusing to compose a cache writer"
             )
-        except Exception as exc:
-            logger.warning(
-                "Unable to resolve ST PIT universe fingerprint for QE prepare_factors.py; "
-                "generated script will continue with the explicit QE backtest coverage "
-                "cache policy and validate universe key/index/date coverage without a "
-                "fingerprint: %s",
-                exc,
-            )
-            return fallback
 
         return {key: metadata.get(key) if metadata.get(key) is not None else fallback[key] for key in fallback}
 
@@ -4027,6 +4028,8 @@ class ConfigComposer:
         lines.append("import tempfile")
         lines.append("import textwrap")
         lines.append("import re")
+        lines.append("import contextlib")
+        lines.append("import time")
         lines.append("import numpy as np")
         lines.append("import pandas as pd")
         lines.append("")
@@ -4034,6 +4037,32 @@ class ConfigComposer:
         lines.append("logger = logging.getLogger('prepare_factors')")
         lines.append("")
         lines.append(f"FACTOR_DATA_DIR = os.environ.get('RDAGENT_FACTOR_DATA_DIR', {repr(factor_data_dir or RDAGENT_FACTOR_DATA_WSL)})")
+        lines.append(
+            "QE_DATASET_EXPECTED_META = "
+            + repr(
+                {
+                    "snapshot_id": QE_DATASET_CONTRACT_ID,
+                    "start": QE_DATASET_START_DATE.isoformat(),
+                    "end": QE_DATASET_SIGNAL_END_DATE.isoformat(),
+                }
+            )
+        )
+        lines.append("")
+        lines.append("")
+        lines.append("def _validate_factor_data_dataset_contract():")
+        lines.append("    meta_path = os.path.join(FACTOR_DATA_DIR, 'meta.json')")
+        lines.append("    if not os.path.isfile(meta_path):")
+        lines.append("        raise RuntimeError(f'QE factor_data dataset contract missing: {meta_path}')")
+        lines.append("    with open(meta_path, 'r', encoding='utf-8') as meta_file:")
+        lines.append("        actual = _json.load(meta_file)")
+        lines.append("    mismatches = {")
+        lines.append("        key: {'expected': expected, 'actual': actual.get(key)}")
+        lines.append("        for key, expected in QE_DATASET_EXPECTED_META.items()")
+        lines.append("        if str(actual.get(key) or '') != str(expected)")
+        lines.append("    }")
+        lines.append("    if mismatches:")
+        lines.append("        raise RuntimeError('QE factor_data dataset contract mismatch: ' + _json.dumps(mismatches, ensure_ascii=False, sort_keys=True))")
+        lines.append("    logger.info(f'QE dataset contract verified: {QE_DATASET_EXPECTED_META}')")
         lines.append("")
         lines.append("# ── 因子值缓存 ──────────────────────────────────────────")
         lines.append("import hashlib")
@@ -4092,6 +4121,99 @@ class ConfigComposer:
         lines.append("        if value:")
         lines.append("            meta[key] = value")
         lines.append("    return meta")
+        lines.append("")
+        lines.append("")
+        lines.append("@contextlib.contextmanager")
+        lines.append("def _exclusive_cache_lock(lock_name):")
+        lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
+        lines.append("        yield")
+        lines.append("        return")
+        lines.append("    lock_dir = os.path.join(os.path.dirname(FACTOR_CACHE_SINGLE_DIR), '.locks')")
+        lines.append("    os.makedirs(lock_dir, exist_ok=True)")
+        lines.append("    lock_hash = hashlib.sha256(lock_name.encode('utf-8')).hexdigest()")
+        lines.append("    lock_path = os.path.join(lock_dir, lock_hash + '.lock')")
+        lines.append("    lock_file = open(lock_path, 'a+b')")
+        lines.append("    locked = False")
+        lines.append("    try:")
+        lines.append("        if os.name == 'nt':")
+        lines.append("            import msvcrt")
+        lines.append("            lock_file.seek(0, os.SEEK_END)")
+        lines.append("            if lock_file.tell() == 0:")
+        lines.append("                lock_file.write(b'0')")
+        lines.append("                lock_file.flush()")
+        lines.append("            lock_file.seek(0)")
+        lines.append("            timeout = float(os.environ.get('FACTOR_CACHE_LOCK_TIMEOUT', '3600'))")
+        lines.append("            deadline = time.monotonic() + timeout")
+        lines.append("            while True:")
+        lines.append("                try:")
+        lines.append("                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)")
+        lines.append("                    locked = True")
+        lines.append("                    break")
+        lines.append("                except OSError:")
+        lines.append("                    if time.monotonic() >= deadline:")
+        lines.append("                        raise TimeoutError(f'factor cache lock timeout: {lock_name}')")
+        lines.append("                    time.sleep(0.1)")
+        lines.append("        else:")
+        lines.append("            import fcntl")
+        lines.append("            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)")
+        lines.append("            locked = True")
+        lines.append("        yield")
+        lines.append("    finally:")
+        lines.append("        if locked:")
+        lines.append("            if os.name == 'nt':")
+        lines.append("                import msvcrt")
+        lines.append("                lock_file.seek(0)")
+        lines.append("                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)")
+        lines.append("            else:")
+        lines.append("                import fcntl")
+        lines.append("                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)")
+        lines.append("        lock_file.close()")
+        lines.append("")
+        lines.append("")
+        lines.append("def _fsync_directory(path):")
+        lines.append("    if os.name == 'nt' or not hasattr(os, 'O_DIRECTORY'):")
+        lines.append("        return")
+        lines.append("    directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)")
+        lines.append("    try:")
+        lines.append("        os.fsync(directory_fd)")
+        lines.append("    finally:")
+        lines.append("        os.close(directory_fd)")
+        lines.append("")
+        lines.append("")
+        lines.append("def _publish_parquet_atomic(cache_path, save_df):")
+        lines.append("    cache_dir = os.path.dirname(cache_path)")
+        lines.append("    tmp_fd, tmp_path = tempfile.mkstemp(prefix='.' + os.path.basename(cache_path) + '.', suffix='.tmp', dir=cache_dir)")
+        lines.append("    os.close(tmp_fd)")
+        lines.append("    try:")
+        lines.append("        save_df.to_parquet(tmp_path, engine='pyarrow', compression='snappy')")
+        lines.append("        import pyarrow.parquet as _pq")
+        lines.append("        parquet_metadata = _pq.read_metadata(tmp_path)")
+        lines.append("        if parquet_metadata.num_rows != len(save_df):")
+        lines.append("            raise RuntimeError(f'parquet row validation failed: {parquet_metadata.num_rows} != {len(save_df)}')")
+        lines.append("        with open(tmp_path, 'rb+') as tmp_file:")
+        lines.append("            os.fsync(tmp_file.fileno())")
+        lines.append("        os.replace(tmp_path, cache_path)")
+        lines.append("        _fsync_directory(cache_dir)")
+        lines.append("    except Exception:")
+        lines.append("        if os.path.exists(tmp_path):")
+        lines.append("            os.remove(tmp_path)")
+        lines.append("        raise")
+        lines.append("")
+        lines.append("")
+        lines.append("def _publish_json_atomic(meta_path, meta):")
+        lines.append("    meta_dir = os.path.dirname(meta_path)")
+        lines.append("    tmp_fd, tmp_path = tempfile.mkstemp(prefix='._meta.', suffix='.json.tmp', dir=meta_dir)")
+        lines.append("    try:")
+        lines.append("        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as tmp_file:")
+        lines.append("            _json.dump(meta, tmp_file, indent=2, ensure_ascii=False)")
+        lines.append("            tmp_file.flush()")
+        lines.append("            os.fsync(tmp_file.fileno())")
+        lines.append("        os.replace(tmp_path, meta_path)")
+        lines.append("        _fsync_directory(meta_dir)")
+        lines.append("    except Exception:")
+        lines.append("        if os.path.exists(tmp_path):")
+        lines.append("            os.remove(tmp_path)")
+        lines.append("        raise")
         lines.append("")
         lines.append("")
         lines.append("def _cache_universe_mismatch(entry, expected):")
@@ -4240,57 +4362,47 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _write_cache(factor_name, factor_code, result_df):")
-        lines.append("    \"\"\"执行成功后回写因子值缓存。\"\"\"")
+        lines.append("    \"\"\"Publish one factor and its metadata atomically while factor lock is held.\"\"\"")
         lines.append("    if not FACTOR_CACHE_SINGLE_DIR:")
         lines.append("        return")
-        lines.append("    try:")
-        lines.append("        os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)")
-        lines.append("        cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
-
-        lines.append("        code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
-        lines.append("        save_df = result_df.copy()")
-        lines.append("        if len(save_df.columns) == 1:")
-        lines.append("            save_df = save_df.rename(columns={save_df.columns[0]: 'value'})")
-        lines.append("        save_df.to_parquet(cache_path, engine='pyarrow', compression='snappy')")
-        lines.append("        # 原子更新 _meta.json")
-        lines.append("        import tempfile as _tmpf")
+        lines.append("    os.makedirs(FACTOR_CACHE_SINGLE_DIR, exist_ok=True)")
+        lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
+        lines.append("    code_hash = hashlib.sha256(factor_code.encode()).hexdigest()[:16]")
+        lines.append("    save_df = result_df.copy()")
+        lines.append("    if len(save_df.columns) == 1:")
+        lines.append("        save_df = save_df.rename(columns={save_df.columns[0]: 'value'})")
+        lines.append("    universe_meta = _expected_universe_meta()")
+        lines.append("    if not universe_meta.get('universe_fingerprint_sha256'):")
+        lines.append("        raise RuntimeError('immutable QE ST PIT fingerprint is required for cache publication')")
+        lines.append("    _publish_parquet_atomic(cache_path, save_df)")
+        lines.append("    dates = result_df.index.get_level_values(0)")
+        lines.append("    d_min = str(dates.min().date())")
+        lines.append("    d_max = str(dates.max().date())")
+        lines.append("    with _exclusive_cache_lock('global_meta'):")
         lines.append("        meta = {}")
         lines.append("        if os.path.exists(FACTOR_CACHE_META):")
-        lines.append("            try:")
-        lines.append("                with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
-        lines.append("                    meta = _json.load(_meta_f)")
-        lines.append("            except Exception as e:")
-        lines.append("                logger.warning(f'  {factor_name}: cache meta read failed before write, skip cache write: {e}')")
-        lines.append("                return")
-        lines.append("        factors = meta.get('factors', {})")
-        lines.append("        universe_meta = _expected_universe_meta()")
-        lines.append("        dates = result_df.index.get_level_values(0)")
-        lines.append("        d_min = str(dates.min().date())")
-        lines.append("        d_max = str(dates.max().date())")
+        lines.append("            with open(FACTOR_CACHE_META, 'r', encoding='utf-8') as _meta_f:")
+        lines.append("                meta = _json.load(_meta_f)")
+        lines.append("        factors = dict(meta.get('factors', {}))")
         lines.append("        factors[factor_name] = {")
         lines.append("            'computed_at': __import__('datetime').datetime.now().isoformat(),")
         lines.append("            'rows': len(result_df),")
         lines.append("            'date_range': f'{d_min}~{d_max}',")
         lines.append("            'as_of_date': d_max,")
         lines.append("            'source_hash_raw': code_hash,")
-        lines.append("            'data_source_mode': 'backtest_factor_data_dir',")
+        lines.append("            'data_source_mode': 'official_offline_backtest_factor_data',")
         lines.append("            'window_train_start': TRAIN_START,")
         lines.append("            'window_backtest_end': TEST_END,")
         lines.append("        }")
         lines.append("        factors[factor_name].update(universe_meta)")
         lines.append("        meta['factors'] = factors")
+        lines.append(f"        meta['moneyflow_unit_contract_version'] = '{MONEYFLOW_UNIT_CONTRACT_VERSION}'")
+        lines.append("        meta['data_source_mode'] = 'official_offline_backtest_factor_data'")
         lines.append("        for _k, _v in universe_meta.items():")
         lines.append("            if _v is not None:")
         lines.append("                meta[_k] = _v")
-        lines.append("        tmp_fd, tmp_path = _tmpf.mkstemp(dir=os.path.dirname(FACTOR_CACHE_META), suffix='.json')")
-
-        lines.append("        with os.fdopen(tmp_fd, 'w', encoding='utf-8') as f:")
-        lines.append("            _json.dump(meta, f, indent=2, ensure_ascii=False)")
-        lines.append("        os.replace(tmp_path, FACTOR_CACHE_META)")
-        lines.append("        logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")
-
-        lines.append("    except Exception as e:")
-        lines.append("        logger.warning(f'  {factor_name}: cache write failed: {e}')")
+        lines.append("        _publish_json_atomic(FACTOR_CACHE_META, meta)")
+        lines.append("    logger.info(f'  {factor_name}: cache WRITTEN ({len(result_df)} rows, {d_min}~{d_max}, window={TRAIN_START}~{TEST_END})')")
         lines.append("")
         lines.append("")
         lines.append("ALLOWED_DATA_FILES = ('daily_pv.h5', 'daily_basic.h5', 'moneyflow.h5', 'bak_basic.h5', 'cyq_perf.h5', 'sector_data.h5', 'margin_detail.h5', 'static_factors.parquet')")
@@ -4329,7 +4441,7 @@ class ConfigComposer:
         lines.append("            shutil.copy2(src_path, dst_path)")
         lines.append("")
         lines.append("")
-        lines.append("def execute_factor(factor_name, factor_code, work_dir):")
+        lines.append("def _execute_factor_locked(factor_name, factor_code, work_dir):")
         lines.append('    """因子执行（含缓存读取/回写）。')
         lines.append('    1. 检查缓存：source_hash 匹配 + 日期覆盖 → 读 parquet')
         lines.append('    2. 未命中：执行 factor.py (timeout=1200s)')
@@ -4384,12 +4496,21 @@ class ConfigComposer:
         lines.append("        if isinstance(df, pd.Series):")
         lines.append("            df = df.to_frame(name=factor_name)")
         lines.append("        logger.info(f'  {factor_name}: {df.shape[0]} rows, {df.shape[1]} cols')")
-        lines.append("        # 回写缓存")
-        lines.append("        _write_cache(factor_name, factor_code, df)")
-        lines.append("        return df")
         lines.append("    except Exception as e:")
         lines.append("        logger.error(f'  {factor_name}: failed to read result.h5: {e}')")
         lines.append("        return None")
+        lines.append("    # Official cache publication is part of the execution contract.  Do not")
+        lines.append("    # downgrade a failed/partial cache write to a successful factor result.")
+        lines.append("    _write_cache(factor_name, factor_code, df)")
+        lines.append("    return df")
+        lines.append("")
+        lines.append("")
+        lines.append("def execute_factor(factor_name, factor_code, work_dir):")
+        lines.append("    lock_name = 'factor:' + factor_name")
+        lines.append("    with _exclusive_cache_lock(lock_name):")
+        lines.append("        # Double-check only after acquiring the factor lock.  A peer loop may")
+        lines.append("        # have completed and atomically published this factor while we waited.")
+        lines.append("        return _execute_factor_locked(factor_name, factor_code, work_dir)")
         lines.append("")
         lines.append("")
         lines.append("def main():")
@@ -4398,6 +4519,7 @@ class ConfigComposer:
         lines.append("")
         lines.append("    logger.info(f'Factor data dir: {FACTOR_DATA_DIR}')")
         lines.append("    logger.info(f'Work dir: {script_dir}')")
+        lines.append("    _validate_factor_data_dataset_contract()")
         lines.append("")
         lines.append("    # 同时将数据文件链接到实验根目录（供 qrun 时 StaticDataLoader 使用）")
         lines.append("    link_all_files_to_dir(FACTOR_DATA_DIR, script_dir)")

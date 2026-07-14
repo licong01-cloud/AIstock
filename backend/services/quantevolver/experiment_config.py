@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 from pydantic import BaseModel, model_validator
 
+from .qe_dataset_contract import QE_ST_PIT_UNIVERSE_KEY
+
 ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
 DEFAULT_LABEL_HORIZON = 1
 
@@ -18,7 +20,7 @@ QE_DEFAULT_RISK_POLICY: dict[str, Any] = {
     "enabled": True,
     "policy_version": "stock_event_risk_policy_v1",
     "providers": ["st_pit"],
-    "st_universe_key": "shsz_st_pit_active_v1",
+    "st_universe_key": QE_ST_PIT_UNIVERSE_KEY,
     "hard_actions": ["block_buy", "force_exit"],
     "visible_time_mode": "next_trading_session",
     "strict_data_ready": True,

@@ -1,9 +1,13 @@
 {
   "actual": "QE and live selection share shsz_st_pit_active_v1; fixed 2026-06-30 caches carry 2026-07-10/13 live fingerprints and QE inline writers overwrite shared metadata.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/qe_dataset_contract.py",
     "backend/services/quantevolver/factor_universe_mask_service.py",
     "backend/services/quantevolver/config_composer.py",
+    "backend/services/quantevolver/experiment_config.py",
     "backend/services/stock_universe_pit_service.py",
+    "backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py",
+    "backend/tests/test_factor_cache_wsl_env.py",
     "backend/tests/test_factor_st_pit_metrics_cache.py",
     "backend/tests/test_stock_universe_pit_service.py",
     "backend/tests/unified_engine/test_qe_config_truth.py",
@@ -26,6 +30,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20260714-777ea5a735ae",
       "timestamp": "2026-07-14T04:55:43.905697Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added the shared QE dataset contract/default policy and their direct cache contract tests; required to keep every QE entry path on one immutable PIT key instead of a composer-only override.",
+      "timestamp": "2026-07-14T05:20:00Z"
     }
   ],
   "evidence_uris": [
