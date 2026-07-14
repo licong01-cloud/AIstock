@@ -1071,4 +1071,6 @@ Program immutable receipts完成、F-519升级为 `verified`，并保留同 batc
 
 Phase 1E完成也不代表 Phase 1数据底座完成、模型可训练、实时荐股可用或任何交易能力可用。
 下一阶段仍按顺序执行 Phase 1F schema verification、Phase 1G observation/source DML、Phase 1H
-label/universe DML、Phase 1I durable store/首个 SEALED snapshot和 Phase 1J handoff。
+label/universe DML、Phase 1I durable store/首个 SEALED snapshot和 Phase 1J handoff。Phase 1F 的
+唯一实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`，
+当前状态为 `design_ready`、代码尚未开始；它不依赖 persistent dual-track L4 完成，不执行 Phase 1G/1H DML。

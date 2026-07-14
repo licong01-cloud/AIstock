@@ -2066,7 +2066,7 @@ Phase 1B 实施验收表：
 
 ### 22.8 Phase 1E：Phase 0A 双轨复验、readiness 与执行计划
 
-- 唯一实施级详细设计为 `docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md`，当前状态为 `design_ready`，代码尚未开始。
+- 唯一实施级详细设计为 `docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md`。代码已由 PR `#2094` 合入，当前状态为 `code_complete_pending_real_dev_input`；E1-E5 与 DEV transactional stateful DML 已验证，persistent single/multi dual-track L4 仍等待真实 immutable DSE/receipt，未激活 runtime。
 - 首次真实单 target audit 已于 2026-07-11 执行并 `BLOCKED`；只读复查确认旧 manifest DSE 不可继承，现有集中创建记录不能证明逐日真实运行。
 - 使用独立 `ProgramDateRequest` 对显式历史日期的单 Alpha和原生多 Alpha执行批量只读复验；
   同一 scope/audit/plan identity不含 batch hash，replay 与 manual historical receipt独立分类，
@@ -2086,8 +2086,10 @@ Phase 1B 实施验收表：
 
 ### 22.9 Phase 1F：Release schema verification
 
-- 在开发/发布流程应用并验证 dataset foundation migration、partitions、triggers 和 comments；不创建 authority tables/roles。
-- 运行进程只验证 schema version，无 DDL 权限和 DDL 入口；本阶段不执行 source ledger、capture/label DML 或文件写入。
+- 唯一实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`，当前状态为 `design_ready`，代码尚未开始。
+- 在开发/发布流程按冻结 SHA 和依赖顺序应用、重放并完整验证 dataset foundation migrations、31 个逻辑关系、columns/constraints/indexes/functions/triggers/comments 与显式 capacity 日期范围生成的历史月分区；不创建 authority tables/roles/approval/authorization。
+- 运行进程只使用 Advisory-owned read-only catalog verifier，无 DDL executor reference 或 DDL 入口；本阶段不执行 source ledger、capture/label DML、文件写入、observer activation 或模型训练。
+- schema verification 不依赖业务 row count、Phase 1E persistent L4、capacity `MEASURED`、Parquet 或模型状态；合法空库结构与 `PARTIAL` capacity 可通过。DEV/production apply 分开报告，生产 DDL 只在用户明确授权的独立操作中执行，不新增应用审批功能或每次 DDL 前全库备份要求。
 
 ### 22.10 Phase 1G：Source ledger 与 observation capture DML
 
