@@ -311,7 +311,7 @@ class DataRefreshAuditRepository:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO market.dataset_date_refresh_audit (
+                INSERT INTO market.dataset_date_refresh_audit AS existing (
                     dataset, trade_date, data_source, job_id, status,
                     row_count, refreshed_at, error_message, metadata,
                     data_max_at, written_rows, expected_rows, coverage_ratio,
@@ -330,6 +330,9 @@ class DataRefreshAuditRepository:
                     coverage_ratio = EXCLUDED.coverage_ratio,
                     quality_status = EXCLUDED.quality_status,
                     failure_category = EXCLUDED.failure_category
+                WHERE existing.status <> 'success'
+                   OR COALESCE(existing.quality_status, 'unknown') NOT IN ('ok', 'empty_valid')
+                   OR EXCLUDED.status = 'success'
                 """,
                 (
                     dataset,

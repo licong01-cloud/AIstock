@@ -10,6 +10,7 @@ from backend.services.tushare_dataset_specs import (
     CYQ_PERF,
     DATASET_REGISTRY,
     QueryMode,
+    STOCK_ST_EVENTS,
     SUSPEND_D,
     TUSHARE_FORECAST_RAW,
 )
@@ -102,6 +103,40 @@ def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(mo
     assert conn.commits == 1
     assert conn.rollbacks == 0
     assert conn.autocommit is True
+
+
+def test_sync_by_date_treats_empty_stock_st_events_as_valid_no_change(monkeypatch):
+    engine = TushareSyncEngine()
+    conn = _FakeConn()
+    publish_date = dt.date(2026, 7, 13)
+
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda spec, params: [])
+    monkeypatch.setattr(engine, "_upsert_batch", lambda conn, spec, rows: 0)
+    monkeypatch.setattr(engine, "_update_progress", lambda conn, job_id, result: None)
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+
+    result = engine._sync_by_date(
+        conn,
+        STOCK_ST_EVENTS,
+        publish_date,
+        publish_date,
+        uuid.uuid4(),
+    )
+
+    assert result.failed_batches == 0
+    assert result.success_batches == 1
+    assert result.inserted_rows == 0
+    assert conn.executed[0] == (
+        "DELETE FROM market.stock_st_events WHERE pub_date = %s",
+        (publish_date,),
+    )
+    audit_params = next(
+        params
+        for sql, params in conn.executed
+        if "dataset_date_refresh_audit" in sql
+    )
+    assert audit_params[4] == "success"
+    assert audit_params[-2] == "empty_valid"
 
 
 def test_sync_by_date_uses_upsert_only_when_replace_existing_dates_is_disabled(monkeypatch):
