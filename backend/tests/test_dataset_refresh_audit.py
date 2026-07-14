@@ -74,6 +74,33 @@ def test_record_success_writes_enhanced_audit_fields():
     assert params[-5:-1] == (5200, 5200, 1.0, "ok")
 
 
+def test_refresh_failure_cannot_downgrade_usable_success_evidence():
+    conn = _FakeConn()
+    repo = DataRefreshAuditRepository(conn_factory=lambda: conn)
+
+    repo.record_failure(
+        dataset="suspend_d",
+        trade_date=dt.date(2026, 7, 14),
+        error_message="cannot execute DELETE in a read-only transaction",
+        failure_category="provider_or_persistence_error",
+    )
+
+    sql, params = conn.executed[-1]
+    assert "INSERT INTO market.dataset_date_refresh_audit AS existing" in sql
+    assert "existing.status <> 'success'" in sql
+    assert "existing.quality_status, 'unknown'" in sql
+    assert "NOT IN ('ok', 'empty_valid')" in sql
+    assert "EXCLUDED.status = 'success'" in sql
+    assert params[0:6] == (
+        "suspend_d",
+        dt.date(2026, 7, 14),
+        "tushare",
+        None,
+        "failed",
+        0,
+    )
+
+
 def test_require_success_rejects_unusable_quality_status():
     trade_date = dt.date(2026, 5, 5)
     conn = _FakeConn(
