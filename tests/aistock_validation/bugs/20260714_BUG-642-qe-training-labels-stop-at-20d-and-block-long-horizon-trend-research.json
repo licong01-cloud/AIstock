@@ -44,8 +44,8 @@
   "expected": "QE accepts and preserves 1/3/5/10/20/30/40/60/120/180D training label horizons end to end; generated label formula is Ref(field,-N-1)/Ref(field,-1)-1; persistence/API/UI/config/loader/archive contracts agree; long horizons enforce explicit mature-label and split-boundary rules; existing tasks remain unchanged.",
   "first_seen_at": "2026-07-14T08:58:12.639366Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e276819bb28c5cc5270edd0db83517012f565f1c",
+  "fixed_at": "2026-07-14T09:53:30.785003Z",
   "github_issue_number": 2095,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2095",
   "last_seen_at": "2026-07-14T08:58:12.639366Z",
@@ -53,8 +53,9 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2100",
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "pending",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -73,6 +74,9 @@
     "fingerprint": "c886ab2d2df34bde444a2199",
     "source_event_id": "FE-20260714-c886ab2d2df3"
   },
+  "validation_evidence": [
+    "rebased targeted pytest: 194 passed, 25 skipped; rebased l0 and validation_module_registry_l0 passed; PR CI all required checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
