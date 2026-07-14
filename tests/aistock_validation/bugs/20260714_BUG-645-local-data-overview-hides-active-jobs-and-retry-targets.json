@@ -30,8 +30,8 @@
   "expected": "Counts must come from status-filtered aggregate queries, active jobs must be fetched independently, and dataset status must query that dataset directly.",
   "first_seen_at": "2026-07-14T10:41:13.860943Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "369ca773e48d375763822382d0a404ae34e5dcd4",
+  "fixed_at": "2026-07-14T13:45:38.787534Z",
   "github_issue_number": 2105,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2105",
   "last_seen_at": "2026-07-14T10:41:13.860943Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2109",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "5e834142b61ffa33c6cd5352",
     "source_event_id": "FE-20260714-5e834142b61f"
   },
+  "validation_evidence": [
+    "13 facade tests passed; ruff/compileall/diff-check passed; nox l0 and validation_module_registry_l0 passed; GitHub checks 17 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
