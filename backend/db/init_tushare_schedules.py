@@ -76,6 +76,7 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
 
 DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v1"
 DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "5b5e3aec97d4c833a67b7351b3f0d5284e80aaef4f102c9101f314e48c33dfc3"
+_MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 
 def get_default_schedule_templates() -> List[Dict[str, Any]]:
@@ -108,15 +109,22 @@ def get_default_schedule_catalog() -> Dict[str, Any]:
     templates = get_default_schedule_templates()
     errors: List[str] = []
     keys: List[tuple[str, str]] = []
+    mode_insensitive_seen: set[str] = set()
     for index, template in enumerate(templates):
         missing = [field for field in ("dataset", "mode", "frequency", "enabled", "options") if field not in template]
         if missing:
             errors.append(f"entry[{index}] missing fields: {','.join(missing)}")
             continue
-        key = (str(template["dataset"]), str(template["mode"]))
+        dataset = str(template["dataset"]).strip().lower()
+        mode = str(template["mode"]).strip().lower()
+        key = (dataset, mode)
         if key in keys:
             errors.append(f"duplicate schedule key: {key[0]}/{key[1]}")
         keys.append(key)
+        if dataset in _MODE_INSENSITIVE_DEFAULT_DATASETS:
+            if dataset in mode_insensitive_seen:
+                errors.append(f"mode-insensitive default dataset has multiple schedules: {dataset}")
+            mode_insensitive_seen.add(dataset)
         if template["frequency"] == "daily" and not template["options"].get("at"):
             errors.append(f"daily schedule missing fixed time: {key[0]}/{key[1]}")
     fingerprint = hashlib.sha256(
@@ -131,7 +139,6 @@ def get_default_schedule_catalog() -> Dict[str, Any]:
         "errors": errors,
         "templates": templates,
     }
-_MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
 
 
 def _validate_default_schedules(entries: List[Dict[str, Any]]) -> None:
