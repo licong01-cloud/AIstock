@@ -34,8 +34,8 @@
   "expected": "分钟增量摄取可按任意历史目标日回补真 OHLC 1m 数据；每日摄取结束后按交易日宇宙/停牌状态校验每 code 应有分钟根数，不足自动重试，仍不足时写 market.ingestion_errors 并使任务显式失败/告警，不允许静默 success。",
   "first_seen_at": "2026-07-05T17:26:32.071417Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d23ea16abdf9562fd33bd809a5506d8247c0bdb0",
+  "fixed_at": "2026-07-14T11:07:46.755744Z",
   "github_issue_number": 1882,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1882",
   "last_seen_at": "2026-07-05T17:26:32.071417Z",
@@ -43,6 +43,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1884",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -54,7 +55,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -63,6 +64,11 @@
     "fingerprint": "e70f05f34878cf2da0e2b52d",
     "source_event_id": "FE-20260705-e70f05f34878"
   },
+  "validation_evidence": [
+    "direct minute ingestion tests 9 passed",
+    "read-only TDX and DB readback passed",
+    "CI 17 passed 0 failed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
