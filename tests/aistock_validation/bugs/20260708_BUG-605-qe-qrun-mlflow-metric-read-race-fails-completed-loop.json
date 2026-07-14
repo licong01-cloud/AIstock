@@ -24,10 +24,10 @@
       "timestamp": "2026-07-08T04:46:46.525568Z"
     },
     {
-      "timestamp": "2026-07-08T04:58:09.615781+00:00",
-      "actor": "codex",
       "action": "scope_expansion",
-      "note": "Expanded allowed_write_scope after repository template paths resolved to scripts/qrun_limit_minute.py plus focused regression test."
+      "actor": "codex",
+      "note": "Expanded allowed_write_scope after repository template paths resolved to scripts/qrun_limit_minute.py plus focused regression test.",
+      "timestamp": "2026-07-08T04:58:09.615781+00:00"
     }
   ],
   "evidence_uris": [
@@ -36,8 +36,8 @@
   "expected": "After qrun computes metrics successfully, the record generation/check path should tolerate only the specific transient MLflow malformed-empty metric read and retry briefly without rerunning backtest; true missing artifacts or other errors must still fail loudly.",
   "first_seen_at": "2026-07-08T04:46:46.525572Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "973dd9624e3faabd97937f5739ebe89ebdfb6f64",
+  "fixed_at": "2026-07-14T06:02:01.718393Z",
   "github_issue_number": 1912,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1912",
   "last_seen_at": "2026-07-08T04:46:46.525572Z",
@@ -45,6 +45,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2082",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,7 +57,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -65,6 +66,12 @@
     "fingerprint": "636e89204c75d14275c7fc13",
     "source_event_id": "FE-20260708-636e89204c75"
   },
+  "validation_evidence": [
+    "pytest backend/tests/unified_engine/test_qrun_mlflow_metric_retry.py -q -> 9 passed",
+    "real WSL Qlib/MLflow async barrier smoke -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
