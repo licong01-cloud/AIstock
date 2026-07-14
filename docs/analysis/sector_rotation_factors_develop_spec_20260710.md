@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v3（Gate-0 F2 执行版，2026-07-11）
+- 当前版本：v4（post-R6 研究路线补全版，2026-07-14）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -18,7 +18,8 @@
 - GATs 关系模型已接入真实申万 L2 行业信息；模型侧可以显式利用板块归属。
 - 导出侧已在 `sector_data.h5` 的 22 个 `sw2_*` 数值字段之外增加稳定的 `l2_code_id`。编码来自权威 `sw_index_classify` 映射，未知值为 `-1`，PIT 归属来自 `market.sw_index_member`。
 - `sw2_*` 是“个股当日所属板块的指数聚合值”，按 PIT 归属展开到个股；`l2_code_id` 是离散分组键，不是连续特征。
-- 方向 A 的签名 fallback 邻接偏置在实验 `qe_20260710_005329_4b05` 的指定配置中未观察到可辨识增量（off≈industry_bias，0.0930 vs 0.0927）。该结果不能外推否定所有邻接设计，但足以说明后续主线应使用真实离散板块码和显式板块因子，不再依赖字段签名猜测同业关系。
+- 方向 A 的签名 fallback 邻接偏置在实验 `qe_20260710_005329_4b05` 的指定配置中未观察到可辨识增量（off≈industry_bias，0.0930 vs 0.0927）。该结果不能外推否定所有邻接设计，但足以说明后续主线不再依赖字段签名猜测同业关系。
+- 真实申万 L2 二值同业邻接已经由 `SwIndexMemberIndustryIdProvider` 基于 `market.sw_index_member` 的 PIT 归属完成 R4 对照，并非“尚未验证”。在 `qe_20260713_195926_11e3` 中，seed 7 的 off/industry-bias RankIC 为 `0.105816/0.095048`，seed 17 为 `0.103728/0.100237`；两颗种子均未改善 RankIC，组合收益表现混合。因此后续不重复同一种二值同业边实验，图模型增量研究转向动态权重、多关系或层次结构，同时保留 `l2_code_id` embedding 与显式板块因子主线。
 
 本次修订同时纳入因子库 MCP 的去重与统一指标证据。关键结论是：原 F1–F4 不能作为四个全新的同优先级因子直接开发。
 
@@ -48,6 +49,7 @@
    - 负对照：已知低成功率的板块资金流加速。
 4. 通过 G12、显式板块因子和 `l2` embedding 的受控消融，确认增量来自哪里。
 5. 通过的因子与 RDAgent/QE/Qlib、因子库和未来实时加载链保持同公式、同 PIT、同编码语义。
+6. 在完成当前因子/embedding 归因后，按“低成本组合验证 → 两层板块选股 → PIT 关系模型 → 概念多关系图”的顺序研究长期上涨趋势 alpha；每一级都必须有独立基线、冻结实验卡和停止条件。
 
 候选在研发前和研发后使用统一状态，不用“计划开发”“已完成”“可用”混写：
 
@@ -67,10 +69,15 @@
 - 不把 `l2_code_id` 当连续数值直接输入因子公式。
 - 不用最终 out-sample 结果选择符号、窗口或公式；这些选择必须在 train/validation 阶段冻结。
 - 不在本规格中授权 candidate 数据向 active/production 的自动 promotion。
+- 不因把方向写入蓝图而自动授权模型接入、概念数据采集、生产 DDL、QE 任务创建或运行时启用；这些仍需对应 feature/数据/实验流程和独立验收。
 
 ### 2.3 2026-07-11 Gate-0 本批执行边界
 
 用户于 2026-07-11 明确批准按本方案启动“前置批次”。本批交付范围是：研究门禁与 F2 设计、candidate bundle 闭环、通用 h20 快筛、RD-Agent/AIstock h20 companion 指标契约，以及 F4/R2 tracked repair source 的 PIT 修复。候选 A1–A6/B1/B2/N1 的实际开发、offline/realtime 双资产生成、成本容量/拥挤回测、QE 消融、生产 DDL/回填、candidate → active promotion 与运行时启用均明确后置；这些后置项不是本批允许以简化版替代的缺口，而是下一阶段必须按 F-007–F-010 重新验收的独立工作。
+
+### 2.4 v4 路线补全边界
+
+第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向：当前 QE 运行、数据集、因子库、生产 DB 和运行时不因本次文档更新发生变化。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
 
 ## 3. 证据口径与基线因子
 
@@ -186,6 +193,24 @@ F1/F3/F4 原口径中“先沿股票计算 `sw2_*` rolling/pct_change，再去�
 - 最终采用标准是 GATs/LGBM 的 out-sample 组合增量，包括 `ΔIC`、净 Sharpe、回撤、换手、容量和多种子稳定性；单因子 IC 不能代替组合验证。
 
 上述门禁分别参考多重检验、PBO/DSR、行业/因子动量、信息扩散、离散度、真实交易成本和机构拥挤模型的一手研究。完整引用见第 18 节；所有外部结论都必须在冻结的 A 股 candidate 数据上重新证伪。
+
+### 4.10 post-R6 模型与组合研究层级
+
+后续研究按信息增量和工程成本分层，不把“换模型”当成默认答案：
+
+1. **组合层**：先复用已归档预测做 GATs + LGBM 的 prediction fusion 与 portfolio fusion，验证关系模型是否以正交性而非单腿 RankIC 创造价值。
+2. **决策层**：再建立“板块评分 → 板块内选股”的两层基线，直接检验板块轮动与板块内 leadership 是否优于一次性全市场排序。
+3. **关系层**：在真实 PIT 申万 L2 归属上研究 HIST-industry、动态加权图和多关系注意力。R4 已证伪的二值同业邻接不得换名重复。
+4. **概念层**：只有概念成员 PIT 数据集通过独立数据门禁后，才研究 HIST-concept、HATS/多关系图或概念超图；同一股票同日属于多个概念是基础语义，不得强制压成单一类别。
+5. **状态层**：MASTER、IGMTF、TRA 只作为关系/市场状态机制得到增量后的条件探针。TRA 若用于 Type B，只允许在长期趋势内部路由状态，不得把 Type A 超跌反弹和 Type B 长期趋势混入同一标签头。
+
+所有关系输入统一服从以下契约：
+
+- 行业或概念成员关系必须是 decision-as-of 可知的 PIT 关系；不得使用“当前成分静态快照回填历史”的简化版。`docs/analysis/p2_relational_model_hist_master_feasibility_20260708.md` 中允许首版静态 `stock2concept` 探路的旧建议由本条取代。
+- 动态矩阵/稀疏边必须同时记录 `as_of_date`、relation type、source version/hash、有效起止区间和 instrument mapping hash；`stock_index`、Qlib instruments 与关系矩阵行序不一致时 loud fail。
+- 动态权重只能使用当日 cutoff 前可知的滚动收益、残差相关、资金流、leadership 或板块状态；训练/验证/测试边界分别构图，不得用全样本相似度。
+- 多关系图至少分离 `industry_membership`、`sector_state/leadership` 和未来 `concept_membership`，不得把不同经济含义的边先求和再声称可解释。
+- 关系模型必须与相同因子、标签、切分、种子和训练预算的 LGBM/GATs 基线比较；新增架构的首个 loop 只作 composer、fit/predict、归档和资源 canary，不承担 alpha 晋级结论。
 
 ## 5. 代码与运行时契约
 
@@ -469,6 +494,69 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 
 报告 h20 IC/RankIC、naive/HAC ICIR、bootstrap 区间、CAGR、DSR、PBO、Sharpe、最大回撤、换手、成本和容量曲线，并分训练/验证/测试及主要市场 regime。GATs 2×2 与 LGBM 都必须比较 OOS ΔIC、净 Sharpe、回撤、换手、容量和多种子稳定性；只有跨合理种子/切分稳定的增量才进入 Tier2/IC 审核。
 
+### 9.4 GATs + LGBM 组合验证（最高优先级）
+
+该方向不新增训练架构，先回答“GATs 单腿即使不超过 LGBM，是否能改善组合”。历史归档 `qe_20260709_055708_fe49_L2`（GATs）与 `qe_20260708_030408_80cd_L1`（LGBM）可作管线 canary；既有分析给出的日截面 rank 相关约 `0.595`、Top25 重合约 `6.9%` 只作为待复核先验，不是最终验收证据。正式结论必须使用 R6 或后续同数据快照、同因子集、同 seed、同 split 的配对预测。
+
+至少比较：
+
+1. 两个单腿；
+2. validation 冻结权重的 rank/prediction fusion；
+3. 独立下单后在组合层合并的 portfolio fusion；
+4. 在相同总持仓数、总风险预算和成本模型下的 sector-exposure constrained sensitivity。
+
+融合权重和归一化方法只能在 validation 冻结，最终 test 不得重新选权。报告预测 rank 相关、Top-K/行业暴露/换手重合、边际贡献、净 CAGR/Sharpe/Calmar/最大回撤、容量和 leave-one-leg-out。若组合不改善扣费后风险收益或改善只来自扩大风险预算，则停止继续扩展 GATs 单腿。
+
+### 9.5 两层板块轮动模型
+
+建立一个可解释的 top-down 对照，不直接从全市场一次性挑 Top-K：
+
+1. 板块层使用等权板块面板及 A1–A6 中通过门禁的因子，对申万 L2 板块做 20/40/60 日趋势、广度、资金与状态评分，先选 Top-M 板块；
+2. 个股层只在入选板块内，使用长期趋势因子、板块内 leadership 和流动性/可交易性选择股票；
+3. 行业不做标签中性化，但组合层必须记录单板块上限、板块集中度和轮动成本；
+4. 与相同候选池/Top-K/成本预算的一层 LGBM、GATs 和简单“板块动量 + 板块内动量”规则基线比较。
+
+板块层和个股层分别归档分数、入选原因和淘汰原因。若板块 Recall 提升但个股收益不提升，应归因为板块内排序问题；若板块层本身无增量，则不进入更复杂的层次图模型。
+
+### 9.6 长期上涨趋势专用评价
+
+h20 继续作为当前模型对照的统一信号标签，但它不能单独代表“连续上涨数月、捕获右尾大行情”的策略目标。post-R6 结果必须与 `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` 的 Phase 8 口径对齐，增加：
+
+- 20/40/60/120/180 个交易日收益画像和按日期聚类的置信区间；
+- `+30%/+50%/+70%` 有序目标的 Recall@20/50、到达概率与 time-to-hit calibration；只有独立深池契约获批后才评估 Recall@100；
+- trend-stage survival、右删失、趋势失效、峰前回撤、MFE/MAE、trend capture ratio 与 false early-exit rate；
+- 最近 1 年、最近 6 个月及科技抱团/板块集中等预注册 regime 切片，但不得用切片结果反向选择全期公式；
+- 持仓超过 30 日不设硬约束，由信号存活、趋势失效和成本后收益决定。
+
+Type A 超跌反弹与 Type B 长期趋势保持独立因子选择、标签头、调仓和退出逻辑；旧多 Alpha 腿只能作为组合相关性/风险基线，不能作为 Type B 演进母体。
+
+### 9.7 PIT 关系模型路线
+
+1. **HIST-industry canary**：基于 `market.sw_index_member` 生成逐日 PIT `stock2concept`/稀疏成员矩阵，补齐 composer 分支、`stock_index` 对齐、每日截面 batch、fit/predict、归档与回测契约。第一轮只验证 wiring、资源和同口径基线；禁止静态行业快照。
+2. **动态加权/多关系图**：在 HIST-industry 或当前 GATs 显示结构增量后，分别测试只用历史窗口构造的 residual co-movement、leadership、flow/state 权重；边类型分头处理并做逐关系消融。R4 的真码二值 `industry_bias` 是已完成负/混合证据，不再重复。
+3. **HATS/层次关系**：只有两种及以上 PIT 关系分别显示增量后才进入，避免仅用单一行业边却包装成多关系模型。
+4. **MASTER/IGMTF/TRA**：MASTER 自研和市场状态特征管线成本高，后置到关系增量成立之后；IGMTF/TRA 可作较低成本 canary，但必须明确它们不是 MASTER 的等价实现。既有时间维 Transformer RankIC 近零，不再重复等价架构。
+
+### 9.8 概念板块与超图路线
+
+概念关系频繁新增、同一股票同时属于多个概念，必须先完成独立的数据设计与 PIT 验收：关系记录至少包含 `concept_id`、`instrument`、`in_date`、`out_date`、source/version、采集/公告可用时点和变更原因；板块标识不得依赖易变名称，开放区间和同日多成员关系必须可复算。数据完整性、历史覆盖、变更捕获和退市/更名语义通过后，再按以下顺序研究：
+
+1. HIST-concept，对比 HIST-industry，验证细粒度题材关系是否增加信号；
+2. industry + concept 多关系 HATS/GAT，做逐关系和交互消融；
+3. 概念超图或多头关系注意力，直接表示一股多概念，不复制样本、不把多个概念压成单码；
+4. 概念层板块评分 → 概念内龙头选择的两层模型。
+
+概念数据集未入库前，上述项目状态统一为 `BLOCKED_BY_PIT_DATASET`，不得用 `sina_board_daily` 的板块聚合或当前成分列表伪造历史成员。
+
+### 9.9 执行顺序与资源门禁
+
+post-R6 的默认顺序为：R6 同口径收口 → GATs+LGBM 融合 → 两层板块模型 → 长期趋势画像 → HIST-industry canary → 动态多关系图 → 概念 PIT 数据与概念模型 → MASTER/IGMTF/TRA 条件探针。低成本、复用预测的实验先于新架构训练。
+
+- GATs/HIST/大截面关系模型归为 `gpu_serial_graph`，默认 1-parallel；只有资源 canary 证明 host↔GPU 交换、显存和系统响应均稳定后才能调整。
+- LSTM/TCN 等已验证可并行的模型归为 `gpu_parallel_standard`，并行上限由调度器按模型类判断；回测可与下一 loop 训练重叠，但必须隔离 recorder、工作目录和 GPU/CPU/内存配额。
+- 远端 CPU 可并行执行 LGBM/融合回测，但在共享 factor cache 原子写、每因子锁、损坏检测/重建和 MLflow recorder 隔离通过定向验证前，不得把“可配置 4 并行”当作已放行能力。
+- 后端重启不应终止已启动的外部 QE worker；新增调度逻辑必须继续满足任务状态可恢复、运行进程不被重复启动、结果只归档一次的契约。
+
 ## 10. 风险与控制
 
 1. **重复因子风险**：F1/F4 已有大量同族或精确重复。通过公式级去重和双层相关性阻止换名复制。
@@ -485,6 +573,12 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 12. **回测选择偏差**：trial 台账不完整、验证后覆写结果或只报告最佳种子都视为 gate 失败；候选族必须做多重检验，策略层必须报告 DSR/PBO。
 13. **成本、容量与拥挤**：毛收益通过但目标资金规模净增量消失，或压力期持仓/冲击高度重合，均不得 promotion。
 14. **生产副作用**：Gate-0 只允许代码、隔离 candidate 和测试证据；生产 DDL、生产 DB 写入、active promotion、服务重启和实时启用均保持 pending。
+15. **关系身份混淆**：embedding、二值邻接、HIST 概念聚合和动态权重图不是同一能力；必须逐层消融，不能把任一结果外推到其他关系机制。
+16. **静态关系未来函数**：当前行业/概念成员快照回填历史会系统性泄漏；所有关系模型只接受逐日 PIT 关系和可复核 mapping hash。
+17. **h20 目标错配**：只优化 h20 RankIC 可能继续偏向短周期反转或较早止盈；长期趋势晋级还必须通过第 9.6 节的 60–180 日、右尾、存活和捕获率指标。
+18. **融合伪增量**：改变总持仓、风险预算或成本假设会制造组合提升；融合实验必须固定总风险并报告 leave-one-leg-out、暴露和换手重合。
+19. **概念多重成员膨胀**：复制一股多概念样本会改变权重和统计量；未来概念模型使用稀疏多热关系/超边，并在聚合后还原到唯一股票决策行。
+20. **并行制品竞争**：共享 factor cache 或 recorder 的非原子写可能产生损坏或错读；并行度提升前必须验证锁、临时文件原子替换、制品 hash 和失败后的定向重建。
 
 ## 11. 验收与交付物
 
@@ -531,6 +625,15 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 - 分别报告：文档/代码合并状态、candidate 数据状态、active promotion 状态、QE 实验状态、模拟盘/实时状态；
 - 未完成 h20 指标、数据 promotion 或 train/serve mapping 统一时，不得宣称板块轮动能力已生产就绪。
 
+### 11.6 post-R6 研究交付物
+
+- GATs/LGBM 同 seed、同 split 预测对齐 receipt，以及 prediction/portfolio fusion 的权重冻结、正交性、成本后组合和 leave-one-leg-out 报告；
+- 两层板块→个股模型的板块评分、板块 Recall、板块内排序、集中度/轮动成本及一层模型对照；
+- 与 Advisory Phase 8 对齐的 20–180 日、MFE/MAE、有序目标、time-to-hit、生存、右删失、捕获率和假退出报告；
+- HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
+- 动态/多关系图的逐关系消融；概念方向则先交付独立 PIT 数据设计与数据门禁，未通过前不交付模型“成功”结论；
+- 每个方向独立的实验卡、停止条件、失败归因、资源类、并行策略和归档状态；不得用单次最好 loop 代替方向结论。
+
 ## 12. Design Acceptance Index / 设计验收索引
 
 下列条目是 F2 的稳定验收 ID。实现、测试、PR 与后续生产 gate 必须引用这些 ID；“代码存在”不等于“生产启用”。
@@ -549,6 +652,11 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 | F-010 | QE 组合增量 | GATs 2×2、LGBM 对照、equal-sector/stock-mapped、多种子 OOS 增量；A5/A6 仅允许预注册 STATE 交互腿。 |
 | F-011 | 零隐式生产副作用 | 本批不写生产 DB、不应用生产 DDL、不 promotion active、不重启服务、不启动 QE/模拟盘/实时交易。 |
 | F-012 | 验证与状态分离 | 定向单测、F2 设计校验、diff 检查和 receipt 通过；合并、candidate、DDL、promotion、实验、运行时状态分别报告。 |
+| F-013 | 组合与两层决策增量 | 同口径 GATs+LGBM prediction/portfolio fusion 和板块→个股两层基线；冻结权重/风险预算，报告正交性、成本、容量、暴露与 leave-one-leg-out。 |
+| F-014 | 长期趋势目标一致性 | h20 对照之外，按 Advisory Phase 8 报告 20–180 日、有序右尾目标、MFE/MAE、time-to-hit、生存、右删失、捕获率和假退出；Type A/B 标签与生命周期隔离。 |
+| F-015 | PIT 关系模型 | HIST-industry、动态加权图和多关系图只消费逐日 PIT 关系；mapping/stock_index fail-fast；R4 二值真码邻接不重复；新架构先通过 composer/资源 canary。 |
+| F-016 | 概念多关系前置门禁 | 概念成员先完成多成员、有效区间、可用时点与 source version 的 PIT 数据设计/验收；通过后才允许 HIST-concept、HATS/多关系图或超图实验。 |
+| F-017 | 研究调度与制品隔离 | 模型类决定串并行；共享 cache 原子写/锁/损坏重建和 recorder 隔离先验收；后端重启不终止或重复启动已运行 worker。 |
 
 ## 13. Implementation Plan / 实施计划
 
@@ -574,6 +682,24 @@ A5/A6 作为 STATE 信号时，可各自增加且仅增加一个在 test 前冻�
 
 F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 `develop-factor` 与因子库 MCP 按 A1→A6 顺序开展纯离线研发；无需等待 production DDL 或 active promotion。Batch B 只在 Batch A 失败归因完成后启动。每个候选独立执行预注册、快筛、统一指标、去重、分类和 disposition；生产持久化、promotion 与运行时仍受第 17 节独立门禁约束。
 
+### Phase G0-E：post-R6 归因与长期趋势闭环
+
+1. 冻结 R6 完整归档，核对同 seed/同 split/同数据快照的 GATs、LGBM 和关系开关配对；失败/不完整 loop 不进入择优。
+2. 先用已归档预测执行第 9.4 节融合，再执行第 9.5 节两层板块→个股基线；两项均不以扩大风险预算换取收益。
+3. 对单腿与组合统一补第 9.6 节长期趋势指标，确认 h20 强度是否能转化为 60–180 日右尾捕获；不能转化则回到因子/标签而不是继续堆模型容量。
+
+### Phase G0-F：PIT 关系模型 canary
+
+1. 为 HIST-industry 形成独立 F1/F2 接入设计，包含逐日 relation artifact、composer、stock index、截面 batch、资源、归档与回滚契约。
+2. 在同因子/标签/切分下比较 LGBM、当前 GATs embedding 和 HIST-industry；先 wiring canary，后多 seed alpha 实验。
+3. 只有显式关系显示稳定增量，才进入动态权重与多关系逐项消融；MASTER/IGMTF/TRA 保持条件触发。
+
+### Phase G0-G：概念 PIT 数据与多关系扩展
+
+1. 先建立概念成员 PIT 数据集专项设计、采集/变更/质量/版本/回放门禁；数据未通过时状态为 `BLOCKED_BY_PIT_DATASET`。
+2. 依次验证 HIST-concept、industry+concept 多关系、超图和概念层两层选股，不并行开启全部架构。
+3. 若概念关系不能在同风险预算下改善长期趋势捕获或只提高拥挤，则停止模型扩展并保留数据集供解释/风险用途。
+
 ## 14. Verification Plan / 验证计划
 
 ### 14.1 Business oracle / 业务判定真值
@@ -592,7 +718,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | L1 | quick horizon/direction/manifest/HAC、bundle dtype/unknown/schema、F4 PIT/conflict、RD h20 engine/API 单测 | 本批必须 PASS。 |
 | L2 | 隔离的 nullable schema/upsert 参数、official summary positional mapping、router/MCP emit/旧 payload 回归 | 本批必须 PASS；不执行生产 DDL。 |
 | L3 | 用真实隔离 candidate 完成 RD engine → AIstock 非生产库/接口端到端并核对 12 字段 | `APPROVED_BY_USER: DEFERRED_TO_G0_D`，开始实际候选研发时执行。 |
-| L4 | GATs/LGBM、成本容量、拥挤/尾部、DSR/PBO 与多种子业务流 | `APPROVED_BY_USER: DEFERRED_TO_G0_D`。 |
+| L4 | GATs/LGBM、融合/两层模型、长期趋势、PIT 关系模型、成本容量、拥挤/尾部、DSR/PBO 与多种子业务流 | `APPROVED_BY_USER: DEFERRED_TO_G0_D_OR_POST_R6`；按 F-010、F-013–F-017 独立验收。 |
 | L5 | 生产 DDL/回填、freshness、candidate → active、服务与 paper/live 运行时验收 | `APPROVED_BY_USER: DEFERRED_TO_PRODUCTION_GATE`。 |
 
 新增/修改业务逻辑的覆盖率目标为 line ≥ 80%、branch ≥ 70%；优先由定向 pytest coverage/CI 记录。若因嵌入式因子代码或外部引擎边界无法可靠计量，必须用上述 business oracle 分支测试补证并在矩阵记录明确例外，不得以全仓平均覆盖率掩盖关键路径。
@@ -608,6 +734,10 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | RD metrics unit | 引擎/API 序列化测试 | legacy 字段不变，h20 companion fields 数值定义和 nullable 行为正确。 |
 | AIstock contract | schema/upsert/router/MCP 定向测试 | 新字段往返，旧 payload 兼容；不连接/修改生产库。 |
 | F4 PIT unit | 多行业、多日期、行业切换与重复值测试 | 板块收益仅按板块时序计算；切换不串组；板块日值冲突 fail-fast。 |
+| Fusion/two-layer | 同快照预测对齐、风险预算、组合与分层归因 | 权重只在 validation 冻结；单腿/融合/两层基线可复算；leave-one-leg-out、暴露和成本齐全。 |
+| Long-trend | 20–180 日、有序 barrier、MFE/MAE、生存/右删失测试 | 与 Advisory Phase 8 日期/标签契约一致；Type A/B 不共用标签头；末端未成熟样本不伪装为失败。 |
+| Relational canary | PIT relation/mapping/stock_index/composer/fit-predict/resource 测试 | 静态快照被拒绝；错位 loud fail；首 loop 完整归档；R4 二值邻接不重复冒充新实验。 |
+| Parallel artifact | cache 原子写/锁/损坏重建、recorder 隔离与 restart recovery | 并行任务不互相读到半文件、不覆盖归档；后端重启不终止或重复启动 worker。 |
 | Targeted coverage | quick screen + shared h20 contract 的 line/branch coverage | 29 tests；combined coverage 92%，shared contract 100%；F4 嵌入代码以 oracle 两分支补证。 |
 | Repository | compile/lint/diff/targeted pytest | 两仓各自通过；已知基线告警与本次新增问题分离。 |
 | Baseline authority audit | `test_factor_metrics_authority_static.py` | 14 passed/2 failed；失败均在未修改的 origin/main 文件：4 个既有硬编码本地路径，以及测试引用已不存在的 `MultiAlphaGroupEditor.tsx`。不作为本批成功证据，也不归因于本改动。 |
@@ -629,6 +759,11 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-010 | QE GATs/LGBM experiment specs | 2×2、STATE、multi-seed OOS 与 L4 契约 | APPROVED_BY_USER: DEFERRED_TO_G0_D | 用户明确批准 2026-07-11 本批不启动 QE。 |
 | F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
 | F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
+| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | 融合/两层实验卡、同口径 prediction receipt、固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 用户于 2026-07-14 批准写入后续研究方向；尚未由本次文档任务创建或执行实验。 |
+| F-014 | 本文 9.6、11.6、Phase G0-E；Advisory Phase 8 | 20–180 日、有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit 报告 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 当前 h20 实验不能替代长期趋势验收；需独立标签成熟度和 OOS 证据。 |
+| F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；未来 HIST PIT relation、mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 二值同业邻接已测试且 RankIC 无增益；动态/层次关系尚未实现。 |
+| F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放验收，随后才有 HIST-concept/HATS/超图证据 | APPROVED_BY_USER: DEFERRED_TO_CONCEPT_DATASET | 当前概念成员 PIT 数据集未入库，不允许静态快照或聚合板块数据替代。 |
+| F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品和 restart recovery 定向验证 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 本次只冻结调度门禁，不修改正在运行的 QE、worker 或并行配置。 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
@@ -671,3 +806,10 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 - [MSCI Integrated Factor Crowding Model](https://www.msci.com/research-and-insights/paper/msci-integrated-factor-crowding-model) 与 [Lazo-Paz, Moneta & Chincarini](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4618248)：其多维拥挤框架形成本文持仓、资金流、成本与尾部风险联合审计的实施推论，不声称复刻 MSCI 模型。
 - [Novy-Marx, Backtesting Strategies Based on Multiple Signals](https://www.nber.org/papers/w21329) 与 [Gu, Kelly & Xiu, Empirical Asset Pricing via Machine Learning](https://www.nber.org/papers/w25398)：组合信号的选择偏差、非线性交互与模型增量。
 - [Shin, 2026 preprint](https://arxiv.org/abs/2606.19550)：测试资产构造可能改变模型排名；仅作为前沿敏感性提示，不作为已确立结论。
+
+内部设计锚点（用于约束 AIstock 实现，不替代一手论文证据）：
+
+- `docs/analysis/p2_relational_model_hist_master_feasibility_20260708.md`：HIST/MASTER/IGMTF/TRA 的早期接入评估；其中静态关系快照建议已由本规格第 4.10 节取代。
+- `docs/architecture/qe_efficient_gats_l2_industry_embedding_f1_design_20260710.md`：真实 PIT 申万 L2 provider、embedding 与 industry bias 的同源契约。
+- `docs/architecture/advisory_strategy_conditioned_model_blueprint_v1_20260710.md` Phase 8：Type B 长期趋势的多期限、有序目标、生存、MFE/MAE 与捕获率口径。
+- `docs/analysis/sector_rotation_factors_batch_e_plan_20260711.md`：当前板块因子批次的后续候选与执行衔接。
