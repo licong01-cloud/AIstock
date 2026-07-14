@@ -30,8 +30,8 @@
   "expected": "Each retry target must resolve to a logical schedule owner while preserving the physical health check, stale target-created queued jobs must reach a terminal state without row deletion, and availability lag must be respected.",
   "first_seen_at": "2026-07-14T10:42:26.820173Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1ee7724b532ec38b2516b4ad89c7d255c70cafd0",
+  "fixed_at": "2026-07-14T14:04:09.732313Z",
   "github_issue_number": 2106,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2106",
   "last_seen_at": "2026-07-14T10:42:26.820173Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2111",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "1eb22119e784542e97da8d38",
     "source_event_id": "FE-20260714-1eb22119e784"
   },
+  "validation_evidence": [
+    "28 scheduler and CYQ routing tests passed; ruff/compileall/diff-check passed; nox gates and GitHub checks green"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
