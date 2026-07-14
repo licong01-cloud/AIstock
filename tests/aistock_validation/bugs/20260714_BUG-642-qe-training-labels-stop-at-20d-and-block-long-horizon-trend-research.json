@@ -1,12 +1,24 @@
 {
   "actual": "QE database/schema preflight and dynamic loader currently allow only 1/3/5/10/20D, API descriptions advertise the same maximum, and long-horizon training experiments cannot be created consistently.",
   "allowed_write_scope": [
+    "backend/services/quantevolver/experiment_config.py",
     "backend/services/quantevolver/label_horizon_schema.py",
     "backend/services/quantevolver/qe_custom_loaders.py",
     "backend/services/quantevolver/config_composer.py",
     "backend/services/quantevolver/experiment_config_builders.py",
     "backend/routers/quantevolver_evolution.py",
     "backend/routers/dispatch.py",
+    "backend/db/migrations/add_qe_label_horizon.py",
+    "backend/init_catalog_db.py",
+    "backend/mcp/modules/qe_experiment.py",
+    "frontend/src/lib/qe-label-horizons.ts",
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/compose/page.tsx",
+    "frontend/src/app/quantevolver/templates/*/page.tsx",
+    "frontend/e2e/qe-label-horizon.spec.ts",
+    "backend/tests/unified_engine/test_label_horizon.py",
+    "backend/tests/mcp/test_domain_modules.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20260714_BUG-642-qe-training-labels-stop-at-20d-and-block-long-horizon-trend-research.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
@@ -42,7 +54,7 @@
     "Do not restart production runtime services without explicit approval."
   ],
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "noop",
+  "production_ddl_gate": "required",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [

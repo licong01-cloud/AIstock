@@ -1,4 +1,5 @@
 import sys
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -12,6 +13,9 @@ def init_database():
     load_dotenv(env_path, override=True)
 
     from db.pg_pool import get_conn
+    from services.quantevolver.experiment_config import ALLOWED_LABEL_HORIZONS
+
+    label_horizons_sql = ", ".join(str(value) for value in ALLOWED_LABEL_HORIZONS)
     
     print("Starting database initialization for RD-Agent Catalogs...")
     
@@ -593,7 +597,7 @@ def init_database():
                     CREATE INDEX IF NOT EXISTS idx_flt_factor_catalog_id
                         ON factor_live_track(factor_catalog_id);
                 """,
-                "qe_evolution_tasks": """
+                "qe_evolution_tasks": f"""
                     CREATE TABLE IF NOT EXISTS qe_evolution_tasks (
                         task_id TEXT PRIMARY KEY,
                         task_name TEXT NOT NULL,
@@ -606,7 +610,7 @@ def init_database():
                         label_horizon INTEGER NOT NULL DEFAULT 1,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         updated_at TIMESTAMPTZ DEFAULT NOW(),
-                        CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN (1, 3, 5, 10, 20))
+                        CONSTRAINT ck_qe_evolution_tasks_label_horizon CHECK (label_horizon IN ({label_horizons_sql}))
                     );
                 """,
                 "qe_evolution_loops": """
@@ -897,21 +901,24 @@ def init_database():
             """)
             label_horizon_constraint = cur.fetchone()
             label_horizon_constraint_def = str(label_horizon_constraint[0]) if label_horizon_constraint else ""
-            missing_label_horizons = [
-                value for value in (1, 3, 5, 10, 20)
-                if str(value) not in label_horizon_constraint_def
-            ]
-            if label_horizon_constraint and missing_label_horizons:
+            existing_label_horizons = {
+                int(value)
+                for value in re.findall(
+                    r"(?<![\w.])-?\d+(?![\w.])",
+                    label_horizon_constraint_def,
+                )
+            }
+            if label_horizon_constraint and existing_label_horizons != set(ALLOWED_LABEL_HORIZONS):
                 cur.execute("""
                     ALTER TABLE qe_evolution_tasks
                     DROP CONSTRAINT ck_qe_evolution_tasks_label_horizon
                 """)
                 label_horizon_constraint = None
             if not label_horizon_constraint:
-                cur.execute("""
+                cur.execute(f"""
                     ALTER TABLE qe_evolution_tasks
                     ADD CONSTRAINT ck_qe_evolution_tasks_label_horizon
-                    CHECK (label_horizon IN (1, 3, 5, 10, 20))
+                    CHECK (label_horizon IN ({label_horizons_sql}))
                 """)
 
             # ============================================================

@@ -1,4 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  isQELabelHorizon,
+  type QELabelHorizon,
+} from "../src/lib/qe-label-horizons";
 
 const backendPort = process.env.BACKEND_PORT || "8012";
 const apiBase =
@@ -159,7 +163,7 @@ async function createExperimentFromUi(
   page: Page,
   factor: FactorRow,
   model: ModelRow,
-  horizon: 1 | 3 | 5 | 10 | 20,
+  horizon: QELabelHorizon,
 ): Promise<string> {
   await page.goto("/quantevolver/compose");
   await expect(page.getByRole("heading", { name: /因子选择/ })).toBeVisible();
@@ -274,7 +278,7 @@ test.describe("QE label_horizon UI flow", () => {
     const horizons = (process.env.QE_E2E_HORIZONS || "1,5")
       .split(",")
       .map((v) => Number(v.trim()))
-      .filter((v): v is 1 | 3 | 5 | 10 | 20 => [1, 3, 5, 10, 20].includes(v));
+      .filter(isQELabelHorizon);
 
     for (const horizon of horizons) {
       const experimentId = await createExperimentFromUi(page, factor, model, horizon);

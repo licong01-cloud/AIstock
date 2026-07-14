@@ -12,6 +12,11 @@ import LogTerminal from "../components/LogTerminal";
 import MetricsSummary from "../components/MetricsSummary";
 import SectorBlacklistPanel from "../components/SectorBlacklistPanel";
 import ParamSchemaForm from "../evolution/components/ParamSchemaForm";
+import {
+  normalizeQELabelHorizon,
+  QE_LABEL_HORIZONS,
+  type QELabelHorizon,
+} from "@/lib/qe-label-horizons";
 
 const IcSeriesChart = dynamic(() => import("../components/charts/IcSeriesChart"), { ssr: false });
 const LossCurveChart = dynamic(() => import("../components/charts/LossCurveChart"), { ssr: false });
@@ -224,7 +229,7 @@ function ComposePageContent() {
   const [quickTrain, setQuickTrain] = useState(false);
   const [randomSeed, setRandomSeed] = useState(DEFAULT_QE_RANDOM_SEED);
   const [labelType, setLabelType] = useState<"close" | "open" | "vwap">("close");
-  const [labelHorizon, setLabelHorizon] = useState<1 | 3 | 5 | 10 | 20>(1);
+  const [labelHorizon, setLabelHorizon] = useState<QELabelHorizon>(1);
   const [blacklistEnabled, setBlacklistEnabled] = useState(false);
   const [stockPoolPath, setStockPoolPath] = useState<string | null>(null);
   const [blacklistSnapshot, setBlacklistSnapshot] = useState<any | null>(null);
@@ -380,7 +385,7 @@ function ComposePageContent() {
     setDisableAlphaBaseline(!!cp.disable_alpha158);
     setQuickTrain(!!cp.quick_train);
     setLabelType((["close", "open", "vwap"].includes(cp.label_type) ? cp.label_type : "close") as "close" | "open" | "vwap");
-    setLabelHorizon(([1, 3, 5, 10, 20].includes(Number(cp.label_horizon || 1)) ? Number(cp.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20);
+    setLabelHorizon(normalizeQELabelHorizon(cp.label_horizon));
     setExecutionAlgo(cp.execution_algo || "");
     setExecutionAlgoParams(cp.execution_algo_params || {});
     setBacktestFreq(cp.execution_algo === "CLOSE_PRICE" || cp.backtest_freq === "day" ? "day" : "1min");
@@ -529,9 +534,7 @@ function ComposePageContent() {
         if (exp.custom_params.random_seed !== undefined) {
           setRandomSeed(parseQeRandomSeedInput(String(exp.custom_params.random_seed), DEFAULT_QE_RANDOM_SEED));
         }
-        if ([1, 3, 5, 10, 20].includes(Number(exp.custom_params.label_horizon || 1))) {
-          setLabelHorizon(Number(exp.custom_params.label_horizon || 1) as 1 | 3 | 5 | 10 | 20);
-        }
+        setLabelHorizon(normalizeQELabelHorizon(exp.custom_params.label_horizon));
         if (exp.custom_params.execution_algo) {
           setExecutionAlgo(exp.custom_params.execution_algo);
           setBacktestFreq(exp.custom_params.execution_algo === "CLOSE_PRICE" ? "day" : "1min");
@@ -1817,7 +1820,7 @@ function ComposePageContent() {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", marginTop: "12px", flexWrap: "wrap" }}>
                 <span style={{ fontSize: "14px", color: "#475569", fontWeight: 600, whiteSpace: "nowrap" }}>Label Horizon</span>
-                {([1, 3, 5, 10, 20] as const).map(h => (
+                {QE_LABEL_HORIZONS.map(h => (
                   <button
                     data-testid={`qe-label-horizon-${h}`}
                     key={h}
@@ -1848,6 +1851,11 @@ function ComposePageContent() {
                 <span style={{ fontSize: "12px", color: "#64748b" }}>
                   公式：T 日特征预测 T+1 到 T+{labelHorizon + 1} forward return；1d 保持旧逻辑。
                 </span>
+                {labelHorizon >= 30 && (
+                  <span style={{ fontSize: "12px", color: "#0f766e" }}>
+                    长周期学习标签按 train/valid/test 截止日净化未成熟样本；推理和回测信号仍覆盖完整 test 窗口。
+                  </span>
+                )}
               </div>
             </div>
 

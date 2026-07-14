@@ -8,13 +8,139 @@ QE 使用这个独立的 qe_custom_loaders.py
 from typing import Optional
 import pandas as pd
 
+try:
+    from qlib.data.dataset.processor import Processor as _QlibProcessor
+except ModuleNotFoundError as exc:  # Windows API/unit-test process does not install Qlib.
+    if not str(exc.name or "").startswith("qlib"):
+        raise
+
+    class _QlibProcessor:  # type: ignore[no-redef]
+        """Import-only stand-in; experiment workers always load Qlib's Processor."""
+
 
 _LABEL_FIELDS = {
     "close": "$close",
     "open": "$open",
     "vwap": "$vwap",
 }
-_ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20}
+_ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20, 30, 40, 60, 120, 180}
+_LONG_HORIZON_MIN = 30
+
+
+class LongHorizonLabelMaturityPurge(_QlibProcessor):
+    """Remove immature learning labels without truncating inference signals.
+
+    Qlib keeps separate inference and learning frames.  This processor is
+    deliberately learn-only: it masks the last ``label_horizon + 1`` trading
+    observations of each train/valid/test segment, then the following
+    ``DropnaLabel`` processor removes those rows from label-dependent model
+    fitting and metric calculation.  The inference frame remains untouched, so
+    predictions and portfolio backtests still cover the complete test segment.
+    """
+
+    def __init__(
+        self,
+        *,
+        label_horizon: int,
+        train_start: str,
+        train_end: str,
+        valid_start: str,
+        valid_end: str,
+        test_start: str,
+        test_end: str,
+    ) -> None:
+        self.label_horizon = DynamicFactorsOnlyLoader._normalize_label_horizon(label_horizon)
+        if self.label_horizon < _LONG_HORIZON_MIN:
+            raise ValueError(
+                "LongHorizonLabelMaturityPurge is reserved for label_horizon >= "
+                f"{_LONG_HORIZON_MIN}, got {self.label_horizon}"
+            )
+        self.segment_bounds = {
+            "train": (self._date(train_start, "train_start"), self._date(train_end, "train_end")),
+            "valid": (self._date(valid_start, "valid_start"), self._date(valid_end, "valid_end")),
+            "test": (self._date(test_start, "test_start"), self._date(test_end, "test_end")),
+        }
+        self._validate_segment_bounds()
+        self.purge_summary: dict[str, dict[str, object]] = {}
+
+    @staticmethod
+    def _date(value: str, field_name: str) -> pd.Timestamp:
+        try:
+            parsed = pd.Timestamp(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must be a valid date, got {value!r}") from exc
+        if pd.isna(parsed):
+            raise ValueError(f"{field_name} must be a valid date, got {value!r}")
+        return parsed.normalize()
+
+    def _validate_segment_bounds(self) -> None:
+        for name, (start, end) in self.segment_bounds.items():
+            if start > end:
+                raise ValueError(f"{name}_start must not be later than {name}_end")
+        if self.segment_bounds["train"][1] >= self.segment_bounds["valid"][0]:
+            raise ValueError("train_end must be earlier than valid_start")
+        if self.segment_bounds["valid"][1] >= self.segment_bounds["test"][0]:
+            raise ValueError("valid_end must be earlier than test_start")
+
+    @staticmethod
+    def _label_columns(df: pd.DataFrame) -> list[object]:
+        if isinstance(df.columns, pd.MultiIndex):
+            return [column for column in df.columns if str(column[0]).lower() == "label"]
+        return [column for column in df.columns if str(column).lower().startswith("label")]
+
+    def is_for_infer(self) -> bool:
+        return False
+
+    def readonly(self) -> bool:
+        return False
+
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            raise ValueError("LongHorizonLabelMaturityPurge received empty learning data")
+        if not isinstance(df.index, pd.MultiIndex) or "datetime" not in df.index.names:
+            raise ValueError(
+                "LongHorizonLabelMaturityPurge requires MultiIndex containing datetime"
+            )
+        label_columns = self._label_columns(df)
+        if not label_columns:
+            raise ValueError("LongHorizonLabelMaturityPurge found no label columns")
+
+        datetimes = pd.DatetimeIndex(
+            pd.to_datetime(df.index.get_level_values("datetime"))
+        ).normalize()
+        calendar = pd.DatetimeIndex(datetimes.unique()).sort_values()
+        reference_offset = self.label_horizon + 1
+        summary: dict[str, dict[str, object]] = {}
+
+        for name, (start, end) in self.segment_bounds.items():
+            end_pos = int(calendar.searchsorted(end, side="right")) - 1
+            cutoff_pos = end_pos - reference_offset
+            if end_pos < 0 or cutoff_pos < 0:
+                raise ValueError(
+                    f"{name} segment has insufficient trading history for "
+                    f"label_horizon={self.label_horizon}"
+                )
+            cutoff = calendar[cutoff_pos]
+            if cutoff < start:
+                segment_days = int(((calendar >= start) & (calendar <= end)).sum())
+                raise ValueError(
+                    f"{name} segment has {segment_days} trading days, fewer than the "
+                    f"{reference_offset + 1} required for a mature "
+                    f"label_horizon={self.label_horizon} sample"
+                )
+            immature = (datetimes >= start) & (datetimes <= end) & (datetimes > cutoff)
+            masked_rows = int(immature.sum())
+            if masked_rows:
+                df.loc[immature, label_columns] = float("nan")
+            summary[name] = {
+                "segment_start": start.date().isoformat(),
+                "segment_end": end.date().isoformat(),
+                "last_mature_feature_date": cutoff.date().isoformat(),
+                "masked_rows": masked_rows,
+            }
+
+        self.purge_summary = summary
+        return df
 
 
 class DynamicFactorsOnlyLoader:

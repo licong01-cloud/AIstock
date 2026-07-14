@@ -17,6 +17,11 @@ import TopologyPanel from "./components/TopologyPanel";
 import LoopDetailPanel, { getTaskStatusInfo } from "./components/LoopDetailPanel";
 import type { Loop } from "./components/TopologyPanel";
 import { qeArchiveApi, type ArchiveSourceStatus, type ArchiveTaskStatus, type BackfillReport } from "@/lib/qe-archive/api";
+import {
+  normalizeQELabelHorizon,
+  QE_LABEL_HORIZONS,
+  type QELabelHorizon,
+} from "@/lib/qe-label-horizons";
 
 const FactorList = dynamic(() => import("../components/FactorList"), { ssr: false });
 const ModelList = dynamic(() => import("../components/ModelList"), { ssr: false });
@@ -85,7 +90,7 @@ const emptyNewTaskState = () => ({
   hmm_model_version_id: "",
   hmm_signal_preset: "preset_A",
   node_id: "",
-  label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
+  label_horizon: 1 as QELabelHorizon,
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
@@ -101,7 +106,7 @@ const emptyForkFormState = () => ({
   strategy_params: {} as Record<string, any>,
   execution_algo: "",
   execution_algo_params: {} as Record<string, any>,
-  label_horizon: 1 as 1 | 3 | 5 | 10 | 20,
+  label_horizon: 1 as QELabelHorizon,
   random_seed: DEFAULT_QE_RANDOM_SEED,
   filter_suspended_on_signal: false,
   suspend_filter_strict: true,
@@ -454,7 +459,7 @@ export default function EvolutionDashboard() {
     unfilled_handler: string;
     unfilled_handler_params: Record<string, any>;
     label_type: string;
-    label_horizon: 1 | 3 | 5 | 10 | 20;
+    label_horizon: QELabelHorizon;
     random_seed: number;
     data_split: Record<string, string> | null;
     blacklist_enabled: boolean;
@@ -642,7 +647,7 @@ export default function EvolutionDashboard() {
       unfilled_handler: loop.unfilled_handler || "",
       unfilled_handler_params: loop.unfilled_handler_params || {},
       label_type: loop.label_type || "",
-      label_horizon: ([1, 3, 5, 10, 20].includes(Number(loop.label_horizon || 1)) ? Number(loop.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20,
+      label_horizon: normalizeQELabelHorizon(loop.label_horizon),
       random_seed: extractQeRandomSeed(loop.runtime_flags, loop, loop.strategy_params, loop.model_params),
       data_split: loop.data_split || null,
       blacklist_enabled: !!loop.stock_pool,
@@ -740,7 +745,7 @@ export default function EvolutionDashboard() {
       const sourceTaskId = exp.qe_task_id || "";
       const sourceLoopIdx = exp.qe_loop_id ? parseInt((exp.qe_loop_id.match(/Loop(\d+)/) || [])[1] || "1") : 1;
       const expParams = typeof exp.custom_params === "string" ? JSON.parse(exp.custom_params || "{}") : (exp.custom_params || {});
-      const expHorizon = ([1, 3, 5, 10, 20].includes(Number(expParams.label_horizon || 1)) ? Number(expParams.label_horizon || 1) : 1) as 1 | 3 | 5 | 10 | 20;
+      const expHorizon = normalizeQELabelHorizon(expParams.label_horizon);
       const expDisableAlpha158 = !!expParams.disable_alpha158;
       updateCustomEvoLoop(0, {
         factor_keys: factorKeys,
@@ -774,9 +779,9 @@ export default function EvolutionDashboard() {
       const configParams = config.model_params || {};
       const configRuntimeFlags = config.runtime_flags || {};
       const loopDisableAlpha158 = !!(config.disable_alpha158 ?? configParams.disable_alpha158);
-      const loopHorizon = ([1, 3, 5, 10, 20].includes(Number(configParams.label_horizon || config.label_horizon || 1))
-        ? Number(configParams.label_horizon || config.label_horizon || 1)
-        : 1) as 1 | 3 | 5 | 10 | 20;
+      const loopHorizon = normalizeQELabelHorizon(
+        configParams.label_horizon || config.label_horizon,
+      );
       const factorList: string[] = config.factor_list || config.factor_names || [];
       if (factorList.length === 0) { alert(`Loop ${loopIndex} 没有因子数据`); return; }
       // 因子列表可能是纯名称或 "name||source"
@@ -1022,9 +1027,7 @@ export default function EvolutionDashboard() {
         hmm_model_version_id: sp.hmm_model_version_id || "",
         hmm_signal_preset: sp.hmm_signal_preset || "preset_A",
         node_id: "",
-        label_horizon: ([1, 3, 5, 10, 20].includes(Number((cloneFromTask as any).label_horizon || 1))
-          ? Number((cloneFromTask as any).label_horizon || 1)
-          : 1) as 1 | 3 | 5 | 10 | 20,
+        label_horizon: normalizeQELabelHorizon((cloneFromTask as any).label_horizon),
         random_seed: extractQeRandomSeed(sp, (cloneFromTask as any).runtime_flags, cloneFromTask),
         filter_suspended_on_signal: !!sp.filter_suspended_on_signal,
         suspend_filter_strict: sp.suspend_filter_strict !== false,
@@ -1780,9 +1783,9 @@ export default function EvolutionDashboard() {
     const sourceLoop = loops.find(l => l.loop_index === loopIndex) as any;
     const cfg = (sourceLoop as any)?.config_json || (sourceLoop as any)?.config_summary || {};
     const mp = cfg?.model_params || {};
-    const sourceHorizon = ([1, 3, 5, 10, 20].includes(Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1))
-      ? Number(mp.label_horizon || cfg.label_horizon || task?.label_horizon || 1)
-      : 1) as 1 | 3 | 5 | 10 | 20;
+    const sourceHorizon = normalizeQELabelHorizon(
+      mp.label_horizon || cfg.label_horizon || task?.label_horizon,
+    );
     setForkForm({
       ...emptyForkFormState(),
       task_name: task ? `${task.task_name}_from_L${loopIndex}` : "",
@@ -3626,7 +3629,7 @@ export default function EvolutionDashboard() {
                   训练标签期限（Label Horizon）
                 </div>
                 <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-                  {([1, 3, 5, 10, 20] as const).map(h => (
+                  {QE_LABEL_HORIZONS.map(h => (
                     <button
                       key={h}
                       type="button"
@@ -3646,7 +3649,7 @@ export default function EvolutionDashboard() {
                     </button>
                   ))}
                   <span style={{ fontSize: "12px", color: "#64748b" }}>
-                    自动演进创建后固定该期限，Agent 不允许静默修改。
+                    自动演进创建后固定该期限，Agent 不允许静默修改；30d 及以上会对学习标签执行分段成熟度净化，回测信号窗口不截断。
                   </span>
                 </div>
               </div>
@@ -4040,7 +4043,7 @@ export default function EvolutionDashboard() {
                         {loop.backtest_only && <span style={{ color: "#64748b", fontWeight: 500 }}> - backtest-only 锁定源模型</span>}
                       </div>
                       <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
-                        {([1, 3, 5, 10, 20] as const).map(h => (
+                        {QE_LABEL_HORIZONS.map(h => (
                           <button
                             key={h}
                             type="button"
@@ -4062,7 +4065,7 @@ export default function EvolutionDashboard() {
                           </button>
                         ))}
                         <span style={{ fontSize: "11px", color: "#64748b" }}>
-                          选择 5d/10d/20d 时建议同步调整 hold_thresh，避免高 IC 无法转化为收益。
+                          选择 5d 及以上时建议同步调整 hold_thresh；30d 及以上会净化分段末端未成熟标签，但保留完整推理/回测窗口。
                         </span>
                       </div>
                     </div>
@@ -4463,7 +4466,7 @@ export default function EvolutionDashboard() {
                   训练标签期限（普通 fork 会重训，可覆盖源 Loop）
                 </div>
                 <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                  {([1, 3, 5, 10, 20] as const).map(h => (
+                  {QE_LABEL_HORIZONS.map(h => (
                     <button
                       key={h}
                       type="button"
@@ -4482,6 +4485,9 @@ export default function EvolutionDashboard() {
                       {h}d
                     </button>
                   ))}
+                </div>
+                <div style={{ marginTop: "6px", fontSize: "11px", color: "#64748b" }}>
+                  30d 及以上重训会启用分段成熟度净化；源 Loop 和 backtest-only 模型的标签期限仍保持锁定。
                 </div>
               </div>
               <div style={{ padding: "10px 12px", borderRadius: "8px", border: "1px solid #fed7aa", backgroundColor: "#fff7ed" }}>

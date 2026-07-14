@@ -8,6 +8,7 @@ import MetricCard from "@/components/paper-v2/MetricCard";
 import SectionCard from "@/components/paper-v2/SectionCard";
 import StatusBadge from "@/components/paper-v2/StatusBadge";
 import { shortHash } from "@/lib/paper-v2/format";
+import { QE_LABEL_HORIZONS } from "@/lib/qe-label-horizons";
 import {
   API_BASE,
   type ArchivePolicy,
@@ -20,7 +21,6 @@ import {
 const EDITABLE_STATUSES = new Set(["draft", "ready_for_review", "approved"]);
 const HARD_DELETE_STATUSES = new Set(["draft", "ready_for_review", "approved"]);
 const ARCHIVE_POLICIES: ArchivePolicy[] = ["AUTO", "SKIP", "MANUAL_ONLY"];
-const LABEL_HORIZONS = [1, 3, 5, 10, 20];
 const SPLIT_FIELDS = [
   "train_start",
   "train_end",
@@ -664,11 +664,11 @@ function LabelHorizonField({
   ariaLabel?: string;
 }) {
   const text = asString(value);
-  const hasCustom = text && !LABEL_HORIZONS.map(String).includes(text);
+  const hasCustom = text && !QE_LABEL_HORIZONS.map(String).includes(text);
   return (
     <SelectField ariaLabel={ariaLabel} disabled={disabled} label={label} value={text} onChange={(next) => onChange(toOptionalNumber(next))}>
       <option value="">继承默认</option>
-      {LABEL_HORIZONS.map((item) => <option key={item} value={item}>{item} 日</option>)}
+      {QE_LABEL_HORIZONS.map((item) => <option key={item} value={item}>{item} 日</option>)}
       {hasCustom ? <option value={text}>{text} 日</option> : null}
     </SelectField>
   );

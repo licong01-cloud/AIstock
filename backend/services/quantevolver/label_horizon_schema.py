@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import re
 
 from ...db.pg_pool import get_conn
+from .experiment_config import ALLOWED_LABEL_HORIZONS
 
 
 CONSTRAINT_NAME = "ck_qe_evolution_tasks_label_horizon"
-ALLOWED_LABEL_HORIZONS = (1, 3, 5, 10, 20)
+
+
+def parse_label_horizon_constraint_values(definition: str | None) -> frozenset[int]:
+    """Extract the integer allow-list from a PostgreSQL CHECK definition."""
+    if not definition or "label_horizon" not in definition:
+        return frozenset()
+    return frozenset(int(value) for value in re.findall(r"(?<![\w.])-?\d+(?![\w.])", definition))
 
 
 @lru_cache(maxsize=1)
@@ -55,12 +63,8 @@ def ensure_qe_label_horizon_schema() -> None:
                     "label_horizon experiments"
                 )
             definition = str(constraint[0])
-            missing_values = [
-                str(value)
-                for value in ALLOWED_LABEL_HORIZONS
-                if str(value) not in definition
-            ]
-            if "label_horizon" not in definition or missing_values:
+            constraint_values = parse_label_horizon_constraint_values(definition)
+            if constraint_values != frozenset(ALLOWED_LABEL_HORIZONS):
                 raise RuntimeError(
                     f"DB constraint {CONSTRAINT_NAME} does not validate "
                     f"label_horizon in {ALLOWED_LABEL_HORIZONS}: {definition}"

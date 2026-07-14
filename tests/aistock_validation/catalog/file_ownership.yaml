@@ -175,6 +175,7 @@ rules:
       - frontend/src/app/qe-archive/**
       - frontend/tests/qe/**
       - frontend/tests/qe-archive/**
+      - frontend/e2e/qe-label-horizon.spec.ts
     primary_module: qe.single_experiment
     impact_modules: [qe.archive, qe.enhanced_metrics, validation.center]
     layer: frontend_ui
@@ -331,6 +332,7 @@ rules:
     include:
       - backend/db/**
       - backend/migrations/**
+      - backend/init_catalog_db.py
     primary_module: platform.db
     impact_modules: [qe.archive, paper_v2, selection_center, strategy_package, validation.center]
     layer: database
