@@ -302,12 +302,27 @@ def _evidence(
     )
 
 
+class FakePackageRepository:
+    def __init__(self, *, package_id: str, manifest_sha256: str) -> None:
+        self.package_id = package_id
+        self.manifest_sha256 = manifest_sha256
+
+    def get(self, package_id: str) -> Any:
+        if package_id != self.package_id:
+            raise DataUnavailableError("fake StrategyPackage does not exist", context={"package_id": package_id})
+        return SimpleNamespace(package_id=self.package_id, manifest_sha256=self.manifest_sha256)
+
+
 class FakeSelectionService:
     def __init__(self, release, *, candidates: list[SelectionCandidate] | None = None, valid_no_candidate: bool = False) -> None:
         self.release = release
         self.candidates = list(candidates or [])
         self.valid_no_candidate = valid_no_candidate
         self.calls: list[dict] = []
+        self.package_repository = FakePackageRepository(
+            package_id=release.package_id,
+            manifest_sha256=release.manifest_sha256,
+        )
 
     def run_selection(self, **kwargs):
         self.calls.append(kwargs)
@@ -2384,6 +2399,73 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
     assert len([binding for binding in local_bindings if binding.effective_from == next_trade_day]) == 1
 
 
+def test_scheduler_roll_forward_uses_current_package_manifest_and_rebases_side_effect_free_same_day_run() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    local_binding = local_binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+    repo.bindings[local_binding.binding_id] = local_binding
+    fake_selection = FakeSelectionService(release, candidates=_candidate_rows())
+    fake_selection.package_repository.manifest_sha256 = "manifest_current_after_controlled_package_update"
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=fake_selection,
+        context_provider=StaticSimulationRunContextProvider(
+            by_strategy_id={local_binding.strategy_id: _position_context(portfolio_id="portfolio_manifest_rebase")}
+        ),
+    )
+
+    first = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    first_binding = repo.get_simulation_release_binding(first.results[0].run.binding_id)
+    first_release = repo.get_strategy_runtime_release(first_binding.release_id)
+
+    assert first.total_bindings == 1
+    assert first.planned_count == 1
+    assert first_release.manifest_sha256 == "manifest_current_after_controlled_package_update"
+    assert first.results[0].run.manifest_sha256 == first_release.manifest_sha256
+    assert first_release.validation_evidence["manifest_identity"] == {
+        "source": "strategy_package_current_manifest",
+        "source_release_manifest_sha256": release.manifest_sha256,
+        "authoritative_manifest_sha256": "manifest_current_after_controlled_package_update",
+        "identity_changed": True,
+        "strategy_package_revalidation_performed": False,
+    }
+
+    fake_selection.package_repository.manifest_sha256 = "manifest_current_after_second_controlled_update"
+    rebased = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+    rebased_binding = repo.get_simulation_release_binding(rebased.results[0].run.binding_id)
+    rebased_release = repo.get_strategy_runtime_release(rebased_binding.release_id)
+    rerun = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+    )
+
+    assert rebased.total_bindings == 1
+    assert rebased.planned_count == 1
+    assert rebased_binding.binding_id != first_binding.binding_id
+    assert rebased_binding.binding_config_json["metadata"]["extends_binding_id"] == first_binding.binding_id
+    assert rebased_binding.binding_config_json["metadata"]["manifest_identity_source"] == (
+        "strategy_package_current_manifest"
+    )
+    assert rebased_release.manifest_sha256 == "manifest_current_after_second_controlled_update"
+    assert rerun.total_bindings == 1
+    assert rerun.reused_count == 1
+    assert rerun.results[0].run.binding_id == rebased_binding.binding_id
+
+
 def test_scheduler_rolls_forward_expired_miniqmt_binding_for_unattended_daily_runs() -> None:
     release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
     prepared_day = TRADE_DATE
@@ -4344,9 +4426,66 @@ def test_scheduler_rebuilds_side_effect_free_miniqmt_failed_plan_with_fresh_cont
     assert retried_plan.plan_id != failed_plan.plan_id
     assert retried_run.run_payload_json["rebuilt_after_side_effect_free_failure"] is True
     assert retried_run.run_payload_json["rebuilt_from_execution_plan_id"] == failed_plan.plan_id
+    rebuild_receipt = retried_run.run_payload_json["miniqmt_side_effect_free_rebuild"]
+    assert rebuild_receipt["schema_version"] == "miniqmt_side_effect_free_plan_rebuild_v1"
+    assert rebuild_receipt["source_execution_plan_id"] == failed_plan.plan_id
+    assert rebuild_receipt["rebuilt_execution_plan_id"] == retried_plan.plan_id
+    assert rebuild_receipt["broker_called"] is False
     assert {intent.symbol for intent in retried_plan.intents if intent.side == OrderSide.SELL} == set()
     assert "BATCH_INSUFFICIENT_BROKER_CAN_SELL" not in str(retried_run.run_payload_json["qmt_batch_result"])
     assert broker.place_order_payloads
+
+
+def test_scheduler_rebuilds_b0_manifest_conflict_once_and_keeps_repeated_runtime_drift_loud() -> None:
+    conflicts = {
+        "code_sha256": {
+            "expected": "53b579e4f5a273dd340354de5876baa8e15070fe52a70f90f7648e3d3dae6996",
+            "received": "0f4702d27b3bd873b39fd8d2473f6a9cbd9a98965fe10d7fbf7534fa326b3100",
+        }
+    }
+    payload = {
+        "broker_called": False,
+        "submitted_intents": 0,
+        "failed_intents": 36,
+        "submit_failure": {
+            "type": "BrokerSubmitError",
+            "stage": "ADAPTER",
+            "message": "B0_QUOTE_V2 frozen build/schema manifest differs from runtime readback",
+            "context": {
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "manifest_conflicts": conflicts,
+                "broker_called": False,
+            },
+        },
+    }
+
+    assert SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(payload) is True
+    fingerprint = canonical_json_sha256(
+        {
+            "schema_version": "miniqmt_b0_manifest_conflict_rebuild_v1",
+            "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+            "manifest_conflicts": conflicts,
+        }
+    )
+    payload["miniqmt_side_effect_free_rebuild"] = {
+        "schema_version": "miniqmt_side_effect_free_plan_rebuild_v1",
+        "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+        "failure_fingerprint": fingerprint,
+        "broker_called": False,
+    }
+
+    assert SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(payload) is False
+
+    payload["submit_failure"]["context"]["manifest_conflicts"] = {
+        "code_sha256": {
+            "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "received": conflicts["code_sha256"]["received"],
+        }
+    }
+    assert SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(payload) is True
+
+    payload["broker_called"] = True
+    assert SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(payload) is False
 
 
 def test_scheduler_rejects_side_effect_free_failed_retry_outside_shared_window_without_broker_call() -> None:

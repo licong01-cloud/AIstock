@@ -4000,6 +4000,15 @@ class SimulationLifecycleScheduler:
         if release_id is not None:
             return bindings
 
+        bindings = self._without_superseded_unattended_bindings(bindings)
+        bindings = [
+            self._rebase_unattended_binding_to_authoritative_manifest(
+                binding=binding,
+                trade_date=trade_date,
+            )
+            for binding in bindings
+        ]
+
         remaining_slots = limit - len(bindings)
         if remaining_slots <= 0:
             return bindings
@@ -4032,6 +4041,112 @@ class SimulationLifecycleScheduler:
         return combined[:limit]
 
     @staticmethod
+    def _without_superseded_unattended_bindings(
+        bindings: list[SimulationReleaseBinding],
+    ) -> list[SimulationReleaseBinding]:
+        """Hide only explicitly superseded same-day roll-forward bindings.
+
+        A manifest rebase creates a new immutable release/binding instead of
+        rewriting the already persisted identity. Both rows can be active on
+        the rebase day, so the successor's explicit lineage is the only safe
+        basis for suppressing the old row. Unrelated overlapping bindings are
+        deliberately left visible and continue to fail through their normal
+        lifecycle checks.
+        """
+
+        superseded_ids: set[str] = set()
+        for binding in bindings:
+            config = binding.binding_config_json if isinstance(binding.binding_config_json, dict) else {}
+            metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+            if metadata.get("manifest_identity_source") != "strategy_package_current_manifest":
+                continue
+            source_binding_id = str(metadata.get("extends_binding_id") or "").strip()
+            if source_binding_id:
+                superseded_ids.add(source_binding_id)
+        return [binding for binding in bindings if binding.binding_id not in superseded_ids]
+
+    def _rebase_unattended_binding_to_authoritative_manifest(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+    ) -> SimulationReleaseBinding:
+        config = binding.binding_config_json if isinstance(binding.binding_config_json, dict) else {}
+        metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+        if metadata.get("purpose") not in {
+            "localsim_unattended_daily_roll_forward",
+            "miniqmt_unattended_daily_roll_forward",
+        }:
+            return binding
+
+        source_release = self.repository.get_strategy_runtime_release(binding.release_id)
+        authoritative_manifest_sha256 = self._authoritative_package_manifest_sha256(
+            package_id=binding.package_id,
+        )
+        if (
+            binding.manifest_sha256 == authoritative_manifest_sha256
+            and source_release.manifest_sha256 == authoritative_manifest_sha256
+        ):
+            return binding
+
+        existing_run = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id,
+            binding_id=binding.binding_id,
+            trade_date=trade_date,
+        )
+        if existing_run is not None and self._run_has_broker_side_effect_evidence(existing_run):
+            # Never move an already submitted run to a different immutable
+            # package identity. Returning the old binding preserves the loud
+            # downstream identity conflict for operator diagnostics.
+            return binding
+
+        return self._roll_forward_unattended_binding(
+            source=binding,
+            trade_date=trade_date,
+            authoritative_manifest_sha256=authoritative_manifest_sha256,
+        )
+
+    @staticmethod
+    def _run_has_broker_side_effect_evidence(run: SimulationDailyRun) -> bool:
+        payload = run.run_payload_json if isinstance(run.run_payload_json, dict) else {}
+        if bool(payload.get("broker_called")):
+            return True
+        raw_submitted = payload.get("submitted_intents")
+        if raw_submitted is not None:
+            try:
+                if int(raw_submitted) > 0:
+                    return True
+            except (TypeError, ValueError):
+                return True
+        return SimulationLifecycleScheduler._mini_qmt_batch_has_broker_side_effect_evidence(payload)
+
+    def _authoritative_package_manifest_sha256(self, *, package_id: str) -> str:
+        package_repository = getattr(self.selection_service, "package_repository", None)
+        get_package = getattr(package_repository, "get", None)
+        if not callable(get_package):
+            raise RuntimeConfigInvalidError(
+                "unattended simulation roll-forward requires the authoritative StrategyPackage repository",
+                context={
+                    "reason_code": "SIMULATION_ROLL_FORWARD_PACKAGE_IDENTITY_SOURCE_MISSING",
+                    "package_id": package_id,
+                },
+            )
+        record = get_package(package_id)
+        record_package_id = str(getattr(record, "package_id", "") or "").strip()
+        manifest_sha256 = str(getattr(record, "manifest_sha256", "") or "").strip()
+        if record_package_id != package_id or not manifest_sha256:
+            raise RuntimeConfigInvalidError(
+                "authoritative StrategyPackage identity is incomplete for unattended roll-forward",
+                context={
+                    "reason_code": "SIMULATION_ROLL_FORWARD_PACKAGE_IDENTITY_INVALID",
+                    "package_id": package_id,
+                    "record_package_id": record_package_id or None,
+                    "manifest_sha256": manifest_sha256 or None,
+                },
+            )
+        return manifest_sha256
+
+    @staticmethod
     def _normalized_backend(value: SimulationBrokerBackend | str) -> SimulationBrokerBackend:
         return value if isinstance(value, SimulationBrokerBackend) else SimulationBrokerBackend(str(value))
 
@@ -4062,23 +4177,29 @@ class SimulationLifecycleScheduler:
         *,
         source: SimulationReleaseBinding,
         trade_date: date,
+        authoritative_manifest_sha256: str | None = None,
     ) -> SimulationReleaseBinding:
         source_release = self.repository.get_strategy_runtime_release(source.release_id)
+        resolved_manifest_sha256 = authoritative_manifest_sha256 or self._authoritative_package_manifest_sha256(
+            package_id=source_release.package_id,
+        )
         release_service = StrategyRuntimeReleaseService(repository=self.repository)
         created_by = self._roll_forward_created_by(source.broker_backend)
         release_metadata = self._roll_forward_release_metadata(
             source_release=source_release,
             source_binding=source,
             trade_date=trade_date,
+            authoritative_manifest_sha256=resolved_manifest_sha256,
         )
         validation_evidence = self._roll_forward_validation_evidence(
             source_release=source_release,
             source_binding=source,
             trade_date=trade_date,
+            authoritative_manifest_sha256=resolved_manifest_sha256,
         )
         new_release = release_service.create_release(
             package_id=source_release.package_id,
-            manifest_sha256=source_release.manifest_sha256,
+            manifest_sha256=resolved_manifest_sha256,
             runtime_profile_id=source_release.runtime_profile_id,
             runtime_profile_version_id=source_release.runtime_profile_version_id,
             runtime_profile_sha256=source_release.runtime_profile_sha256,
@@ -4105,6 +4226,7 @@ class SimulationLifecycleScheduler:
             source_binding=source,
             new_release=new_release,
             trade_date=trade_date,
+            authoritative_manifest_sha256=resolved_manifest_sha256,
         )
         return release_service.create_binding(
             strategy_id=source.strategy_id,
@@ -4157,6 +4279,7 @@ class SimulationLifecycleScheduler:
         source_release: StrategyRuntimeRelease,
         source_binding: SimulationReleaseBinding,
         trade_date: date,
+        authoritative_manifest_sha256: str,
     ) -> dict[str, Any]:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
@@ -4169,6 +4292,10 @@ class SimulationLifecycleScheduler:
                 "target_trade_date": trade_date.isoformat(),
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
+                "manifest_identity_source": "strategy_package_current_manifest",
+                "source_release_manifest_sha256": source_release.manifest_sha256,
+                "authoritative_manifest_sha256": authoritative_manifest_sha256,
+                "manifest_identity_changed": source_release.manifest_sha256 != authoritative_manifest_sha256,
                 "roll_forward_policy": {
                     "schema_version": "localsim_roll_forward_policy_v1",
                     "immutable_daily_release": True,
@@ -4184,6 +4311,7 @@ class SimulationLifecycleScheduler:
         source_release: StrategyRuntimeRelease,
         source_binding: SimulationReleaseBinding,
         trade_date: date,
+        authoritative_manifest_sha256: str,
     ) -> dict[str, Any]:
         evidence = deepcopy(source_release.validation_evidence or {})
         created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
@@ -4194,6 +4322,13 @@ class SimulationLifecycleScheduler:
                 "target_trade_date": trade_date.isoformat(),
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
+                "manifest_identity": {
+                    "source": "strategy_package_current_manifest",
+                    "source_release_manifest_sha256": source_release.manifest_sha256,
+                    "authoritative_manifest_sha256": authoritative_manifest_sha256,
+                    "identity_changed": source_release.manifest_sha256 != authoritative_manifest_sha256,
+                    "strategy_package_revalidation_performed": False,
+                },
             }
         )
         return evidence
@@ -4205,6 +4340,7 @@ class SimulationLifecycleScheduler:
         source_binding: SimulationReleaseBinding,
         new_release: StrategyRuntimeRelease,
         trade_date: date,
+        authoritative_manifest_sha256: str,
     ) -> dict[str, Any]:
         config = source_binding.binding_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
@@ -4219,6 +4355,10 @@ class SimulationLifecycleScheduler:
                 "extends_release_id": source_release.release_id,
                 "extends_binding_id": source_binding.binding_id,
                 "new_release_id": new_release.release_id,
+                "manifest_identity_source": "strategy_package_current_manifest",
+                "source_release_manifest_sha256": source_release.manifest_sha256,
+                "authoritative_manifest_sha256": authoritative_manifest_sha256,
+                "manifest_identity_changed": source_release.manifest_sha256 != authoritative_manifest_sha256,
                 "roll_forward_policy": {
                     "schema_version": "localsim_roll_forward_policy_v1",
                     "immutable_daily_binding": True,
@@ -4568,6 +4708,7 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
+        rebuild_receipt = self._mini_qmt_side_effect_free_rebuild_receipt(run)
         context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
@@ -4615,6 +4756,10 @@ class SimulationLifecycleScheduler:
                     "rebuilt_after_side_effect_free_failure": True,
                     "rebuilt_from_execution_plan_id": run.execution_plan_id,
                     "rebuilt_execution_plan_id": build_result.execution_plan.plan_id,
+                    "miniqmt_side_effect_free_rebuild": {
+                        **rebuild_receipt,
+                        "rebuilt_execution_plan_id": build_result.execution_plan.plan_id,
+                    },
                     "miniqmt_context_diagnostics": context.context_diagnostics,
                     "broker_called": False,
                     "submitted_intents": 0,
@@ -5903,13 +6048,67 @@ class SimulationLifecycleScheduler:
             return False
         batch = payload.get("qmt_batch_result") if isinstance(payload.get("qmt_batch_result"), dict) else {}
         status = str(payload.get("qmt_batch_status") or batch.get("batch_status") or "").upper()
-        if status not in {"PREFLIGHT_FAILED", "FAILED", "PARTIAL"}:
+        if status in {"PREFLIGHT_FAILED", "FAILED", "PARTIAL"}:
+            try:
+                failed = int(batch.get("failed", payload.get("failed_intents", 0)) or 0)
+            except (TypeError, ValueError):
+                failed = 0
+            if failed > 0:
+                return True
+        return SimulationLifecycleScheduler._b0_manifest_conflict_requires_plan_rebuild(payload)
+
+    @staticmethod
+    def _b0_manifest_conflict_requires_plan_rebuild(payload: dict[str, Any]) -> bool:
+        failure = payload.get("submit_failure")
+        if not isinstance(failure, dict):
             return False
-        try:
-            failed = int(batch.get("failed", payload.get("failed_intents", 0)) or 0)
-        except (TypeError, ValueError):
-            failed = 0
-        return failed > 0
+        context = failure.get("context")
+        if not isinstance(context, dict):
+            return False
+        if str(context.get("reason_code") or "").upper() != "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT":
+            return False
+        conflicts = context.get("manifest_conflicts")
+        if not isinstance(conflicts, dict) or not conflicts:
+            return False
+        fingerprint = canonical_json_sha256(
+            {
+                "schema_version": "miniqmt_b0_manifest_conflict_rebuild_v1",
+                "reason_code": "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT",
+                "manifest_conflicts": conflicts,
+            }
+        )
+        previous = payload.get("miniqmt_side_effect_free_rebuild")
+        if isinstance(previous, dict) and previous.get("failure_fingerprint") == fingerprint:
+            # The same immutable conflict after one fresh-plan rebuild means
+            # the runtime and compiler roots genuinely disagree. Rebuilding
+            # forever would hide that deployment fault, so retain the loud
+            # failure until the observed conflict changes.
+            return False
+        return True
+
+    @staticmethod
+    def _mini_qmt_side_effect_free_rebuild_receipt(run: SimulationDailyRun) -> dict[str, Any]:
+        payload = run.run_payload_json if isinstance(run.run_payload_json, dict) else {}
+        failure = payload.get("submit_failure") if isinstance(payload.get("submit_failure"), dict) else {}
+        context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
+        reason_code = str(context.get("reason_code") or "MINIQMT_BATCH_SIDE_EFFECT_FREE_FAILURE").upper()
+        receipt: dict[str, Any] = {
+            "schema_version": "miniqmt_side_effect_free_plan_rebuild_v1",
+            "reason_code": reason_code,
+            "source_execution_plan_id": run.execution_plan_id,
+            "broker_called": False,
+        }
+        conflicts = context.get("manifest_conflicts")
+        if reason_code == "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT" and isinstance(conflicts, dict) and conflicts:
+            receipt["manifest_conflicts"] = deepcopy(conflicts)
+            receipt["failure_fingerprint"] = canonical_json_sha256(
+                {
+                    "schema_version": "miniqmt_b0_manifest_conflict_rebuild_v1",
+                    "reason_code": reason_code,
+                    "manifest_conflicts": conflicts,
+                }
+            )
+        return receipt
 
     def _run_selection_once_per_release(
         self,
