@@ -44,8 +44,8 @@
   "expected": "Each QE dataset version pins one immutable ST PIT snapshot reused by all experiment types, loops, official factor caches, metrics and correlations; live PIT remains separately rolling and QE cannot mutate it.",
   "first_seen_at": "2026-07-14T04:55:43.905704Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5c986a1ed03937e11305ec3be898e93d61a5c7e4",
+  "fixed_at": "2026-07-14T05:56:02.154063Z",
   "github_issue_number": 2079,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2079",
   "last_seen_at": "2026-07-14T04:55:43.905704Z",
@@ -53,6 +53,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2081",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -64,7 +65,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -73,6 +74,11 @@
     "fingerprint": "777ea5a735aee05cc0decbd2",
     "source_event_id": "FE-20260714-777ea5a735ae"
   },
+  "validation_evidence": [
+    "targeted QE ST PIT/cache matrix -> passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
