@@ -1,5 +1,8 @@
 import datetime as dt
 import uuid
+from types import SimpleNamespace
+
+import pytest
 
 from scripts import ingest_incremental as inc
 
@@ -29,6 +32,37 @@ class DummyConn:
 
     def rollback(self):
         self.rollback_count += 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class ScriptedCursor(DummyCursor):
+    def __init__(self, conn):
+        super().__init__(conn)
+        self.result = []
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        self.result = self.conn.query_results.pop(0)
+
+    def fetchone(self):
+        return self.result[0] if self.result else None
+
+    def fetchall(self):
+        return list(self.result)
+
+
+class ScriptedConn(DummyConn):
+    def __init__(self, query_results):
+        super().__init__()
+        self.query_results = list(query_results)
+
+    def cursor(self):
+        return ScriptedCursor(self)
 
 
 def _minute_row(day: dt.date, minute: int, price: float = 10.0):
@@ -81,6 +115,97 @@ def test_minute_history_backfill_uses_kline_all_and_upserts_true_ohlc(monkeypatc
         (10.0, 10.2, 9.9, 10.1),
     ]
     assert all(value[2] == "1m" and value[9] == "none" and value[10] == "tdx_api" for value in conn.values)
+    assert all(value[0].endswith("+08:00") for value in conn.values)
+
+
+def test_minute_upsert_rejects_incomplete_ohlcv_payload_before_writing(monkeypatch):
+    target = dt.date(2026, 5, 29)
+    row = _minute_row(target, 1)
+    row.pop("Amount")
+    conn = DummyConn()
+
+    monkeypatch.setattr(
+        inc.pgx,
+        "execute_values",
+        lambda cur, sql, values: cur.conn.values.extend(values),
+    )
+
+    with pytest.raises(ValueError, match="missing_required_fields"):
+        inc.upsert_minute(conn, "688591.SH", target, [row])
+
+    assert conn.values == []
+
+
+def test_minute_completeness_requires_exact_session_shape(monkeypatch):
+    target = dt.date(2026, 5, 29)
+    valid_240 = {
+        "total_bars": 240,
+        "core_session_bars": 240,
+        "opening_bar_count": 0,
+        "unexpected_session_bars": 0,
+        "invalid_payload_bars": 0,
+        "first_time": "09:31:00",
+        "last_time": "15:00:00",
+    }
+    valid_241 = {
+        **valid_240,
+        "total_bars": 241,
+        "opening_bar_count": 1,
+        "first_time": "09:30:00",
+    }
+    invalid_240 = {
+        **valid_240,
+        "core_session_bars": 239,
+        "unexpected_session_bars": 1,
+    }
+
+    for observed in (valid_240, valid_241):
+        monkeypatch.setattr(inc, "get_minute_day_stats", lambda *_args, value=observed: {"688591.SH": value})
+        assert inc.find_minute_day_gaps(DummyConn(), target, ["688591.SH"]) == []
+
+    monkeypatch.setattr(inc, "get_minute_day_stats", lambda *_args: {"688591.SH": invalid_240})
+    gaps = inc.find_minute_day_gaps(DummyConn(), target, ["688591.SH"])
+    assert len(gaps) == 1
+    assert gaps[0]["unexpected_session_bars"] == 1
+
+
+def test_minute_authorities_fail_loud_instead_of_shrinking_universe():
+    target = dt.date(2026, 5, 29)
+
+    with pytest.raises(RuntimeError, match="trading_calendar has no authority row"):
+        inc.is_trading_day(ScriptedConn([[]]), target)
+
+    stock_rows = [[("688591.SH", dt.date(2020, 1, 1), None)]]
+    with pytest.raises(RuntimeError, match="stock_basic is missing requested TDX stock codes"):
+        inc.get_expected_minute_codes(
+            ScriptedConn(stock_rows),
+            target,
+            ["688591.SH", "000001.SZ"],
+        )
+
+
+def test_minute_universe_uses_listing_date_and_suspension_authority():
+    target = dt.date(2026, 5, 29)
+    conn = ScriptedConn(
+        [
+            [
+                ("000001.SZ", dt.date(1991, 4, 3), None),
+                ("301999.SZ", dt.date(2026, 6, 1), None),
+                ("688591.SH", dt.date(2020, 1, 1), None),
+            ],
+            [("688591.SH",)],
+        ]
+    )
+
+    expected = inc.get_expected_minute_codes(
+        conn,
+        target,
+        ["688591.SH", "301999.SZ", "000001.SZ"],
+    )
+
+    assert expected == ["000001.SZ"]
+    assert "market.stock_basic" in conn.executed[0][0]
+    assert "market.suspend_d" in conn.executed[1][0]
 
 
 def test_minute_completeness_detects_gap_and_repairs(monkeypatch):
@@ -164,13 +289,20 @@ def test_ingest_minute_marks_failed_when_completeness_still_has_gaps(monkeypatch
     job_id = uuid.uuid4()
     statuses = {}
     validation_calls = []
+    task_updates = []
 
     monkeypatch.setattr(inc, "tqdm", None)
     monkeypatch.setattr(inc, "create_job", lambda *_args, **_kwargs: job_id)
     monkeypatch.setattr(inc, "create_run", lambda *_args, **_kwargs: run_id)
     monkeypatch.setattr(inc, "update_job_summary", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(inc, "create_task", lambda *_args, **_kwargs: uuid.uuid4())
-    monkeypatch.setattr(inc, "complete_task", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        inc,
+        "complete_task",
+        lambda _conn, task_id, success, progress, last_error: task_updates.append(
+            (task_id, success, progress, last_error)
+        ),
+    )
     monkeypatch.setattr(inc, "fetch_minute_range", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(inc, "log_ingestion", lambda *_args, **_kwargs: None)
 
@@ -188,9 +320,40 @@ def test_ingest_minute_marks_failed_when_completeness_still_has_gaps(monkeypatch
     monkeypatch.setattr(inc, "finish_run", fake_finish_run)
     monkeypatch.setattr(inc, "finish_job", fake_finish_job)
 
-    inc.ingest_minute(DummyConn(), ["688591.SH"], target, target, batch_size=1, max_empty=0)
+    succeeded = inc.ingest_minute(DummyConn(), ["688591.SH"], target, target, batch_size=1, max_empty=0)
 
+    assert succeeded is False
     assert validation_calls == [(run_id, job_id, "kline_minute_raw", ["688591.SH"], target, target)]
     assert statuses["run"][1] == "failed"
     assert statuses["job"][1] == "failed"
     assert statuses["run"][2]["failed_codes"] == 1
+    assert task_updates[-1][1:] == (
+        False,
+        0.0,
+        'minute completeness validation failed: {"ts_code": "688591.SH", "actual_bars": 12, "expected_bars": 240}',
+    )
+
+
+def test_main_exits_nonzero_when_minute_dataset_finishes_failed(monkeypatch):
+    args = SimpleNamespace(
+        date="2026-05-29",
+        start_date="2026-05-29",
+        datasets="kline_minute_raw",
+        exchanges="sh,sz",
+        batch_size=1,
+        max_empty=0,
+        job_id=None,
+        bulk_session_tune=False,
+        workers=1,
+    )
+    conn = DummyConn()
+
+    monkeypatch.setattr(inc, "parse_args", lambda: args)
+    monkeypatch.setattr(inc, "fetch_codes", lambda _exchanges: ["688591.SH"])
+    monkeypatch.setattr(inc.psycopg2, "connect", lambda **_kwargs: conn)
+    monkeypatch.setattr(inc, "ingest_minute", lambda *_args, **_kwargs: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        inc.main()
+
+    assert exc_info.value.code == 1
