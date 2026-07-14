@@ -1,6 +1,7 @@
 {
   "actual": "Twenty-one sw_daily retry targets have attempt_count zero and no next_retry_at, one sw_sector target job has remained queued since 2026-06-10, and margin_detail current-day target retries repeatedly fail before T+1 availability.",
   "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20260714_BUG-646-retry-lifecycle-strands-aliased-targets-and-lagged-dataset-retries.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
