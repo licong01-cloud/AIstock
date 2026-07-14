@@ -25,6 +25,7 @@ from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import BrokerConnectivityError, DataUnavailableError, InvalidStateTransitionError
 from backend.services.trading_core.models import AccountSnapshot, MinuteBar, OrderIntent, OrderSide, OrderStatus, PositionLot, RunStatus
 from backend.services.trading_core.oms import OMS
@@ -538,6 +539,43 @@ def test_live_session_tick_processes_new_minute_bar_once() -> None:
         as_of_time=datetime(2024, 1, 2, 9, 32),
     )
     assert paper_repo.list_session_days(session.session_id)[-1].actual_bar_count == 2
+
+
+def test_live_run_preparation_does_not_repeat_strategy_package_manifest_validation() -> None:
+    class RaiseStrategyPackageRevalidation(StrategyPackageValidator):
+        def validate_manifest_identity_for_paper_trading(self, manifest) -> None:  # noqa: ANN001
+            raise AssertionError(f"live session revalidated StrategyPackage {manifest.package_id}")
+
+    paper_repo, portfolio_id = make_portfolio_repo()
+    session = PaperTradingSessionService(repository=paper_repo).create_session(
+        portfolio_id=portfolio_id,
+        mode=PaperSessionMode.LIVE_ONLY,
+        start_date=date(2024, 1, 2),
+        live_data_source=MinuteDataSource.TDX_REALTIME,
+        runtime_config={
+            "paper_v2_session": {"signal_data_source": "DB_HISTORICAL"},
+            "selection_artifact_config": {"auto_generate": False},
+        },
+    )
+    executor = PaperTradingLiveMinuteExecutor(
+        repository=paper_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=FakeLiveMarket(make_bars()),
+        runtime=FakeRuntime(),
+        target_engine=FakeTargetEngine(),
+        validator=RaiseStrategyPackageRevalidation(),
+        tradability_filter=FakeTradabilityFilter(),
+        refresh_audit=FakeRefreshAuditOk(),
+    )
+
+    run = executor._prepare_live_run(  # noqa: SLF001
+        session,
+        trade_date=date(2024, 1, 2),
+        as_of_time=datetime(2024, 1, 2, 9, 31),
+    )
+
+    assert run.status == RunStatus.RUNNING
+    assert run.portfolio_id == portfolio_id
 
 
 def test_live_day_with_terminal_orders_and_zero_fills_succeeds_as_no_trade() -> None:

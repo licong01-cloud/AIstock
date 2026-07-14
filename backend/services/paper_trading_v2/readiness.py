@@ -144,7 +144,6 @@ class PaperTradingReadinessService:
         execution_policy_context = self._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
         config["validated_execution_policy"] = execution_policy_context
-        self.validator.validate_manifest_identity_for_paper_trading(manifest)
         self.validator.validate_execution_policy_for_paper(
             package_id=manifest.package_id,
             policy_json=execution_policy_json,
@@ -159,7 +158,16 @@ class PaperTradingReadinessService:
         )
         effective_manifest = apply_runtime_variant_to_manifest(manifest, config)
         config["qe_backtest_runtime_contract"] = runtime_contract
-        checks.append(PaperReadinessCheck(check_name="strategy_package_manifest", context={"package_id": manifest.package_id}))
+        checks.append(
+            PaperReadinessCheck(
+                check_name="strategy_package_manifest",
+                context={
+                    "package_id": manifest.package_id,
+                    "admission_authority": "strategy_package_entry",
+                    "revalidated": False,
+                },
+            )
+        )
 
         self.calendar_provider.ensure_trading_day(trade_date)
         checks.append(PaperReadinessCheck(check_name="trading_calendar", context={"trade_date": trade_date.isoformat()}))

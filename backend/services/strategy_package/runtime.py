@@ -133,6 +133,9 @@ class StrategyPackageRuntime:
         hmm_runtime: SectorHMMRuntime | None = None,
         artifact_repository: StrategyPackageSelectionArtifactRepository | None = None,
     ) -> None:
+        # Compatibility seam only. New StrategyPackages complete immutable
+        # asset admission before they enter Selection/Paper runtimes; signal
+        # generation must not repeat manifest or model-asset validation.
         self.validator = validator or StrategyPackageValidator()
         self.hmm_runtime = hmm_runtime or SectorHMMRuntime()
         self.artifact_repository = artifact_repository or StrategyPackageSelectionArtifactRepository()
@@ -163,7 +166,6 @@ class StrategyPackageRuntime:
         hmm_effective_trade_date: date | None = None,
         prohibit_no_candidate_declaration: bool = False,
     ) -> SignalSnapshotBuildTrace:
-        self.validator.validate_manifest(manifest)
         if not manifest.manifest_sha256:
             raise PackageAssetInvalidError(
                 "strategy package manifest must be frozen before runtime",

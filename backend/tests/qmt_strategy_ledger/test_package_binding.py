@@ -146,6 +146,25 @@ def test_package_binding_creates_active_binding_with_manifest_evidence() -> None
     assert evidence.manifest_sha256 == "sha_a"
 
 
+def test_package_binding_does_not_revalidate_strategy_package_assets() -> None:
+    class RaiseAssetEligibility:
+        def require_eligible(self, *_args, **_kwargs):  # noqa: ANN002, ANN003, ANN201
+            raise AssertionError("QMT binding must not repeat StrategyPackage asset admission")
+
+    repo = _repo()
+    service = QmtStrategyPackageBindingService(
+        repository=repo,
+        package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.BACKTEST_APPROVED, "sha_a")),
+        selection_reader=FakeSelectionReader(_run()),
+        asset_eligibility_service=RaiseAssetEligibility(),
+    )
+
+    binding = service.bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a"))
+
+    assert binding.package_id == "pkg_a"
+    assert binding.manifest_sha256 == "sha_a"
+
+
 def test_package_binding_captures_frozen_selection_asset_evidence() -> None:
     repo = _repo()
     runtime_config = {"selection_artifact_config": {"cutoff_date": "2026-05-17"}}
@@ -301,12 +320,13 @@ def test_package_binding_still_requires_explicit_replace_for_changed_strategy_id
 def test_package_binding_rejects_unavailable_package_selection_and_manifest_mismatch() -> None:
     repo = _repo()
 
-    with pytest.raises(StrategyPackageValidationError, match="asset eligibility"):
+    with pytest.raises(StrategyPackageValidationError, match="retired StrategyPackage") as retired_exc:
         QmtStrategyPackageBindingService(
             repository=repo,
             package_reader=FakePackageReader(FakePackageRecord("pkg_a", PackageStatus.RETIRED, "sha_a")),
             selection_reader=FakeSelectionReader(_run()),
         ).bind(PackageBindingRequest(strategy_id="strat_a", package_id="pkg_a", selection_run_id="sel_a"))
+    assert retired_exc.value.context["reason_code"] == "strategy_package_retired_for_new_qmt_binding"
 
     with pytest.raises(DataUnavailableError, match="selection run is not succeeded"):
         QmtStrategyPackageBindingService(
