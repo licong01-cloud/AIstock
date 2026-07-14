@@ -30,8 +30,8 @@
   "expected": "LocalSIM must use one exact manifest identity across binding, release, run context, and broker. An explicitly marked BUG-639 successor lineage must resolve the authoritative current StrategyPackage manifest without repeating package completeness validation; legacy and manual bindings must remain pinned to the portfolio frozen manifest and arbitrary mismatches must fail loudly.",
   "first_seen_at": "2026-07-14T07:02:24.972162Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7b08c6abd92103a0483a95b94fbfaffb9fba5702",
+  "fixed_at": "2026-07-14T07:46:18.392544Z",
   "github_issue_number": 2088,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2088",
   "last_seen_at": "2026-07-14T07:02:24.972162Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2090",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "5f306eebe4cdbe46ff468c0a",
     "source_event_id": "FE-20260714-5f306eebe4cd"
   },
+  "validation_evidence": [
+    "ruff check + py_compile + git diff --check -> passed; 7 direct LocalSIM successor identity tests -> passed; nox l0 changed-file guardrails -> passed; nox validation_module_registry_l0 -> 8 passed and ownership scan passed; rebased PR CI -> 20 passed, 0 failed, 0 pending"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
