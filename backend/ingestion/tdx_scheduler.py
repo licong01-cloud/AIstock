@@ -57,6 +57,13 @@ _ENGINE_DATASETS = frozenset(DATASET_REGISTRY.keys())
 
 _AUTO_RETRY_DELAY_MINUTES = 60
 _AUTO_RETRY_DEDUP_SECONDS = 60
+_AUTO_RETRY_LEASE_MINUTES = 120
+_ACTIVE_JOB_LEASE_MINUTES = 120
+_POST_CLOSE_RETRY_READY_AT = {
+    # The canonical 16:50 daily schedule gets first chance. Persisted recovery
+    # targets are considered only after a short post-schedule grace period.
+    "index_daily": dt.time(17, 0),
+}
 _AUTO_RETRY_EXCLUDED_DATASETS = frozenset(
     {
         "_data_freshness_check",
@@ -438,14 +445,23 @@ class TDXScheduler:
                 """
                 SELECT job_id
                   FROM market.ingestion_jobs
-                 WHERE created_at >= NOW() - (%s || ' seconds')::interval
-                   AND lower(summary->>'dataset') = %s
+                 WHERE lower(summary->>'dataset') = %s
                    AND lower(COALESCE(summary->>'mode', '')) = %s
-                   AND status IN ('queued', 'pending', 'running', 'success')
+                   AND (
+                       (
+                           status IN ('queued', 'pending', 'running')
+                           AND COALESCE(started_at, created_at) >=
+                               NOW() - (%s || ' minutes')::interval
+                       )
+                       OR (
+                           status = 'success'
+                           AND created_at >= NOW() - (%s || ' seconds')::interval
+                       )
+                   )
                  ORDER BY created_at DESC
                  LIMIT 1
                 """,
-                (str(max(int(window_seconds), 1)), ds, md),
+                (ds, md, str(_ACTIVE_JOB_LEASE_MINUTES), str(max(int(window_seconds), 1))),
             )
             return bool(rows)
         except Exception as exc:  # noqa: BLE001
@@ -606,13 +622,14 @@ class TDXScheduler:
         )
         return dict(rows[0]) if rows else {}
 
-    def _check_dataset_recovered(self, dataset: str) -> Optional[Any]:
+    def _check_dataset_recovered(
+        self,
+        dataset: str,
+        expected_date: Optional[dt.date] = None,
+    ) -> Optional[Any]:
         check_dataset = _AUTO_RETRY_CHECK_ALIASES.get(dataset, dataset)
         checker = AuditBackedDataHealthChecker(self._db_cfg)
-        results = checker.check_datasets([check_dataset])
-        if not results:
-            return None
-        return results[0]
+        return checker.check_dataset(check_dataset, expected_date=expected_date)
 
     # ------------------------------------------------------------------
     # schedule management
@@ -659,8 +676,9 @@ class TDXScheduler:
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
 
+        repo = DataSyncTargetRepository()
         try:
-            due_targets = DataSyncTargetRepository().list_fillable_targets(limit=100)
+            due_targets = repo.list_fillable_targets(limit=100)
         except Exception as exc:  # noqa: BLE001
             _logger.warning("target retry: due-target scan skipped: %s", exc)
             return []
@@ -669,6 +687,7 @@ class TDXScheduler:
         schedule_map = schedule_map or self._schedule_map_for_enabled_datasets()
         submitted: list[str] = []
         seen: Set[str] = set()
+        now = _now()
         for target in due_targets:
             ds = str(target.get("dataset") or "").strip().lower()
             if not ds or ds in seen or _is_auto_retry_excluded_dataset(ds):
@@ -678,20 +697,140 @@ class TDXScheduler:
             if not sched:
                 continue
             retry_mode = sched.get("mode") or "incremental"
+            target_id = str(target.get("target_id") or "").strip()
+            target_date = self._coerce_target_date(target.get("target_date"))
+
+            try:
+                readiness = self._check_dataset_recovered(ds, target_date)
+            except Exception as exc:  # noqa: BLE001
+                readiness = None
+                _logger.warning("target retry: precheck failed for %s/%s: %s", ds, target_date, exc)
+            if readiness is not None and getattr(readiness, "status", None) == "ok":
+                metadata = {
+                    "precheck": "already_recovered",
+                    "expected_date": target_date.isoformat() if target_date else None,
+                }
+                repo.mark_reconciled(target_id, context=metadata)
+                repo.record_attempt(
+                    DataSyncAttemptRecord(
+                        target_id=target_id,
+                        status="reconciled",
+                        trigger_source="data_sync_target_precheck",
+                        finished_at=now,
+                        context_json=metadata,
+                    )
+                )
+                continue
+
+            required_before = self._coerce_target_datetime(target.get("required_before"))
+            if required_before is not None and now >= required_before:
+                failure_category = str(
+                    getattr(readiness, "failure_category", None) or "target_deadline_expired"
+                )
+                metadata = {
+                    "precheck": "deadline_expired",
+                    "expected_date": target_date.isoformat() if target_date else None,
+                    "failure_category": failure_category,
+                }
+                repo.mark_final_blocked(target_id, reason=failure_category, context=metadata)
+                repo.record_attempt(
+                    DataSyncAttemptRecord(
+                        target_id=target_id,
+                        status="final_blocked",
+                        trigger_source="data_sync_target_precheck",
+                        finished_at=now,
+                        error_message=failure_category,
+                        context_json=metadata,
+                    )
+                )
+                self._flush_final_data_sync_alerts(
+                    [
+                        {
+                            "target_id": target_id,
+                            "dataset": ds,
+                            "target_date": target_date,
+                            "target_status": "final_blocked",
+                            "failure_category": failure_category,
+                            "required_before": required_before,
+                            "metadata": metadata,
+                        }
+                    ]
+                )
+                continue
+
+            if not self._target_retry_window_open(ds, now=now):
+                continue
             if self._recent_dataset_submission_exists(ds, retry_mode):
                 continue
             try:
-                self._enqueue_target_retry(
+                claimed = repo.claim_fillable_target(
+                    target_id,
+                    due_at=now,
+                    claimed_until=now + dt.timedelta(minutes=_AUTO_RETRY_LEASE_MINUTES),
+                )
+                if not claimed:
+                    continue
+                job_id = self._enqueue_target_retry(
                     target=target,
                     schedule=sched,
                     retry_mode=retry_mode,
                     triggered_by="data_sync_target_due",
                     attempt=int(target.get("attempt_count") or 0) + 1,
                 )
+                if job_id is None:
+                    repo.mark_retry(
+                        target_id,
+                        retry_after=now + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES),
+                        reason="duplicate_running",
+                        context={"precheck": "duplicate_running"},
+                    )
+                    continue
                 submitted.append(ds)
             except Exception as exc:  # noqa: BLE001
                 _logger.warning("target retry: submit failed for %s: %s", ds, exc)
         return submitted
+
+    @staticmethod
+    def _coerce_target_date(value: Any) -> Optional[dt.date]:
+        if isinstance(value, dt.datetime):
+            return value.date()
+        if isinstance(value, dt.date):
+            return value
+        if value:
+            try:
+                return dt.date.fromisoformat(str(value))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _coerce_target_datetime(value: Any) -> Optional[dt.datetime]:
+        if isinstance(value, dt.datetime):
+            parsed = value
+        elif value:
+            try:
+                parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(dt.timezone.utc)
+
+    def _target_retry_window_open(
+        self,
+        dataset: str,
+        *,
+        now: Optional[dt.datetime] = None,
+    ) -> bool:
+        ready_at = _POST_CLOSE_RETRY_READY_AT.get((dataset or "").strip().lower())
+        if ready_at is None:
+            return True
+        current = now or _now()
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=dt.timezone.utc)
+        return current.astimezone(_CN_TZ).time() >= ready_at
 
     def _update_jobs(
         self, testing_rows: Iterable[Dict[str, Any]], ingestion_rows: Iterable[Dict[str, Any]]
@@ -1260,43 +1399,75 @@ class TDXScheduler:
         retry_mode: str,
         triggered_by: str,
         attempt: int,
-    ) -> uuid.UUID:
+    ) -> Optional[uuid.UUID]:
         ds = str(target.get("dataset") or "").strip().lower()
-        retry_opts: Dict[str, Any] = {"triggered_by": triggered_by, "data_sync_target_id": str(target.get("target_id"))}
-        try:
-            ar_start, ar_end = self._compute_auto_range(ds)
-            if ar_start is not None and ar_end is not None:
-                retry_opts["start_date"] = ar_start.isoformat()
-                retry_opts["end_date"] = ar_end.isoformat()
-        except Exception as ar_exc:  # noqa: BLE001
-            _logger.warning("target retry: auto-range failed for %s: %s", ds, ar_exc)
-
-        retry_job_id = uuid.uuid4()
-        self._execute(
-            """INSERT INTO market.ingestion_jobs
-                   (job_id, job_type, status, created_at, summary)
-               VALUES (%s, %s, 'queued', NOW(), %s)""",
-            (
-                retry_job_id,
-                retry_mode,
-                _json_dump({"dataset": ds, "mode": retry_mode, "triggered_by": triggered_by, "attempt": attempt}),
-            ),
-        )
-        retry_opts["job_id"] = str(retry_job_id)
-        try:
-            DataSyncTargetRepository().record_attempt(
-                DataSyncAttemptRecord(
-                    target_id=str(target.get("target_id")),
-                    status="started",
-                    trigger_source=triggered_by,
-                    job_id=str(retry_job_id),
-                    started_at=_now(),
-                    context_json={"attempt": attempt, "options": retry_opts},
-                )
+        target_id = str(target.get("target_id") or "").strip()
+        target_date = self._coerce_target_date(target.get("target_date"))
+        required_before = self._coerce_target_datetime(target.get("required_before"))
+        retry_opts: Dict[str, Any] = {
+            "triggered_by": triggered_by,
+            "data_sync_target_id": target_id,
+        }
+        if target_date is not None:
+            target_date_text = target_date.isoformat()
+            retry_opts.update(
+                {
+                    "target_date": target_date_text,
+                    "start_date": target_date_text,
+                    "end_date": target_date_text,
+                }
             )
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("target retry: failed to record attempt for %s: %s", ds, exc)
-        self._submit_ingestion(str(schedule["schedule_id"]), ds, retry_mode, triggered_by, retry_opts)
+        else:
+            try:
+                ar_start, ar_end = self._compute_auto_range(ds)
+                if ar_start is not None and ar_end is not None:
+                    retry_opts["start_date"] = ar_start.isoformat()
+                    retry_opts["end_date"] = ar_end.isoformat()
+            except Exception as ar_exc:  # noqa: BLE001
+                _logger.warning("target retry: auto-range failed for %s: %s", ds, ar_exc)
+        if required_before is not None:
+            retry_opts["target_required_before"] = required_before.isoformat()
+
+        key = f"ingestion:{ds}:{(retry_mode or '').strip().lower()}"
+        with self._lock:
+            if self._tracker.is_running(key) or self._recent_dataset_submission_exists(ds, retry_mode):
+                return None
+
+            retry_job_id = uuid.uuid4()
+            self._execute(
+                """INSERT INTO market.ingestion_jobs
+                       (job_id, job_type, status, created_at, summary)
+                   VALUES (%s, %s, 'queued', NOW(), %s)""",
+                (
+                    retry_job_id,
+                    retry_mode,
+                    _json_dump(
+                        {
+                            "dataset": ds,
+                            "mode": retry_mode,
+                            "triggered_by": triggered_by,
+                            "attempt": attempt,
+                            "data_sync_target_id": target_id,
+                            "target_date": target_date.isoformat() if target_date else None,
+                        }
+                    ),
+                ),
+            )
+            retry_opts["job_id"] = str(retry_job_id)
+            try:
+                DataSyncTargetRepository().record_attempt(
+                    DataSyncAttemptRecord(
+                        target_id=target_id,
+                        status="started",
+                        trigger_source=triggered_by,
+                        job_id=str(retry_job_id),
+                        started_at=_now(),
+                        context_json={"attempt": attempt, "options": retry_opts},
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("target retry: failed to record attempt for %s: %s", ds, exc)
+            self._submit_ingestion(None, ds, retry_mode, triggered_by, retry_opts)
         return retry_job_id
 
     def _finalize_data_sync_target_retry(
@@ -1322,7 +1493,7 @@ class TDXScheduler:
         recovered = False
         failure_category = "not_ready_after_retry"
         try:
-            readiness = self._check_dataset_recovered(dataset)
+            readiness = self._check_dataset_recovered(dataset, target_date)
             if readiness is not None and getattr(readiness, "status", None) == "ok":
                 recovered = True
             elif readiness is not None and getattr(readiness, "failure_category", None):
@@ -1352,7 +1523,9 @@ class TDXScheduler:
                 )
                 return
 
-            final_deadline_at = self._final_deadline_for_target(dataset, target_date)
+            final_deadline_at = self._coerce_target_datetime(options.get("target_required_before"))
+            if final_deadline_at is None:
+                final_deadline_at = self._final_deadline_for_target(dataset, target_date)
             after_deadline = final_deadline_at is not None and now >= final_deadline_at
             if after_deadline:
                 repo.mark_final_blocked(target_id, reason=error_message or failure_category, context=metadata)

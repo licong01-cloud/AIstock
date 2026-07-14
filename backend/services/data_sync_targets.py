@@ -253,6 +253,33 @@ class DataSyncTargetRepository:
                 )
                 return self._rows(cur)
 
+    def claim_fillable_target(
+        self,
+        target_id: str,
+        *,
+        claimed_until: datetime,
+        due_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Atomically lease one due target before creating any job or attempt row."""
+
+        due_at = due_at or datetime.now(timezone.utc)
+        with self._connection_provider() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE market.data_sync_targets
+                    SET next_retry_at = %s,
+                        updated_at = NOW()
+                    WHERE target_id = %s
+                      AND target_status IN ('pending', 'retry')
+                      AND (next_retry_at IS NULL OR next_retry_at <= %s)
+                    RETURNING *
+                    """,
+                    (claimed_until, target_id, due_at),
+                )
+                rows = self._rows(cur)
+                return rows[0] if rows else None
+
     def list_attempts(self, target_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
         limit = max(1, min(int(limit or 50), 500))
         with self._connection_provider() as conn:
@@ -410,6 +437,9 @@ class DataSyncTargetService:
 
     def list_fillable_targets(self, **kwargs: Any) -> list[dict[str, Any]]:
         return self.repository.list_fillable_targets(**kwargs)
+
+    def claim_fillable_target(self, target_id: str, **kwargs: Any) -> dict[str, Any] | None:
+        return self.repository.claim_fillable_target(target_id, **kwargs)
 
     def list_attempts(self, target_id: str, **kwargs: Any) -> list[dict[str, Any]]:
         return self.repository.list_attempts(target_id, **kwargs)

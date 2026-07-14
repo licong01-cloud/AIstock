@@ -1,7 +1,10 @@
 import datetime as dt
 from pathlib import Path
 
-from backend.services.data_sync_targets import DataSyncTargetRecord, make_target_key_sha256
+from backend.services.data_sync_targets import (
+    DataSyncTargetRepository,
+    make_target_key_sha256,
+)
 
 
 def test_target_key_ignores_json_key_order_and_normalizes_dates():
@@ -75,3 +78,54 @@ def test_target_statuses_are_final_gate_compatible():
     assert "final_blocked" in TARGET_STATUSES
     assert "reconciled" in TARGET_STATUSES
     assert {"started", "retry", "final_blocked", "reconciled"}.issubset(ATTEMPT_STATUSES)
+
+
+def test_repository_atomically_leases_only_a_due_fillable_target():
+    claimed_until = dt.datetime(2026, 7, 14, 10, 0, tzinfo=dt.timezone.utc)
+    due_at = dt.datetime(2026, 7, 14, 8, 0, tzinfo=dt.timezone.utc)
+
+    class _Cursor:
+        description = [("target_id",), ("next_retry_at",)]
+
+        def __init__(self):
+            self.sql = ""
+            self.params = ()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            self.sql = sql
+            self.params = params
+
+        def fetchall(self):
+            return [{"target_id": "target-1", "next_retry_at": claimed_until}]
+
+    cursor = _Cursor()
+
+    class _Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return cursor
+
+    repo = DataSyncTargetRepository(connection_provider=lambda: _Connection())
+
+    claimed = repo.claim_fillable_target(
+        "target-1",
+        due_at=due_at,
+        claimed_until=claimed_until,
+    )
+
+    assert claimed == {"target_id": "target-1", "next_retry_at": claimed_until}
+    assert "UPDATE market.data_sync_targets" in cursor.sql
+    assert "target_status IN ('pending', 'retry')" in cursor.sql
+    assert "next_retry_at IS NULL OR next_retry_at <= %s" in cursor.sql
+    assert cursor.params == (claimed_until, "target-1", due_at)
