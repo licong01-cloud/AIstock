@@ -2,6 +2,7 @@
   "actual": "Live state has an extra stock_basic incremental schedule; suspend_d and anns_metadata produce hundreds of weekend or overnight runs; weekend compensation created 31 skipped jobs in 45 days.",
   "allowed_write_scope": [
     "backend/db/init_tushare_schedules.py",
+    "backend/ingestion/tdx_scheduler.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20260714_BUG-647-local-data-schedule-catalog-retains-legacy-duplicates-and-wasteful-caden.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"

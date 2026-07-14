@@ -2,7 +2,10 @@ import uuid
 import datetime as dt
 from types import SimpleNamespace
 
+import pytest
+
 import backend.ingestion.tdx_scheduler as scheduler_module
+from backend.db.init_tushare_schedules import _DEFAULT_SCHEDULES, _validate_default_schedules
 from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
 
@@ -16,6 +19,83 @@ def _scheduler_with_execute_capture():
 
     scheduler._execute = _execute
     return scheduler, calls
+
+
+def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_unique():
+    _validate_default_schedules(_DEFAULT_SCHEDULES)
+
+    weekend = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "_weekend_compensation")
+    assert weekend["frequency"] == "weekly"
+    assert weekend["day_of_week"] == "saturday"
+    assert weekend["at"] == "10:00"
+
+    with pytest.raises(ValueError, match="mode-insensitive default dataset has multiple schedules"):
+        _validate_default_schedules(
+            [
+                {"dataset": "stock_basic", "mode": "init", "frequency": "daily"},
+                {"dataset": "stock_basic", "mode": "incremental", "frequency": "daily"},
+            ]
+        )
+
+
+def test_schedule_hygiene_reports_without_automatic_cleanup():
+    findings = TDXScheduler._schedule_hygiene_findings(
+        [
+            {"schedule_id": "stock-init", "dataset": "stock_basic", "mode": "init", "frequency": "daily", "options": {}},
+            {
+                "schedule_id": "stock-incremental",
+                "dataset": "stock_basic",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {},
+            },
+            {"schedule_id": "suspend-hourly", "dataset": "suspend_d", "mode": "incremental", "frequency": "1h", "options": {}},
+            {
+                "schedule_id": "suspend-fixed",
+                "dataset": "_suspend_d_preopen_0905",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {"at": "09:05"},
+            },
+            {"schedule_id": "anns", "dataset": "anns_metadata", "mode": "incremental", "frequency": "1h", "options": {}},
+            {
+                "schedule_id": "weekend",
+                "dataset": "_weekend_compensation",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {"at": "10:00"},
+            },
+        ]
+    )
+
+    by_code = {finding["code"]: finding for finding in findings}
+    assert by_code["duplicate_mode_insensitive_dataset"]["action"] == "review_only_no_automatic_delete"
+    assert by_code["unbounded_high_frequency_review"]["action"] == "preserve_until_availability_window_is_approved"
+    assert by_code["overlapping_suspend_refresh_cadence"]["action"] == "review_only_preserve_pretrade_coverage"
+    assert by_code["weekend_compensation_not_weekly"]["action"] == "align_with_canonical_saturday_schedule"
+
+
+def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    scheduler._weekend_compensation_due = lambda: False
+    scheduler._next_run_for = lambda _schedule_id: None
+    scheduler._update_ingestion_schedule = lambda *args, **kwargs: calls.append((args, kwargs))
+    scheduler._claim_scheduled_fire = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("non-Saturday legacy cadence must stop before claiming a fire")
+    )
+
+    scheduler._scheduled_ingestion_run(
+        "weekend-schedule",
+        "_weekend_compensation",
+        "incremental",
+        {"at": "10:00"},
+        "daily",
+    )
+
+    assert calls[0][0] == ("weekend-schedule",)
+    assert calls[0][1]["last_status"] == "skipped"
+    assert calls[0][1]["last_error"] == "not_saturday"
 
 
 def test_success_ingestion_schedule_update_clears_previous_error():

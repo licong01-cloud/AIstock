@@ -82,6 +82,8 @@ _STALE_QUEUED_JOB_MINUTES = 10
 _TARGET_STALE_QUEUED_JOB_MINUTES = _AUTO_RETRY_LEASE_MINUTES
 _AVAILABILITY_LAG_TRADING_DAYS = {"margin_detail": 1}
 _AVAILABILITY_READY_AT = {"margin_detail": dt.time(19, 10)}
+_MODE_INSENSITIVE_SCHEDULE_DATASETS = frozenset({"stock_basic"})
+_HIGH_FREQUENCY_REVIEW_DATASETS = frozenset({"suspend_d", "anns_metadata"})
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -670,6 +672,88 @@ class TDXScheduler:
         checker = AuditBackedDataHealthChecker(self._db_cfg)
         return checker.check_dataset(check_dataset, expected_date=expected_date)
 
+    @staticmethod
+    def _schedule_hygiene_findings(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for row in rows:
+            normalized.append(
+                {
+                    "schedule_id": str(row.get("schedule_id") or ""),
+                    "dataset": str(row.get("dataset") or "").strip().lower(),
+                    "mode": str(row.get("mode") or "incremental").strip().lower(),
+                    "frequency": str(row.get("frequency") or "").strip().lower(),
+                    "options": _parse_options(row.get("options")),
+                }
+            )
+
+        findings: List[Dict[str, Any]] = []
+        for dataset in sorted(_MODE_INSENSITIVE_SCHEDULE_DATASETS):
+            matches = [row for row in normalized if row["dataset"] == dataset]
+            if len(matches) > 1:
+                findings.append(
+                    {
+                        "code": "duplicate_mode_insensitive_dataset",
+                        "dataset": dataset,
+                        "severity": "warning",
+                        "schedule_ids": [row["schedule_id"] for row in matches],
+                        "modes": [row["mode"] for row in matches],
+                        "action": "review_only_no_automatic_delete",
+                    }
+                )
+
+        for row in normalized:
+            frequency = row["frequency"]
+            dataset = row["dataset"]
+            if (
+                dataset in _HIGH_FREQUENCY_REVIEW_DATASETS
+                and frequency.endswith("h")
+                and frequency[:-1].isdigit()
+                and int(frequency[:-1]) <= 1
+                and not row["options"].get("active_windows")
+            ):
+                findings.append(
+                    {
+                        "code": "unbounded_high_frequency_review",
+                        "dataset": dataset,
+                        "severity": "info",
+                        "schedule_ids": [row["schedule_id"]],
+                        "frequency": frequency,
+                        "action": "preserve_until_availability_window_is_approved",
+                    }
+                )
+
+        suspend_hourly = any(row["dataset"] == "suspend_d" and row["frequency"].endswith("h") for row in normalized)
+        suspend_fixed = [row["schedule_id"] for row in normalized if row["dataset"].startswith("_suspend_d_")]
+        if suspend_hourly and suspend_fixed:
+            findings.append(
+                {
+                    "code": "overlapping_suspend_refresh_cadence",
+                    "dataset": "suspend_d",
+                    "severity": "info",
+                    "schedule_ids": suspend_fixed,
+                    "action": "review_only_preserve_pretrade_coverage",
+                }
+            )
+
+        for row in normalized:
+            if row["dataset"] != "_weekend_compensation":
+                continue
+            options = row["options"]
+            if (
+                row["frequency"] not in {"weekly", "week", "1w"}
+                or str(options.get("day_of_week") or "").strip().lower() not in {"saturday", "sat"}
+            ):
+                findings.append(
+                    {
+                        "code": "weekend_compensation_not_weekly",
+                        "dataset": row["dataset"],
+                        "severity": "warning",
+                        "schedule_ids": [row["schedule_id"]],
+                        "action": "align_with_canonical_saturday_schedule",
+                    }
+                )
+        return findings
+
     # ------------------------------------------------------------------
     # schedule management
     def refresh_schedules(self) -> None:
@@ -692,6 +776,14 @@ class TDXScheduler:
              WHERE enabled = TRUE
             """
         )
+        findings = self._schedule_hygiene_findings(ingestion)
+        findings_fingerprint = _json_dump(findings)
+        if findings_fingerprint != getattr(self, "_schedule_hygiene_fingerprint", None):
+            for finding in findings:
+                log_fn = _logger.warning if finding.get("severity") == "warning" else _logger.info
+                log_fn("schedule hygiene finding: %s", _json_dump(finding))
+            self._schedule_hygiene_fingerprint = findings_fingerprint
+        self._last_schedule_hygiene_findings = findings
         self._update_jobs(testing, ingestion)
         try:
             self._reconcile_due_data_sync_targets()
@@ -1230,9 +1322,23 @@ class TDXScheduler:
         raise RuntimeError(f"unsupported suspend_d date_strategy: {date_strategy}")
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _weekend_compensation_due(today: Optional[dt.date] = None) -> bool:
+        return (today or dt.date.today()).weekday() == 5
+
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
+        if (dataset or "").strip().lower() == "_weekend_compensation" and not self._weekend_compensation_due():
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_run=_now(),
+                    last_status="skipped",
+                    last_error="not_saturday",
+                    next_run=self._next_run_for(schedule_id),
+                )
+            return
         if not self._claim_scheduled_fire(schedule_id, dataset, mode, frequency):
             return
 
@@ -3440,7 +3546,7 @@ class TDXScheduler:
 
         # Only run on Saturday
         today = dt.date.today()
-        if today.weekday() != 5:
+        if not self._weekend_compensation_due(today):
             _log.info("weekend_compensation: today is weekday %d (not Saturday), skipping", today.weekday())
             if job_id is not None:
                 self._execute(
@@ -3448,6 +3554,14 @@ class TDXScheduler:
                     " summary=%s WHERE job_id=%s",
                     (_json_dump({"dataset": "_weekend_compensation", "skipped": True,
                                  "reason": f"not saturday (weekday={today.weekday()})"}), job_id),
+                )
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_run=start_ts,
+                    last_status="skipped",
+                    last_error="not_saturday",
+                    next_run=self._next_run_for(schedule_id),
                 )
             return
 
