@@ -54,7 +54,7 @@ from backend.services.miniqmt_execution_runtime import (
 )
 from backend.services.selection_center.models import SelectionMode, SignalSnapshot
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.models import AlphaMode, StrategyPackageManifest
+from backend.services.strategy_package.models import AlphaMode, PackageStatus, StrategyPackageManifest
 from backend.services.strategy_package.multi_alpha_live import multi_alpha_selection_artifact_runtime_hash
 from backend.services.strategy_package.runtime import _candidate_selection_artifact_runtime_hashes
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
@@ -2444,6 +2444,7 @@ class SimulationSchedulerBindingResult:
     sync_result: dict[str, Any] | None = None
     reconciliation_result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    lifecycle_diagnostic: dict[str, Any] | None = None
     data_source: str | None = None
 
     @property
@@ -2951,6 +2952,12 @@ class SimulationLifecycleScheduler:
             active_on=trade_date,
             limit=limit,
         )
+        package_status_cache: dict[str, PackageStatus] = {}
+        bindings, lifecycle_skips, blocked_binding_keys = self._partition_retired_package_bindings(
+            bindings=bindings,
+            data_source=data_source,
+            package_status_cache=package_status_cache,
+        )
         bindings = self._with_unattended_roll_forward_bindings(
             bindings=bindings,
             trade_date=trade_date,
@@ -2959,8 +2966,12 @@ class SimulationLifecycleScheduler:
             strategy_id=strategy_id,
             release_id=release_id,
             approval_states=approval_states,
+            data_source=data_source,
+            package_status_cache=package_status_cache,
+            lifecycle_skips=lifecycle_skips,
+            blocked_binding_keys=blocked_binding_keys,
         )
-        results: list[SimulationSchedulerBindingResult] = []
+        results: list[SimulationSchedulerBindingResult] = list(lifecycle_skips)
         eod_terminalized_run_ids = {str(item.get("run_id")) for item in eod_terminalized_results if item.get("run_id")}
         selection_cache: dict[tuple[Any, ...], StrategyPackageSelectionResult | BaseException] = {}
         shared_selection_keys = self._shared_selection_cache_keys(
@@ -3008,7 +3019,7 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
             data_source=data_source,
             submit=submit,
-            total_bindings=len(bindings),
+            total_bindings=len(bindings) + len(lifecycle_skips),
             results=tuple(results),
             stale_run_results=tuple([*stale_run_results, *eod_terminalized_results]),
             as_of_time=as_of_time,
@@ -4335,6 +4346,109 @@ class SimulationLifecycleScheduler:
                 return evidence
         return {}
 
+    def _partition_retired_package_bindings(
+        self,
+        *,
+        bindings: list[SimulationReleaseBinding],
+        data_source: str,
+        package_status_cache: dict[str, PackageStatus],
+    ) -> tuple[
+        list[SimulationReleaseBinding],
+        list[SimulationSchedulerBindingResult],
+        set[tuple[str, SimulationBrokerBackend]],
+    ]:
+        eligible: list[SimulationReleaseBinding] = []
+        skipped: list[SimulationSchedulerBindingResult] = []
+        blocked_keys: set[tuple[str, SimulationBrokerBackend]] = set()
+        for binding in bindings:
+            status = self._package_lifecycle_status(
+                package_id=binding.package_id,
+                package_status_cache=package_status_cache,
+            )
+            if status != PackageStatus.RETIRED:
+                eligible.append(binding)
+                continue
+            blocked_keys.add((binding.strategy_id, binding.broker_backend))
+            skipped.append(self._retired_package_binding_result(binding=binding, data_source=data_source))
+        return eligible, skipped, blocked_keys
+
+    def _package_lifecycle_status(
+        self,
+        *,
+        package_id: str,
+        package_status_cache: dict[str, PackageStatus],
+    ) -> PackageStatus:
+        cached = package_status_cache.get(package_id)
+        if cached is not None:
+            return cached
+        package_repository = getattr(self.selection_service, "package_repository", None)
+        get_package = getattr(package_repository, "get", None)
+        if not callable(get_package):
+            raise RuntimeConfigInvalidError(
+                "simulation scheduler requires the authoritative StrategyPackage lifecycle reader",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_PACKAGE_LIFECYCLE_READER_MISSING",
+                    "package_id": package_id,
+                },
+            )
+        record = get_package(package_id)
+        record_package_id = str(getattr(record, "package_id", "") or "").strip()
+        raw_status = getattr(record, "package_status", None)
+        status_value = str(getattr(raw_status, "value", raw_status) or "").strip()
+        try:
+            status = PackageStatus(status_value)
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "simulation scheduler StrategyPackage lifecycle status is invalid",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_PACKAGE_LIFECYCLE_INVALID",
+                    "package_id": package_id,
+                    "record_package_id": record_package_id or None,
+                    "package_status": status_value or None,
+                },
+            ) from exc
+        if record_package_id != package_id:
+            raise RuntimeConfigInvalidError(
+                "simulation scheduler StrategyPackage lifecycle identity does not match the binding",
+                context={
+                    "reason_code": "SIMULATION_SCHEDULER_PACKAGE_LIFECYCLE_IDENTITY_MISMATCH",
+                    "package_id": package_id,
+                    "record_package_id": record_package_id or None,
+                    "package_status": status.value,
+                },
+            )
+        package_status_cache[package_id] = status
+        return status
+
+    @staticmethod
+    def _retired_package_binding_result(
+        *,
+        binding: SimulationReleaseBinding,
+        data_source: str,
+    ) -> SimulationSchedulerBindingResult:
+        diagnostic = {
+            "schema_version": "simulation_package_lifecycle_skip_v1",
+            "reason_code": "SIMULATION_BINDING_PACKAGE_RETIRED",
+            "stage": "BINDING_SELECTION",
+            "action": "SKIP",
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "package_id": binding.package_id,
+            "package_status": PackageStatus.RETIRED.value,
+            "broker_backend": binding.broker_backend.value,
+            "broker_called": False,
+            "strategy_package_revalidation_performed": False,
+        }
+        logger.warning("Simulation binding skipped because StrategyPackage is retired: %s", diagnostic)
+        return SimulationSchedulerBindingResult(
+            binding_id=binding.binding_id,
+            strategy_id=binding.strategy_id,
+            broker_backend=binding.broker_backend,
+            status="SKIPPED_RETIRED_PACKAGE",
+            lifecycle_diagnostic=diagnostic,
+            data_source=data_source,
+        )
+
     def _with_unattended_roll_forward_bindings(
         self,
         *,
@@ -4345,6 +4459,10 @@ class SimulationLifecycleScheduler:
         strategy_id: str | None,
         release_id: str | None,
         approval_states: tuple[SimulationBindingApprovalState, ...] | None,
+        data_source: str,
+        package_status_cache: dict[str, PackageStatus],
+        lifecycle_skips: list[SimulationSchedulerBindingResult],
+        blocked_binding_keys: set[tuple[str, SimulationBrokerBackend]],
     ) -> list[SimulationReleaseBinding]:
         if release_id is not None:
             return bindings
@@ -4362,6 +4480,7 @@ class SimulationLifecycleScheduler:
         if remaining_slots <= 0:
             return bindings
         existing_keys = {(item.strategy_id, item.broker_backend) for item in bindings}
+        existing_keys.update(blocked_binding_keys)
         roll_forwarded: list[SimulationReleaseBinding] = []
         for backend in self._roll_forward_backends_for_filter(broker_backend):
             if len(roll_forwarded) >= remaining_slots:
@@ -4375,6 +4494,16 @@ class SimulationLifecycleScheduler:
             )
             for source in source_candidates:
                 if (source.strategy_id, source.broker_backend) in existing_keys:
+                    continue
+                package_status = self._package_lifecycle_status(
+                    package_id=source.package_id,
+                    package_status_cache=package_status_cache,
+                )
+                if package_status == PackageStatus.RETIRED:
+                    lifecycle_skips.append(
+                        self._retired_package_binding_result(binding=source, data_source=data_source)
+                    )
+                    existing_keys.add((source.strategy_id, source.broker_backend))
                     continue
                 if not self._binding_can_roll_forward(source=source, trade_date=trade_date):
                     continue
@@ -9231,6 +9360,7 @@ class SimulationLifecycleBackgroundScheduler:
                             "execution_plan_id": item.execution_plan.plan_id if item.execution_plan else None,
                             "data_source": item.data_source or self._data_source,
                             "error": item.error,
+                            "lifecycle_diagnostic": item.lifecycle_diagnostic,
                             **capacity_fields,
                         }
                     )
@@ -9247,6 +9377,9 @@ class SimulationLifecycleBackgroundScheduler:
                     "reused_count": tick.reused_count,
                     "submitted_count": tick.submitted_count,
                     "failed_count": tick.failed_count,
+                    "retired_package_skipped_count": sum(
+                        1 for item in tick.results if item.status == "SKIPPED_RETIRED_PACKAGE"
+                    ),
                     "stale_terminalized_count": tick.stale_terminalized_count,
                     "succeeded_with_capacity_residual_count": sum(
                         1 for item in processed if item.get("succeeded_with_capacity_residual")

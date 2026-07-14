@@ -2,7 +2,11 @@
   "actual": "pkg_a2f53f3f2f3e4095a910b939464c35e6 has package_status=RETIRED but received both LocalSIM and MiniQMT SIM_VALIDATING bindings for 2026-07-14; the MiniQMT legacy run submitted seven child orders, and the source binding remains eligible to auto-roll-forward for 2026-07-15.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260714_BUG-650-retired-strategy-package-remains-eligible-for-unattended-simulation-roll.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/service.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_strategy_runtime_release.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-650",
@@ -42,7 +46,8 @@
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k retired",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
@@ -154,5 +159,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "allowed"
 }
