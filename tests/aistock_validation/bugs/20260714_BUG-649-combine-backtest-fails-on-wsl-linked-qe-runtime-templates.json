@@ -30,8 +30,8 @@
   "expected": "Submission preflight accepts the canonical QE runtime layout and child workspaces preserve or recreate required WSL factor-data links without copying target datasets; invalid link layouts fail before a run is persisted or child tasks start.",
   "first_seen_at": "2026-07-14T15:01:32.936310Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "41f91431e54beb5e2a3b39b463f4ff8523f9e358",
+  "fixed_at": "2026-07-14T15:56:45.945233Z",
   "github_issue_number": 2123,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2123",
   "last_seen_at": "2026-07-14T15:01:32.936310Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2124",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "multi_alpha"
   ],
@@ -58,6 +59,12 @@
     "fingerprint": "dcf7e485101c8d2527bdd41c",
     "source_event_id": "FE-20260714-dcf7e485101c"
   },
+  "validation_evidence": [
+    "targeted pytest matrix including real DrvFS symlink and concurrent WSL children -> 8 passed",
+    "real R7A Loop1 runtime preflight via WSL -> passed",
+    "nox -s l0 -> passed",
+    "nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
