@@ -21,14 +21,21 @@ Phase 1G 设计复核发现两个父级一致性缺口：
 
 ```text
 design_status = design_ready
-implementation_status = code_complete
+implementation_status = merged_pr_2129
 phase1f_v1_dev_receipt = compatible_but_contract_incomplete_for_phase1g
 disposable_postgresql_l2 = passed
-dev_ddl = not_executed
-production_ddl = not_executed
+dev_ddl = applied_and_verified_2026_07_15
+production_ddl = applied_and_verified_2026_07_15
+final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
+phase1f1_defined_scope = complete
+phase1g_full_schema_ready = false_pending_phase1f2_scope_aware_trace_identity
 business_dml = none
 runtime_activation = none
 ```
+
+2026-07-15 Phase 1G开工一致性复核确认：本设计定义的partition/hash scope已完整交付，但既有
+outbox natural key和capture-gap identity未包含scope。该后续缺口不否定本设计或既有DDL receipt；它由
+Phase 1G详细设计§5.4/§21 G0定义的独立Phase 1F.2 forward contract修正。Phase 1F.2尚未实现或应用。
 
 任务分级为 `T3 / F2`。本设计只修正 Advisory Phase 1 自有 schema/release contract，不增加用户、
 角色、RBAC、审批、授权链、人工确认表、双人复核或 DDL 前数据库导出/全库备份要求。数据库日常备份
@@ -281,21 +288,22 @@ v2 catalog closure必须包含：
 - 不设计 backup precondition、approval row、role check或人工确认 token。
 - production DDL不在代码合入或 DEV验证时自动执行。
 
-### 8.1 Production Gates (All Noop) / 生产状态
+### 8.1 Production Status / 生产状态
 
 本标题用于F2交付状态分离，不表示新增应用门禁：
 
 ```text
 production_dependency_gate = noop
-production_ddl = not_executed
+production_ddl = applied_and_verified
 production_dml = none
 runtime_activation = none
 role_or_approval_gate = none
 backup_gate = none
 ```
 
-代码或文档合入不执行production操作。后续只有用户明确要求执行某次production DDL时，发布工具才按
-exact `.env` production keys运行既有plan/apply/verify流程；程序内部没有审批实体或等待状态。
+代码或文档合入本身没有执行production操作。用户于2026-07-15明确要求先完成DEV验证再执行production
+DDL；发布工具随后按exact `.env` production keys完成plan/apply/new-verify/new-exact-reapply。程序内部
+没有审批实体或等待状态，本次执行也没有引入此类实体。
 
 ## 9. Rollout And Rollback / 发布、事务与可恢复性
 
@@ -397,7 +405,7 @@ Phase 1F.1不得修改 snapshot writer、Selection、inference、模拟盘、Pap
 
 ### 13.3 L3 Persistent DEV
 
-在用户后续明确要求执行该 DEV DDL时：
+2026-07-15已按用户明确要求完成：
 
 1. 使用 `.env` exact DEV keys生成plan；
 2. apply v1->v2 forward migration并readback；
@@ -406,8 +414,31 @@ Phase 1F.1不得修改 snapshot writer、Selection、inference、模拟盘、Pap
 5. snapshot compatibility read-only smoke；
 6. 保存repo-external immutable receipts。
 
-不执行 Phase 1G业务 DML、observer、模型训练或production DDL。每日数据库备份事实不转换为每次 DDL
-前备份要求。
+DEV首次apply plan/receipt分别为
+`d4cc88772e5f7513b6eae657d6736c44bf39ea48d6dbf12a8cbe92ae02c4d42b` / 
+`bcafcf7ac04ecaba8b7c328c24577ff2f016277fcc54eb22fc1d53f963407e3c`；独立VERIFY plan/receipt为
+`12a1f076c37b0dc632f09c3d3082988cb4301ad930fea2926801761cabbeefef` /
+`e42fe870a5f54e65497c8b3bae1838433c8d8416a8c923720e677849bd33ddf1`；exact-reapply plan/receipt为
+`61931ae09df05c548de20ca2ed6f3b6efa9e8f4e73744e63ad164917aa166986` /
+`2288276143e118f7b2ff37f09c43f88ce23ecae2eee25b1163a307ab3416fb6e`。最终catalog为
+`COMPATIBLE/COMPATIBLE/downstream_ready=true`，fingerprint为
+`106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627`；exact reapply
+`ddl_executed=false`。真实snapshot reader/Parquet只读smoke读取lineage/candidate各1行并成功。
+
+### 13.4 Production Execution
+
+DEV全链成功后，2026-07-15按同一冻结contract在production执行。首次apply plan/receipt分别为
+`ed37de077c49e09d9bc7c45b9ac10312fbdd748e86bfb72f92839d4f7bf16d10` /
+`863a82c31f64ef9c7148cbc189a46ae1d8ff55d646e255140f9f7d04b7b59906`；它补齐production中尚未部署的
+order 50/55/60/70/80。独立VERIFY plan/receipt为
+`f9ddbfc3c6d8baff2ce6d8a92913fca0b574c3551847fc62a5c01cac585c4ce4` /
+`2a21f6da845b516cdb386ed608bb2f2d46aefe9fffb842746616be9e60a31ce9`；exact-reapply plan/receipt为
+`e05f0f47c4b3379bfa06637998986035de44992c7a46345f38d506f7f78b9d90` /
+`266b5c291b0691738affc6970e8074b23df9a1ea51e55fea87e85a9747b24bf9`。production最终fingerprint与DEV
+一致，exact reapply `ddl_executed=false`，兼容视图只读smoke成功且业务行为空。
+
+两次执行均未写Phase 1G业务DML、未启动observer、未训练模型、未激活runtime。每日数据库备份事实没有
+转换为每次DDL前备份要求。
 
 ## 14. 正向可达性
 
@@ -492,6 +523,8 @@ Phase 1F.1代码可请求合入条件：migration/registry/verifier/executor完�
 DESIGN-COMPLIANCE-001通过，snapshot compatibility parity无差异；不得以fixture-only migration或
 只删除UNIQUE约束冒充完成。
 
-Phase 1F.1 DEV完成条件：后续显式执行DEV plan/apply/new-verify/new-exact-reapply，v2 catalog
-`COMPATIBLE/COMPATIBLE/downstream_ready=true`且immutable receipts完整。此后Phase 1G才可执行persistent
-DEV observation DML；不要求production DDL先完成。
+Phase 1F.1 DEV完成条件已满足：DEV plan/apply/new-verify/new-exact-reapply、v2 catalog
+`COMPATIBLE/COMPATIBLE/downstream_ready=true`且immutable receipts完整。它证明本设计的partition/hash
+scope完成，不再声称Phase 1G全部schema前置已满足；Phase 1G业务代码还需先完成独立Phase 1F.2
+scope-aware trace identity contract及DEV发布证据。Production也已独立apply、verify和exact reapply，但该事实
+不会自动执行Phase 1F.2、Phase 1G DML或激活runtime。
