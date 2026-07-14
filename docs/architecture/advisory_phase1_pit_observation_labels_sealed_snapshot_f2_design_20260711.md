@@ -2068,9 +2068,20 @@ Phase 1B 实施验收表：
 
 - 唯一实施级详细设计为 `docs/architecture/advisory_phase1e_dual_track_readiness_execution_plan_f2_design_20260714.md`，当前状态为 `design_ready`，代码尚未开始。
 - 首次真实单 target audit 已于 2026-07-11 执行并 `BLOCKED`；只读复查确认旧 manifest DSE 不可继承，现有集中创建记录不能证明逐日真实运行。
-- 使用版本化 target/date/evidence scope 对显式历史日期的单 Alpha和原生多 Alpha手工 batch 执行批量只读复验；replay 与 manual historical receipt 独立分类。
-- Phase 0A.1 自动形成 handoff/scope set；随后冻结 source/capture/label/store 计划、行数/字节预算。输入完整的 typed request 保存 final request hash；依赖后续 DML output 的请求保存带必填 output slots 的 template hash，禁止占位符伪造 final hash。
-- 任一 BLOCKED scope 只阻断自身；合法 RESEARCH_READY/PARTIAL scope 必须可继续。PARTIAL source/label scope 只能执行研究数据建设，不能被解释为实时或正式交易能力。
+- 使用独立 `ProgramDateRequest` 对显式历史日期的单 Alpha和原生多 Alpha执行批量只读复验；
+  同一 scope/audit/plan identity不含 batch hash，replay 与 manual historical receipt独立分类，
+  dated binding/manifest切换按日期表达。
+- Phase 0A.1 自动形成 handoff/scope set；target没有 admission scope时形成不伪造 scope的
+  `TARGET_DIAGNOSTIC`。随后冻结 source/CapturePlan和后置 label/store templates；输入完整的
+  typed request保存 final request hash，依赖后续 output的请求保存带必填 slots的 template hash。
+- 任一 BLOCKED unit只阻断自身；合法 RESEARCH_READY/PARTIAL scope必须可继续。PARTIAL
+  source/label scope只能执行研究数据建设，不能被解释为实时或正式交易能力。
+- Phase 1E 通过 Advisory-owned read-only evidence projection单向消费 Selection/package evidence；
+  不 import/call Selection/StrategyPackage inference、模拟盘、Paper、QE/QuantEvolver、RD-Agent、
+  Qlib或QMT runtime/service，不写共享业务表。策略包入库有效性不重复验证，只核对persisted identity/hash。
+- capacity按 canonical signals/stage/labels/universe/source revisions逐 role验证实际 workload是否被
+  request/receipt覆盖；小 workload receipt不能覆盖大计划。artifact/audit使用atomic no-replace，
+  并发writer以winner readback收敛，不能覆盖。
 - Phase 1D capacity 为 `PARTIAL` 时不全局阻断 Phase 1F/1G/1H；Phase 1I 先对真实 rows 做 bounded staging materialization，补齐测量并得到 `MEASURED` receipt 后才允许 publish/seal，从而避免“先有 SEALED 才能测量、先测量才能 SEALED”的循环。
 
 ### 22.9 Phase 1F：Release schema verification
