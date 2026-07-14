@@ -1803,7 +1803,7 @@ class PaperTradingLiveMinuteExecutor:
             self.repository.save_order_execution_state(updated_state)
 
         if not processed_any_bar:
-            self.repository.save_session_event(
+            self._save_session_event_once(
                 session_id=session.session_id,
                 run_id=run.run_id,
                 event_type="LIVE_WAITING_FOR_BAR",
@@ -1915,13 +1915,7 @@ class PaperTradingLiveMinuteExecutor:
             )
             self._mark_run_failed(session, run, error)
             raise error
-        if not fills:
-            error = ExecutionAlgoError(
-                "live paper run produced no fills; no-trade live day is not yet modeled as success",
-                context={"session_id": session.session_id, "run_id": run.run_id, "trade_date": run.trade_date.isoformat()},
-            )
-            self._mark_run_failed(session, run, error)
-            raise error
+        no_trade_day = not fills
         portfolio = self.repository.get_portfolio(session.portfolio_id)
         latest_cash = self.repository.load_latest_cash(portfolio, run.trade_date)
         latest_positions = self.repository.load_latest_positions(portfolio.portfolio_id, run.trade_date)
@@ -1950,6 +1944,8 @@ class PaperTradingLiveMinuteExecutor:
                 "finalized_from": "live_intraday",
                 "allow_partial_fill": allow_partial_fill,
                 "remaining_order_count": len(remaining_states),
+                "no_trade_day": no_trade_day,
+                "no_trade_reason_code": "TERMINAL_ORDERS_WITHOUT_FILLS" if no_trade_day else None,
             },
         )
         self._assert_orders_terminal_before_success(run)
@@ -1965,9 +1961,51 @@ class PaperTradingLiveMinuteExecutor:
             run_id=run.run_id,
             event_type="LIVE_DAY_FINALIZED",
             message="paper v2 live day finalized after market close",
-            context={"trade_date": run.trade_date.isoformat(), "fill_count": len(fills), "nav": snapshot.nav},
+            context={
+                "trade_date": run.trade_date.isoformat(),
+                "fill_count": len(fills),
+                "nav": snapshot.nav,
+                "no_trade_day": no_trade_day,
+                "no_trade_reason_code": "TERMINAL_ORDERS_WITHOUT_FILLS" if no_trade_day else None,
+            },
         )
         return self._progress(session.session_id)
+
+    def _save_session_event_once(
+        self,
+        *,
+        session_id: str,
+        run_id: str | None,
+        event_type: str,
+        message: str,
+        context: dict[str, Any],
+    ) -> None:
+        """Persist a waiting transition once until its durable fingerprint changes."""
+        fingerprint = {
+            "event_type": event_type,
+            "run_id": run_id,
+            "trade_date": context.get("trade_date"),
+            "latest_available_bar_time": context.get("latest_available_bar_time"),
+        }
+        events = self.repository.list_session_events(session_id, limit=500)
+        if events:
+            event = events[-1]
+            event_context = event.get("context") if isinstance(event.get("context"), dict) else {}
+            existing = {
+                "event_type": event.get("event_type"),
+                "run_id": event.get("run_id"),
+                "trade_date": event_context.get("trade_date"),
+                "latest_available_bar_time": event_context.get("latest_available_bar_time"),
+            }
+            if existing == fingerprint:
+                return
+        self.repository.save_session_event(
+            session_id=session_id,
+            run_id=run_id,
+            event_type=event_type,
+            message=message,
+            context=context,
+        )
 
     def _assert_orders_terminal_before_success(self, run: PaperRun) -> None:
         orders = self.repository.list_orders_for_run(run.run_id)

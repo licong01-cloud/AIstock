@@ -12,13 +12,14 @@ import logging
 import math
 import os
 import queue
+import inspect
 import threading
 import time as monotonic_time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Mapping, Protocol
 import psycopg2.extras
@@ -446,11 +447,30 @@ class ProductionSimulationRunContextProvider:
         binding: SimulationReleaseBinding,
         trade_date: date,
     ) -> SimulationRunContext:
+        return self.load_context_for_phase(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+            as_of_time=None,
+            require_localsim_realtime_quote=(trade_date == date.today()),
+        )
+
+    def load_context_for_phase(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        as_of_time: datetime | None,
+        require_localsim_realtime_quote: bool,
+    ) -> SimulationRunContext:
         if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
             return self._load_local_sim_context(
                 runtime_release=runtime_release,
                 binding=binding,
                 trade_date=trade_date,
+                as_of_time=as_of_time,
+                require_realtime_quote=require_localsim_realtime_quote,
             )
 
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
@@ -474,6 +494,8 @@ class ProductionSimulationRunContextProvider:
         runtime_release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
         trade_date: date,
+        as_of_time: datetime | None = None,
+        require_realtime_quote: bool | None = None,
     ) -> SimulationRunContext:
         portfolio_id = self._resolve_local_sim_portfolio_id(binding)
         paper_repository = self._build_dependency(
@@ -514,14 +536,20 @@ class ProductionSimulationRunContextProvider:
             strategy_id=binding.strategy_id,
             binding_id=binding.binding_id,
         )
-        market_data_source = self._resolve_local_sim_market_data_source(portfolio=portfolio, trade_date=trade_date)
+        market_data_source = self._resolve_local_sim_market_data_source(
+            portfolio=portfolio,
+            trade_date=trade_date,
+            as_of_time=as_of_time,
+        )
         pre_trade_tradability = self._load_pre_trade_tradability(
             symbols=list(positions),
             trade_date=trade_date,
-            require_realtime_quote=(
-                market_data_source == MinuteDataSource.TDX_REALTIME
+            require_realtime_quote=bool(
+                require_realtime_quote
+                and market_data_source == MinuteDataSource.TDX_REALTIME
                 and self._position_loader is None
             ),
+            as_of_time=as_of_time,
         )
         manifest = getattr(portfolio, "frozen_manifest", None)
         self._validate_manifest_identity(
@@ -550,6 +578,7 @@ class ProductionSimulationRunContextProvider:
             cash=cash,
             positions=positions,
             trade_date=trade_date,
+            as_of_time=as_of_time,
         )
         target_total_equity, target_equity_context = _build_dynamic_target_equity_basis(
             binding=binding,
@@ -764,27 +793,45 @@ class ProductionSimulationRunContextProvider:
         trade_date: date,
         binding: SimulationReleaseBinding,
         market_data_source: str | None = None,
+        require_realtime_quote: bool | None = None,
+        as_of_time: datetime | None = None,
+        side_by_symbol: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        require_realtime_quote = self._position_loader is None and (
-            (binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and trade_date == date.today())
-            or (
-                binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
-                and (market_data_source == MinuteDataSource.TDX_REALTIME.value or trade_date == date.today())
+        if require_realtime_quote is None:
+            current_trade_date = (
+                date.today()
+                if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM
+                else scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
             )
-        )
+            require_quote = self._position_loader is None and (
+                (binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM and trade_date == current_trade_date)
+                or (
+                    binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                    and (
+                        market_data_source == MinuteDataSource.TDX_REALTIME.value
+                        or trade_date == current_trade_date
+                    )
+                )
+            )
+        else:
+            require_quote = bool(require_realtime_quote and self._position_loader is None)
         if binding.broker_backend == SimulationBrokerBackend.MINIQMT_SIM:
-            qmt_client = self._qmt_client_factory() if require_realtime_quote else None
+            qmt_client = self._qmt_client_factory() if require_quote else None
             return self._load_miniqmt_pre_trade_tradability(
                 symbols=symbols,
                 trade_date=trade_date,
                 binding=binding,
                 qmt_client=qmt_client,
-                require_realtime_quote=require_realtime_quote,
+                require_realtime_quote=require_quote,
+                as_of_time=as_of_time,
+                side_by_symbol=side_by_symbol,
             )
         return self._load_pre_trade_tradability(
             symbols=symbols,
             trade_date=trade_date,
-            require_realtime_quote=require_realtime_quote,
+            require_realtime_quote=require_quote,
+            as_of_time=as_of_time,
+            side_by_symbol=side_by_symbol,
         )
 
     def _load_miniqmt_pre_trade_tradability(
@@ -795,6 +842,8 @@ class ProductionSimulationRunContextProvider:
         binding: SimulationReleaseBinding,
         qmt_client: Any | None,
         require_realtime_quote: bool,
+        as_of_time: datetime | None = None,
+        side_by_symbol: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not require_realtime_quote:
             return {}
@@ -820,6 +869,8 @@ class ProductionSimulationRunContextProvider:
             trade_date=trade_date,
             require_realtime_quote=True,
             provider=provider,
+            as_of_time=as_of_time,
+            side_by_symbol=side_by_symbol,
         )
 
     def _build_miniqmt_quote_fetcher(
@@ -952,9 +1003,9 @@ class ProductionSimulationRunContextProvider:
         trade_date: date,
         require_realtime_quote: bool,
         provider: Any | None = None,
+        as_of_time: datetime | None = None,
+        side_by_symbol: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        if not require_realtime_quote and not self._pre_trade_tradability_provider_injected:
-            return {}
         if self._position_loader is not None and not self._pre_trade_tradability_provider_injected:
             return {}
         tradability_provider = provider or self._pre_trade_tradability_provider
@@ -967,10 +1018,22 @@ class ProductionSimulationRunContextProvider:
                     "provider": type(tradability_provider).__name__,
                 },
             )
-        try:
-            raw = loader(symbols, trade_date, require_realtime_quote=require_realtime_quote)
-        except TypeError:
-            raw = loader(symbols, trade_date)
+        signature = inspect.signature(loader)
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        optional_kwargs = {
+            "require_realtime_quote": require_realtime_quote,
+            "as_of_time": as_of_time,
+            "side_by_symbol": side_by_symbol,
+        }
+        supported_kwargs = {
+            key: value
+            for key, value in optional_kwargs.items()
+            if accepts_kwargs or key in signature.parameters
+        }
+        raw = loader(symbols, trade_date, **supported_kwargs)
         if not isinstance(raw, dict):
             raise DataUnavailableError(
                 "pre-trade tradability provider returned invalid payload",
@@ -1020,6 +1083,7 @@ class ProductionSimulationRunContextProvider:
         cash: float,
         positions: dict[str, PositionLot],
         trade_date: date,
+        as_of_time: datetime | None = None,
     ) -> BrokerBackend | None:
         if self._local_broker_factory is not None:
             return self._local_broker_factory(binding.strategy_id)
@@ -1036,6 +1100,7 @@ class ProductionSimulationRunContextProvider:
             data_source = self._resolve_local_sim_market_data_source(
                 portfolio=portfolio,
                 trade_date=trade_date,
+                as_of_time=as_of_time,
             )
             return LocalSimBackend(
                 portfolio_id=portfolio_id,
@@ -1046,6 +1111,7 @@ class ProductionSimulationRunContextProvider:
                 manifest=manifest,
                 execution_policy=execution_policy,
                 package_id=binding.package_id,
+                scheduler_as_of_time=as_of_time,
             )
         except (DataUnavailableError, RuntimeConfigInvalidError):
             raise
@@ -1067,11 +1133,13 @@ class ProductionSimulationRunContextProvider:
         *,
         portfolio: Any,
         trade_date: date,
+        as_of_time: datetime | None = None,
     ) -> MinuteDataSource:
         data_source = getattr(portfolio, "data_source", MinuteDataSource.DB_HISTORICAL)
         if not isinstance(data_source, MinuteDataSource):
             data_source = MinuteDataSource(str(data_source))
-        if trade_date == date.today():
+        current_trade_date = scheduler_time(as_of_time).date() if as_of_time is not None else date.today()
+        if trade_date == current_trade_date:
             return MinuteDataSource.TDX_REALTIME
         return data_source
 
@@ -4181,6 +4249,31 @@ class SimulationLifecycleScheduler:
             return re.sub(r"\d{4}-\d{2}-\d{2}", target, strategy_name)
         return strategy_name
 
+    def _load_run_context(
+        self,
+        *,
+        runtime_release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        as_of_time: datetime | None,
+        require_localsim_realtime_quote: bool = False,
+    ) -> SimulationRunContext:
+        """Load phase-appropriate runtime state without coupling selection to live quotes."""
+        phase_loader = getattr(self.context_provider, "load_context_for_phase", None)
+        if callable(phase_loader):
+            return phase_loader(
+                runtime_release=runtime_release,
+                binding=binding,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+                require_localsim_realtime_quote=require_localsim_realtime_quote,
+            )
+        return self.context_provider.load_context(
+            runtime_release=runtime_release,
+            binding=binding,
+            trade_date=trade_date,
+        )
+
     def _run_binding(
         self,
         *,
@@ -4201,7 +4294,13 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
         )
         if existing is not None and existing.execution_plan_id:
-            if self._should_rebuild_localsim_plan_after_side_effect_free_failure(binding=binding, run=existing):
+            if self._should_rebuild_localsim_plan_after_side_effect_free_failure(
+                binding=binding,
+                run=existing,
+                submit=submit,
+                trade_date=trade_date,
+                as_of_time=as_of_time,
+            ):
                 return self._rebuild_localsim_plan_after_side_effect_free_failure(
                     binding=binding,
                     run=existing,
@@ -4239,10 +4338,11 @@ class SimulationLifecycleScheduler:
                 as_of_time=as_of_time,
             )
 
-        context = self.context_provider.load_context(
+        context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
+            as_of_time=as_of_time,
         )
         selection = self._run_selection_once_per_release(
             binding=binding,
@@ -4267,6 +4367,13 @@ class SimulationLifecycleScheduler:
             selection=selection,
             context=context,
             created_by=created_by,
+            require_realtime_quote=self._localsim_realtime_quote_required(
+                binding=binding,
+                trade_date=trade_date,
+                submit=submit,
+                as_of_time=as_of_time,
+            ) if binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM else None,
+            as_of_time=as_of_time,
         )
         build_result = self._clear_pre_run_failure_after_planning(build_result)
         build_result = self._persist_no_rebalance_evidence(
@@ -4461,10 +4568,11 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
-        context = self.context_provider.load_context(
+        context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
+            as_of_time=as_of_time,
         )
         selection = self._run_selection_once_per_release(
             binding=binding,
@@ -4489,6 +4597,7 @@ class SimulationLifecycleScheduler:
             selection=selection,
             context=context,
             created_by=created_by,
+            as_of_time=as_of_time,
         )
         build_result = self._persist_no_rebalance_evidence(
             build_result=build_result,
@@ -4642,10 +4751,11 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
-        context = self.context_provider.load_context(
+        context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
+            as_of_time=as_of_time,
         )
         selection = self._run_selection_once_per_release(
             binding=binding,
@@ -4670,6 +4780,16 @@ class SimulationLifecycleScheduler:
             selection=selection,
             context=context,
             created_by=created_by,
+            require_realtime_quote=self._localsim_realtime_quote_required(
+                binding=binding,
+                trade_date=trade_date,
+                submit=submit,
+                as_of_time=as_of_time,
+            ),
+            as_of_time=as_of_time,
+            preserved_causality_cursor=self._local_sim_plan_causality_cursor(
+                self.repository.get_execution_plan(run.execution_plan_id or "")
+            ),
         )
         build_result = self._persist_no_rebalance_evidence(
             build_result=build_result,
@@ -4900,10 +5020,11 @@ class SimulationLifecycleScheduler:
         context: SimulationRunContext | None = None
         tick_driver_result = None
         if self._should_drive_existing_miniqmt_event_loop(binding=binding, run=run, submit=submit):
-            context = self.context_provider.load_context(
+            context = self._load_run_context(
                 runtime_release=runtime_release,
                 binding=binding,
                 trade_date=trade_date,
+                as_of_time=as_of_time,
             )
             tick_driver_result = self._drive_miniqmt_event_loop_ticks_with_timeout(
                 binding=binding,
@@ -4916,10 +5037,11 @@ class SimulationLifecycleScheduler:
             run = self.repository.get_simulation_daily_run(run.run_id)
         if self._should_reconcile_existing_miniqmt_run(binding=binding, run=run, submit=submit):
             if context is None:
-                context = self.context_provider.load_context(
+                context = self._load_run_context(
                     runtime_release=runtime_release,
                     binding=binding,
                     trade_date=trade_date,
+                    as_of_time=as_of_time,
                 )
             sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
             reconciliation = self._reconcile_after_submit_with_timeout(binding=binding, run=run, context=context)
@@ -4966,10 +5088,11 @@ class SimulationLifecycleScheduler:
         if self._should_submit_existing_plan(binding=binding, run=run, plan=plan, submit=submit):
             runtime_release = self.repository.get_strategy_runtime_release(binding.release_id)
             try:
-                context = self.context_provider.load_context(
+                context = self._load_run_context(
                     runtime_release=runtime_release,
                     binding=binding,
                     trade_date=trade_date,
+                    as_of_time=as_of_time,
                 )
                 sync_result = self._sync_before_submit(binding=binding, run=run, context=context)
                 run, plan, residual_only = self._prepare_localsim_execution_plan_for_submit(
@@ -5687,31 +5810,67 @@ class SimulationLifecycleScheduler:
             and SimulationLifecycleScheduler._mini_qmt_batch_failed_without_broker_side_effect(run.run_payload_json)
         )
 
-    @staticmethod
     def _should_rebuild_localsim_plan_after_side_effect_free_failure(
+        self,
         *,
         binding: SimulationReleaseBinding,
         run: SimulationDailyRun,
+        submit: bool,
+        trade_date: date,
+        as_of_time: datetime | None,
     ) -> bool:
         if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
             return False
-        if run.status != SimulationDailyRunStatus.FAILED_RETRYABLE:
+        if not submit:
             return False
         if bool(run.run_payload_json.get("broker_called")):
             return False
-        failure = run.run_payload_json.get("submit_failure")
-        if not isinstance(failure, dict) or failure.get("stage") != "LOCAL_SIM_SUBMIT_FAILED":
+        if not self._localsim_realtime_quote_required(
+            binding=binding,
+            trade_date=trade_date,
+            submit=submit,
+            as_of_time=as_of_time,
+        ):
             return False
-        context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
-        text = " ".join(
-            str(item or "")
-            for item in (
-                failure.get("message"),
-                context.get("cause"),
-                context.get("cause_code"),
-            )
-        ).lower()
-        return "insufficient cash" in text
+        if run.status == SimulationDailyRunStatus.FAILED_RETRYABLE:
+            failure = run.run_payload_json.get("submit_failure")
+            if isinstance(failure, dict) and failure.get("stage") == "LOCAL_SIM_SUBMIT_FAILED":
+                context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
+                text = " ".join(
+                    str(item or "")
+                    for item in (
+                        failure.get("message"),
+                        context.get("cause"),
+                        context.get("cause_code"),
+                    )
+                ).lower()
+                if "insufficient cash" in text:
+                    return True
+        return (
+            callable(getattr(self.context_provider, "load_context_for_phase", None))
+            and run.status in {
+                SimulationDailyRunStatus.PLANNING_EXECUTION,
+                SimulationDailyRunStatus.FAILED_RETRYABLE,
+            }
+        )
+
+    @staticmethod
+    def _localsim_realtime_quote_required(
+        *,
+        binding: SimulationReleaseBinding,
+        trade_date: date,
+        submit: bool,
+        as_of_time: datetime | None,
+    ) -> bool:
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM or not submit:
+            return False
+        local_as_of = scheduler_time(as_of_time)
+        if trade_date != local_as_of.date():
+            return False
+        return any(
+            window.get("state") == "ACTIVE" and window.get("action") == "submit"
+            for window in compute_schedule_windows(trade_date=trade_date, as_of_time=local_as_of)
+        )
 
     @staticmethod
     def _is_deterministic_localsim_submit_failure(exc: BaseException) -> bool:
@@ -7916,6 +8075,9 @@ class SimulationLifecycleScheduler:
         selection: StrategyPackageSelectionResult,
         context: SimulationRunContext,
         created_by: str,
+        require_realtime_quote: bool | None = None,
+        as_of_time: datetime | None = None,
+        preserved_causality_cursor: datetime | None = None,
     ) -> SimulationPlanBuildResult:
         evidence = selection.evidence_by_package[binding.package_id]
         candidates = selection.package_results.get(binding.package_id, [])
@@ -7924,6 +8086,8 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
             context=context,
             candidate_symbols=[candidate.symbol for candidate in candidates],
+            require_realtime_quote=require_realtime_quote,
+            as_of_time=as_of_time,
         )
         snapshot = SignalSnapshot(
             package_id=binding.package_id,
@@ -7939,7 +8103,7 @@ class SimulationLifecycleScheduler:
             binding=binding,
             context=context,
         )
-        return self.orchestrator.build_execution_plan(
+        build_result = self.orchestrator.build_execution_plan(
             runtime_release=runtime_release,
             binding=binding,
             selection_evidence=evidence,
@@ -7956,6 +8120,129 @@ class SimulationLifecycleScheduler:
             target_equity_context=target_equity_context,
             created_by=created_by,
         )
+        if binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+            return build_result
+        return self._attach_local_sim_causality_cursor(
+            build_result=build_result,
+            as_of_time=as_of_time,
+            preserved_cursor=preserved_causality_cursor,
+        )
+
+    @staticmethod
+    def _local_sim_plan_causality_cursor(plan: ExecutionPlan | None) -> datetime | None:
+        if plan is None:
+            return None
+        payload = plan.plan_payload_json.get("local_sim_execution_causality")
+        if not isinstance(payload, dict):
+            return None
+        raw = payload.get("eligible_bar_after")
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "LocalSim execution plan has an invalid causality cursor",
+                context={"plan_id": plan.plan_id, "eligible_bar_after": raw},
+            ) from exc
+        return scheduler_time(parsed)
+
+    def _attach_local_sim_causality_cursor(
+        self,
+        *,
+        build_result: SimulationPlanBuildResult,
+        as_of_time: datetime | None,
+        preserved_cursor: datetime | None,
+    ) -> SimulationPlanBuildResult:
+        plan = build_result.execution_plan
+        local_as_of = scheduler_time(as_of_time)
+        cursor = scheduler_time(preserved_cursor) if preserved_cursor is not None else None
+        cursor_source = "preserved_execution_plan"
+        if cursor is None:
+            windows = compute_schedule_windows(
+                trade_date=plan.target_trade_date,
+                as_of_time=local_as_of,
+            )
+            submit_windows = [window for window in windows if window.get("action") == "submit"]
+            active = next((window for window in submit_windows if window.get("state") == "ACTIVE"), None)
+            if active is not None:
+                cursor = local_as_of
+                cursor_source = "first_plan_during_submit_window"
+            else:
+                next_window = next(
+                    (
+                        window
+                        for window in submit_windows
+                        if datetime.fromisoformat(str(window["start_at"])) > local_as_of
+                    ),
+                    None,
+                )
+                if next_window is not None:
+                    cursor = datetime.fromisoformat(str(next_window["start_at"])) - timedelta(microseconds=1)
+                    cursor_source = "next_submit_window_boundary"
+                else:
+                    cursor = local_as_of
+                    cursor_source = "after_last_submit_window"
+
+        causality = {
+            "schema_version": "local_sim_execution_causality_v1",
+            "eligible_bar_after": cursor.isoformat(),
+            "captured_as_of_time": local_as_of.isoformat(),
+            "cursor_source": cursor_source,
+            "bar_selection_rule": "strictly_after_cursor_and_not_after_scheduler_as_of",
+        }
+        payload = deepcopy(plan.plan_payload_json)
+        payload["local_sim_execution_causality"] = causality
+        payload_intents = payload.get("intents")
+        if not isinstance(payload_intents, list):
+            raise RuntimeConfigInvalidError(
+                "LocalSim execution plan payload is missing intents",
+                context={"plan_id": plan.plan_id},
+            )
+        updated_intents = [
+            intent.model_copy(
+                update={
+                    "metadata": {
+                        **dict(intent.metadata),
+                        "local_sim_execution_causality": causality,
+                    },
+                }
+            )
+            for intent in plan.intents
+        ]
+        by_intent_id = {intent.intent_id: intent for intent in updated_intents}
+        for item in payload_intents:
+            if not isinstance(item, dict):
+                raise RuntimeConfigInvalidError(
+                    "LocalSim execution plan contains an invalid intent payload",
+                    context={"plan_id": plan.plan_id},
+                )
+            updated = by_intent_id.get(str(item.get("intent_id") or ""))
+            if updated is None:
+                raise RuntimeConfigInvalidError(
+                    "LocalSim execution plan intent payload cannot be reconstructed",
+                    context={"plan_id": plan.plan_id, "intent_id": item.get("intent_id")},
+                )
+            item["metadata"] = dict(updated.metadata)
+        new_hash = canonical_json_sha256(payload)
+        new_id = f"plan_{new_hash[:16]}"
+        updated_intents = [intent.model_copy(update={"plan_id": new_id}) for intent in updated_intents]
+        prepared_plan = plan.model_copy(
+            update={
+                "plan_id": new_id,
+                "intents": updated_intents,
+                "plan_payload_json": payload,
+                "plan_hash": new_hash,
+                "created_at": datetime.now(UTC),
+            }
+        )
+        persisted_plan = self.repository.save_execution_plan(prepared_plan)
+        updated_run = self.repository.update_simulation_daily_run(
+            build_result.run.run_id,
+            execution_plan=persisted_plan,
+            payload_patch={"local_sim_execution_causality": causality},
+        )
+        return replace(build_result, run=updated_run, execution_plan=persisted_plan)
 
     @staticmethod
     def _target_equity_basis_for_context(
@@ -8003,20 +8290,38 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         context: SimulationRunContext,
         candidate_symbols: list[str],
+        require_realtime_quote: bool | None = None,
+        as_of_time: datetime | None = None,
     ) -> dict[str, dict[str, Any]]:
         symbols = sorted({*context.current_positions.keys(), *[str(symbol).strip() for symbol in candidate_symbols if str(symbol).strip()]})
-        statuses = {str(symbol): dict(status) for symbol, status in (context.pre_trade_tradability or {}).items()}
-        missing = [symbol for symbol in symbols if symbol not in statuses]
         loader = getattr(self.context_provider, "load_pre_trade_tradability", None)
+        refresh_from_loader = require_realtime_quote is True and callable(loader)
+        statuses = (
+            {}
+            if refresh_from_loader
+            else {str(symbol): dict(status) for symbol, status in (context.pre_trade_tradability or {}).items()}
+        )
+        missing = list(symbols) if refresh_from_loader else [symbol for symbol in symbols if symbol not in statuses]
         if missing and callable(loader):
-            statuses.update(
-                loader(
-                    symbols=missing,
-                    trade_date=trade_date,
-                    binding=binding,
-                    market_data_source=context.market_data_source,
-                )
+            loader_kwargs = {
+                "symbols": missing,
+                "trade_date": trade_date,
+                "binding": binding,
+                "market_data_source": context.market_data_source,
+                "require_realtime_quote": require_realtime_quote,
+                "as_of_time": as_of_time,
+            }
+            signature = inspect.signature(loader)
+            accepts_kwargs = any(
+                parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
             )
+            supported_kwargs = {
+                key: value
+                for key, value in loader_kwargs.items()
+                if accepts_kwargs or key in signature.parameters
+            }
+            statuses.update(loader(**supported_kwargs))
         return statuses
 
     def _persist_no_rebalance_evidence(

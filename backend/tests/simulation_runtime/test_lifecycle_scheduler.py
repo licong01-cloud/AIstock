@@ -61,6 +61,7 @@ from backend.services.simulation_runtime.lifecycle import (
     compute_schedule_windows,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.simulation_runtime.decision import TradingRuleService
 from backend.services.strategy_package.manifest import freeze_manifest
 from backend.services.strategy_package.models import (
     AlphaCombinationPolicy,
@@ -5689,13 +5690,247 @@ def test_scheduler_reports_unattended_trading_windows_without_submitting_orders(
         "pre_open",
         "selection",
         "planning",
+        "opening_auction_observe",
         "execution",
+        "lunch_recess",
+        "execution_afternoon",
+        "closing_auction_observe",
         "post_close_reconcile",
     ]
     assert result.planned_count == 1
     assert result.schedule_windows[2]["window_id"] == "planning"
     assert result.schedule_windows[2]["state"] == "ACTIVE"
     assert result.schedule_windows[3]["state"] == "UPCOMING"
+
+
+@pytest.mark.parametrize(
+    ("as_of_time", "window_id", "action"),
+    [
+        (datetime(2026, 5, 21, 9, 25), "opening_auction_observe", "observe_only"),
+        (datetime(2026, 5, 21, 9, 30), "execution", "submit"),
+        (datetime(2026, 5, 21, 11, 30), "lunch_recess", "market_wait"),
+        (datetime(2026, 5, 21, 13, 0), "execution_afternoon", "submit"),
+        (datetime(2026, 5, 21, 14, 57), "closing_auction_observe", "observe_only"),
+    ],
+)
+def test_schedule_windows_segment_non_continuous_trading_phases(
+    as_of_time: datetime,
+    window_id: str,
+    action: str,
+) -> None:
+    active = next(
+        window
+        for window in compute_schedule_windows(trade_date=TRADE_DATE, as_of_time=as_of_time)
+        if window["state"] == "ACTIVE"
+    )
+
+    assert active["window_id"] == window_id
+    assert active["action"] == action
+
+
+def test_localsim_realtime_quote_is_required_only_inside_continuous_submit_windows() -> None:
+    _, local_binding, _, _ = _release_and_bindings()
+    assert local_binding is not None
+
+    assert SimulationLifecycleScheduler._localsim_realtime_quote_required(
+        binding=local_binding,
+        trade_date=TRADE_DATE,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 10, 0),
+    ) is True
+    assert SimulationLifecycleScheduler._localsim_realtime_quote_required(
+        binding=local_binding,
+        trade_date=TRADE_DATE,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 12, 0),
+    ) is False
+    assert SimulationLifecycleScheduler._localsim_realtime_quote_required(
+        binding=local_binding,
+        trade_date=TRADE_DATE,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 14, 58),
+    ) is False
+
+
+def test_trading_rule_applies_limit_evidence_after_actual_side_is_known() -> None:
+    service = TradingRuleService()
+    status = {
+        "is_tradable": True,
+        "reason_code": "OK",
+        "quote_evidence": {"blocked_sides": ["BUY"]},
+    }
+
+    buy = service.decide_order_quantity(
+        symbol="000001.SZ",
+        side=OrderSide.BUY,
+        requested_quantity=100,
+        tradability_status=status,
+    )
+    sell = service.decide_order_quantity(
+        symbol="000001.SZ",
+        side=OrderSide.SELL,
+        requested_quantity=100,
+        tplus1_available_quantity=100,
+        tradability_status=status,
+    )
+
+    assert buy.decision == "REJECT"
+    assert buy.reason_code == "LIMIT_UP_BUY_BLOCKED"
+    assert sell.decision == "EMIT"
+    assert sell.reason_code == "OK"
+
+
+def test_localsim_selection_and_plan_only_do_not_request_same_day_realtime_quote() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+
+    class PhaseAwareContextProvider:
+        def __init__(self) -> None:
+            self.phase_quote_requirements: list[bool] = []
+            self.tradability_quote_requirements: list[bool | None] = []
+
+        def load_context_for_phase(self, **kwargs: Any) -> SimulationRunContext:
+            self.phase_quote_requirements.append(bool(kwargs["require_localsim_realtime_quote"]))
+            return _position_context(portfolio_id="portfolio_phase_aware")
+
+        def load_pre_trade_tradability(self, **kwargs: Any) -> dict[str, dict[str, Any]]:
+            self.tradability_quote_requirements.append(kwargs.get("require_realtime_quote"))
+            return {
+                symbol: {
+                    "schema_version": "pre_trade_tradability_status_v1",
+                    "symbol": symbol,
+                    "trade_date": kwargs["trade_date"].isoformat(),
+                    "is_tradable": True,
+                    "reason_code": "OK",
+                    "source": "unit_test.daily_status_only",
+                }
+                for symbol in kwargs["symbols"]
+            }
+
+    provider = PhaseAwareContextProvider()
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=provider,  # type: ignore[arg-type]
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+
+    assert result.planned_count == 1
+    assert provider.phase_quote_requirements == [False]
+    assert provider.tradability_quote_requirements
+    assert all(requirement is False for requirement in provider.tradability_quote_requirements)
+    causality = result.results[0].execution_plan.plan_payload_json["local_sim_execution_causality"]
+    assert causality["eligible_bar_after"] == "2026-05-21T09:29:59.999999+08:00"
+    assert result.results[0].run.execution_plan_id == result.results[0].execution_plan.plan_id
+
+
+def test_localsim_plan_first_created_during_active_window_starts_after_scheduler_time() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: _position_context(portfolio_id="portfolio_causal_cursor")}
+        ),
+    )
+
+    result = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 13, 15),
+    )
+
+    causality = result.results[0].execution_plan.plan_payload_json["local_sim_execution_causality"]
+    assert causality["eligible_bar_after"] == "2026-05-21T13:15:00+08:00"
+    assert causality["cursor_source"] == "first_plan_during_submit_window"
+
+
+def test_pre_trade_provider_internal_type_error_is_not_retried_or_silenced() -> None:
+    from backend.services.simulation_runtime.scheduler import ProductionSimulationRunContextProvider
+
+    class BrokenProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_statuses(self, symbols: list[str], trade_date: date, **kwargs: Any):
+            self.calls += 1
+            raise TypeError("provider internal contract bug")
+
+    broken = BrokenProvider()
+    provider = ProductionSimulationRunContextProvider(pre_trade_tradability_provider=broken)
+    release = _make_test_release()
+    binding = _make_test_binding(release, broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+
+    with pytest.raises(TypeError, match="provider internal contract bug"):
+        provider.load_pre_trade_tradability(
+            symbols=["000001.SZ"],
+            trade_date=TRADE_DATE,
+            binding=binding,
+            require_realtime_quote=False,
+        )
+
+    assert broken.calls == 1
+
+
+def test_localsim_submit_fetches_exact_plan_symbols_only_after_selection() -> None:
+    release, local_binding, _, repo = _release_and_bindings()
+    assert local_binding is not None
+    events: list[tuple[str, Any]] = []
+
+    class RecordingSelection(FakeSelectionService):
+        def run_selection(self, **kwargs: Any):
+            events.append(("selection", None))
+            return super().run_selection(**kwargs)
+
+    class RecordingProvider:
+        def load_context_for_phase(self, **kwargs: Any) -> SimulationRunContext:
+            events.append(("context", kwargs["require_localsim_realtime_quote"]))
+            return _position_context(portfolio_id="portfolio_submit_quote", local_broker=FakeLocalSimBroker())
+
+        def load_pre_trade_tradability(self, **kwargs: Any) -> dict[str, dict[str, Any]]:
+            events.append(("quote", (kwargs.get("require_realtime_quote"), tuple(kwargs["symbols"]))))
+            return {
+                symbol: {
+                    "schema_version": "pre_trade_tradability_status_v1",
+                    "symbol": symbol,
+                    "trade_date": kwargs["trade_date"].isoformat(),
+                    "is_tradable": True,
+                    "reason_code": "OK",
+                    "source": "unit_test.realtime_quote",
+                }
+                for symbol in kwargs["symbols"]
+            }
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=RecordingSelection(release, candidates=_candidate_rows()),
+        context_provider=RecordingProvider(),  # type: ignore[arg-type]
+    )
+
+    scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        submit=True,
+        as_of_time=datetime(2026, 5, 21, 10, 0),
+    )
+
+    assert events[0] == ("context", False)
+    assert events[1] == ("selection", None)
+    assert events[2] == (
+        "quote",
+        (True, ("000001.SZ", "000003.SZ", "688001.SH")),
+    )
 
 
 def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_default(

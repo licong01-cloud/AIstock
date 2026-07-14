@@ -26,6 +26,8 @@ parallel portfolios per process.
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping
@@ -129,6 +131,7 @@ class LocalSimBackend(BrokerBackend):
         execution_policy: Mapping[str, Any] | None = None,
         initial_available_cash: float | None = None,
         initial_positions: Mapping[str, PositionLot] | None = None,
+        scheduler_as_of_time: datetime | None = None,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -170,6 +173,12 @@ class LocalSimBackend(BrokerBackend):
         self._subscribers: dict[str, Callable[[FillEvent], None]] = {}
         self._lock = threading.RLock()
         self._closed = False
+        self._scheduler_as_of_time = scheduler_as_of_time
+        self._eligible_bar_after: datetime | None = None
+        self._bound_plan_id: str | None = None
+        self._batch_snapshot: dict[str, Any] | None = None
+        self._batch_plan_id: str | None = None
+        self._deferred_fill_events: list[FillEvent] = []
 
     # ----- Read accessors used by adapter / tests -----
     @property
@@ -185,6 +194,72 @@ class LocalSimBackend(BrokerBackend):
         return self._data_source
 
     # ----- BrokerBackend Protocol -----
+    def bind_execution_plan(self, *, plan: Any, as_of_time: datetime) -> None:
+        """Bind the immutable scheduler cursor used to prevent look-ahead fills."""
+        if self._data_source != MinuteDataSource.TDX_REALTIME:
+            return
+        payload = getattr(plan, "plan_payload_json", {}).get("local_sim_execution_causality")
+        if not isinstance(payload, dict) or not payload.get("eligible_bar_after"):
+            raise BrokerSubmitError(
+                "LocalSim realtime execution plan is missing causality evidence",
+                context={"plan_id": getattr(plan, "plan_id", None)},
+            )
+        try:
+            cursor = datetime.fromisoformat(str(payload["eligible_bar_after"]))
+        except ValueError as exc:
+            raise BrokerSubmitError(
+                "LocalSim realtime execution plan has an invalid causality cursor",
+                context={
+                    "plan_id": getattr(plan, "plan_id", None),
+                    "eligible_bar_after": payload.get("eligible_bar_after"),
+                },
+            ) from exc
+        target_trade_date = getattr(plan, "target_trade_date", None)
+        if target_trade_date is None or as_of_time.date() != target_trade_date or cursor.date() != target_trade_date:
+            raise BrokerSubmitError(
+                "LocalSim realtime causality times must match the execution trade date",
+                context={
+                    "plan_id": getattr(plan, "plan_id", None),
+                    "target_trade_date": str(target_trade_date),
+                    "as_of_time": as_of_time.isoformat(),
+                    "eligible_bar_after": cursor.isoformat(),
+                },
+            )
+        self._bound_plan_id = str(getattr(plan, "plan_id"))
+        self._scheduler_as_of_time = as_of_time
+        self._eligible_bar_after = cursor
+
+    def begin_plan_submission(self, *, plan_id: str) -> None:
+        with self._lock:
+            if self._batch_snapshot is not None:
+                raise BrokerSubmitError(
+                    "LocalSim plan submission transaction is already active",
+                    context={"active_plan_id": self._batch_plan_id, "plan_id": plan_id},
+                )
+            self._batch_snapshot = self._snapshot_mutable_state()
+            self._batch_plan_id = plan_id
+            self._deferred_fill_events = []
+
+    def commit_plan_submission(self, *, plan_id: str) -> None:
+        with self._lock:
+            self._require_active_batch(plan_id)
+            events = list(self._deferred_fill_events)
+            self._batch_snapshot = None
+            self._batch_plan_id = None
+            self._deferred_fill_events = []
+        for event in events:
+            self._dispatch_fill(event)
+
+    def rollback_plan_submission(self, *, plan_id: str) -> None:
+        with self._lock:
+            self._require_active_batch(plan_id)
+            snapshot = self._batch_snapshot
+            assert snapshot is not None
+            self._restore_mutable_state(snapshot)
+            self._batch_snapshot = None
+            self._batch_plan_id = None
+            self._deferred_fill_events = []
+
     def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
         self._ensure_alive()
         if intent.portfolio_id != self._portfolio_id:
@@ -213,13 +288,55 @@ class LocalSimBackend(BrokerBackend):
                 )
 
             try:
-                market_input = self._market_data_provider.load_symbol_input(
-                    symbol=intent.symbol,
-                    trade_date=intent.target_trade_date,
-                    source=self._data_source,
-                    min_bars=1,
-                    require_day_features=self._algo_requires_day_features(),
-                )
+                if self._data_source == MinuteDataSource.TDX_REALTIME and self._eligible_bar_after is not None:
+                    if self._scheduler_as_of_time is None:
+                        raise DataUnavailableError(
+                            "LocalSim realtime execution is missing scheduler as_of_time",
+                            context={"intent_id": intent.intent_id, "plan_id": self._bound_plan_id},
+                        )
+                    market_input = self._market_data_provider.load_observed_intraday(
+                        symbol=intent.symbol,
+                        trade_date=intent.target_trade_date,
+                        source=self._data_source,
+                        until_time=self._scheduler_as_of_time,
+                        require_day_features=self._algo_requires_day_features(),
+                    )
+                    cursor_cmp = self._naive_for_compare(self._eligible_bar_after)
+                    causal_bars = [
+                        bar
+                        for bar in market_input.minute_bars
+                        if self._naive_for_compare(bar.bar_time) > cursor_cmp
+                    ]
+                    if not causal_bars:
+                        raise DataUnavailableError(
+                            "LocalSim is waiting for the first observed minute bar after the execution cursor",
+                            context={
+                                "reason_code": "LOCAL_SIM_CAUSAL_BAR_NOT_YET_AVAILABLE",
+                                "intent_id": intent.intent_id,
+                                "symbol": intent.symbol,
+                                "plan_id": self._bound_plan_id,
+                                "eligible_bar_after": self._eligible_bar_after.isoformat(),
+                                "observed_until": self._scheduler_as_of_time.isoformat(),
+                            },
+                        )
+                    market_input = replace(
+                        market_input,
+                        minute_bars=causal_bars,
+                        market_context={
+                            **market_input.market_context,
+                            "eligible_bar_after": self._eligible_bar_after.isoformat(),
+                            "observed_until": self._scheduler_as_of_time.isoformat(),
+                            "causal_bar_count": len(causal_bars),
+                        },
+                    )
+                else:
+                    market_input = self._market_data_provider.load_symbol_input(
+                        symbol=intent.symbol,
+                        trade_date=intent.target_trade_date,
+                        source=self._data_source,
+                        min_bars=1,
+                        require_day_features=self._algo_requires_day_features(),
+                    )
             except DataUnavailableError as exc:
                 # Missing minute bars / pre_close / suspend — treat as a
                 # connectivity-class fault: the data layer the broker depends
@@ -287,10 +404,14 @@ class LocalSimBackend(BrokerBackend):
                     },
                 ) from exc
 
+            ledger_snapshot = self._snapshot_ledger_state()
             try:
                 for fill in fills:
                     self._ledger.apply_fill(fill)
-            except (RiskRuleError, TradingCoreError) as exc:
+            except Exception as exc:
+                self._restore_ledger_state(ledger_snapshot)
+                if not isinstance(exc, (RiskRuleError, TradingCoreError)):
+                    raise
                 # Ledger refused (e.g. insufficient cash). Order matched at
                 # the algo layer but the simulated account cannot absorb it.
                 rejection_handle = OrderHandle(
@@ -351,7 +472,10 @@ class LocalSimBackend(BrokerBackend):
                 fill_ts=fill.trade_time,
                 venue=self.backend_id,
             )
-            self._dispatch_fill(event)
+            if self._batch_snapshot is not None:
+                self._deferred_fill_events.append(event)
+            else:
+                self._dispatch_fill(event)
         return handle
 
     def cancel(self, handle: OrderHandle) -> CancelAck:
@@ -507,6 +631,48 @@ class LocalSimBackend(BrokerBackend):
             self._subscribers.clear()
 
     # ----- Internals -----
+    @staticmethod
+    def _naive_for_compare(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+    def _snapshot_ledger_state(self) -> dict[str, Any]:
+        return {
+            "cash": self._ledger._cash,
+            "positions": deepcopy(self._ledger.positions),
+            "fills": deepcopy(self._ledger.fills),
+            "cash_entries": deepcopy(self._ledger.cash_entries),
+            "order_fee_state": deepcopy(self._ledger._order_fee_state),
+        }
+
+    def _restore_ledger_state(self, snapshot: Mapping[str, Any]) -> None:
+        self._ledger._cash = snapshot["cash"]
+        self._ledger.positions = deepcopy(snapshot["positions"])
+        self._ledger.fills = deepcopy(snapshot["fills"])
+        self._ledger.cash_entries = deepcopy(snapshot["cash_entries"])
+        self._ledger._order_fee_state = deepcopy(snapshot["order_fee_state"])
+
+    def _snapshot_mutable_state(self) -> dict[str, Any]:
+        return {
+            "ledger": self._snapshot_ledger_state(),
+            "records": deepcopy(self._records),
+            "intent_index": deepcopy(self._intent_index),
+            "oms_state": deepcopy(self._oms.__dict__),
+        }
+
+    def _restore_mutable_state(self, snapshot: Mapping[str, Any]) -> None:
+        self._restore_ledger_state(snapshot["ledger"])
+        self._records = deepcopy(snapshot["records"])
+        self._intent_index = deepcopy(snapshot["intent_index"])
+        self._oms.__dict__.clear()
+        self._oms.__dict__.update(deepcopy(snapshot["oms_state"]))
+
+    def _require_active_batch(self, plan_id: str) -> None:
+        if self._batch_snapshot is None or self._batch_plan_id != plan_id:
+            raise BrokerSubmitError(
+                "LocalSim plan submission transaction does not match",
+                context={"active_plan_id": self._batch_plan_id, "plan_id": plan_id},
+            )
+
     def _ensure_alive(self) -> None:
         if self._closed:
             raise BrokerConnectivityError(

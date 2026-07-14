@@ -575,7 +575,11 @@ class PreTradeTradabilityProvider:
                         quote_evidence=quote_payload,
                     ).to_payload()
                     continue
-                blocked_reason_code = quote_payload.get("side_block_reason_code") or quote_payload.get("limit_state_reason_code")
+                # A limit state blocks one order side, not the security itself.
+                # When planning has not derived BUY/SELL yet, preserve the
+                # blocked_sides evidence and let TradingRuleService apply it
+                # after the target delta determines the actual side.
+                blocked_reason_code = quote_payload.get("side_block_reason_code")
                 if blocked_reason_code:
                     statuses[symbol] = PreTradeTradabilityStatus(
                         symbol=symbol,
