@@ -5,6 +5,7 @@ Safe to run multiple times — uses ON CONFLICT DO UPDATE to refresh times.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any, Dict, List
@@ -72,6 +73,64 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_auto_retry_stale",     "mode": "incremental", "frequency": "daily", "at": "23:00"},
 ]
 
+DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v1"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "323c1b006259cd795cc45f557ebf6072f7b933f42cf3a6c993102114f66bc03a"
+
+
+def get_default_schedule_templates() -> List[Dict[str, Any]]:
+    """Return the canonical schedule catalog in ingestion API shape.
+
+    Callers receive fresh dictionaries so planning and API serialization cannot
+    mutate the initializer's process-global defaults.
+    """
+    templates: List[Dict[str, Any]] = []
+    for entry in _DEFAULT_SCHEDULES:
+        options = {
+            key: value
+            for key, value in entry.items()
+            if key not in {"dataset", "mode", "frequency", "enabled"} and value is not None
+        }
+        templates.append(
+            {
+                "dataset": entry["dataset"],
+                "mode": entry["mode"],
+                "frequency": entry["frequency"],
+                "enabled": entry.get("enabled", True),
+                "options": options,
+            }
+        )
+    return templates
+
+
+def get_default_schedule_catalog() -> Dict[str, Any]:
+    """Return a validated, fingerprinted view of the canonical defaults."""
+    templates = get_default_schedule_templates()
+    errors: List[str] = []
+    keys: List[tuple[str, str]] = []
+    for index, template in enumerate(templates):
+        missing = [field for field in ("dataset", "mode", "frequency", "enabled", "options") if field not in template]
+        if missing:
+            errors.append(f"entry[{index}] missing fields: {','.join(missing)}")
+            continue
+        key = (str(template["dataset"]), str(template["mode"]))
+        if key in keys:
+            errors.append(f"duplicate schedule key: {key[0]}/{key[1]}")
+        keys.append(key)
+        if template["frequency"] == "daily" and not template["options"].get("at"):
+            errors.append(f"daily schedule missing fixed time: {key[0]}/{key[1]}")
+    fingerprint = hashlib.sha256(
+        json.dumps(templates, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if fingerprint != DEFAULT_SCHEDULE_CATALOG_FINGERPRINT:
+        errors.append("catalog fingerprint does not match the reviewed canonical manifest")
+    return {
+        "version": DEFAULT_SCHEDULE_CATALOG_VERSION,
+        "fingerprint": fingerprint,
+        "complete": not errors and bool(templates),
+        "errors": errors,
+        "templates": templates,
+    }
+
 
 def ensure_tushare_schedules() -> int:
     """Insert or update default Tushare schedules.
@@ -82,14 +141,9 @@ def ensure_tushare_schedules() -> int:
     affected = 0
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for entry in _DEFAULT_SCHEDULES:
+            for template in get_default_schedule_templates():
                 sid = str(uuid.uuid4())
-                options_payload = {
-                    k: v
-                    for k, v in entry.items()
-                    if k not in {"dataset", "mode", "frequency", "enabled"} and v is not None
-                }
-                options = json.dumps(options_payload, ensure_ascii=False)
+                options = json.dumps(template["options"], ensure_ascii=False)
                 cur.execute(
                     """
                     INSERT INTO market.ingestion_schedules
@@ -102,8 +156,8 @@ def ensure_tushare_schedules() -> int:
                         enabled = EXCLUDED.enabled,
                         updated_at = NOW()
                     """,
-                    (sid, entry["dataset"], entry["mode"],
-                     entry["frequency"], entry.get("enabled", True), options),
+                    (sid, template["dataset"], template["mode"],
+                     template["frequency"], template["enabled"], options),
                 )
                 if cur.rowcount > 0:
                     affected += 1

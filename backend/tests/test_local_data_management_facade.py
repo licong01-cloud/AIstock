@@ -6,7 +6,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from backend.routers import local_data
+from backend.db.init_tushare_schedules import get_default_schedule_catalog
+from backend.routers import ingestion, local_data
 from backend.services.local_data_management import (
     LOCAL_DATA_CONFIRM_CHANGE,
     LOCAL_DATA_CONFIRM_REPAIR,
@@ -222,7 +223,67 @@ def test_schedule_reset_plan_is_plan_only_and_does_not_write() -> None:
 
     assert result["risk_level"] == "plan_only"
     assert result["data"]["actions"]
+    assert result["data"]["catalog_fingerprint"] == get_default_schedule_catalog()["fingerprint"]
+    moneyflow = next(
+        action["desired"]
+        for action in result["data"]["actions"]
+        if action["key"] == ["stock_moneyflow_ts", "incremental"]
+    )
+    assert moneyflow["options"]["at"] == "17:20"
+    assert all(action["key"] != ["kline_weekly", "incremental"] for action in result["data"]["actions"])
     assert source.calls == []
+
+
+def test_schedule_reset_refuses_destructive_delete_missing_plan() -> None:
+    source = FakeSource()
+    service = LocalDataManagementService(connection_provider=EmptyConnection, source=source)
+
+    with pytest.raises(HTTPException, match="destructive schedule reset is disabled"):
+        service.plan_schedule_reset(delete_missing=True)
+
+    assert source.calls == []
+
+
+def test_schedule_reset_apply_rejects_forged_or_stale_plan_without_writes() -> None:
+    source = FakeSource()
+    service = LocalDataManagementService(connection_provider=EmptyConnection, source=source)
+    plan = service.plan_schedule_reset()["data"]
+    plan["actions"][0]["desired"]["frequency"] = "1m"
+
+    with pytest.raises(HTTPException, match="stale or does not match"):
+        service.apply_schedule_reset(plan=plan, confirm_change=LOCAL_DATA_CONFIRM_CHANGE)
+
+    with pytest.raises(HTTPException, match="destructive schedule reset actions are not supported"):
+        service.apply_schedule_reset(
+            plan={"plan_id": "forged", "actions": [{"action": "delete", "schedule_id": str(source.schedule_id)}]},
+            confirm_change=LOCAL_DATA_CONFIRM_CHANGE,
+        )
+
+    assert source.calls == []
+
+
+def test_default_schedule_catalog_is_complete_and_router_uses_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = get_default_schedule_catalog()
+    calls: list[tuple[str, str, str, bool, dict[str, object]]] = []
+
+    monkeypatch.setattr(
+        ingestion,
+        "_upsert_ingestion_schedule_entry",
+        lambda dataset, mode, frequency, enabled, options: calls.append(
+            (dataset, mode, frequency, enabled, options)
+        )
+        or {"dataset": dataset, "mode": mode},
+    )
+    monkeypatch.setattr(ingestion.scheduler, "refresh_schedules", lambda: None)
+
+    items = ingestion._ensure_default_ingestion_schedules()
+
+    assert catalog["complete"] is True
+    assert len(catalog["templates"]) == 29
+    assert len(items) == len(catalog["templates"])
+    assert [(item[0], item[1]) for item in calls] == [
+        (item["dataset"], item["mode"]) for item in catalog["templates"]
+    ]
 
 
 def test_schedule_reset_apply_requires_confirmation() -> None:
