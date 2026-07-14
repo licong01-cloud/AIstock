@@ -68,6 +68,8 @@ class PaperTradingV2Runner:
         execution_engine: MinuteExecutionEngine | None = None,
         market_data_provider: PaperV2MinuteMarketDataProvider | None = None,
     ) -> None:
+        # Compatibility seam only. StrategyPackage completeness is admitted at
+        # package entry and must not be revalidated in order execution helpers.
         self.validator = validator or StrategyPackageValidator()
         self.oms = oms or OMS()
         self.execution_engine = execution_engine or MinuteExecutionEngine(oms=self.oms)
@@ -86,7 +88,6 @@ class PaperTradingV2Runner:
         snapshot_time: datetime,
         fee_model: FeeModel | None = None,
     ) -> PaperRunResult:
-        self.validator.validate_for_paper_trading(manifest)
         self._validate_order_intent(
             manifest=manifest,
             portfolio_id=portfolio_id,
@@ -144,7 +145,6 @@ class PaperTradingV2Runner:
         ``DataUnavailableError`` before execution starts.
         """
 
-        self.validator.validate_for_paper_trading(manifest)
         self._validate_order_intent(
             manifest=manifest,
             portfolio_id=portfolio_id,
@@ -200,7 +200,6 @@ class PaperTradingV2Runner:
         Empty batches, missing symbol data, or any order failure abort the run.
         """
 
-        self.validator.validate_for_paper_trading(manifest)
         if not order_intents:
             raise ArtifactGenerationFailedError(
                 "order batch requires at least one order_intent",

@@ -1205,7 +1205,6 @@ class PaperTradingLiveMinuteExecutor:
                 context={"portfolio_id": portfolio.portfolio_id, "status": portfolio.status.value},
             )
         manifest = portfolio.frozen_manifest
-        self.validator.validate_manifest_identity_for_paper_trading(manifest)
         execution_policy_context = self.day_helper._execution_policy_context_for_date(portfolio, trade_date)
         execution_policy_json = execution_policy_context["policy_json"]
         capability = require_execution_algo_supports_mode(

@@ -34,6 +34,7 @@ from backend.services.strategy_package.selection_artifact import (
     selection_artifact_runtime_hash,
 )
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
 from backend.services.trading_core.ledger import CashLedgerEntry
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
@@ -1824,6 +1825,10 @@ def test_paper_portfolio_lifecycle_blocks_paused_runs_until_resumed() -> None:
 
 
 def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
+    class RaiseStrategyPackageRevalidation(StrategyPackageValidator):
+        def validate_manifest_identity_for_paper_trading(self, manifest) -> None:  # noqa: ANN001
+            raise AssertionError(f"readiness revalidated StrategyPackage {manifest.package_id}")
+
     package_repo = InMemoryStrategyPackageRepository()
     paper_repo = InMemoryPaperTradingV2Repository()
     manifest = make_paper_enabled_manifest()
@@ -1849,6 +1854,7 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
         calendar_provider=FakeCalendar(),
         market_data_provider=provider,
         runtime=runtime_with_authoritative_scores(manifest, data_source=MinuteDataSource.TDX_REALTIME.value),
+        validator=RaiseStrategyPackageRevalidation(),
         tradability_filter=TradabilityFilter(FakeSuspendLookup()),
         refresh_audit=NoopRefreshAudit(),
     ).check_day(
@@ -1858,6 +1864,9 @@ def test_paper_trading_readiness_checks_rebalance_and_market_data() -> None:
 
     assert result.order_intent_count == 1
     assert result.checked_symbols == ["000001.SZ"]
+    manifest_check = next(check for check in result.checks if check.check_name == "strategy_package_manifest")
+    assert manifest_check.context["admission_authority"] == "strategy_package_entry"
+    assert manifest_check.context["revalidated"] is False
     assert {check.check_name for check in result.checks} >= {
         "strategy_package_manifest",
         "trading_calendar",

@@ -9,12 +9,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import strategy_packages as router_module
-from backend.services.paper_trading_v2.market_data import MinuteDataSource
+from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
+from backend.services.paper_trading_v2.market_data import MinuteDataSource, PaperV2MinuteMarketDataProvider
 from backend.services.paper_trading_v2.repository import InMemoryPaperTradingV2Repository
 from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioService
 from backend.services.selection_center.repository import InMemorySelectionCenterRepository
 from backend.services.selection_center.package_health import SelectionPackageHealthService
 from backend.services.selection_center.service import SelectionCenterService
+from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.asset_eligibility import (
     MULTI_ALPHA_PAPER_ADMISSION_BLOCKER,
     MULTI_ALPHA_SELECTION_ARTIFACT_AVAILABLE,
@@ -28,7 +30,9 @@ from backend.services.strategy_package.asset_eligibility import (
     StrategyPackageAssetEligibilityService,
 )
 from backend.services.strategy_package.manifest import freeze_manifest
-from backend.services.strategy_package.models import PackageStatus
+from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
+from backend.services.strategy_package.models import AlphaMode, PackageStatus
+from backend.services.strategy_package.multi_alpha_live import LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
 from backend.services.strategy_package.multi_alpha_paper_admission import (
     InMemoryMultiAlphaPaperAdmissionRepository,
 )
@@ -40,15 +44,28 @@ from backend.services.strategy_package.multi_alpha_paper_dry_run import (
     MultiAlphaPaperDryRunValidator,
 )
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
-from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact
+from backend.services.strategy_package.runtime import StrategyPackageRuntime
+from backend.services.strategy_package.selection_artifact import (
+    InMemorySelectionScoreArtifactRepository,
+    SelectionScoreArtifact,
+    selection_artifact_runtime_hash_for_manifest,
+)
 from backend.services.strategy_package.service import StrategyPackageService
+from backend.services.strategy_package.validators import StrategyPackageValidator
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError, StrategyPackageValidationError
 from backend.tests.paper_trading_v2.test_day_runner import (
+    FakeCalendar,
+    FakeLimitProvider,
+    FakeSuspendLookup,
+    FakeSuspendProvider,
+    RecordingRefreshAudit,
     make_paper_enabled_manifest,
+    make_raw_bars,
     save_manifest_with_default_execution_policy,
 )
 from backend.tests.strategy_package.test_multi_alpha_base_schema import _single_manifest
 from backend.tests.strategy_package.test_multi_alpha_live_selection import (
+    ChildFailingRepository,
     TRADE_DATE,
     _artifact_service,
     _live_weight_history,
@@ -64,6 +81,61 @@ from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_t
 
 def _reason(exc: BaseException) -> str | None:
     return getattr(exc, "context", {}).get("reason_code")
+
+
+class RaiseStrategyPackageRevalidation(StrategyPackageValidator):
+    def validate_manifest(self, manifest) -> None:  # noqa: ANN001
+        raise AssertionError(f"runtime revalidated StrategyPackage {manifest.package_id}")
+
+    def validate_manifest_identity_for_paper_trading(self, manifest) -> None:  # noqa: ANN001
+        raise AssertionError(f"Paper runtime revalidated StrategyPackage {manifest.package_id}")
+
+    def validate_for_paper_trading(self, manifest) -> None:  # noqa: ANN001
+        raise AssertionError(f"Paper runner revalidated StrategyPackage {manifest.package_id}")
+
+
+def _runtime_with_admitted_artifact(
+    manifest,
+    *,
+    runtime_config: dict[str, Any],
+) -> StrategyPackageRuntime:  # noqa: ANN001
+    rows = [
+        {
+            "symbol": "000001.SZ",
+            "score": 0.91,
+            "rank": 1,
+            "target_weight": 0.03,
+            "reference_price": 10.0,
+            "component_scores": ({"alpha_a1": 0.9, "alpha_fund": 0.8} if manifest.alpha_mode == AlphaMode.MULTI_ALPHA else {}),
+        }
+    ]
+    artifact_repository = InMemorySelectionScoreArtifactRepository()
+    artifact_repository.save(
+        SelectionScoreArtifact(
+            package_id=manifest.package_id,
+            manifest_sha256=manifest.manifest_sha256 or "",
+            trade_date=date(2024, 1, 2),
+            data_source=MinuteDataSource.TDX_REALTIME.value,
+            runtime_config_hash=selection_artifact_runtime_hash_for_manifest(manifest, runtime_config),
+            scores_json=rows,
+            score_count=len(rows),
+            universe_count=len(rows),
+            top_score_symbol=rows[0]["symbol"],
+            metadata={
+                "source_type": (
+                    LIVE_MULTI_ALPHA_SELECTION_SOURCE_TYPE
+                    if manifest.alpha_mode == AlphaMode.MULTI_ALPHA
+                    else AUTHORITATIVE_SELECTION_SOURCE_TYPE
+                ),
+                "authority_scope": AUTHORITATIVE_SELECTION_SCOPE,
+                "test_seeded": True,
+            },
+        )
+    )
+    return StrategyPackageRuntime(
+        validator=RaiseStrategyPackageRevalidation(),
+        artifact_repository=artifact_repository,
+    )
 
 
 def _runtime_config_with_history(*, top_k: int = 50, history: list[dict] | None = None) -> dict[str, Any]:
@@ -382,6 +454,92 @@ def test_local_sim_and_minqmt_manual_portfolio_create_succeed_without_dry_run_ad
     assert minqmt_portfolio.package_id == parent.package_id
     assert minqmt_portfolio.broker_backend == "minqmt_sim"
     assert minqmt_portfolio.data_source == MinuteDataSource.MINIQMT_REALTIME
+
+
+@pytest.mark.parametrize("alpha_mode", [AlphaMode.SINGLE_ALPHA, AlphaMode.MULTI_ALPHA])
+def test_localsim_full_day_runs_admitted_single_and_multi_without_package_revalidation(alpha_mode: AlphaMode) -> None:
+    if alpha_mode == AlphaMode.MULTI_ALPHA:
+        package_repo, record = _make_parent(live_weight_policy=True)
+        manifest = record.current_manifest()
+        runtime_config: dict[str, Any] = {
+            "runtime_profile": {"selection": {"top_k": 50}},
+            "selection_artifact_config": {"auto_generate": False},
+        }
+        guarded_package_repo = ChildFailingRepository(package_repo)
+    else:
+        package_repo = InMemoryStrategyPackageRepository()
+        manifest = make_paper_enabled_manifest()
+        package_repo.save_manifest(manifest)
+        runtime_config = {"selection_artifact_config": {"auto_generate": False}}
+        guarded_package_repo = package_repo
+
+    twap_policy_json = make_paper_enabled_manifest().minute_execution_policy.model_dump(mode="json")
+    policy = StrategyPackageService(repository=package_repo).create_execution_policy(
+        package_id=manifest.package_id,
+        policy_name=f"{alpha_mode.value}_localsim_twap",
+        policy_json=twap_policy_json,
+        source_backtest_id=f"{alpha_mode.value}_localsim_twap_backtest",
+        source_backtest_status="BACKTEST_VALIDATED",
+    )
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio = PaperTradingV2PortfolioService(
+        package_repository=guarded_package_repo,
+        repository=paper_repo,
+        validator=RaiseStrategyPackageRevalidation(),
+        asset_eligibility_service=RaiseRuntimePackageRevalidation(),
+    ).create_portfolio(
+        package_id=manifest.package_id,
+        portfolio_name=f"{alpha_mode.value} LocalSIM acceptance",
+        initial_cash=100_000,
+        start_date=date(2024, 1, 2),
+        data_source=MinuteDataSource.TDX_REALTIME,
+        broker_backend="local_sim",
+        execution_policy={"validated_execution_policy_id": policy.policy_id},
+    )
+    runtime = _runtime_with_admitted_artifact(manifest, runtime_config=runtime_config)
+    provider = PaperV2MinuteMarketDataProvider(
+        limit_price_provider=FakeLimitProvider(),
+        suspend_status_provider=FakeSuspendProvider(),
+        tdx_fetcher=lambda _symbol, _trade_date: make_raw_bars(),
+    )
+
+    result = PaperTradingDayRunner(
+        repository=paper_repo,
+        package_repository=guarded_package_repo,
+        calendar_provider=FakeCalendar(),
+        market_data_provider=provider,
+        runtime=runtime,
+        validator=RaiseStrategyPackageRevalidation(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=RecordingRefreshAudit(),
+    ).run_day(
+        portfolio_id=portfolio.portfolio_id,
+        trade_date=date(2024, 1, 2),
+        runtime_config=runtime_config,
+    )
+
+    assert result.run.status.value == "SUCCEEDED"
+    assert result.run.runtime_config["validated_execution_policy"]["policy_sha256"] == policy.policy_sha256
+    assert paper_repo.orders[result.run.run_id]
+    assert paper_repo.fills[result.run.run_id]
+    assert paper_repo.cash_entries[result.run.run_id]
+    assert paper_repo.snapshots[result.run.run_id].nav > 0
+    assert [
+        event["event_type"]
+        for event in paper_repo.list_run_events(portfolio.portfolio_id, run_id=result.run.run_id)
+    ] == [
+        "RUN_STARTED",
+        "DATA_READY",
+        "SIGNAL_GENERATED",
+        "TRADABILITY_FILTERED",
+        "TARGETS_GENERATED",
+        "ORDER_INTENTS_GENERATED",
+        "MARKET_DATA_LOADED",
+        "ORDER_EXECUTED",
+        "RUN_SUCCEEDED",
+    ]
+    if alpha_mode == AlphaMode.MULTI_ALPHA:
+        assert all(not package_id.startswith("pkg_mac") for package_id in guarded_package_repo.get_calls)
 
 
 def test_minqmt_auto_run_missing_account_still_blocked_after_signal_eligibility() -> None:

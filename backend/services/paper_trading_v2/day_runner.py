@@ -252,7 +252,6 @@ class PaperTradingDayRunner:
                 "portfolio frozen manifest does not match frozen package invariants",
                 context={"portfolio_id": portfolio_id, "package_id": portfolio.package_id},
             )
-        self.validator.validate_manifest_identity_for_paper_trading(manifest)
         self.calendar_provider.ensure_trading_day(trade_date)
         existing_run = self.repository.get_run_by_portfolio_date(portfolio_id, trade_date)
         if existing_run is not None:

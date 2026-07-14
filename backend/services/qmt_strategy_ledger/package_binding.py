@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from backend.services.selection_center.models import SelectionRunStatus
 from backend.services.strategy_package.live_inference import AUTHORITATIVE_SELECTION_SCOPE, AUTHORITATIVE_SELECTION_SOURCE_TYPE
-from backend.services.strategy_package.asset_eligibility import StrategyPackageAssetEligibilityService
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.selection_artifact import selection_artifact_runtime_hash
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, StrategyPackageValidationError
 
@@ -57,13 +57,15 @@ class QmtStrategyPackageBindingService:
         package_reader: StrategyPackageReader,
         selection_reader: SelectionRunReader,
         artifact_repository: Any | None = None,
-        asset_eligibility_service: StrategyPackageAssetEligibilityService | Any | None = None,
+        asset_eligibility_service: Any | None = None,
     ) -> None:
         self._repository = repository
         self._package_reader = package_reader
         self._selection_reader = selection_reader
         self._artifact_repository = artifact_repository
-        self._asset_eligibility_service = asset_eligibility_service or StrategyPackageAssetEligibilityService()
+        # Compatibility seam only. Completeness admission belongs to the
+        # StrategyPackage entry writer and must not be repeated by QMT binding.
+        self._asset_eligibility_service = asset_eligibility_service
 
     def bind(self, request: PackageBindingRequest) -> StrategyPackageBinding:
         return self.bind_with_result(request).binding
@@ -71,7 +73,16 @@ class QmtStrategyPackageBindingService:
     def bind_with_result(self, request: PackageBindingRequest) -> PackageBindingResult:
         account = self._repository.get_virtual_account(request.strategy_id)
         package_record = self._package_reader.get(request.package_id)
-        self._asset_eligibility_service.require_eligible(package_record)
+        package_status = getattr(package_record, "package_status", None)
+        if str(getattr(package_status, "value", package_status) or "") == PackageStatus.RETIRED.value:
+            raise StrategyPackageValidationError(
+                "retired StrategyPackage cannot create a new QMT binding",
+                context={
+                    "reason_code": "strategy_package_retired_for_new_qmt_binding",
+                    "package_id": request.package_id,
+                    "package_status": PackageStatus.RETIRED.value,
+                },
+            )
         runtime_config = dict(request.runtime_config or {})
         selection_run = self._resolve_selection_run(request, package_record) if request.selection_run_id else None
         binding = StrategyPackageBinding(

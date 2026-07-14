@@ -472,6 +472,29 @@ def test_runtime_asset_admission_rejects_manifest_asset_closure_drift(tmp_path: 
     assert "asset_closure_sha256" in context["invalid_fields"]
 
 
+@pytest.mark.parametrize(
+    ("relative_path", "forbidden_call"),
+    [
+        ("backend/services/strategy_package/runtime.py", ".validator.validate_manifest("),
+        ("backend/services/paper_trading_v2/day_runner.py", ".validate_manifest_identity_for_paper_trading("),
+        ("backend/services/paper_trading_v2/readiness.py", ".validate_manifest_identity_for_paper_trading("),
+        ("backend/services/paper_trading_v2/live_session.py", ".validate_manifest_identity_for_paper_trading("),
+        ("backend/services/paper_trading_v2/runner.py", ".validate_for_paper_trading("),
+        ("backend/services/simulation_runtime/selection.py", ".require_eligible("),
+        ("backend/services/selection_center/service.py", ".require_eligible("),
+        ("backend/services/qmt_strategy_ledger/package_binding.py", ".require_eligible("),
+    ],
+)
+def test_downstream_simulation_paths_do_not_repeat_strategy_package_admission(
+    relative_path: str,
+    forbidden_call: str,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / relative_path).read_text(encoding="utf-8")
+
+    assert forbidden_call not in source
+
+
 def test_package_asset_params_with_model_code_materialize_successfully(tmp_path: Path) -> None:
     store = LocalPackageAssetStore(tmp_path / "asset_store")
     model_py = b"class LSTM_10D_hs64_d02:\n    pass\nmodel_cls = LSTM_10D_hs64_d02\n"
