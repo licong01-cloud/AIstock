@@ -31,8 +31,8 @@ dev_release_rehearsal = completed_2026-07-14; managed=COMPATIBLE; prerequisite=C
 dev_ddl = migration_order_50_applied_and_verified
 dev_v1_receipt_downstream_ready = true
 phase1_parent_schema_parity = incomplete_lineage_candidate_partition_and_hash_uniqueness
-phase1g_persistent_schema_ready = false_pending_phase1f1
-production_ddl = pending_separate_explicit_execution
+phase1g_persistent_schema_ready = false_pending_phase1f2_scope_aware_trace_identity
+production_ddl = applied_and_verified_via_phase1f1_v2_2026_07_15
 production_dml = none
 runtime_activation = none
 model_training = none
@@ -41,6 +41,10 @@ model_training = none
 Phase 1E persistent dual-track L4 仍等待真实 single/multi Alpha immutable DSE/receipt；该缺口
 不阻塞 Phase 1F 设计、schema apply 或 schema verify，但不得在 Phase 1F 中伪造、复制或手写
 DSE 予以替代。
+
+Phase 1F.1已完成其partition/hash修正，但2026-07-15 Phase 1G开工复核发现outbox natural key及
+capture-gap identity缺少scope。该新缺口由Phase 1G详细设计§5.4/§21 G0的独立Phase 1F.2 contract负责，
+不改写Phase 1F/1F.1历史receipt，也不构成审批或人工门禁。
 
 ## 2. 目标
 
@@ -810,10 +814,10 @@ L3 是 Phase 1F DEV schema 状态证据，不是 Phase 1E dual-track L4、Phase 
 
 ## 17. Production Gates, Rollout And Rollback / 生产状态、发布与回滚
 
-本设计完成时的生产状态固定为：
+当前生产状态为：
 
 ```text
-production_ddl_gate = pending
+production_ddl_gate = applied_and_verified
 production_dml_gate = noop
 production_frontend_dependency_gate = noop
 production_backend_dependency_gate = noop
@@ -822,8 +826,8 @@ observer_activation = noop
 model_training = noop
 ```
 
-`production_ddl_gate=pending` 只陈述尚未执行的数据库事实，不是应用内审批。代码/设计合入不会
-自动改变该状态。
+`production_ddl_gate=applied_and_verified`来自2026-07-15用户明确授权后的独立执行，不是应用内审批。
+代码/设计合入本身没有自动改变该状态。
 
 ### 17.1 Rollout States
 
@@ -1039,19 +1043,21 @@ plan/receipt 分别为 `96684eb234712027c2a5845001544d1015dffdbb8835e8ec0cd73a6a
 
 该 request 中 DEV Advisory Program count 为 0，因此上述结果只证明 schema release/reapply 完整，
 不冒充 Phase 1E 真实 dual-track L4、Phase 1G persistent observation DML 或 capacity readiness。
-未执行 production DDL/DML、observer startup、Phase 1G/1H DML、Parquet 构建或模型训练。
+本次历史v1 DEV rehearsal未执行production操作；后续Phase 1F.1独立发布已于2026-07-15完成production
+DDL。至今仍未执行production DML、observer startup、Phase 1G/1H DML、Parquet构建或模型训练。
 
 Phase 1G详细设计复核进一步发现：v1 registry把stage/candidate局部content hash冻结为全局UNIQUE，且
 lineage/candidate仍为普通表，与Phase 1父设计的作用域唯一和月分区要求不一致。因此上述
 `downstream_ready=true`只在v1 contract内成立，不能被解释为Phase 1G persistent DML已具备最终schema。
 forward修正的唯一详细设计为
 `docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`；
-本轮未实现或执行其DEV/production DDL。
+其代码已由PR `#2129`合入，DEV与production DDL已于2026-07-15应用并完整验证。
 
 实现完成后的合并前证据：pure/static + pinned disposable PostgreSQL consolidated matrix 为
 `38 passed`，其中 L2 为 `18 passed`；fresh apply、exact reapply、九类 drift、partial resume、
 executor/file-wrapped rollback、committed-readback failure、lock timeout、session policy、query spy、
-database/container destroy 全部通过。该证据不表示 DEV/production DDL 已执行。
+database/container destroy 全部通过。该证据本身不表示persistent DDL已执行；实际DEV/production执行
+事实由Phase 1F.1独立immutable receipts证明。
 
 ## 23. DESIGN-COMPLIANCE-001
 
@@ -1087,14 +1093,15 @@ database/container destroy 全部通过。该证据不表示 DEV/production DDL 
 1. F1-F3 实现完整，L0-L2 全部通过。
 2. disposable PostgreSQL full-order apply/reapply/drift/partial-resume matrix 通过且测试库销毁。
 3. DESIGN-COMPLIANCE-001 按实现逐项复核，无简化版、静默错误或业务偏移。
-4. production gates 准确报告；没有生产授权时为 `production_ddl_pending`，不得冒充已应用。
+4. production gates 准确报告；2026-07-15授权执行前保持`production_ddl_pending`，授权后的实际状态为
+   `applied_and_verified`，不得混淆时间点。
 
 Phase 1F v1 DEV已完成F4 persistent release rehearsal、独立readback、exact reapply和immutable
-receipt，但Phase 1G persistent schema需先完成Phase 1F.1 forward contract。Phase 1G的唯一实施级设计为
+receipt；Phase 1F.1 forward contract也已在DEV/production应用并验证。Phase 1G的唯一实施级设计为
 `docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`，当前为
-`design_ready / implementation_not_started`；它只消费exact Phase 1F.1 v2 receipt hash且
-`managed_schema_status=COMPATIBLE`、`prerequisite_status=COMPATIBLE`、
-`downstream_ready=true` 的 DEV schema，不需要生产 DDL 先完成。
+`design_ready_after_consistency_review / implementation_not_started / blocked_pending_phase1f2`；它只消费
+exact Phase 1F.2 scope-aware receipt和`managed_schema_status=COMPATIBLE`、
+`prerequisite_status=COMPATIBLE`、`downstream_ready=true` 的target schema。该前置条件尚未满足。
 
-Phase 1F production 完成的条件：F5 在用户明确授权后完成 production apply/readback receipt。
-这不会自动启动 observer、Phase 1G/1H DML、Phase 1I snapshot 或任何模型能力。
+Phase 1F/1F.1 production schema完成条件已满足：用户明确授权后完成production apply/readback/new verify/
+exact reapply receipts。这没有自动启动observer、Phase 1G/1H DML、Phase 1I snapshot或任何模型能力。

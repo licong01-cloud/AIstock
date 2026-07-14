@@ -2109,17 +2109,18 @@ Phase 1B 实施验收表：
 ### 22.9 Phase 1F：Release schema verification
 
 - 唯一v1实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`；代码已由 PR `#2114` 合入，DEV persistent L3 已完成 plan/apply/verify/exact-reapply，v1 managed/prerequisite均为`COMPATIBLE`、receipt中`downstream_ready=true`。后续复核发现v1 contract未覆盖本设计的lineage/candidate分区且错误冻结两个局部content hash全局唯一，因此该receipt不能被Phase 1G persistent DML直接消费。
-- 修正设计已完成代码并通过 disposable PostgreSQL L2：它通过全局identity + 月分区payload + compatibility view修复，不改变snapshot只读结果；DEV/production DDL均尚未执行。
+- Phase 1F.1修正代码已由PR `#2129`合入，并于2026-07-15依次完成DEV与production plan/apply/new-verify/new-exact-reapply：全局identity + 月分区payload + compatibility view保持snapshot只读结果不变，两个目标均为`COMPATIBLE/COMPATIBLE/downstream_ready=true`，最终catalog fingerprint一致为`106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627`；零业务DML、零runtime activation。
+- Phase 1G开工一致性复核另发现Phase 1F.1 outbox唯一键及capture-gap identity均未包含scope，会阻断或串联同一Selection证据被多个独立Program合法消费。Phase 1F.2必须以独立scope-aware trace identity migration、registry/verifier contract和DEV发布证据同时修正成功/失败证据；它是技术前置，不是审批、角色或人工门禁。Phase 1F.2当前尚未实现或应用。
 - 在开发/发布流程按冻结 SHA 和依赖顺序应用、重放并完整验证 dataset foundation migrations、35 个逻辑关系、columns/constraints/indexes/functions/triggers/comments 与显式 capacity 日期范围生成的历史月分区；不创建 authority tables/roles/approval/authorization。
 - 运行进程只使用 Advisory-owned read-only catalog verifier，无 DDL executor reference 或 DDL 入口；本阶段不执行 source ledger、capture/label DML、文件写入、observer activation 或模型训练。
 - schema verification 不依赖业务 row count、Phase 1E persistent L4、capacity `MEASURED`、Parquet 或模型状态；合法空库结构与 `PARTIAL` capacity 可通过。DEV/production apply 分开报告，生产 DDL 只在用户明确授权的独立操作中执行，不新增应用审批功能或每次 DDL 前全库备份要求。
 
 ### 22.10 Phase 1G：Source ledger 与 observation capture DML
 
-- 唯一实施级详细设计为 `docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`，当前为 `design_ready / implementation_not_started`；代码开始前必须先完成Phase 1F.1 v2 schema实现，persistent DEV DML还需v2 DEV receipt。
+- 唯一实施级详细设计为 `docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`，当前为 `design_ready_after_consistency_review / implementation_not_started`；下一项任务是先形成独立Phase 1F.2 F2详细设计，再按该文§5.4与§21 G0完成scope-aware trace identity contract及DEV ready receipt，尚不可直接进入G1-G4。真实persistent DEV L4仍需Phase 1E形成single/multi Alpha immutable DSE/receipt。
 - Phase 1G 不新增 source availability event；它在 Phase 1E 相同 cutoff 重放 source resolution，逐 hash 一致后冻结 revision set。source event 的生产权仍唯一属于 Phase 1D observer。
 - immutable DSE/artifact/package 仅通过 Advisory-owned read-only projection 消费；不调用 Selection、策略包 validator/asset loader/inference，不改变 Selection、荐股、模拟盘、Paper、QE/RD-Agent/Qlib/QMT。
-- control binding 自动 get-or-append exact；observation/version/lineage/stage/candidate/membership/delivery 使用强类型 request、单 plan PostgreSQL 原子事务和 immutable receipt。single Alpha 与原生 multi Alpha 各 Program 独立执行，失败显式、正常重跑自动收敛，无自动 retry loop、角色、审批或人工改库。
+- control binding 自动 get-or-append exact；observation/version/lineage/stage/candidate/outbox/membership/delivery 使用caller-owned单 plan PostgreSQL原子事务。Phase 1G以强类型只读plan执行stale revalidation，并把稳定capture result与逐次attempt receipt分离。single Alpha 与原生 multi Alpha 各 Program 独立执行，失败显式、正常重跑自动收敛，无自动 retry loop、角色、审批或人工改库。
 - 本阶段不执行 DDL、不读取回测或 Paper 数据、不训练模型。DEV transactional 验证与 persistent real dual-track L4 分开报告，生产 DML 只在后续独立明确执行中发生。
 
 ### 22.11 Phase 1H：Label/universe DML 与 evidence
