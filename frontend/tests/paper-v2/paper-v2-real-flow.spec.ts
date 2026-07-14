@@ -5,7 +5,7 @@ const TDX_BASE = process.env.TDX_BASE_URL || "http://127.0.0.1:19080";
 const LEGACY_QE_EXPERIMENTS = ["qe_20260416_002701", "qe_20260413_084216", "qe_20260416_082012"];
 const PREFERRED_PACKAGE_MARKERS = (
   process.env.PAPER_V2_E2E_PACKAGE_MARKERS
-  || "qe_20260601_172505_fe17,qe_20260520_215627_abbc,qe_20260513_151128_12ea"
+  || "qe_20260601_172505_fe17,qe_20260520_215627_abbc"
 )
   .split(",")
   .map((item) => item.trim())
@@ -150,6 +150,13 @@ function packagePreference(pkg: PackageSummary): number {
 
 async function discoverValidationPackages(request: APIRequestContext): Promise<PackageSummary[]> {
   const selectable = await listSelectablePackages(request);
+  const leakedRetiredPackageIds = selectable
+    .filter((pkg) => String(pkg.package_status || "").toUpperCase() === "RETIRED")
+    .map((pkg) => pkg.package_id);
+  expect(
+    leakedRetiredPackageIds,
+    "Selection Center selectable-packages must not expose RETIRED StrategyPackages",
+  ).toEqual([]);
   const runnable = selectable
     .filter((pkg) => pkg.selection_health?.runnable === true)
     .sort((a, b) => packagePreference(a) - packagePreference(b));

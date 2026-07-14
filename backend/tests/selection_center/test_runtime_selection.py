@@ -1652,6 +1652,42 @@ def test_selection_center_lists_selectable_packages_with_metrics_and_latest_run(
     assert packages[0]["latest_selection_run"]["run_id"] == run.run_id
 
 
+def test_selectable_packages_full_view_excludes_retired_before_health_evaluation() -> None:
+    class TrackingPackageHealth:
+        def __init__(self) -> None:
+            self.package_ids: list[str] = []
+
+        def summarize(self, record):  # noqa: ANN001, ANN202
+            self.package_ids.append(record.package_id)
+            if record.package_status == PackageStatus.RETIRED:
+                raise AssertionError("retired StrategyPackage must not reach selection health evaluation")
+            return {"status": "RUNNABLE", "runnable": True}
+
+    package_repo = InMemoryStrategyPackageRepository()
+    active = ready_manifest_with_scores("pkg_active_full_view", "000001.SZ", 0.9, 1)
+    retired = ready_manifest_with_scores("pkg_retired_full_view", "000002.SZ", 0.8, 1)
+    retired = freeze_manifest(
+        retired.model_copy(update={"package_status": PackageStatus.RETIRED, "manifest_sha256": None})
+    )
+    package_repo.save_manifest(active)
+    package_repo.save_manifest(retired)
+    health = TrackingPackageHealth()
+    service = SelectionCenterService(
+        package_repository=package_repo,
+        repository=InMemorySelectionCenterRepository(),
+        tradability_filter=TradabilityFilter(FakeSuspendLookup()),
+        refresh_audit=NoopRefreshAudit(),
+        package_health_service=health,
+    )
+
+    packages = service.list_selectable_packages(limit=10, view="full")
+    summary_packages = service.list_selectable_packages(limit=10, view="summary")
+
+    assert [item["package_id"] for item in packages] == [active.package_id]
+    assert [item["package_id"] for item in summary_packages] == [active.package_id]
+    assert health.package_ids == [active.package_id]
+
+
 def test_selectable_packages_summary_path_does_not_expand_limit_or_upsert_model_state() -> None:
     class CountingPackageRepository(InMemoryStrategyPackageRepository):
         def __init__(self) -> None:

@@ -17,6 +17,7 @@ from backend.services.simulation_runtime import InMemorySimulationRuntimeReposit
 from backend.services.simulation_runtime.selection import StrategyPackageSelectionService
 from backend.services.strategy_package.metrics_summary import metrics_summary_from_record
 from backend.services.strategy_package.backtest_contract import normalize_runtime_config_with_backtest_contract
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.repository import StrategyPackageRepository
 from backend.services.strategy_package.runtime import StrategyPackageRuntime, apply_runtime_variant_config
 from backend.services.strategy_package.runtime_variant import RuntimeVariantValidationStatus
@@ -750,6 +751,8 @@ class SelectionCenterService:
         package_service = StrategyPackageService(repository=self.package_repository)
         items: list[dict[str, Any]] = []
         for record in records:
+            if record.package_status == PackageStatus.RETIRED:
+                continue
             manifest = record.current_manifest()
             model_state = package_service.get_model_state(record.package_id)
             latest_run = latest_runs.get(record.package_id)
