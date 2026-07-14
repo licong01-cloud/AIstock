@@ -305,10 +305,15 @@ def test_default_local_pred_backtest_commands_use_configured_wsl_on_windows(
     )
 
     assert qrun_command[:4] == ["wsl", "-d", "Ubuntu", "bash"]
-    assert "conda activate rdagent-gpu" in qrun_command[-1]
+    assert qrun_command[-1].startswith("set -eo pipefail; source ")
+    assert "conda activate rdagent-gpu; set -u;" in qrun_command[-1]
+    assert "set -euo pipefail; source" not in qrun_command[-1]
     assert ". ./.factor_env" in qrun_command[-1]
     assert "python qrun_limit_minute.py conf.yaml --pred-backtest combined_prediction.pkl" in qrun_command[-1]
     assert read_command[:4] == ["wsl", "-d", "Ubuntu", "bash"]
+    assert read_command[-1].startswith("set -eo pipefail; source ")
+    assert "conda activate rdagent-gpu; set -u;" in read_command[-1]
+    assert "set -euo pipefail; source" not in read_command[-1]
     assert "QE_REQUIRE_RECORDER_ID=1 python read_exp_res.py" in read_command[-1]
     assert read_env is None
 
