@@ -32,8 +32,8 @@
   "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
   "first_seen_at": "2026-07-14T10:39:43.685313Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
+  "fixed_at": "2026-07-14T13:30:19.049294Z",
   "github_issue_number": 2104,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
   "last_seen_at": "2026-07-14T10:39:43.685313Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "465858b4d68c8d71e7f828f5",
     "source_event_id": "FE-20260714-465858b4d68c"
   },
+  "validation_evidence": [
+    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
