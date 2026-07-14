@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import backend.ingestion.tdx_scheduler as scheduler_module
 from backend.ingestion.tdx_scheduler import TDXScheduler
+from backend.services.audit_backed_data_health import AuditDatasetCheckResult
 
 
 def _scheduler_with_execute_capture():
@@ -129,6 +130,222 @@ def test_refresh_schedules_reconciles_due_sync_targets():
     assert calls == ["stale", ("jobs", [], []), "due"]
 
 
+def test_recent_submission_keeps_running_job_visible_outside_recent_window():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    seen = {}
+
+    def _fetchall(sql, params=()):
+        seen["sql"] = sql
+        seen["params"] = params
+        return [{"job_id": uuid.uuid4()}]
+
+    scheduler._fetchall = _fetchall
+
+    assert scheduler._recent_dataset_submission_exists("index_daily", "incremental") is True
+    assert "status IN ('queued', 'pending', 'running')" in seen["sql"]
+    assert "status = 'success'" in seen["sql"]
+    assert seen["params"][:2] == ("index_daily", "incremental")
+
+
+def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    target_date = dt.date(2026, 7, 13)
+    target = {
+        "target_id": "target-1",
+        "dataset": "index_daily",
+        "target_date": target_date,
+        "attempt_count": 9,
+    }
+
+    class _Repo:
+        def list_fillable_targets(self, **_kwargs):
+            return [target]
+
+        def mark_reconciled(self, target_id, **kwargs):
+            calls.append(("reconciled", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record.status, record.target_id, record.trigger_source))
+            return {"attempt_id": "attempt-1"}
+
+        def claim_fillable_target(self, *_args, **_kwargs):
+            raise AssertionError("covered target must not be leased")
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    scheduler._schedule_map_for_enabled_datasets = lambda: {
+        "index_daily": {"schedule_id": "schedule-1", "mode": "incremental"}
+    }
+    scheduler._check_dataset_recovered = lambda dataset, expected_date=None: SimpleNamespace(
+        status="ok", dataset=dataset, expected_date=expected_date
+    )
+    scheduler._enqueue_target_retry = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("covered target must not submit a job")
+    )
+
+    submitted = scheduler._reconcile_due_data_sync_targets()
+
+    assert submitted == []
+    assert calls[0][0:2] == ("reconciled", "target-1")
+    assert calls[1] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
+
+
+def test_index_daily_target_retry_waits_until_post_close(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 8, 59, tzinfo=dt.timezone.utc),
+    )
+
+    assert scheduler._target_retry_window_open("index_daily") is False
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 9, 0, tzinfo=dt.timezone.utc),
+    )
+    assert scheduler._target_retry_window_open("index_daily") is True
+
+
+def test_expired_due_target_is_final_blocked_without_job(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    target_date = dt.date(2026, 7, 13)
+    deadline = dt.datetime(2026, 7, 13, 15, 30, tzinfo=dt.timezone.utc)
+
+    class _Repo:
+        def list_fillable_targets(self, **_kwargs):
+            return [
+                {
+                    "target_id": "target-1",
+                    "dataset": "index_daily",
+                    "target_date": target_date,
+                    "required_before": deadline,
+                    "attempt_count": 9,
+                }
+            ]
+
+        def mark_final_blocked(self, target_id, **kwargs):
+            calls.append(("final", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record.status, record.target_id, record.trigger_source))
+            return {"attempt_id": "attempt-1"}
+
+        def claim_fillable_target(self, *_args, **_kwargs):
+            raise AssertionError("expired target must not be leased")
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 7, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._schedule_map_for_enabled_datasets = lambda: {
+        "index_daily": {"schedule_id": "schedule-1", "mode": "incremental"}
+    }
+    scheduler._check_dataset_recovered = lambda _dataset, _expected=None: SimpleNamespace(
+        status="stale", failure_category="audit_stale"
+    )
+    scheduler._flush_final_data_sync_alerts = lambda targets: calls.append(("alert", targets))
+    scheduler._enqueue_target_retry = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("expired target must not submit a job")
+    )
+
+    submitted = scheduler._reconcile_due_data_sync_targets()
+
+    assert submitted == []
+    assert calls[0][0:2] == ("final", "target-1")
+    assert calls[1] == ("attempt", "final_blocked", "target-1", "data_sync_target_precheck")
+    assert calls[2][0] == "alert"
+
+
+def test_enqueue_target_retry_anchors_original_date_and_isolates_schedule(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    target_date = dt.date(2026, 7, 13)
+    deadline = dt.datetime(2026, 7, 13, 15, 30, tzinfo=dt.timezone.utc)
+
+    scheduler._lock = scheduler_module.threading.RLock()
+    scheduler._tracker = SimpleNamespace(is_running=lambda _key: False)
+    scheduler._recent_dataset_submission_exists = lambda *_args, **_kwargs: False
+    scheduler._execute = lambda sql, params=(): calls.append(("execute", sql, params))
+    scheduler._submit_ingestion = lambda *args, **kwargs: calls.append(("submit", args, kwargs)) or uuid.uuid4()
+
+    class _Repo:
+        def record_attempt(self, record):
+            calls.append(("attempt", record))
+            return {"attempt_id": "attempt-1"}
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+
+    job_id = scheduler._enqueue_target_retry(
+        target={
+            "target_id": "target-1",
+            "dataset": "index_daily",
+            "target_date": target_date,
+            "required_before": deadline,
+        },
+        schedule={"schedule_id": "schedule-1", "mode": "incremental"},
+        retry_mode="incremental",
+        triggered_by="data_sync_target_due",
+        attempt=10,
+    )
+
+    assert job_id is not None
+    submit_args = next(call[1] for call in calls if call[0] == "submit")
+    assert submit_args[0] is None
+    assert submit_args[1:4] == ("index_daily", "incremental", "data_sync_target_due")
+    options = submit_args[4]
+    assert options["target_date"] == "2026-07-13"
+    assert options["start_date"] == "2026-07-13"
+    assert options["end_date"] == "2026-07-13"
+    assert options["target_required_before"] == deadline.isoformat()
+
+
+def test_audit_checker_uses_physical_fallback_for_stale_explicit_target_date():
+    from backend.services.audit_backed_data_health import AuditBackedDataHealthChecker
+
+    checker = AuditBackedDataHealthChecker.__new__(AuditBackedDataHealthChecker)
+    checker._latest_trading_day = lambda: dt.date(2026, 7, 14)
+    checker._fetch_audit_rows = lambda _dataset, _expected: (
+        {
+            "trade_date": dt.date(2026, 7, 10),
+            "row_count": 871,
+            "quality_status": "ok",
+            "failure_category": "audit_stale",
+        },
+        None,
+    )
+    checker._status_from_audit = lambda **_kwargs: AuditDatasetCheckResult(
+        dataset="index_daily",
+        table_name="market.index_daily",
+        date_column="trade_date",
+        tier="light",
+        max_date=dt.date(2026, 7, 10),
+        expected_date=dt.date(2026, 7, 13),
+        status="stale",
+        failure_category="audit_stale",
+    )
+    checker._from_physical_fallback = lambda _dataset, expected, _elapsed: AuditDatasetCheckResult(
+        dataset="index_daily",
+        table_name="market.index_daily",
+        date_column="trade_date",
+        tier="light",
+        max_date=dt.date(2026, 7, 13),
+        expected_date=expected,
+        status="ok",
+        source="physical_fallback",
+    )
+
+    result = checker.check_dataset("index_daily", expected_date=dt.date(2026, 7, 13))
+
+    assert result.status == "ok"
+    assert result.max_date == dt.date(2026, 7, 13)
+    assert result.source == "physical_fallback"
+
+
 def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
@@ -150,7 +367,9 @@ def test_finalize_data_sync_target_retry_closes_recovered_target(monkeypatch):
     scheduler._final_deadline_for_target = lambda _dataset, _target_date: dt.datetime(
         2026, 5, 18, 23, 30, tzinfo=dt.timezone.utc
     )
-    scheduler._check_dataset_recovered = lambda _dataset: SimpleNamespace(status="ok")
+    scheduler._check_dataset_recovered = lambda _dataset, expected_date=None: SimpleNamespace(
+        status="ok", expected_date=expected_date
+    )
 
     scheduler._finalize_data_sync_target_retry(
         _Future(),

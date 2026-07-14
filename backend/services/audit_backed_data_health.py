@@ -302,8 +302,15 @@ class AuditBackedDataHealthChecker:
             result.status = "ok"
         return result
 
-    def _check_one(self, dataset: str, latest_trading: dt.date) -> AuditDatasetCheckResult:
-        expected_date = self._expected_date(dataset, latest_trading)
+    def _check_one(
+        self,
+        dataset: str,
+        latest_trading: dt.date,
+        *,
+        expected_date: Optional[dt.date] = None,
+    ) -> AuditDatasetCheckResult:
+        explicit_expected_date = expected_date is not None
+        expected_date = expected_date or self._expected_date(dataset, latest_trading)
         started = time.time()
         try:
             latest_success, latest_expected = self._fetch_audit_rows(dataset, expected_date)
@@ -321,6 +328,18 @@ class AuditBackedDataHealthChecker:
                 latest_success=latest_success,
                 latest_expected=latest_expected,
             )
+            if (
+                explicit_expected_date
+                and result.status == "stale"
+                and result.failure_category in {"audit_missing", "audit_stale"}
+            ):
+                fallback = self._from_physical_fallback(
+                    dataset,
+                    expected_date,
+                    (time.time() - started) * 1000,
+                )
+                if fallback is not None and fallback.is_fresh:
+                    return fallback
         except Exception as exc:
             result = self._base_result(dataset, expected_date)
             result.status = "error"
@@ -333,6 +352,15 @@ class AuditBackedDataHealthChecker:
         latest_trading = self._latest_trading_day()
         datasets = [dataset for tier in ALL_TIERS for dataset in tier.tables]
         return [self._check_one(dataset, latest_trading) for dataset in datasets]
+
+    def check_dataset(
+        self,
+        dataset: str,
+        *,
+        expected_date: Optional[dt.date] = None,
+    ) -> AuditDatasetCheckResult:
+        latest_trading = self._latest_trading_day()
+        return self._check_one(dataset, latest_trading, expected_date=expected_date)
 
     def check_datasets(self, datasets: List[str]) -> List[AuditDatasetCheckResult]:
         latest_trading = self._latest_trading_day()
