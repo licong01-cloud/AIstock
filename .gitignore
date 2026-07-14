@@ -73,6 +73,8 @@ nul
 !package.json
 !package-lock.json
 !tsconfig.json
+!backend/services/advisory_phase1/release_schema_registry/
+!backend/services/advisory_phase1/release_schema_registry/*.json
 !tests/aistock_validation/bugs/*.json
 !tests/aistock_validation/catalog/**/*.json
 !tests/aistock_validation/runs/**/*.json

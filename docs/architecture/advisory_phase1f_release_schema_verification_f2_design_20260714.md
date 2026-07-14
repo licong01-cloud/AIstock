@@ -24,9 +24,10 @@ Qlib 或 QMT 的任何运行路径。
 
 ```text
 design_status = design_ready
-implementation_status = not_started
+implementation_status = code_complete_l0_l2_verified_pending_explicit_DEV_DDL
 phase1e_code = merged_as_code_complete_pending_real_dev_input
-dev_ddl = not_executed_by_this_design_task
+dev_readonly_preflight = completed_2026-07-14; managed=PARTIAL_ADDITIVE; prerequisite=COMPATIBLE
+dev_ddl = not_executed_by_this_implementation_task
 production_ddl = pending_separate_explicit_execution
 production_dml = none
 runtime_activation = none
@@ -56,9 +57,9 @@ Phase 1F 必须同时达到以下目标：
 
 ## 3. 当前事实与缺口
 
-### 3.1 已合入 migration 顺序
+### 3.1 Managed migration 顺序
 
-Phase 1F 管理下列已合入 migration。文件内容在 release contract 中按 SHA-256 冻结；若发现
+Phase 1F 管理下列历史 migration 和本阶段新增的 order 70 forward migration。文件内容在 release contract 中按 SHA-256 冻结；若发现
 缺陷，只能新增 forward migration，禁止修改已发布 migration 后让同一文件名代表不同内容。
 
 | order | migration | transaction mode | 主要对象 | 依赖 |
@@ -69,6 +70,7 @@ Phase 1F 管理下列已合入 migration。文件内容在 release contract 中�
 | 40 | `add_advisory_phase1c3_label_snapshot_foundation_20260713.sql` | `FILE_WRAPPED` | label、blob、build、attempt、snapshot、fixture partitions | order 30 |
 | 50 | `add_advisory_phase1_source_observer_20260714.sql` | `EXECUTOR_MANAGED` | observer cursor/receipt | order 10、20 |
 | 60 | Phase 1F generated partition DDL | `EXECUTOR_MANAGED` | 完整历史月分区 | order 40 + explicit capacity range |
+| 70 | `add_advisory_phase1f_schema_canonicalization_20260714.sql` | `EXECUTOR_MANAGED` | 历史/空库 constraint 与 capture comment 语义收敛 | order 10、30 |
 
 Phase 0A/0A.2 的 Program、dated binding、historical research receipt 和 Selection evidence 是
 read-only prerequisite contract，不属于 Phase 1F 管理的 DDL。Phase 1F 只验证后续 1G/1H
@@ -188,6 +190,7 @@ normalizer_version
 supported_postgres_major_versions
 ddl_session_policy
 managed_migrations[]
+repairable_drift_variants[] = object_id + exact actual payload hash + repair orders
 phase0a_prerequisite_relations[]
 external_readonly_prerequisite_relations[]
 required_relations[]
@@ -224,6 +227,9 @@ transaction_mode = FILE_WRAPPED | EXECUTOR_MANAGED
 declared_object_ids
 ```
 
+新建的 order 70 migration 通过 repository `.gitattributes` 固定 `eol=lf`，保证 Windows、WSL 和 CI
+检出的 raw bytes 与 `file_sha256` 一致；executor 不做换行归一化或 hash fallback。
+
 `FILE_WRAPPED` 表示 migration 自带顶层 `BEGIN/COMMIT`，executor 不嵌套或删除其 transaction
 envelope；`EXECUTOR_MANAGED` 表示 executor 为该文件建立独立 transaction。禁止用字符串切割
 删除 SQL 中的 `BEGIN/COMMIT`，避免误伤 PL/pgSQL function body。
@@ -238,7 +244,7 @@ registry 不从目标数据库自动生成并覆盖。实现 PR 必须在隔离 
 | object | required contract |
 |---|---|
 | relation | schema、name、relkind、persistence、partition strategy/key |
-| column | ordinal、name、type/typmod、nullable、default、identity/generated |
+| column | name、type/typmod、nullable、default、identity/generated；ordinal 仅诊断，不进入兼容判定/hash |
 | PK/UK/FK/check | name、type、deferrability、validation、normalized definition |
 | index | name、unique、valid/ready、access method、columns/expressions、predicate |
 | function | schema/name/identity args、return type、language、volatility、security、normalized body hash |
@@ -249,6 +255,13 @@ registry 不从目标数据库自动生成并覆盖。实现 PR 必须在隔离 
 `pg_get_constraintdef`、`pg_get_indexdef`、`pg_get_functiondef` 和 `pg_get_triggerdef` 经版本化
 normalizer 仅去除无语义空白、quote 和 PostgreSQL 展示噪音，再计算 hash。normalizer 不删除
 predicate、check expression、trigger event、function body或 deferrability 等业务语义。
+
+历史 additive DDL 会导致相同 column semantics 具有不同物理 ordinal，PostgreSQL 也会因建表历史为
+未命名 check 生成不同序号。Phase 1F 因此保留 ordinal 诊断值但不以其判定漂移；未命名 check 只在
+relation/type/normalized definition 完全相同时映射到 contract identity。除此之外的 name/definition
+变化仍为 drift。`repairable_drift_variants` 同时冻结 object id、exact predecessor payload hash 和
+repair orders，只覆盖真实 migration 中间态/历史 predecessor；不把任意 index、trigger、function
+或 constraint drift 降级为可修复。
 
 ### 6.3 Prerequisite Contract
 
@@ -324,6 +337,9 @@ request_content_hash
 允许为空，不参与 managed schema apply 判定，因此不要求 Phase 1E persistent dual-track L4 已完成。
 `capacity_receipt_hash` 可在 `PARTIAL` 时存在，Phase 1F 不要求 `MEASURED`，因为 schema 和分区
 范围不依赖 Parquet bytes。
+CLI `plan` 必须显式传入 `--requested-operation plan|verify|apply`；plan receipt 同时保存实际
+`operation=PLAN` 与目标 `requested_operation`，后续 verify/apply receipt 的两者必须一致，禁止
+用 APPLY request 冒充 VERIFY lineage。
 
 ### 8.2 ReleaseSchemaPlan
 
@@ -335,7 +351,7 @@ database_identity
 contract version/hash
 ddl_session_policy/hash
 ordered migration file identities
-current catalog fingerprint
+current catalog fingerprint + object count + per-kind counts/hashes
 managed_schema_status
 prerequisite_status
 downstream_ready
@@ -343,7 +359,7 @@ managed_differences[]
 prerequisite_differences[]
 expected month partitions[]
 pending DDL operations[]
-expected final catalog fingerprint payload
+expected final catalog fingerprint + object count + per-kind counts/hashes
 plan_content_hash
 ```
 
@@ -355,13 +371,16 @@ plan_content_hash
 ```text
 schema_version = advisory_phase1f_release_receipt_v1
 operation
+requested_operation
 target identity
 request/plan/contract hashes
 pre_catalog_fingerprint
+pre_catalog_evidence = object_count + per_kind_counts/hashes
 executed migration hashes[]
 per_migration_results[]
 executed partition bounds[]
 post_catalog_fingerprint
+post_catalog_evidence = object_count + per_kind_counts/hashes
 operation_status = SUCCESS | FAILED
 managed_schema_status
 prerequisite_status
@@ -428,7 +447,7 @@ managed schema 与 downstream prerequisite 分成两个状态轴，禁止 prereq
 |---|---|---|
 | `COMPATIBLE` | 全部 managed objects 与 partitions 完整一致 | verify exit 0；apply 为 exact reapply |
 | `ABSENT` | managed schema 全部不存在 | 允许按完整顺序 fresh apply |
-| `PARTIAL_ADDITIVE` | 缺少可由冻结 migration/partition DDL补齐的对象，已有对象均一致 | 允许 apply 后 full verify |
+| `PARTIAL_ADDITIVE` | 缺少可由冻结 migration/partition DDL补齐的对象，或命中 `repairable_drift_variants` 的 exact predecessor payload | 允许 apply 后 full verify |
 | `DRIFTED` | 同名对象定义、migration SHA 或 catalog semantics 冲突 | 拒绝 apply；需要新的 forward migration/contract revision |
 | `UNSUPPORTED` | PostgreSQL major/contract normalizer 不支持 | 非零失败，不猜测兼容性 |
 
@@ -436,6 +455,10 @@ managed schema 与 downstream prerequisite 分成两个状态轴，禁止 prereq
 `ALTER ... ADD` 或 typed partition DDL补齐。如果 relation 已存在但缺少只定义在其原始
 `CREATE TABLE` 内的 column/constraint，则重放 `CREATE TABLE IF NOT EXISTS` 无法补齐，必须归类
 `DRIFTED`，不能先执行再依赖 post-verify 报错。
+
+唯一例外是 contract 中显式列出的 order 70 predecessor constraint。它们的 actual/expected canonical
+payload 和 repair order 都被冻结；只有 exact match 才能进入 `PARTIAL_ADDITIVE`。普通 predicate、
+disabled trigger、function body、index 或同名 constraint 漂移仍必须为 `DRIFTED`。
 
 | prerequisite_status | meaning | Phase 1F behavior |
 |---|---|---|
@@ -505,7 +528,7 @@ identifier 由年月 formatter 生成，不接受任意 identifier 或 SQL 字�
 ### 11.2 Transaction
 
 现有 migration transaction envelope 不统一，因此 Phase 1F 明确采用“单 migration 原子、release
-可恢复”，不虚构跨五组 migration 的全局原子性：
+可恢复”，不虚构跨六个文件 migration 加动态 partition DDL 的全局原子性：
 
 - `FILE_WRAPPED` 文件在无 active transaction 的 dedicated connection 上以 driver
   `autocommit=true` 先执行 session-level `SET lock_timeout='10s'`、
@@ -518,6 +541,9 @@ identifier 由年月 formatter 生成，不接受任意 identifier 或 SQL 字�
 - dynamic month partitions 在独立 executor-managed transaction 中原子创建并验证全部目标 bound。
 - 每个已提交 migration 后都打开新的 `REPEATABLE READ READ ONLY` transaction 做 independent
   subset readback，再进入下一 order。
+- migration transaction 一旦返回 committed，executor 必须先记录 migration hash、
+  `status=COMMITTED` 和 `ddl_executed=true`，再做 independent readback；readback 失败不得把已经提交
+  的 DDL 改写成 `ddl_executed=false` 或从 receipt 删除。
 - later migration 失败时，当前 migration 回滚，但 earlier committed migrations 保留；failed receipt
   精确记录已提交 order。下一次 plan 必须把它们识别为兼容 existing objects，并只继续未完成步骤。
 - lock/statement timeout 不自动重试；当前 migration 回滚并分别返回
@@ -584,8 +610,8 @@ CLI 可以显式 import verifier 与 executor；未来 worker 只能 import cont
 runtime verifier 的 transitive module graph，并拒绝 apply module、migration path 或 DDL verb常量。
 
 若实现发现 frozen migration 有真实缺陷，只能在
-`backend/db/migrations/add_advisory_phase1f_*.sql` 新增 forward migration及对应 DEV-only
-rollback；不得修改前述已发布 SQL。
+`backend/db/migrations/add_advisory_phase1f_*.sql` 新增 forward migration并完成 disposable parity；
+不得修改前述已发布 SQL，也不得为无法恢复原始历史 variant 的 canonicalization 伪造 rollback。
 
 ### 13.2 Commands
 
@@ -595,6 +621,7 @@ plan
   --env-file <path>
   --capacity-request <json>
   [--phase1e-plan <json>]...
+  --requested-operation plan|verify|apply
   --receipt-root <repo-external-path>
 
 verify
@@ -724,9 +751,10 @@ valid .env target
 
 ### 16.3 L2 Disposable PostgreSQL Integration
 
-使用 CI/local test harness 创建的一次性 PostgreSQL database。测试连接不得解析 production
-`.env` keys；测试完成后销毁整个 disposable database，而不是依赖无法包住 file-level `COMMIT`
-的外层 transaction 或不完整 rollback SQL：
+使用测试代码自行启动的 pinned PostgreSQL 16 Docker image 创建一次性 cluster/database。测试不接收
+DEV/production DSN、不读取 `.env`；每个测试销毁 database，module teardown 强制删除 container 并
+验证不存在。`AISTOCK_PHASE1F_REQUIRE_L2=1` 只让缺少 Docker 时测试明确失败，不是运行期门禁，也
+不是审批、备份或数据库连接配置。测试不依赖无法包住 file-level `COMMIT` 的外层 transaction：
 
 1. 按完整顺序 apply 所有 migrations 和跨年分区。
 2. full catalog verify `COMPATIBLE`。
@@ -738,9 +766,9 @@ valid .env target
 6. migration 中途失败时当前 migration 原子回滚、earlier committed orders 精确留证；再次 plan
    识别 `PARTIAL_ADDITIVE` 并只续跑未完成步骤。
 7. verify transaction 确认 read-only；query spy 无业务表读取、DDL/DML 或 row lock。
-8. 竞争 Advisory table lock 时 10 秒 lock timeout、长 statement 15 分钟 timeout、零自动重试、
-   当前 migration rollback 和 partial receipt 全部准确。
-9. 完成后销毁 disposable database，证明本机 DEV/production 零连接、零残留。
+8. 竞争 Advisory table lock 时实际触发 10 秒 lock timeout 并证明零自动重试；从 session readback
+   验证 statement timeout 固定为 15 分钟并验证 timeout reason 分类。
+9. 完成后销毁每个 disposable database 和整个 container，证明 DEV/production 零连接、零残留。
 
 ### 16.4 L3 Persistent DEV Release Rehearsal
 
@@ -889,7 +917,7 @@ phase1i_snapshot_state
 ## 21. Design Acceptance Index
 
 - F-601：Phase 1F 只管理 release schema，不执行业务 DML、文件构建、模型训练或 runtime activation。
-- F-602：五组已合入 migration 的 path/order/dependency/SHA/transaction mode 全部进入 typed contract。
+- F-602：六个文件 migration 与动态 partition DDL 的 path/order/dependency/SHA/transaction mode 全部进入 typed contract。
 - F-603：31 个逻辑关系及目标 partitions 的完整 catalog closure 被验证，不是表名子集。
 - F-604：Phase 0A prerequisite 只读核对并独立报告；缺口不阻止 managed schema apply，不重复
   package/Selection 验证或修改其对象。
@@ -960,6 +988,42 @@ phase1i_snapshot_state
 | F-627 | §5.2、§12-13、§16 | verifier/executor transitive import denylist | design_ready | none |
 | F-628 | §6.1、§8、§11.2、§14、§16 | session policy/hash/lock/statement timeout tests | design_ready | none |
 | F-629 | §8.1、§13.2、§15-16 | optional zero/one/many Phase 1E plan tests | design_ready | none |
+
+### 22.1 Implementation Evidence Status / 实现验收状态（2026-07-14）
+
+本轮实现已建立以下 repo-owned 交付物：
+
+```text
+backend/services/advisory_phase1/release_schema_contract.py
+backend/services/advisory_phase1/release_schema_verify_postgres.py
+backend/services/advisory_phase1/release_schema_apply_postgres.py
+backend/services/advisory_phase1/release_schema_receipt_store.py
+backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v1.json
+backend/db/migrations/add_advisory_phase1f_schema_canonicalization_20260714.sql
+scripts/advisory_phase1_release_schema.py
+backend/tests/advisory_phase1/test_release_schema*.py
+.gitattributes
+.gitignore
+```
+
+| design items | implementation evidence | current status | remaining evidence |
+|---|---|---|---|
+| F-601 to F-610 | typed frozen contract, full catalog registry, readonly verifier, exact env resolver, dual-axis plan, typed month planner | local implementation verified | none for code scope |
+| F-611 to F-613 | release executor, committed-before-readback receipt semantics, per-migration atomic rollback, partial-resume and post-commit failure tests | L2 verified | explicit persistent DEV rehearsal remains |
+| F-614 to F-619 | durable atomic no-replace receipt store, transitive import denylist, no approval/RBAC/backup/runtime-DML paths | local and L2 verified | none for code-merge scope |
+| F-620 to F-626 | separate DEV/production labels, external production authorization boundary, forward-fix policy, structured receipt/diagnostic fields, market calendar catalog prerequisite | local implementation verified | explicit DEV rehearsal and later production authorization only |
+| F-627 to F-629 | verifier/executor physical split, frozen session timeout policy, optional repeatable `--phase1e-plan`, explicit requested operation | local and L2 verified | none for code-merge scope |
+
+已完成的只读 DEV preflight 使用 `.env` 的 DEV exact keys，只读 catalog 结果为：
+`managed_schema_status=PARTIAL_ADDITIVE`、`prerequisite_status=COMPATIBLE`、
+`downstream_ready=false`，唯一 pending DDL 为 order 50 的 source-observer migration。该事实不表示
+DEV DDL 已应用，也不表示 production schema ready。未执行 DEV DDL、production DDL/DML、runtime activation、
+observer startup、Phase 1G/1H DML、Parquet 构建或模型训练。
+
+实现完成后的合并前证据：pure/static + pinned disposable PostgreSQL consolidated matrix 为
+`38 passed`，其中 L2 为 `18 passed`；fresh apply、exact reapply、九类 drift、partial resume、
+executor/file-wrapped rollback、committed-readback failure、lock timeout、session policy、query spy、
+database/container destroy 全部通过。该证据不表示 DEV/production DDL 已执行。
 
 ## 23. DESIGN-COMPLIANCE-001
 
