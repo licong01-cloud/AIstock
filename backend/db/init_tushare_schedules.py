@@ -33,8 +33,9 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
     {"dataset": "_suspend_d_close_1610", "mode": "incremental", "frequency": "daily", "at": "16:10",
      "date_strategy": "current_and_next_trading_day", "skip_auto_range": True},
 
-    # ── Phase 2a — 周末补偿检查（每天10:00触发，仅周六实际执行）────
-    {"dataset": "_weekend_compensation", "mode": "incremental", "frequency": "daily", "at": "10:00"},
+    # ── Phase 2a — 周末补偿检查（周六10:00触发）────────────────
+    {"dataset": "_weekend_compensation", "mode": "incremental", "frequency": "weekly",
+     "day_of_week": "saturday", "at": "10:00"},
 
     # ── Phase 2 — TDX 数据（收盘后即可） ────────────────────────────
     {"dataset": "kline_daily_raw",       "mode": "incremental", "frequency": "daily", "at": "16:10"},
@@ -74,7 +75,7 @@ _DEFAULT_SCHEDULES: List[Dict[str, Any]] = [
 ]
 
 DEFAULT_SCHEDULE_CATALOG_VERSION = "tushare-defaults-v1"
-DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "323c1b006259cd795cc45f557ebf6072f7b933f42cf3a6c993102114f66bc03a"
+DEFAULT_SCHEDULE_CATALOG_FINGERPRINT = "5b5e3aec97d4c833a67b7351b3f0d5284e80aaef4f102c9101f314e48c33dfc3"
 
 
 def get_default_schedule_templates() -> List[Dict[str, Any]]:
@@ -130,6 +131,26 @@ def get_default_schedule_catalog() -> Dict[str, Any]:
         "errors": errors,
         "templates": templates,
     }
+_MODE_INSENSITIVE_DEFAULT_DATASETS = frozenset({"stock_basic"})
+
+
+def _validate_default_schedules(entries: List[Dict[str, Any]]) -> None:
+    """Fail before opening a DB connection when canonical defaults conflict."""
+    exact_keys: set[tuple[str, str]] = set()
+    mode_insensitive_seen: set[str] = set()
+    for entry in entries:
+        dataset = str(entry.get("dataset") or "").strip().lower()
+        mode = str(entry.get("mode") or "incremental").strip().lower()
+        if not dataset:
+            raise ValueError("default schedule dataset is required")
+        key = (dataset, mode)
+        if key in exact_keys:
+            raise ValueError(f"duplicate default schedule: {dataset}/{mode}")
+        exact_keys.add(key)
+        if dataset in _MODE_INSENSITIVE_DEFAULT_DATASETS:
+            if dataset in mode_insensitive_seen:
+                raise ValueError(f"mode-insensitive default dataset has multiple schedules: {dataset}")
+            mode_insensitive_seen.add(dataset)
 
 
 def ensure_tushare_schedules() -> int:
@@ -137,6 +158,7 @@ def ensure_tushare_schedules() -> int:
 
     Returns the number of rows actually inserted or updated.
     """
+    _validate_default_schedules(_DEFAULT_SCHEDULES)
     load_dotenv(override=True)
     affected = 0
     with get_conn() as conn:
