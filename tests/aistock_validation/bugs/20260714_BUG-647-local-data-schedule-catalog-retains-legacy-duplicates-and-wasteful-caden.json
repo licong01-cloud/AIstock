@@ -31,8 +31,8 @@
   "expected": "Canonical schedule code must prevent duplicate logical defaults, preserve required data availability, and expose safe diagnostics before any frequency change or production cleanup.",
   "first_seen_at": "2026-07-14T10:47:12.403408Z",
   "fix_branch": null,
-  "fix_commit": "2842ca0084d4aa285259dd401ad5ecbd5a282387",
-  "fixed_at": "2026-07-14T14:20:24.615828Z",
+  "fix_commit": "8fcc80a38a60aaa60ca5c5d283f6174415648540",
+  "fixed_at": "2026-07-14T14:35:09.755005Z",
   "github_issue_number": 2107,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2107",
   "last_seen_at": "2026-07-14T10:47:12.403408Z",
@@ -40,7 +40,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2113",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2120",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -61,7 +61,7 @@
     "source_event_id": "FE-20260714-79814c59ea53"
   },
   "validation_evidence": [
-    "44 combined scheduler, CYQ routing, and local-data facade tests passed; catalog complete with reviewed fingerprint; ruff/compileall/diff-check passed; nox l0 and validation_module_registry_l0 passed; GitHub checks 17 passed, 0 failed"
+    "Original BUG-647 scheduler/CYQ/local-data matrix: 44 passed; catalog fingerprint, ruff, compile, diff-check, l0, and validation_module_registry_l0 passed. Post-merge catalog identity follow-up PR #2120: direct negative-path matrix 3 passed and all GitHub CI checks passed."
   ],
   "verification_budget": {
     "budget": "light",
