@@ -1,74 +1,72 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "Both WSL child processes exit with cuda_env.sh: line 2: LD_LIBRARY_PATH: unbound variable and persist pred_backtest_failed.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/tests/test_multi_alpha_combine_backtest.py",
+    "tests/aistock_validation/bugs/20260714_BUG-652-qe-combine-backtest-wsl-strict-shell-breaks-conda-activation-when-ld-lib.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-652",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T16:26:33.468213Z",
+  "description": "Both WSL child processes exit with cuda_env.sh: line 2: LD_LIBRARY_PATH: unbound variable and persist pred_backtest_failed.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-7c03a41fd5e6",
+      "timestamp": "2026-07-14T16:26:33.468211Z"
     }
   ],
   "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
+    "macb_2ad05dc61b7bf596_20240701_20260629_20260714T161959723608Z"
   ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "expected": "Activate the configured Conda environment before enabling nounset, then retain strict fail-loud shell behavior for the actual qrun and artifact-read commands.",
+  "first_seen_at": "2026-07-14T16:26:33.468213Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
-  "module": "aistock_backend",
+  "fix_commit": "b4bfbaf7c1e1408d39186f6c2db4fc4ca06aaa35",
+  "fixed_at": "2026-07-14T17:33:43.455146Z",
+  "github_issue_number": 2130,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2130",
+  "last_seen_at": "2026-07-14T16:26:33.468213Z",
+  "module": "multi_alpha",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2131",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "Run frozen R7A combine backtest macb_2ad05dc61b7bf596_20240701_20260629_20260714T161959723608Z on node wsl2-5080.",
   "required_verification": [
     "l0"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
+  "severity": "P2",
   "status": "fixed",
   "suspected_modules": [
-    "aistock_backend"
+    "multi_alpha"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "QE combine-backtest WSL strict shell breaks Conda activation when LD_LIBRARY_PATH is unset",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "7c03a41fd5e629274b43bb4f",
+    "source_event_id": "FE-20260714-7c03a41fd5e6"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "PR #2131 CI all green; local 41 tests plus WSL Conda strict-mode smoke passed"
   ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "light",
     "deferred_nightly_verification": {
       "modules": [
-        "aistock_backend"
+        "multi_alpha"
       ],
       "plans": [],
       "required": true,
@@ -104,7 +102,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -120,10 +118,10 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "light",
       "deferred_nightly_verification": {
         "modules": [
-          "aistock_backend"
+          "multi_alpha"
         ],
         "plans": [],
         "required": true,
@@ -159,7 +157,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "25-35%"
     }
   }
 }

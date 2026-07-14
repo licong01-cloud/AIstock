@@ -1070,7 +1070,19 @@ Phase 1E可标记功能完成或启用后续真实数据流程的条件仍包括
 Program immutable receipts完成、F-519升级为 `verified`，并保留同 batch/跨 batch identity parity。
 
 Phase 1E完成也不代表 Phase 1数据底座完成、模型可训练、实时荐股可用或任何交易能力可用。
-下一阶段仍按顺序执行 Phase 1F schema verification、Phase 1G observation/source DML、Phase 1H
-label/universe DML、Phase 1I durable store/首个 SEALED snapshot和 Phase 1J handoff。Phase 1F 的
-唯一实施级详细设计为 `docs/architecture/advisory_phase1f_release_schema_verification_f2_design_20260714.md`，
-当前状态为 `design_ready`、代码尚未开始；它不依赖 persistent dual-track L4 完成，不执行 Phase 1G/1H DML。
+后续仍按Phase 1F.1 schema parity、Phase 1G observation/source DML、Phase 1H label/universe DML、
+Phase 1I durable store/首个SEALED snapshot和Phase 1J handoff顺序执行。Phase 1F v1已由PR `#2114`
+合入并完成DEV persistent L3 plan/apply/verify/exact-reapply；v1 managed/prerequisite均为`COMPATIBLE`、
+receipt中`downstream_ready=true`，生产DDL仍为独立`pending`状态。后续复核发现v1 contract未覆盖
+lineage/candidate月分区且错误设置局部content hash全局唯一，因此不能被Phase 1G persistent DML直接
+消费。Phase 1F.1修正设计为
+`docs/architecture/advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`，
+当前 Phase 1F.1 schema代码已完成并通过 disposable PostgreSQL L2；DEV/production DDL均未执行。上述schema事实也不替代本阶段仍缺少的真实single/multi Alpha
+persistent L4输入。
+
+Phase 1G 的唯一实施级详细设计为
+`docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md`，当前为
+`design_ready / implementation_not_started`，代码以Phase 1F.1 v2 schema为前提。它消费本计划的 exact request/template/hash，在相同 cutoff
+重放 source resolution并冻结 revision，使用 immutable DSE/artifact/package 的 Advisory-owned 只读投影
+写入 observation capture；不补造 source event、不调用 Selection/推理、不重复验证策略包，也不执行
+DDL、回测读取、模型训练、shared runtime activation或任何角色/审批流程。

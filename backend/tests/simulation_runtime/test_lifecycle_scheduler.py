@@ -303,18 +303,38 @@ def _evidence(
 
 
 class FakePackageRepository:
-    def __init__(self, *, package_id: str, manifest_sha256: str) -> None:
+    def __init__(
+        self,
+        *,
+        package_id: str,
+        manifest_sha256: str,
+        package_status: PackageStatus = PackageStatus.SELECTION_ENABLED,
+    ) -> None:
         self.package_id = package_id
         self.manifest_sha256 = manifest_sha256
+        self.package_status = package_status
+        self.calls: list[str] = []
 
     def get(self, package_id: str) -> Any:
+        self.calls.append(package_id)
         if package_id != self.package_id:
             raise DataUnavailableError("fake StrategyPackage does not exist", context={"package_id": package_id})
-        return SimpleNamespace(package_id=self.package_id, manifest_sha256=self.manifest_sha256)
+        return SimpleNamespace(
+            package_id=self.package_id,
+            manifest_sha256=self.manifest_sha256,
+            package_status=self.package_status,
+        )
 
 
 class FakeSelectionService:
-    def __init__(self, release, *, candidates: list[SelectionCandidate] | None = None, valid_no_candidate: bool = False) -> None:
+    def __init__(
+        self,
+        release,
+        *,
+        candidates: list[SelectionCandidate] | None = None,
+        valid_no_candidate: bool = False,
+        package_status: PackageStatus = PackageStatus.SELECTION_ENABLED,
+    ) -> None:
         self.release = release
         self.candidates = list(candidates or [])
         self.valid_no_candidate = valid_no_candidate
@@ -322,6 +342,7 @@ class FakeSelectionService:
         self.package_repository = FakePackageRepository(
             package_id=release.package_id,
             manifest_sha256=release.manifest_sha256,
+            package_status=package_status,
         )
 
     def run_selection(self, **kwargs):
@@ -1724,6 +1745,54 @@ def test_scheduler_keeps_retired_sim_bindings_out_of_selection() -> None:
     assert result.results == ()
 
 
+def test_scheduler_skips_existing_bindings_when_strategy_package_is_retired() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    selection = FakeSelectionService(
+        release,
+        candidates=_candidate_rows(),
+        package_status=PackageStatus.RETIRED,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(),
+    )
+
+    result = scheduler.run_once(trade_date=TRADE_DATE, data_source="DB_HISTORICAL", submit=True)
+
+    assert result.total_bindings == 2
+    assert result.planned_count == 0
+    assert result.submitted_count == 0
+    assert result.failed_count == 0
+    assert {item.binding_id for item in result.results} == {
+        local_binding.binding_id,
+        qmt_binding.binding_id,
+    }
+    assert {item.status for item in result.results} == {"SKIPPED_RETIRED_PACKAGE"}
+    assert all(item.run is None and item.execution_plan is None for item in result.results)
+    assert all(
+        item.lifecycle_diagnostic
+        == {
+            "schema_version": "simulation_package_lifecycle_skip_v1",
+            "reason_code": "SIMULATION_BINDING_PACKAGE_RETIRED",
+            "stage": "BINDING_SELECTION",
+            "action": "SKIP",
+            "binding_id": item.binding_id,
+            "strategy_id": item.strategy_id,
+            "package_id": release.package_id,
+            "package_status": "RETIRED",
+            "broker_backend": item.broker_backend.value,
+            "broker_called": False,
+            "strategy_package_revalidation_performed": False,
+        }
+        for item in result.results
+    )
+    assert selection.calls == []
+    assert selection.package_repository.calls == [release.package_id]
+    assert repo.list_simulation_daily_runs(limit=10) == []
+
+
 @pytest.mark.parametrize(
     ("exc_cls", "reason_code"),
     (
@@ -2397,6 +2466,50 @@ def test_scheduler_rolls_forward_expired_localsim_binding_for_unattended_daily_r
         limit=10,
     )
     assert len([binding for binding in local_bindings if binding.effective_from == next_trade_day]) == 1
+
+
+def test_scheduler_does_not_roll_forward_retired_strategy_package_bindings() -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    prepared_day = TRADE_DATE
+    next_trade_day = TRADE_DATE + timedelta(days=1)
+    for binding in (local_binding, qmt_binding):
+        expired = binding.model_copy(update={"effective_from": prepared_day, "effective_to": prepared_day})
+        repo.bindings[expired.binding_id] = expired
+    selection = FakeSelectionService(
+        release,
+        candidates=_candidate_rows(),
+        package_status=PackageStatus.RETIRED,
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(),
+    )
+
+    result = scheduler.run_once(
+        trade_date=next_trade_day,
+        data_source="DB_HISTORICAL",
+        submit=True,
+    )
+
+    assert result.total_bindings == 2
+    assert result.planned_count == 0
+    assert result.submitted_count == 0
+    assert {item.status for item in result.results} == {"SKIPPED_RETIRED_PACKAGE"}
+    assert {item.binding_id for item in result.results} == {
+        local_binding.binding_id,
+        qmt_binding.binding_id,
+    }
+    assert all(item.lifecycle_diagnostic["broker_called"] is False for item in result.results)
+    assert all(
+        item.lifecycle_diagnostic["strategy_package_revalidation_performed"] is False
+        for item in result.results
+    )
+    assert selection.calls == []
+    assert selection.package_repository.calls == [release.package_id]
+    assert len(repo.bindings) == 2
+    assert repo.list_simulation_daily_runs(limit=10) == []
 
 
 def test_scheduler_roll_forward_uses_current_package_manifest_and_rebases_side_effect_free_same_day_run() -> None:
@@ -6102,6 +6215,44 @@ def test_background_scheduler_runs_planning_window_and_keeps_submit_disabled_by_
     assert result["summary"]["planned_count"] == 2
     assert background.status()["default_submit"] is False
     assert background.status()["last_result"]["summary"]["total_bindings"] == 2
+
+
+def test_background_scheduler_exposes_retired_package_skip_without_selection_or_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release, local_binding, qmt_binding, repo = _release_and_bindings()
+    assert local_binding is not None
+    selection = FakeSelectionService(
+        release,
+        candidates=_candidate_rows(),
+        package_status=PackageStatus.RETIRED,
+    )
+    lifecycle = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=selection,
+        context_provider=StaticSimulationRunContextProvider(),
+    )
+    monkeypatch.setenv("SIMULATION_RUNTIME_SCHEDULER_DEFAULT_SUBMIT", "true")
+    background = SimulationLifecycleBackgroundScheduler(
+        lifecycle_scheduler=lifecycle,
+        trading_calendar_service=StaticTradingCalendarProvider([date(2026, 5, 20), TRADE_DATE]),
+    )
+
+    result = background.run_once(as_of_time=datetime(2026, 5, 21, 1, 22, tzinfo=UTC))
+
+    assert result["should_run"] is True
+    assert result["summary"]["retired_package_skipped_count"] == 2
+    assert result["summary"]["planned_count"] == 0
+    assert result["summary"]["submitted_count"] == 0
+    assert result["errors"] == []
+    assert {item["status"] for item in result["processed"]} == {"SKIPPED_RETIRED_PACKAGE"}
+    assert all(
+        item["lifecycle_diagnostic"]["reason_code"] == "SIMULATION_BINDING_PACKAGE_RETIRED"
+        for item in result["processed"]
+    )
+    assert all(item["lifecycle_diagnostic"]["broker_called"] is False for item in result["processed"])
+    assert selection.calls == []
+    assert repo.list_simulation_daily_runs(limit=10) == []
 
 
 def test_background_scheduler_stop_shuts_down_selection_inference_executor() -> None:

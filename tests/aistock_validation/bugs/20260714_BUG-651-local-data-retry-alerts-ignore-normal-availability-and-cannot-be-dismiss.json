@@ -1,53 +1,59 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "suspend_d and stock_st_events can reach retry_exhausted alerts when data is not expected to update yet or has no business change; the operator alert has no dismiss action and clicking it navigates away from the current workflow. Analyze dataset availability semantics, suppress non-actionable alerts, and add an accessible non-navigating dismiss control without altering data or production schedules.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "backend/services/data_refresh_audit.py",
+    "backend/tests/test_dataset_refresh_audit.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "frontend/src/app/DataAlertsToast.tsx",
+    "frontend/tests/local-data/data-alerts-toast.spec.ts",
+    "tests/aistock_validation/bugs/20260714_BUG-651-local-data-retry-alerts-ignore-normal-availability-and-cannot-be-dismiss.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-651",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T16:12:56.197853Z",
+  "description": "suspend_d and stock_st_events can reach retry_exhausted alerts when data is not expected to update yet or has no business change; the operator alert has no dismiss action and clicking it navigates away from the current workflow. Analyze dataset availability semantics, suppress non-actionable alerts, and add an accessible non-navigating dismiss control without altering data or production schedules.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-9f3263b026cf",
+      "timestamp": "2026-07-14T16:12:56.197848Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Scoped BUG-651 implementation to refresh audit monotonicity, zero-row contract regression coverage, and non-navigating alert dismissal.",
+      "timestamp": "2026-07-14T16:32:53.7894456Z"
     }
   ],
-  "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
-  ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "first_seen_at": "2026-07-14T16:12:56.197853Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
+  "fix_commit": "c11e5523574825b5177897c5433899b040292035",
+  "fixed_at": "2026-07-14T17:43:34.680158Z",
+  "github_issue_number": 2128,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2128",
+  "last_seen_at": "2026-07-14T16:12:56.197853Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2132",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "reproduce_command": "n/a",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -56,13 +62,15 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "Local data retry alerts ignore normal availability and cannot be dismissed",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "9f3263b026cf2e597c3b7e15",
+    "source_event_id": "FE-20260714-9f3263b026cf"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "rebased targeted pytest -> 25 passed",
+    "rebased nox l0 validation_module_registry_l0 -> passed",
+    "GitHub CI after rebase -> 20 passed, 0 failed"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -161,5 +169,6 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }

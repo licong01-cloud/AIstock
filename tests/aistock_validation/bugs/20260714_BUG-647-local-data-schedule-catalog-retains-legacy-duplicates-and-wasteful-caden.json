@@ -1,47 +1,46 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "Live state has an extra stock_basic incremental schedule; suspend_d and anns_metadata produce hundreds of weekend or overnight runs; weekend compensation created 31 skipped jobs in 45 days.",
   "allowed_write_scope": [
     "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "tests/aistock_validation/bugs/20260714_BUG-647-local-data-schedule-catalog-retains-legacy-duplicates-and-wasteful-caden.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-647",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T10:47:12.403408Z",
+  "description": "Live state has an extra stock_basic incremental schedule; suspend_d and anns_metadata produce hundreds of weekend or overnight runs; weekend compensation created 31 skipped jobs in 45 days.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-79814c59ea53",
+      "timestamp": "2026-07-14T10:47:12.403405Z"
     }
   ],
   "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
+    "Read-only 45-day audit: extra stock_basic 18:31 schedule, suspend_d 299 weekend/411 overnight hourly runs, anns_metadata 301 weekend/411 overnight runs, and 31 weekend-compensation no-op jobs."
   ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "expected": "Canonical schedule code must prevent duplicate logical defaults, preserve required data availability, and expose safe diagnostics before any frequency change or production cleanup.",
+  "first_seen_at": "2026-07-14T10:47:12.403408Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
+  "fix_commit": "8fcc80a38a60aaa60ca5c5d283f6174415648540",
+  "fixed_at": "2026-07-14T14:35:09.755005Z",
+  "github_issue_number": 2107,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2107",
+  "last_seen_at": "2026-07-14T10:47:12.403408Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2120",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,21 +50,21 @@
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
-  "severity": "P1",
+  "severity": "P2",
   "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "local-data schedule catalog retains legacy duplicates and wasteful cadence",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "79814c59ea53e4ec9e8b3d92",
+    "source_event_id": "FE-20260714-79814c59ea53"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "Original BUG-647 scheduler/CYQ/local-data matrix: 44 passed; catalog fingerprint, ruff, compile, diff-check, l0, and validation_module_registry_l0 passed. Post-merge catalog identity follow-up PR #2120: direct negative-path matrix 3 passed and all GitHub CI checks passed."
   ],
   "verification_budget": {
-    "budget": "standard",
+    "budget": "light",
     "deferred_nightly_verification": {
       "modules": [
         "aistock_backend"
@@ -104,7 +103,7 @@
       "l0"
     ],
     "schema_version": "aistock_verification_budget_v1",
-    "target_cost_percent_of_legacy": "30-45%"
+    "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
@@ -120,7 +119,7 @@
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
     "verification_budget": {
-      "budget": "standard",
+      "budget": "light",
       "deferred_nightly_verification": {
         "modules": [
           "aistock_backend"
@@ -159,7 +158,7 @@
         "l0"
       ],
       "schema_version": "aistock_verification_budget_v1",
-      "target_cost_percent_of_legacy": "30-45%"
+      "target_cost_percent_of_legacy": "25-35%"
     }
   }
 }

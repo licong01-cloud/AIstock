@@ -76,8 +76,14 @@ _AUTO_RETRY_CHECK_ALIASES = {
     # sw_sector is the scheduled composite dataset; sw_daily is the table checked.
     "sw_sector": "sw_daily",
 }
+_AUTO_RETRY_SCHEDULE_ALIASES = {physical: scheduled for scheduled, physical in _AUTO_RETRY_CHECK_ALIASES.items()}
 _SCHEDULE_ERROR_CLEAR_STATUSES = frozenset({"success"})
 _STALE_QUEUED_JOB_MINUTES = 10
+_TARGET_STALE_QUEUED_JOB_MINUTES = _AUTO_RETRY_LEASE_MINUTES
+_AVAILABILITY_LAG_TRADING_DAYS = {"margin_detail": 1}
+_AVAILABILITY_READY_AT = {"margin_detail": dt.time(19, 10)}
+_MODE_INSENSITIVE_SCHEDULE_DATASETS = frozenset({"stock_basic"})
+_HIGH_FREQUENCY_REVIEW_DATASETS = frozenset({"suspend_d", "anns_metadata"})
 
 # TDX datasets whose incremental mode should go through Go backend API (not ingest_incremental.py)
 _GO_INCREMENTAL_DATASETS: Dict[str, Dict[str, str]] = {
@@ -542,7 +548,7 @@ class TDXScheduler:
         mode: Optional[str] = None,
         reason: str = "scheduler_stale_queued_reconciliation",
     ) -> int:
-        """Fail schedule-created queued jobs that cannot be owned after restart."""
+        """Fail stale scheduler-owned queued jobs that cannot be owned after restart."""
 
         minutes = max(int(older_than_minutes), 0)
         ds = (dataset or "").strip().lower() or None
@@ -560,15 +566,23 @@ class TDXScheduler:
                    summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
              WHERE status IN ('queued', 'pending')
                AND started_at IS NULL
-               AND created_at < NOW() - (%s || ' minutes')::interval
-               AND COALESCE(summary->>'triggered_by', '') = 'schedule'
+               AND (
+                    (COALESCE(summary->>'triggered_by', '') = 'schedule'
+                     AND created_at < NOW() - (%s || ' minutes')::interval)
+                 OR (COALESCE(summary->>'triggered_by', '') = 'data_sync_target_due'
+                     AND created_at < NOW() - (%s || ' minutes')::interval)
+               )
                AND (%s IS NULL OR lower(summary->>'dataset') = %s)
                AND (%s IS NULL OR lower(COALESCE(summary->>'mode', '')) = %s)
-             RETURNING job_id, summary->>'schedule_id' AS schedule_id
+             RETURNING job_id,
+                       summary->>'schedule_id' AS schedule_id,
+                       summary->>'data_sync_target_id' AS data_sync_target_id,
+                       summary->>'triggered_by' AS triggered_by
             """,
             (
                 json.dumps(payload, ensure_ascii=False, default=str),
                 str(minutes),
+                str(_TARGET_STALE_QUEUED_JOB_MINUTES),
                 ds,
                 ds,
                 md,
@@ -604,6 +618,33 @@ class TDXScheduler:
                     )
                 except Exception as exc:  # noqa: BLE001
                     _logger.warning("failed to mark stale schedule %s as failed: %s", schedule_id, exc)
+            for row in rows:
+                target_id = str(row.get("data_sync_target_id") or "").strip()
+                if not target_id:
+                    continue
+                retry_after = _now() + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES)
+                context = {
+                    "stale_reconciled": True,
+                    "stale_reason": reason,
+                    "job_id": str(row.get("job_id") or ""),
+                }
+                try:
+                    repo = DataSyncTargetRepository()
+                    repo.mark_retry(target_id, retry_after=retry_after, reason=reason, context=context)
+                    repo.record_attempt(
+                        DataSyncAttemptRecord(
+                            target_id=target_id,
+                            status="retry",
+                            trigger_source="stale_queued_reconciliation",
+                            job_id=str(row.get("job_id") or "") or None,
+                            finished_at=_now(),
+                            error_message=reason,
+                            retry_after=retry_after,
+                            context_json=context,
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning("failed to release stale target job %s: %s", row.get("job_id"), exc)
         return count
 
     def _job_update_outcome(self, job_id: uuid.UUID) -> Dict[str, Any]:
@@ -631,6 +672,88 @@ class TDXScheduler:
         checker = AuditBackedDataHealthChecker(self._db_cfg)
         return checker.check_dataset(check_dataset, expected_date=expected_date)
 
+    @staticmethod
+    def _schedule_hygiene_findings(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for row in rows:
+            normalized.append(
+                {
+                    "schedule_id": str(row.get("schedule_id") or ""),
+                    "dataset": str(row.get("dataset") or "").strip().lower(),
+                    "mode": str(row.get("mode") or "incremental").strip().lower(),
+                    "frequency": str(row.get("frequency") or "").strip().lower(),
+                    "options": _parse_options(row.get("options")),
+                }
+            )
+
+        findings: List[Dict[str, Any]] = []
+        for dataset in sorted(_MODE_INSENSITIVE_SCHEDULE_DATASETS):
+            matches = [row for row in normalized if row["dataset"] == dataset]
+            if len(matches) > 1:
+                findings.append(
+                    {
+                        "code": "duplicate_mode_insensitive_dataset",
+                        "dataset": dataset,
+                        "severity": "warning",
+                        "schedule_ids": [row["schedule_id"] for row in matches],
+                        "modes": [row["mode"] for row in matches],
+                        "action": "review_only_no_automatic_delete",
+                    }
+                )
+
+        for row in normalized:
+            frequency = row["frequency"]
+            dataset = row["dataset"]
+            if (
+                dataset in _HIGH_FREQUENCY_REVIEW_DATASETS
+                and frequency.endswith("h")
+                and frequency[:-1].isdigit()
+                and int(frequency[:-1]) <= 1
+                and not row["options"].get("active_windows")
+            ):
+                findings.append(
+                    {
+                        "code": "unbounded_high_frequency_review",
+                        "dataset": dataset,
+                        "severity": "info",
+                        "schedule_ids": [row["schedule_id"]],
+                        "frequency": frequency,
+                        "action": "preserve_until_availability_window_is_approved",
+                    }
+                )
+
+        suspend_hourly = any(row["dataset"] == "suspend_d" and row["frequency"].endswith("h") for row in normalized)
+        suspend_fixed = [row["schedule_id"] for row in normalized if row["dataset"].startswith("_suspend_d_")]
+        if suspend_hourly and suspend_fixed:
+            findings.append(
+                {
+                    "code": "overlapping_suspend_refresh_cadence",
+                    "dataset": "suspend_d",
+                    "severity": "info",
+                    "schedule_ids": suspend_fixed,
+                    "action": "review_only_preserve_pretrade_coverage",
+                }
+            )
+
+        for row in normalized:
+            if row["dataset"] != "_weekend_compensation":
+                continue
+            options = row["options"]
+            if (
+                row["frequency"] not in {"weekly", "week", "1w"}
+                or str(options.get("day_of_week") or "").strip().lower() not in {"saturday", "sat"}
+            ):
+                findings.append(
+                    {
+                        "code": "weekend_compensation_not_weekly",
+                        "dataset": row["dataset"],
+                        "severity": "warning",
+                        "schedule_ids": [row["schedule_id"]],
+                        "action": "align_with_canonical_saturday_schedule",
+                    }
+                )
+        return findings
+
     # ------------------------------------------------------------------
     # schedule management
     def refresh_schedules(self) -> None:
@@ -653,6 +776,14 @@ class TDXScheduler:
              WHERE enabled = TRUE
             """
         )
+        findings = self._schedule_hygiene_findings(ingestion)
+        findings_fingerprint = _json_dump(findings)
+        if findings_fingerprint != getattr(self, "_schedule_hygiene_fingerprint", None):
+            for finding in findings:
+                log_fn = _logger.warning if finding.get("severity") == "warning" else _logger.info
+                log_fn("schedule hygiene finding: %s", _json_dump(finding))
+            self._schedule_hygiene_fingerprint = findings_fingerprint
+        self._last_schedule_hygiene_findings = findings
         self._update_jobs(testing, ingestion)
         try:
             self._reconcile_due_data_sync_targets()
@@ -673,6 +804,21 @@ class TDXScheduler:
             and not _is_auto_retry_excluded_dataset(str(r.get("dataset")))
         }
 
+    @staticmethod
+    def _retry_schedule_dataset(dataset: str, metadata: Any = None) -> str:
+        health_dataset = (dataset or "").strip().lower()
+        metadata_obj = metadata
+        if isinstance(metadata_obj, str):
+            try:
+                metadata_obj = json.loads(metadata_obj)
+            except (TypeError, ValueError):
+                metadata_obj = {}
+        if isinstance(metadata_obj, dict):
+            explicit_owner = str(metadata_obj.get("schedule_dataset") or "").strip().lower()
+            if explicit_owner:
+                return explicit_owner
+        return _AUTO_RETRY_SCHEDULE_ALIASES.get(health_dataset, health_dataset)
+
     def _reconcile_due_data_sync_targets(self, schedule_map: Optional[Dict[str, Dict[str, Any]]] = None) -> list[str]:
         """Resume persisted retry targets that survived scheduler restart."""
 
@@ -684,27 +830,32 @@ class TDXScheduler:
             return []
         if not due_targets:
             return []
-        schedule_map = schedule_map or self._schedule_map_for_enabled_datasets()
+        if schedule_map is None:
+            schedule_map = self._schedule_map_for_enabled_datasets()
         submitted: list[str] = []
         seen: Set[str] = set()
         now = _now()
         for target in due_targets:
-            ds = str(target.get("dataset") or "").strip().lower()
-            if not ds or ds in seen or _is_auto_retry_excluded_dataset(ds):
+            health_dataset = str(target.get("dataset") or "").strip().lower()
+            schedule_dataset = self._retry_schedule_dataset(health_dataset, target.get("metadata"))
+            if (
+                not health_dataset
+                or not schedule_dataset
+                or schedule_dataset in seen
+                or _is_auto_retry_excluded_dataset(schedule_dataset)
+            ):
                 continue
-            seen.add(ds)
-            sched = schedule_map.get(ds)
-            if not sched:
-                continue
-            retry_mode = sched.get("mode") or "incremental"
+            seen.add(schedule_dataset)
+            sched = schedule_map.get(schedule_dataset)
+            retry_mode = (sched or {}).get("mode") or "incremental"
             target_id = str(target.get("target_id") or "").strip()
             target_date = self._coerce_target_date(target.get("target_date"))
 
             try:
-                readiness = self._check_dataset_recovered(ds, target_date)
+                readiness = self._check_dataset_recovered(health_dataset, target_date)
             except Exception as exc:  # noqa: BLE001
                 readiness = None
-                _logger.warning("target retry: precheck failed for %s/%s: %s", ds, target_date, exc)
+                _logger.warning("target retry: precheck failed for %s/%s: %s", health_dataset, target_date, exc)
             if readiness is not None and getattr(readiness, "status", None) == "ok":
                 metadata = {
                     "precheck": "already_recovered",
@@ -723,6 +874,8 @@ class TDXScheduler:
                 continue
 
             required_before = self._coerce_target_datetime(target.get("required_before"))
+            if required_before is None:
+                required_before = self._final_deadline_for_target(schedule_dataset, target_date)
             if required_before is not None and now >= required_before:
                 failure_category = str(
                     getattr(readiness, "failure_category", None) or "target_deadline_expired"
@@ -747,7 +900,7 @@ class TDXScheduler:
                     [
                         {
                             "target_id": target_id,
-                            "dataset": ds,
+                            "dataset": health_dataset,
                             "target_date": target_date,
                             "target_status": "final_blocked",
                             "failure_category": failure_category,
@@ -758,9 +911,35 @@ class TDXScheduler:
                 )
                 continue
 
-            if not self._target_retry_window_open(ds, now=now):
+            if not sched:
+                retry_after = now + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES)
+                metadata = {
+                    "precheck": "schedule_owner_missing",
+                    "health_dataset": health_dataset,
+                    "schedule_dataset": schedule_dataset,
+                }
+                repo.mark_retry(
+                    target_id,
+                    retry_after=retry_after,
+                    reason="schedule_owner_missing",
+                    context=metadata,
+                )
+                repo.record_attempt(
+                    DataSyncAttemptRecord(
+                        target_id=target_id,
+                        status="retry",
+                        trigger_source="data_sync_target_precheck",
+                        finished_at=now,
+                        error_message="schedule_owner_missing",
+                        retry_after=retry_after,
+                        context_json=metadata,
+                    )
+                )
                 continue
-            if self._recent_dataset_submission_exists(ds, retry_mode):
+
+            if not self._target_retry_window_open(schedule_dataset, target_date=target_date, now=now):
+                continue
+            if self._recent_dataset_submission_exists(schedule_dataset, retry_mode):
                 continue
             try:
                 claimed = repo.claim_fillable_target(
@@ -776,6 +955,7 @@ class TDXScheduler:
                     retry_mode=retry_mode,
                     triggered_by="data_sync_target_due",
                     attempt=int(target.get("attempt_count") or 0) + 1,
+                    execution_dataset=schedule_dataset,
                 )
                 if job_id is None:
                     repo.mark_retry(
@@ -785,9 +965,9 @@ class TDXScheduler:
                         context={"precheck": "duplicate_running"},
                     )
                     continue
-                submitted.append(ds)
+                submitted.append(schedule_dataset)
             except Exception as exc:  # noqa: BLE001
-                _logger.warning("target retry: submit failed for %s: %s", ds, exc)
+                _logger.warning("target retry: submit failed for %s: %s", schedule_dataset, exc)
         return submitted
 
     @staticmethod
@@ -822,14 +1002,25 @@ class TDXScheduler:
         self,
         dataset: str,
         *,
+        target_date: Optional[dt.date] = None,
         now: Optional[dt.datetime] = None,
     ) -> bool:
-        ready_at = _POST_CLOSE_RETRY_READY_AT.get((dataset or "").strip().lower())
-        if ready_at is None:
-            return True
+        dataset_key = (dataset or "").strip().lower()
         current = now or _now()
         if current.tzinfo is None:
             current = current.replace(tzinfo=dt.timezone.utc)
+        if target_date is not None and dataset_key in _AVAILABILITY_LAG_TRADING_DAYS:
+            try:
+                availability_date = self._availability_date_for_target(dataset_key, target_date)
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("target retry: availability window unavailable for %s/%s: %s", dataset_key, target_date, exc)
+                return False
+            ready_at = _AVAILABILITY_READY_AT[dataset_key]
+            ready_datetime = dt.datetime.combine(availability_date, ready_at, tzinfo=_CN_TZ)
+            return current.astimezone(_CN_TZ) >= ready_datetime
+        ready_at = _POST_CLOSE_RETRY_READY_AT.get(dataset_key)
+        if ready_at is None:
+            return True
         return current.astimezone(_CN_TZ).time() >= ready_at
 
     def _update_jobs(
@@ -993,6 +1184,26 @@ class TDXScheduler:
     def _next_trading_day(self, anchor_date: dt.date, *, inclusive: bool = False) -> dt.date:
         return self._trading_calendar_service().next_trading_day(anchor_date, inclusive=inclusive)
 
+    def _availability_adjusted_target_date(
+        self,
+        dataset: str,
+        expected_date: Optional[dt.date],
+    ) -> Optional[dt.date]:
+        adjusted = expected_date
+        lag_days = _AVAILABILITY_LAG_TRADING_DAYS.get((dataset or "").strip().lower(), 0)
+        for _ in range(lag_days):
+            if adjusted is None:
+                return None
+            adjusted = self._latest_trading_day(adjusted - dt.timedelta(days=1))
+        return adjusted
+
+    def _availability_date_for_target(self, dataset: str, target_date: dt.date) -> dt.date:
+        availability_date = target_date
+        lag_days = _AVAILABILITY_LAG_TRADING_DAYS.get((dataset or "").strip().lower(), 0)
+        for _ in range(lag_days):
+            availability_date = self._next_trading_day(availability_date)
+        return availability_date
+
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
         """Return (start_date, end_date) for incremental catch-up.
 
@@ -1050,6 +1261,7 @@ class TDXScheduler:
             latest_date: Optional[dt.date] = dt.date.today()
         else:
             latest_date = self._latest_trading_day()
+            latest_date = self._availability_adjusted_target_date(dataset, latest_date)
         if latest_date is None:
             return None, None
 
@@ -1110,9 +1322,23 @@ class TDXScheduler:
         raise RuntimeError(f"unsupported suspend_d date_strategy: {date_strategy}")
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _weekend_compensation_due(today: Optional[dt.date] = None) -> bool:
+        return (today or dt.date.today()).weekday() == 5
+
     def _scheduled_ingestion_run(
         self, schedule_id: str, dataset: str, mode: str, options: Dict[str, Any], frequency: str = ""
     ) -> None:
+        if (dataset or "").strip().lower() == "_weekend_compensation" and not self._weekend_compensation_due():
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_run=_now(),
+                    last_status="skipped",
+                    last_error="not_saturday",
+                    next_run=self._next_run_for(schedule_id),
+                )
+            return
         if not self._claim_scheduled_fire(schedule_id, dataset, mode, frequency):
             return
 
@@ -1361,29 +1587,32 @@ class TDXScheduler:
                     return dt.date.fromisoformat(str(raw))
                 except ValueError:
                     continue
-        return self._latest_trading_day()
+        latest_trading_day = self._latest_trading_day()
+        return self._availability_adjusted_target_date(dataset, latest_trading_day)
 
     def _final_deadline_for_target(self, dataset: str, target_date: Optional[dt.date]) -> Optional[dt.datetime]:
         if target_date is None:
             return None
-        hour, minute = (23, 30)
-        if dataset in {"cyq_perf", "cyq_chips", "bak_basic", "margin_detail", "sw_daily", "sw_sector"}:
-            hour, minute = (23, 30)
-        local_deadline = dt.datetime.combine(target_date, dt.time(hour, minute), tzinfo=_CN_TZ)
+        dataset_key = (dataset or "").strip().lower()
+        deadline_date = self._availability_date_for_target(dataset_key, target_date)
+        local_deadline = dt.datetime.combine(deadline_date, dt.time(23, 30), tzinfo=_CN_TZ)
         return local_deadline.astimezone(dt.timezone.utc)
 
     def _record_retry_target(self, dataset: str, target_date: dt.date, **kwargs: Any) -> str | None:
         try:
+            dataset_key = (dataset or "").strip().lower()
+            metadata = dict(kwargs.get("metadata") or {})
+            metadata.setdefault("schedule_dataset", self._retry_schedule_dataset(dataset_key, metadata))
             row = DataSyncTargetRepository().upsert_target(
                 DataSyncTargetRecord(
-                    dataset=(dataset or "").strip().lower(),
+                    dataset=dataset_key,
                     data_source=str(kwargs.get("data_source") or "readiness_gate"),
                     target_date=target_date,
                     target_status=str(kwargs.get("target_status") or "retry"),
                     target_scope=kwargs.get("target_scope") or {},
                     next_retry_at=kwargs.get("next_retry_at"),
                     required_before=kwargs.get("required_before"),
-                    metadata=kwargs.get("metadata") or {},
+                    metadata=metadata,
                 )
             )
             return str(row.get("target_id") or "") or None
@@ -1399,14 +1628,17 @@ class TDXScheduler:
         retry_mode: str,
         triggered_by: str,
         attempt: int,
+        execution_dataset: Optional[str] = None,
     ) -> Optional[uuid.UUID]:
-        ds = str(target.get("dataset") or "").strip().lower()
+        health_dataset = str(target.get("dataset") or "").strip().lower()
+        ds = str(execution_dataset or health_dataset).strip().lower()
         target_id = str(target.get("target_id") or "").strip()
         target_date = self._coerce_target_date(target.get("target_date"))
         required_before = self._coerce_target_datetime(target.get("required_before"))
         retry_opts: Dict[str, Any] = {
             "triggered_by": triggered_by,
             "data_sync_target_id": target_id,
+            "data_sync_target_dataset": health_dataset,
         }
         if target_date is not None:
             target_date_text = target_date.isoformat()
@@ -1448,6 +1680,7 @@ class TDXScheduler:
                             "triggered_by": triggered_by,
                             "attempt": attempt,
                             "data_sync_target_id": target_id,
+                            "data_sync_target_dataset": health_dataset,
                             "target_date": target_date.isoformat() if target_date else None,
                         }
                     ),
@@ -1489,11 +1722,12 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
 
-        target_date = self._target_date_for_retry(dataset, options)
+        health_dataset = str(options.get("data_sync_target_dataset") or dataset).strip().lower()
+        target_date = self._target_date_for_retry(health_dataset, options)
         recovered = False
         failure_category = "not_ready_after_retry"
         try:
-            readiness = self._check_dataset_recovered(dataset, target_date)
+            readiness = self._check_dataset_recovered(health_dataset, target_date)
             if readiness is not None and getattr(readiness, "status", None) == "ok":
                 recovered = True
             elif readiness is not None and getattr(readiness, "failure_category", None):
@@ -1507,6 +1741,8 @@ class TDXScheduler:
             "job_id": options.get("job_id"),
             "triggered_by": options.get("triggered_by"),
             "finalizer": "data_sync_target_retry",
+            "health_dataset": health_dataset,
+            "schedule_dataset": dataset,
         }
         try:
             if recovered:
@@ -1525,7 +1761,7 @@ class TDXScheduler:
 
             final_deadline_at = self._coerce_target_datetime(options.get("target_required_before"))
             if final_deadline_at is None:
-                final_deadline_at = self._final_deadline_for_target(dataset, target_date)
+                final_deadline_at = self._final_deadline_for_target(health_dataset, target_date)
             after_deadline = final_deadline_at is not None and now >= final_deadline_at
             if after_deadline:
                 repo.mark_final_blocked(target_id, reason=error_message or failure_category, context=metadata)
@@ -1544,7 +1780,7 @@ class TDXScheduler:
                     [
                         {
                             "target_id": target_id,
-                            "dataset": dataset,
+                            "dataset": health_dataset,
                             "target_date": target_date,
                             "target_status": "final_blocked",
                             "failure_category": failure_category,
@@ -2776,18 +3012,23 @@ class TDXScheduler:
         for result in check_results:
             if getattr(result, "status", "ok") == "ok":
                 continue
-            dataset = str(getattr(result, "dataset", "") or "")
-            expected_date = getattr(result, "expected_date", None)
+            dataset = str(getattr(result, "dataset", "") or "").strip().lower()
+            raw_expected_date = self._coerce_target_date(getattr(result, "expected_date", None))
+            expected_date = self._availability_adjusted_target_date(dataset, raw_expected_date)
             if not dataset or expected_date is None:
                 continue
             try:
                 summary = result.summary() if hasattr(result, "summary") else {}
+                schedule_dataset = self._retry_schedule_dataset(dataset)
+                retry_after = _now() + dt.timedelta(minutes=_AUTO_RETRY_DELAY_MINUTES)
                 row = repo.upsert_target(
                     DataSyncTargetRecord(
                         dataset=dataset,
                         data_source="readiness_gate",
                         target_date=expected_date,
                         target_status="retry",
+                        next_retry_at=retry_after,
+                        required_before=self._final_deadline_for_target(schedule_dataset, expected_date),
                         target_scope={
                             "stage": "freshness_check",
                             "status": getattr(result, "status", None),
@@ -2797,6 +3038,8 @@ class TDXScheduler:
                             "source": "_data_freshness_check",
                             "alert_gate": "deferred_until_retry_final_state",
                             "health_summary": summary,
+                            "schedule_dataset": schedule_dataset,
+                            "raw_expected_date": raw_expected_date.isoformat() if raw_expected_date else None,
                         },
                     )
                 )
@@ -3303,7 +3546,7 @@ class TDXScheduler:
 
         # Only run on Saturday
         today = dt.date.today()
-        if today.weekday() != 5:
+        if not self._weekend_compensation_due(today):
             _log.info("weekend_compensation: today is weekday %d (not Saturday), skipping", today.weekday())
             if job_id is not None:
                 self._execute(
@@ -3311,6 +3554,14 @@ class TDXScheduler:
                     " summary=%s WHERE job_id=%s",
                     (_json_dump({"dataset": "_weekend_compensation", "skipped": True,
                                  "reason": f"not saturday (weekday={today.weekday()})"}), job_id),
+                )
+            if schedule_id:
+                self._update_ingestion_schedule(
+                    schedule_id,
+                    last_run=start_ts,
+                    last_status="skipped",
+                    last_error="not_saturday",
+                    next_run=self._next_run_for(schedule_id),
                 )
             return
 

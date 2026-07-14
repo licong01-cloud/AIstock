@@ -1,47 +1,45 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "Twenty-one sw_daily retry targets have attempt_count zero and no next_retry_at, one sw_sector target job has remained queued since 2026-06-10, and margin_detail current-day target retries repeatedly fail before T+1 availability.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "tests/aistock_validation/bugs/20260714_BUG-646-retry-lifecycle-strands-aliased-targets-and-lagged-dataset-retries.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-646",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T10:42:26.820173Z",
+  "description": "Twenty-one sw_daily retry targets have attempt_count zero and no next_retry_at, one sw_sector target job has remained queued since 2026-06-10, and margin_detail current-day target retries repeatedly fail before T+1 availability.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-1eb22119e784",
+      "timestamp": "2026-07-14T10:42:26.820170Z"
     }
   ],
   "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
+    "Read-only DB audit: 21 orphan sw_daily retry targets, stale queued job b73b672b-10d6-4d36-a394-95e7e2377247, and 83 failed margin_detail data_sync_target_due jobs over 45 days."
   ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "expected": "Each retry target must resolve to a logical schedule owner while preserving the physical health check, stale target-created queued jobs must reach a terminal state without row deletion, and availability lag must be respected.",
+  "first_seen_at": "2026-07-14T10:42:26.820173Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
+  "fix_commit": "1ee7724b532ec38b2516b4ad89c7d255c70cafd0",
+  "fixed_at": "2026-07-14T14:04:09.732313Z",
+  "github_issue_number": 2106,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2106",
+  "last_seen_at": "2026-07-14T10:42:26.820173Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2111",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,13 +54,13 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "retry lifecycle strands aliased targets and lagged dataset retries",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "1eb22119e784542e97da8d38",
+    "source_event_id": "FE-20260714-1eb22119e784"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "28 scheduler and CYQ routing tests passed; ruff/compileall/diff-check passed; nox gates and GitHub checks green"
   ],
   "verification_budget": {
     "budget": "standard",

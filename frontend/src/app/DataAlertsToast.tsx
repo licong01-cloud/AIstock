@@ -115,15 +115,46 @@ export default function DataAlertsToast() {
             style={{
               background: bg,
               color: "#fff",
-              padding: "12px 16px",
+              padding: "12px 40px 12px 16px",
               borderRadius: 8,
               boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
               cursor: "pointer",
               fontSize: 14,
               fontWeight: 500,
+              position: "relative",
               transition: "opacity 0.3s",
             }}
           >
+            <button
+              type="button"
+              aria-label={`关闭 ${a.dataset} 提醒`}
+              title="关闭提醒并留在当前页面"
+              onClick={(event) => {
+                event.stopPropagation();
+                setDismissed((prev) => {
+                  const next = new Set(prev);
+                  next.add(a.alert_id);
+                  return next;
+                });
+              }}
+              style={{
+                position: "absolute",
+                top: 6,
+                right: 8,
+                width: 28,
+                height: 28,
+                border: 0,
+                borderRadius: 6,
+                background: "rgba(255,255,255,0.16)",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: 20,
+                lineHeight: "28px",
+                padding: 0,
+              }}
+            >
+              ×
+            </button>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>
               [{a.severity.toUpperCase()}] {a.title}
             </div>

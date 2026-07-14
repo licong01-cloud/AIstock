@@ -2,7 +2,11 @@ import uuid
 import datetime as dt
 from types import SimpleNamespace
 
+import pytest
+
+import backend.db.init_tushare_schedules as schedule_catalog_module
 import backend.ingestion.tdx_scheduler as scheduler_module
+from backend.db.init_tushare_schedules import _DEFAULT_SCHEDULES, _validate_default_schedules
 from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
 
@@ -16,6 +20,94 @@ def _scheduler_with_execute_capture():
 
     scheduler._execute = _execute
     return scheduler, calls
+
+
+def test_canonical_weekend_compensation_is_weekly_saturday_and_defaults_are_unique():
+    _validate_default_schedules(_DEFAULT_SCHEDULES)
+
+    weekend = next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "_weekend_compensation")
+    assert weekend["frequency"] == "weekly"
+    assert weekend["day_of_week"] == "saturday"
+    assert weekend["at"] == "10:00"
+
+    with pytest.raises(ValueError, match="mode-insensitive default dataset has multiple schedules"):
+        _validate_default_schedules(
+            [
+                {"dataset": "stock_basic", "mode": "init", "frequency": "daily"},
+                {"dataset": "stock_basic", "mode": "incremental", "frequency": "daily"},
+            ]
+        )
+
+
+def test_default_schedule_catalog_rejects_mode_insensitive_duplicate(monkeypatch):
+    duplicate = dict(next(item for item in _DEFAULT_SCHEDULES if item["dataset"] == "stock_basic"))
+    duplicate["mode"] = "incremental"
+    monkeypatch.setattr(schedule_catalog_module, "_DEFAULT_SCHEDULES", [*_DEFAULT_SCHEDULES, duplicate])
+
+    catalog = schedule_catalog_module.get_default_schedule_catalog()
+
+    assert catalog["complete"] is False
+    assert "mode-insensitive default dataset has multiple schedules: stock_basic" in catalog["errors"]
+
+
+def test_schedule_hygiene_reports_without_automatic_cleanup():
+    findings = TDXScheduler._schedule_hygiene_findings(
+        [
+            {"schedule_id": "stock-init", "dataset": "stock_basic", "mode": "init", "frequency": "daily", "options": {}},
+            {
+                "schedule_id": "stock-incremental",
+                "dataset": "stock_basic",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {},
+            },
+            {"schedule_id": "suspend-hourly", "dataset": "suspend_d", "mode": "incremental", "frequency": "1h", "options": {}},
+            {
+                "schedule_id": "suspend-fixed",
+                "dataset": "_suspend_d_preopen_0905",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {"at": "09:05"},
+            },
+            {"schedule_id": "anns", "dataset": "anns_metadata", "mode": "incremental", "frequency": "1h", "options": {}},
+            {
+                "schedule_id": "weekend",
+                "dataset": "_weekend_compensation",
+                "mode": "incremental",
+                "frequency": "daily",
+                "options": {"at": "10:00"},
+            },
+        ]
+    )
+
+    by_code = {finding["code"]: finding for finding in findings}
+    assert by_code["duplicate_mode_insensitive_dataset"]["action"] == "review_only_no_automatic_delete"
+    assert by_code["unbounded_high_frequency_review"]["action"] == "preserve_until_availability_window_is_approved"
+    assert by_code["overlapping_suspend_refresh_cadence"]["action"] == "review_only_preserve_pretrade_coverage"
+    assert by_code["weekend_compensation_not_weekly"]["action"] == "align_with_canonical_saturday_schedule"
+
+
+def test_non_saturday_legacy_weekend_schedule_skips_before_claim_or_job_creation():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    scheduler._weekend_compensation_due = lambda: False
+    scheduler._next_run_for = lambda _schedule_id: None
+    scheduler._update_ingestion_schedule = lambda *args, **kwargs: calls.append((args, kwargs))
+    scheduler._claim_scheduled_fire = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("non-Saturday legacy cadence must stop before claiming a fire")
+    )
+
+    scheduler._scheduled_ingestion_run(
+        "weekend-schedule",
+        "_weekend_compensation",
+        "incremental",
+        {"at": "10:00"},
+        "daily",
+    )
+
+    assert calls[0][0] == ("weekend-schedule",)
+    assert calls[0][1]["last_status"] == "skipped"
+    assert calls[0][1]["last_error"] == "not_saturday"
 
 
 def test_success_ingestion_schedule_update_clears_previous_error():
@@ -68,11 +160,44 @@ def test_stale_queued_reconciliation_marks_schedule_created_jobs_failed():
     assert "status = 'failed'" in seen["sql"]
     assert "started_at IS NULL" in seen["sql"]
     assert "triggered_by', '') = 'schedule'" in seen["sql"]
-    assert seen["params"][2] == "anns_metadata"
-    assert seen["params"][4] == "incremental"
+    assert "triggered_by', '') = 'data_sync_target_due'" in seen["sql"]
+    assert seen["params"][2] == "120"
+    assert seen["params"][3] == "anns_metadata"
+    assert seen["params"][5] == "incremental"
     assert "UPDATE market.ingestion_schedules" in seen["schedule_sql"]
     assert "last_status = 'failed'" in seen["schedule_sql"]
     assert seen["schedule_params"] == ("unit_test", str(schedule_id))
+
+
+def test_stale_target_queue_job_releases_target_without_deleting_history(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    job_id = uuid.uuid4()
+
+    scheduler._fetchall = lambda _sql, _params=(): [
+        {
+            "job_id": job_id,
+            "schedule_id": None,
+            "data_sync_target_id": "target-1",
+            "triggered_by": "data_sync_target_due",
+        }
+    ]
+    scheduler._execute = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("target-created jobs must not update an unrelated schedule")
+    )
+
+    class _Repo:
+        def mark_retry(self, target_id, **kwargs):
+            calls.append(("retry", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record.status, record.target_id, record.job_id))
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+
+    assert scheduler._reconcile_stale_queued_ingestion_jobs() == 1
+    assert calls[0][0:2] == ("retry", "target-1")
+    assert calls[1] == ("attempt", "retry", "target-1", str(job_id))
 
 
 def test_script_ingestion_job_started_at_uses_database_clock(monkeypatch):
@@ -188,6 +313,87 @@ def test_due_target_already_covered_is_reconciled_without_job(monkeypatch):
     assert submitted == []
     assert calls[0][0:2] == ("reconciled", "target-1")
     assert calls[1] == ("attempt", "reconciled", "target-1", "data_sync_target_precheck")
+
+
+def test_sw_daily_target_uses_sw_sector_schedule_owner(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+    target = {
+        "target_id": "target-sw",
+        "dataset": "sw_daily",
+        "target_date": dt.date(2026, 7, 14),
+        "attempt_count": 0,
+        "metadata": {"schedule_dataset": "sw_sector"},
+    }
+
+    class _Repo:
+        def list_fillable_targets(self, **_kwargs):
+            return [target]
+
+        def claim_fillable_target(self, target_id, **_kwargs):
+            calls.append(("claim", target_id))
+            return True
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 8, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._check_dataset_recovered = lambda dataset, expected_date=None: calls.append(
+        ("check", dataset, expected_date)
+    ) or SimpleNamespace(status="stale", failure_category="audit_stale")
+    scheduler._target_retry_window_open = lambda dataset, **kwargs: calls.append(("window", dataset)) or True
+    scheduler._recent_dataset_submission_exists = lambda dataset, mode: calls.append(("recent", dataset, mode)) or False
+    scheduler._enqueue_target_retry = lambda **kwargs: calls.append(("enqueue", kwargs)) or uuid.uuid4()
+
+    submitted = scheduler._reconcile_due_data_sync_targets(
+        {"sw_sector": {"schedule_id": "schedule-sw", "mode": "incremental"}}
+    )
+
+    assert submitted == ["sw_sector"]
+    assert ("check", "sw_daily", dt.date(2026, 7, 14)) in calls
+    assert ("recent", "sw_sector", "incremental") in calls
+    enqueue = next(call[1] for call in calls if call[0] == "enqueue")
+    assert enqueue["target"] is target
+    assert enqueue["execution_dataset"] == "sw_sector"
+
+
+def test_due_target_without_schedule_owner_records_retry_state(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    calls = []
+
+    class _Repo:
+        def list_fillable_targets(self, **_kwargs):
+            return [
+                {
+                    "target_id": "target-orphan",
+                    "dataset": "orphan_dataset",
+                    "target_date": dt.date(2026, 7, 14),
+                }
+            ]
+
+        def mark_retry(self, target_id, **kwargs):
+            calls.append(("retry", target_id, kwargs))
+
+        def record_attempt(self, record):
+            calls.append(("attempt", record.status, record.error_message))
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 8, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._check_dataset_recovered = lambda *_args, **_kwargs: SimpleNamespace(status="stale")
+    scheduler._enqueue_target_retry = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("a target without an owner must not submit")
+    )
+
+    assert scheduler._reconcile_due_data_sync_targets({}) == []
+    assert calls[0][0:2] == ("retry", "target-orphan")
+    assert calls[0][2]["context"]["schedule_dataset"] == "orphan_dataset"
+    assert calls[1] == ("attempt", "retry", "schedule_owner_missing")
 
 
 def test_index_daily_target_retry_waits_until_post_close(monkeypatch):
@@ -430,6 +636,91 @@ def test_final_deadline_uses_china_local_time():
     deadline = scheduler._final_deadline_for_target("cyq_perf", dt.date(2026, 5, 18))
 
     assert deadline == dt.datetime(2026, 5, 18, 15, 30, tzinfo=dt.timezone.utc)
+
+
+def test_margin_detail_uses_previous_trading_day_and_t_plus_one_window():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._latest_trading_day = lambda as_of_date=None: (
+        dt.date(2026, 7, 14) if as_of_date is None else dt.date(2026, 7, 13)
+    )
+    scheduler._next_trading_day = lambda anchor_date, *, inclusive=False: (
+        dt.date(2026, 7, 14) if anchor_date == dt.date(2026, 7, 13) else dt.date(2026, 7, 15)
+    )
+
+    assert scheduler._target_date_for_retry("margin_detail") == dt.date(2026, 7, 13)
+    assert scheduler._final_deadline_for_target("margin_detail", dt.date(2026, 7, 13)) == dt.datetime(
+        2026, 7, 14, 15, 30, tzinfo=dt.timezone.utc
+    )
+    assert scheduler._target_retry_window_open(
+        "margin_detail",
+        target_date=dt.date(2026, 7, 13),
+        now=dt.datetime(2026, 7, 14, 11, 9, tzinfo=dt.timezone.utc),
+    ) is False
+    assert scheduler._target_retry_window_open(
+        "margin_detail",
+        target_date=dt.date(2026, 7, 13),
+        now=dt.datetime(2026, 7, 14, 11, 10, tzinfo=dt.timezone.utc),
+    ) is True
+
+
+def test_margin_detail_auto_range_stops_at_previous_trading_day():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def _fetchall(sql, _params=()):
+        if "FROM market.data_stats_config" in sql:
+            return [{"table_name": "market.margin_detail", "date_column": "trade_date", "extra_info": {}}]
+        if "MAX(trade_date)" in sql:
+            return [{"mx": dt.date(2026, 7, 10)}]
+        return []
+
+    scheduler._fetchall = _fetchall
+    scheduler._latest_trading_day = lambda as_of_date=None: (
+        dt.date(2026, 7, 14) if as_of_date is None else dt.date(2026, 7, 13)
+    )
+    scheduler._next_trading_day = lambda _anchor_date, *, inclusive=False: dt.date(2026, 7, 13)
+
+    assert scheduler._compute_auto_range("margin_detail") == (
+        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 13),
+    )
+
+
+def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_deadline(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    captured = []
+
+    class _Repo:
+        def upsert_target(self, record):
+            captured.append(record)
+            return {"target_id": "target-margin"}
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", lambda: _Repo())
+    monkeypatch.setattr(
+        scheduler_module,
+        "_now",
+        lambda: dt.datetime(2026, 7, 14, 10, 0, tzinfo=dt.timezone.utc),
+    )
+    scheduler._latest_trading_day = lambda as_of_date=None: (
+        dt.date(2026, 7, 14) if as_of_date is None else dt.date(2026, 7, 13)
+    )
+    scheduler._next_trading_day = lambda _anchor_date, *, inclusive=False: dt.date(2026, 7, 14)
+    result = SimpleNamespace(
+        dataset="margin_detail",
+        status="stale",
+        expected_date=dt.date(2026, 7, 14),
+        failure_category="audit_stale",
+        summary=lambda: {"status": "stale"},
+    )
+
+    assert scheduler._record_freshness_retry_targets([result]) == ["target-margin"]
+
+    record = captured[0]
+    assert record.dataset == "margin_detail"
+    assert record.target_date == dt.date(2026, 7, 13)
+    assert record.next_retry_at == dt.datetime(2026, 7, 14, 11, 0, tzinfo=dt.timezone.utc)
+    assert record.required_before == dt.datetime(2026, 7, 14, 15, 30, tzinfo=dt.timezone.utc)
+    assert record.metadata["schedule_dataset"] == "margin_detail"
+    assert record.metadata["raw_expected_date"] == "2026-07-14"
 
 
 def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monkeypatch):

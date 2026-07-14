@@ -1,47 +1,45 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "A live snapshot reported one running job and zero retry targets while six active jobs and twenty-two retry targets existed.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
     "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
     "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "tests/aistock_validation/bugs/20260714_BUG-645-local-data-overview-hides-active-jobs-and-retry-targets.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-645",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T10:41:13.860943Z",
+  "description": "A live snapshot reported one running job and zero retry targets while six active jobs and twenty-two retry targets existed.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-5e834142b61f",
+      "timestamp": "2026-07-14T10:41:13.860940Z"
     }
   ],
   "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
+    "Read-only snapshot: overview running_job_count=1 and retry_target_count=0; status-filtered queries found 6 active jobs and 22 retry targets."
   ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "expected": "Counts must come from status-filtered aggregate queries, active jobs must be fetched independently, and dataset status must query that dataset directly.",
+  "first_seen_at": "2026-07-14T10:41:13.860943Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
+  "fix_commit": "369ca773e48d375763822382d0a404ae34e5dcd4",
+  "fixed_at": "2026-07-14T13:45:38.787534Z",
+  "github_issue_number": 2105,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2105",
+  "last_seen_at": "2026-07-14T10:41:13.860943Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2109",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -56,13 +54,13 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "local-data overview hides active jobs and retry targets",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "5e834142b61ffa33c6cd5352",
+    "source_event_id": "FE-20260714-5e834142b61f"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "13 facade tests passed; ruff/compileall/diff-check passed; nox l0 and validation_module_registry_l0 passed; GitHub checks 17 passed, 0 failed"
   ],
   "verification_budget": {
     "budget": "standard",

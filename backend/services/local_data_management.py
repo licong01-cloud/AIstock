@@ -64,6 +64,14 @@ class LocalDataManagementService:
             limit=10,
             active_only=False,
         )
+        active_jobs_response = self._source(
+            "GET /api/ingestion/jobs?active_only=true",
+            self.source.list_ingestion_jobs,
+            "local_data_list_active_jobs",
+            "read_only",
+            limit=50,
+            active_only=True,
+        )
         alerts = self._source(
             "GET /api/ingestion/alerts/active",
             self.source.get_active_alerts,
@@ -75,13 +83,15 @@ class LocalDataManagementService:
         targets = self.list_sync_targets(limit=50)["data"]
         datasets = list(stats.get("data", {}).get("items") or [])
         recent_jobs = list(jobs.get("data", {}).get("items") or [])
+        active_jobs = list(active_jobs_response.get("data", {}).get("items") or [])
         active_alerts = list(alerts.get("data", {}).get("alerts") or [])
         sync_targets = list(targets.get("items") or [])
+        counts = self._fetch_overview_counts()
 
         stale_count = sum(1 for item in datasets if str(item.get("cache_state") or "") in {"stale", "audit_missing", "unknown"})
-        blocked_count = sum(1 for item in sync_targets if item.get("target_status") == "final_blocked")
-        retry_count = sum(1 for item in sync_targets if item.get("target_status") == "retry")
-        running_count = sum(1 for item in recent_jobs if item.get("status") in {"running", "queued", "pending"})
+        blocked_count = counts["blocked_target_count"]
+        retry_count = counts["retry_target_count"]
+        running_count = counts["active_job_count"]
         has_error_alert = any(item.get("severity") in {"error", "critical"} for item in active_alerts)
         status = "red" if blocked_count or has_error_alert else ("yellow" if stale_count or retry_count or active_alerts else "green")
         summary = self._health_summary(status, stale_count, blocked_count, retry_count, len(active_alerts))
@@ -102,6 +112,7 @@ class LocalDataManagementService:
                 "affected_modules": self._affected_modules(sync_targets),
                 "datasets": datasets[:30],
                 "recent_jobs": recent_jobs[:10],
+                "active_jobs": active_jobs,
                 "active_alerts": active_alerts[:20],
                 "sync_targets": sync_targets[:30],
                 "next_actions": self._next_actions(stale_count, blocked_count, retry_count, len(active_alerts)),
@@ -116,11 +127,8 @@ class LocalDataManagementService:
         row = next((item for item in rows if str(item.get("data_kind")) == dataset_key), None)
         if row is None:
             raise HTTPException(status_code=404, detail=f"unknown local data dataset: {dataset_key}")
-        related_jobs = [
-            item
-            for item in (self.source.list_ingestion_jobs(limit=20, active_only=False).get("items") or [])
-            if (item.get("meta") or {}).get("dataset") == dataset_key
-        ]
+        latest_job_id = self._fetch_latest_job_id(dataset_key)
+        last_job = self.source.get_ingestion_job(job_id=latest_job_id) if latest_job_id else None
         targets = self._fetch_targets(dataset=dataset_key, limit=20)
         label = STATUS_LABELS.get(str(row.get("cache_state") or "unknown"), "未知")
         return self._response(
@@ -134,7 +142,7 @@ class LocalDataManagementService:
                 "physical_max_date": row.get("physical_max_date"),
                 "stats_max_date": row.get("stats_max_date"),
                 "cache_state": row.get("cache_state"),
-                "last_job": related_jobs[0] if related_jobs else None,
+                "last_job": last_job,
                 "sync_targets": targets,
                 "detail": row,
             },
@@ -632,13 +640,60 @@ class LocalDataManagementService:
                    metadata, created_at, updated_at, reconciled_at, blocked_at
               FROM market.data_sync_targets
               {where}
-             ORDER BY priority ASC, COALESCE(required_before, created_at) ASC, created_at DESC
+             ORDER BY CASE target_status
+                          WHEN 'final_blocked' THEN 0
+                          WHEN 'retry' THEN 1
+                          WHEN 'pending' THEN 2
+                          ELSE 3
+                      END ASC,
+                      CASE WHEN target_status IN ('retry', 'pending')
+                           THEN COALESCE(next_retry_at, required_before)
+                      END ASC NULLS FIRST,
+                      priority ASC, updated_at DESC, created_at DESC
              LIMIT %s
         """
         with self.connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(sql, params)
                 return jsonable_encoder([dict(row) for row in cur.fetchall()])
+
+    def _fetch_overview_counts(self) -> dict[str, int]:
+        with self.connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM market.ingestion_jobs
+                          WHERE status IN ('running', 'queued', 'pending')) AS active_job_count,
+                        (SELECT COUNT(*) FROM market.data_sync_targets
+                          WHERE target_status = 'retry') AS retry_target_count,
+                        (SELECT COUNT(*) FROM market.data_sync_targets
+                          WHERE target_status = 'final_blocked') AS blocked_target_count
+                    """
+                )
+                row = dict(cur.fetchone() or {})
+        return {
+            "active_job_count": int(row.get("active_job_count") or 0),
+            "retry_target_count": int(row.get("retry_target_count") or 0),
+            "blocked_target_count": int(row.get("blocked_target_count") or 0),
+        }
+
+    def _fetch_latest_job_id(self, dataset: str) -> uuid.UUID | None:
+        with self.connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT job_id
+                      FROM market.ingestion_jobs
+                     WHERE summary->>'dataset' = %s
+                        OR summary->'datasets' @> %s::jsonb
+                     ORDER BY created_at DESC
+                     LIMIT 1
+                    """,
+                    (dataset, json.dumps([dataset])),
+                )
+                row = cur.fetchone()
+        return uuid.UUID(str(row["job_id"])) if row and row.get("job_id") else None
 
     def _fetch_attempts(self, *, target_id: str | None = None, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         filters: list[str] = []

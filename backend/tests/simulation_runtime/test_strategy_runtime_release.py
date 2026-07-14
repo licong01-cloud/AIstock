@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from backend.services.simulation_runtime import (
@@ -8,6 +10,7 @@ from backend.services.simulation_runtime import (
     StrategyRuntimeReleaseService,
 )
 from backend.services.simulation_runtime.models import StrategyRuntimeRelease
+from backend.services.strategy_package.models import PackageStatus
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
 
@@ -149,3 +152,60 @@ def test_strategy_runtime_release_hash_changes_only_for_policy_changes_not_bindi
     assert binding_a.strategy_slot_id == "slot_strategy_a"
     assert binding_a.binding_config_json["account_group_id"] == "ag_minqmt_broker_account_a_sim"
     assert binding_a.binding_config_json["strategy_slot_id"] == "slot_strategy_a"
+
+
+def test_simulation_binding_admission_rejects_retired_package_without_revalidation() -> None:
+    repository = InMemorySimulationRuntimeRepository()
+    package_reader = SimpleNamespace(
+        get=lambda package_id: SimpleNamespace(
+            package_id=package_id,
+            package_status=PackageStatus.RETIRED,
+        )
+    )
+    service = StrategyRuntimeReleaseService(
+        repository=repository,
+        package_lifecycle_reader=package_reader,
+    )
+    release = service.create_release(**_release_kwargs())
+
+    with pytest.raises(RuntimeConfigInvalidError, match="retired StrategyPackage") as exc_info:
+        service.create_binding(
+            strategy_id="strategy_retired",
+            release=release,
+            broker_backend="local_sim",
+            capital_allocation=100_000,
+        )
+
+    assert exc_info.value.context == {
+        "reason_code": "SIMULATION_BINDING_PACKAGE_RETIRED",
+        "package_id": release.package_id,
+        "release_id": release.release_id,
+        "package_status": "RETIRED",
+        "strategy_package_revalidation_performed": False,
+    }
+    assert repository.bindings == {}
+
+
+def test_simulation_binding_admission_accepts_active_package_lifecycle_only() -> None:
+    repository = InMemorySimulationRuntimeRepository()
+    package_reader = SimpleNamespace(
+        get=lambda package_id: SimpleNamespace(
+            package_id=package_id,
+            package_status=PackageStatus.SELECTION_ENABLED,
+        )
+    )
+    service = StrategyRuntimeReleaseService(
+        repository=repository,
+        package_lifecycle_reader=package_reader,
+    )
+    release = service.create_release(**_release_kwargs())
+
+    binding = service.create_binding(
+        strategy_id="strategy_active",
+        release=release,
+        broker_backend="local_sim",
+        capital_allocation=100_000,
+    )
+
+    assert binding.package_id == release.package_id
+    assert repository.get_simulation_release_binding(binding.binding_id) == binding

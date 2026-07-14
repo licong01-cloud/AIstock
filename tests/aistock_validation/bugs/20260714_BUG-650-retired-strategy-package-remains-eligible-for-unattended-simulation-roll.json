@@ -1,74 +1,75 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "pkg_a2f53f3f2f3e4095a910b939464c35e6 has package_status=RETIRED but received both LocalSIM and MiniQMT SIM_VALIDATING bindings for 2026-07-14; the MiniQMT legacy run submitted seven child orders, and the source binding remains eligible to auto-roll-forward for 2026-07-15.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/20260714_BUG-650-retired-strategy-package-remains-eligible-for-unattended-simulation-roll.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/service.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_strategy_runtime_release.py"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-650",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T15:51:01.008099Z",
+  "description": "pkg_a2f53f3f2f3e4095a910b939464c35e6 has package_status=RETIRED but received both LocalSIM and MiniQMT SIM_VALIDATING bindings for 2026-07-14; the MiniQMT legacy run submitted seven child orders, and the source binding remains eligible to auto-roll-forward for 2026-07-15.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-cf262d9e87cf",
+      "timestamp": "2026-07-14T15:51:01.008092Z"
     }
   ],
   "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
+    "backend/services/simulation_runtime/scheduler.py::_binding_can_roll_forward; production readback 2026-07-14 package_status=RETIRED with active daily LocalSIM/MiniQMT bindings"
   ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "expected": "Retiring a strategy package durably makes its associated unattended simulation binding lineage ineligible for future roll-forward before the next scheduler window; existing broker-side-effect evidence remains immutable and auditable. New single-alpha and multi-alpha packages remain supported, and runtime stages perform identity continuity plus required data/component checks only.",
+  "first_seen_at": "2026-07-14T15:51:01.008099Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
-  "module": "aistock_backend",
+  "fix_commit": "4561d29a2c929971d367e2b34bfb9033adf13737",
+  "fixed_at": "2026-07-14T17:43:52.804229Z",
+  "github_issue_number": 2125,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2125",
+  "last_seen_at": "2026-07-14T15:51:01.008099Z",
+  "module": "simulation_runtime",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2127",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "pytest -q backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k retired",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
-  "risk_area": "bug",
+  "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "fixed",
   "suspected_modules": [
-    "aistock_backend"
+    "simulation_runtime"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "Retired strategy package remains eligible for unattended simulation roll-forward",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "cf262d9e87cf275418ac6e1b",
+    "source_event_id": "FE-20260714-cf262d9e87cf"
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "GitHub PR checks passed after rebase; targeted BUG-650 tests 8 passed; nox l0 and validation_module_registry_l0 passed"
   ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
       "modules": [
-        "aistock_backend"
+        "simulation_runtime"
       ],
       "plans": [],
       "required": true,
@@ -123,7 +124,7 @@
       "budget": "standard",
       "deferred_nightly_verification": {
         "modules": [
-          "aistock_backend"
+          "simulation_runtime"
         ],
         "plans": [],
         "required": true,
@@ -161,5 +162,6 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "workflow_gate": "allowed"
 }

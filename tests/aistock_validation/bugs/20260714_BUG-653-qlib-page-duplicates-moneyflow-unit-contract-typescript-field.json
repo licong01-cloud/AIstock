@@ -1,51 +1,46 @@
 {
-  "actual": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "actual": "npx tsc --noEmit reports seven errors in frontend/src/app/qlib/page.tsx for duplicate/self-referential moneyflow_unit_contract declarations and missing ExportResponse property.",
   "allowed_write_scope": [
-    "backend/db/init_tushare_schedules.py",
-    "backend/services/local_data_management.py",
-    "backend/routers/ingestion.py",
-    "backend/tests/test_local_data_management_facade.py",
-    "tests/aistock_validation/bugs/20260714_BUG-644-local-data-schedule-reset-uses-incomplete-defaults-and-can-remove-valid.json",
+    "frontend/src/app/qlib/page.tsx",
+    "tests/aistock_validation/bugs/20260714_BUG-653-qlib-page-duplicates-moneyflow-unit-contract-typescript-field.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
   "assigned_agent": null,
-  "bug_id": "BUG-644",
+  "bug_id": "BUG-653",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
-  "created_at": "2026-07-14T10:39:43.685313Z",
-  "description": "reset-plan proposes one timing-changing update and up to 28 deletes against the live canonical schedule set.",
+  "created_at": "2026-07-14T17:55:17.310272Z",
+  "description": "npx tsc --noEmit reports seven errors in frontend/src/app/qlib/page.tsx for duplicate/self-referential moneyflow_unit_contract declarations and missing ExportResponse property.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
-      "note": "Promoted from IC-20260714-465858b4d68c",
-      "timestamp": "2026-07-14T10:39:43.685310Z"
+      "note": "Promoted from IC-20260714-b66a580ba194",
+      "timestamp": "2026-07-14T17:55:17.310268Z"
     }
   ],
-  "evidence_uris": [
-    "POST /api/v1/local-data/schedules/reset-plan?delete_missing=false proposed stock_moneyflow_ts timing update and kline_weekly creation; delete_missing=true additionally proposed 28 deletes."
-  ],
-  "expected": "All default/reset paths must share one authoritative schedule catalog and fail closed when the catalog is incomplete; planning must not mutate production state.",
-  "first_seen_at": "2026-07-14T10:39:43.685313Z",
+  "evidence_uris": [],
+  "expected": "The qlib page response contracts declare moneyflow_unit_contract exactly once in the correct interface and frontend TypeScript compilation succeeds.",
+  "first_seen_at": "2026-07-14T17:55:17.310272Z",
   "fix_branch": null,
-  "fix_commit": "c4efc095d088c2298ce40dccc278403929373b71",
-  "fixed_at": "2026-07-14T13:30:19.049294Z",
-  "github_issue_number": 2104,
-  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2104",
-  "last_seen_at": "2026-07-14T10:39:43.685313Z",
+  "fix_commit": "bac7ec0bfc29c468b8a2d517ff6e8c5a53fcb5e2",
+  "fixed_at": "2026-07-14T18:04:56.819867Z",
+  "github_issue_number": 2136,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2136",
+  "last_seen_at": "2026-07-14T17:55:17.310272Z",
   "module": "aistock_backend",
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2108",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2137",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "cd frontend && npx tsc --noEmit",
   "required_verification": [
     "l0"
   ],
@@ -56,13 +51,44 @@
   "suspected_modules": [
     "aistock_backend"
   ],
-  "title": "local-data schedule reset uses incomplete defaults and can remove valid schedules",
+  "title": "Qlib page duplicates moneyflow_unit_contract TypeScript field",
   "trigger_condition": {
-    "fingerprint": "465858b4d68c8d71e7f828f5",
-    "source_event_id": "FE-20260714-465858b4d68c"
+    "fingerprint": "b66a580ba1947d9173583c43",
+    "source_event_id": "FE-20260714-b66a580ba194"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:aistock_backend",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": false,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/qlib/page.tsx"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/qlib/page.tsx",
+    "ui_routes": [
+      "/src/app/qlib/page.tsx"
+    ],
+    "visual_acceptance_required": true
   },
   "validation_evidence": [
-    "local targeted tests, l0, validation_module_registry_l0 and GitHub CI -> passed"
+    "npm ci from lockfile + npx tsc --noEmit -> passed",
+    "eslint qlib page -> passed",
+    "nox l0 validation_module_registry_l0 -> passed",
+    "GitHub CI -> 14 passed, 0 failed"
   ],
   "verification_budget": {
     "budget": "standard",
@@ -116,6 +142,7 @@
     "recommendations": [
       "Use compact success output; request full JSON only for failures or diagnostics.",
       "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
       "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
     ],
     "schema_version": "aistock_workflow_efficiency_recommendations_v1",
