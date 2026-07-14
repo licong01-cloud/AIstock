@@ -32,8 +32,8 @@
   "expected": "Retiring a strategy package durably makes its associated unattended simulation binding lineage ineligible for future roll-forward before the next scheduler window; existing broker-side-effect evidence remains immutable and auditable. New single-alpha and multi-alpha packages remain supported, and runtime stages perform identity continuity plus required data/component checks only.",
   "first_seen_at": "2026-07-14T15:51:01.008099Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4561d29a2c929971d367e2b34bfb9033adf13737",
+  "fixed_at": "2026-07-14T17:43:52.804229Z",
   "github_issue_number": 2125,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2125",
   "last_seen_at": "2026-07-14T15:51:01.008099Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2127",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -52,7 +53,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -61,6 +62,9 @@
     "fingerprint": "cf262d9e87cf275418ac6e1b",
     "source_event_id": "FE-20260714-cf262d9e87cf"
   },
+  "validation_evidence": [
+    "GitHub PR checks passed after rebase; targeted BUG-650 tests 8 passed; nox l0 and validation_module_registry_l0 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
