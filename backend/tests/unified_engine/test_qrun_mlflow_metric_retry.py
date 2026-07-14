@@ -126,6 +126,9 @@ def test_qrun_record_check_retries_empty_mlflow_metric_once(tmp_path, monkeypatc
                 raise ValueError("Metric 'Rank IC' is malformed. No data found.")
             return "ok"
 
+        def load(self, name: str, parents: bool = True):
+            return (name, parents)
+
     record_temp.RecordTemp = FlakyRecordTemp
     runner._install_mlflow_metric_read_retry()
 
@@ -157,6 +160,9 @@ def test_qrun_record_check_keeps_true_missing_artifact_loud(tmp_path, monkeypatc
             self.calls += 1
             raise FileNotFoundError("pred.pkl")
 
+        def load(self, name: str, parents: bool = True):
+            return (name, parents)
+
     record_temp.RecordTemp = MissingArtifactRecordTemp
     runner._install_mlflow_metric_read_retry()
     record = record_temp.RecordTemp(_FakeRecorder(tmp_path / "run"))
@@ -185,6 +191,9 @@ def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, mo
             self.calls += 1
             raise ValueError("Metric 'Rank IC' is malformed. No data found.")
 
+        def load(self, name: str, parents: bool = True):
+            return (name, parents)
+
     record_temp.RecordTemp = AlwaysEmptyMetricRecordTemp
     runner._install_mlflow_metric_read_retry()
     run_dir = tmp_path / "mlruns" / "0" / "run-1"
@@ -196,3 +205,147 @@ def test_qrun_record_check_retry_exhaustion_reports_metric_and_path(tmp_path, mo
     message = str(exc_info.value)
     assert "Rank IC" in message
     assert str(run_dir / "metrics" / "Rank IC") in message
+
+
+def test_qrun_record_load_drains_prior_async_metric_writes_before_artifact_read(tmp_path, monkeypatch) -> None:
+    runner, record_temp = _load_runner(monkeypatch)
+
+    class OrderedAsyncRecorder(_FakeRecorder):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__(run_dir)
+            self.metric_ready = False
+            self.barrier_calls = 0
+            self.async_log = self._enqueue
+
+        def _enqueue(self, operation, *args, **kwargs):
+            self.barrier_calls += 1
+            self.metric_ready = True
+            operation(*args, **kwargs)
+
+    class BarrierRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            if not self.recorder.metric_ready:
+                raise AssertionError("artifact read started before queued metric writes drained")
+            return {"name": name, "parents": parents}
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = BarrierRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    recorder = OrderedAsyncRecorder(tmp_path / "mlruns" / "0" / "run-1")
+    record = record_temp.RecordTemp(recorder)
+
+    assert record.load("pred.pkl") == {"name": "pred.pkl", "parents": True}
+    assert recorder.barrier_calls == 1
+    assert record.load_calls == 1
+
+
+def test_qrun_record_load_retries_wrapped_load_object_empty_metric(tmp_path, monkeypatch) -> None:
+    runner, record_temp = _load_runner(monkeypatch)
+    monkeypatch.setenv(runner.MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV, "0")
+
+    class LoadObjectError(Exception):
+        pass
+
+    class FlakyLoadRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            if self.load_calls == 1:
+                try:
+                    raise ValueError("Metric 'IC' is malformed. No data found.")
+                except ValueError as cause:
+                    raise LoadObjectError(str(cause)) from cause
+            return name
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = FlakyLoadRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    record = record_temp.RecordTemp(_FakeRecorder(tmp_path / "run"))
+
+    assert record.load("pred.pkl") == "pred.pkl"
+    assert record.load_calls == 2
+
+
+def test_qrun_record_load_does_not_retry_unrelated_load_object_error(tmp_path, monkeypatch) -> None:
+    runner, record_temp = _load_runner(monkeypatch)
+
+    class LoadObjectError(Exception):
+        pass
+
+    class MissingLoadRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            raise LoadObjectError(f"artifact not found: {name}")
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = MissingLoadRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    record = record_temp.RecordTemp(_FakeRecorder(tmp_path / "run"))
+
+    with pytest.raises(LoadObjectError, match="artifact not found"):
+        record.load("pred.pkl")
+    assert record.load_calls == 1
+
+
+def test_qrun_record_load_fails_before_read_when_async_barrier_times_out(tmp_path, monkeypatch) -> None:
+    runner, record_temp = _load_runner(monkeypatch)
+    monkeypatch.setenv(runner.MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV, "0")
+
+    class StalledRecorder(_FakeRecorder):
+        def __init__(self, run_dir: Path) -> None:
+            super().__init__(run_dir)
+            self.async_log = lambda _operation: None
+
+    class NeverReadRecordTemp:
+        def __init__(self, recorder) -> None:
+            self._recorder = recorder
+            self.load_calls = 0
+
+        @property
+        def recorder(self):
+            return self._recorder
+
+        def load(self, name: str, parents: bool = True):
+            self.load_calls += 1
+            return name
+
+        def check(self, include_self: bool = False, parents: bool = True):
+            return True
+
+    record_temp.RecordTemp = NeverReadRecordTemp
+    runner._install_mlflow_metric_read_retry()
+    record = record_temp.RecordTemp(StalledRecorder(tmp_path / "run"))
+
+    with pytest.raises(runner.QEMlflowAsyncDrainError, match="barrier timed out"):
+        record.load("pred.pkl")
+    assert record.load_calls == 0

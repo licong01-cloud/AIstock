@@ -29,6 +29,7 @@ import re
 import shutil
 import stat
 import sys
+import threading
 import time
 import warnings
 from datetime import datetime, timezone
@@ -101,13 +102,19 @@ DEFAULT_PRED_BACKTEST_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 DEFAULT_PARAMS_PICKLE_MAX_BYTES = 2 * 1024 * 1024 * 1024
 MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS"
 MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC_ENV = "QE_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC"
+MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV = "QE_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC"
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_ATTEMPTS = 3
 DEFAULT_MLFLOW_EMPTY_METRIC_RETRY_SLEEP_SEC = 0.1
+DEFAULT_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC = 30.0
 _MLFLOW_EMPTY_METRIC_RE = re.compile(r"Metric '([^']+)' is malformed\. No data found\.")
 
 
 class QEMlflowMetricReadRaceError(RuntimeError):
     """Raised after exhausting the specific MLflow empty metric read retry."""
+
+
+class QEMlflowAsyncDrainError(RuntimeError):
+    """Raised when queued Qlib MLflow writes cannot reach a read barrier."""
 
 
 def _env_int(name: str, default_value: int) -> int:
@@ -136,11 +143,19 @@ def _env_float(name: str, default_value: float) -> float:
     return value
 
 
-def _empty_mlflow_metric_name(exc: ValueError) -> str | None:
-    match = _MLFLOW_EMPTY_METRIC_RE.search(str(exc))
-    if match is None:
-        return None
-    return match.group(1)
+def _empty_mlflow_metric_name(exc: BaseException) -> str | None:
+    """Find only Qlib/MLflow's exact empty-metric error in a wrapped cause chain."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ValueError) or type(current).__name__ == "LoadObjectError":
+            match = _MLFLOW_EMPTY_METRIC_RE.search(str(current))
+            if match is not None:
+                return match.group(1)
+        current = current.__cause__ or current.__context__
+    return None
 
 
 def _mlflow_metric_file_hint(recorder, metric_name: str) -> str:
@@ -177,7 +192,7 @@ def _retry_empty_mlflow_metric_read(operation, *, recorder=None, context: str):
     for attempt in range(attempts + 1):
         try:
             return operation()
-        except ValueError as exc:
+        except Exception as exc:
             metric_name = _empty_mlflow_metric_name(exc)
             if metric_name is None:
                 raise
@@ -195,30 +210,83 @@ def _retry_empty_mlflow_metric_read(operation, *, recorder=None, context: str):
                 time.sleep(sleep_seconds)
 
 
+def _drain_mlflow_async_writes(recorder, *, context: str) -> bool:
+    """Wait for all MLflow writes queued before this call without stopping Qlib's worker."""
+
+    async_log = getattr(recorder, "async_log", None) if recorder is not None else None
+    if async_log is None:
+        return False
+    if not callable(async_log):
+        raise QEMlflowAsyncDrainError(
+            f"{context}: recorder.async_log is not callable: {type(async_log).__name__}"
+        )
+    worker = getattr(async_log, "_t", None)
+    if worker is not None and hasattr(worker, "is_alive") and not worker.is_alive():
+        raise QEMlflowAsyncDrainError(f"{context}: Qlib MLflow async writer thread is not alive")
+
+    timeout = _env_float(
+        MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC_ENV,
+        DEFAULT_MLFLOW_ASYNC_DRAIN_TIMEOUT_SEC,
+    )
+    reached = threading.Event()
+    try:
+        async_log(reached.set)
+    except Exception as exc:
+        raise QEMlflowAsyncDrainError(
+            f"{context}: failed to enqueue Qlib MLflow async write barrier"
+        ) from exc
+    if not reached.wait(timeout):
+        raise QEMlflowAsyncDrainError(
+            f"{context}: Qlib MLflow async write barrier timed out after {timeout:.3f}s"
+        )
+    return True
+
+
 def _install_mlflow_metric_read_retry() -> bool:
     from qlib.workflow import record_temp
 
     record_temp_cls = getattr(record_temp, "RecordTemp", None)
     if record_temp_cls is None:
         raise RuntimeError("qlib.workflow.record_temp.RecordTemp is unavailable; cannot install QE metric retry")
-    if getattr(record_temp_cls.check, "_qe_mlflow_metric_retry", False):
-        return False
+    installed = False
 
-    original_check = record_temp_cls.check
+    if not getattr(record_temp_cls.load, "_qe_mlflow_metric_retry", False):
+        original_load = record_temp_cls.load
 
-    def _check_with_mlflow_metric_retry(self, *args, **kwargs):
-        recorder = getattr(self, "recorder", None)
-        return _retry_empty_mlflow_metric_read(
-            lambda: original_check(self, *args, **kwargs),
-            recorder=recorder,
-            context=f"{type(self).__name__}.check",
-        )
+        def _load_with_mlflow_write_barrier(self, *args, **kwargs):
+            recorder = getattr(self, "recorder", None)
+            context = f"{type(self).__name__}.load"
+            _drain_mlflow_async_writes(recorder, context=context)
+            return _retry_empty_mlflow_metric_read(
+                lambda: original_load(self, *args, **kwargs),
+                recorder=recorder,
+                context=context,
+            )
 
-    _check_with_mlflow_metric_retry._qe_mlflow_metric_retry = True
-    _check_with_mlflow_metric_retry._qe_original_check = original_check
-    record_temp_cls.check = _check_with_mlflow_metric_retry
-    print("[INFO] Installed QE MLflow empty metric read retry for Qlib record checks")
-    return True
+        _load_with_mlflow_write_barrier._qe_mlflow_metric_retry = True
+        _load_with_mlflow_write_barrier._qe_original_load = original_load
+        record_temp_cls.load = _load_with_mlflow_write_barrier
+        installed = True
+
+    if not getattr(record_temp_cls.check, "_qe_mlflow_metric_retry", False):
+        original_check = record_temp_cls.check
+
+        def _check_with_mlflow_metric_retry(self, *args, **kwargs):
+            recorder = getattr(self, "recorder", None)
+            return _retry_empty_mlflow_metric_read(
+                lambda: original_check(self, *args, **kwargs),
+                recorder=recorder,
+                context=f"{type(self).__name__}.check",
+            )
+
+        _check_with_mlflow_metric_retry._qe_mlflow_metric_retry = True
+        _check_with_mlflow_metric_retry._qe_original_check = original_check
+        record_temp_cls.check = _check_with_mlflow_metric_retry
+        installed = True
+
+    if installed:
+        print("[INFO] Installed QE MLflow async write barrier and exact empty-metric read retry")
+    return installed
 
 
 def _pickle_max_bytes(env_name: str, default_bytes: int) -> int:
