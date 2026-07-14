@@ -32,6 +32,13 @@ async function backendRequest<T = any>(
   return JSON.parse(text) as T;
 }
 
+interface MoneyflowUnitContract {
+  version: string;
+  factor_volume_unit: "share";
+  factor_amount_unit: "cny";
+  total_net_source: string;
+}
+
 interface ExportResponse {
   snapshot_id: string;
   freq: string;
@@ -39,6 +46,7 @@ interface ExportResponse {
   end: string;
   ts_codes?: string[];
   rows: number;
+  moneyflow_unit_contract?: MoneyflowUnitContract;
 }
 
 interface SnapshotInfo {
@@ -129,15 +137,9 @@ interface StepResult {
 interface StaticFactorsResponse {
   snapshot_id: string;
   rows: number;
-  moneyflow_unit_contract?: StaticFactorsResponse["moneyflow_unit_contract"];
   columns: number;
   parquet_path: string;
-  moneyflow_unit_contract: {
-    version: string;
-    factor_volume_unit: "share";
-    factor_amount_unit: "cny";
-    total_net_source: string;
-  };
+  moneyflow_unit_contract: MoneyflowUnitContract;
 }
 
 // 数据检查响应
