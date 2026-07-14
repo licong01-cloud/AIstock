@@ -30,8 +30,8 @@
   "expected": "LocalSIM reuses valid daily selection evidence whose canonical manifest identity matches the bound release; MiniQMT validates the same frozen assignment identity against runtime readback and autonomously resumes or reconciles retryable bindings, while deterministic conflicts fail loudly with complete diagnostics.",
   "first_seen_at": "2026-07-14T05:33:54.848091Z",
   "fix_branch": "bug/BUG-639-simulation-runtime-manifest-identity-drift-block-20260714",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "13e4f0ddac85ec671177a531d66e5581d5d1e226",
+  "fixed_at": "2026-07-14T06:38:45.132441Z",
   "github_issue_number": 2083,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2083",
   "last_seen_at": "2026-07-14T05:33:54.848091Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2086",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -50,7 +51,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -59,6 +60,9 @@
     "fingerprint": "d8bd4d56fb2c1ca32820ef0d",
     "source_event_id": "FE-20260714-d8bd4d56fb2c"
   },
+  "validation_evidence": [
+    "PR #2086 CI: 20 passed, 0 failed, 0 pending; local targeted scheduler tests: 4 passed; l0 and validation_module_registry_l0: passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
