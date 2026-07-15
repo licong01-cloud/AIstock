@@ -6575,10 +6575,13 @@ class AutoEvolutionScheduler:
                 strategy_config = self._parse_custom_evo_strategy_config(task.get("strategy_evo_config"), task_id=task_id)
                 expected_count = len(strategy_config["loops"])
                 cur.execute(
-                    "SELECT status, COUNT(*) FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
+                    "SELECT status, COUNT(*) AS count FROM qe_evolution_loops WHERE task_id = %s GROUP BY status",
                     (task_id,),
                 )
-                status_counts = {status: count for status, count in cur.fetchall()}
+                status_counts = {
+                    str(row["status"]): int(row["count"])
+                    for row in cur.fetchall()
+                }
                 terminal_statuses = {"completed", "failed", "cancelled", "canceled"}
                 active_count = sum(
                     int(count) for status, count in status_counts.items()

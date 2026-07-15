@@ -297,6 +297,69 @@ def test_results_only_registration_is_idempotent_upsert(monkeypatch):
     assert any("ON CONFLICT (experiment_id) DO UPDATE" in sql for sql in state["sql"])
 
 
+class _TaskStatusCursor:
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.state = state
+        self._result: Any = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(str(sql).split())
+        if normalized.startswith("SELECT strategy_evo_config"):
+            self._result = {"strategy_evo_config": {"loops": [{}, {}]}}
+        elif normalized.startswith("SELECT status, COUNT(*) AS count"):
+            self._result = [{"status": "completed", "count": 2}]
+        elif normalized.startswith("UPDATE qe_evolution_tasks SET status"):
+            self.state["updated_status"] = params[0]
+            self._result = None
+        else:  # pragma: no cover - unexpected SQL is a test failure
+            raise AssertionError(normalized)
+
+    def fetchone(self):
+        assert isinstance(self._result, dict)
+        return self._result
+
+    def fetchall(self):
+        assert isinstance(self._result, list)
+        return self._result
+
+
+class _TaskStatusConn:
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.state = state
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def cursor(self, *args, **kwargs):
+        return _TaskStatusCursor(self.state)
+
+    def commit(self):
+        self.state["commits"] += 1
+
+
+def test_results_only_task_status_recompute_reads_realdict_rows(monkeypatch):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"updated_status": None, "commits": 0}
+    monkeypatch.setattr(qes, "get_conn", lambda: _TaskStatusConn(state))
+    monkeypatch.setattr(
+        scheduler,
+        "_parse_custom_evo_strategy_config",
+        lambda raw, *, task_id: {"loops": [{}, {}]},
+    )
+
+    assert scheduler.recompute_custom_evo_task_status("qe_task") == "completed"
+    assert state == {"updated_status": "completed", "commits": 1}
+
+
 def test_results_only_helper_has_no_backtest_submission_path():
     source = inspect.getsource(AutoEvolutionScheduler._retry_loop_results_only)
     assert "BacktestExecutor" not in source
