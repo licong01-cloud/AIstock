@@ -33,8 +33,8 @@
   "expected": "Issue-fix workflow and client entrypoints enforce a compact local validation budget: run only changed-file compile/lint, direct fix-point tests, safety invariants, diff/scope checks; after failures rerun failed nodeids or pytest --lf first; run at most one final relevant small matrix; delegate broad module/UI/API/business-flow/regression validation to VC/CI/nightly with compact receipts. Restarted Codex/Claude windows should read the same updated skill/command and follow the budget automatically.",
   "first_seen_at": "2026-07-07T09:36:57.082788Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "17750d0910bc202df3f9fda5a288030bd0fe61bb",
+  "fixed_at": "2026-07-15T13:22:37.689894Z",
   "github_issue_number": 1902,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1902",
   "last_seen_at": "2026-07-07T09:36:57.082788Z",
@@ -42,6 +42,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1904",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,7 +54,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "validation_llm_pipeline"
   ],
@@ -62,6 +63,9 @@
     "fingerprint": "d34fa681cba8da7522ee1b64",
     "source_event_id": "FE-20260707-d34fa681cba8"
   },
+  "validation_evidence": [
+    "Source PR #1904 is MERGED (17750d0910bc202df3f9fda5a288030bd0fe61bb); canonical BUG-602 remained open; metadata-only aftercare. Issue #1902 already closed prior to aftercare."
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
