@@ -93,6 +93,7 @@ from backend.services.trading_core.errors import (
     BrokerUnavailableError,
     BrokerRejectedError,
     DataUnavailableError,
+    InvalidStateTransitionError,
     LiveApprovalRequiredError,
     RuntimeConfigInvalidError,
 )
@@ -553,6 +554,39 @@ def _local_sim_context_with_real_broker(
         paper_repository=paper_repository,
         cash=cash,
         market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+    )
+
+
+def _local_sim_realtime_context_with_real_broker(
+    *, portfolio_id: str, release: Any, paper_repository: InMemoryPaperTradingV2Repository,
+    cash: float, positions: dict[str, PositionLot],
+) -> SimulationRunContext:
+    policy = {
+        "policy_id": "exec_policy_twap_streaming",
+        "policy_sha256": "exec_policy_hash_twap_streaming",
+        "policy_json": {"algo_code": "TWAP", "algo_config": {"allow_partial_fill": True, "split_count": 6}},
+    }
+    broker = LocalSimBackend(
+        portfolio_id=portfolio_id,
+        initial_cash=100_000,
+        initial_available_cash=cash,
+        data_source=MinuteDataSource.TDX_REALTIME,
+        manifest=_score_weighted_manifest(release),
+        package_id=release.package_id,
+        market_data_provider=FakeLocalSimMarketDataProvider(),
+        execution_policy=policy,
+        initial_positions=positions,
+    )
+    return SimulationRunContext(
+        portfolio_id=portfolio_id,
+        current_positions=positions,
+        current_prices={"000001.SZ": 10.1, "688001.SH": 10.1, **{symbol: 10.1 for symbol in positions}},
+        top_k=1,
+        execution_policy_payload=policy,
+        local_broker=broker,
+        paper_repository=paper_repository,
+        cash=cash,
+        market_data_source=MinuteDataSource.TDX_REALTIME.value,
     )
 
 
@@ -1556,6 +1590,24 @@ class FakeLocalSimMarketDataProvider:
                 "limit_down": 9.0,
                 "suspend_status": {"is_suspended": False},
             },
+        )
+
+    def load_observed_intraday(
+        self, *, symbol: str, trade_date: date, source: MinuteDataSource,
+        until_time: datetime, require_day_features: bool = False,
+    ) -> MinuteExecutionMarketInput:
+        source_input = self.load_symbol_input(
+            symbol=symbol,
+            trade_date=trade_date,
+            source=source,
+            min_bars=6,
+            require_day_features=require_day_features,
+        )
+        return replace(
+            source_input,
+            minute_bars=[
+                bar for bar in source_input.minute_bars if bar.bar_time <= until_time.replace(tzinfo=None)
+            ],
         )
 
 
@@ -7159,6 +7211,93 @@ def test_scheduler_runs_two_localsim_strategies_with_independent_state_and_resta
         assert paper_repo.cash_entries[run_id]
     assert len(selection.calls) == 2
     assert restarted.reused_count == 2
+
+
+def test_scheduler_localsim_realtime_partial_run_resumes_until_all_intents_terminal() -> None:
+    release, local_binding, _, repo = _release_and_bindings(qmt_only=False)
+    assert local_binding is not None
+    paper_repo = InMemoryPaperTradingV2Repository()
+    portfolio_id = "portfolio_localsim_streaming_restart"
+    first_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id, release=release, paper_repository=paper_repo, cash=100_000, positions={}
+    )
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={local_binding.binding_id: first_context}
+        ),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 22),
+    )
+    first = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 32),
+    )
+    assert planned.planned_count == 1
+    assert first.results[0].status == "LOCALSIM_INTRADAY_RUNNING", first.results[0].error
+    assert first.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    assert "local_sim_synchronous_terminal" not in first.results[0].run.run_payload_json
+    assert first.results[0].run.run_payload_json["local_sim_durable_minute_loop"]["terminal"] is False
+    run_id = first.results[0].run.run_id
+    first_states = repo.list_local_sim_execution_states(run_id)
+    assert first_states
+    assert all(not state.is_terminal and state.remaining_quantity > 0 for state in first_states)
+    first_fill_ids = {row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)}
+    assert first_fill_ids
+    with pytest.raises(InvalidStateTransitionError) as cas_error:
+        repo.commit_local_sim_execution_states(
+            run_id=run_id,
+            states=first_states,
+            expected_versions={state.state_id: (state.sequence + 1, "wrong_hash") for state in first_states},
+        )
+    assert cas_error.value.context["reason_code"] == "LOCALSIM_DURABLE_STATE_CAS_CONFLICT"
+
+    first_broker = first_context.local_broker
+    assert first_broker is not None
+    second_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id, release=release, paper_repository=paper_repo,
+        cash=float(first_broker.query_account().cash), positions=first_broker.query_positions(),
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: second_context}
+    )
+    second = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 34),
+    )
+    assert second.results[0].status == "LOCALSIM_INTRADAY_RUNNING"
+    assert second.results[0].run.status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    second_states = repo.list_local_sim_execution_states(run_id)
+    assert all(state.sequence == prior.sequence + 1 for state, prior in zip(second_states, first_states))
+    assert all(state.filled_quantity > prior.filled_quantity for state, prior in zip(second_states, first_states))
+    second_fill_ids = {row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)}
+    assert first_fill_ids < second_fill_ids
+
+    second_broker = second_context.local_broker
+    assert second_broker is not None
+    third_context = _local_sim_realtime_context_with_real_broker(
+        portfolio_id=portfolio_id, release=release, paper_repository=paper_repo,
+        cash=float(second_broker.query_account().cash), positions=second_broker.query_positions(),
+    )
+    scheduler.context_provider = StaticSimulationRunContextProvider(
+        by_binding_id={local_binding.binding_id: third_context}
+    )
+    third = scheduler.run_once(
+        trade_date=TRADE_DATE, data_source=MinuteDataSource.TDX_REALTIME.value,
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, submit=True,
+        as_of_time=datetime(2026, 5, 21, 9, 36),
+    )
+    third_states = repo.list_local_sim_execution_states(run_id)
+    assert all(state.runtime_status.value == "FILLED" and state.remaining_quantity == 0 for state in third_states)
+    assert third.results[0].run.status == SimulationDailyRunStatus.SUCCEEDED
+    terminal_fill_ids = [row["fill_id"] for row in paper_repo.list_fills_for_run(run_id)]
+    assert len(terminal_fill_ids) == len(set(terminal_fill_ids))
 
 
 def test_scheduler_miniqmt_two_strategies_same_stock_keep_strategy_lots_and_merged_reconcile() -> None:

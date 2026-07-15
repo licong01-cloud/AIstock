@@ -468,6 +468,15 @@ runbook 固定顺序：process → lifecycle → binding → data/backend → du
 
 承接 `F-007` 至 `F-012`：建立 durable per-intent/algo state、逐分钟 causal 消费、partial continuation、收盘 residual、重启恢复。不得继续扩展 submit-time 一次性终结模型。
 
+`BUG-660` 实现回执（本变更）：
+
+- `LocalSimExecutionStateV1` 按 `binding + trade_date + plan + intent + algo instance` 生成 canonical identity，包含冻结 schedule/plan hash、next slice、causality cursor、last bar identity、数量闭合、sequence、idempotency key 和 state hash；
+- `simulation_daily_run.run_payload_json.local_sim_execution_states_v1` 是 P0-A durable state plane，repository 使用行锁和 batch CAS，独立 readback 校验 schema/hash；P0-B 仍负责把 economic facts、state、outbox 收敛为同一事务，不能因本项完成而把 `F-013..015` 标记完成；
+- 当日 TDX LocalSIM 只调用 `execute_order_incremental`，当前无 bar 时持久化 `WAITING_FOR_CAUSAL_BAR`，partial 保持 `ACTIVE/INTRADAY_RUNNING`，restart 从 Paper order + durable state 恢复且只消费严格晚于 cursor 的 bar；历史闭市日仍使用完整权威分钟集同步执行；
+- 同一 cursor bar readback payload 改写、duplicate/out-of-order bar、CAS/hash/identity drift、收盘 bar 缺失均 typed failure；完整收盘 bar 后剩余数量进入 `EXPIRED_WITH_RESIDUAL`，不得冒充成功；
+- direct tests 覆盖 waiting、partial continuation、相同 tick replay、restart、不同 payload 冲突、CAS conflict、close residual、close bar missing，以及 scheduler 从计划到多 tick 终态的真实 `MinuteExecutionEngine` 路径；
+- 本项不执行生产 DDL/DML/config，不调用 broker，不重启服务。source merge、运行重启和正常交易日证据继续分开记录。
+
 ### P0-B：LocalSIM 原子事实与权威估值
 
 承接 `F-013` 至 `F-015`：repository transaction/CAS/outbox/readback；移除 reference/limit mark fallback；保证 run/Paper projection/account snapshot/TCA generation 闭合。
@@ -634,7 +643,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
 | `SIM-P-003` | `F-005` | BUG-658 已允许 unchanged authoritative manifest roll-forward 且拒绝虚假变更 | commit `43ce19de`；本设计核对 2 direct tests passed | IMPLEMENTED_VERIFIED | 保持 frozen identity contract |
-| `SIM-P-004` | `F-007..012` | LocalSIM 仍由 submit-time `execute_order` 消费当前 bars，默认 partial，订单立即 terminal | `paper_trading_v2/broker/localsim.py:94,357-368` | REPAIR_REQUIRED | P0-A |
+| `SIM-P-004` | `F-007..012` | BUG-660 已实现 durable per-intent state、batch CAS/readback、realtime incremental minute loop、partial continuation、restart cursor/bar-hash 去重和 close residual；历史闭市日同步路径保持不变 | `paper_trading_v2/broker/localsim.py`、`simulation_runtime/models.py`、`simulation_runtime/repository.py`、`simulation_runtime/scheduler.py`；direct LocalSIM/scheduler tests | IMPLEMENTED_VERIFIED（source pending merge） | P0-B 完成 economic facts/state/outbox 同事务后，用户重启并补正常交易日 runtime evidence |
 | `SIM-P-005` | `F-013,014` | LocalSIM Paper facts 仍为多个 repository 方法顺序写入，无覆盖全链事务/outbox | `simulation_runtime/scheduler.py:7273-7465` | REPAIR_REQUIRED | P0-B |
 | `SIM-P-006` | `F-015` | position marks 仍可从 plan reference/limit price 补值 | `simulation_runtime/scheduler.py:7606-7627` | REPAIR_REQUIRED | P0-B |
 | `SIM-P-007` | `F-016` | MiniQMT canonical runtime 已有真实 tick callback、bootstrap、durable event loop | Phase 1 design/PR #2019、BUG-604/614 tests | IMPLEMENTED_VERIFIED | 唯一路径静态与真实 SIM 持续验证 |
