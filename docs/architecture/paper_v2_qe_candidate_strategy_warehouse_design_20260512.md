@@ -1,7 +1,7 @@
 # Paper v2 / QE 候选策略包与数仓边界正式设计
 
-> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文仅保留 QE / 候选策略包 / 数仓历史背景；凡涉及 StrategyPackage 承载日频策略、分钟线执行、尾盘处理、HMM/ST PIT/event_signal/risk/broker 配置，或用包内 runtime 配置直接驱动模拟盘的描述，均已作废。
-> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+> **2026-07-15 作废/取代声明**：本文已不再作为 LocalSIM / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。模拟盘平台唯一上位蓝图为 `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`。本文仅保留 QE / 候选策略包 / 数仓历史背景；凡涉及 StrategyPackage 承载日频策略、分钟线执行、尾盘处理、HMM/ST PIT/event_signal/risk/broker 配置，或用包内 runtime 配置直接驱动模拟盘的描述，均已作废。
+> 若本文与唯一上位蓝图不一致，以上位蓝图为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
 
 > **2026-05-20 边界更新**：本文中关于 HMM/ST PIT/事件信号平台化的方向保留；但凡写到 `StrategyPackage` 锁定日频策略、分钟线执行策略、尾盘处理策略、组合/风控配置的描述，均已被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。新版边界规定：StrategyPackage 只绑定因子和模型 alpha core；日频策略、分钟执行、尾盘处理、HMM、ST PIT、event_signal、broker、模拟盘/实盘审批全部属于平台运行能力，必须通过版本化 profile/policy/activation 管理。
 

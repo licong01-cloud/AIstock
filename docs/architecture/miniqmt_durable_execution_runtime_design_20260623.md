@@ -1,5 +1,7 @@
 # MiniQMT Durable 执行 Runtime（A 方案）详细设计（2026-06-23）
 
+> 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的 durable event-loop/OMS 下位专项契约。本文中的历史 `A/B`、shadow、fallback 和人工 live gate 术语不得解释为保留第二条 SIM 产品执行路线；当前平台术语与迁移边界以上位蓝图 §6 为准。
+
 > 本文是 ADR 0002 的落地规格。**A = durable、回调驱动的 MiniQMTExecutionRuntime 事件循环**，是 MiniQMT 实盘目标架构。
 > 本文交独立 Codex 窗口做**真实开发**：**不允许任何简化版**，不允许用"合成 timer / 提交后查一次 / JSON 文件 OMS"冒充事件循环，
 > 不允许偏离接缝契约。每阶段受 §9 阶段验收硬门禁与 §10 反回归门禁强制约束，任一不达标即停止合入。

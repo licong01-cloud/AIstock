@@ -1,5 +1,7 @@
 # MiniQMT 唯一执行链路与 vn.py 架构参考统一设计（2026-06-08）
 
+> 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的 MiniQMT runtime 下位专项契约。唯一 runtime、vn.py 语义和 route ownership 继续有效；旧 A/B fallback、compiler、canary 或人工门禁描述仅作为阶段历史，不得覆盖上位蓝图的 `B0_QUOTE_V2` tick 单一路径、自动恢复和无额外审批目标。
+
 > 状态：详细设计方案 / P0 架构统一整改方案
 > 工作分支：`docs/miniqmt-unified-vnpy-execution-design-20260608`
 > 适用范围：AIstock MiniQMT SIM 单策略/多策略模拟盘、未来 MiniQMT Live 执行层基础、Paper v2 MiniQMT 入口、simulation_runtime MiniQMT 入口、qmt_strategy ledger/OMS、operator 清仓/撤单/重置信号入口。

@@ -1,5 +1,7 @@
 # MiniQMT A Phase 7 B Fallback / Retirement Evaluation
 
+> Authority status: `historical_phase_record`. This document records the 2026-06-23 decision only. The current authoritative target and terminology are defined by [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) section 6. It must not be used to recreate the compiler/B fallback or a second SIM product execution route.
+
 > Date: 2026-06-23
 > Scope: Phase 7 evaluation for ADR 0002 and `miniqmt_durable_execution_runtime_design_20260623.md`.
 > Conclusion: keep B as an explicit fallback; do not delete B in this phase.
