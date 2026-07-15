@@ -3,7 +3,7 @@
 - 文档类型：F2 因子研发规格 / Gate-0 开发指引（`develop-factor`）
 - 主线：板块轮动（sector rotation）——让模型显式理解板块归属、轮动速度、成员参与度与板块内结构
 - 初版日期：2026-07-10
-- 当前版本：v4.4（R6/R7 正式结果、R8 长周期/多模型/多腿计划与执行总账，2026-07-15）
+- 当前版本：v4.5（R7B 正式结果、R8A/R8B 已启动及长期趋势研究进度总账，2026-07-15）
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 
@@ -77,7 +77,7 @@
 
 ### 2.4 v4 路线补全边界
 
-第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向。v4.2 进一步用 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 冻结 F-014 的计算、制品、数仓、API/MCP/UI 和历史结果评价契约；v4.3 把该能力收紧为 QE-only：只由 QE task/Loop 显式触发，只读 QE dataset，只写 QE 专属 CAS namespace 与三张 additive evaluation 表，只在 `/quantevolver`、`/qe-archive` 和 QE MCP 展示。通用 Prediction Store、既有 Archive 通用表以及 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 的服务、表、缓存、调度和 UI 均不得修改。v4.4 在不改变上述隔离边界的前提下，将已完成的 R6/R7A 正式结果、R7B 与 R8 后续实验卡、当前因子库/数据状态写回原有路线章节，使本文同时承担设计蓝图与研究执行总账。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
+第 2.3、11.1、Phase G0-A–G0-C、15–17 节保留 Gate-0 当时的交付与门禁证据，不把历史 receipt 改写成当前运行状态。v4 新增的第 4.10、9.4–9.9、11.6 与 Phase G0-E–G0-G 是 post-R6 研究方向。v4.2 进一步用 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 冻结 F-014 的计算、制品、数仓、API/MCP/UI 和历史结果评价契约；v4.3 把该能力收紧为 QE-only：只由 QE task/Loop 显式触发，只读 QE dataset，只写 QE 专属 CAS namespace 与三张 additive evaluation 表，只在 `/quantevolver`、`/qe-archive` 和 QE MCP 展示。通用 Prediction Store、既有 Archive 通用表以及 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 的服务、表、缓存、调度和 UI 均不得修改。v4.4 在不改变上述隔离边界的前提下，将已完成的 R6/R7A 正式结果、R7B 与 R8 后续实验卡、当前因子库/数据状态写回原有路线章节，使本文同时承担设计蓝图与研究执行总账。v4.5 进一步写回 R7B 正式结果和 R8A/R8B 已启动的任务 receipt，并将 R8B 从“等待 R8A 结果后条件进入”校准为预注册 h40/h60 的并行 LSTM canary；该调整不允许依据中途结果改变期限、输入窗口、超参或种子。后续每个实验必须引用 F-013–F-017，并在创建任务前把数据快照、预测资产、种子、切分、资源类和并行策略写入实验卡。
 
 ### 2.5 当前执行总账（截至 2026-07-15）
 
@@ -90,11 +90,11 @@
 | R6 LGBM 因子析因 | `COMPLETED` | `qe_20260714_104829_a9ca`，5 个因子集 × 3 seeds，15/15 Loop 完成 | `G14-FP` 是风险收益与信号强度较均衡的 h20 锚点；`G15-FPL` RankIC 更高但收益转换未同步提高。 |
 | R6 GAT 因子析因 | `COMPLETED` | `qe_20260714_104830_0230`，5 个因子集 × 3 seeds，15/15 Loop 完成 | `G12 + l2 embedding` 保留关系模型对照价值；新增 F/P/L 在 GAT 上未形成稳定的普遍增量。 |
 | R7A 两腿 `equal + rank` | `COMPLETED_NO_PROMOTION` | `macb_365aed6303e71d6e_20240701_20260629_20260714T174425343045Z` | 组合 Sharpe/Calmar 均低于 LGBM 基线；证明“低重合/正交”不等于成本后组合增益。 |
-| R7B 两腿 `equal + zscore` | `PLANNED_NOT_STARTED` | 第 9.4.4 节冻结实验卡 | 只改变归一化方法，完成后决定是否停止当前 GAT+LGBM prediction-fusion 路线。 |
+| R7B 两腿 `equal + zscore` | `COMPLETED_NO_PROMOTION` | `macb_365aed6303e71d6e_20240701_20260629_20260714T190901628242Z` | CAGR 67.95%、Sharpe 1.8313、Calmar 3.5429；较 R7A 略改善，但 Sharpe/Calmar 仍分别落后 LGBM 基线 0.1902/0.1200，停止当前 prediction-fusion 权重扩展。 |
 | 30/40/60/120/180D 标签基础架构 | `IMPLEMENTED` | `ALLOWED_LABEL_HORIZONS`、`LongHorizonLabelMaturityPurge` 及对应测试 | 可训练长周期标签；标签期限不等于 LSTM 输入窗口或策略持仓期。 |
 | F-014 长期趋势评价层 | `DESIGN_READY_CODE_PENDING` | `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` | QE-only 设计完成；evaluator、QE CAS/三表、API/MCP/UI、DDL 和实际 R6/R8 评价仍待独立实现与验收。 |
-| R8A 长周期 LGBM 对照 | `PLANNED_NOT_STARTED` | 第 9.6.1 节冻结实验卡 | h30/h40/h60/h120 × 3 seeds；复用 h20 基线，先识别标签期限增量。 |
-| R8B LSTM 长周期对照 | `CONDITIONAL` | 第 9.6.2 节 | 只在 R8A 选出的两个期限上执行，避免标签期限、输入窗口和模型架构同时变化。 |
+| R8A 长周期 LGBM 对照 | `RUNNING_PRELIMINARY` | `qe_20260715_101942_d873`；12 个 CPU Loop；`rdagent-node1` 并行 4 | h30/h40/h60/h120 × 3 seeds 已启动；复用 h20 基线，任务完成与 F-014 评价层落地前不得选定长期期限。 |
+| R8B LSTM 长周期对照 | `RUNNING_PRELIMINARY` | `qe_20260715_104922_001d`；6 个 GPU Loop；`wsl2-5080` 并行 2 | 预注册 h40/h60 × 3 seeds、`step_len=20`；与 R8A 同数据/因子/切分，仅改变模型族，禁止中途改设计。 |
 | 两层板块→个股模型 | `PLANNED_NOT_STARTED` | 第 9.5 节 | 先证明板块 Recall，再判断板块内 leadership；通过后才竞争第三条组合腿。 |
 | HIST/动态多关系/概念超图 | `DEFERRED` / `BLOCKED_BY_PIT_DATASET` | 第 9.7–9.8 节 | HIST-industry 后置到低成本标签/组合验证之后；概念方向继续等待独立 PIT 数据集。 |
 
@@ -417,7 +417,7 @@ Gate-0 已修复 tracked regeneration source `scripts/p1_new_factors.py` 中的 
 | active `factor_implementation_source_data` | 22 个 `sw2_*` 字段，无 `l2_code_id` | 122 列，无 `l2_code_id` | 不能用于 A1–A6/B1/B2/N1 的正式离线验证。 |
 | candidate `factor_implementation_source_data_20260428_candidate` | 23 列，含 `l2_code_id` | 120 个数据列，无 `l2_code_id` | `sector_data.h5` 已满足；旧 bundle 缺离散行业键。 |
 | Gate-0 隔离产物 `gate0_sector_factor_candidate_20260711` | 复用上述 23 列 candidate | 121 个数据列；旧 candidate 的 120 个数据列全部保留并新增 `l2_code_id=int16` | 已完成物理/schema/指纹验证；仍为 gitignored candidate，未 promotion。 |
-| 当前 WSL QE `factor_data`（2018-08-01 至 2026-06-30） | 23 列，含 `l2_code_id` | 123 个数据列，含 `l2_code_id=int16` | 已被 R6 的 30 个正式 Loop 与 R7A 组合回测实际读取；满足当前 QE 研究，不外推为非 QE 运行时 readiness。 |
+| 当前 QE `factor_data`（2018-08-01 至 2026-06-30） | 23 列，含 `l2_code_id` | 123 个数据列，含 `l2_code_id=int16` | WSL 副本已被 R6/R7 与 R8B 实际读取，同身份远端副本正被 R8A 使用；满足当前 QE 研究，不外推为非 QE 运行时 readiness。 |
 
 2026-07-11 Gate-0 实测审计：candidate `sector_data.h5` 共 7,334,829 行、1,876 个交易日、4,691 只股票，日期为 2018-08-01 至 2026-04-28，131 个已知板块，源表 `l2_code_id` 覆盖率 100%。旧生成器会把所有列统一转为 `float32` 且遗漏 `margin_detail.h5`，因此旧 candidate bundle 不具备离散类别键语义。修复后隔离生成产物为 7,304,119 行、4,691 只股票、1,876 日：7,303,993 行为已知板块，126 行显式为 unknown `-1`，known coverage 为 99.99827494595858%，取值范围 `[-1,133]`，共 131 个已知板块；旧 120 个数据列全部保留，共同字段 dtype 无变化，只新增 `l2_code_id=int16`。`static_factors.parquet` SHA-256 为 `FE91FA9C519F4FD501D5E979F03B604C66F3904387B48C0E982D8366747D60A6`；schema JSON/CSV SHA-256 分别为 `04252DD8E8941CDD8018885B1BBBE95F4C606FBAEE49C61BAB6E1986DFFF5DFE`、`D193BDBF4B003291B5FD708A1D420FF14E6526C3473F5E786F869889B81B6FD6`。产物仍在任务 worktree 的 gitignored 目录，未修改旧 candidate、active 或数据库。
 
@@ -600,11 +600,16 @@ R6 结论冻结如下：
 
 R7A 的停止结论是 `COMPLETED_NO_PROMOTION`：组合管线已经通过真实回测，但等权 rank 未改善 LGBM 的风险调整后收益。历史 canary 的 RankIC 增量、较低预测相关和较低 TopK 重合不能推翻正式组合结果。当前 GAT 腿不得直接进入默认 Type B 多 Alpha 包，也不允许通过增加总风险、总持仓或事后改权制造“增量”。
 
-#### 9.4.4 R7B 单变量敏感性实验卡
+#### 9.4.4 R7B 正式结果与停止结论（2026-07-15）
 
-R7B 保持 R7A 的两条腿、seed ensemble、OOS、Top50、成本、执行器、风险预算和 baseline 完全不变，唯一允许变化为 `normalize_method: rank -> zscore`，权重继续固定 `0.5/0.5`。LGBM mirror baseline 应与 R7A 一致或仅有可解释的数值误差；出现实质漂移时先诊断制品/模板，不解释为 alpha。
+R7B 严格执行 R7A 的单变量敏感性：seed ensemble、OOS、Top50、固定等权和 baseline 全部不变，仅将 `normalize_method: rank -> zscore`。正式 run 为 `macb_365aed6303e71d6e_20240701_20260629_20260714T190901628242Z`，状态 `succeeded`；OOS 为 2024-07-01 至 2026-06-29，LGBM G14-FP h20 与 GAT G12 embedding h20 各使用三种子 ensemble，权重固定 `0.5/0.5`。
 
-R7B 尚未创建或运行。若 R7B 的成本后 Sharpe/Calmar 仍不超过 LGBM，或改善只来自更大暴露/回撤，则停止当前 GAT+LGBM prediction-fusion 路线，保留 GAT 作为关系研究基线；不得在 test 后再尝试任意权重网格。只有 R7B 通过，才允许在独立 validation 冻结 `ic_weighted/risk_parity` 权重并执行 portfolio fusion。
+| 方案 | CAGR | Sharpe | Calmar | 最大回撤 | TopK h20 收益 | TopK 命中率 | 换手 | 相对 LGBM Sharpe / Calmar |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| R7A `equal + rank` | 66.48% | 1.8052 | 3.3445 | -19.88% | 6.0834% | 59.05% | 17.82 | -0.2163 / -0.3184 |
+| R7B `equal + zscore` | 67.95% | 1.8313 | 3.5429 | -19.18% | 6.3768% | 58.63% | 23.54 | -0.1902 / -0.1200 |
+
+R7B 相对 R7A 的 CAGR、Sharpe、Calmar 和最大回撤分别改善约 1.47 个百分点、0.0261、0.1984 和 0.70 个百分点，但 TopK 命中率下降约 0.42 个百分点，换手增加约 5.72。更重要的是，R7B 的 Sharpe/Calmar 仍低于同口径 LGBM baseline，因此状态为 `COMPLETED_NO_PROMOTION`。预注册停止条件已经触发：不继续试 `ic_weighted/risk_parity` 等 prediction-fusion 权重变体；后续资源转向长周期标签腿、两层板块模型以及通过独立门禁的 portfolio fusion/LOO。
 
 ### 9.5 两层板块轮动模型
 
@@ -654,15 +659,19 @@ F-014 的可实施详细设计已固化在 `docs/architecture/qe_long_trend_eval
 
 h30 是 h20→h40 的插值控制，h40/h60 是第一优先的两月至一季度趋势目标，h120 是半年趋势探针。h120 会从每个 learning segment 屏蔽最后 121 个交易日标签，有效样本和近期成熟标签显著减少；必须同时报告统一共同成熟截止日和各期限最大可用截止日，不得因长周期样本更少而直接用原始 IC 大小择优。R8A 可以在现有指标链上先完成初筛，但 F-014 evaluator 未实现前只能标记 `PRELIMINARY_HORIZON_SCREEN`，不能宣布长期趋势目标已经通过。
 
-#### 9.6.2 R8B LSTM 与其他模型的条件进入顺序
+R8A 已按上述冻结卡创建并启动，task 为 `qe_20260715_101942_d873`，名称为 `R8A-CPU Type-B G14-FP 长周期标签 h30-h120 4horizon x 3seed LGBM`。12 个 Loop 固定分配到 `rdagent-node1`，并行度 4；本次更新查询时任务为 `running`，首批 h30 三种子与 h40/seed123 已进入运行。任务使用 `filtered_pool_20260630`、G14-FP 14 因子、Alpha158 off、`score_weighted_topk_v2`、Top50、`V25_1_SMALL_CAP`、同一数据 split、费用和 QE-only ST PIT。任何已完成子 Loop 的中途指标都不得触发缩减期限、增加模型或变更种子。
 
-R8B 只对 R8A 选出的两个期限运行已验证的 LSTM 配置，每个期限使用 seeds `123/314/2718`，首轮固定 `step_len=20`，共 6 个 `gpu_parallel_standard` Loop。这样只比较 LGBM 与 LSTM 的模型归纳偏置；若 LSTM 在长期捕获、种子稳定性或与 LGBM 的组合边际上通过，再另立 R8B2 对胜出标签测试 `step_len=20/40/60`，不得回写 R8B 结果。
+#### 9.6.2 R8B LSTM 预注册 canary 与其他模型进入顺序
+
+R8B 不读取 R8A 中途结果，而是提前预注册 h40/h60 两个业务优先期限作为并行 canary；每个期限使用 seeds `123/314/2718`，首轮固定 `step_len=20`，共 6 个 `gpu_parallel_standard` Loop。这样可在 R8A 完成前利用独立 GPU 节点缩短等待时间，同时仍能在事后按同期限、同种子比较 LGBM 与 LSTM 的模型归纳偏置。若 LSTM 在长期捕获、种子稳定性或与 LGBM 的组合边际上通过，再另立 R8B2 对胜出标签测试 `step_len=20/40/60`，不得回写或自适应修改 R8B。
+
+R8B 已创建并启动，task 为 `qe_20260715_104922_001d`，名称为 `R8B-GPU Type-B G14-FP LSTM h40-h60 2horizon x 3seed canary`。模型固定 `__seed_LSTM_10D_hs64_d02__`，使用 `TimeSeries`/`TSDatasetH`、`step_len=20`；G14-FP 14 因子、数据快照、股票池、split、Alpha158、策略、Top50、执行算法、费用和 QE-only ST PIT 与 R8A 完全一致，仅模型族和预注册期限矩阵不同。6 个 Loop 分配到 `wsl2-5080`，并行度 2；本次更新查询时任务为 `running`，h40/seed123 与 h40/seed314 已有真实 runner 进程。启动前节点 Results API 曾离线，按正式服务入口恢复并 probe 后原配置启动成功，未降级 CPU、未改变实验卡；该事件只作为 F-017 运行证据，不作为研究收益证据。
 
 模型优先级冻结为：
 
 1. LSTM：第一挑战者；历史 h20 有正向证据，但必须在 2026-06-30 同口径数据上重跑。
 2. TCN：只有 LSTM 显示时序结构增量后，才对一个胜出期限做 canary；既有 h20 结果较弱，不进入首轮全矩阵。
-3. GAT：R7B 未通过前不扩展至 h40/h60；关系研究继续按 HIST/动态边路线独立推进。
+3. GAT：R7B 已完成但未晋级，因此当前 GAT prediction-fusion 不扩展至 h40/h60；关系研究继续按 HIST/动态边路线独立推进。
 4. 时间维 Transformer：既有 RankIC 近零，状态保持 `KILL_EQUIVALENT_ARCHITECTURE`。
 5. GRU/CatBoost/XGBoost/TabPFN：不是当前 Type B 的优先机制探针；只有 LGBM/LSTM 与两层板块模型均不能解释剩余误差时再立独立实验卡。
 
@@ -676,7 +685,7 @@ R8B 只对 R8A 选出的两个期限运行已验证的 LSTM 配置，每个期�
 | 长周期趋势腿 | R8A/R8B 胜出的 h40/h60 LGBM 或 LSTM | 长期指标通过，且相对 h20 具备预测/TopK/持仓增量 |
 | 板块决策/关系腿 | 两层板块→个股模型；后续 HIST-industry | 板块 Recall 与板块内排序分别通过；同风险预算下增加净收益或降低回撤 |
 
-h30、h40、h60、h120 不是天然的四条腿。任一候选加入组合前必须报告每日预测 rank 相关、TopK/行业暴露/换手重合、validation 冻结权重、固定总持仓/风险/成本、最近 1 年与 6 个月/科技抱团 regime、容量和 leave-one-leg-out。删除某腿后组合更好、增量只来自扩大风险预算，或相邻期限高度同质且无 LOO 边际时，该腿不得进入组合。当前 GAT G12 不占用默认第三腿名额；只有 R7B 或后续关系机制给出正式组合增量后重新竞争。
+h30、h40、h60、h120 不是天然的四条腿。任一候选加入组合前必须报告每日预测 rank 相关、TopK/行业暴露/换手重合、validation 冻结权重、固定总持仓/风险/成本、最近 1 年与 6 个月/科技抱团 regime、容量和 leave-one-leg-out。删除某腿后组合更好、增量只来自扩大风险预算，或相邻期限高度同质且无 LOO 边际时，该腿不得进入组合。当前 GAT G12 不占用默认第三腿名额；R7B 已确定未晋级，只有后续关系机制给出新的正式组合增量后才能重新竞争。
 
 ### 9.7 PIT 关系模型路线
 
@@ -698,14 +707,14 @@ h30、h40、h60、h120 不是天然的四条腿。任一候选加入组合前必
 
 ### 9.9 执行顺序与资源门禁
 
-截至 2026-07-15，R6 已收口、R7A 已完成但未晋级。后续默认顺序更新为：
+截至 2026-07-15，R6 已收口，R7A/R7B 均完成但未晋级，R8A/R8B 已按预注册卡并行运行。后续默认顺序更新为：
 
-1. **R7B**：完成同两腿 `equal + zscore` 单变量敏感性；不通过即停止当前 GAT+LGBM prediction-fusion 扩展。
-2. **R8A**：LGBM G14-FP 的 h30/h40/h60/h120 三种子期限扫描；h20 复用 R6。
-3. **F-014 evaluator 实现**：可与 R8A 训练并行开发，但在 evaluator/数仓/API/MCP/UI、DDL 和 QE-only 隔离验收完成前，R8A 只能形成 preliminary 期限结论。
-4. **R8B**：仅对 R8A 选出的两个期限运行 LSTM；模型通过后再单独研究 step length。
-5. **两层板块模型**：板块评分→板块内选股，与 R8A/R8B 可在不同节点串行资源约束下并行准备；正式组合结论等待其独立基线完成。
-6. **R8C 最多三腿组合**：h20 锚点 + 长周期胜者 + 两层/关系胜者，固定风险预算并做 LOO。
+1. **等待并完整归档 R8A/R8B**：不得根据中途 Loop 调整 horizon、step length、超参或 seeds；R8A 使用远端 CPU 4 并行，R8B 使用本地 GPU 2 并行，资源与 recorder 隔离。
+2. **F-014 evaluator 实现**：可与训练并行开发，但在 evaluator/数仓/API/MCP/UI、DDL 和 QE-only 隔离验收完成前，R8A/R8B 只能形成 preliminary 期限/模型筛选结论。
+3. **R8A/R8B 完成后统一分析**：先比较同期限、同种子的 LGBM/LSTM，再用 h20 锚点判断标签增量；不得只用单个最好 Loop 或原始 RankIC 宣布胜者。
+4. **两层板块模型**：板块评分→板块内选股，可在不占用当前训练资源的设计/数据准备层并行推进；正式组合结论等待其独立基线完成。
+5. **R8B2 条件实验**：仅当 LSTM 在 h40/h60 之一形成稳定增量时，才单独比较 `step_len=20/40/60`；TCN 只做一个胜出期限 canary。
+6. **R8C 最多三腿组合**：h20 锚点 + 长周期胜者 + 两层/关系胜者，固定风险预算并做 LOO；R7A/R7B 已证明正交性本身不构成准入。
 7. **关系/概念后续**：HIST-industry canary → 动态多关系图 → 概念 PIT 数据与概念模型 → MASTER/IGMTF/TRA 条件探针。
 
 低成本、复用预测的实验先于新架构训练；同一研究阶段不得为了等待一个节点而擅自提升图模型并行度。
@@ -787,9 +796,9 @@ h30、h40、h60、h120 不是天然的四条腿。任一候选加入组合前必
 
 - 历史 GATs/LGBM prediction-fusion canary receipt：预测/标签逐行对齐、正交性、Top25 重合、预冻结等权 rank/zscore 与信号级 h20 结果已完成；
 - R6 正式同数据/同 split/同 seeds 的 LGBM/GAT 5 因子集 × 3 seeds 共 30 个 Loop 已完成；任务、因子集聚合和失败归因见第 9.4.2 节；
-- R7A `equal + rank` 正式组合回测已成功执行但未超过 LGBM Sharpe/Calmar，状态 `COMPLETED_NO_PROMOTION`；R7B `equal + zscore` 尚未开始；portfolio fusion、完整 LOO、容量与风险预算敏感性继续 pending；
+- R7A `equal + rank` 与 R7B `equal + zscore` 正式组合回测均已成功执行但未超过 LGBM Sharpe/Calmar，状态均为 `COMPLETED_NO_PROMOTION`；R7B 相对 R7A 略改善但换手更高，当前 prediction-fusion 权重扩展停止；portfolio fusion、完整 LOO、容量与风险预算敏感性继续 pending；
 - 两层板块→个股模型的板块评分、板块 Recall、板块内排序、集中度/轮动成本及一层模型对照；
-- R8A/R8B/R8C 实验卡：长周期标签扫描、LSTM 条件对照和最多三腿准入/LOO 已冻结，尚未创建任务；
+- R8A/R8B/R8C 实验卡：R8A LGBM 长周期标签扫描 `qe_20260715_101942_d873` 与 R8B LSTM 预注册 canary `qe_20260715_104922_001d` 已创建并运行；R8C 仍等待长期趋势胜者、两层/关系胜者和 F-014 评价证据；
 - 与 Advisory Phase 8 对齐的 20–180 日、MFE/MAE、有序目标、time-to-hit、生存、右删失、捕获率和假退出报告仍 pending；
 - F-014 详细设计：`docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md`，覆盖同一 evaluator 的正常 Loop/`long_trend_only`、双快照、QE-only CAS/三表数仓、QE API/MCP/UI、失败语义、重启恢复和非 QE 模块零影响门禁；当前为设计完成、代码/DDL/实际评价 pending；
 - HIST-industry 的逐日 PIT relation artifact、mapping hash、`stock_index` 对齐测试、composer/fit/predict canary 与资源 receipt；
@@ -847,8 +856,8 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 ### Phase G0-E：post-R6 归因与长期趋势闭环
 
 1. `[COMPLETED]` R6 已冻结并归档：同数据、同 split、同三 seeds 的 LGBM/GAT 五因子集共 30 个 Loop 全部完成；失败/不完整 Loop 不参与本次聚合。
-2. `[PARTIAL]` R7A 已完成 `equal + rank` 正式组合回测且未晋级；下一步仅执行 R7B `equal + zscore`。若仍不超过 LGBM，停止当前 prediction-fusion 权重扩展；portfolio fusion 与完整 LOO 保持 pending。
-3. `[PLANNED]` 按第 9.6.1–9.6.2 节执行 R8A 标签期限扫描和条件 R8B LSTM；不能把 label horizon、step length 与持仓期限混成一个变更。
+2. `[COMPLETED_NO_PROMOTION]` R7A `equal + rank` 与 R7B `equal + zscore` 均已完成；R7B 仍不超过 LGBM，当前 prediction-fusion 权重扩展按预注册规则停止，portfolio fusion 与完整 LOO 保持 pending。
+3. `[RUNNING_PRELIMINARY]` 按第 9.6.1–9.6.2 节运行 R8A 标签期限扫描与预注册 R8B LSTM canary；R8B 固定 h40/h60 和 `step_len=20`，不能把 label horizon、step length 与持仓期限混成一个变更，也不能按中途结果改卡。
 4. `[DESIGN_READY]` 按 `docs/architecture/qe_long_trend_evaluation_f2_design_20260714.md` 实现 QE-only evaluator，再对单腿与组合补长期趋势指标。F2 设计已就绪，代码、DDL、重启和实际评价仍按独立任务与门禁执行。
 5. `[PLANNED]` 执行第 9.5 节两层板块→个股基线；只有长期趋势胜者和两层模型分别通过后，才按第 9.6.3 节组建最多三腿 R8C。不能转化为 60–180 日右尾捕获时，应回到因子/标签，不继续堆模型容量或腿数。
 
@@ -882,7 +891,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | L1 | quick horizon/direction/manifest/HAC、bundle dtype/unknown/schema、F4 PIT/conflict、RD h20 engine/API 单测 | 本批必须 PASS。 |
 | L2 | 隔离的 nullable schema/upsert 参数、official summary positional mapping、router/MCP emit/旧 payload 回归 | 本批必须 PASS；不执行生产 DDL。 |
 | L3 | 真实 2026-06-30 数据、官方指标/相关性与 QE 因子加载 | 三个因子独立指标/基本相关性和 R6 离线加载已完成；realtime parity 仍 pending。 |
-| L4 | GATs/LGBM、融合/两层模型、长期趋势、PIT 关系模型、成本容量、拥挤/尾部、DSR/PBO 与多种子业务流 | R4/R6/R7A 已完成部分证据；R7B、R8、两层、F-014 evaluator、capacity/DSR/PBO 与关系模型继续按 F-010、F-013–F-017 验收。 |
+| L4 | GATs/LGBM、融合/两层模型、长期趋势、PIT 关系模型、成本容量、拥挤/尾部、DSR/PBO 与多种子业务流 | R4/R6/R7A/R7B 已完成部分证据，R8A/R8B 运行中；两层、F-014 evaluator、capacity/DSR/PBO 与关系模型继续按 F-010、F-013–F-017 验收。 |
 | L5 | 生产 DDL/回填、freshness、candidate → active、服务与 paper/live 运行时验收 | `APPROVED_BY_USER: DEFERRED_TO_PRODUCTION_GATE`。 |
 
 新增/修改业务逻辑的覆盖率目标为 line ≥ 80%、branch ≥ 70%；优先由定向 pytest coverage/CI 记录。若因嵌入式因子代码或外部引擎边界无法可靠计量，必须用上述 business oracle 分支测试补证并在矩阵记录明确例外，不得以全仓平均覆盖率掩盖关键路径。
@@ -905,7 +914,7 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | Targeted coverage | quick screen + shared h20 contract 的 line/branch coverage | 29 tests；combined coverage 92%，shared contract 100%；F4 嵌入代码以 oracle 两分支补证。 |
 | Repository | compile/lint/diff/targeted pytest | 两仓各自通过；已知基线告警与本次新增问题分离。 |
 | Baseline authority audit | `test_factor_metrics_authority_static.py` | 14 passed/2 failed；失败均在未修改的 origin/main 文件：4 个既有硬编码本地路径，以及测试引用已不存在的 `MultiAlphaGroupEditor.tsx`。不作为本批成功证据，也不归因于本改动。 |
-| External gate | 真实数据 E2E、生产 DDL、promotion、QE | QE 数据/R6/R7A 已更新；F-014 DDL、realtime parity、promotion 与 paper/live 继续按 L3/L4/L5 单独授权。 |
+| External gate | 真实数据 E2E、生产 DDL、promotion、QE | QE 数据、R6/R7 正式结果和 R8A/R8B 运行 receipt 已更新；F-014 DDL、realtime parity、promotion 与 paper/live 继续按 L3/L4/L5 单独授权。 |
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
@@ -919,20 +928,20 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 | F-006 | AIstock `scripts/p1_new_factors.py` F4/R2 tracked repair source | PIT 当前行业历史与冲突 fail-fast 2 passed；旧 catalog 口径失效已记录 | VERIFIED | 无 |
 | F-007 | 后续候选 asset/realtime loader | 三个候选已登记并由 R6 QE 离线执行；catalog asset/transformation 状态复核 | APPROVED_BY_USER: PARTIAL_QE_ASSET_READY | catalog 1525/1528/1532 `is_available=true` 且 QE 可运行；`asset_status/transformation_status=pending/PENDING`、`realtime_code_text` 为空，离线/实时 parity 与荐股/模拟盘加载仍未验收。 |
 | F-008 | 因子库 MCP + Stage 0/3 | 2026-06-30 官方 h20 批次；每因子 583 个基本相关性 pair；第 3.1 节 | APPROVED_BY_USER: PARTIAL_OFFICIAL_METRICS_CORR_COMPLETE | 独立指标和基本相关性已完成；板块原生层、partial/residual IC、完整分类/去重处置仍按候选门禁后置。 |
-| F-009 | Stage 1/3 + portfolio evaluator | R6/R7A 已有成本后回测；HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: PARTIAL_QE_BACKTEST_COMPLETE | 已有统一回测但未完成多规模 capacity、冲击/拥挤、DSR/PBO 和完整 portfolio fusion；不得 promotion。 |
+| F-009 | Stage 1/3 + portfolio evaluator | R6/R7A/R7B 已有成本后回测；HAC/bootstrap/DSR/PBO/cost/capacity/crowding 设计与 L4 oracle | APPROVED_BY_USER: PARTIAL_QE_BACKTEST_COMPLETE | 已有统一回测但未完成多规模 capacity、冲击/拥挤、DSR/PBO 和完整 portfolio fusion；不得 promotion。 |
 | F-010 | QE GATs/LGBM experiment specs | R4 二值邻接、R6 30 Loop、multi-seed OOS 与第 9.4.2 节 | APPROVED_BY_USER: PARTIAL_R6_COMPLETE | 2×2/真码邻接和 R6 LGBM/GAT 多种子已完成；长期标签、两层模型和完整 L4 成本容量验收仍 pending。 |
 | F-011 | 两仓隔离 worktree 与第 17 节 | active/旧 candidate/production DB/DDL/runtime 均未修改 | VERIFIED | 无 |
 | F-012 | 两仓定向测试、lint/compile/diff 与 F2 validation | AIstock 99 passed/1 skipped；RD-Agent 11 passed；F2 PASS；authority 14 passed/2 个 origin/main 既有失败已分离；PR/merge 分离 | VERIFIED | 无 |
-| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | R6 同口径 prediction receipt；R7A 正式回测；固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_FORMAL_BACKTEST_COMPLETE | R7A `equal+rank` 已成功执行但 Sharpe/Calmar 低于 LGBM，未晋级；R7B、portfolio fusion、完整 LOO、容量和两层模型仍 pending。 |
-| F-014 | 本文 9.6、11.6、Phase G0-E；`qe_long_trend_evaluation_f2_design_20260714.md`；Advisory Phase 8 | 20–180 日标签基础架构；有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit；双快照、QE-only CAS/三表数仓/API/MCP/UI | APPROVED_BY_USER: DESIGN_AND_LABEL_INFRA_READY | 30–180D 标签与 maturity purge 已实现；F2 详细设计 v1.1 与 21 项 DAI 已完成。evaluator、DDL、API/MCP/UI、R8 任务和实际长期评价仍 pending。 |
+| F-013 | 本文 4.10、9.4–9.5、11.6、Phase G0-E | R6 同口径 prediction receipt；R7A/R7B 正式回测；固定风险预算、长期成本后组合与 leave-one-leg-out | APPROVED_BY_USER: PARTIAL_FORMAL_BACKTEST_COMPLETE | R7A/R7B 均成功但 Sharpe/Calmar 低于 LGBM，prediction-fusion 权重扩展停止；portfolio fusion、完整 LOO、容量和两层模型仍 pending。 |
+| F-014 | 本文 9.6、11.6、Phase G0-E；`qe_long_trend_evaluation_f2_design_20260714.md`；Advisory Phase 8 | 20–180 日标签基础架构；R8A/R8B 任务 receipt；有序 barrier、MFE/MAE、time-to-hit、生存/删失、capture/false-exit；双快照、QE-only CAS/三表数仓/API/MCP/UI | APPROVED_BY_USER: LABEL_INFRA_READY_EXPERIMENTS_RUNNING | 30–180D 标签与 maturity purge 已实现；R8A/R8B 已运行。F2 evaluator、DDL、API/MCP/UI 和实际长期趋势评价仍 pending，当前结果只能 preliminary。 |
 | F-015 | 本文 4.10、9.7、Phase G0-F | R4 真码邻接 receipt；未来 HIST PIT relation、mapping 对齐、composer/resource canary 和逐关系消融 | APPROVED_BY_USER: DEFERRED_TO_POST_R6 | 二值同业邻接已测试且 RankIC 无增益；动态/层次关系尚未实现。 |
 | F-016 | 本文 4.10、9.8、Phase G0-G | 概念 PIT 数据设计、成员变更/多成员/版本/回放验收，随后才有 HIST-concept/HATS/超图证据 | APPROVED_BY_USER: DEFERRED_TO_CONCEPT_DATASET | 当前概念成员 PIT 数据集未入库，不允许静态快照或聚合板块数据替代。 |
-| F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品、combine-backtest 与 restart recovery | APPROVED_BY_USER: PARTIAL_RUNTIME_VERIFIED | R6 的 30 Loop 和 BUG-649/652 修复后的 R7A 成功证明当前 CPU/GPU/组合路径可运行；图模型仍保持串行，远端 4 并行、所有失败恢复和长周期 evaluator 重启恢复需按各实验继续留证。 |
+| F-017 | 本文 9.9、Phase G0-F、14.3 | 模型资源分类、cache/recorder 隔离、并行制品、combine-backtest 与 restart recovery | APPROVED_BY_USER: PARTIAL_RUNTIME_VERIFIED | R6、R7A/R7B 证明组合路径可运行；R8A 已按远端 CPU 4 并行、R8B 已按标准 GPU 模型 2 并行启动。R8B 节点入口离线后经正式 Results API 恢复与 probe 成功且无降级；全部 Loop 归档、失败恢复和 F-014 重启恢复仍需继续留证。 |
 
 ## 16. Rollout / Rollback / 发布回滚
 
 - Gate-0/运行时状态：基础代码、2026-06-30 QE 数据、长标签支持和 R7 combine-backtest 修复已经分别完成；合并、数据部署、实验成功和生产启用仍是不同事实。
-- v4.4 文档 rollout：仅更新本蓝图并合入 F-014 QE-only 详细设计，不修改代码、DB、数据、任务或运行时；无需服务重启。
+- v4.5 文档 rollout：仅把已由独立授权创建的 R7B/R8A/R8B receipt 与结果写回蓝图；本次文档变更自身不创建/停止任务，不修改代码、DB、数据或生产运行时，无需服务重启。R8B 启动前恢复的本地 QE Results API 属已执行实验的节点运行事实，不属于本文档任务的生产激活。
 - Schema rollout：现有 factor h20 指标已可用；未来 F-014 三表必须通过版本化 migration 和独立 DDL 授权，依赖既有每日备份，不在 DDL 前额外导出数据库。
 - Data rollout：R8 默认继续冻结 2026-06-30 QE 快照；任何新快照另立 dataset identity 并保留上一版本回滚，不影响非 QE PIT/模拟盘数据。
 - Rollback：文档按 PR revert；未来 evaluator/schema 可停止新写入并保留历史 receipt，数据回切上一版本；任何回滚不得删除试验台账、预测或评价制品。
@@ -942,16 +951,16 @@ F-001–F-006 通过且隔离 candidate 达到 `research-ready` 后，即可用 
 
 | gate | 本批状态 | 放行条件 |
 |---|---|---|
-| source merge | GATE0_AND_RUNTIME_FIXES_MERGED | Gate-0、长标签基础架构和 R7 combine-backtest 修复已进入 main；本 v4.4 文档与 F-014 设计随当前文档 PR 合入。 |
-| QE dataset | VERIFIED_20260630 | 当前 WSL QE 快照已支持 R6/R7；未来数据切换继续要求版本化快照和回滚保留。 |
+| source merge | GATE0_AND_RUNTIME_FIXES_MERGED | Gate-0、长标签基础架构和 R7 combine-backtest 修复已进入 main；本 v4.5 进度更新仍需单独提交/合入。 |
+| QE dataset | VERIFIED_20260630 | 当前 QE 快照已支持 R6/R7，并被 R8A/R8B 继续冻结复用；未来数据切换继续要求版本化快照和回滚保留。 |
 | factor asset | RESEARCH_AVAILABLE_ONLY | catalog 1525/1528/1532 可供 QE；realtime transformation/parity 完成前不得进入荐股、模拟盘或生产交易。 |
 | production_ddl_gate | PARTIAL_EXISTING_SCHEMA_READY | 现有 factor h20 指标可读写；F-014 三张 additive evaluation 表的 migration 尚未实现/应用，必须走独立 feature/DDL 门禁。 |
-| production_db_write_gate | OFFICIAL_RESEARCH_WRITES_COMPLETE | 官方因子指标/相关性和 QE archive 已持久化；本 v4.4 文档任务不写 DB，RD task/loop 非官方 factor writer 继续禁用。 |
+| production_db_write_gate | OFFICIAL_RESEARCH_WRITES_COMPLETE | 官方因子指标/相关性和 QE archive 已持久化；本 v4.5 文档任务不写 DB，RD task/loop 非官方 factor writer 继续禁用。 |
 | active_promotion_gate | NOT_AUTHORIZED | 研究可用不等于生产 promotion；需 realtime asset/parity、长期评价和策略包门禁。 |
 | production_frontend_dependency_gate | noop | 本批无前端/lockfile 变化。 |
 | production_backend_dependency_gate | noop | 本批无依赖/lockfile 变化。 |
 | candidate_freshness_gate | PASSED_FOR_QE_20260630 | R6/R7 已锁定 2026-06-30；R8 继续复用该快照以保证对比，除非另立数据版本实验。 |
-| QE experiment | R6_R7A_COMPLETED | R7B、R8A/R8B、两层模型和长期 evaluator 结果按第 9.9 节推进。 |
+| QE experiment | R6_R7_COMPLETED_R8_RUNNING | R7A/R7B 均完成且未晋级；R8A/R8B 运行中；两层模型与长期 evaluator 结果按第 9.9 节推进。 |
 | service/runtime restart | NOT_REQUIRED_FOR_DOCS | 本文更新不修改运行时代码或配置；未来 F-014 实现另行决定重启窗口。 |
 | paper/live trading | NOT_ENABLED | 不属于本规格自动动作。 |
 
