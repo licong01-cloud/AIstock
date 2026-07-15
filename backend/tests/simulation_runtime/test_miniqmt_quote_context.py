@@ -19,15 +19,15 @@ from backend.services.miniqmt_execution_runtime.quote_ingress import (
 from backend.services.miniqmt_execution_runtime.quote_normalizer import capture_raw_quote_frame
 from backend.services.paper_trading_v2.market_data import DailySuspendStatus, EquityInstrumentMetadata, PreviousClose
 from backend.services.simulation_runtime.miniqmt_quote_context import (
+    MiniQMTInstrumentQuoteSpecProvider,
     MiniQMTQuoteContextAuthorityAdapter,
     QuoteContextSymbolSpec,
 )
 from backend.services.trading_core.limit_price_provider import DailyLimitPrice
 
 
-def _policy() -> QuoteContractPolicy:
-    return QuoteContractPolicy.from_execution_policy(
-        {
+def _execution_policy() -> dict[str, object]:
+    return {
             "quote_contract": {
                 "schema_version": "miniqmt_quote_contract_policy_v2",
                 "control_revision": "B0_QUOTE_V2",
@@ -48,7 +48,10 @@ def _policy() -> QuoteContractPolicy:
                 "auction_mode": "OBSERVE_ONLY",
             }
         }
-    )
+
+
+def _policy() -> QuoteContractPolicy:
+    return QuoteContractPolicy.from_execution_policy(_execution_policy())
 
 
 class _Calendar:
@@ -104,6 +107,7 @@ def _adapter(
     store: QuoteEvaluationContextStore,
     providers: _Providers,
     calendar: _Calendar | None = None,
+    runtime_symbol_spec_provider=None,  # type: ignore[no-untyped-def]
 ) -> MiniQMTQuoteContextAuthorityAdapter:
     return MiniQMTQuoteContextAuthorityAdapter(
         context_store=store,
@@ -112,6 +116,7 @@ def _adapter(
         limit_price_provider=providers,
         previous_close_provider=providers,
         equity_metadata_provider=providers,
+        runtime_symbol_spec_provider=runtime_symbol_spec_provider,
     )
 
 
@@ -271,3 +276,80 @@ def test_calendar_failure_is_loud_and_non_equity_or_halt_remains_explicit_state(
         clock_monotonic_ns=3, clock_domain_id="context-test-domain",
     )
     assert halted.symbol_context("000001.SZ").tradability.state.value == "INTRADAY_HALT"  # type: ignore[union-attr]
+
+
+def test_instrument_quote_spec_provider_requires_exact_authority_without_defaults() -> None:
+    records = {
+        "000001.SZ": {
+            "InstrumentID": "000001",
+            "ExchangeID": "SZSE",
+            "PriceTick": "0.0100",
+            "MinLimitOrderVolume": "100.00",
+            "IsTrading": True,
+            "InstrumentStatus": 0,
+        }
+    }
+    provider = MiniQMTInstrumentQuoteSpecProvider(lambda symbol: records[symbol])
+
+    spec = provider.get_symbol_spec("000001.SZ")
+
+    assert spec.symbol == "000001.SZ"
+    assert spec.price_tick == Decimal("0.0100")
+    assert spec.lot_size == 100
+    assert spec.depth_quantity_unit == DepthQuantityUnit.SHARES
+    assert "xtquant_whole_quote_bidVol_askVol_shares_v1" in spec.unit_evidence_version
+
+    for missing_field in ("PriceTick", "MinLimitOrderVolume", "IsTrading", "InstrumentStatus"):
+        incomplete = dict(records["000001.SZ"])
+        incomplete.pop(missing_field)
+        with pytest.raises(QuoteContractError):
+            MiniQMTInstrumentQuoteSpecProvider(lambda _symbol, row=incomplete: row).get_symbol_spec("000001.SZ")
+
+    wrong_identity = {**records["000001.SZ"], "InstrumentID": "000002"}
+    with pytest.raises(QuoteContractError) as exc_info:
+        MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: wrong_identity).get_symbol_spec("000001.SZ")
+    assert exc_info.value.reason_code.value == "ADAPTIVE_IS_QUOTE_SYMBOL_INVALID"
+
+
+def test_runtime_context_registration_is_atomic_idempotent_and_rejects_policy_drift() -> None:
+    store = QuoteEvaluationContextStore()
+    providers = _Providers()
+    adapter = _adapter(store, providers, runtime_symbol_spec_provider=lambda _symbol: _spec())
+    at_utc = datetime(2026, 7, 12, 1, 30, tzinfo=UTC)
+
+    first = adapter.prepare_runtime_context(
+        runtime_id="runtime-1",
+        symbols=["000001.SZ", "000001.SZ"],
+        execution_policy=_execution_policy(),
+        clock_at_utc=at_utc,
+        clock_monotonic_ns=100_500_000,
+    )
+    second = adapter.prepare_runtime_context(
+        runtime_id="runtime-1",
+        symbols=["000001.SZ"],
+        execution_policy=_execution_policy(),
+        clock_at_utc=at_utc,
+        clock_monotonic_ns=100_600_000,
+    )
+
+    assert first.policy.policy_sha256 == second.policy.policy_sha256
+    assert adapter.registered_runtime_count() == 1
+    assert store.health()["status"] == "READY"
+
+    drifted_policy = _execution_policy()
+    drifted_policy["quote_contract"] = {
+        **drifted_policy["quote_contract"],  # type: ignore[misc]
+        "max_receive_age_ms": 3_000,
+    }
+    with pytest.raises(QuoteContractError) as exc_info:
+        adapter.prepare_runtime_context(
+            runtime_id="runtime-2",
+            symbols=["000001.SZ"],
+            execution_policy=drifted_policy,
+            clock_at_utc=at_utc,
+            clock_monotonic_ns=100_700_000,
+        )
+
+    assert exc_info.value.reason_code.value == "ADAPTIVE_IS_B0_QUOTE_V2_ASSIGNMENT_CONFLICT"
+    assert adapter.registered_runtime_count() == 1
+    assert store.snapshot() is second

@@ -943,6 +943,18 @@ class _FakeXtDataForQuoteHeal:
         row = self.rows[index]
         return {symbol: row[symbol] for symbol in symbols if symbol in row}
 
+    def get_instrument_detail(self, symbol: str, *, iscomplete: bool) -> dict[str, object]:
+        assert iscomplete is True
+        code, exchange = symbol.split(".", 1)
+        return {
+            "InstrumentID": code,
+            "ExchangeID": exchange,
+            "PriceTick": 0.01,
+            "MinLimitOrderVolume": 100,
+            "IsTrading": True,
+            "InstrumentStatus": 0,
+        }
+
 
 def _install_fake_xtdata(monkeypatch: pytest.MonkeyPatch, fake_xtdata: _FakeXtDataForQuoteHeal) -> None:
     import backend.infra.realtime_quote_subscriber as subscriber_mod
@@ -952,6 +964,7 @@ def _install_fake_xtdata(monkeypatch: pytest.MonkeyPatch, fake_xtdata: _FakeXtDa
     xtdata_mod.subscribe_whole_quote = fake_xtdata.subscribe_whole_quote
     xtdata_mod.unsubscribe_quote = fake_xtdata.unsubscribe_quote
     xtdata_mod.get_full_tick = fake_xtdata.get_full_tick
+    xtdata_mod.get_instrument_detail = fake_xtdata.get_instrument_detail
     xtdata_mod.run = fake_xtdata.run
     xtquant_mod.xtdata = xtdata_mod
     monkeypatch.setitem(sys.modules, "xtquant", xtquant_mod)
@@ -984,6 +997,26 @@ def test_xtquant_get_full_tick_subscribes_and_self_heals_stale_cache(monkeypatch
     health = client.get_realtime_quote_health()
     assert health["reason_code"] == "MINIQMT_QUOTE_SELF_HEAL_SUCCEEDED"
     assert health["before"]["stale_symbols"][0]["symbol"] == "000001.SZ"
+
+
+def test_xtquant_get_instrument_detail_reads_complete_authority_without_order_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_xtdata = _FakeXtDataForQuoteHeal()
+    _install_fake_xtdata(monkeypatch, fake_xtdata)
+    client = XtQuantQMTClient(enabled=True, account_id="acct_unit", mode="SIM", userdata_path=None, session_id=1)
+    client._ensure_xtquant = lambda: None  # type: ignore[method-assign]
+
+    payload = client.get_instrument_detail("000001.SZ")
+
+    assert payload == {
+        "InstrumentID": "000001",
+        "ExchangeID": "SZ",
+        "PriceTick": 0.01,
+        "MinLimitOrderVolume": 100,
+        "IsTrading": True,
+        "InstrumentStatus": 0,
+    }
 
 
 def test_xtquant_get_full_tick_still_returns_stale_payload_after_loud_self_heal(monkeypatch: pytest.MonkeyPatch) -> None:

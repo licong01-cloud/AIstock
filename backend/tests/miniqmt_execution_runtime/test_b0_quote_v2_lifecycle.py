@@ -36,10 +36,12 @@ class _LifecycleSupervisor:
 def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_ingress() -> None:
     source, runtime, _gateway, _repository = _runtime_controller()
     supervisor = _LifecycleSupervisor(source)
+    released_contexts: list[str] = []
     factory = B0QuoteV2ControllerFactory(
         supervisor=supervisor,
         config=source.config,
         data_session_key="sim-session-p1e",
+        context_release_callback=released_contexts.append,
     )
 
     controller = factory.create(
@@ -54,6 +56,12 @@ def test_only_scheduler_constructs_controller_and_read_only_paths_never_start_in
     assert factory.health()["controller_count"] == 1
     with pytest.raises(QuoteContractError):
         factory.create(runtime=runtime, assignments=source.assignments, symbols=tuple(source.symbols))
+
+    factory.release(runtime.config.runtime_id)
+    assert factory.get(runtime.config.runtime_id) is None
+    assert supervisor.leases == {}
+    assert supervisor.sinks == {}
+    assert released_contexts == [runtime.config.runtime_id]
 
 
 def test_runtime_leases_share_physical_feed_but_isolate_coordinator_and_symbol_failure() -> None:

@@ -485,6 +485,11 @@ class BaseQMTClient:
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         raise NotImplementedError
 
+    def get_instrument_detail(self, stock_code: str) -> Dict[str, Any]:
+        """Return complete, read-only xtdata instrument authority for one exact symbol."""
+
+        raise NotImplementedError
+
     def get_full_tick(
         self,
         stock_list: List[str],
@@ -602,6 +607,11 @@ class SimulatorQMTClient(BaseQMTClient):
 
     def get_trading_calendar(self, market: str = "SH") -> List[str]:
         return []
+
+    def get_instrument_detail(self, stock_code: str) -> Dict[str, Any]:
+        raise QMTNotAvailableError(
+            "MINIQMT_INSTRUMENT_DETAIL_UNAVAILABLE: simulator QMT client has no xtdata instrument authority"
+        )
 
     def get_full_tick(
         self,
@@ -1447,6 +1457,33 @@ Notes:
                 "self_heal_count": self._quote_self_heal_count,
                 "last_tick_by_symbol": dict(self._quote_feed_last_ticks),
             }
+
+    def get_instrument_detail(self, stock_code: str) -> Dict[str, Any]:
+        symbols = _normalize_qmt_symbols([stock_code])
+        if len(symbols) != 1:
+            raise QMTNotAvailableError(
+                "MINIQMT_INSTRUMENT_DETAIL_INVALID_SYMBOL: one exact SH/SZ/BJ symbol is required"
+            )
+        symbol = symbols[0]
+        with self._lock:
+            try:
+                self._ensure_xtquant()
+                from xtquant import xtdata
+
+                timeout_s = _env_float("MINIQMT_QUERY_TIMEOUT_SECONDS", default=2.0)
+                payload = _call_with_timeout(
+                    lambda: xtdata.get_instrument_detail(symbol, iscomplete=True),
+                    timeout_s,
+                )
+            except Exception as exc:  # noqa: BLE001 - translate the read authority once.
+                raise QMTNotAvailableError(
+                    "MINIQMT_INSTRUMENT_DETAIL_UNAVAILABLE: xtdata instrument authority read failed"
+                ) from exc
+        if not isinstance(payload, dict) or not payload:
+            raise QMTNotAvailableError(
+                "MINIQMT_INSTRUMENT_DETAIL_UNAVAILABLE: xtdata returned no complete instrument authority"
+            )
+        return dict(payload)
 
     def get_full_tick(
         self,

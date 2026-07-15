@@ -2,7 +2,17 @@
   "actual": "After MiniQMT/QMT reconnect, the production scheduler rolls forward but B0_QUOTE_V2 runs fail with 'controller requires scheduler-published context'. Live readback shows an ACTIVE subscription and writer but zero normalized observations, thousands rejected with ADAPTIVE_IS_QUOTE_CLOCK_CALENDAR_INVALID, and no broker call for the multi-alpha run. Production composition builds quote ingress activation without wiring the authoritative context adapter/shared context store. In the same recovery path, stale MiniQMT terminalization/reconcile exceptions run before current binding processing and can starve unrelated LocalSIM and MiniQMT bindings. Fix the production context publication lifecycle and isolate per-run recovery failures without legacy fallback, silent errors, business-logic drift, or new approval gates.",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260715_BUG-654-miniqmt-recovery-misses-b0-quote-context-and-stale-run-failures-starve-b.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/infra/qmt_client.py",
+    "backend/services/miniqmt_execution_runtime/b0_quote_v2.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/miniqmt_quote_context.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_activation.py",
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-654",
@@ -22,8 +32,13 @@
       "timestamp": "2026-07-15T02:58:24.923837Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "backend/tests/simulation_runtime/test_miniqmt_quote_context.py::test_runtime_context_registration_is_atomic_idempotent_and_rejects_policy_drift",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_publishes_b0_context_before_miniqmt_submit_callable",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_failure_is_explicit_without_starving_current_bindings",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs"
+  ],
+  "expected": "For each new or durable-active B0_QUOTE_V2 runtime, the scheduler must atomically publish an authoritative quote evaluation context into the exact store used by the production ingress writer before any controller tick or broker submit. The frozen plan policy, exact parent symbols, instrument tick/lot/depth-unit evidence, calendar and tradability authorities must be used without defaults or LEGACY fallback. A stale or post-close recovery failure must remain explicit at stage/run granularity while other historical runs and all current eligible LocalSIM/MiniQMT bindings continue processing.",
   "first_seen_at": "2026-07-15T02:58:24.923848Z",
   "fix_branch": null,
   "fix_commit": null,
@@ -38,9 +53,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_publishes_b0_context_before_miniqmt_submit_callable backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovery_failure_is_explicit_without_starving_current_bindings -q",
   "required_verification": [
-    "l0"
+    "l0",
+    "validation_module_registry_l0"
   ],
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
@@ -152,5 +168,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_fix"
 }

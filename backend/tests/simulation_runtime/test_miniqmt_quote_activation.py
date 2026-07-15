@@ -8,6 +8,7 @@ import pytest
 
 from backend.execution_algos.adaptive_is.contracts import ControlRevision
 from backend.execution_algos.adaptive_is.reasons import QuoteContractError
+from backend.miniqmt_quote_contract_config import QuoteContractPolicy
 from backend.services.miniqmt_execution_runtime import (
     FakeMiniQMTGateway,
     InMemoryMiniQMTExecutionRuntimeRepository,
@@ -70,6 +71,17 @@ class _QmtClient:
             }
         )
         return {symbol: {"lastPrice": 10.0} for symbol in symbols}
+
+    def get_instrument_detail(self, symbol: str) -> dict[str, object]:
+        code, exchange = symbol.split(".", 1)
+        return {
+            "InstrumentID": code,
+            "ExchangeID": exchange,
+            "PriceTick": 0.01,
+            "MinLimitOrderVolume": 100,
+            "IsTrading": True,
+            "InstrumentStatus": 0,
+        }
 
 
 class _LifecycleActivation:
@@ -139,7 +151,11 @@ def _quote_control_policy_context(*, parent_intent_id: str, trade_date: date) ->
         revision=revision,
     )
     return {
-        "policy_json": {"algo_code": "SNIPER_MINIQMT", "algo_config": {}},
+        "policy_json": {
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {},
+            "quote_contract": quote_contract,
+        },
         "validated_execution_policy_id": "policy-b0-activation",
         "policy_sha256": "a" * 64,
         "quote_control": {
@@ -455,6 +471,8 @@ def test_applied_schema_builds_single_scheduler_factory_and_bootstrap_avoids_leg
     assert activation.data_session_key == MINIQMT_B0_QUOTE_V2_SIM_DATA_SESSION_KEY
     assert scheduler._b0_quote_v2_controller_factory is activation.controller_factory
     assert scheduler.orchestrator.b0_quote_v2_controller_factory is activation.controller_factory
+    assert activation.quote_context_adapter is not None
+    assert activation.quote_context_adapter.context_store is activation.supervisor.context_store
     with pytest.raises(ValueError, match="requires process switch=false"):
         DrainOnlyB0QuoteV2ControllerFactory(
             requested_config=activation.config,
@@ -482,6 +500,68 @@ def test_applied_schema_builds_single_scheduler_factory_and_bootstrap_avoids_leg
         activation.begin_lifecycle_epoch()
     with pytest.raises(RuntimeError, match="cannot run watchdog"):
         activation.watchdog_tick()
+
+
+def test_activation_parses_frozen_plan_and_publishes_exact_runtime_context() -> None:
+    captured: dict[str, object] = {}
+
+    class _ContextAdapter:
+        def __init__(self, context_store) -> None:  # type: ignore[no-untyped-def]
+            self.context_store = context_store
+
+        def health(self) -> dict[str, object]:
+            return {"status": "READY"}
+
+        def release_runtime_context(self, runtime_id: str) -> None:
+            captured["released_runtime_id"] = runtime_id
+
+        def prepare_runtime_context(self, **kwargs: Any) -> SimpleNamespace:
+            captured.update(kwargs)
+            captured["symbols"] = tuple(kwargs["symbols"])
+            policy = QuoteContractPolicy.from_execution_policy(kwargs["execution_policy"])
+            return SimpleNamespace(
+                context_id="context-from-frozen-plan",
+                policy=policy,
+                symbols={"000001.SZ": object()},
+            )
+
+    activation = build_miniqmt_quote_ingress_activation_from_env(
+        environ=_enabled_env(),
+        schema_gate_reader=lambda: "applied_and_verified",
+        subscriber_factory=_Subscriber,
+        qmt_client_factory=_QmtClient,
+        context_adapter_factory=lambda store, _qmt: _ContextAdapter(store),  # type: ignore[arg-type,return-value]
+    )
+    policy_context = _quote_control_policy_context(parent_intent_id="parent-context", trade_date=date(2026, 7, 14))
+    plan = SimpleNamespace(
+        plan_id="plan-context-publication",
+        plan_payload_json={
+            "execution_policy": {"payload": policy_context},
+            "quote_control": policy_context["quote_control"],
+        },
+        intents=(SimpleNamespace(symbol="000001.SZ"),),
+    )
+
+    receipt = activation.prepare_runtime_context(
+        runtime_id="runtime-context-publication",
+        plan=plan,
+        recovering_active=False,
+        clock_at_utc=datetime(2026, 7, 14, 1, 30, tzinfo=UTC),
+        clock_monotonic_ns=100_000,
+    )
+
+    captured_execution_policy = captured["execution_policy"]
+    assert isinstance(captured_execution_policy, dict)
+    expected_policy_sha256 = QuoteContractPolicy.from_execution_policy(captured_execution_policy).policy_sha256
+    assert receipt == {
+        "runtime_id": "runtime-context-publication",
+        "context_id": "context-from-frozen-plan",
+        "policy_sha256": expected_policy_sha256,
+        "symbol_count": 1,
+        "recovering_active": False,
+    }
+    assert captured["runtime_id"] == "runtime-context-publication"
+    assert captured["symbols"] == ("000001.SZ",)
 
 
 def test_activation_rejects_impossible_component_states_and_missing_bootstrap_method() -> None:
