@@ -2,7 +2,37 @@
   "actual": "LEGACY_B0、Paper MiniQMTSimBackend 和 raw QMT direct order/batch/cancel 仍存在可达 broker side effect，尚未证明 active/open-order 安全迁移和唯一路径。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20260715_BUG-662-miniqmt-b0-quote-v2-tick-broker.json",
-    "tests/aistock_validation/bugs/.bug_id_allocator.json"
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/qmt.py",
+    "backend/services/miniqmt_execution_runtime/__init__.py",
+    "backend/services/miniqmt_execution_runtime/b0_quote_v2.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/paper_trading_v2/broker/__init__.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/simulation_runtime/__init__.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/miniqmt_route_migration.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/services/simulation_runtime/service.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py",
+    "backend/tests/routers/test_qmt_route_retirement.py",
+    "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+    "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "scripts/miniqmt_b0_quote_v2_route_migration.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-662",
@@ -27,7 +57,7 @@
   ],
   "expected": "所有产品下单、撤单、replace、reconcile 仅经 SimulationLifecycleScheduler -> MiniQMTExecutionRuntime -> OMS/Gateway；LEGACY_B0 仅历史读取及既有 active parent 原 revision drain；非法旁路 fail loud，迁移幂等且可独立 readback。",
   "first_seen_at": "2026-07-15T16:17:40.159948Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-662-miniqmt-b0-quote-v2-tick-broker-20260715",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 2190,
@@ -154,5 +184,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "ready_for_pr"
 }
