@@ -9,13 +9,12 @@ Covers Engine §3.6.1 (R-Q9 D1) BrokerBackend protocol:
   - market-source cross-pairing rejected at backend init
     (BrokerMarketSourceMismatchError, R-Q9 D3)
   - subscribe_fill_callback delivers + unsubscribe releases
-  - synchronous semantics (Lead 2026-05-08 decision (4)): fill_callback fires
-    before submit_order_intent returns; OrderHandle.status is terminal on
-    return
+  - historical synchronous semantics and realtime durable minute continuation
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -155,6 +154,8 @@ def _build_backend(
     provider: FakeMarketDataProvider | None = None,
     execution_engine=None,
     initial_positions: dict[str, PositionLot] | None = None,
+    execution_policy: dict | None = None,
+    initial_available_cash: float | None = None,
 ) -> tuple[LocalSimBackend, FakeMarketDataProvider, StrategyPackageManifest]:
     manifest = make_paper_enabled_manifest()
     market_data_provider = provider or FakeMarketDataProvider()
@@ -166,6 +167,8 @@ def _build_backend(
         market_data_provider=market_data_provider,
         execution_engine=execution_engine,
         initial_positions=initial_positions,
+        execution_policy=execution_policy,
+        initial_available_cash=initial_available_cash,
     )
     return backend, market_data_provider, manifest
 
@@ -320,8 +323,13 @@ def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None
     backend, _, _ = _build_backend(
         data_source=MinuteDataSource.TDX_REALTIME,
         provider=provider,
-        execution_engine=FullFillExecutionEngine(),
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_unit",
+            "policy_sha256": "sha_twap_unit",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 1}},
+        },
     )
+    backend.configure_execution_runtime(run_id="run_causal_unit", binding_id="binding_causal_unit")
     plan = SimpleNamespace(
         plan_id="plan_causal_unit",
         target_trade_date=TRADE_DATE,
@@ -338,7 +346,172 @@ def test_localsim_realtime_submission_uses_only_bars_after_plan_cursor() -> None
     snapshot = backend.export_execution_snapshot(handles=[handle])
 
     assert len(snapshot["fills"]) == 1
-    assert snapshot["fills"][0].bar_time == as_of
+    assert snapshot["fills"][0].bar_time > cursor
+    assert len(snapshot["execution_states"]) == 1
+    assert snapshot["execution_states"][0].last_processed_bar_time == as_of
+    assert snapshot["execution_states"][0].runtime_status.value == "FILLED"
+
+
+def test_localsim_realtime_submission_persists_waiting_state_before_first_causal_bar() -> None:
+    historical = _make_market_input("000001.SZ", bar_count=1)
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=31)
+    backend, _, _ = _build_backend(data_source=MinuteDataSource.TDX_REALTIME, provider=provider)
+    backend.configure_execution_runtime(run_id="run_waiting_unit", binding_id="binding_waiting_unit")
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_waiting_unit",
+            target_trade_date=TRADE_DATE,
+            plan_payload_json={"local_sim_execution_causality": {
+                "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": as_of.isoformat()
+            }},
+        ),
+        as_of_time=as_of,
+    )
+    handle = backend.submit_order_intent(_buy_intent(backend))
+    snapshot = backend.export_execution_snapshot(handles=[handle])
+    assert backend.query_status(handle).state == "pending"
+    assert snapshot["fills"] == ()
+    state = snapshot["execution_states"][0]
+    assert state.runtime_status.value == "WAITING_FOR_CAUSAL_BAR"
+    assert state.sequence == 0
+    assert state.last_processed_bar_time is None
+
+
+def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill() -> None:
+    historical = _make_market_input("000001.SZ", bar_count=4)
+    provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})
+    cursor = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30)
+    streaming_policy = {
+        "validated_execution_policy_id": "exec_policy_twap_streaming",
+        "policy_sha256": "sha_twap_streaming",
+        "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 4, "allow_partial_fill": True}},
+    }
+    first_as_of = cursor + timedelta(minutes=2)
+    first, _, _ = _build_backend(
+        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider, execution_policy=streaming_policy,
+    )
+    first.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
+    plan = SimpleNamespace(
+        plan_id="plan_stream_restart", target_trade_date=TRADE_DATE,
+        plan_payload_json={"local_sim_execution_causality": {
+            "schema_version": "local_sim_execution_causality_v1", "eligible_bar_after": cursor.isoformat()
+        }},
+    )
+    first.bind_execution_plan(plan=plan, as_of_time=first_as_of)
+    first_handle = first.submit_order_intent(_buy_intent(first, quantity=10_000))
+    first_snapshot = first.export_execution_snapshot(handles=[first_handle])
+    first_state = first_snapshot["execution_states"][0]
+    first_order = first_snapshot["orders"][0]
+    first_fill_ids = {fill.fill_id for fill in first_snapshot["fills"]}
+    assert first_state.runtime_status.value == "ACTIVE"
+    assert first_state.remaining_quantity > 0
+    assert first_state.last_processed_bar_time == first_as_of
+
+    conflicting_bars = list(historical.minute_bars)
+    conflicting_bars[1] = conflicting_bars[1].model_copy(update={"close": conflicting_bars[1].close + 0.5})
+    conflict_backend, _, _ = _build_backend(
+        initial_cash=10_000_000, initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(), data_source=MinuteDataSource.TDX_REALTIME,
+        provider=ObservedMarketDataProvider(
+            inputs_by_symbol={"000001.SZ": replace(historical, minute_bars=conflicting_bars)}
+        ), execution_policy=streaming_policy,
+    )
+    conflict_backend.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
+    conflict_backend.bind_execution_plan(plan=plan, as_of_time=cursor + timedelta(minutes=3))
+    conflict_backend.restore_execution_state(order=first_order, state=first_state)
+    with pytest.raises(BrokerConnectivityError) as conflict:
+        conflict_backend.advance_realtime_execution(as_of_time=cursor + timedelta(minutes=3))
+    assert conflict.value.context["reason_code"] == "LOCALSIM_LAST_APPLIED_BAR_PAYLOAD_CONFLICT"
+
+    second_as_of = cursor + timedelta(minutes=4)
+    second, _, _ = _build_backend(
+        initial_cash=10_000_000, initial_available_cash=float(first.query_account().cash),
+        initial_positions=first.query_positions(), data_source=MinuteDataSource.TDX_REALTIME,
+        provider=provider, execution_policy=streaming_policy,
+    )
+    second.configure_execution_runtime(run_id="run_stream_restart", binding_id="binding_stream_restart")
+    second.bind_execution_plan(plan=plan, as_of_time=second_as_of)
+    restored_handle = second.restore_execution_state(order=first_order, state=first_state)
+    second.advance_realtime_execution(as_of_time=second_as_of)
+    second_snapshot = second.export_execution_snapshot(handles=[restored_handle])
+    second_state = second_snapshot["execution_states"][0]
+    second_fill_ids = {fill.fill_id for fill in second_snapshot["fills"]}
+    assert second_state.last_processed_bar_time == second_as_of
+    assert second_state.sequence == first_state.sequence + 1
+    assert second_state.filled_quantity > first_state.filled_quantity
+    assert first_fill_ids.isdisjoint(second_fill_ids)
+    assert all(fill.bar_time > first_state.last_processed_bar_time for fill in second_snapshot["fills"])
+    second.advance_realtime_execution(as_of_time=second_as_of)
+    replay_snapshot = second.export_execution_snapshot(handles=[restored_handle])
+    assert replay_snapshot["fills"] == ()
+    assert replay_snapshot["execution_states"][0] == second_state
+
+
+def test_localsim_close_terminalizes_remaining_schedule_with_explicit_residual() -> None:
+    source_input = _make_market_input("000001.SZ", bar_count=1)
+    closing_bar = source_input.minute_bars[0].model_copy(
+        update={"bar_time": datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=15)}
+    )
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": replace(source_input, minute_bars=[closing_bar])}
+    )
+    as_of = closing_bar.bar_time + timedelta(minutes=1)
+    backend, _, _ = _build_backend(
+        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME, provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_close_residual",
+            "policy_sha256": "sha_twap_close_residual",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 10}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_close_residual", binding_id="binding_close_residual")
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_close_residual", target_trade_date=TRADE_DATE,
+            plan_payload_json={"local_sim_execution_causality": {
+                "schema_version": "local_sim_execution_causality_v1",
+                "eligible_bar_after": closing_bar.bar_time.replace(hour=14, minute=59).isoformat(),
+            }},
+        ), as_of_time=as_of,
+    )
+    handle = backend.submit_order_intent(_buy_intent(backend, quantity=10_000))
+    state = backend.export_execution_snapshot(handles=[handle])["execution_states"][0]
+    assert state.runtime_status.value == "EXPIRED_WITH_RESIDUAL"
+    assert state.remaining_quantity > 0
+    assert state.terminal_reason == "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY"
+    assert state.residual_classification == "SCHEDULE_RESIDUAL_AT_CLOSE"
+
+
+def test_localsim_post_close_fails_loud_when_closing_bar_is_missing() -> None:
+    provider = ObservedMarketDataProvider(
+        inputs_by_symbol={"000001.SZ": _make_market_input("000001.SZ", bar_count=2)}
+    )
+    as_of = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=15, minute=1)
+    backend, _, _ = _build_backend(
+        initial_cash=10_000_000, data_source=MinuteDataSource.TDX_REALTIME, provider=provider,
+        execution_policy={
+            "validated_execution_policy_id": "exec_policy_twap_missing_close",
+            "policy_sha256": "sha_twap_missing_close",
+            "policy_json": {"algo_code": "TWAP", "algo_config": {"split_count": 10}},
+        },
+    )
+    backend.configure_execution_runtime(run_id="run_missing_close", binding_id="binding_missing_close")
+    backend.bind_execution_plan(
+        plan=SimpleNamespace(
+            plan_id="plan_missing_close", target_trade_date=TRADE_DATE,
+            plan_payload_json={"local_sim_execution_causality": {
+                "schema_version": "local_sim_execution_causality_v1",
+                "eligible_bar_after": datetime.combine(TRADE_DATE, datetime.min.time()).replace(
+                    hour=9, minute=30
+                ).isoformat(),
+            }},
+        ), as_of_time=as_of,
+    )
+    with pytest.raises(BrokerConnectivityError) as exc_info:
+        backend.submit_order_intent(_buy_intent(backend, quantity=10_000))
+    assert exc_info.value.context["reason_code"] == "LOCALSIM_CLOSE_BAR_MISSING"
 
 
 def test_localsim_plan_batch_rolls_back_all_orders_and_callbacks_on_later_failure() -> None:

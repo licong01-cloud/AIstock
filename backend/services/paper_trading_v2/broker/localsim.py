@@ -6,17 +6,14 @@ matches OrderIntents against TDX or DB historical minute bars in-process
 via the existing ``MinuteExecutionEngine`` + ``OMS`` + ``InMemoryLedger``
 stack.
 
-Synchronicity contract (Lead 2026-05-08 decision (4)):
-  - ``submit_order_intent`` is **synchronous and blocking**. By the time it
-    returns, ``OrderHandle.status`` reflects the terminal state
-    (``filled`` / ``partial_filled`` / ``rejected``); subscribed
-    ``fill_callback`` callbacks have already been invoked **before** return.
-  - This is intentional: in-process matching has no async surface, and
-    Engine code must already handle the asynchronous MiniQMTSim shape, so
-    the synchronous LocalSim path is a strict subset.
-  - Engine should NOT assume LocalSim's synchronous semantics in shared code
-    paths. Treat ``submit`` as potentially async; query status via the
-    callback or ``query_status``.
+Execution contract:
+  - Historical LocalSIM remains synchronous because the authoritative closed
+    day is complete at submission time.
+  - Same-day TDX LocalSIM is a scheduler-owned durable minute loop. Submit only
+    consumes bars after the frozen causality cursor; partial orders remain
+    active and are restored on later scheduler ticks.
+  - Fill callbacks produced by the current tick are dispatched before that
+    tick returns, but callers must not interpret submit return as terminal.
 
 Multi-package binding (R-Q9 D2): each portfolio creates its own
 ``LocalSimBackend`` instance; instances do not share state, supporting N
@@ -28,7 +25,7 @@ from __future__ import annotations
 import threading
 from copy import deepcopy
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from decimal import Decimal
 from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
@@ -40,6 +37,11 @@ from backend.services.paper_trading_v2.market_data import (
 )
 from backend.services.strategy_package.execution_policy import normalize_execution_policy_json
 from backend.services.strategy_package.models import StrategyPackageManifest
+from backend.services.simulation_runtime.models import (
+    LocalSimExecutionRuntimeStatus,
+    LocalSimExecutionStateV1,
+    canonical_json_sha256,
+)
 from backend.services.trading_core.errors import (
     BrokerConnectivityError,
     BrokerRejectedError,
@@ -51,6 +53,7 @@ from backend.services.trading_core.errors import (
     RuntimeConfigInvalidError,
     TradingCoreError,
 )
+from backend.services.trading_core.execution_algo_capabilities import require_execution_algo_supports_mode
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
 from backend.services.trading_core.minute_execution import MinuteExecutionEngine
 from backend.services.trading_core.models import (
@@ -91,11 +94,11 @@ _CHANNEL_KIND_BY_SOURCE: dict[MinuteDataSource, MarketDataChannelKind] = {
 class _OrderRecord:
     """Internal bookkeeping per submitted OrderIntent.
 
-    LocalSim resolves to terminal state at submit time, so we just snapshot
-    the OMS Order + emitted fills + final status for later query_status.
+    Realtime LocalSIM keeps the durable execution state active across scheduler
+    ticks; historical execution may still resolve synchronously.
     """
 
-    __slots__ = ("handle", "order", "status", "fills", "events")
+    __slots__ = ("handle", "order", "status", "fills", "events", "execution_state")
 
     def __init__(
         self,
@@ -104,12 +107,14 @@ class _OrderRecord:
         status: OrderHandleStatus,
         fills: list[Fill],
         events: list[OrderEvent],
+        execution_state: LocalSimExecutionStateV1 | None = None,
     ) -> None:
         self.handle = handle
         self.order = order
         self.status = status
         self.fills = fills
         self.events = events
+        self.execution_state = execution_state
 
 
 class LocalSimBackend(BrokerBackend):
@@ -179,6 +184,8 @@ class LocalSimBackend(BrokerBackend):
         self._batch_snapshot: dict[str, Any] | None = None
         self._batch_plan_id: str | None = None
         self._deferred_fill_events: list[FillEvent] = []
+        self._runtime_run_id: str | None = None
+        self._runtime_binding_id: str | None = None
 
     # ----- Read accessors used by adapter / tests -----
     @property
@@ -192,6 +199,167 @@ class LocalSimBackend(BrokerBackend):
     @property
     def data_source(self) -> MinuteDataSource:
         return self._data_source
+
+    def configure_execution_runtime(self, *, run_id: str, binding_id: str) -> None:
+        """Bind the immutable scheduler/run identity used by durable state."""
+        run_id = str(run_id or "").strip()
+        binding_id = str(binding_id or "").strip()
+        if not run_id or not binding_id:
+            raise BrokerSubmitError(
+                "LocalSim durable execution requires run_id and binding_id",
+                context={"reason_code": "LOCALSIM_RUNTIME_SCOPE_MISSING"},
+            )
+        with self._lock:
+            if self._runtime_run_id not in {None, run_id} or self._runtime_binding_id not in {None, binding_id}:
+                raise BrokerSubmitError(
+                    "LocalSim runtime identity cannot be rebound",
+                    context={
+                        "reason_code": "LOCALSIM_RUNTIME_SCOPE_IDENTITY_CONFLICT",
+                        "current_run_id": self._runtime_run_id,
+                        "incoming_run_id": run_id,
+                        "current_binding_id": self._runtime_binding_id,
+                        "incoming_binding_id": binding_id,
+                    },
+                )
+            self._runtime_run_id = run_id
+            self._runtime_binding_id = binding_id
+
+    def restore_execution_state(self, *, order: Order, state: LocalSimExecutionStateV1) -> OrderHandle:
+        """Restore one order without replaying already applied bars."""
+        self._ensure_alive()
+        with self._lock:
+            self._require_runtime_scope()
+            if state.run_id != self._runtime_run_id or state.binding_id != self._runtime_binding_id:
+                raise BrokerSubmitError(
+                    "LocalSim restored state does not match bound runtime identity",
+                    context={
+                        "reason_code": "LOCALSIM_RESTORE_RUNTIME_IDENTITY_CONFLICT",
+                        "state_id": state.state_id,
+                        "state_run_id": state.run_id,
+                        "bound_run_id": self._runtime_run_id,
+                        "state_binding_id": state.binding_id,
+                        "bound_binding_id": self._runtime_binding_id,
+                    },
+                )
+            if order.order_id != state.order_id or order.intent_id != state.intent_id:
+                raise BrokerSubmitError(
+                    "LocalSim restored order does not match durable state",
+                    context={
+                        "reason_code": "LOCALSIM_RESTORE_ORDER_IDENTITY_CONFLICT",
+                        "state_id": state.state_id,
+                        "state_order_id": state.order_id,
+                        "order_id": order.order_id,
+                        "state_intent_id": state.intent_id,
+                        "order_intent_id": order.intent_id,
+                    },
+                )
+            if state.intent_id in self._intent_index:
+                raise BrokerSubmitError(
+                    "LocalSim durable state was restored more than once",
+                    context={"reason_code": "LOCALSIM_RESTORE_DUPLICATE_INTENT", "state_id": state.state_id},
+                )
+            handle = OrderHandle(
+                handle_id=f"lsh_{state.state_id[-32:]}",
+                backend_id=self.backend_id,
+                submitted_at=state.created_at,
+                intent_id=state.intent_id,
+            )
+            self._records[handle.handle_id] = _OrderRecord(
+                handle=handle,
+                order=order,
+                status=self._build_status(handle.handle_id, order),
+                fills=[],
+                events=[],
+                execution_state=state,
+            )
+            self._intent_index[state.intent_id] = handle.handle_id
+            return handle
+
+    def advance_realtime_execution(self, *, as_of_time: datetime) -> tuple[OrderHandle, ...]:
+        """Apply each newly observed causal minute exactly once to restored states."""
+        self._ensure_alive()
+        if self._data_source != MinuteDataSource.TDX_REALTIME:
+            raise BrokerSubmitError(
+                "incremental LocalSim advancement is only valid for TDX realtime",
+                context={"reason_code": "LOCALSIM_INCREMENTAL_SOURCE_INVALID", "source": self._data_source.value},
+            )
+        self._scheduler_as_of_time = as_of_time
+        self._require_runtime_scope()
+        plan_id = self._bound_plan_id
+        if plan_id is None:
+            raise BrokerSubmitError(
+                "LocalSim realtime advancement is missing the bound execution plan",
+                context={"reason_code": "LOCALSIM_CAUSALITY_SCOPE_MISSING"},
+            )
+        self.begin_plan_submission(plan_id=plan_id)
+        try:
+            with self._lock:
+                self._ledger.fills = []
+                self._ledger.cash_entries = []
+                for record in self._records.values():
+                    record.fills = []
+                    record.events = []
+                handles: list[OrderHandle] = []
+                for record in self._records.values():
+                    state = record.execution_state
+                    if state is None:
+                        raise BrokerSubmitError(
+                            "realtime LocalSim order is missing durable execution state",
+                            context={
+                                "reason_code": "LOCALSIM_DURABLE_STATE_MISSING",
+                                "order_id": record.order.order_id,
+                                "intent_id": record.order.intent_id,
+                            },
+                        )
+                    if state.is_terminal:
+                        handles.append(record.handle)
+                        continue
+                    market_input = self._load_realtime_market_input(
+                        symbol=record.order.symbol,
+                        trade_date=state.trade_date,
+                        as_of_time=as_of_time,
+                    )
+                    self._validate_replayed_cursor_bar(state=state, observed_bars=market_input.minute_bars)
+                    cursor = state.last_processed_bar_time or state.causality_cursor
+                    new_bars = [
+                        bar for bar in market_input.minute_bars
+                        if self._naive_for_compare(bar.bar_time) > self._naive_for_compare(cursor)
+                    ]
+                    if new_bars:
+                        final_order, engine_state, fills, events = self._execution_engine.execute_order_incremental(
+                            order=record.order,
+                            execution_state=state,
+                            new_bars=new_bars,
+                            algo_code=str(self._execution_policy["algo_code"]),
+                            algo_config=dict(self._execution_policy.get("algo_config") or {}),
+                            market_context=self._incremental_market_context(
+                                market_input.market_context,
+                                observed_until=as_of_time,
+                                causal_bar_count=len(new_bars),
+                            ),
+                        )
+                        self._apply_incremental_effects(
+                            record=record, final_order=final_order, fills=fills, events=events
+                        )
+                        record.execution_state = self._next_execution_state(
+                            previous=state,
+                            engine_state=engine_state,
+                            order=final_order,
+                            bars=new_bars,
+                            fill_count=len(fills),
+                        )
+                    record.execution_state = self._expire_residual_after_complete_close(
+                        state=record.execution_state,
+                        observed_bars=market_input.minute_bars,
+                        as_of_time=as_of_time,
+                        increment_sequence=not bool(new_bars),
+                    )
+                    handles.append(record.handle)
+        except Exception:
+            self.rollback_plan_submission(plan_id=plan_id)
+            raise
+        self.commit_plan_submission(plan_id=plan_id)
+        return tuple(handles)
 
     # ----- BrokerBackend Protocol -----
     def bind_execution_plan(self, *, plan: Any, as_of_time: datetime) -> None:
@@ -288,18 +456,17 @@ class LocalSimBackend(BrokerBackend):
                 )
 
             try:
-                if self._data_source == MinuteDataSource.TDX_REALTIME and self._eligible_bar_after is not None:
-                    if self._scheduler_as_of_time is None:
+                if self._data_source == MinuteDataSource.TDX_REALTIME:
+                    self._require_runtime_scope()
+                    if self._eligible_bar_after is None or self._scheduler_as_of_time is None:
                         raise DataUnavailableError(
-                            "LocalSim realtime execution is missing scheduler as_of_time",
-                            context={"intent_id": intent.intent_id, "plan_id": self._bound_plan_id},
+                            "LocalSim realtime execution is missing bound plan causality",
+                            context={"reason_code": "LOCALSIM_CAUSALITY_SCOPE_MISSING", "intent_id": intent.intent_id},
                         )
-                    market_input = self._market_data_provider.load_observed_intraday(
+                    market_input = self._load_realtime_market_input(
                         symbol=intent.symbol,
                         trade_date=intent.target_trade_date,
-                        source=self._data_source,
-                        until_time=self._scheduler_as_of_time,
-                        require_day_features=self._algo_requires_day_features(),
+                        as_of_time=self._scheduler_as_of_time,
                     )
                     cursor_cmp = self._naive_for_compare(self._eligible_bar_after)
                     causal_bars = [
@@ -307,27 +474,14 @@ class LocalSimBackend(BrokerBackend):
                         for bar in market_input.minute_bars
                         if self._naive_for_compare(bar.bar_time) > cursor_cmp
                     ]
-                    if not causal_bars:
-                        raise DataUnavailableError(
-                            "LocalSim is waiting for the first observed minute bar after the execution cursor",
-                            context={
-                                "reason_code": "LOCAL_SIM_CAUSAL_BAR_NOT_YET_AVAILABLE",
-                                "intent_id": intent.intent_id,
-                                "symbol": intent.symbol,
-                                "plan_id": self._bound_plan_id,
-                                "eligible_bar_after": self._eligible_bar_after.isoformat(),
-                                "observed_until": self._scheduler_as_of_time.isoformat(),
-                            },
-                        )
                     market_input = replace(
                         market_input,
                         minute_bars=causal_bars,
-                        market_context={
-                            **market_input.market_context,
-                            "eligible_bar_after": self._eligible_bar_after.isoformat(),
-                            "observed_until": self._scheduler_as_of_time.isoformat(),
-                            "causal_bar_count": len(causal_bars),
-                        },
+                        market_context=self._incremental_market_context(
+                            market_input.market_context,
+                            observed_until=self._scheduler_as_of_time,
+                            causal_bar_count=len(causal_bars),
+                        ),
                     )
                 else:
                     market_input = self._market_data_provider.load_symbol_input(
@@ -353,19 +507,45 @@ class LocalSimBackend(BrokerBackend):
                 ) from exc
 
             order = self._oms.create_order(intent)
+            execution_state: LocalSimExecutionStateV1 | None = None
             try:
-                final_order, fills, events = self._execution_engine.execute_order(
-                    order=order,
-                    minute_bars=market_input.minute_bars,
-                    algo_code=str(self._execution_policy["algo_code"]),
-                    algo_config=dict(self._execution_policy.get("algo_config") or {}),
-                    market_context=market_input.market_context,
-                    allow_partial_fill=bool(
-                        (self._execution_policy.get("algo_config") or {}).get(
-                            "allow_partial_fill", True
+                if self._data_source == MinuteDataSource.TDX_REALTIME:
+                    execution_state = self._new_execution_state(intent=intent, order=order)
+                    if market_input.minute_bars:
+                        final_order, engine_state, fills, events = self._execution_engine.execute_order_incremental(
+                            order=order,
+                            execution_state=execution_state,
+                            new_bars=list(market_input.minute_bars),
+                            algo_code=str(self._execution_policy["algo_code"]),
+                            algo_config=dict(self._execution_policy.get("algo_config") or {}),
+                            market_context=market_input.market_context,
                         )
-                    ),
-                )
+                        execution_state = self._next_execution_state(
+                            previous=execution_state,
+                            engine_state=engine_state,
+                            order=final_order,
+                            bars=list(market_input.minute_bars),
+                            fill_count=len(fills),
+                        )
+                    else:
+                        final_order, fills, events = order, [], []
+                    execution_state = self._expire_residual_after_complete_close(
+                        state=execution_state,
+                        observed_bars=market_input.minute_bars,
+                        as_of_time=self._scheduler_as_of_time,
+                        increment_sequence=not bool(market_input.minute_bars),
+                    )
+                else:
+                    final_order, fills, events = self._execution_engine.execute_order(
+                        order=order,
+                        minute_bars=market_input.minute_bars,
+                        algo_code=str(self._execution_policy["algo_code"]),
+                        algo_config=dict(self._execution_policy.get("algo_config") or {}),
+                        market_context=market_input.market_context,
+                        allow_partial_fill=bool(
+                            (self._execution_policy.get("algo_config") or {}).get("allow_partial_fill", True)
+                        ),
+                    )
             except (ExecutionAlgoError, RiskRuleError, InvalidStateTransitionError) as exc:
                 # Backend rejected — distinct from connectivity (data fine,
                 # order semantics violated).
@@ -459,6 +639,7 @@ class LocalSimBackend(BrokerBackend):
                 status=status,
                 fills=list(fills),
                 events=list(events),
+                execution_state=execution_state,
             )
             self._intent_index[intent.intent_id] = handle.handle_id
 
@@ -519,6 +700,24 @@ class LocalSimBackend(BrokerBackend):
                 last_event_at=datetime.now(UTC),
                 rejection_reason=None,
             )
+            if record.execution_state is not None:
+                state = record.execution_state
+                payload = state.model_dump(mode="python")
+                sequence = state.sequence + 1
+                payload.update(
+                    {
+                        "order_status": cancelled_order.status.value,
+                        "runtime_status": LocalSimExecutionRuntimeStatus.CANCELLED,
+                        "terminal_reason": "USER_CANCELLED",
+                        "sequence": sequence,
+                        "idempotency_key": canonical_json_sha256(
+                            ["localsim_state_transition_v1", state.state_id, sequence, "CANCELLED"]
+                        ),
+                        "state_hash": "",
+                        "updated_at": datetime.now(UTC),
+                    }
+                )
+                record.execution_state = LocalSimExecutionStateV1.model_validate(payload)
             return CancelAck(
                 handle_id=handle.handle_id,
                 accepted=True,
@@ -603,6 +802,9 @@ class LocalSimBackend(BrokerBackend):
                 "positions": dict(self._ledger.positions),
                 "account": self.query_account(),
                 "handle_statuses": tuple(record.status for record in records),
+                "execution_states": tuple(
+                    record.execution_state for record in records if record.execution_state is not None
+                ),
             }
 
     def market_data_channel(self) -> MarketDataChannel:
@@ -634,6 +836,288 @@ class LocalSimBackend(BrokerBackend):
     @staticmethod
     def _naive_for_compare(value: datetime) -> datetime:
         return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+    def _require_runtime_scope(self) -> None:
+        if self._runtime_run_id is None or self._runtime_binding_id is None:
+            raise BrokerSubmitError(
+                "LocalSim realtime execution is missing durable runtime scope",
+                context={"reason_code": "LOCALSIM_RUNTIME_SCOPE_MISSING", "plan_id": self._bound_plan_id},
+            )
+
+    def _load_realtime_market_input(self, *, symbol: str, trade_date: Any, as_of_time: datetime) -> Any:
+        try:
+            market_input = self._market_data_provider.load_observed_intraday(
+                symbol=symbol,
+                trade_date=trade_date,
+                source=self._data_source,
+                until_time=as_of_time,
+                require_day_features=self._algo_requires_day_features(),
+            )
+        except DataUnavailableError as exc:
+            raise BrokerConnectivityError(
+                "LocalSim could not load realtime minute market data",
+                context={
+                    "reason_code": "LOCALSIM_REALTIME_MARKET_DATA_UNAVAILABLE",
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "source": self._data_source.value,
+                    "observed_until": as_of_time.isoformat(),
+                    "cause": exc.message,
+                },
+            ) from exc
+        self._validate_observed_bar_stream(symbol=symbol, trade_date=trade_date, observed_bars=market_input.minute_bars)
+        return market_input
+
+    def _validate_observed_bar_stream(self, *, symbol: str, trade_date: Any, observed_bars: Iterable[Any]) -> None:
+        previous_time: datetime | None = None
+        seen: dict[datetime, str] = {}
+        for bar in observed_bars:
+            identity = self._bar_identity(bar)
+            if bar.symbol != symbol or bar.bar_time.date() != trade_date:
+                raise BrokerConnectivityError(
+                    "LocalSim realtime minute bar identity conflicts with the requested stream",
+                    context={
+                        "reason_code": "LOCALSIM_MINUTE_BAR_IDENTITY_CONFLICT",
+                        "requested_symbol": symbol,
+                        "requested_trade_date": trade_date.isoformat(),
+                        "bar_symbol": bar.symbol,
+                        "bar_time": bar.bar_time.isoformat(),
+                    },
+                )
+            existing = seen.get(bar.bar_time)
+            if existing is not None:
+                raise BrokerConnectivityError(
+                    "LocalSim realtime minute stream contains a duplicate bar time",
+                    context={
+                        "reason_code": (
+                            "LOCALSIM_MINUTE_BAR_PAYLOAD_CONFLICT" if existing != identity
+                            else "LOCALSIM_MINUTE_BAR_DUPLICATE"
+                        ),
+                        "symbol": symbol,
+                        "bar_time": bar.bar_time.isoformat(),
+                        "first_identity": existing,
+                        "duplicate_identity": identity,
+                    },
+                )
+            if previous_time is not None and bar.bar_time <= previous_time:
+                raise BrokerConnectivityError(
+                    "LocalSim realtime minute stream is not strictly ordered",
+                    context={
+                        "reason_code": "LOCALSIM_MINUTE_BAR_OUT_OF_ORDER",
+                        "symbol": symbol,
+                        "previous_bar_time": previous_time.isoformat(),
+                        "bar_time": bar.bar_time.isoformat(),
+                    },
+                )
+            seen[bar.bar_time] = identity
+            previous_time = bar.bar_time
+
+    def _validate_replayed_cursor_bar(
+        self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any]
+    ) -> None:
+        if state.last_processed_bar_time is None or state.last_applied_bar_identity is None:
+            return
+        matching = [bar for bar in observed_bars if bar.bar_time == state.last_processed_bar_time]
+        if not matching:
+            raise BrokerConnectivityError(
+                "LocalSim realtime source cannot read back the last applied minute bar",
+                context={
+                    "reason_code": "LOCALSIM_LAST_APPLIED_BAR_READBACK_MISSING",
+                    "state_id": state.state_id,
+                    "symbol": state.symbol,
+                    "last_processed_bar_time": state.last_processed_bar_time.isoformat(),
+                },
+            )
+        actual_identity = self._bar_identity(matching[0])
+        if actual_identity != state.last_applied_bar_identity:
+            raise BrokerConnectivityError(
+                "LocalSim last applied minute bar payload changed after persistence",
+                context={
+                    "reason_code": "LOCALSIM_LAST_APPLIED_BAR_PAYLOAD_CONFLICT",
+                    "state_id": state.state_id,
+                    "symbol": state.symbol,
+                    "bar_time": state.last_processed_bar_time.isoformat(),
+                    "expected_identity": state.last_applied_bar_identity,
+                    "actual_identity": actual_identity,
+                },
+            )
+
+    def _bar_identity(self, bar: Any) -> str:
+        return canonical_json_sha256(
+            {"schema_version": "localsim_minute_bar_identity_v1", "source": self._data_source.value,
+             "bar": bar.model_dump(mode="json")}
+        )
+
+    def _incremental_market_context(
+        self, market_context: Mapping[str, Any], *, observed_until: datetime, causal_bar_count: int,
+    ) -> dict[str, Any]:
+        capability = require_execution_algo_supports_mode(
+            self._execution_policy, mode="LIVE_ONLY", package_id=self._package_id
+        )
+        return {
+            **dict(market_context),
+            "eligible_bar_after": self._eligible_bar_after.isoformat() if self._eligible_bar_after else None,
+            "observed_until": observed_until.isoformat(),
+            "causal_bar_count": causal_bar_count,
+            "live_step_mode": capability.live_step_mode,
+            "plan_horizon_bars": capability.plan_horizon_bars,
+            "v25_realtime_streaming": capability.algo_code in {"V25_TWO_STAGE", "V25_1_SMALL_CAP"},
+        }
+
+    def _new_execution_state(self, *, intent: OrderIntent, order: Order) -> LocalSimExecutionStateV1:
+        self._require_runtime_scope()
+        if self._bound_plan_id is None or self._eligible_bar_after is None:
+            raise BrokerSubmitError(
+                "LocalSim realtime execution is missing bound plan identity",
+                context={"reason_code": "LOCALSIM_CAUSALITY_SCOPE_MISSING", "intent_id": intent.intent_id},
+            )
+        algo_code = str(self._execution_policy["algo_code"]).strip().upper()
+        algo_instance_digest = canonical_json_sha256(
+            ["localsim_algo_instance_v1", self._runtime_binding_id, intent.target_trade_date.isoformat(),
+             self._bound_plan_id, intent.intent_id, algo_code]
+        )
+        return LocalSimExecutionStateV1(
+            run_id=str(self._runtime_run_id),
+            binding_id=str(self._runtime_binding_id),
+            trade_date=intent.target_trade_date,
+            plan_id=self._bound_plan_id,
+            intent_id=intent.intent_id,
+            algo_instance_id=f"lsalgo_{algo_instance_digest[:32]}",
+            portfolio_id=self._portfolio_id,
+            order_id=order.order_id,
+            symbol=order.symbol,
+            side=order.side,
+            total_quantity=order.quantity,
+            filled_quantity=0,
+            remaining_quantity=order.quantity,
+            algo_code=algo_code,
+            order_status=order.status.value,
+            runtime_status=LocalSimExecutionRuntimeStatus.WAITING_FOR_CAUSAL_BAR,
+            algo_state={"total_quantity": order.quantity, "executed_quantity": 0, "step": 0,
+                        "is_complete": False, "causality_mode": "strict_no_backfill"},
+            schedule_version=f"{algo_code}:persisted_plan_v1",
+            causality_cursor=self._eligible_bar_after,
+            idempotency_key=canonical_json_sha256(
+                ["localsim_state_transition_v1", self._bound_plan_id, intent.intent_id, 0,
+                 "WAITING_FOR_CAUSAL_BAR"]
+            ),
+        )
+
+    def _next_execution_state(
+        self, *, previous: LocalSimExecutionStateV1, engine_state: Any, order: Order,
+        bars: list[Any], fill_count: int,
+    ) -> LocalSimExecutionStateV1:
+        if not bars:
+            return previous
+        last_bar = max(bars, key=lambda item: item.bar_time)
+        last_bar_identity = self._bar_identity(last_bar)
+        algo_state = dict(getattr(engine_state, "algo_state", {}) or {})
+        raw_step = algo_state.get("step", previous.next_slice_index)
+        if isinstance(raw_step, bool) or not isinstance(raw_step, int) or raw_step < 0:
+            raise ExecutionAlgoError(
+                "LocalSim execution state contains an invalid next slice index",
+                context={"reason_code": "LOCALSIM_NEXT_SLICE_INDEX_INVALID", "state_id": previous.state_id,
+                         "raw_step": raw_step},
+            )
+        sequence = previous.sequence + 1
+        payload = previous.model_dump(mode="python")
+        payload.update(
+            {
+                "filled_quantity": order.filled_quantity,
+                "remaining_quantity": order.remaining_quantity,
+                "order_status": order.status.value,
+                "runtime_status": (
+                    LocalSimExecutionRuntimeStatus.FILLED if order.status == OrderStatus.FILLED
+                    else LocalSimExecutionRuntimeStatus.ACTIVE
+                ),
+                "algo_state": algo_state,
+                "plan": deepcopy(getattr(engine_state, "plan", None)),
+                "plan_sha256": None,
+                "next_slice_index": raw_step,
+                "last_processed_bar_time": getattr(engine_state, "last_processed_bar_time", last_bar.bar_time),
+                "last_applied_bar_identity": last_bar_identity,
+                "market_session": self._market_session(last_bar.bar_time),
+                "latest_order_sequence": previous.latest_order_sequence + 1,
+                "latest_fill_sequence": previous.latest_fill_sequence + fill_count,
+                "latest_cash_sequence": previous.latest_cash_sequence + fill_count,
+                "latest_position_sequence": previous.latest_position_sequence + fill_count,
+                "sequence": sequence,
+                "idempotency_key": canonical_json_sha256(
+                    ["localsim_state_transition_v1", previous.state_id, sequence, last_bar_identity]
+                ),
+                "state_hash": "",
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        return LocalSimExecutionStateV1.model_validate(payload)
+
+    def _expire_residual_after_complete_close(
+        self, *, state: LocalSimExecutionStateV1, observed_bars: Iterable[Any],
+        as_of_time: datetime, increment_sequence: bool,
+    ) -> LocalSimExecutionStateV1:
+        if state.is_terminal or as_of_time.time() < time(15, 0):
+            return state
+        latest_bar_time = max((bar.bar_time for bar in observed_bars), default=None)
+        if latest_bar_time is None or latest_bar_time.time() < time(15, 0):
+            raise BrokerConnectivityError(
+                "LocalSim cannot terminalize residual before the closing minute is observed",
+                context={
+                    "reason_code": "LOCALSIM_CLOSE_BAR_MISSING",
+                    "state_id": state.state_id,
+                    "symbol": state.symbol,
+                    "trade_date": state.trade_date.isoformat(),
+                    "latest_bar_time": latest_bar_time.isoformat() if latest_bar_time else None,
+                    "observed_until": as_of_time.isoformat(),
+                },
+            )
+        payload = state.model_dump(mode="python")
+        sequence = state.sequence + (1 if increment_sequence else 0)
+        payload.update(
+            {
+                "runtime_status": LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
+                "terminal_reason": "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY",
+                "residual_classification": "SCHEDULE_RESIDUAL_AT_CLOSE",
+                "sequence": sequence,
+                "idempotency_key": canonical_json_sha256(
+                    ["localsim_state_transition_v1", state.state_id, sequence, "EXPIRED_WITH_RESIDUAL"]
+                ),
+                "state_hash": "",
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        return LocalSimExecutionStateV1.model_validate(payload)
+
+    @staticmethod
+    def _market_session(bar_time: datetime) -> str:
+        return "AM" if bar_time.time() <= time(11, 30) else "PM"
+
+    def _apply_incremental_effects(
+        self, *, record: _OrderRecord, final_order: Order, fills: list[Fill], events: list[OrderEvent],
+    ) -> None:
+        ledger_snapshot = self._snapshot_ledger_state()
+        try:
+            for fill in fills:
+                self._ledger.apply_fill(fill)
+        except Exception:
+            self._restore_ledger_state(ledger_snapshot)
+            raise
+        record.order = final_order
+        record.status = self._build_status(record.handle.handle_id, final_order)
+        record.fills.extend(fills)
+        record.events.extend(events)
+        for fill in fills:
+            fill_event = FillEvent(
+                handle_id=record.handle.handle_id,
+                intent_id=record.handle.intent_id,
+                fill_quantity=fill.quantity,
+                fill_price=Decimal(repr(fill.price)),
+                fill_ts=fill.trade_time,
+                venue=self.backend_id,
+            )
+            if self._batch_snapshot is not None:
+                self._deferred_fill_events.append(fill_event)
+            else:
+                self._dispatch_fill(fill_event)
 
     def _snapshot_ledger_state(self) -> dict[str, Any]:
         return {

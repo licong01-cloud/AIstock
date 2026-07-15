@@ -21,6 +21,7 @@ from .models import (
     DailySelectionEvidence,
     ExecutionPlan,
     ExecutionPlanIntent,
+    LocalSimExecutionStateV1,
     RuntimeReleaseValidationState,
     SimulationBindingApprovalState,
     SimulationBrokerBackend,
@@ -32,6 +33,130 @@ from .models import (
 )
 
 ConnFactory = Callable[[], Iterator[Any]]
+LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY = "local_sim_execution_states_v1"
+
+
+def _local_sim_state_map(payload: dict[str, Any]) -> dict[str, LocalSimExecutionStateV1]:
+    raw = payload.get(LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY)
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise InvalidStateTransitionError(
+            "LocalSIM durable state payload must be an object",
+            context={"reason_code": "LOCALSIM_DURABLE_STATE_PAYLOAD_INVALID"},
+        )
+    states: dict[str, LocalSimExecutionStateV1] = {}
+    for state_id, state_payload in raw.items():
+        try:
+            state = LocalSimExecutionStateV1.model_validate(state_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise InvalidStateTransitionError(
+                "LocalSIM durable state payload failed schema or hash validation",
+                context={"reason_code": "LOCALSIM_DURABLE_STATE_SCHEMA_INVALID", "state_id": str(state_id)},
+            ) from exc
+        if state.state_id != state_id:
+            raise InvalidStateTransitionError(
+                "LocalSIM durable state map key does not match state identity",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_IDENTITY_CONFLICT",
+                    "map_state_id": str(state_id),
+                    "payload_state_id": state.state_id,
+                },
+            )
+        states[state.state_id] = state
+    return states
+
+
+def _merge_local_sim_state_batch(
+    *,
+    run_id: str,
+    payload: dict[str, Any],
+    states: Iterable[LocalSimExecutionStateV1],
+    expected_versions: dict[str, tuple[int, str] | None],
+) -> dict[str, Any]:
+    current = _local_sim_state_map(payload)
+    incoming = list(states)
+    if not incoming:
+        raise ValueError("LocalSIM state batch cannot be empty")
+    if len({state.state_id for state in incoming}) != len(incoming):
+        raise InvalidStateTransitionError(
+            "LocalSIM state batch contains duplicate state identities",
+            context={"reason_code": "LOCALSIM_DURABLE_STATE_BATCH_DUPLICATE"},
+        )
+    for state in incoming:
+        if state.run_id != run_id:
+            raise InvalidStateTransitionError(
+                "LocalSIM state run identity does not match repository target",
+                context={
+                    "reason_code": "LOCALSIM_DURABLE_STATE_RUN_IDENTITY_CONFLICT",
+                    "run_id": run_id,
+                    "state_run_id": state.run_id,
+                    "state_id": state.state_id,
+                },
+            )
+        if state.state_id not in expected_versions:
+            raise InvalidStateTransitionError(
+                "LocalSIM state batch is missing the expected CAS version",
+                context={"reason_code": "LOCALSIM_DURABLE_STATE_CAS_EXPECTATION_MISSING", "state_id": state.state_id},
+            )
+        existing = current.get(state.state_id)
+        expected = expected_versions[state.state_id]
+        if existing is None:
+            if expected is not None:
+                raise InvalidStateTransitionError(
+                    "LocalSIM initial state CAS precondition failed",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_CAS_CONFLICT",
+                        "state_id": state.state_id,
+                        "expected": expected,
+                        "incoming_sequence": state.sequence,
+                    },
+                )
+        else:
+            if expected != (existing.sequence, existing.state_hash):
+                raise InvalidStateTransitionError(
+                    "LocalSIM state CAS precondition failed",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_CAS_CONFLICT",
+                        "state_id": state.state_id,
+                        "expected": expected,
+                        "actual_sequence": existing.sequence,
+                        "actual_state_hash": existing.state_hash,
+                    },
+                )
+            if state.sequence == existing.sequence and state.state_hash == existing.state_hash:
+                continue
+            if state.sequence != existing.sequence + 1:
+                raise InvalidStateTransitionError(
+                    "LocalSIM state sequence must advance by exactly one",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_SEQUENCE_CONFLICT",
+                        "state_id": state.state_id,
+                        "previous_sequence": existing.sequence,
+                        "incoming_sequence": state.sequence,
+                    },
+                )
+            immutable_fields = (
+                "run_id", "binding_id", "trade_date", "plan_id", "intent_id", "algo_instance_id",
+                "portfolio_id", "order_id", "symbol", "side", "total_quantity", "algo_code",
+                "schedule_version", "causality_cursor", "created_at",
+            )
+            drift = [field for field in immutable_fields if getattr(existing, field) != getattr(state, field)]
+            if drift:
+                raise InvalidStateTransitionError(
+                    "LocalSIM state immutable identity drifted during transition",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_IDENTITY_CONFLICT",
+                        "state_id": state.state_id,
+                        "fields": drift,
+                    },
+                )
+        current[state.state_id] = state
+    merged = dict(payload)
+    merged[LOCAL_SIM_EXECUTION_STATES_PAYLOAD_KEY] = {
+        state_id: state.model_dump(mode="json") for state_id, state in sorted(current.items())
+    }
+    return merged
 
 
 def _is_daily_selection_evidence_v2(evidence: DailySelectionEvidence) -> bool:
@@ -694,6 +819,68 @@ class SimulationRuntimeRepository:
                 )
         return self.get_simulation_daily_run(run_id)
 
+    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+        run = self.get_simulation_daily_run(run_id)
+        states = list(_local_sim_state_map(run.run_payload_json).values())
+        states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
+        return states
+
+    def commit_local_sim_execution_states(
+        self,
+        *,
+        run_id: str,
+        states: Iterable[LocalSimExecutionStateV1],
+        expected_versions: dict[str, tuple[int, str] | None],
+    ) -> list[LocalSimExecutionStateV1]:
+        incoming = list(states)
+        with self._conn_factory() as conn:
+            original_autocommit = bool(getattr(conn, "autocommit", False))
+            try:
+                if original_autocommit:
+                    conn.autocommit = False
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        """SELECT run_payload_json FROM paper_v2.simulation_daily_run
+                           WHERE run_id = %s FOR UPDATE""",
+                        (run_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        raise DataUnavailableError("simulation daily run does not exist", context={"run_id": run_id})
+                    merged = _merge_local_sim_state_batch(
+                        run_id=run_id,
+                        payload=dict(row.get("run_payload_json") or {}),
+                        states=incoming,
+                        expected_versions=expected_versions,
+                    )
+                    cur.execute(
+                        """UPDATE paper_v2.simulation_daily_run
+                           SET run_payload_json = %s, updated_at = now() WHERE run_id = %s""",
+                        (psycopg2.extras.Json(merged), run_id),
+                    )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if original_autocommit:
+                    conn.autocommit = True
+        readback = {state.state_id: state for state in self.list_local_sim_execution_states(run_id)}
+        for state in incoming:
+            persisted = readback.get(state.state_id)
+            if persisted is None or persisted.state_hash != state.state_hash:
+                raise InvalidStateTransitionError(
+                    "LocalSIM durable state independent readback failed",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_READBACK_FAILED",
+                        "run_id": run_id,
+                        "state_id": state.state_id,
+                        "expected_state_hash": state.state_hash,
+                        "actual_state_hash": persisted.state_hash if persisted else None,
+                    },
+                )
+        return [readback[state.state_id] for state in incoming]
+
     def merge_run_tca_capture_sidecar(
         self,
         *,
@@ -1295,6 +1482,44 @@ class InMemorySimulationRuntimeRepository:
         )
         self.daily_runs[run_id] = updated
         return updated
+
+    def list_local_sim_execution_states(self, run_id: str) -> list[LocalSimExecutionStateV1]:
+        run = self.get_simulation_daily_run(run_id)
+        states = list(_local_sim_state_map(run.run_payload_json).values())
+        states.sort(key=lambda item: (item.intent_id, item.algo_instance_id, item.state_id))
+        return states
+
+    def commit_local_sim_execution_states(
+        self,
+        *,
+        run_id: str,
+        states: Iterable[LocalSimExecutionStateV1],
+        expected_versions: dict[str, tuple[int, str] | None],
+    ) -> list[LocalSimExecutionStateV1]:
+        incoming = list(states)
+        current = self.get_simulation_daily_run(run_id)
+        merged = _merge_local_sim_state_batch(
+            run_id=run_id,
+            payload=current.run_payload_json,
+            states=incoming,
+            expected_versions=expected_versions,
+        )
+        self.daily_runs[run_id] = current.model_copy(update={"run_payload_json": merged})
+        readback = {state.state_id: state for state in self.list_local_sim_execution_states(run_id)}
+        for state in incoming:
+            persisted = readback.get(state.state_id)
+            if persisted is None or persisted.state_hash != state.state_hash:
+                raise InvalidStateTransitionError(
+                    "LocalSIM durable state independent readback failed",
+                    context={
+                        "reason_code": "LOCALSIM_DURABLE_STATE_READBACK_FAILED",
+                        "run_id": run_id,
+                        "state_id": state.state_id,
+                        "expected_state_hash": state.state_hash,
+                        "actual_state_hash": persisted.state_hash if persisted else None,
+                    },
+                )
+        return [readback[state.state_id] for state in incoming]
 
     def merge_run_tca_capture_sidecar(
         self,
