@@ -340,6 +340,31 @@ hash不一致。调用方不得只传任意本地路径，Phase 1G也不得在�
 同策略的另一个物理root不改变业务身份。输出root只承载Phase 1G result/attempt/batch CAS制品，不读取
 Phase 1E或回测、Paper、模拟盘文件。
 
+G1固定三类store layout policy语义，物理root由环境显式提供但不进入layout policy hash：
+
+| layout policy id | version | 固定布局/内容契约 |
+|---|---:|---|
+| `ADVISORY_PHASE1F2_RELEASE_RECEIPT_STORE` | `1` | `receipts/<receipt_content_hash>.json`，直接承载`ReleaseSchemaReceipt` canonical JSON |
+| `ADVISORY_PHASE1E_EXECUTION_PLAN_STORE` | `1` | `advisory/phase1e/plans/<hash-prefix>/<plan_hash>.json`，承载`advisory_phase1e_artifact_envelope_v1` |
+| `ADVISORY_PHASE1G_RESULT_STORE` | `1` | `results|attempts|batches/<hash-prefix>/<semantic_hash>.json`，直接承载对应typed canonical JSON |
+
+三个layout policy hash依次固定为：
+
+```text
+ADVISORY_PHASE1F2_RELEASE_RECEIPT_STORE = a3d32dc3aea24e2228b9f2bc02a559993db4bfe02ed437d25db0799ef1f94ee1
+ADVISORY_PHASE1E_EXECUTION_PLAN_STORE   = 3bf0e1b0352aaf88a470b78c0502994ff17d6c02c9a94436bcb463e71bf5c9e8
+ADVISORY_PHASE1G_RESULT_STORE           = 7c7700e7a1f8bc82bda131afe566e6ab9e0f89fc9d45f107db9679122c2eae06
+```
+
+layout policy hash只覆盖layout policy id/version、artifact kind、布局版本、envelope版本和identity字段，
+不覆盖root、环境名或墙钟时间。input resolver由调用方显式绑定
+`artifact kind + root + expected store policy hash + expected layout policy hash`。Phase 1E的
+`store_policy_hash`不是G1重新发明的常量，而是exact Phase 1E request、plan operation和artifact envelope
+已经冻结的`artifact_store_policy_hash`；ref、root binding、plan和envelope四者必须相等。Phase 1F.2
+receipt store没有历史embedded policy字段，因此它的store policy hash等于上表对应layout policy hash，
+并要求root binding与ref一致。Phase 1G result store policy hash同样等于其layout policy hash。任何未注册
+kind、store policy或布局均明确失败，不按相似路径搜索。
+
 ### 6.4 Immutable DSE/artifact/package projection
 
 `HistoricalDseTraceProjection` 在一个 `REPEATABLE READ READ ONLY` snapshot 中读取：
@@ -481,6 +506,37 @@ registry_hash
 
 每个 target 的实际 planned rows/bytes 从 Phase 1E workload/resource budget读取，必须不超过 registry
 absolute bounds。registry 是程序配置，不是用户审批；不得在代码中隐藏 fallback 数值。
+
+G1首个且唯一注册项固定为：
+
+```text
+registry_id = ADVISORY_PHASE1G_HISTORICAL_OBSERVATION_CAPTURE
+registry_version = 1
+absolute_max_candidates = 1000000
+absolute_max_bytes = 2147483648
+absolute_max_capture_ms = 1800000
+lease_seconds = 3600
+statement_timeout_ms = 1800000
+lock_timeout_ms = 30000
+source_resolver_contract_version = advisory_phase1g_source_resolver_v1
+dse_projection_contract_version = advisory_phase1g_dse_projection_v1
+observation_writer_contract_version = advisory_phase1g_observation_writer_v1
+```
+
+三个component hash分别是`{component_name, contract_version}`的canonical SHA256；`registry_hash`是上述
+完整typed registry payload的canonical SHA256。这些hash冻结接口契约身份，不是假装已经存在的G2/G3
+源码hash；G2/G3实现必须声明并匹配相同contract version。绝对上界高于正常单Program/date/scope工作量，
+只防止错误输入形成无界事务；真正逐target rows/bytes仍以Phase 1E已测量且冻结的capacity为更严格上界。
+registry没有环境fallback、动态放宽、人工审批或角色授权。
+
+当前固定hash为：
+
+```text
+source_resolver_contract_hash = c2a87f75b9f539e7cb2d02bee8dad9ce09408a3b559c03edaa7867356d33f68f
+dse_projection_contract_hash  = 1f37ae4ffd92a5949d0083bac2a8eaec20be92136d83664f541c2d0f788206a7
+observation_writer_contract_hash = 548906749d026ebd559be5a8bf189b7420575ea4ea016e9c1d0ce2351a1aed49
+registry_hash = fe3548010d6343781e69f4b8aee7e49c477d1f7f29f853fd5f3fbe85e6416bf4
+```
 
 ### 7.5 Stable capture result
 
@@ -1028,6 +1084,19 @@ G0是已经完成的开发/数据库identity技术前置，不是运行审批；
 - Phase 1F.2 receipt/catalog guard和exact target connection resolver；
 - immutable input ref resolver与external CAS no-replace result store；
 - L0/L1。
+
+G1已在`feature/advisory-phase1g-g1-foundation-20260715`实现并完成本批L0/L1、覆盖率与相邻回归；该状态不
+代表G2-G5或整个Phase 1G完成，也不满足下文“G0-G4完整实现”代码合入条件。
+
+| G1 design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| G1-001 typed contracts/policy/hash | `phase1g_contract.py` | `test_phase1g_contract.py` | implemented_verified_in_branch | none |
+| G1-002 Phase 1E-derived target request | `build_phase1g_target_execution_request()` | exact program/date/scope/operation hash test | implemented_verified_in_branch | none |
+| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale tests | implemented_verified_in_branch | none |
+| G1-004 immutable input refs | `phase1g_artifact_ref.py` | containment/latest/hash/policy/reparse tests | implemented_verified_in_branch | none |
+| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper tests | implemented_verified_in_branch | none |
+| G1-006 module isolation | four `phase1g_*.py` modules | import denylist test | implemented_verified_in_branch | none |
+| G1-007 local quality | G1 test suite | 34 passed, 1 environment skip; statements 87.73%, branches 72.09% | implemented_verified_in_branch | none |
 
 ### G2：Source Replay And Historical Trace Projection
 
