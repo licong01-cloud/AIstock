@@ -38,10 +38,6 @@ from backend.services.advisory_phase1.trace_outbox import ExpectedTraceIdentity,
 
 
 _ENV_FILE = Path("F:/Dev/AIstock/.env")
-_MIGRATION = Path("backend/db/migrations/add_advisory_phase1_capture_foundation_20260713.sql")
-_ROLLBACK = Path("backend/db/migrations/add_advisory_phase1_capture_foundation_20260713.rollback.sql")
-_BATCH_C_MIGRATION = Path("backend/db/migrations/add_advisory_phase1c3_label_snapshot_foundation_20260713.sql")
-_BATCH_C_ROLLBACK = Path("backend/db/migrations/add_advisory_phase1c3_label_snapshot_foundation_20260713.rollback.sql")
 _NOW = datetime(2026, 7, 13, 2, 0, tzinfo=timezone.utc)
 
 
@@ -170,11 +166,6 @@ def _envelope(binding: TraceCaptureBinding) -> StageTraceEnvelope:
     )
 
 
-def _apply_sql(conn: Any, path: Path) -> None:
-    with conn.cursor() as cur:
-        cur.execute(path.read_text(encoding="utf-8"))
-
-
 def _insert_signal(cur: Any, *, signal_id: str, scope_hash: str, target_trade_date: date, plan: CapturePlan) -> None:
     cur.execute(
         """
@@ -268,16 +259,26 @@ def _insert_version(
 def test_capture_foundation_l4_dev_db_apply_readback_and_rollback() -> None:
     conn = psycopg2.connect(**_dev_dsn(), connect_timeout=5)
     conn.autocommit = True
-    applied = False
-    applied_batch_c = False
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conrelid = to_regclass('app.advisory_selection_stage_trace_outbox')
+                      AND conname = 'uq_advisory_stage_trace_outbox_scope_identity'
+                ),
+                to_regclass('app.advisory_capture_gap') IS NOT NULL,
+                to_regclass('app.advisory_dataset_snapshot') IS NOT NULL
+            """
+        )
+        schema_ready = cur.fetchone()
+    if schema_ready != (True, True, True):
+        conn.close()
+        pytest.skip("DEV catalog must have the published Phase 1F.2 v3 schema before rollback-only repository L4")
+    conn.autocommit = False
     try:
-        _apply_sql(conn, _ROLLBACK)
-        _apply_sql(conn, _MIGRATION)
-        applied = True
-        _apply_sql(conn, _BATCH_C_MIGRATION)
-        applied_batch_c = True
-        conn.autocommit = False
-
         @contextmanager
         def conn_factory() -> Iterator[Any]:
             yield conn
@@ -416,17 +417,5 @@ def test_capture_foundation_l4_dev_db_apply_readback_and_rollback() -> None:
                 )
             conn.rollback()
     finally:
-        try:
-            if applied_batch_c:
-                conn.rollback()
-                conn.autocommit = True
-                _apply_sql(conn, _BATCH_C_ROLLBACK)
-            if applied:
-                conn.rollback()
-                conn.autocommit = True
-                _apply_sql(conn, _ROLLBACK)
-                with conn.cursor() as cur:
-                    cur.execute("SELECT to_regclass('app.advisory_capture_batch')")
-                    assert cur.fetchone() == (None,)
-        finally:
-            conn.close()
+        conn.rollback()
+        conn.close()

@@ -923,7 +923,7 @@ def _difference_relation_key(object_id: str) -> str | None:
     return ".".join(parts[:2]) if len(parts) >= 2 else None
 
 
-def _exact_predecessor_scope_is_compatible(
+def _predecessor_chain_is_compatible(
     *,
     connection: Any,
     config: DatabaseConnectionConfig,
@@ -944,10 +944,11 @@ def _exact_predecessor_scope_is_compatible(
         contract=predecessor,
         expected_partitions=predecessor_partitions,
     )
-    exact_relations = set(spec.exact_relations)
-    return not any(
-        _difference_relation_key(item.object_id) in exact_relations for item in verification.managed_differences
-    )
+    # A forward release may resume from a partially applied predecessor. Every
+    # catalog difference must therefore be owned by a frozen predecessor
+    # migration; one unknown difference anywhere in the chain blocks forward
+    # repair, including differences outside this release's exact relation scope.
+    return all(item.repairable_by_orders for item in verification.managed_differences)
 
 
 def _compare_partitions(
@@ -1079,15 +1080,7 @@ def verify_catalog(
         (item.object_id, item.actual_payload_sha256): item.repairable_by_orders
         for item in contract.repairable_drift_variants
     }
-    actual_relations = {(str(item["schema"]), str(item["name"])): item for item in projection.relations}
-    has_cutover_predecessor = any(
-        item.relkind == "v"
-        and item.repairable_by_orders
-        and (observed := actual_relations.get((item.schema, item.name))) is not None
-        and observed.get("relkind") == "r"
-        for item in contract.required_relations
-    )
-    predecessor_scope_is_exact = has_cutover_predecessor and _exact_predecessor_scope_is_compatible(
+    predecessor_chain_is_compatible = contract.predecessor_contract is not None and _predecessor_chain_is_compatible(
         connection=connection,
         config=config,
         contract=contract,
@@ -1095,7 +1088,7 @@ def verify_catalog(
     )
     repairable_unexpected_objects = (
         {item.object_id: item.repairable_by_orders for item in contract.repairable_unexpected_objects}
-        if predecessor_scope_is_exact
+        if predecessor_chain_is_compatible
         else {}
     )
     major = projection.database_identity.server_version_num // 10_000
@@ -1238,7 +1231,7 @@ def verify_catalog(
         and item.actual is not None
         and item.expected.get("relkind") == "v"
         and item.actual.get("relkind") == "r"
-        and predecessor_scope_is_exact
+        and predecessor_chain_is_compatible
         and relation_repair_orders.get(item.object_id.removeprefix("relation:"))
     }
     repaired_children: list[CatalogDifference] = []

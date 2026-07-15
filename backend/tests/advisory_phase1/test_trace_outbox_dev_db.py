@@ -19,6 +19,7 @@ from backend.services.advisory_phase1.control_binding import (
     ControlType,
     PostgresControlBindingRepository,
 )
+from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import (
     PHASE1_STAGE_TRACE_SCHEMA_VERSION,
     StageTraceEnvelope,
@@ -26,7 +27,9 @@ from backend.services.advisory_phase1.stage_trace import (
     TraceCapturePolicy,
 )
 from backend.services.advisory_phase1.trace_outbox import (
+    ExpectedTraceIdentity,
     PostgresTraceOutboxRepository,
+    REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
     TraceDeliveryEventRequest,
     TraceDeliveryEventType,
 )
@@ -66,14 +69,19 @@ def _dev_dsn() -> dict[str, Any]:
     return dsn
 
 
-def _binding(*, control_binding_event_hash: str = "7" * 64) -> TraceCaptureBinding:
+def _binding(
+    *,
+    control_binding_event_hash: str = "7" * 64,
+    admission_scope_id: str = "l4-scope",
+    admission_scope_hash: str = "b" * 64,
+) -> TraceCaptureBinding:
     return TraceCaptureBinding(
         control_binding_event_hash=control_binding_event_hash,
         binding_id="l4-trace-binding",
         binding_version="1",
         handoff_readiness_hash="a" * 64,
-        admission_scope_id="l4-scope",
-        admission_scope_hash="b" * 64,
+        admission_scope_id=admission_scope_id,
+        admission_scope_hash=admission_scope_hash,
         capture_batch_id="l4-batch",
         capture_fencing_token=1,
         capture_policy=TraceCapturePolicy(
@@ -101,7 +109,7 @@ def _control_request(binding: TraceCaptureBinding) -> ControlBindingRequest:
     )
 
 
-def _envelope(binding: TraceCaptureBinding) -> StageTraceEnvelope:
+def _envelope(binding: TraceCaptureBinding, *, artifact_hash: str = "d" * 64) -> StageTraceEnvelope:
     content = canonicalize(
         {
             "schema_version": PHASE1_STAGE_TRACE_SCHEMA_VERSION,
@@ -116,7 +124,7 @@ def _envelope(binding: TraceCaptureBinding) -> StageTraceEnvelope:
                 "execution_prohibited": True,
             },
             "trace_capture_binding": binding.model_dump(mode="json"),
-            "raw_score_artifact": {"artifact_payload_sha256": "d" * 64, "scores_json": []},
+            "raw_score_artifact": {"artifact_payload_sha256": artifact_hash, "scores_json": []},
             "stage_trace": [],
             "hmm_metadata": {},
             "risk_metadata": {},
@@ -136,6 +144,22 @@ def _envelope(binding: TraceCaptureBinding) -> StageTraceEnvelope:
 
 def test_trace_outbox_l4_dev_db_is_immutable_idempotent_and_rolls_back() -> None:
     conn = psycopg2.connect(**_dev_dsn(), connect_timeout=5)
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = to_regclass('app.advisory_selection_stage_trace_outbox')
+                  AND conname = 'uq_advisory_stage_trace_outbox_scope_identity'
+            )
+            """
+        )
+        schema_ready = cur.fetchone()[0]
+    if not schema_ready:
+        conn.close()
+        pytest.skip("DEV catalog must have the published Phase 1F.2 v3 schema before rollback-only outbox L4")
     conn.autocommit = False
     try:
         @contextmanager
@@ -147,11 +171,26 @@ def test_trace_outbox_l4_dev_db_is_immutable_idempotent_and_rolls_back() -> None
         control_event = controls.append(_control_request(provisional_binding))
         binding = _binding(control_binding_event_hash=control_event.binding_event_hash)
         envelope = _envelope(binding)
+        provisional_binding_b = _binding(admission_scope_id="l4-scope-b", admission_scope_hash="e" * 64)
+        control_event_b = controls.append(_control_request(provisional_binding_b))
+        binding_b = _binding(
+            control_binding_event_hash=control_event_b.binding_event_hash,
+            admission_scope_id="l4-scope-b",
+            admission_scope_hash="e" * 64,
+        )
+        envelope_b = _envelope(binding_b)
         validator = _FixtureAdmissionValidator()
         repository = PostgresTraceOutboxRepository(conn_factory=conn_factory, admission_validator=validator)
         first = repository.append(envelope, binding=binding)
         assert repository.append(envelope, binding=binding) == first
-        assert validator.call_count == 1
+        second_scope = repository.append(envelope_b, binding=binding_b)
+        assert first.trace_outbox_id != second_scope.trace_outbox_id
+        assert repository.contains_identity(ExpectedTraceIdentity.from_envelope(envelope, binding=binding))
+        assert repository.contains_identity(ExpectedTraceIdentity.from_envelope(envelope_b, binding=binding_b))
+        with pytest.raises(SourceLedgerError) as excinfo:
+            repository.append(_envelope(binding, artifact_hash="f" * 64), binding=binding)
+        assert excinfo.value.reason_code == REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT
+        assert validator.call_count == 2
         failed = repository.append_delivery(
             TraceDeliveryEventRequest(
                 trace_outbox_id=first.trace_outbox_id,

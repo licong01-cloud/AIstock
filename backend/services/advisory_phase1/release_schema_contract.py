@@ -1200,7 +1200,7 @@ def make_release_plan_request(
 
 
 RELEASE_SCHEMA_REGISTRY_ROOT = Path(__file__).resolve().parent / "release_schema_registry"
-DEFAULT_RELEASE_SCHEMA_REGISTRY = RELEASE_SCHEMA_REGISTRY_ROOT / "advisory_phase1_dataset_foundation_v2.json"
+DEFAULT_RELEASE_SCHEMA_REGISTRY = RELEASE_SCHEMA_REGISTRY_ROOT / "advisory_phase1_dataset_foundation_v3.json"
 
 
 def load_release_schema_contract(path: Path | None = None) -> ReleaseSchemaContract:
@@ -1237,18 +1237,21 @@ def load_release_schema_contract(path: Path | None = None) -> ReleaseSchemaContr
 
 
 def load_predecessor_release_schema_contract(contract: ReleaseSchemaContract) -> ReleaseSchemaContract | None:
-    """Load and verify the repository-frozen predecessor named by a v2 contract."""
+    """Load and verify the repository-frozen predecessor named by a forward contract."""
 
     spec = contract.predecessor_contract
     if spec is None:
         return None
     predecessor = load_release_schema_contract(RELEASE_SCHEMA_REGISTRY_ROOT / spec.relative_path)
-    if predecessor.schema_version != CONTRACT_SCHEMA_VERSION:
-        raise ReleaseSchemaContractError(REASON_CONTRACT_INVALID, "predecessor contract must use the v1 schema")
     if predecessor.contract_content_hash != spec.contract_content_hash:
         raise ReleaseSchemaContractError(
             REASON_CONTRACT_HASH_MISMATCH,
-            "predecessor registry content hash differs from the v2 contract",
+            "predecessor registry content hash differs from the forward contract",
+        )
+    if predecessor.release_schema_version == contract.release_schema_version:
+        raise ReleaseSchemaContractError(
+            REASON_CONTRACT_INVALID,
+            "predecessor release schema version must differ from the current contract",
         )
     predecessor_relations = {f"{item.schema}.{item.name}" for item in predecessor.required_relations}
     if not set(spec.exact_relations).issubset(predecessor_relations):

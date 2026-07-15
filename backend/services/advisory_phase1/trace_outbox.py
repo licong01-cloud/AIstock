@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from enum import Enum
 from queue import Full, Queue
 from threading import Thread
-from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterator, Literal, Mapping, Protocol, Sequence
 
 import psycopg2
 import psycopg2.extras
@@ -31,6 +31,10 @@ REASON_TRACE_DISPATCH_QUEUE_FULL = "ADVISORY_PHASE1_TRACE_DISPATCH_QUEUE_FULL"
 REASON_TRACE_DISPATCHER_FAILED = "ADVISORY_PHASE1_TRACE_DISPATCHER_FAILED"
 REASON_TRACE_CAPTURE_LOST = "ADVISORY_PHASE1_TRACE_CAPTURE_LOST"
 REASON_TRACE_WRITE_FAILED = "ADVISORY_PHASE1_TRACE_WRITE_FAILED"
+REASON_PHASE1F2_TRACE_IDENTITY_INVALID = "ADVISORY_PHASE1F2_TRACE_IDENTITY_INVALID"
+REASON_PHASE1F2_SCHEMA_NOT_READY = "ADVISORY_PHASE1F2_SCHEMA_NOT_READY"
+REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT = "ADVISORY_PHASE1F2_OUTBOX_SCOPE_CONFLICT"
+TRACE_IDENTITY_SCHEMA_VERSION_V2 = "advisory_phase1_trace_identity_v2"
 
 
 class TraceDeliveryEventType(str, Enum):
@@ -252,7 +256,7 @@ class InMemoryTraceOutboxRepository:
         admission_validator: TraceAdmissionValidator | None = None,
     ) -> None:
         self._records_by_hash: dict[str, TraceOutboxRecord] = {}
-        self._records_by_natural_key: dict[tuple[str, str, str, str, str], TraceOutboxRecord] = {}
+        self._records_by_natural_key: dict[tuple[str, str, str, str, str, str], TraceOutboxRecord] = {}
         self._events_by_outbox: dict[str, list[TraceDeliveryEvent]] = {}
         self._now_provider = now_provider or (lambda: datetime.now(timezone.utc))
         self._admission_validator = admission_validator or RejectingTraceAdmissionValidator()
@@ -268,8 +272,8 @@ class InMemoryTraceOutboxRepository:
         natural_existing = self._records_by_natural_key.get(natural_key)
         if natural_existing is not None:
             raise SourceLedgerError(
-                REASON_TRACE_OUTBOX_CONFLICT,
-                "same selection identity and capture policy has a different trace payload",
+                REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
+                "same selection identity, capture policy, and admission scope has a different trace payload",
                 context={"trace_outbox_id": natural_existing.trace_outbox_id},
             )
         self._admission_validator.validate(envelope=envelope, binding=binding, conn=None)
@@ -306,6 +310,7 @@ class InMemoryTraceOutboxRepository:
         return event
 
     def contains_identity(self, identity: "ExpectedTraceIdentity") -> bool:
+        _require_scope_aware_identity(identity)
         return identity.natural_key in self._records_by_natural_key
 
 
@@ -322,10 +327,22 @@ class PostgresTraceOutboxRepository:
         self._admission_validator = admission_validator or RejectingTraceAdmissionValidator()
 
     def append(self, envelope: StageTraceEnvelope, *, binding: TraceCaptureBinding) -> TraceOutboxRecord:
+        try:
+            return self._append_scope_aware(envelope=envelope, binding=binding)
+        except SourceLedgerError:
+            raise
+        except (psycopg2.errors.UndefinedColumn, psycopg2.errors.UndefinedObject, psycopg2.errors.UndefinedTable) as exc:
+            raise SourceLedgerError(
+                REASON_PHASE1F2_SCHEMA_NOT_READY,
+                "scope-aware trace outbox schema is incomplete",
+            ) from exc
+
+    def _append_scope_aware(self, *, envelope: StageTraceEnvelope, binding: TraceCaptureBinding) -> TraceOutboxRecord:
         _validate_envelope_binding(envelope=envelope, binding=binding)
         natural_key = _natural_key(envelope, binding)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                _require_scope_aware_outbox_schema(cur)
                 cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (envelope.trace_outbox_id,))
                 cur.execute(
                     "SELECT * FROM app.advisory_selection_stage_trace_outbox WHERE trace_content_hash = %s FOR UPDATE",
@@ -342,14 +359,15 @@ class PostgresTraceOutboxRepository:
                     SELECT * FROM app.advisory_selection_stage_trace_outbox
                     WHERE selection_run_id = %s AND package_id = %s AND manifest_sha256 = %s
                       AND decision_as_of_trade_date = %s AND capture_policy_hash = %s
+                      AND admission_scope_hash = %s
                     FOR UPDATE
                     """,
                     natural_key,
                 )
                 if cur.fetchone() is not None:
                     raise SourceLedgerError(
-                        REASON_TRACE_OUTBOX_CONFLICT,
-                        "same selection identity and capture policy has a different trace payload",
+                        REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
+                        "same selection identity, capture policy, and admission scope has a different trace payload",
                     )
                 # The validator must use this transaction and retain row locks
                 # through the INSERT/commit boundary. Exact retries returned
@@ -374,7 +392,17 @@ class PostgresTraceOutboxRepository:
                         _outbox_insert_params(envelope=envelope, binding=binding, created_at=created_at),
                     )
                 except psycopg2.IntegrityError as exc:
-                    raise SourceLedgerError(REASON_TRACE_OUTBOX_CONFLICT, "database rejected trace outbox identity") from exc
+                    constraint_name = str(getattr(exc.diag, "constraint_name", "") or "")
+                    if constraint_name != "uq_advisory_stage_trace_outbox_scope_identity":
+                        raise SourceLedgerError(
+                            REASON_TRACE_OUTBOX_CONFLICT,
+                            "database rejected trace outbox persistence",
+                            context={"constraint_name": constraint_name or None},
+                        ) from exc
+                    raise SourceLedgerError(
+                        REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
+                        "database rejected scope-aware trace outbox identity",
+                    ) from exc
                 return _record_from_row(dict(cur.fetchone()))
 
     def append_delivery(self, request: TraceDeliveryEventRequest) -> TraceDeliveryEvent:
@@ -420,21 +448,24 @@ class PostgresTraceOutboxRepository:
                 return _delivery_from_row(dict(cur.fetchone()))
 
     def contains_identity(self, identity: "ExpectedTraceIdentity") -> bool:
+        _require_scope_aware_identity(identity)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
+                _require_scope_aware_outbox_schema(cur)
                 cur.execute(
                     """
                     SELECT 1 FROM app.advisory_selection_stage_trace_outbox
                     WHERE selection_run_id = %s AND package_id = %s AND manifest_sha256 = %s
                       AND decision_as_of_trade_date = %s AND capture_policy_hash = %s
+                      AND admission_scope_hash = %s
                     """,
                     identity.natural_key,
                 )
                 return cur.fetchone() is not None
 
 
-class ExpectedTraceIdentity(BaseModel):
-    """Immutable business-success identity used only for outbox reconciliation."""
+class LegacyExpectedTraceIdentityV1(BaseModel):
+    """Read-only parser for immutable gaps persisted before Phase 1F.2."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -448,7 +479,7 @@ class ExpectedTraceIdentity(BaseModel):
     @classmethod
     def _sha256(cls, value: str) -> str:
         if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
-            raise ValueError("expected trace hashes must be lowercase sha256 hex")
+            raise ValueError("legacy expected trace hashes must be lowercase sha256 hex")
         return value
 
     @property
@@ -461,16 +492,91 @@ class ExpectedTraceIdentity(BaseModel):
             self.capture_policy_hash,
         )
 
-    @classmethod
-    def from_envelope(cls, envelope: StageTraceEnvelope, *, binding: TraceCaptureBinding) -> "ExpectedTraceIdentity":
-        selection_identity = envelope.trace_content.get("selection_identity") or {}
-        return cls(
-            selection_run_id=str(selection_identity.get("selection_run_id") or ""),
-            package_id=str(selection_identity.get("package_id") or ""),
-            manifest_sha256=str(selection_identity.get("manifest_sha256") or ""),
-            decision_as_of_trade_date=date.fromisoformat(str(selection_identity.get("decision_as_of_trade_date") or "")),
-            capture_policy_hash=str(binding.capture_policy.policy_hash or ""),
+    @property
+    def selection_lookup_key(self) -> tuple[str, str, str, str]:
+        return (
+            self.selection_run_id,
+            self.package_id,
+            self.manifest_sha256,
+            self.decision_as_of_trade_date.isoformat(),
         )
+
+
+class ScopeAwareExpectedTraceIdentityV2(BaseModel):
+    """Immutable scope-aware business-success identity for new writes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[TRACE_IDENTITY_SCHEMA_VERSION_V2] = TRACE_IDENTITY_SCHEMA_VERSION_V2
+    selection_run_id: str = Field(min_length=1, max_length=160)
+    package_id: str = Field(min_length=1, max_length=160)
+    manifest_sha256: str = Field(min_length=64, max_length=64)
+    decision_as_of_trade_date: date
+    capture_policy_hash: str = Field(min_length=64, max_length=64)
+    admission_scope_id: str = Field(min_length=1, max_length=160)
+    admission_scope_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("manifest_sha256", "capture_policy_hash", "admission_scope_hash")
+    @classmethod
+    def _sha256(cls, value: str) -> str:
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("scope-aware expected trace hashes must be lowercase sha256 hex")
+        return value
+
+    @property
+    def natural_key(self) -> tuple[str, str, str, str, str, str]:
+        return (
+            self.selection_run_id,
+            self.package_id,
+            self.manifest_sha256,
+            self.decision_as_of_trade_date.isoformat(),
+            self.capture_policy_hash,
+            self.admission_scope_hash,
+        )
+
+    @property
+    def selection_lookup_key(self) -> tuple[str, str, str, str]:
+        return (
+            self.selection_run_id,
+            self.package_id,
+            self.manifest_sha256,
+            self.decision_as_of_trade_date.isoformat(),
+        )
+
+    @classmethod
+    def from_envelope(
+        cls, envelope: StageTraceEnvelope, *, binding: TraceCaptureBinding
+    ) -> "ScopeAwareExpectedTraceIdentityV2":
+        selection_identity = envelope.trace_content.get("selection_identity") or {}
+        try:
+            return cls(
+                selection_run_id=str(selection_identity.get("selection_run_id") or ""),
+                package_id=str(selection_identity.get("package_id") or ""),
+                manifest_sha256=str(selection_identity.get("manifest_sha256") or ""),
+                decision_as_of_trade_date=date.fromisoformat(
+                    str(selection_identity.get("decision_as_of_trade_date") or "")
+                ),
+                capture_policy_hash=str(binding.capture_policy.policy_hash or ""),
+                admission_scope_id=binding.admission_scope_id,
+                admission_scope_hash=binding.admission_scope_hash,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SourceLedgerError(
+                REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
+                "trace envelope and binding do not form a valid scope-aware identity",
+            ) from exc
+
+
+ExpectedTraceIdentity = ScopeAwareExpectedTraceIdentityV2
+
+
+def _require_scope_aware_identity(identity: Any) -> ScopeAwareExpectedTraceIdentityV2:
+    if not isinstance(identity, ScopeAwareExpectedTraceIdentityV2):
+        raise SourceLedgerError(
+            REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
+            "new trace identity operations require the scope-aware v2 contract",
+        )
+    return identity
 
 
 class TraceCaptureGapHandler(Protocol):
@@ -491,6 +597,7 @@ class TraceCaptureReconciler:
     def reconcile(self, expected: Sequence[ExpectedTraceIdentity]) -> tuple[ExpectedTraceIdentity, ...]:
         missing: list[ExpectedTraceIdentity] = []
         for identity in expected:
+            _require_scope_aware_identity(identity)
             if self._outbox.contains_identity(identity):
                 continue
             self._gap_handler(identity=identity, reason_code=REASON_TRACE_CAPTURE_LOST)
@@ -498,7 +605,7 @@ class TraceCaptureReconciler:
         return tuple(missing)
 
 
-def _natural_key(envelope: StageTraceEnvelope, binding: TraceCaptureBinding) -> tuple[str, str, str, str, str]:
+def _natural_key(envelope: StageTraceEnvelope, binding: TraceCaptureBinding) -> tuple[str, str, str, str, str, str]:
     identity = envelope.trace_content.get("selection_identity")
     if not isinstance(identity, Mapping):
         raise SourceLedgerError(REASON_TRACE_OUTBOX_RECORD_INVALID, "trace content does not contain selection identity")
@@ -508,6 +615,7 @@ def _natural_key(envelope: StageTraceEnvelope, binding: TraceCaptureBinding) -> 
         str(identity.get("manifest_sha256") or ""),
         str(identity.get("decision_as_of_trade_date") or ""),
         str(binding.capture_policy.policy_hash or ""),
+        str(binding.admission_scope_hash or ""),
     )
 
 
@@ -521,27 +629,46 @@ def _validate_envelope_binding(*, envelope: StageTraceEnvelope, binding: TraceCa
 
 
 def _outbox_insert_params(*, envelope: StageTraceEnvelope, binding: TraceCaptureBinding, created_at: datetime) -> tuple[Any, ...]:
-    selection_run_id, package_id, manifest_sha256, decision_date, capture_policy_hash = _natural_key(envelope, binding)
+    identity = ExpectedTraceIdentity.from_envelope(envelope, binding=binding)
     return (
         envelope.trace_outbox_id,
         binding.control_binding_event_hash,
-        selection_run_id,
-        package_id,
-        manifest_sha256,
-        decision_date,
+        identity.selection_run_id,
+        identity.package_id,
+        identity.manifest_sha256,
+        identity.decision_as_of_trade_date.isoformat(),
         binding.handoff_readiness_hash,
-        binding.admission_scope_id,
-        binding.admission_scope_hash,
+        identity.admission_scope_id,
+        identity.admission_scope_hash,
         binding.capture_batch_id,
         binding.capture_fencing_token,
         str(envelope.trace_content.get("schema_version") or ""),
-        capture_policy_hash,
+        identity.capture_policy_hash,
         psycopg2.extras.Json(_canonicalize(envelope.trace_content)),
         envelope.trace_content_hash,
         envelope.candidate_count,
         envelope.size_bytes,
         created_at,
     )
+
+
+def _require_scope_aware_outbox_schema(cur: Any) -> None:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class r ON r.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = r.relnamespace
+        WHERE n.nspname = 'app'
+          AND r.relname = 'advisory_selection_stage_trace_outbox'
+          AND c.conname = 'uq_advisory_stage_trace_outbox_scope_identity'
+        """
+    )
+    if cur.fetchone() is None:
+        raise SourceLedgerError(
+            REASON_PHASE1F2_SCHEMA_NOT_READY,
+            "scope-aware trace outbox schema has not been applied",
+        )
 
 
 def _record_from_row(row: dict[str, Any]) -> TraceOutboxRecord:
