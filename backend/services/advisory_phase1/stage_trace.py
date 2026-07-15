@@ -651,10 +651,13 @@ def _build_multi_alpha_component_payload(
     if len(matching_rows) != 1:
         raise ComponentEvidenceError(REASON_COMPONENT_EVIDENCE_INCOMPLETE)
     raw_candidate = dict(matching_rows[0])
-    if stage_name == "alpha_raw" and (
-        raw_candidate.get("rank") != candidate.get("rank") or raw_candidate.get("score") != candidate.get("score")
-    ):
-        raise ComponentEvidenceError(REASON_COMPONENT_EVIDENCE_INCOMPLETE)
+    if stage_name == "alpha_raw":
+        if raw_candidate.get("rank") != candidate.get("rank"):
+            raise ComponentEvidenceError(REASON_COMPONENT_EVIDENCE_INCOMPLETE)
+        if _decimal_text(raw_candidate.get("score"), REASON_COMPONENT_EVIDENCE_INCOMPLETE) != _decimal_text(
+            candidate.get("score"), REASON_COMPONENT_EVIDENCE_INCOMPLETE
+        ):
+            raise ComponentEvidenceError(REASON_COMPONENT_EVIDENCE_INCOMPLETE)
     parent_parity = _mapping(metadata.get("multi_alpha_parent_parity"), REASON_COMPONENT_PARENT_PARITY_INVALID)
     parent_parity_hash = str(metadata.get("multi_alpha_parent_parity_hash") or "")
     if not _is_sha256(parent_parity_hash) or _canonical_json_sha256(parent_parity) != parent_parity_hash:

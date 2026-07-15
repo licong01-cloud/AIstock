@@ -312,12 +312,10 @@ def test_multi_alpha_exclusions_keep_component_provenance_in_trace_envelope() ->
 
     for stage in envelope.trace_content["stage_trace"]:
         component = stage["candidate_component_evidence"][candidate.symbol]
-        assert component["capability"] in {"FULL", "PARTIAL"}
-        if component["capability"] == "FULL":
-            assert component["component_evidence_hash"]
-        else:
-            assert component["reason_codes"]
-    assert envelope.trace_content["component_capability"] == "PARTIAL"
+        assert component["capability"] == "FULL"
+        assert component["component_evidence_hash"]
+        assert component["reason_codes"] == []
+    assert envelope.trace_content["component_capability"] == "FULL"
 
 
 def test_missing_leg_rank_is_partial_without_changing_parent_candidate() -> None:

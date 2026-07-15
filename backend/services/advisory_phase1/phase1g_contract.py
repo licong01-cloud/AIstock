@@ -13,7 +13,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
-from backend.services.advisory_phase1.release_schema_contract import DatabaseIdentity, TargetLabel
+from backend.services.advisory_phase1.release_schema_contract import (
+    DatabaseIdentity,
+    TargetLabel,
+)
 
 
 REASON_SCHEMA_RECEIPT_INVALID = "ADVISORY_PHASE1G_SCHEMA_RECEIPT_INVALID"
@@ -23,6 +26,25 @@ REASON_PLAN_INVALID = "ADVISORY_PHASE1G_PLAN_INVALID"
 REASON_RESULT_STORE_FAILED = "ADVISORY_PHASE1G_RESULT_STORE_FAILED"
 REASON_ATTEMPT_RECEIPT_STORE_FAILED = "ADVISORY_PHASE1G_ATTEMPT_RECEIPT_STORE_FAILED"
 REASON_UNEXPECTED_ERROR = "ADVISORY_PHASE1G_UNEXPECTED_ERROR"
+REASON_G3_INPUT_INVALID = "ADVISORY_PHASE1G_G3_INPUT_INVALID"
+REASON_G3_SCHEMA_NOT_READY = "ADVISORY_PHASE1G_G3_SCHEMA_NOT_READY"
+REASON_G3_BATCH_NOT_RUNNING = "ADVISORY_PHASE1G_G3_BATCH_NOT_RUNNING"
+REASON_G3_BATCH_ROW_VERSION_CONFLICT = "ADVISORY_PHASE1G_G3_BATCH_ROW_VERSION_CONFLICT"
+REASON_G3_FENCING_INVALID = "ADVISORY_PHASE1G_G3_FENCING_INVALID"
+REASON_G3_LEASE_EXPIRED = "ADVISORY_PHASE1G_G3_LEASE_EXPIRED"
+REASON_G3_CONTROL_BINDING_CONFLICT = "ADVISORY_PHASE1G_G3_CONTROL_BINDING_CONFLICT"
+REASON_G3_CAPTURE_PLAN_CONFLICT = "ADVISORY_PHASE1G_G3_CAPTURE_PLAN_CONFLICT"
+REASON_G3_SOURCE_REVISION_CONFLICT = "ADVISORY_PHASE1G_G3_SOURCE_REVISION_CONFLICT"
+REASON_G3_TRACE_OUTBOX_CONFLICT = "ADVISORY_PHASE1G_G3_TRACE_OUTBOX_CONFLICT"
+REASON_G3_OBSERVATION_CONFLICT = "ADVISORY_PHASE1G_G3_OBSERVATION_CONFLICT"
+REASON_G3_CHILD_ROW_CONFLICT = "ADVISORY_PHASE1G_G3_CHILD_ROW_CONFLICT"
+REASON_G3_MEMBERSHIP_CONFLICT = "ADVISORY_PHASE1G_G3_MEMBERSHIP_CONFLICT"
+REASON_G3_DELIVERY_CONFLICT = "ADVISORY_PHASE1G_G3_DELIVERY_CONFLICT"
+REASON_G3_CAPACITY_EXCEEDED = "ADVISORY_PHASE1G_G3_CAPACITY_EXCEEDED"
+REASON_G3_COMMIT_FAILED = "ADVISORY_PHASE1G_G3_COMMIT_FAILED"
+REASON_G3_COMMIT_STATE_UNKNOWN = "ADVISORY_PHASE1G_G3_COMMIT_STATE_UNKNOWN"
+REASON_G3_POST_COMMIT_VERIFY_FAILED = "ADVISORY_PHASE1G_G3_POST_COMMIT_VERIFY_FAILED"
+REASON_G3_UNEXPECTED_ERROR = "ADVISORY_PHASE1G_G3_UNEXPECTED_ERROR"
 
 TARGET_REQUEST_SCHEMA_VERSION = "advisory_phase1g_target_execution_request_v1"
 BATCH_REQUEST_SCHEMA_VERSION = "advisory_phase1g_execution_batch_request_v1"
@@ -35,10 +57,16 @@ INPUT_ARTIFACT_REF_SCHEMA_VERSION = "advisory_phase1g_input_artifact_ref_v1"
 OUTPUT_ARTIFACT_REF_SCHEMA_VERSION = "advisory_phase1g_output_artifact_ref_v1"
 STORE_LAYOUT_POLICY_SCHEMA_VERSION = "advisory_phase1g_store_layout_policy_v1"
 CAPTURE_POLICY_REGISTRY_SCHEMA_VERSION = "advisory_phase1g_capture_policy_registry_v1"
+TRANSACTIONAL_WRITE_REQUEST_SCHEMA_VERSION = (
+    "advisory_phase1g_transactional_write_request_v1"
+)
+TARGET_COMMIT_PROJECTION_SCHEMA_VERSION = "advisory_phase1g_target_commit_projection_v1"
 
 
 class Phase1GContractError(RuntimeError):
-    def __init__(self, reason_code: str, message: str, *, context: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self, reason_code: str, message: str, *, context: dict[str, Any] | None = None
+    ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
         self.context = context or {}
@@ -50,7 +78,9 @@ class _StrictContract(BaseModel):
 
 def _sha256(value: str, *, field_name: str) -> str:
     normalized = str(value or "").strip().lower()
-    if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+    if len(normalized) != 64 or any(
+        character not in "0123456789abcdef" for character in normalized
+    ):
         raise ValueError(f"{field_name} must be lowercase sha256")
     return normalized
 
@@ -61,9 +91,13 @@ def _aware_utc(value: datetime, *, field_name: str) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-def _sorted_unique(values: tuple[str, ...], *, field_name: str, sha256: bool = False) -> tuple[str, ...]:
+def _sorted_unique(
+    values: tuple[str, ...], *, field_name: str, sha256: bool = False
+) -> tuple[str, ...]:
     normalized = tuple(sorted(str(value).strip() for value in values))
-    if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
+    if any(not value for value in normalized) or len(normalized) != len(
+        set(normalized)
+    ):
         raise ValueError(f"{field_name} must be non-empty, sorted, and duplicate-free")
     if sha256:
         for value in normalized:
@@ -94,8 +128,156 @@ class Phase1GBatchStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class Phase1GTransactionalWriteRequest(_StrictContract):
+    schema_version: Literal[TRANSACTIONAL_WRITE_REQUEST_SCHEMA_VERSION] = (
+        TRANSACTIONAL_WRITE_REQUEST_SCHEMA_VERSION
+    )
+    target_request_hash: str = Field(min_length=64, max_length=64)
+    phase1e_plan_id: str = Field(min_length=1, max_length=160)
+    phase1e_plan_hash: str = Field(min_length=64, max_length=64)
+    g2_target_projection_snapshot_hash: str = Field(min_length=64, max_length=64)
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    capture_request_hash: str = Field(min_length=64, max_length=64)
+    capture_attempt_no: int = Field(ge=1)
+    expected_batch_row_version: int = Field(ge=1)
+    capture_fencing_token: int = Field(ge=1)
+    control_binding_event_hash: str = Field(min_length=64, max_length=64)
+    capture_plan_hash: str = Field(min_length=64, max_length=64)
+    trace_capture_context_hash: str = Field(min_length=64, max_length=64)
+    trace_capture_binding_hash: str = Field(min_length=64, max_length=64)
+    trace_outbox_id: str = Field(min_length=1, max_length=160)
+    stage_trace_envelope_hash: str = Field(min_length=64, max_length=64)
+    observation_semantic_key: str = Field(min_length=64, max_length=64)
+    observation_semantic_draft_hash: str = Field(min_length=64, max_length=64)
+    expected_rows: int = Field(ge=1)
+    expected_bytes: int = Field(ge=1)
+    write_request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator(
+        "target_request_hash",
+        "phase1e_plan_hash",
+        "g2_target_projection_snapshot_hash",
+        "capture_request_hash",
+        "control_binding_event_hash",
+        "capture_plan_hash",
+        "trace_capture_context_hash",
+        "trace_capture_binding_hash",
+        "stage_trace_envelope_hash",
+        "observation_semantic_key",
+        "observation_semantic_draft_hash",
+        "write_request_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _derive_hash(self) -> "Phase1GTransactionalWriteRequest":
+        digest = canonical_json_sha256(
+            self.model_dump(mode="json", exclude={"write_request_hash"})
+        )
+        if self.write_request_hash is not None and self.write_request_hash != digest:
+            raise ValueError("write_request_hash does not match transactional request")
+        object.__setattr__(self, "write_request_hash", digest)
+        return self
+
+
+class Phase1GStageEvidenceCommitRef(_StrictContract):
+    stage: Literal[
+        "alpha_raw",
+        "hmm_adjusted",
+        "risk_policy_adjusted",
+        "selection_effective",
+        "advisory_model",
+    ]
+    stage_evidence_id: str = Field(min_length=1, max_length=160)
+    content_hash: str = Field(min_length=64, max_length=64)
+
+    @field_validator("content_hash")
+    @classmethod
+    def _hash(cls, value: str) -> str:
+        return _sha256(value, field_name="content_hash")
+
+
+class Phase1GTargetCommitProjection(_StrictContract):
+    schema_version: Literal[TARGET_COMMIT_PROJECTION_SCHEMA_VERSION] = (
+        TARGET_COMMIT_PROJECTION_SCHEMA_VERSION
+    )
+    target_request_hash: str = Field(min_length=64, max_length=64)
+    target_plan_hash: str = Field(min_length=64, max_length=64)
+    capture_batch_id: str = Field(min_length=1, max_length=160)
+    capture_request_hash: str = Field(min_length=64, max_length=64)
+    capture_attempt_no: int = Field(ge=1)
+    capture_fencing_token: int = Field(ge=1)
+    source_revision_set_id: str = Field(min_length=1, max_length=160)
+    source_revision_set_hash: str = Field(min_length=64, max_length=64)
+    source_revision_member_count: int = Field(ge=1)
+    source_revision_member_hash: str = Field(min_length=64, max_length=64)
+    control_binding_event_hash: str = Field(min_length=64, max_length=64)
+    trace_outbox_id: str = Field(min_length=1, max_length=160)
+    trace_content_hash: str = Field(min_length=64, max_length=64)
+    canonical_signal_id: str = Field(min_length=1, max_length=160)
+    observation_version_id: str = Field(min_length=1, max_length=160)
+    observation_content_hash: str = Field(min_length=64, max_length=64)
+    observation_revision_no: int = Field(ge=1)
+    lineage_id: str = Field(min_length=1, max_length=160)
+    lineage_content_hash: str = Field(min_length=64, max_length=64)
+    stage_evidence_refs: tuple[Phase1GStageEvidenceCommitRef, ...] = Field(
+        min_length=5, max_length=5
+    )
+    candidate_count: int = Field(ge=0)
+    candidate_set_hash: str = Field(min_length=64, max_length=64)
+    target_membership_count: Literal[3] = 3
+    target_membership_hash: str = Field(min_length=64, max_length=64)
+    delivery_event_id: str = Field(min_length=1, max_length=160)
+    delivery_event_hash: str = Field(min_length=64, max_length=64)
+    post_commit_readback_hash: str = Field(min_length=64, max_length=64)
+    target_commit_projection_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+
+    @field_validator(
+        "target_request_hash",
+        "target_plan_hash",
+        "capture_request_hash",
+        "source_revision_set_hash",
+        "source_revision_member_hash",
+        "control_binding_event_hash",
+        "trace_content_hash",
+        "observation_content_hash",
+        "lineage_content_hash",
+        "candidate_set_hash",
+        "target_membership_hash",
+        "delivery_event_hash",
+        "post_commit_readback_hash",
+        "target_commit_projection_hash",
+    )
+    @classmethod
+    def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _close_projection(self) -> "Phase1GTargetCommitProjection":
+        ordered = tuple(sorted(self.stage_evidence_refs, key=lambda item: item.stage))
+        if len({item.stage for item in ordered}) != 5:
+            raise ValueError("target commit projection requires five unique stage refs")
+        object.__setattr__(self, "stage_evidence_refs", ordered)
+        digest = canonical_json_sha256(
+            self.model_dump(mode="json", exclude={"target_commit_projection_hash"})
+        )
+        if (
+            self.target_commit_projection_hash is not None
+            and self.target_commit_projection_hash != digest
+        ):
+            raise ValueError("target_commit_projection_hash does not match final facts")
+        object.__setattr__(self, "target_commit_projection_hash", digest)
+        return self
+
+
 class Phase1GStoreLayoutPolicy(_StrictContract):
-    schema_version: Literal[STORE_LAYOUT_POLICY_SCHEMA_VERSION] = STORE_LAYOUT_POLICY_SCHEMA_VERSION
+    schema_version: Literal[STORE_LAYOUT_POLICY_SCHEMA_VERSION] = (
+        STORE_LAYOUT_POLICY_SCHEMA_VERSION
+    )
     policy_id: str = Field(min_length=1, max_length=160)
     policy_version: str = Field(min_length=1, max_length=80)
     artifact_kinds: tuple[str, ...] = Field(min_length=1)
@@ -107,15 +289,27 @@ class Phase1GStoreLayoutPolicy(_StrictContract):
     @field_validator("layout_policy_hash")
     @classmethod
     def _hash(cls, value: str | None) -> str | None:
-        return _sha256(value, field_name="layout_policy_hash") if value is not None else None
+        return (
+            _sha256(value, field_name="layout_policy_hash")
+            if value is not None
+            else None
+        )
 
     def canonical_payload(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude={"layout_policy_hash"})
 
     @model_validator(mode="after")
     def _validate_policy(self) -> "Phase1GStoreLayoutPolicy":
-        object.__setattr__(self, "artifact_kinds", _sorted_unique(self.artifact_kinds, field_name="artifact_kinds"))
-        object.__setattr__(self, "identity_fields", _sorted_unique(self.identity_fields, field_name="identity_fields"))
+        object.__setattr__(
+            self,
+            "artifact_kinds",
+            _sorted_unique(self.artifact_kinds, field_name="artifact_kinds"),
+        )
+        object.__setattr__(
+            self,
+            "identity_fields",
+            _sorted_unique(self.identity_fields, field_name="identity_fields"),
+        )
         digest = canonical_json_sha256(self.canonical_payload())
         if self.layout_policy_hash is not None and self.layout_policy_hash != digest:
             raise ValueError("layout_policy_hash does not match store layout policy")
@@ -145,7 +339,11 @@ PHASE1G_RESULT_STORE_LAYOUT_POLICY = Phase1GStoreLayoutPolicy(
     policy_version="1",
     artifact_kinds=tuple(item.value for item in Phase1GOutputArtifactKind),
     layout_version="phase1g_semantic_hash_prefix_v1",
-    identity_fields=("attempt_receipt_hash", "batch_attempt_receipt_hash", "capture_result_hash"),
+    identity_fields=(
+        "attempt_receipt_hash",
+        "batch_attempt_receipt_hash",
+        "capture_result_hash",
+    ),
 )
 
 
@@ -172,7 +370,9 @@ class Phase1GComponentContract(_StrictContract):
 
 
 class Phase1GCapturePolicyRegistry(_StrictContract):
-    schema_version: Literal[CAPTURE_POLICY_REGISTRY_SCHEMA_VERSION] = CAPTURE_POLICY_REGISTRY_SCHEMA_VERSION
+    schema_version: Literal[CAPTURE_POLICY_REGISTRY_SCHEMA_VERSION] = (
+        CAPTURE_POLICY_REGISTRY_SCHEMA_VERSION
+    )
     registry_id: str = Field(min_length=1, max_length=160)
     registry_version: str = Field(min_length=1, max_length=80)
     absolute_max_candidates: int = Field(ge=1)
@@ -199,25 +399,35 @@ class Phase1GCapturePolicyRegistry(_StrictContract):
         if self.lock_timeout_ms > self.statement_timeout_ms:
             raise ValueError("lock timeout cannot exceed statement timeout")
         if self.statement_timeout_ms > self.absolute_max_capture_ms:
-            raise ValueError("statement timeout cannot exceed the absolute capture duration")
+            raise ValueError(
+                "statement timeout cannot exceed the absolute capture duration"
+            )
         digest = canonical_json_sha256(self.canonical_payload())
         if self.registry_hash is not None and self.registry_hash != digest:
             raise ValueError("registry_hash does not match capture policy registry")
         object.__setattr__(self, "registry_hash", digest)
         return self
 
-    def assert_within_bounds(self, *, planned_candidates: int, planned_bytes: int) -> None:
+    def assert_within_bounds(
+        self, *, planned_candidates: int, planned_bytes: int
+    ) -> None:
         if planned_candidates < 0 or planned_candidates > self.absolute_max_candidates:
             raise Phase1GContractError(
                 REASON_PLAN_INVALID,
                 "planned candidates exceed the registered Phase 1G bound",
-                context={"planned_candidates": planned_candidates, "maximum": self.absolute_max_candidates},
+                context={
+                    "planned_candidates": planned_candidates,
+                    "maximum": self.absolute_max_candidates,
+                },
             )
         if planned_bytes < 0 or planned_bytes > self.absolute_max_bytes:
             raise Phase1GContractError(
                 REASON_PLAN_INVALID,
                 "planned bytes exceed the registered Phase 1G bound",
-                context={"planned_bytes": planned_bytes, "maximum": self.absolute_max_bytes},
+                context={
+                    "planned_bytes": planned_bytes,
+                    "maximum": self.absolute_max_bytes,
+                },
             )
 
 
@@ -245,7 +455,9 @@ DEFAULT_CAPTURE_POLICY_REGISTRY = Phase1GCapturePolicyRegistry(
 )
 
 
-def resolve_capture_policy_registry(*, registry_id: str, registry_version: str) -> Phase1GCapturePolicyRegistry:
+def resolve_capture_policy_registry(
+    *, registry_id: str, registry_version: str
+) -> Phase1GCapturePolicyRegistry:
     if (
         registry_id != DEFAULT_CAPTURE_POLICY_REGISTRY.registry_id
         or registry_version != DEFAULT_CAPTURE_POLICY_REGISTRY.registry_version
@@ -259,7 +471,9 @@ def resolve_capture_policy_registry(*, registry_id: str, registry_version: str) 
 
 
 class Phase1GInputArtifactRef(_StrictContract):
-    schema_version: Literal[INPUT_ARTIFACT_REF_SCHEMA_VERSION] = INPUT_ARTIFACT_REF_SCHEMA_VERSION
+    schema_version: Literal[INPUT_ARTIFACT_REF_SCHEMA_VERSION] = (
+        INPUT_ARTIFACT_REF_SCHEMA_VERSION
+    )
     artifact_kind: Phase1GInputArtifactKind
     store_policy_hash: str = Field(min_length=64, max_length=64)
     relative_path: str = Field(min_length=1, max_length=800)
@@ -282,7 +496,9 @@ class Phase1GInputArtifactRef(_StrictContract):
 
 
 class Phase1GOutputArtifactRef(_StrictContract):
-    schema_version: Literal[OUTPUT_ARTIFACT_REF_SCHEMA_VERSION] = OUTPUT_ARTIFACT_REF_SCHEMA_VERSION
+    schema_version: Literal[OUTPUT_ARTIFACT_REF_SCHEMA_VERSION] = (
+        OUTPUT_ARTIFACT_REF_SCHEMA_VERSION
+    )
     artifact_kind: Phase1GOutputArtifactKind
     store_policy_hash: str = Field(min_length=64, max_length=64)
     relative_path: str = Field(min_length=1, max_length=800)
@@ -318,7 +534,9 @@ class Phase1GIdentityHashRef(_StrictContract):
 
 
 class Phase1GTargetExecutionRequest(_StrictContract):
-    schema_version: Literal[TARGET_REQUEST_SCHEMA_VERSION] = TARGET_REQUEST_SCHEMA_VERSION
+    schema_version: Literal[TARGET_REQUEST_SCHEMA_VERSION] = (
+        TARGET_REQUEST_SCHEMA_VERSION
+    )
     target_label: TargetLabel
     release_schema_receipt_ref: Phase1GInputArtifactRef
     phase1e_plan_ref: Phase1GInputArtifactRef
@@ -377,14 +595,22 @@ class Phase1GTargetExecutionRequest(_StrictContract):
 
     @model_validator(mode="after")
     def _validate_request(self) -> "Phase1GTargetExecutionRequest":
-        if self.release_schema_receipt_ref.artifact_kind is not Phase1GInputArtifactKind.PHASE1F2_RELEASE_RECEIPT:
+        if (
+            self.release_schema_receipt_ref.artifact_kind
+            is not Phase1GInputArtifactKind.PHASE1F2_RELEASE_RECEIPT
+        ):
             raise ValueError("release_schema_receipt_ref has the wrong artifact kind")
         if (
             self.release_schema_receipt_ref.store_policy_hash
             != PHASE1F2_RELEASE_RECEIPT_LAYOUT_POLICY.layout_policy_hash
         ):
-            raise ValueError("release_schema_receipt_ref has an unregistered store policy")
-        if self.phase1e_plan_ref.artifact_kind is not Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN:
+            raise ValueError(
+                "release_schema_receipt_ref has an unregistered store policy"
+            )
+        if (
+            self.phase1e_plan_ref.artifact_kind
+            is not Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN
+        ):
             raise ValueError("phase1e_plan_ref has the wrong artifact kind")
         if self.phase1e_plan_ref.semantic_content_hash != self.phase1e_plan_hash:
             raise ValueError("Phase 1E plan ref does not match phase1e_plan_hash")
@@ -393,9 +619,16 @@ class Phase1GTargetExecutionRequest(_StrictContract):
             registry_version=self.capture_policy_registry_version,
         )
         if policy.registry_hash != self.capture_policy_registry_hash:
-            raise ValueError("capture policy registry hash does not match registered policy")
-        if self.result_store_policy_hash != PHASE1G_RESULT_STORE_LAYOUT_POLICY.layout_policy_hash:
-            raise ValueError("result store policy hash does not match the registered Phase 1G result store")
+            raise ValueError(
+                "capture policy registry hash does not match registered policy"
+            )
+        if (
+            self.result_store_policy_hash
+            != PHASE1G_RESULT_STORE_LAYOUT_POLICY.layout_policy_hash
+        ):
+            raise ValueError(
+                "result store policy hash does not match the registered Phase 1G result store"
+            )
         digest = canonical_json_sha256(self.canonical_payload())
         if self.request_hash is not None and self.request_hash != digest:
             raise ValueError("request_hash does not match target request")
@@ -413,13 +646,20 @@ class Phase1GExecutionBatchRequest(_StrictContract):
     @field_validator("batch_request_hash")
     @classmethod
     def _hash(cls, value: str | None) -> str | None:
-        return _sha256(value, field_name="batch_request_hash") if value is not None else None
+        return (
+            _sha256(value, field_name="batch_request_hash")
+            if value is not None
+            else None
+        )
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "targets": [
-                {"request_hash": item.request_hash, "semantic_request": item.canonical_payload()}
+                {
+                    "request_hash": item.request_hash,
+                    "semantic_request": item.canonical_payload(),
+                }
                 for item in self.targets
             ],
             "continue_on_target_failure": self.continue_on_target_failure,
@@ -489,22 +729,32 @@ class Phase1GTargetExecutionPlan(_StrictContract):
 
     @model_validator(mode="after")
     def _validate_plan(self) -> "Phase1GTargetExecutionPlan":
-        source_events = tuple(sorted(self.expected_source_events, key=lambda item: (item.identity, item.content_hash)))
+        source_events = tuple(
+            sorted(
+                self.expected_source_events,
+                key=lambda item: (item.identity, item.content_hash),
+            )
+        )
         if len({item.identity for item in source_events}) != len(source_events):
             raise ValueError("expected source event identities must be unique")
         object.__setattr__(self, "expected_source_events", source_events)
         object.__setattr__(
             self,
             "observed_outbox_identity_hashes",
-            _sorted_unique(
-                self.observed_outbox_identity_hashes,
-                field_name="observed_outbox_identity_hashes",
-                sha256=True,
-            )
-            if self.observed_outbox_identity_hashes
-            else (),
+            (
+                _sorted_unique(
+                    self.observed_outbox_identity_hashes,
+                    field_name="observed_outbox_identity_hashes",
+                    sha256=True,
+                )
+                if self.observed_outbox_identity_hashes
+                else ()
+            ),
         )
-        if self.release_receipt_hash != self.target_request.release_schema_receipt_ref.semantic_content_hash:
+        if (
+            self.release_receipt_hash
+            != self.target_request.release_schema_receipt_ref.semantic_content_hash
+        ):
             raise ValueError("plan release receipt hash does not match target request")
         if (
             self.phase1e_plan_id != self.target_request.phase1e_plan_id
@@ -513,13 +763,18 @@ class Phase1GTargetExecutionPlan(_StrictContract):
             raise ValueError("plan Phase 1E identity does not match target request")
         if self.database_identity.target_label is not self.target_request.target_label:
             raise ValueError("plan database identity does not match target label")
-        if self.capture_policy_registry_hash != self.target_request.capture_policy_registry_hash:
+        if (
+            self.capture_policy_registry_hash
+            != self.target_request.capture_policy_registry_hash
+        ):
             raise ValueError("plan capture policy does not match target request")
         policy = resolve_capture_policy_registry(
             registry_id=self.target_request.capture_policy_registry_id,
             registry_version=self.target_request.capture_policy_registry_version,
         )
-        policy.assert_within_bounds(planned_candidates=self.expected_rows, planned_bytes=self.expected_bytes)
+        policy.assert_within_bounds(
+            planned_candidates=self.expected_rows, planned_bytes=self.expected_bytes
+        )
         digest = canonical_json_sha256(self.canonical_payload())
         if self.target_plan_hash is not None and self.target_plan_hash != digest:
             raise ValueError("target_plan_hash does not match target plan")
@@ -544,7 +799,9 @@ class Phase1GExecutionBatchPlan(_StrictContract):
 
     @model_validator(mode="after")
     def _validate_plan(self) -> "Phase1GExecutionBatchPlan":
-        plans = tuple(sorted(self.target_plans, key=lambda item: str(item.target_plan_hash)))
+        plans = tuple(
+            sorted(self.target_plans, key=lambda item: str(item.target_plan_hash))
+        )
         hashes = tuple(str(item.target_plan_hash) for item in plans)
         if len(hashes) != len(set(hashes)) or self.target_count != len(plans):
             raise ValueError("batch plan target count/hashes are inconsistent")
@@ -561,8 +818,12 @@ def build_phase1g_execution_batch_plan(
     batch_request: Phase1GExecutionBatchRequest,
     target_plans: tuple[Phase1GTargetExecutionPlan, ...],
 ) -> Phase1GExecutionBatchPlan:
-    request_hashes = tuple(sorted(str(item.request_hash) for item in batch_request.targets))
-    plan_request_hashes = tuple(sorted(str(item.target_request.request_hash) for item in target_plans))
+    request_hashes = tuple(
+        sorted(str(item.request_hash) for item in batch_request.targets)
+    )
+    plan_request_hashes = tuple(
+        sorted(str(item.target_request.request_hash) for item in target_plans)
+    )
     if request_hashes != plan_request_hashes:
         raise Phase1GContractError(
             REASON_PLAN_INVALID,
@@ -617,7 +878,9 @@ class Phase1GTraceOutboxMapping(_StrictContract):
 
 
 class Phase1GCaptureResult(_StrictContract):
-    schema_version: Literal[CAPTURE_RESULT_SCHEMA_VERSION] = CAPTURE_RESULT_SCHEMA_VERSION
+    schema_version: Literal[CAPTURE_RESULT_SCHEMA_VERSION] = (
+        CAPTURE_RESULT_SCHEMA_VERSION
+    )
     target_request_hash: str = Field(min_length=64, max_length=64)
     phase1f_receipt_hash: str = Field(min_length=64, max_length=64)
     phase1f_catalog_fingerprint: str = Field(min_length=64, max_length=64)
@@ -666,35 +929,53 @@ class Phase1GCaptureResult(_StrictContract):
     def _validate_result(self) -> "Phase1GCaptureResult":
         selected = tuple(
             sorted(
-                self.selected_observation_mappings, key=lambda item: (item.capture_plan_hash, item.canonical_signal_id)
+                self.selected_observation_mappings,
+                key=lambda item: (item.capture_plan_hash, item.canonical_signal_id),
             )
         )
         traces = tuple(
-            sorted(self.trace_outbox_mappings, key=lambda item: (item.capture_plan_hash, item.trace_outbox_id))
+            sorted(
+                self.trace_outbox_mappings,
+                key=lambda item: (item.capture_plan_hash, item.trace_outbox_id),
+            )
         )
         selected_plan_hashes = tuple(item.capture_plan_hash for item in selected)
         trace_plan_hashes = tuple(item.capture_plan_hash for item in traces)
         if len(selected_plan_hashes) != len(set(selected_plan_hashes)):
-            raise ValueError("selected observation mappings must have unique capture plans")
+            raise ValueError(
+                "selected observation mappings must have unique capture plans"
+            )
         if len(trace_plan_hashes) != len(set(trace_plan_hashes)):
             raise ValueError("trace outbox mappings must have unique capture plans")
         if selected_plan_hashes != trace_plan_hashes:
-            raise ValueError("selected observation and trace mappings must close over the same capture plans")
+            raise ValueError(
+                "selected observation and trace mappings must close over the same capture plans"
+            )
         trace_by_plan = {item.capture_plan_hash: item for item in traces}
         if any(
-            item.trace_outbox_id != trace_by_plan[item.capture_plan_hash].trace_outbox_id
-            or item.trace_content_hash != trace_by_plan[item.capture_plan_hash].trace_content_hash
+            item.trace_outbox_id
+            != trace_by_plan[item.capture_plan_hash].trace_outbox_id
+            or item.trace_content_hash
+            != trace_by_plan[item.capture_plan_hash].trace_content_hash
             for item in selected
         ):
-            raise ValueError("selected observation mappings do not match trace outbox mappings")
+            raise ValueError(
+                "selected observation mappings do not match trace outbox mappings"
+            )
         if any(
             item.source_revision_set_id != self.source_revision_set_id
             or item.source_revision_set_hash != self.source_revision_set_hash
             for item in selected
         ):
-            raise ValueError("selected observation mappings do not match the result source revision set")
-        if self.capture_plan_set_count != len(selected) or self.membership_count < len(selected):
-            raise ValueError("capture result counts do not close over selected observations")
+            raise ValueError(
+                "selected observation mappings do not match the result source revision set"
+            )
+        if self.capture_plan_set_count != len(selected) or self.membership_count < len(
+            selected
+        ):
+            raise ValueError(
+                "capture result counts do not close over selected observations"
+            )
         object.__setattr__(self, "selected_observation_mappings", selected)
         object.__setattr__(self, "trace_outbox_mappings", traces)
         digest = canonical_json_sha256(self.canonical_payload())
@@ -705,7 +986,9 @@ class Phase1GCaptureResult(_StrictContract):
 
 
 class Phase1GAttemptReceipt(_StrictContract):
-    schema_version: Literal[ATTEMPT_RECEIPT_SCHEMA_VERSION] = ATTEMPT_RECEIPT_SCHEMA_VERSION
+    schema_version: Literal[ATTEMPT_RECEIPT_SCHEMA_VERSION] = (
+        ATTEMPT_RECEIPT_SCHEMA_VERSION
+    )
     target_plan_hash: str = Field(min_length=64, max_length=64)
     target_request_hash: str = Field(min_length=64, max_length=64)
     attempt_invocation_id: str = Field(min_length=1, max_length=160)
@@ -724,7 +1007,12 @@ class Phase1GAttemptReceipt(_StrictContract):
     runtime_activated: Literal[False] = False
     attempt_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
-    @field_validator("target_plan_hash", "target_request_hash", "capture_result_hash", "attempt_receipt_hash")
+    @field_validator(
+        "target_plan_hash",
+        "target_request_hash",
+        "capture_result_hash",
+        "attempt_receipt_hash",
+    )
     @classmethod
     def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
         return _sha256(value, field_name=info.field_name) if value is not None else None
@@ -732,11 +1020,15 @@ class Phase1GAttemptReceipt(_StrictContract):
     @field_validator("started_at", "finished_at")
     @classmethod
     def _timestamps(cls, value: datetime | None, info) -> datetime | None:  # type: ignore[no-untyped-def]
-        return _aware_utc(value, field_name=info.field_name) if value is not None else None
+        return (
+            _aware_utc(value, field_name=info.field_name) if value is not None else None
+        )
 
     @field_validator("error_context")
     @classmethod
-    def _redacted_error_context(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _redacted_error_context(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         if value is None:
             return None
         normalized = canonicalize(value)
@@ -744,9 +1036,13 @@ class Phase1GAttemptReceipt(_StrictContract):
         return normalized
 
     def canonical_payload(self) -> dict[str, Any]:
-        payload = self.model_dump(mode="json", exclude={"attempt_receipt_hash", "capture_result_ref"})
+        payload = self.model_dump(
+            mode="json", exclude={"attempt_receipt_hash", "capture_result_ref"}
+        )
         payload["capture_result_ref"] = (
-            self.capture_result_ref.semantic_binding_payload() if self.capture_result_ref is not None else None
+            self.capture_result_ref.semantic_binding_payload()
+            if self.capture_result_ref is not None
+            else None
         )
         return payload
 
@@ -755,43 +1051,84 @@ class Phase1GAttemptReceipt(_StrictContract):
         object.__setattr__(
             self,
             "reason_codes",
-            _sorted_unique(self.reason_codes, field_name="reason_codes") if self.reason_codes else (),
+            (
+                _sorted_unique(self.reason_codes, field_name="reason_codes")
+                if self.reason_codes
+                else ()
+            ),
         )
         object.__setattr__(
             self,
             "committed_phases",
-            _sorted_unique(self.committed_phases, field_name="committed_phases") if self.committed_phases else (),
+            (
+                _sorted_unique(self.committed_phases, field_name="committed_phases")
+                if self.committed_phases
+                else ()
+            ),
         )
-        batch_values = (self.capture_batch_id, self.capture_attempt_no, self.capture_batch_status)
-        if any(value is not None for value in batch_values) and not all(value is not None for value in batch_values):
-            raise ValueError("capture batch attempt fields must be all present or all absent")
+        batch_values = (
+            self.capture_batch_id,
+            self.capture_attempt_no,
+            self.capture_batch_status,
+        )
+        if any(value is not None for value in batch_values) and not all(
+            value is not None for value in batch_values
+        ):
+            raise ValueError(
+                "capture batch attempt fields must be all present or all absent"
+            )
         if self.operation_status is Phase1GAttemptStatus.IN_PROGRESS:
             if (
                 self.finished_at is not None
                 or self.capture_result_ref is not None
                 or self.capture_result_hash is not None
             ):
-                raise ValueError("in-progress attempt cannot be finished or expose a result")
+                raise ValueError(
+                    "in-progress attempt cannot be finished or expose a result"
+                )
         else:
             if self.finished_at is None or self.finished_at < self.started_at:
-                raise ValueError("finished attempt requires an ordered finished_at timestamp")
+                raise ValueError(
+                    "finished attempt requires an ordered finished_at timestamp"
+                )
         if self.operation_status is Phase1GAttemptStatus.SUCCESS:
             if (
                 self.capture_result_ref is None
                 or self.capture_result_hash is None
-                or self.capture_result_ref.semantic_content_hash != self.capture_result_hash
+                or self.capture_result_ref.semantic_content_hash
+                != self.capture_result_hash
             ):
-                raise ValueError("successful attempt requires one matching stable result reference")
-            if self.capture_result_ref.artifact_kind is not Phase1GOutputArtifactKind.CAPTURE_RESULT:
-                raise ValueError("successful attempt result reference has the wrong artifact kind")
-            if self.capture_result_ref.store_policy_hash != PHASE1G_RESULT_STORE_LAYOUT_POLICY.layout_policy_hash:
-                raise ValueError("successful attempt result reference has an unregistered store policy")
-        elif self.capture_result_ref is not None or self.capture_result_hash is not None:
+                raise ValueError(
+                    "successful attempt requires one matching stable result reference"
+                )
+            if (
+                self.capture_result_ref.artifact_kind
+                is not Phase1GOutputArtifactKind.CAPTURE_RESULT
+            ):
+                raise ValueError(
+                    "successful attempt result reference has the wrong artifact kind"
+                )
+            if (
+                self.capture_result_ref.store_policy_hash
+                != PHASE1G_RESULT_STORE_LAYOUT_POLICY.layout_policy_hash
+            ):
+                raise ValueError(
+                    "successful attempt result reference has an unregistered store policy"
+                )
+        elif (
+            self.capture_result_ref is not None or self.capture_result_hash is not None
+        ):
             raise ValueError("non-successful attempt cannot expose a stable result")
-        if self.operation_status is Phase1GAttemptStatus.FAILED and not self.reason_codes:
+        if (
+            self.operation_status is Phase1GAttemptStatus.FAILED
+            and not self.reason_codes
+        ):
             raise ValueError("failed attempt requires at least one reason code")
         digest = canonical_json_sha256(self.canonical_payload())
-        if self.attempt_receipt_hash is not None and self.attempt_receipt_hash != digest:
+        if (
+            self.attempt_receipt_hash is not None
+            and self.attempt_receipt_hash != digest
+        ):
             raise ValueError("attempt_receipt_hash does not match attempt receipt")
         object.__setattr__(self, "attempt_receipt_hash", digest)
         return self
@@ -804,7 +1141,12 @@ class Phase1GTargetAttemptRef(_StrictContract):
     operation_status: Phase1GAttemptStatus
     capture_result_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
-    @field_validator("target_request_hash", "target_plan_hash", "attempt_receipt_hash", "capture_result_hash")
+    @field_validator(
+        "target_request_hash",
+        "target_plan_hash",
+        "attempt_receipt_hash",
+        "capture_result_hash",
+    )
     @classmethod
     def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
         return _sha256(value, field_name=info.field_name) if value is not None else None
@@ -813,8 +1155,12 @@ class Phase1GTargetAttemptRef(_StrictContract):
     def _validate_terminal_ref(self) -> "Phase1GTargetAttemptRef":
         if self.operation_status is Phase1GAttemptStatus.IN_PROGRESS:
             raise ValueError("batch attempt refs must be terminal")
-        if (self.operation_status is Phase1GAttemptStatus.SUCCESS) != (self.capture_result_hash is not None):
-            raise ValueError("batch target success must carry exactly one stable result hash")
+        if (self.operation_status is Phase1GAttemptStatus.SUCCESS) != (
+            self.capture_result_hash is not None
+        ):
+            raise ValueError(
+                "batch target success must carry exactly one stable result hash"
+            )
         return self
 
 
@@ -829,9 +1175,13 @@ class Phase1GBatchAttemptReceipt(_StrictContract):
     target_attempt_receipt_hashes: tuple[str, ...] = ()
     successful_capture_result_hashes: tuple[str, ...] = ()
     batch_status: Phase1GBatchStatus
-    batch_attempt_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    batch_attempt_receipt_hash: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
 
-    @field_validator("batch_request_hash", "batch_plan_hash", "batch_attempt_receipt_hash")
+    @field_validator(
+        "batch_request_hash", "batch_plan_hash", "batch_attempt_receipt_hash"
+    )
     @classmethod
     def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
         return _sha256(value, field_name=info.field_name) if value is not None else None
@@ -841,45 +1191,87 @@ class Phase1GBatchAttemptReceipt(_StrictContract):
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> "Phase1GBatchAttemptReceipt":
-        refs = tuple(sorted(self.target_attempt_refs, key=lambda item: item.target_request_hash))
+        refs = tuple(
+            sorted(self.target_attempt_refs, key=lambda item: item.target_request_hash)
+        )
         if len({item.target_request_hash for item in refs}) != len(refs):
-            raise ValueError("batch target attempt refs must have unique target request hashes")
+            raise ValueError(
+                "batch target attempt refs must have unique target request hashes"
+            )
         if len({item.target_plan_hash for item in refs}) != len(refs):
-            raise ValueError("batch target attempt refs must have unique target plan hashes")
+            raise ValueError(
+                "batch target attempt refs must have unique target plan hashes"
+            )
         if len({item.attempt_receipt_hash for item in refs}) != len(refs):
-            raise ValueError("batch target attempt refs must have unique attempt receipt hashes")
+            raise ValueError(
+                "batch target attempt refs must have unique attempt receipt hashes"
+            )
         attempt_hashes = tuple(item.attempt_receipt_hash for item in refs)
         result_hashes = tuple(
             item.capture_result_hash
             for item in refs
-            if item.operation_status is Phase1GAttemptStatus.SUCCESS and item.capture_result_hash is not None
+            if item.operation_status is Phase1GAttemptStatus.SUCCESS
+            and item.capture_result_hash is not None
         )
-        if self.target_attempt_receipt_hashes and self.target_attempt_receipt_hashes != attempt_hashes:
-            raise ValueError("batch attempt receipt hashes do not preserve target request order")
-        if self.successful_capture_result_hashes and self.successful_capture_result_hashes != result_hashes:
-            raise ValueError("batch stable result hashes do not preserve target request order")
+        if (
+            self.target_attempt_receipt_hashes
+            and self.target_attempt_receipt_hashes != attempt_hashes
+        ):
+            raise ValueError(
+                "batch attempt receipt hashes do not preserve target request order"
+            )
+        if (
+            self.successful_capture_result_hashes
+            and self.successful_capture_result_hashes != result_hashes
+        ):
+            raise ValueError(
+                "batch stable result hashes do not preserve target request order"
+            )
         object.__setattr__(self, "target_attempt_refs", refs)
         object.__setattr__(self, "target_attempt_receipt_hashes", attempt_hashes)
         object.__setattr__(self, "successful_capture_result_hashes", result_hashes)
-        if self.target_count != self.succeeded_count + self.failed_count or self.target_count != len(attempt_hashes):
-            raise ValueError("batch receipt target counts do not match attempt receipts")
-        actual_succeeded = sum(item.operation_status is Phase1GAttemptStatus.SUCCESS for item in refs)
-        actual_failed = sum(item.operation_status is Phase1GAttemptStatus.FAILED for item in refs)
-        if self.succeeded_count != actual_succeeded or self.failed_count != actual_failed:
-            raise ValueError("batch receipt outcome counts do not match target attempt refs")
-        if self.succeeded_count != len(result_hashes) or len(result_hashes) != len(set(result_hashes)):
-            raise ValueError("batch receipt success count does not match stable results")
+        if (
+            self.target_count != self.succeeded_count + self.failed_count
+            or self.target_count != len(attempt_hashes)
+        ):
+            raise ValueError(
+                "batch receipt target counts do not match attempt receipts"
+            )
+        actual_succeeded = sum(
+            item.operation_status is Phase1GAttemptStatus.SUCCESS for item in refs
+        )
+        actual_failed = sum(
+            item.operation_status is Phase1GAttemptStatus.FAILED for item in refs
+        )
+        if (
+            self.succeeded_count != actual_succeeded
+            or self.failed_count != actual_failed
+        ):
+            raise ValueError(
+                "batch receipt outcome counts do not match target attempt refs"
+            )
+        if self.succeeded_count != len(result_hashes) or len(result_hashes) != len(
+            set(result_hashes)
+        ):
+            raise ValueError(
+                "batch receipt success count does not match stable results"
+            )
         expected_status = (
             Phase1GBatchStatus.SUCCESS
             if self.failed_count == 0
-            else Phase1GBatchStatus.FAILED
-            if self.succeeded_count == 0
-            else Phase1GBatchStatus.PARTIAL_FAILURE
+            else (
+                Phase1GBatchStatus.FAILED
+                if self.succeeded_count == 0
+                else Phase1GBatchStatus.PARTIAL_FAILURE
+            )
         )
         if self.batch_status is not expected_status:
             raise ValueError("batch receipt status does not match target outcomes")
         digest = canonical_json_sha256(self.canonical_payload())
-        if self.batch_attempt_receipt_hash is not None and self.batch_attempt_receipt_hash != digest:
+        if (
+            self.batch_attempt_receipt_hash is not None
+            and self.batch_attempt_receipt_hash != digest
+        ):
             raise ValueError("batch_attempt_receipt_hash does not match batch receipt")
         object.__setattr__(self, "batch_attempt_receipt_hash", digest)
         return self
@@ -907,9 +1299,17 @@ _REDACTED_CONTEXT_DENIED_SUFFIXES = _REDACTED_CONTEXT_DENIED_KEYS - {"token"}
 def _assert_redacted_error_context(value: Any, *, path: str = "error_context") -> None:
     if isinstance(value, dict):
         for raw_key, child in value.items():
-            key = str(raw_key).strip().lower().replace("-", "_").replace(".", "_").replace(" ", "_")
+            key = (
+                str(raw_key)
+                .strip()
+                .lower()
+                .replace("-", "_")
+                .replace(".", "_")
+                .replace(" ", "_")
+            )
             if key in _REDACTED_CONTEXT_DENIED_KEYS or any(
-                key.endswith(f"_{denied}") for denied in _REDACTED_CONTEXT_DENIED_SUFFIXES
+                key.endswith(f"_{denied}")
+                for denied in _REDACTED_CONTEXT_DENIED_SUFFIXES
             ):
                 raise ValueError(f"{path} contains a prohibited sensitive field")
             _assert_redacted_error_context(child, path=f"{path}.{key}")
@@ -920,7 +1320,9 @@ def _assert_redacted_error_context(value: Any, *, path: str = "error_context") -
         return
     if isinstance(value, str):
         lowered = value.lower()
-        has_database_uri = any(f"{scheme}://" in lowered for scheme in ("postgres", "postgresql"))
+        has_database_uri = any(
+            f"{scheme}://" in lowered for scheme in ("postgres", "postgresql")
+        )
         has_password_assignment = "=".join(("password", "")) in lowered
         if has_database_uri or has_password_assignment:
             raise ValueError(f"{path} contains prohibited connection credentials")
