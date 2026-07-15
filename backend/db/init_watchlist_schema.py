@@ -69,8 +69,23 @@ DDL: List[str] = [
     CREATE TABLE IF NOT EXISTS app.watchlist_item_categories (
         item_id     BIGINT NOT NULL REFERENCES app.watchlist_items(id) ON DELETE CASCADE,
         category_id BIGINT NOT NULL REFERENCES app.watchlist_categories(id) ON DELETE CASCADE,
+        added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        entry_price_snapshot NUMERIC,
+        entry_date_snapshot DATE,
         PRIMARY KEY (item_id, category_id)
     );
+    """,
+    """
+    COMMENT ON COLUMN app.watchlist_item_categories.added_at IS
+        '股票加入该分类的时间戳，用于分类级别的加入时间追踪和收益计算基准；默认为 NOW()，表示记录创建时间';
+    """,
+    """
+    COMMENT ON COLUMN app.watchlist_item_categories.entry_price_snapshot IS
+        '股票加入该分类时的价格快照（原始价格，未复权），用于计算该分类下的收益；NULL 表示加入时未记录价格或价格获取失败';
+    """,
+    """
+    COMMENT ON COLUMN app.watchlist_item_categories.entry_date_snapshot IS
+        '股票加入该分类时的基准日期，用于复权调整和收益计算；通常与 added_at 日期一致，但可能根据选股任务的 as_of 日期调整；NULL 表示使用 added_at 日期';
     """,
     """
     CREATE TABLE IF NOT EXISTS app.advisory_daily_review (
@@ -162,6 +177,8 @@ DDL: List[str] = [
     "CREATE INDEX IF NOT EXISTS idx_advisory_daily_review_code_date ON app.advisory_daily_review(code, trade_date DESC);",
     "CREATE INDEX IF NOT EXISTS idx_watchlist_item_categories_item_id ON app.watchlist_item_categories(item_id);",
     "CREATE INDEX IF NOT EXISTS idx_watchlist_item_categories_cat_id ON app.watchlist_item_categories(category_id);",
+    "CREATE INDEX IF NOT EXISTS idx_watchlist_item_categories_added ON app.watchlist_item_categories(category_id, added_at DESC);",
+    "CREATE INDEX IF NOT EXISTS idx_watchlist_item_categories_entry_date ON app.watchlist_item_categories(item_id, category_id, entry_date_snapshot DESC);",
     """
     CREATE TABLE IF NOT EXISTS app.sync_meta (
         key         TEXT PRIMARY KEY,
