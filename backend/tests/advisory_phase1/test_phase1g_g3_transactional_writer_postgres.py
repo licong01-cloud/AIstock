@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from typing import Any, Iterator
 
 import psycopg2
@@ -29,6 +30,8 @@ from backend.services.advisory_phase1.phase1g_contract import (
     REASON_G3_COMMIT_FAILED,
     REASON_G3_COMMIT_STATE_UNKNOWN,
     REASON_G3_CHILD_ROW_CONFLICT,
+    REASON_G3_CAPACITY_EXCEEDED,
+    REASON_G3_INPUT_INVALID,
     REASON_G3_POST_COMMIT_VERIFY_FAILED,
     REASON_G3_UNEXPECTED_ERROR,
 )
@@ -153,6 +156,8 @@ def _build_target(
     *,
     suffix: str = "a",
     case_factory=historical_raw_empty_case,
+    policy_max_candidates: int = 1000,
+    policy_max_bytes: int = 10_000_000,
 ):  # type: ignore[no-untyped-def]
     case = case_factory()
     source_operation, source_replay, historical = _project_case(case)
@@ -171,8 +176,8 @@ def _build_target(
         capture_policy=TraceCapturePolicy(
             policy_id=f"phase1g-g3-policy-{suffix}",
             policy_version="1",
-            max_candidates=1000,
-            max_bytes=10_000_000,
+            max_candidates=policy_max_candidates,
+            max_bytes=policy_max_bytes,
             max_capture_ms=60_000,
         ),
     )
@@ -614,6 +619,116 @@ def test_disposable_postgres_first_write_and_exact_retry_are_complete_and_stable
             assert cur.fetchone()[0] == "RUNNING"
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize(
+    ("case_factory", "policy_max_candidates", "policy_max_bytes"),
+    (
+        (lambda: historical_many_candidates_case(2), 1, 10_000_000),
+        (historical_raw_empty_case, 1000, 1024),
+    ),
+)
+def test_disposable_postgres_policy_capacity_fails_before_target_transaction(
+    database_factory,
+    case_factory,
+    policy_max_candidates: int,
+    policy_max_bytes: int,
+) -> None:  # type: ignore[no-untyped-def]
+    config = database_factory()
+    _fresh_apply(config)
+    _repository, target = _build_target(
+        config,
+        suffix=f"capacity-{policy_max_candidates}-{policy_max_bytes}",
+        case_factory=case_factory,
+        policy_max_candidates=policy_max_candidates,
+        policy_max_bytes=policy_max_bytes,
+    )
+    connection_calls = 0
+
+    def forbidden_transaction_connection():  # type: ignore[no-untyped-def]
+        nonlocal connection_calls
+        connection_calls += 1
+        raise AssertionError("capacity rejection must precede connection creation")
+
+    writer = Phase1GTransactionalWriter(
+        transaction_connection_factory=forbidden_transaction_connection,
+        readonly_connection_factory=forbidden_transaction_connection,
+    )
+    with pytest.raises(Phase1GTransactionalWriterError) as exc_info:
+        writer.write_target(target)
+
+    assert exc_info.value.reason_code == REASON_G3_CAPACITY_EXCEEDED
+    assert connection_calls == 0
+    assert all(value == 0 for value in _target_fact_counts(config).values())
+
+
+def test_disposable_postgres_full_capture_plan_hash_closes_frozen_g2_fields(
+    database_factory,
+) -> None:  # type: ignore[no-untyped-def]
+    config = database_factory()
+    _fresh_apply(config)
+    _repository, target = _build_target(config, suffix="plan-drift")
+    mutations = (
+        {"risk_policy_hash": "1" * 64},
+        {"universe_policy_hash": "2" * 64},
+        {
+            "decision_cutoff_ts": target.capture_plan.decision_cutoff_ts
+            + timedelta(minutes=1)
+        },
+        {
+            "evidence_available_at": target.capture_plan.evidence_available_at
+            + timedelta(minutes=1)
+        },
+        {
+            "hmm_snapshot_status": "AVAILABLE",
+            "hmm_snapshot_id": "hmm-drift",
+            "hmm_snapshot_hash": "3" * 64,
+        },
+    )
+
+    for mutation in mutations:
+        plan_payload = target.capture_plan.model_dump(
+            mode="python", exclude={"plan_hash"}
+        )
+        plan_payload.update(mutation)
+        plan_payload["evidence_bundle_hash"] = "0" * 64
+        provisional = CapturePlan.model_validate(plan_payload)
+        plan_payload["evidence_bundle_hash"] = expected_evidence_bundle_hash(
+            plan=provisional,
+            trace_content_hash=target.envelope.trace_content_hash,
+        )
+        drifted_plan = CapturePlan.model_validate(plan_payload)
+        drifted_draft = build_observation_semantic_draft(
+            plan=drifted_plan,
+            envelope=target.envelope,
+            binding=target.persisted_binding,
+        )
+        request_payload = target.request.model_dump(
+            mode="python", exclude={"write_request_hash"}
+        )
+        request_payload.update(
+            capture_plan_hash=drifted_plan.plan_hash,
+            observation_semantic_key=drifted_draft.semantic_observation_key,
+            observation_semantic_draft_hash=drifted_draft.draft_content_hash,
+        )
+        drifted_request = Phase1GTransactionalWriteRequest.model_validate(
+            request_payload
+        )
+        drifted_target = Phase1GTransactionalTargetInput(
+            **{
+                **target.__dict__,
+                "request": drifted_request,
+                "capture_plan": drifted_plan,
+                "semantic_draft": drifted_draft,
+            }
+        )
+
+        with pytest.raises(Phase1GTransactionalWriterError) as exc_info:
+            Phase1GTransactionalWriter._validate_input(drifted_target)
+        assert exc_info.value.reason_code == REASON_G3_INPUT_INVALID
+        assert "frozen source-set reference" in str(exc_info.value)
+
+    assert all(value == 0 for value in _target_fact_counts(config).values())
 
 
 @pytest.mark.parametrize(

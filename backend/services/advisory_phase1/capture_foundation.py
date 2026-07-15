@@ -15,7 +15,6 @@ import psycopg2
 import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.db.pg_pool import get_conn
 from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonicalize
 from backend.services.advisory_phase1.label_capture import (
     LABEL_CAPTURE_BATCH_SCHEMA_VERSION,
@@ -958,6 +957,8 @@ ConnFactory = Callable[[], Iterator[Any]]
 
 
 def _transactional_conn_factory() -> Iterator[Any]:
+    from backend.db.pg_pool import get_conn
+
     return get_conn(autocommit=False, manage_transaction=True)
 
 

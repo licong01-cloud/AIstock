@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -254,6 +255,7 @@ def test_writer_input_closure_accepts_only_complete_typed_identity_graph() -> No
         artifact=SimpleNamespace(
             artifact_id=plan.selection_score_artifact_id,
             artifact_payload_sha256=plan.selection_score_artifact_hash,
+            score_count=envelope.candidate_count,
         ),
         package_manifest=SimpleNamespace(alpha_mode=plan.alpha_mode),
         stage_trace_builder_input=SimpleNamespace(runtime_config={"runtime": "test"}),
@@ -424,3 +426,45 @@ def test_writer_input_closure_rejects_each_cross_identity_drift(
             )
         )
     assert exc_info.value.reason_code == REASON_G3_INPUT_INVALID
+
+
+def test_transaction_connection_factory_failure_has_stable_reason_and_log(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    request = SimpleNamespace(
+        target_request_hash="1" * 64,
+        capture_batch_id="batch-connection-failure",
+        capture_plan_hash="2" * 64,
+    )
+    target = SimpleNamespace(request=request)
+    monkeypatch.setattr(
+        Phase1GTransactionalWriter,
+        "_validate_input",
+        staticmethod(lambda _target: None),
+    )
+
+    def fail_connection():  # type: ignore[no-untyped-def]
+        raise OSError("injected connection failure with no credentials")
+
+    writer = Phase1GTransactionalWriter(
+        transaction_connection_factory=fail_connection,
+        readonly_connection_factory=fail_connection,
+    )
+    with caplog.at_level(
+        logging.ERROR,
+        logger="backend.services.advisory_phase1.phase1g_transactional_writer",
+    ):
+        with pytest.raises(Phase1GTransactionalWriterError) as exc_info:
+            writer.write_target(target)  # type: ignore[arg-type]
+
+    assert exc_info.value.reason_code == "ADVISORY_PHASE1G_G3_UNEXPECTED_ERROR"
+    assert isinstance(exc_info.value.__cause__, OSError)
+    assert exc_info.value.context == {"capture_batch_id": "batch-connection-failure"}
+    records = [
+        record
+        for record in caplog.records
+        if record.message == "phase1g g3 transaction connection acquisition failed"
+    ]
+    assert len(records) == 1
+    assert records[0].reason_code == "ADVISORY_PHASE1G_G3_UNEXPECTED_ERROR"
+    assert "password" not in caplog.text.lower()

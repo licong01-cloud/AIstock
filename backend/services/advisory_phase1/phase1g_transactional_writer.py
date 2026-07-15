@@ -135,7 +135,23 @@ class Phase1GTransactionalWriter:
                 "capture_plan_hash_prefix": request.capture_plan_hash[:12],
             },
         )
-        conn = self._transaction_connection_factory()
+        try:
+            conn = self._transaction_connection_factory()
+        except Exception as exc:
+            logger.error(
+                "phase1g g3 transaction connection acquisition failed",
+                extra={
+                    "capture_batch_id": request.capture_batch_id,
+                    "reason_code": REASON_G3_UNEXPECTED_ERROR,
+                    "exception_type": type(exc).__name__,
+                },
+                exc_info=True,
+            )
+            raise Phase1GTransactionalWriterError(
+                REASON_G3_UNEXPECTED_ERROR,
+                "transaction connection acquisition failed",
+                context={"capture_batch_id": request.capture_batch_id},
+            ) from exc
         committed = False
         commit_error: Exception | None = None
         try:
@@ -720,6 +736,9 @@ class Phase1GTransactionalWriter:
         freeze = snapshot.source_revision_freeze_intent
         operation = snapshot.source_operation_projection
         historical = snapshot.historical_trace_projection
+        # Phase 1E freezes the canonical hash of the complete CapturePlan. A
+        # match closes every plan field, including audit, HMM, risk and timing
+        # fields that are not repeated individually in the G2 projection.
         source_refs = tuple(
             item
             for item in operation.expected_capture_source_sets
@@ -797,12 +816,26 @@ class Phase1GTransactionalWriter:
                 "snapshot, plan, context, source, and observation identities diverge",
             )
         minimum_rows = 4 + 5 + 2 * len(target.semantic_draft.candidate_semantic_rows)
-        if request.expected_rows < minimum_rows or request.expected_bytes < max(
-            snapshot.projected_bytes, target.envelope.size_bytes
+        required_bytes = max(snapshot.projected_bytes, target.envelope.size_bytes)
+        policy = binding.capture_policy
+        if (
+            request.expected_rows < minimum_rows
+            or request.expected_bytes < required_bytes
+            or target.envelope.candidate_count > policy.max_candidates
+            or historical.artifact.score_count > policy.max_candidates
+            or required_bytes > policy.max_bytes
         ):
             raise Phase1GTransactionalWriterError(
                 REASON_G3_CAPACITY_EXCEEDED,
-                "transactional writer capacity declaration is incomplete",
+                "transactional writer input exceeds declared or policy capacity",
+                context={
+                    "required_rows": minimum_rows,
+                    "required_bytes": required_bytes,
+                    "candidate_count": target.envelope.candidate_count,
+                    "artifact_score_count": historical.artifact.score_count,
+                    "policy_max_candidates": policy.max_candidates,
+                    "policy_max_bytes": policy.max_bytes,
+                },
             )
 
     @staticmethod

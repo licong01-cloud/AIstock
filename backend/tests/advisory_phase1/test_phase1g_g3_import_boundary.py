@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -97,6 +99,26 @@ def test_g3_production_modules_do_not_cross_shared_runtime_boundaries() -> None:
         for module in imported
         if any(module.startswith(prefix) for prefix in FORBIDDEN_IMPORT_PREFIXES)
     }
+
+
+def test_g3_writer_import_and_construction_do_not_load_global_pg_pool() -> None:
+    script = """
+import sys
+from backend.services.advisory_phase1.phase1g_transactional_writer import Phase1GTransactionalWriter
+Phase1GTransactionalWriter(
+    transaction_connection_factory=lambda: None,
+    readonly_connection_factory=lambda: None,
+)
+raise SystemExit(1 if 'backend.db.pg_pool' in sys.modules else 0)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_g3_writer_has_no_runtime_ddl_env_guessing_or_hidden_retry() -> None:

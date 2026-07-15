@@ -6,7 +6,6 @@ from typing import Any, Callable, Iterator
 
 import psycopg2.extras
 
-from backend.db.pg_pool import get_conn
 from backend.services.advisory_phase0a.policy import canonicalize
 from backend.services.advisory_phase1.source_ledger import (
     SourceAvailabilityEvent,
@@ -92,6 +91,8 @@ SOURCE_REVISION_MEMBER_SELECT_EXACT_SQL = """
 
 
 def _transactional_conn_factory() -> Iterator[Any]:
+    from backend.db.pg_pool import get_conn
+
     return get_conn(autocommit=False, manage_transaction=True)
 
 
