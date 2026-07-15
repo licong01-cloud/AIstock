@@ -32,8 +32,8 @@
   "expected": "Late upstream completion should trigger dependency-ordered sector_data recovery for the latest completed trading day, finalize job/target metadata, and leave the next nominal daily schedule eligible.",
   "first_seen_at": "2026-07-15T17:15:57.717417Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "753a592d767e3a9179b6616daf2ebf5fb7f003d1",
+  "fixed_at": "2026-07-15T17:41:04.802910Z",
   "github_issue_number": 2192,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2192",
   "last_seen_at": "2026-07-15T17:15:57.717417Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2193",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "404b9915d6b048d33b62ad1e",
     "source_event_id": "FE-20260715-404b9915d6b0"
   },
+  "validation_evidence": [
+    "PR #2193 checks: 17 passed, 0 failed; mergeable=CLEAN"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
