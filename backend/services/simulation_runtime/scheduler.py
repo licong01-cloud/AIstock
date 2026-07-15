@@ -121,6 +121,9 @@ DEFAULT_SIMULATION_BINDING_WATCHDOG_TIMEOUT_SECONDS = 600.0
 DEFAULT_MINIQMT_SUBMIT_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_RECONCILE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MINIQMT_TICK_DRIVER_TIMEOUT_SECONDS = 30.0
+_MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE = "MINIQMT_QUOTE_CONTEXT_PREPARE_FAILED"
+_LEGACY_B0_CONTEXT_MISSING_FAILURE_STAGE = "MINIQMT_EVENT_LOOP_SUBMIT_FAILED"
+_LEGACY_B0_CONTEXT_MISSING_MESSAGE = "B0_QUOTE_V2 controller requires scheduler-published context"
 
 logger = logging.getLogger("aistock.simulation_runtime.scheduler")
 _POST_CLOSE_RECONCILE_TIME = time(15, 0)
@@ -5787,6 +5790,12 @@ class SimulationLifecycleScheduler:
             trade_date=trade_date,
             runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(runtime_release),
         )
+        run = self._recover_legacy_b0_context_missing_run_if_safe(
+            binding=binding,
+            run=run,
+            plan=plan,
+            submit=submit,
+        )
         status = "REUSED_EXISTING_PLAN"
         if run.status == SimulationDailyRunStatus.SUCCEEDED and not plan.intents:
             status = "NO_REBALANCE"
@@ -7854,7 +7863,11 @@ class SimulationLifecycleScheduler:
     ) -> bool:
         if not submit or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             return False
-        if run.status not in {SimulationDailyRunStatus.SUBMITTING, SimulationDailyRunStatus.INTRADAY_RUNNING}:
+        if run.status not in {
+            SimulationDailyRunStatus.SUBMITTING,
+            SimulationDailyRunStatus.INTRADAY_RUNNING,
+            SimulationDailyRunStatus.RECONCILING,
+        }:
             return False
         payload = run.run_payload_json
         route = payload.get("miniqmt_runtime_route") if isinstance(payload.get("miniqmt_runtime_route"), dict) else {}
@@ -8319,12 +8332,21 @@ class SimulationLifecycleScheduler:
     ) -> SimulationExecutionResult:
         if binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM:
             return submit_callable()
-        self._prepare_miniqmt_quote_context_for_plan(
-            binding=binding,
-            plan=plan,
-            as_of_time=as_of_time,
-            recovering_active=False,
-        )
+        try:
+            self._prepare_miniqmt_quote_context_for_plan(
+                binding=binding,
+                plan=plan,
+                as_of_time=as_of_time,
+                recovering_active=False,
+            )
+        except Exception as exc:
+            self._mark_miniqmt_quote_context_prepare_failure(
+                binding=binding,
+                run=run,
+                plan=plan,
+                exc=exc,
+            )
+            raise
         try:
             return self._run_callable_with_timeout(
                 stage="MINIQMT_EVENT_LOOP_SUBMIT",
@@ -8350,6 +8372,134 @@ class SimulationLifecycleScheduler:
             if self._exception_context(exc).get("reason_code") == "MINIQMT_EVENT_LOOP_SUBMIT_TIMEOUT":
                 self._mark_miniqmt_submit_timeout(binding=binding, run=run, plan=plan, exc=exc)
             raise
+
+    def _mark_miniqmt_quote_context_prepare_failure(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        exc: Exception,
+    ) -> SimulationDailyRun:
+        current = self.repository.get_simulation_daily_run(run.run_id)
+        broker_side_effect_evidence = self._run_has_broker_side_effect_evidence(current)
+        loud_payload = exc.as_loud_payload() if isinstance(exc, QuoteContractError) else None
+        exception_context = (
+            loud_payload
+            if isinstance(loud_payload, dict)
+            else {
+                "reason_code": self._exception_context(exc).get("reason_code"),
+                "stage": self._exception_context(exc).get("stage"),
+                "message": str(exc),
+                "context": self._exception_context(exc),
+            }
+        )
+        retryable = not isinstance(exc, QuoteContractError) or exc.retryable
+        next_status = (
+            SimulationDailyRunStatus.FAILED_RETRYABLE
+            if retryable or broker_side_effect_evidence
+            else SimulationDailyRunStatus.FAILED_TERMINAL
+        )
+        diagnostic = {
+            "schema_version": "miniqmt_quote_context_prepare_failure_v1",
+            "reason_code": _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE,
+            "stage": _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE,
+            "run_id": current.run_id,
+            "plan_id": plan.plan_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": plan.target_trade_date.isoformat(),
+            "exception_type": type(exc).__name__,
+            "exception": exception_context,
+            "retryable": retryable,
+            "broker_callable_invoked": False,
+            "broker_side_effect_evidence_before_attempt": broker_side_effect_evidence,
+            "previous_status": current.status.value,
+            "next_status": next_status.value,
+        }
+        return self.repository.update_simulation_daily_run(
+            current.run_id,
+            status=next_status,
+            payload_patch={
+                "last_stage": _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE,
+                "miniqmt_quote_context_prepare_failure": diagnostic,
+                "submit_failure": {
+                    "stage": _MINIQMT_QUOTE_CONTEXT_PREPARE_FAILURE_STAGE,
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "context": diagnostic,
+                },
+            },
+        )
+
+    def _recover_legacy_b0_context_missing_run_if_safe(
+        self,
+        *,
+        binding: SimulationReleaseBinding,
+        run: SimulationDailyRun,
+        plan: ExecutionPlan,
+        submit: bool,
+    ) -> SimulationDailyRun:
+        if (
+            not submit
+            or binding.broker_backend != SimulationBrokerBackend.MINIQMT_SIM
+            or run.status != SimulationDailyRunStatus.RECONCILING
+        ):
+            return run
+        payload = run.run_payload_json if isinstance(run.run_payload_json, dict) else {}
+        submit_failure = payload.get("submit_failure") if isinstance(payload.get("submit_failure"), dict) else {}
+        if (
+            submit_failure.get("stage") != _LEGACY_B0_CONTEXT_MISSING_FAILURE_STAGE
+            or submit_failure.get("message") != _LEGACY_B0_CONTEXT_MISSING_MESSAGE
+        ):
+            return run
+        if self._run_has_broker_side_effect_evidence(run) or self._mini_qmt_run_has_runtime_execution_evidence(payload):
+            return run
+        diagnostic = {
+            "schema_version": "miniqmt_legacy_b0_context_missing_recovery_v1",
+            "reason_code": "MINIQMT_LEGACY_B0_CONTEXT_MISSING_RECOVERED",
+            "run_id": run.run_id,
+            "plan_id": plan.plan_id,
+            "binding_id": binding.binding_id,
+            "strategy_id": binding.strategy_id,
+            "trade_date": run.trade_date.isoformat(),
+            "previous_status": run.status.value,
+            "next_status": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+            "broker_called": False,
+            "submitted_intents": 0,
+            "broker_side_effect_evidence": False,
+            "runtime_execution_evidence": False,
+            "matched_failure": dict(submit_failure),
+            "automatic_recovery_scope": "exact_pre_context_legacy_failure_only",
+        }
+        return self.repository.update_simulation_daily_run(
+            run.run_id,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+            payload_patch={
+                "last_stage": SimulationDailyRunStatus.FAILED_RETRYABLE.value,
+                "miniqmt_legacy_b0_context_missing_recovery": diagnostic,
+                "submit_failure": {
+                    "stage": "MINIQMT_LEGACY_B0_CONTEXT_MISSING_RECOVERY",
+                    "type": "AutomaticNoSideEffectRecovery",
+                    "message": "exact legacy pre-context MiniQMT failure recovered for standard retry",
+                    "context": diagnostic,
+                },
+            },
+        )
+
+    @staticmethod
+    def _mini_qmt_run_has_runtime_execution_evidence(payload: dict[str, Any]) -> bool:
+        for key in (
+            "qmt_batch_id",
+            "qmt_batch_result",
+            "miniqmt_runtime_id",
+            "miniqmt_runtime_route",
+            "miniqmt_event_loop_tick_driver",
+            "miniqmt_runtime_evidence",
+        ):
+            if payload.get(key):
+                return True
+        return False
 
     def _reconcile_after_submit_with_timeout(
         self,
