@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-612",
-  "closed_at": null,
+  "closed_at": "2026-07-09T04:59:38Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,8 +30,8 @@
   "expected": "Resident train/test/predict should preserve numeric results and qlib fit/predict contracts while reducing per-day overhead: test_epoch should synchronize only O(1) times per epoch, resident tensors should be float32 after preload, daily resident paths should not call feature.float(), and loud VRAM fallback semantics/reason_code should remain unchanged.",
   "first_seen_at": "2026-07-09T04:37:27.560244Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "087d4e6554972a5bcc1ad0376e5d23f63e3aa235",
+  "fixed_at": "2026-07-15T13:38:31.065556Z",
   "github_issue_number": 1932,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/1932",
   "last_seen_at": "2026-07-09T04:37:27.560244Z",
@@ -39,6 +39,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/1933",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -49,7 +50,7 @@
   "risk_area": "regression",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe"
   ],
@@ -58,6 +59,9 @@
     "fingerprint": "f8f4cbe97bce5c33658ba498",
     "source_event_id": "FE-20260709-f8f4cbe97bce"
   },
+  "validation_evidence": [
+    "Source PR #1933 is MERGED (087d4e6554972a5bcc1ad0376e5d23f63e3aa235); canonical BUG-612 remained open; metadata-only aftercare. Issue #1932 already closed prior to aftercare."
+  ],
   "verification_budget": {
     "budget": "light",
     "deferred_nightly_verification": {
