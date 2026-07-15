@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Iterator
+from uuid import uuid4
 
 import psycopg2
 import pytest
@@ -166,17 +167,26 @@ def test_trace_outbox_l4_dev_db_is_immutable_idempotent_and_rolls_back() -> None
         def conn_factory() -> Iterator[Any]:
             yield conn
 
-        provisional_binding = _binding()
+        test_run_id = uuid4().hex
+        scope_a_id = f"l4-scope-a-{test_run_id}"
+        scope_a_hash = canonical_json_sha256({"scope": "a", "test_run_id": test_run_id})
+        scope_b_id = f"l4-scope-b-{test_run_id}"
+        scope_b_hash = canonical_json_sha256({"scope": "b", "test_run_id": test_run_id})
+        provisional_binding = _binding(admission_scope_id=scope_a_id, admission_scope_hash=scope_a_hash)
         controls = PostgresControlBindingRepository(conn_factory=conn_factory)
         control_event = controls.append(_control_request(provisional_binding))
-        binding = _binding(control_binding_event_hash=control_event.binding_event_hash)
+        binding = _binding(
+            control_binding_event_hash=control_event.binding_event_hash,
+            admission_scope_id=scope_a_id,
+            admission_scope_hash=scope_a_hash,
+        )
         envelope = _envelope(binding)
-        provisional_binding_b = _binding(admission_scope_id="l4-scope-b", admission_scope_hash="e" * 64)
+        provisional_binding_b = _binding(admission_scope_id=scope_b_id, admission_scope_hash=scope_b_hash)
         control_event_b = controls.append(_control_request(provisional_binding_b))
         binding_b = _binding(
             control_binding_event_hash=control_event_b.binding_event_hash,
-            admission_scope_id="l4-scope-b",
-            admission_scope_hash="e" * 64,
+            admission_scope_id=scope_b_id,
+            admission_scope_hash=scope_b_hash,
         )
         envelope_b = _envelope(binding_b)
         validator = _FixtureAdmissionValidator()
@@ -218,8 +228,13 @@ def test_trace_outbox_l4_dev_db_is_immutable_idempotent_and_rolls_back() -> None
             conn.rollback()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT count(*) FROM app.advisory_selection_stage_trace_outbox WHERE trace_outbox_id = %s",
-                (first.trace_outbox_id,),
+                "SELECT count(*) FROM app.advisory_selection_stage_trace_outbox WHERE trace_outbox_id = ANY(%s)",
+                ([first.trace_outbox_id, second_scope.trace_outbox_id],),
+            )
+            assert cur.fetchone() == (0,)
+            cur.execute(
+                "SELECT count(*) FROM app.advisory_phase1_control_binding_event WHERE binding_chain_key = ANY(%s)",
+                ([control_event.request.binding_chain_key, control_event_b.request.binding_chain_key],),
             )
             assert cur.fetchone() == (0,)
     finally:
