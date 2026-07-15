@@ -21,13 +21,14 @@ G3 只实现 PostgreSQL transaction primitives 和单 target 原子 writer，不
 
 ```text
 design_tier = F2
-design_status = ready_for_implementation
+design_status = implemented_pending_review
 design_review = passed_2026-07-15
-implementation_status = not_started
+implementation_status = local_verified_2026_07_15_pending_review
 code_merge_state = none
 ddl_pending = none
-dml_pending = none_for_design
-dev_validation = not_started_and_not_required_for_design
+dml_pending = none_for_g3
+local_validation = passed_pure_shared_and_disposable_postgresql
+dev_validation = not_run
 production_activation = none
 ```
 
@@ -258,6 +259,7 @@ materialize_observation_row_bundle(
     draft: Phase1GObservationSemanticDraft,
     observation_revision_no: int,
     supersedes_observation_version_id: str | None,
+    created_by_capture_batch_id: str,
 ) -> Phase1GObservationRowBundle
 ```
 
@@ -354,10 +356,16 @@ read_revision_chain_exact_in_transaction(cur, canonical_signal_id)
 read_semantic_draft_for_revision_in_transaction(cur, observation_version_id)
 append_materialized_bundle_in_transaction(cur, row_bundle, batch_id)
 read_observation_bundle_exact_in_transaction(cur, observation_version_id)
+read_observation_bundle_exact_readonly(cur, observation_version_id)
 ```
 
 writer 直接写 identity/payload 基表；authority readback也直接读取基表，兼容 view 仅用于测试 parity read。每个 insert
 都需随后从当前 transaction readback并与 materialized row逐字段一致。
+
+`created_by_capture_batch_id` 是 identity materializer 的显式输入：首写和合法 successor 使用当前 batch；exact retry
+重建历史 revision 时使用该 revision 已持久化的创建 batch；recovery 复用旧 observation 时不得把当前 batch 改写进旧
+immutable row。事务内 exact read保留行锁；normal post-commit 和 commit-response-loss 使用独立 readonly connection
+上的无锁 exact read，禁止在 read-only transaction 中执行 `FOR UPDATE/FOR KEY SHARE`。
 
 ## 9. 单 Target 事务算法
 
@@ -606,13 +614,16 @@ batch/scope/package/observation hash前缀、transaction stage、reason code和 
 backend/services/advisory_phase1/phase1g_transactional_writer.py       # new
 backend/services/advisory_phase1/observation_capture_postgres.py       # new
 backend/services/advisory_phase1/observation_capture.py                # semantic draft + identity materializer
+backend/services/advisory_phase1/source_revision_postgres.py           # caller-owned freeze/exact/readonly primitives
 backend/services/advisory_phase1/control_binding.py                    # additive tx primitives
 backend/services/advisory_phase1/capture_foundation.py                 # additive tx primitives
 backend/services/advisory_phase1/trace_outbox.py                       # additive tx primitives
+backend/services/advisory_phase1/stage_trace.py                         # multi Alpha decimal parity correction
 backend/services/advisory_phase1/phase1g_contract.py                   # additive G3 request/projection DTO
 backend/tests/advisory_phase1/test_phase1g_g3_transactional_writer.py
 backend/tests/advisory_phase1/test_phase1g_g3_transactional_writer_postgres.py
 backend/tests/advisory_phase1/test_phase1g_g3_import_boundary.py
+backend/tests/advisory_phase1/test_stage_trace.py
 docs/architecture/advisory_phase1g_g3_transactional_postgresql_writer_f2_design_20260715.md
 docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md
 ```
@@ -806,38 +817,38 @@ runtime_activation = none
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-768 | §3、§18 | changed-path/import boundary | design_ready | none |
-| F-769 | §4、§17.2 | transitive import denylist | design_ready | none |
-| F-770 | §5、§9 | transaction query spy + rollback fault matrix | design_ready | none |
-| F-771 | §8.2、§9.1 | binding/batch precondition tests | design_ready | none |
-| F-772 | §8.1 | cursor spy/no-commit/no-pool tests | design_ready | none |
-| F-773 | §8 | existing wrapper regression | design_ready | none |
-| F-774 | §5.3、§22 | SQL/static no-DDL scan | design_ready | none |
-| F-775 | §5.1、§8.5 | base-table DML + view parity/query spy | design_ready | none |
-| F-776 | §6.1-6.3 | typed cross-identity negative matrix | design_ready | none |
-| F-777 | §7、§9.3 | semantic draft/materializer/in-memory golden parity | design_ready | none |
-| F-778 | §6.2-6.3、§7 | full stage/candidate no-truncation test | design_ready | none |
-| F-779 | §7、§15 | single/multi/raw/filtered positive matrix | design_ready | none |
-| F-780 | §9.2 | fixed lock-order/one-connection spy | design_ready | none |
-| F-781 | §8.1、§9.3 | source freeze rollback/exact retry | design_ready | none |
-| F-782 | §8.4、§11.1 | outbox first/retry/conflict tests | design_ready | none |
-| F-783 | §8.4、§11.2 | predecessor/current binding recovery tests | design_ready | none |
-| F-784 | §10.1 | header exact/conflict tests | design_ready | none |
-| F-785 | §10.2 | non-latest exact historical revision retry | design_ready | none |
-| F-786 | §10.3-10.4 | successor/two-writer/fork negatives | design_ready | none |
-| F-787 | §8.5、§9.3 | child/identity/payload tamper tests | design_ready | none |
-| F-788 | §8.3、§12 | membership/row-version retry tests | design_ready | none |
-| F-789 | §8.4、§12 | delivery sequence/predecessor tests | design_ready | none |
-| F-790 | §13.1、§19.3 | every-write-node rollback zero-residue | design_ready | none |
-| F-791 | §13.2 | commit-response-loss three-way matrix | design_ready | none |
-| F-792 | §13.3 | post-commit missing/tampered child matrix | design_ready | none |
-| F-793 | §6.4、§11.2 | same-batch hash parity + recovery immutable-identity parity | design_ready | none |
-| F-794 | §11.3 | no sleep/backoff + normal rerun | design_ready | none |
-| F-795 | §16 | reason/context/caplog/traceback redaction | design_ready | none |
-| F-796 | §15 | capacity/disposition/zero-candidate matrix | design_ready | none |
-| F-797 | §19.3 | production-migration PostgreSQL 16 matrix | design_ready | none |
-| F-798 | §2、§3.2、§20 | source/static forbidden-gate scan | design_ready | none |
-| F-799 | §1、§19.4、§22、§25 | separated-state review | design_ready | none |
+| F-768 | §3、§18 | changed-path/import boundary | local_verified | none |
+| F-769 | §4、§17.2 | transitive import denylist | local_verified | none |
+| F-770 | §5、§9 | transaction query spy + rollback fault matrix | local_verified | none |
+| F-771 | §8.2、§9.1 | binding/batch precondition tests | local_verified | none |
+| F-772 | §8.1 | cursor spy/no-commit/no-pool tests | local_verified | none |
+| F-773 | §8 | existing wrapper regression | local_verified | none |
+| F-774 | §5.3、§22 | SQL/static no-DDL scan | local_verified | none |
+| F-775 | §5.1、§8.5 | base-table DML + view parity/query spy | local_verified | none |
+| F-776 | §6.1-6.3 | typed cross-identity negative matrix | local_verified | none |
+| F-777 | §7、§9.3 | semantic draft/materializer/in-memory golden parity | local_verified | none |
+| F-778 | §6.2-6.3、§7 | full stage/candidate no-truncation test | local_verified | none |
+| F-779 | §7、§15 | single/multi/raw/filtered positive matrix | local_verified | none |
+| F-780 | §9.2 | fixed lock-order/one-connection spy | local_verified | none |
+| F-781 | §8.1、§9.3 | source freeze rollback/exact retry | local_verified | none |
+| F-782 | §8.4、§11.1 | outbox first/retry/conflict tests | local_verified | none |
+| F-783 | §8.4、§11.2 | predecessor/current binding recovery tests | local_verified | none |
+| F-784 | §10.1 | header exact/conflict tests | local_verified | none |
+| F-785 | §10.2 | non-latest exact historical revision retry | local_verified | none |
+| F-786 | §10.3-10.4 | successor/two-writer/fork negatives | local_verified | none |
+| F-787 | §8.5、§9.3 | child/identity/payload tamper tests | local_verified | none |
+| F-788 | §8.3、§12 | membership/row-version retry tests | local_verified | none |
+| F-789 | §8.4、§12 | delivery sequence/predecessor tests | local_verified | none |
+| F-790 | §13.1、§19.3 | every-write-node rollback zero-residue | local_verified | none |
+| F-791 | §13.2 | commit-response-loss three-way matrix | local_verified | none |
+| F-792 | §13.3 | post-commit missing/tampered child matrix | local_verified | none |
+| F-793 | §6.4、§11.2 | same-batch hash parity + recovery immutable-identity parity | local_verified | none |
+| F-794 | §11.3 | no sleep/backoff + normal rerun | local_verified | none |
+| F-795 | §16 | reason/context/caplog/traceback redaction | local_verified | none |
+| F-796 | §15 | capacity/disposition/zero-candidate matrix | local_verified | none |
+| F-797 | §19.3 | production-migration PostgreSQL 16 matrix | local_verified | none |
+| F-798 | §2、§3.2、§20 | source/static forbidden-gate scan | local_verified | none |
+| F-799 | §1、§19.4、§22、§25 | separated-state review | local_verified | none |
 
 ## 25. DESIGN-COMPLIANCE-001
 
@@ -863,7 +874,8 @@ G3 详细设计进入代码阶段前必须满足：
 3. transaction lock/order、retry/successor/recovery和commit uncertainty均有正反例。
 4. 所有保留技术条件在合法数据下可自动通过，不形成不可达门禁。
 5. 无migration、global pool、runtime activation、角色/RBAC/approval/backup/manual bypass。
-6. 用户确认后才开始G3A-G3D代码实现。
+6. 用户已确认开始G3A-G3D代码实现；本地实现与 disposable PostgreSQL 验证已完成，提交、合入、DEV/production
+   数据库操作和 runtime activation 仍须分开报告。
 
 G3代码完整实现并通过L0-L2后，下一阶段是G4 Service、CLI And Recovery orchestration。G3设计或代码合入不代表
 G4/G5、DEV evidence、production DML或runtime activation完成。
