@@ -3,7 +3,7 @@
 ## 1. Background / 文档定位与当前状态
 
 本文是 `advisory_phase1_pit_observation_labels_sealed_snapshot_f2_design_20260711.md`
-中 Phase 1G 的唯一实施级详细设计，承接已经合入并完成 DEV schema rehearsal 的 Phase 1F：
+中 Phase 1G 的唯一实施级详细设计，承接已经合入并完成 DEV/production 发布验证的 Phase 1F：
 
 ```text
 Phase 1E immutable per-Program/date readiness plan
@@ -27,14 +27,17 @@ Phase 1 自有表和仓库外制品目录。
 当前状态：
 
 ```text
-design_status = design_ready_after_2026_07_15_consistency_review
-implementation_status = not_started
+design_status = implementation_ready_after_phase1f2_dev_and_production_release_2026_07_15
+implementation_status = g1_not_started
 phase1f_v1_dev_schema = compatible_and_verified_but_parent_contract_incomplete
 phase1f1_schema = merged_pr_2129_dev_and_production_applied_verified
-phase1g_code_start_state = blocked_pending_phase1f2_scope_aware_trace_identity_contract
 phase1f1_final_catalog_fingerprint = 106af55734c6ec7bb0b0dd4e438bcb780d672be95220aead686ec6f4b6c3e627
-phase1f2_schema = scope_aware_outbox_and_gap_contract_frozen_not_implemented_or_applied
-phase1f2_standalone_f2_design = design_ready_2026_07_15
+phase1f2_schema = merged_pr_2144_plus_bugfix_pr_2146_and_pr_2150_dev_and_production_applied_verified
+phase1f2_standalone_f2_design = validated_and_merged_2026_07_15
+phase1f2_dev_apply_receipt = 0770cc350efc5740e563b59601be54328228dce364e7a316f5c8399415ac5fe4
+phase1f2_production_apply_receipt = c9191c4c28becae8cc4424c7bdb825fc61b2480c297fc944a8d84cd02a032a7e
+phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
+phase1g_code_start_state = ready_for_g1_g4
 phase1e_persistent_l4 = pending_real_single_and_multi_alpha_dev_inputs
 dev_advisory_program_count = 0_as_of_2026_07_14
 phase1g_dev_dml = not_executed
@@ -45,18 +48,20 @@ runtime_activation = none
 Phase 1G代码必须基于Phase 1F.2 scope-aware schema实现。Phase 1F.1的详细设计为
 `advisory_phase1f1_observation_partition_schema_forward_migration_f2_design_20260714.md`；它修复当前v1
 全局content-hash唯一约束与lineage/candidate未分区问题。该DDL已在独立发布任务中完成DEV与production
-plan/apply/new-verify/new-exact-reapply，两个目标均为exact v2 `COMPATIBLE`。但它尚未修正下述outbox
-scope identity，因此Phase 1G业务代码仍等待Phase 1F.2 G0完成。G0完成后可进入代码、disposable
-PostgreSQL和事务型DEV rollback验证；真实persistent DEV L4仍必须等待single Alpha与原生multi Alpha的
+plan/apply/new-verify/new-exact-reapply，两个目标均为exact v2 `COMPATIBLE`。Phase 1F.2随后通过PR #2144
+和BUG修复PR #2146/#2150完成scope-aware outbox/gap identity，并在DEV与production完成
+plan/apply/new-verify/new-exact-reapply，两个目标均为exact v3 `COMPATIBLE/downstream_ready=true`。
+G0技术前置已经满足，可进入G1-G4代码、disposable PostgreSQL和事务型DEV rollback验证；真实persistent
+DEV L4仍必须等待single Alpha与原生multi Alpha的
 immutable DSE/receipt。禁止用fixture、复制、手写DSE或replay假装完成真实L4。
 
-2026-07-15开工前复核同时确认：当前
+2026-07-15开工前复核曾确认当时
 `app.advisory_selection_stage_trace_outbox` 的唯一键为
 `(selection_run_id,package_id,manifest_sha256,decision_as_of_trade_date,capture_policy_hash)`，没有
 `admission_scope_hash`。这与同一Selection证据可服务多个独立Program/scope的父级不变量冲突。Phase 1G
-不得用随机policy、合并Program或复用错误binding绕过；必须先完成本文§5.4定义的Phase 1F.2独立release
-修正。调用点复核还确认`advisory_capture_gap`共享同一identity却未持久化scope，因此§5.4同时兼容修正
-成功与失败证据。该修正是数据库identity正确性，不是审批、角色或人工门禁。
+不得用随机policy、合并Program或复用错误binding绕过。本文§5.4定义的独立release现已完成；
+`advisory_capture_gap`也已同时兼容修正成功与失败证据。该修正是数据库identity正确性，不是审批、角色
+或人工门禁。
 
 ## 2. Goals / 目标
 
@@ -197,9 +202,9 @@ package preflight 来决定 capture 是否可用。
 - 相同策略包服务多个 Program 时，每个 Program 保持独立 dated binding、scope 和 capture receipt。
 - 一个 unit 失败只产生自身失败结果；其他 unit 已提交结果不回滚，也不被标记失败。
 
-### 5.4 Phase 1F.2 scope-aware trace identity prerequisite
+### 5.4 Phase 1F.2 scope-aware trace identity prerequisite（已完成）
 
-当前已部署v2 schema的outbox唯一约束
+Phase 1F.2发布前的v2 schema中，outbox唯一约束
 `advisory_selection_stage_trac_selection_run_id_package_id_m_key`冻结为：
 
 ```text
@@ -207,7 +212,7 @@ UNIQUE(selection_run_id, package_id, manifest_sha256,
        decision_as_of_trade_date, capture_policy_hash)
 ```
 
-Phase 1F.2必须在独立frozen migration和新release-schema contract中将其替换为：
+Phase 1F.2已在独立frozen migration和v3 release-schema contract中将其替换为：
 
 ```text
 UNIQUE(selection_run_id, package_id, manifest_sha256,
@@ -245,16 +250,15 @@ Phase 0A `HandoffAdmissionScope`的canonical identity包含`audit_target_id`，�
 `program_id`，避免同一Program identity出现两套不一致来源。双Program测试必须使用各自权威scope hash，
 禁止调用方自行拼scope。
 
-Phase 1F.2必须独立完成：frozen migration SHA、registry contract、unknown drift拒绝、disposable
+Phase 1F.2已独立完成：frozen migration SHA、registry contract、unknown drift拒绝、disposable
 PostgreSQL legacy gap readback、单scope retry、双scope同Selection outbox与gap正向用例、DEV
-plan/apply/new-verify/new-exact-reapply。Production
-DDL仍只在用户对该次DDL明确要求后执行；Phase 1G plan/capture模块不得import release executor或运行DDL。
+plan/apply/new-verify/new-exact-reapply，以及经用户明确授权的production
+plan/apply/new-verify/new-exact-reapply；Phase 1G plan/capture模块仍不得import release executor或运行DDL。
 本节冻结Phase 1G依赖的最小正确契约；独立Phase 1F.2 F2详细设计已经逐项定义v3 registry predecessor
 closure、constraint/index名称、legacy row兼容、migration/rollback边界和验收矩阵：
-`advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`。G0实现必须逐项
-消费其F-650至F-679，不得在Phase 1G业务代码PR中临时发明DDL或改用简化contract。
-在Phase 1F.2 DEV receipt达到`COMPATIBLE/COMPATIBLE/downstream_ready=true`前，不开始Phase 1G业务代码，
-避免交付一个已知无法支持多Program的部分实现。
+`advisory_phase1f2_scope_aware_trace_identity_forward_migration_f2_design_20260715.md`。G0实现已逐项
+消费其F-650至F-679；Phase 1G业务代码不得临时发明DDL或改用简化contract。
+DEV与production receipt均已达到`COMPATIBLE/COMPATIBLE/downstream_ready=true`，G1-G4编码前置已解除。
 
 ### 5.5 Shared-path impact audit
 
@@ -336,6 +340,39 @@ hash不一致。调用方不得只传任意本地路径，Phase 1G也不得在�
 同策略的另一个物理root不改变业务身份。输出root只承载Phase 1G result/attempt/batch CAS制品，不读取
 Phase 1E或回测、Paper、模拟盘文件。
 
+G1固定三类store layout policy语义，物理root由环境显式提供但不进入layout policy hash：
+
+| layout policy id | version | 固定布局/内容契约 |
+|---|---:|---|
+| `ADVISORY_PHASE1F2_RELEASE_RECEIPT_STORE` | `1` | `receipts/<receipt_content_hash>.json`，直接承载`ReleaseSchemaReceipt` canonical JSON |
+| `ADVISORY_PHASE1E_EXECUTION_PLAN_STORE` | `1` | `advisory/phase1e/plans/<hash-prefix>/<plan_hash>.json`，承载`advisory_phase1e_artifact_envelope_v1` |
+| `ADVISORY_PHASE1G_RESULT_STORE` | `1` | `results|attempts|batches/<hash-prefix>/<semantic_hash>.json`，直接承载对应typed canonical JSON |
+
+三个layout policy hash依次固定为：
+
+```text
+ADVISORY_PHASE1F2_RELEASE_RECEIPT_STORE = a3d32dc3aea24e2228b9f2bc02a559993db4bfe02ed437d25db0799ef1f94ee1
+ADVISORY_PHASE1E_EXECUTION_PLAN_STORE   = 3bf0e1b0352aaf88a470b78c0502994ff17d6c02c9a94436bcb463e71bf5c9e8
+ADVISORY_PHASE1G_RESULT_STORE           = 7c7700e7a1f8bc82bda131afe566e6ab9e0f89fc9d45f107db9679122c2eae06
+```
+
+layout policy hash只覆盖layout policy id/version、artifact kind、布局版本、envelope版本和identity字段，
+不覆盖root、环境名或墙钟时间。input resolver由调用方显式绑定
+`artifact kind + root + expected store policy hash + expected layout policy hash`。Phase 1E的
+`store_policy_hash`不是G1重新发明的常量，而是exact Phase 1E request、plan operation和artifact envelope
+已经冻结的`artifact_store_policy_hash`；ref、root binding、plan和envelope四者必须相等。Phase 1F.2
+receipt store没有历史embedded policy字段，因此它的store policy hash等于上表对应layout policy hash，
+并要求root binding与ref一致。Phase 1G result store policy hash同样等于其layout policy hash。任何未注册
+kind、store policy或布局均明确失败，不按相似路径搜索。
+
+Phase 1G不得为了读取plan而import Phase 1E compiler/runtime模块。G1使用repo-owned pure consumer
+projection验证完整plan顶层字段、evidence binding、operation payload/hash以及canonical plan id/hash；
+projection只承担读取契约，不执行capacity probe、source resolver或数据库访问。`scope_key`、evidence
+binding、`SOURCE_RESOLUTION` complete request和`OBSERVATION_CAPTURE` semantic template中的
+program/date/package/manifest/admission scope id/hash必须逐项相等，两个operation各自必须显式携带与
+artifact ref相同的`artifact_store_policy_hash`。缺字段、跨operation漂移或只由另一operation补齐policy
+均明确失败，禁止跳过缺失字段后用集合“碰巧相等”来通过。
+
 ### 6.4 Immutable DSE/artifact/package projection
 
 `HistoricalDseTraceProjection` 在一个 `REPEATABLE READ READ ONLY` snapshot 中读取：
@@ -403,7 +440,8 @@ request_hash
 
 规则：
 
-- program/date/scope 必须与 Phase 1E plan 一致，调用方不能覆盖 plan semantic fields。
+- program/date/package/manifest/scope 必须在 Phase 1E plan顶层、evidence binding及source/observation
+  operation间完整闭包，调用方不能覆盖 plan semantic fields。
 - `requested_at` 仅用于审计，不参与 signal/observation identity。
 - `request_hash`明确排除`requested_at`，只覆盖semantic execution payload；相同target正常重跑必须得到
   相同request hash，不能因墙钟时间形成新业务身份。
@@ -458,6 +496,8 @@ Phase1GExecutionBatchPlan
 refs、source events、DSE/artifact/package identities、control-binding head、capture batch state和outbox
 identity。任一变化返回`ADVISORY_PHASE1G_PLAN_STALE`且当前target零DML；不得静默重新plan、采用latest、
 继续使用过时数据或只比较request hash。调用方应重新运行只读`plan`。
+`expected_source_events[]`按event identity唯一；同一identity即使携带不同content hash也属于冲突，不能
+被当成两个合法事件。
 
 ### 7.4 Capture policy registry
 
@@ -477,6 +517,37 @@ registry_hash
 
 每个 target 的实际 planned rows/bytes 从 Phase 1E workload/resource budget读取，必须不超过 registry
 absolute bounds。registry 是程序配置，不是用户审批；不得在代码中隐藏 fallback 数值。
+
+G1首个且唯一注册项固定为：
+
+```text
+registry_id = ADVISORY_PHASE1G_HISTORICAL_OBSERVATION_CAPTURE
+registry_version = 1
+absolute_max_candidates = 1000000
+absolute_max_bytes = 2147483648
+absolute_max_capture_ms = 1800000
+lease_seconds = 3600
+statement_timeout_ms = 1800000
+lock_timeout_ms = 30000
+source_resolver_contract_version = advisory_phase1g_source_resolver_v1
+dse_projection_contract_version = advisory_phase1g_dse_projection_v1
+observation_writer_contract_version = advisory_phase1g_observation_writer_v1
+```
+
+三个component hash分别是`{component_name, contract_version}`的canonical SHA256；`registry_hash`是上述
+完整typed registry payload的canonical SHA256。这些hash冻结接口契约身份，不是假装已经存在的G2/G3
+源码hash；G2/G3实现必须声明并匹配相同contract version。绝对上界高于正常单Program/date/scope工作量，
+只防止错误输入形成无界事务；真正逐target rows/bytes仍以Phase 1E已测量且冻结的capacity为更严格上界。
+registry没有环境fallback、动态放宽、人工审批或角色授权。
+
+当前固定hash为：
+
+```text
+source_resolver_contract_hash = c2a87f75b9f539e7cb2d02bee8dad9ce09408a3b559c03edaa7867356d33f68f
+dse_projection_contract_hash  = 1f37ae4ffd92a5949d0083bac2a8eaec20be92136d83664f541c2d0f788206a7
+observation_writer_contract_hash = 548906749d026ebd559be5a8bf189b7420575ea4ea016e9c1d0ce2351a1aed49
+registry_hash = fe3548010d6343781e69f4b8aee7e49c477d1f7f29f853fd5f3fbe85e6416bf4
+```
 
 ### 7.5 Stable capture result
 
@@ -514,6 +585,8 @@ trace_outbox_id/hash
 稳定result只在batch `COMPLETE`、DB readback全部一致、plan set/membership/mapping hashes闭合时产生，
 并作为Phase 1H唯一消费的Phase 1G外部契约。相同target exact rerun必须返回同一
 `capture_result_hash`；result不含调用时间、是否本次执行DML或瞬态错误。
+每个`selected_observation_mappings[]`的`source_revision_set_id/hash`必须与result顶层exact source
+revision set一致，不能只校验trace mapping/count后接受跨source-set lineage。
 
 ### 7.6 Per-invocation attempt receipt
 
@@ -539,6 +612,10 @@ attempt_receipt_hash
 exact rerun的稳定result hash不变，但新的attempt receipt按真实时间、DML事实和恢复路径形成独立hash。
 失败attempt不得产出伪造result；若DB已COMPLETE而外部result写入失败，下次调用必须先由DB完整readback
 重建同一稳定result，再写新的attempt receipt。
+成功attempt的`capture_result_ref`必须使用已注册Phase 1G result store policy。`error_context`只允许
+去敏诊断字段；password/secret/token/DSN/database URL/connection string/model path/candidate payload
+字段或PostgreSQL credential URI直接使contract失败，不能静默删除后继续持久化，也不能在错误消息中
+回显原值。
 
 ### 7.7 Batch attempt receipt
 
@@ -546,13 +623,20 @@ batch attempt receipt只汇总本次调用有序target attempt refs，并独立�
 
 ```text
 target_count/succeeded_count/failed_count
-target_attempt_receipt_hashes[]
-successful_capture_result_hashes[]
+target_attempt_refs[] sorted by target_request_hash
+  target_request_hash
+  target_plan_hash
+  attempt_receipt_hash
+  operation_status = SUCCESS | FAILED
+  capture_result_hash optional and required exactly for SUCCESS
+target_attempt_receipt_hashes[] derived in the same target order
+successful_capture_result_hashes[] derived in the same target order
 batch_status = SUCCESS | PARTIAL_FAILURE | FAILED
 batch_attempt_receipt_hash
 ```
 
-任一 target 失败时 CLI 非零退出，但已成功 target 保持真实成功，不回滚、不隐藏。
+任一 target 失败时 CLI 非零退出，但已成功 target 保持真实成功，不回滚、不隐藏。batch不能仅按attempt
+hash字典序排序后丢失target到attempt/result的对应关系；冗余hash数组必须与typed refs的target顺序完全一致。
 
 ## 8. Control Binding And Capture Request Materialization
 
@@ -786,11 +870,12 @@ stage；不得输出密码、DSN、完整候选 payload、模型路径或无价�
 未来代码限定为：
 
 ```text
-backend/db/migrations/add_advisory_scope_aware_trace_identity_*.sql # Phase 1F.2独立发布批次
+backend/db/migrations/add_advisory_phase1f2_scope_aware_trace_identity_20260715.sql # Phase 1F.2已发布
 backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v3.json
 backend/services/advisory_phase1/release_schema_contract.py        # v3 registry loading/predecessor closure
 backend/services/advisory_phase1/release_schema_verify_postgres.py # Phase 1F.2 exact catalog verify
 backend/services/advisory_phase1/phase1g_contract.py
+backend/services/advisory_phase1/phase1g_phase1e_projection.py
 backend/services/advisory_phase1/phase1g_schema_guard.py
 backend/services/advisory_phase1/phase1g_artifact_ref.py
 backend/services/advisory_phase1/historical_trace_projection_postgres.py
@@ -805,8 +890,8 @@ backend/tests/advisory_phase1/test_phase1g_*.py
 docs/architecture/advisory_phase1g_source_observation_capture_dml_f2_design_20260714.md
 ```
 
-实施必须拆成独立的G0 Phase 1F.2 schema发布批次和后续Phase 1G业务代码批次。G0冻结migration、registry、
-verifier与scope-aware repository identity并完成DEV发布证据；Phase 1G plan/capture本身不新增或执行migration。
+实施已拆成独立的G0 Phase 1F.2 schema发布批次和后续Phase 1G业务代码批次。G0已冻结migration、registry、
+verifier与scope-aware repository identity并完成DEV/production发布证据；Phase 1G plan/capture本身不新增或执行migration。
 不得把migration藏进Phase 1G startup/worker，或用随机policy、合并Program、错绑scope、JSON-only writer、
 修改hash语义等方式绕过schema parity。
 
@@ -828,8 +913,9 @@ backend.services.advisory_phase1.release_schema_apply_postgres
 
 CLI必须用`--target-db`和`--env-file`复用Phase 1F已验证的DEV/production exact key resolver，构造
 `DatabaseConnectionConfig`并显式注入所有Phase 1G repositories；缺key、target不匹配或database identity
-不一致直接失败，不猜测、不回退共享pool。static transitive import与query spy必须验证上述边界，不能只
-扫描直接import。
+不一致直接失败，不猜测、不回退共享pool。G1读取Phase 1E plan只能经过
+`phase1g_phase1e_projection.py`，不得传递import `readiness_plan`/capacity probe/compiler。static
+transitive import与隔离进程runtime import测试必须验证上述边界，不能只扫描直接import。
 
 ## 16. CLI Contract
 
@@ -937,16 +1023,16 @@ revision、capture receipt和exact rerun。缺任一输入时状态保持
 
 ```text
 phase1f1_production_ddl = applied_and_verified_2026_07_15
-phase1f2_dev_ddl = not_executed_scope_aware_outbox_and_gap
-phase1f2_production_ddl = not_executed
+phase1f2_dev_ddl = applied_and_verified_2026_07_15
+phase1f2_production_ddl = applied_and_verified_2026_07_15
+phase1f2_final_catalog_fingerprint = 95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a
 phase1g_production_dml = not_executed
 runtime_activation = none
 role_or_approval_gate = none
 ```
 
-以上是执行状态，不是程序门禁或审批。`phase1f1_production_ddl`已于2026-07-15完成并验证；Phase 1F.2
-尚未实现或应用，必须作为独立G0技术前置。Phase 1G仍然不得自动执行DDL。Phase 1F.2 schema就绪后，
-完整业务输入无需角色或人工审批即可通过程序逻辑。
+以上是执行状态，不是程序门禁或审批。Phase 1F.1与Phase 1F.2 DEV/production DDL均已于2026-07-15
+完成并验证。Phase 1G仍然不得自动执行DDL；完整业务输入无需角色或人工审批即可通过程序逻辑。
 
 ## 18. Positive Reachability / 正向可达性
 
@@ -1010,13 +1096,13 @@ Phase 1F.2 COMPATIBLE schema
 ### G0：Phase 1F.2 Scope-aware Trace Identity Release
 
 - 独立Phase 1F.2 F2详细设计已形成并通过Design Acceptance/F2结构校验；
-- frozen migration把outbox唯一键扩展为包含`admission_scope_hash`，并为gap增加legacy/v2 scope布局；
-- 同步registry/verifier、legacy/v2 identity、natural key、gap persistence和exact read SQL；
-- disposable PostgreSQL legacy gap兼容、同scope retry、双scope同Selection outbox/gap矩阵；
-- DEV plan/apply/new-verify/new-exact-reapply。Production DDL只在用户另行明确要求后执行。
+- PR #2144及BUG修复PR #2146/#2150已完成frozen migration、v3 registry/verifier、legacy/v2 identity、
+  natural key、gap persistence和exact read SQL；
+- disposable PostgreSQL legacy gap兼容、同scope retry、双scope同Selection outbox/gap矩阵已通过；
+- DEV与production plan/apply/new-verify/new-exact-reapply均已完成，最终catalog fingerprint为
+  `95600e18fbe4a4026f24a374e66289b7e530c874a95a203db2b738855a6a580a`。
 
-G0是开发/数据库identity技术前置，不是运行审批；未完成独立F2设计及Phase 1F.2 DEV ready receipt前
-不进入G1-G4编码。
+G0是已经完成的开发/数据库identity技术前置，不是运行审批；G1-G4编码前置已解除。
 
 ### G1：Contracts, Schema Guard And Stores
 
@@ -1024,6 +1110,21 @@ G0是开发/数据库identity技术前置，不是运行审批；未完成独立
 - Phase 1F.2 receipt/catalog guard和exact target connection resolver；
 - immutable input ref resolver与external CAS no-replace result store；
 - L0/L1。
+
+G1已在`feature/advisory-phase1g-g1-foundation-20260715`实现并完成本批L0/L1、覆盖率与相邻回归；该状态不
+代表G2-G5或整个Phase 1G完成。Phase 1G采用分批合入：当前G批次的acceptance matrix无缺口即可独立
+请求代码合入，整项功能完成和production/runtime readiness仍必须等待G0-G4及G5真实DEV证据。
+
+| G1 design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
+|---|---|---|---|---|
+| G1-001 typed contracts/policy/hash | `phase1g_contract.py` | `test_phase1g_contract.py` | implemented_verified_in_branch | none |
+| G1-002 Phase 1E-derived target request | `phase1g_phase1e_projection.py`、`build_phase1g_target_execution_request()` | exact program/date/package/manifest/scope/policy/operation hash closure tests | implemented_verified_in_branch | none |
+| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale/unexpected-error mapping tests | implemented_verified_in_branch | none |
+| G1-004 immutable input refs | `phase1g_artifact_ref.py` | containment/latest/hash/policy/reparse tests | implemented_verified_in_branch | none |
+| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper/non-silent temp-cleanup tests | implemented_verified_in_branch | none |
+| G1-006 module isolation | five G1 `phase1g_*.py` modules | static transitive + isolated runtime import denylist tests | implemented_verified_in_branch | none |
+| G1-007 result/attempt/batch closure | `phase1g_contract.py` | source-set lineage、redacted context、result policy、target-attempt order tests | implemented_verified_in_branch | none |
+| G1-008 local quality | G1 test suite | 41 passed, 1 environment skip; statements 88.30%, branches 70.88% | implemented_verified_in_branch | none |
 
 ### G2：Source Replay And Historical Trace Projection
 
@@ -1153,24 +1254,25 @@ G0是开发/数据库identity技术前置，不是运行审批；未完成独立
 设计可标记 `design_ready` 的条件：
 
 1. F-701至F-735全部 `design_ready`，无未批准exception/TODO。
-2. Phase 1F v1 DEV、Phase 1F.1 DEV/production applied-and-verified、Phase 1F.2 not-yet-applied和
+2. Phase 1F v1 DEV、Phase 1F.1与Phase 1F.2 DEV/production applied-and-verified，以及
    Phase 1E pending real input状态同步。
 3. outbox recovery、DSE projection、source replay和positive reachability前后一致。
 4. F2 validator、文档引用和`git diff --check`通过。
 5. 无额外角色、审批、授权、备份、shared runtime或DDL设计。
 
-Phase 1G业务代码开始条件尚未满足：Phase 1F.1 schema代码和DEV/production发布虽已完成，但§5.4发现
-scope-aware trace identity仍缺失。下一项任务必须先完成G0 Phase 1F.2详细契约实现、disposable
-PostgreSQL矩阵和DEV plan/apply/new-verify/new-exact-reapply；编码前先形成独立F2详细设计。该技术前置满足后可直接进入G1-G4，不需要
-角色、审批或人工业务门禁。真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable
-DSE/receipt。
+Phase 1G业务代码开始条件已经满足：G0 Phase 1F.2独立设计、代码、disposable PostgreSQL矩阵以及
+DEV/production plan/apply/new-verify/new-exact-reapply均已完成。可直接进入G1-G4，不需要角色、审批或
+人工业务门禁。真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable DSE/receipt。
 
-Phase 1G代码可请求合入的条件：
+Phase 1G分批代码可请求合入的条件：
 
-1. G0-G4完整实现，L0-L2与transactional DEV zero-residue验证通过。
-2. DESIGN-COMPLIANCE-001逐项具有实现/测试证据。
-3. 没有用fixture/in-memory-only结果冒充persistent real input完成。
+1. 当前G批次的设计条目完整实现，批次所需L0/L1或L2验证全部通过且acceptance matrix无缺口。
+2. 当前G批次的DESIGN-COMPLIANCE-001逐项具有实现/测试证据。
+3. 没有用fixture/in-memory-only结果冒充persistent real input完成或越级声明后续G批次完成。
 4. production state准确报告，代码合入不执行生产DDL/DML或runtime activation。
+
+Phase 1G整体代码完成条件仍为G0-G4完整实现、L0-L2与transactional DEV zero-residue验证通过；分批
+合入只是隔离已完成契约基础，不降低整个功能或persistent DEV验收标准。
 
 Phase 1G功能完成条件：真实single/multi Alpha persistent DEV L4均成功、exact rerun一致，并产生可供
 Phase 1H消费的immutable receipts。若真实输入仍缺失，只能报告
