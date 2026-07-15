@@ -189,6 +189,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "workflow_gate": "ready_for_pr"
+  }
 }
