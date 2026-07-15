@@ -1,8 +1,8 @@
 # QE 长期上涨趋势评价层 F2 设计
 
-- 版本：v1.1
-- 日期：2026-07-14
-- 状态：`DESIGN_READY`
+- 版本：v1.2
+- 日期：2026-07-15
+- 状态：`DESIGN_READY_AMENDED`
 - 任务分级：`T3 / F2`
 - 模块：`QuantEvolver / QE-only Evaluation Store / QE Archive Read Model / QE UI`
 - 风险等级：高（跨计算节点、制品、数仓、API、MCP 与 UI）
@@ -44,10 +44,19 @@ label_h = close[T+h+1] / close[T+1] - 1
 6. 将小型汇总指标固化到 QE 专属 evaluation 表，将逐信号和逐 episode 明细固化为 QE 专属 CAS Parquet，不把百万级明细写入 PostgreSQL；
 7. 在 QE Loop 详情、QE Archive 比较页和只读 QE MCP 中展示相同结果、成熟度和失败原因；
 8. 保证后台重启不终止已提交到计算节点的评价任务，不重复启动，不重复归档。
+9. 在不把评价器变成执行模拟器的前提下，将理论 `T+1 close_qfq` 机会与实际 signal→fill/exit 证据桥接，量化涨跌停、停牌和延迟成交造成的长期趋势捕获损失。
 
 ### 2.2 交付边界
 
 实施完成时必须同时覆盖计算引擎、异步状态、制品、数仓、API、MCP、UI、历史结果评价和回归测试。只提供离线脚本、只写 JSON、不入数仓、只做后端不做 UI、只做新实验不支持已完成 Loop，均不构成本设计的完整实现。
+
+为提高吞吐，实施允许三个工作流并行：`计算/统计/可成交性`、`CAS/状态/三表/幂等恢复`、`API/MCP/UI/历史补算`。内部状态严格为：
+
+- `CORE_COMPUTE_VERIFIED`：纯计算公式和 fixture 通过，只能用于开发诊断；
+- `PRELIMINARY_CAPTURE_AVAILABLE`：不可变 profile、数据身份、QE-only CAS 和可复算 receipt 通过，只能用于观察；
+- `F014_RESEARCH_DECISION_READY`：三工作流、真实 E2E、重启恢复、历史补算和非 QE 零影响全部验收后才可发布。
+
+前两个状态不构成缩小后的交付版本，不能解锁期限选择、R8B2、R8M 最终裁决、R8C 或任何 promotion。完整交付边界不因内部里程碑而改变。
 
 ## 3. Non-Goals / 非目标
 
@@ -56,7 +65,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 3. 不重新计算因子独立指标、官方因子缓存或因子相关性。
 4. 不做行业中性化；板块轮动收益保持为目标信号的一部分。
 5. 不读取或修改 Selection、Paper v2、模拟盘、荐股运行时的 PIT 数据；只消费 QE 数据集契约。
-6. 不把日线 high/low 触达描述为可成交结果；分钟级 executable MFE/MAE 属于 Advisory/执行专项能力。
+6. 不把日线 high/low 触达描述为订单成交或不成交；F-014 只基于已归档 QE order/trade/position 证据做结果分层，不模拟队列、撤单或 child-order。分钟级 executable MFE/MAE 仍属于 Advisory/执行专项能力。
 7. 不接入概念板块；当前只使用申万 L2 PIT `l2_code_id`，未来概念数据沿独立 PIT 数据设计接入。
 8. 不使用当前数据覆盖旧实验的原始特征快照；结果观察快照只允许是原快照本身或经过重叠区间一致性验证的严格扩展版本。
 9. 不把旧 Type A 超跌反弹包作为 Type B 演进母体；旧包只可作为组合相关性或风险基线。
@@ -106,6 +115,8 @@ label_h = close[T+h+1] / close[T+1] - 1
 | F-019 | 默认对既有任务关闭；仅 QE task/Loop 的显式 profile 生效，无 startup side effect，不改变既有模型输出和回测结果。 |
 | F-020 | 实施必须通过 DESIGN-COMPLIANCE-001 四项复核、真实制品 E2E、DEV DB E2E、UI E2E、重启恢复和 extension snapshot oracle。 |
 | F-021 | 代码所有权和运行依赖执行 QE-only allowlist；静态 import/route/schema 回归证明 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 和通用 Prediction Store 零变化。 |
+| F-022 | 理论机会与实际可成交结果分层：trade/order artifact 经 reconciliation 后为最高权威；日线触板不直接推断成交；入场与退出阻断对称，证据不足显式 `NOT_VERIFIABLE`。 |
+| F-023 | 内部里程碑与正式决策状态分离；只有完整链路可写 `F014_RESEARCH_DECISION_READY`，计算核、receipt 或后端-only 均不得提前解锁研究决策。 |
 
 ## 6. Architecture / 架构
 
@@ -114,11 +125,13 @@ label_h = close[T+h+1] / close[T+1] - 1
 ```text
 QE Loop train/predict/backtest completed
   -> immutable pred.pkl / label.pkl / params.pkl
+  -> resolve and hash QE position / trade / optional order artifacts
   -> resolve feature dataset identity from Loop execution manifest
   -> resolve outcome dataset: same snapshot or verified extension snapshot
   -> LongTrendEvaluationEngine on CPU compute node
        -> signal observation wide Parquet
        -> holding episode Parquet
+       -> theoretical opportunity vs execution-evidence bridge
        -> compact receipt JSON
   -> QELongTrendArtifactStore QE-only CAS atomic publish
   -> qlib_results_enhanced.json.long_trend_diagnostics
@@ -201,6 +214,9 @@ QE task/Loop or QE long_trend_only API
   "terminal_rule": "T_plus_h_plus_1_close_qfq",
   "barrier_primary_projection": "future_close_qfq",
   "path_projection": "future_high_low_qfq_diagnostic",
+  "execution_bridge": "qe_archived_order_trade_position_reconciled_v1",
+  "execution_authority_order": ["reconciled_order_and_trade", "reconciled_trade", "position_transition", "daily_market_state_diagnostic"],
+  "unknown_execution_policy": "explicit_not_verifiable",
   "sector_projection": "signal_date_sw_l2_l2_code_id",
   "require_sector_breakdown": true,
   "min_entry_coverage": 0.98,
@@ -248,6 +264,18 @@ return_h = close_qfq[terminal_date(h)] / entry_price - 1
 ```
 
 `return_h` 必须与 Qlib `label_h` 逐点相等，允许的浮点误差为 `1e-6`。若已有同 horizon `label.pkl`，抽样和全量 hash parity 必须同时通过；不通过时整次评价失败。
+
+上述 entry 是“若能在 S 日收盘建立仓位”的理论机会锚点，不表示策略实际成交。实际桥接另外解析经校验的 QE order/trade/position artifact，并按以下稳定状态输出：
+
+| `entry_execution_status` | 判定 |
+|---|---|
+| `filled_t1` | S 日存在经 reconciliation 的首次买入成交 |
+| `delayed_fill` | S 日后才首次成交，并保存 `entry_delay_days` |
+| `never_filled` | 有权威下单意图但评价窗口内无成交 |
+| `not_attempted_by_strategy` | 权威订单/组合决策证明未尝试建仓，不归因于市场阻断 |
+| `not_verifiable` | 缺下单意图、订单队列或足够 reconciliation 证据，禁止猜测 |
+
+`entry_block_reason` 只在证据足够时取 `blocked_limit_up`、`blocked_suspension` 或其他注册原因。日线涨停/停牌状态只能辅助解释，不能单独把无成交归因成阻断；派生的 stock-level trade 汇总可用于收益归因，但不能伪装为精确 child-order ledger。对每个理论 winner 计算 `missed_mfe_due_to_entry_block` 和 `missed_barrier_winner_due_to_entry_block`，并将 `not_attempted_by_strategy` 与市场阻断分开统计。
 
 因为 entry 使用 `S` 日收盘价，MFE/MAE 和 barrier 的未来路径从 `S+1` 开始，不能使用 `S` 日已经发生的 high/low：
 
@@ -316,7 +344,9 @@ extended_capture_ratio = episode_close_return_qfq / max(extended_mfe_180, epsilo
 post_exit_mfe        = max qfq high after exit through entry+180 / exit_close_qfq - 1
 ```
 
-该 return 只评价退出时点对 qfq 收盘路径的捕获，不冒充真实成交收益。原始 ratio 不裁剪；UI 可另给可视化范围，但数仓保存原值和异常标记。只有 trade artifact 明确提供并通过价格基准、数量和费用 reconciliation 时，才另存 `execution_gross_return/execution_net_return`；缺费用时不得以 close return 或 gross 冒充 net。组合成本后收益继续以 Qlib portfolio report 为权威。
+episode 同时保存 `exit_execution_status`、`exit_delay_days` 和 `exit_block_reason`。`exit_execution_status` 至少区分 `filled_on_exit_signal_day`、`delayed_exit`、`never_exited` 与 `not_verifiable`；`exit_block_reason` 只在证据足够时取 `blocked_limit_down`、`blocked_suspension` 或其他注册原因。评价量化趋势反转或退出信号后无法减仓/清仓造成的额外 MAE、回撤和持仓天数。买入涨停与卖出跌停/停牌使用同一证据等级，不能只审计买入侧。
+
+该 return 只评价退出时点对 qfq 收盘路径的捕获，不冒充真实成交收益。原始 ratio 不裁剪；UI 可另给可视化范围，但数仓保存原值和异常标记。只有 trade artifact 明确提供并通过价格基准、数量和费用 reconciliation 时，才另存 `execution_gross_return/execution_net_return`；缺费用时不得以 close return 或 gross 冒充 net。组合成本后收益继续以 Qlib portfolio report 为权威。reconciled trade/order artifact 对实际成交日期、价格、数量和费用具有最高权威；position transition 可作缺省持仓边界证据，日线市场状态只作 diagnostic。
 
 历史结果的 episode source resolver 固定为：原始 Recorder position/trade artifact → 经完整性校验的 QE Archive position/trade 行 → QE-only CAS 中由 QE run 产生的 position/trade artifact。三者都不可用时以 `QELT_POSITION_ARTIFACT_MISSING` 失败，不从 Top-K 列表猜持仓，也不向通用 Prediction Store 增加 artifact。R6 preflight 必须在真正执行评价前证明至少一个权威来源仍可读取。
 
@@ -348,6 +378,9 @@ post_exit_mfe        = max qfq high after exit through entry+180 / exit_close_qf
 ```text
 signal_date, instrument, score, stable_rank, l2_code_id,
 entry_date, entry_close_qfq,
+entry_execution_status, entry_execution_evidence_level,
+actual_entry_date, actual_entry_price, entry_delay_days, entry_block_reason,
+missed_mfe_due_to_entry_block, missed_barrier_winner_due_to_entry_block,
 return_20/40/60/120/180,
 close_mfe_20/.../180, close_mae_20/.../180,
 path_mfe_20/.../180, path_mae_20/.../180,
@@ -365,6 +398,9 @@ row_quality_flags
 ```text
 instrument, episode_seq, entry_date, exit_date, open_censored,
 entry_close_qfq, exit_close_qfq,
+entry_execution_status, entry_delay_days, entry_block_reason,
+exit_signal_date, actual_exit_date, exit_execution_status, exit_delay_days, exit_block_reason,
+post_exit_signal_mae, blocked_exit_extra_drawdown, blocked_exit_extra_holding_days,
 episode_close_return_qfq,
 execution_gross_return, execution_net_return,
 episode_mfe, episode_mae, episode_capture_ratio,
@@ -378,9 +414,10 @@ cost_quality, episode_quality_flags
 `long_trend_evaluation_receipt.json` 包含：
 
 - evaluation identity、profile/version、evaluator source SHA；
-- prediction/label/position/trade artifact SHA；
+- prediction/label/position/trade/order artifact SHA（order 不存在时以显式 null 进入 manifest）；
 - feature/outcome dataset identity 和 overlap parity receipt；
 - 汇总指标、成熟度、coverage、resource statistics、reason code；
+- execution evidence coverage、`not_verifiable` 比例、入场/退出阻断分层及其 MFE/barrier/回撤损失；
 - 两个 Parquet 的 URI、SHA-256、行数、列 schema hash；
 - `no_training/no_backtest/no_live_data_access` 三项真值。
 
@@ -394,11 +431,12 @@ QE-only allowlist：
 
 - `portfolio_positions` → 原 Recorder 中的 `positions_normal_1day.pkl`，作为 full profile 的必需输入制品；
 - `portfolio_indicators`/`portfolio_trades` → 原 Recorder 中的对应 Qlib artifact，存在时用于费用和交易 reconciliation；
+- `portfolio_orders` → QE run 已真实归档的订单/意图 artifact（可选）；不存在时不得伪造，相关非成交原因进入 `not_verifiable`；
 - `long_trend_signal_observations` → Parquet；
 - `long_trend_holding_episodes` → Parquet；
 - `long_trend_evaluation_receipt` → JSON。
 
-`pred.pkl/label.pkl` 仍按既有只读 pointer/download 契约读取，不修改其 manifest。新 full-backtest Loop 只在 QE workspace 内把 position/trade/indicator 复制到 QE-only namespace；上传成功前不能宣称该 run 具备可长期补算能力。历史 run 不伪造回填：只有原 Recorder、完整 QE Archive rows 或已有 QE-only CAS 输入中至少一个来源通过 hash/行数/date coverage 校验才可评价。不得把多 evaluation version 写成同一 prediction run 的同名 artifact，也不得把未知 artifact 默认命名为 `params.pkl`。
+`pred.pkl/label.pkl` 仍按既有只读 pointer/download 契约读取，不修改其 manifest。新 full-backtest Loop 只在 QE workspace 内把 position/trade/indicator 和真实存在的 order artifact 复制到 QE-only namespace；上传成功前不能宣称该 run 具备可长期补算能力。历史 run 不伪造回填：只有原 Recorder、完整 QE Archive rows 或已有 QE-only CAS 输入中至少一个来源通过 hash/行数/date coverage 校验才可评价。缺 order artifact 必须以显式 null 固化并降低 execution evidence，不得生成替代订单；不得把多 evaluation version 写成同一 prediction run 的同名 artifact，也不得把未知 artifact 默认命名为 `params.pkl`。
 
 ### 8.5 DB schema
 
@@ -419,11 +457,11 @@ QE-only allowlist：
 | `feature_dataset_manifest_sha256` | TEXT | 非空 |
 | `outcome_dataset_snapshot_id` | TEXT | 非空 |
 | `outcome_dataset_manifest_sha256` | TEXT | 非空 |
-| `input_manifest_sha256` | TEXT | pred/label/position/trade 输入组合 hash |
+| `input_manifest_sha256` | TEXT | pred/label/position/trade/order 输入组合 hash，缺 order 以显式 null 固化 |
 | `artifact_store_run_key` | TEXT | 成功后非空 |
 | `artifact_manifest_sha256` | TEXT | 成功后非空 |
 | `status` | TEXT | queued/running/succeeded/failed/cancelled |
-| `evidence_status` | TEXT | ready/insufficient_maturity/not_available |
+| `evidence_status` | TEXT | ready/insufficient_maturity/insufficient_execution_evidence/not_available |
 | `reason_code` | TEXT | 失败或不可用时非空 |
 | `reason_json` | JSONB | 结构化失败上下文，不存秘密 |
 | `stats_json` | JSONB | 行数、覆盖、资源、成熟度 |
@@ -444,7 +482,7 @@ QE-only allowlist：
 |---|---|---|
 | `evaluation_metric_id` | BIGSERIAL | PK |
 | `evaluation_id` | TEXT | FK `run_evaluation(evaluation_id)`，ON DELETE CASCADE |
-| `metric_key/metric_scope` | TEXT | 指标名；scope 为 signal/episode/sector/maturity |
+| `metric_key/metric_scope` | TEXT | 指标名；scope 为 signal/episode/execution/sector/maturity |
 | `period_start/period_end` | DATE | slice 边界，可空 |
 | `horizon` | INTEGER | 20/40/60/120/180，可空 |
 | `sector_code` | TEXT | 申万 L2，可空 |
@@ -542,14 +580,14 @@ POST body 只允许：
 
 不提供 `force` 覆盖。相同 identity 返回已有任务；profile、outcome snapshot 或 evaluator version 改变会自然生成新 identity。
 
-创建 API 先验证 task/Loop、`qe_archive.run`、QE dataset contract 与 QE workspace identity；任何非 QuantEvolver/QE 来源返回 `QELT_NON_QE_SOURCE_REJECTED`。查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code` 过滤和有界 limit；默认 compact，不返回 Parquet 明细。通用 `/prediction-store` API、Paper/Selection/Advisory API 和 route registration 不变。
+创建 API 先验证 task/Loop、`qe_archive.run`、QE dataset contract 与 QE workspace identity；任何非 QuantEvolver/QE 来源返回 `QELT_NON_QE_SOURCE_REJECTED`。查询必须支持 `run_id/task_id/loop_index/model_type/label_horizon/evaluation_asof/horizon/sector_code/entry_execution_status/exit_execution_status` 过滤和有界 limit；默认 compact，不返回 Parquet 明细。通用 `/prediction-store` API、Paper/Selection/Advisory API 和 route registration 不变。
 
 ### 10.2 QE Archive MCP
 
 增加只读 `qe_archive_query_long_trend_quality`：
 
 - 默认 summary，最大 100 行；
-- 显式参数才能返回 per-horizon/per-sector；
+- 显式参数才能返回 per-horizon/per-sector/per-execution-status；
 - 只返回 artifact URI/hash，不内联明细 Parquet；
 - 不提供创建评价、运行实验、DB DML、promotion 或交易工具。
 
@@ -561,9 +599,11 @@ Loop 详情增加“长期趋势”页签：
 2. 20–180D return/RankIC/MFE/MAE 表；
 3. 30%/50%/70% precision、recall、AUCPR、time-to-hit；
 4. episode capture、extended capture、false early-exit；
-5. 板块 HHI、top1 sector share 和 L2 表；
-6. reason code、coverage 和删失说明；
-7. 已完成 Loop 的单一“生成/更新长期趋势评价”入口；同 identity 幂等，不设置含义重叠的强制按钮。
+5. `filled_t1/delayed_fill/never_filled/not_attempted_by_strategy/not_verifiable` 入场分层、阻断损失和 `entry_delay_days`；
+6. 退出延迟、跌停/停牌阻断、额外回撤和 `not_verifiable` 分层；
+7. 板块 HHI、top1 sector share 和 L2 表；
+8. reason code、maturity/execution coverage 和删失说明；
+9. 已完成 Loop 的单一“生成/更新长期趋势评价”入口；同 identity 幂等，不设置含义重叠的强制按钮。
 
 任务创建页只提供 profile 开关和 profile 说明，不允许编辑冻结参数。页面刷新从 DB 状态恢复进度，不依赖浏览器内存。
 
@@ -590,8 +630,10 @@ Loop 详情增加“长期趋势”页签：
 | `QELT_ENTRY_COVERAGE_REJECTED` | entry coverage 低于阈值 | failed |
 | `QELT_PATH_COVERAGE_REJECTED` | path coverage 低于阈值 | failed |
 | `QELT_INSUFFICIENT_MATURITY` | 合法但成熟日期不足 | succeeded + evidence_status insufficient_maturity |
+| `QELT_EXECUTION_EVIDENCE_INSUFFICIENT` | 订单/交易/持仓证据不足以对非成交或延迟原因作权威归因 | succeeded + evidence_status insufficient_execution_evidence；决策门 false |
 | `QELT_POSITION_ARTIFACT_MISSING` | 要求 episode 但 position 缺失 | failed；不交付信号层子集冒充完成 |
 | `QELT_EPISODE_RECONCILIATION_FAILED` | position/trade 对不上 | failed |
+| `QELT_EXECUTION_BRIDGE_RECONCILIATION_FAILED` | order/trade/position 的日期、数量或价格冲突 | failed；不得回退到日线猜测 |
 | `QELT_ARTIFACT_UPLOAD_FAILED` | CAS 发布失败 | failed，不写 succeeded DB |
 | `QELT_ARCHIVE_PERSIST_FAILED` | DB 事务失败 | worker receipt 保留，重试入仓 |
 | `QELT_DUPLICATE_IDENTITY_CONFLICT` | 同 identity 不同内容 | failed 并告警 |
@@ -606,15 +648,15 @@ Loop 详情增加“长期趋势”页签：
 1. 新增 profile/DTO/reason-code/identity 模块；
 2. 新增严格 price/sector reader，只读 QE snapshot；
 3. 实现 signal wide observation、maturity/censor、统计推断；
-4. 实现 episode reconstruction 和 capture；
-5. 建立 formula、calendar、suspension、delist/data-gap、sector PIT 的 unit oracle。
+4. 实现 episode reconstruction、signal→fill/exit evidence bridge 和 capture；
+5. 建立 formula、calendar、suspension、limit state、delist/data-gap、sector PIT、order/trade/position reconciliation 的 unit oracle。
 
 ### Phase 2：计算节点、资源阶段和制品
 
 1. ConfigComposer 固化 profile、feature snapshot 和 evaluator source SHA；
 2. worker wrapper 接入 normal Loop 与 `long_trend_only`；
 3. 资源状态机加入 `long_trend_eval`，实现 CPU postprocess 单槽、outbox 和恢复；
-4. 新增 QE-only `QELongTrendArtifactStore`、独立 root/manifest/allowlist；通用 Prediction Store 保持只读回归目标；
+4. 新增 QE-only `QELongTrendArtifactStore`、独立 root/manifest/allowlist，并原样保存可得的 QE order/trade/position 输入指纹；通用 Prediction Store 保持只读回归目标；
 5. `read_exp_res.py` 只校验和挂载 compact receipt。
 
 ### Phase 3：数仓、API 与 MCP
@@ -628,8 +670,8 @@ Loop 详情增加“长期趋势”页签：
 ### Phase 4：UI 与历史 R6 路径
 
 1. Loop 创建页增加不可变 profile 开关；
-2. Loop 详情增加进度、成熟度和长期指标；
-3. Archive 页增加同 vintage 对比；
+2. Loop 详情增加进度、成熟度、长期指标与入场/退出可成交性分层；
+3. Archive 页增加同 vintage、同 execution evidence quality 对比；
 4. 对已归档 R6 执行 dry-run preflight：只验证 pred/position/dataset identity 可得性；
 5. 只有 preflight 全部通过后，才允许用户从 UI 创建 `long_trend_only` 评价任务。
 
@@ -642,6 +684,18 @@ Loop 详情增加“长期趋势”页签：
 5. 执行 ownership/import/route/schema 静态隔离门禁，证明非 QE 模块和通用 Prediction Store 无改动；
 6. DESIGN-COMPLIANCE-001、F2 validator 和生产门禁 receipt 全部完成后才可请求代码合入。
 
+### 12.1 并行工作流与完成语义
+
+Phase 1–5 是依赖顺序，不要求所有开发串行。实际实施拆为：
+
+| 工作流 | 覆盖 | 可独立到达的内部里程碑 |
+|---|---|---|
+| A：计算/统计/可成交性 | Phase 1、signal/episode schema、order/trade/position reconciliation、formula oracle | `CORE_COMPUTE_VERIFIED` |
+| B：CAS/状态/三表 | Phase 2–3 的 artifact、identity、fencing、migration、repository、恢复 | 与 A 联调后形成可复算 receipt |
+| C：API/MCP/UI/历史补算 | Phase 3–5 的查询、展示、`long_trend_only`、真实 E2E | 与 A/B 联调后形成完整用户链 |
+
+A+B 达到不可变 CAS receipt 后可标记 `PRELIMINARY_CAPTURE_AVAILABLE`，但不能在 DB/UI 中显示为正式研究通过。只有 A+B+C 全部完成 Phase 5、F-001–F-023 和生产前技术门禁后，权威状态机才允许写 `F014_RESEARCH_DECISION_READY`。该状态由服务端按验收 receipt 计算，前端或调用方不能手工覆盖。
+
 ## 13. Verification Plan / 验证方案
 
 ### 13.1 L0/L1
@@ -651,6 +705,9 @@ Loop 详情增加“长期趋势”页签：
 - entry 日 high/low 不得进入未来路径；
 - 20/40/60/120/180 maturity 与右删失；
 - suspension/missing/delist reason；
+- `filled_t1/delayed_fill/never_filled/not_attempted_by_strategy/not_verifiable` 入场状态与 delay；
+- 涨停买入、跌停/停牌退出阻断的对称 fixture；仅日线触板时必须保持 `not_verifiable`；
+- order/trade/position reconciliation 冲突 fail-fast，不回退到价格猜测；
 - barrier nesting、time-to-hit、AUCPR、禁止普通 score Brier；
 - stable tie rank；
 - episode open/close/add/reduce/re-entry；
@@ -668,7 +725,7 @@ Loop 详情增加“长期趋势”页签：
 - migration apply/readback/rollback（DEV DB）；
 - repository 三张 evaluation 表事务；
 - 通用 Prediction Store manifest/API、Archive PayloadExtractor、run_metric/run_artifact schema 快照零变化；
-- API/MCP bounded response、QE source preflight 和错误映射；
+- API/MCP bounded response、execution-status filter、QE source preflight 和错误映射；
 - `git diff --name-only` ownership allowlist，以及 Selection/Advisory/Paper/模拟盘/QMT/StrategyPackage route/schema regression。
 
 ### 13.3 L3
@@ -686,7 +743,7 @@ completed Recorder
  -> API/MCP/UI readback
 ```
 
-逐点核对 Parquet 行数、SHA、DB metric 数、UI 数值与 receipt 一致。Mock 不能替代该链。
+逐点核对 Parquet 行数、SHA、DB metric 数、UI 数值、execution evidence coverage 与 receipt 一致。Mock 不能替代该链；真实 canary 必须至少覆盖一个正常 T+1 成交、一个延迟/阻断或 `not_verifiable` 样本，并证明组合成本后收益仍来自 portfolio report。
 
 ### 13.4 L4/L5
 
@@ -708,12 +765,15 @@ completed Recorder
 | outcome snapshot 修改历史价格 | 结果不可复现 | overlap qfq OHLC parity + extension-only |
 | 重复信号造成伪样本量 | 置信度虚高 | 先按信号日聚合、block bootstrap/HAC |
 | high/low 当成可成交 | 夸大收益能力 | path diagnostic 与 executable 字段隔离 |
+| 无成交被一律归因涨停 | 把策略未下单或缺证据误判为市场阻断 | order/trade/position 权威等级；无意图/队列证据显式 `not_verifiable` |
+| 只检查买入侧 | 低估趋势反转后的退出风险 | 对称记录跌停、停牌、延迟退出及额外回撤/持有天数 |
 | 百万明细写 DB | 表膨胀、查询变慢 | CAS wide Parquet，DB 只存标量/指针 |
 | H5 并行全量读取 | 内存和磁盘抖动 | CPU postprocess 单槽、只读两文件、chunk 释放 |
 | 历史 run 缺 snapshot identity | 错用当前数据 | loud fail；只接受 execution/config evidence |
 | sector 当前成分污染历史 | 板块归因泄漏 | 信号日 PIT l2_code_id |
 | 普通 score 计算 Brier | 伪校准 | 只有 probability semantics 才计算 |
 | evaluator 失败被 UI 隐藏 | 假成功 | 独立状态/reason、Loop/Archive/MCP 同步展示 |
+| 内部计算核被当成完整 F-014 | 提前选期限或晋级模型 | 三级里程碑；只有服务端计算的 `F014_RESEARCH_DECISION_READY` 解锁决策 |
 | 自动评价阻塞下一训练 | 降低实验吞吐 | GPU release 后 CPU 后处理，独立资源槽 |
 | 多评价版本混排 | 错误横向比较 | UI 默认同 outcome vintage/snapshot |
 | 复用共享 store/table 产生跨模块耦合 | Paper/Selection/Advisory 被 schema 或 writer 变更波及 | QE-only CAS、三张 additive 表、ownership/import/route/schema 零变化门禁 |
@@ -730,6 +790,8 @@ completed Recorder
 6. 重启后只对单个已完成 canary Loop 执行 `long_trend_only`；
 7. canary 全链通过后再启用 Type B 新任务自动评价；
 8. R6 批量评价属于独立运行授权，不随代码发布自动执行。
+
+步骤 1 可形成 `CORE_COMPUTE_VERIFIED`，步骤 1–3 与原子 CAS receipt 联调后最多形成 `PRELIMINARY_CAPTURE_AVAILABLE`；两者都不解锁研究裁决。只有步骤 1–7 的完整链和真实 canary 通过，才允许 `F014_RESEARCH_DECISION_READY`。
 
 ### 15.2 回滚
 
@@ -751,6 +813,7 @@ completed Recorder
 | experiment/evaluation execution | 未执行 | canary 和 R6 批量评价分开授权 |
 | production data write | 未执行 | 仅经 versioned migration 和评价 writer；不导出数据库 |
 | `non_qe_impact_gate` | `design_verified_zero_scope` | ownership/import/route/schema 回归全部通过后才能请求合入；非 QE 变更必须为零 |
+| `research_decision_gate` | `blocked_design_only` | 只有 `F014_RESEARCH_DECISION_READY` 可解锁期限选择、R8B2、R8M 最终裁决或 R8C；内部里程碑保持 blocked |
 
 本设计不引入人工 approval/RBAC/双人复核。schema、hash、数据身份、成熟度和制品完整性属于自动技术门禁；合法输入恢复后可自动重新执行。
 
@@ -781,6 +844,8 @@ completed Recorder
 | F-019 | default-off compatibility | old task/config/backtest regression | design_ready | none |
 | F-020 | full delivery controls | F2 validator、DEV DB E2E、design compliance matrix | design_ready | none |
 | F-021 | QE-only ownership/import/runtime isolation | non-QE diff allowlist + route/schema/static-import regression | design_ready | none |
+| F-022 | signal→fill/exit evidence bridge | entry/exit status、delay、block-loss、authority/not-verifiable fixtures + real artifact reconciliation | design_ready | none |
+| F-023 | staged delivery truth | milestone state-machine tests；UI/API 不得把 core/preliminary 映射为 decision-ready | design_ready | none |
 
 ## 18. DESIGN-COMPLIANCE-001
 
@@ -790,6 +855,8 @@ completed Recorder
 - [x] `no_unrequested_gate_or_approval`：只增加自动技术真值校验，不增加人工审批或角色。
 - [x] 数据集、预测、评价、数仓和 UI 使用同一 evaluation identity。
 - [x] QE-only CAS namespace、三张 additive evaluation 表和 ownership allowlist 消除共享 writer/schema 副作用；非 QE route/schema/import 以回归测试证明零变化。
+- [x] 理论机会、实际成交和证据不足三层明确分开；买入/退出阻断对称，日线触板不冒充订单真值。
+- [x] `CORE_COMPUTE_VERIFIED` 与 `PRELIMINARY_CAPTURE_AVAILABLE` 只用于工程进度，不能冒充 `F014_RESEARCH_DECISION_READY`。
 - [x] 代码合入、生产 DDL、服务重启、canary 和 R6 批量评价保持分离。
 
 ## 19. Existing-Code Implementation Anchors / 现有代码实施锚点
