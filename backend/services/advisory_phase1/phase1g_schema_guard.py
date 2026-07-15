@@ -9,6 +9,7 @@ from typing import Callable
 from backend.services.advisory_phase1.phase1g_contract import (
     REASON_SCHEMA_NOT_READY,
     REASON_SCHEMA_RECEIPT_INVALID,
+    REASON_UNEXPECTED_ERROR,
     Phase1GContractError,
 )
 from backend.services.advisory_phase1.release_schema_contract import (
@@ -65,6 +66,12 @@ class Phase1GExactTargetConnectionResolver:
                 "exact Phase 1G target connection configuration is invalid",
                 context={"target_label": target_label.value, "cause_reason_code": exc.reason_code},
             ) from exc
+        except Exception as exc:
+            raise Phase1GSchemaGuardError(
+                REASON_UNEXPECTED_ERROR,
+                "unexpected exact Phase 1G target connection resolution failure",
+                context={"target_label": target_label.value, "error_type": type(exc).__name__},
+            ) from exc
         if config.target_label is not target_label:
             raise Phase1GSchemaGuardError(
                 REASON_SCHEMA_RECEIPT_INVALID,
@@ -110,6 +117,12 @@ class Phase1GReleaseSchemaGuard:
                 "fresh read-only Phase 1G catalog verification failed",
                 context={"target_label": target_label.value, "cause_reason_code": exc.reason_code},
             ) from exc
+        except Exception as exc:
+            raise Phase1GSchemaGuardError(
+                REASON_UNEXPECTED_ERROR,
+                "unexpected fresh Phase 1G catalog verification failure",
+                context={"target_label": target_label.value, "error_type": type(exc).__name__},
+            ) from exc
         if (
             not verification.downstream_ready
             or verification.managed_differences
@@ -133,11 +146,18 @@ class Phase1GReleaseSchemaGuard:
                 "release receipt database identity is stale or belongs to a different target",
                 context={"target_label": target_label.value},
             )
-        evidence = observed_managed_catalog_evidence(
-            projection=verification.projection,
-            contract=self._contract,
-            expected_partitions=expected_partitions,
-        )
+        try:
+            evidence = observed_managed_catalog_evidence(
+                projection=verification.projection,
+                contract=self._contract,
+                expected_partitions=expected_partitions,
+            )
+        except Exception as exc:
+            raise Phase1GSchemaGuardError(
+                REASON_UNEXPECTED_ERROR,
+                "unexpected Phase 1G catalog fingerprint projection failure",
+                context={"target_label": target_label.value, "error_type": type(exc).__name__},
+            ) from exc
         if evidence.total_sha256 != receipt.post_catalog_fingerprint:
             raise Phase1GSchemaGuardError(
                 REASON_SCHEMA_RECEIPT_INVALID,

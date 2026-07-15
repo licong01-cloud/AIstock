@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.services.advisory_phase1 import phase1g_artifact_ref as artifact_ref_module
-from backend.services.advisory_phase0a.policy import canonical_json_text, canonicalize
+from backend.services.advisory_phase0a.policy import canonical_json_sha256, canonical_json_text, canonicalize
 from backend.services.advisory_phase1.phase1g_artifact_ref import (
     Phase1GArtifactRefError,
     Phase1GArtifactRootBinding,
@@ -20,7 +20,8 @@ from backend.services.advisory_phase1.phase1g_contract import (
     PHASE1F2_RELEASE_RECEIPT_LAYOUT_POLICY,
     Phase1GInputArtifactKind,
 )
-from backend.services.advisory_phase1.readiness_plan import PlannedOperationType
+from backend.services.advisory_phase1.phase1g_phase1e_projection import Phase1EPlannedOperationType
+from backend.services.advisory_phase1.readiness_plan import Phase1EExecutionPlan, PlannedOperationType
 from backend.tests.advisory_phase1.phase1g_test_support import (
     h,
     input_ref,
@@ -84,22 +85,25 @@ def test_resolver_loads_exact_release_receipt_and_phase1e_plan(tmp_path: Path) -
     resolved_plan = resolver.resolve(plan_ref)
 
     assert resolved_receipt.payload == receipt
-    assert resolved_plan.payload == plan
+    assert resolved_plan.payload.model_dump(mode="json") == plan.model_dump(mode="json")
 
     request = build_phase1g_target_execution_request(
         target_label=receipt.database_identity.target_label,
         release_schema_receipt_ref=receipt_ref,
         phase1e_plan_ref=plan_ref,
-        phase1e_plan=plan,
+        phase1e_plan=resolved_plan.payload,
         requested_at=datetime(2026, 7, 15, 2, 0, tzinfo=UTC),
     )
-    operations = {item.operation_type: item for item in plan.planned_operations}
+    operations = {item.operation_type: item for item in resolved_plan.payload.planned_operations}
     assert request.program_id == plan.scope_key["program_id"]
     assert request.admission_scope_id == plan.evidence_binding.admission_scope_id
     assert request.admission_scope_hash == plan.evidence_binding.admission_scope_hash
-    assert request.source_operation_hash == operations[PlannedOperationType.SOURCE_RESOLUTION].complete_request_hash
     assert (
-        request.observation_template_hash == operations[PlannedOperationType.OBSERVATION_CAPTURE].request_template_hash
+        request.source_operation_hash == operations[Phase1EPlannedOperationType.SOURCE_RESOLUTION].complete_request_hash
+    )
+    assert (
+        request.observation_template_hash
+        == operations[Phase1EPlannedOperationType.OBSERVATION_CAPTURE].request_template_hash
     )
 
 
@@ -175,13 +179,73 @@ def test_phase1e_plan_requires_policy_closure_across_ref_envelope_and_plan(tmp_p
     _, raw = write_phase1e_plan_artifact(root=plan_root, plan=plan, store_policy_hash=h("f"))
     resolver = _resolver(receipt_root=receipt_root, plan_root=plan_root, plan_policy_hash=h("f"))
 
-    with pytest.raises(Phase1GArtifactRefError, match="plan operations"):
+    with pytest.raises(Phase1GArtifactRefError, match="semantic closure"):
         resolver.resolve(
             input_ref(
                 kind=Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN,
                 semantic_hash=str(plan.plan_hash),
                 file_sha256=raw_sha256(raw),
                 store_policy_hash=h("f"),
+            )
+        )
+
+
+def _mutate_operation_scope(
+    plan: Phase1EExecutionPlan,
+    *,
+    operation_type: PlannedOperationType,
+    mutate,
+) -> Phase1EExecutionPlan:  # type: ignore[no-untyped-def]
+    payload = plan.model_dump(mode="python", exclude={"plan_hash", "plan_id"})
+    for operation in payload["planned_operations"]:
+        if operation["operation_type"] != operation_type:
+            continue
+        request_field = (
+            "complete_request_payload"
+            if operation["complete_request_payload"] is not None
+            else "request_template_payload"
+        )
+        hash_field = "complete_request_hash" if request_field == "complete_request_payload" else "request_template_hash"
+        mutate(operation[request_field]["scope_context"])
+        operation[hash_field] = canonical_json_sha256(operation[request_field])
+        break
+    else:
+        raise AssertionError(f"missing operation {operation_type.value}")
+    return Phase1EExecutionPlan.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("operation_type", "mutate"),
+    (
+        (
+            PlannedOperationType.OBSERVATION_CAPTURE,
+            lambda scope: scope.__setitem__("program_id", "program-b"),
+        ),
+        (
+            PlannedOperationType.OBSERVATION_CAPTURE,
+            lambda scope: scope["batch_contract"].pop("artifact_store_policy_hash"),
+        ),
+    ),
+)
+def test_phase1e_plan_rejects_operation_scope_or_policy_gap(
+    tmp_path: Path,
+    operation_type: PlannedOperationType,
+    mutate,
+) -> None:  # type: ignore[no-untyped-def]
+    receipt_root = tmp_path / "receipts-root"
+    plan_root = tmp_path / "plans-root"
+    receipt_root.mkdir()
+    plan_root.mkdir()
+    plan = _mutate_operation_scope(phase1e_plan(), operation_type=operation_type, mutate=mutate)
+    _, raw = write_phase1e_plan_artifact(root=plan_root, plan=plan, store_policy_hash=h("e"))
+    resolver = _resolver(receipt_root=receipt_root, plan_root=plan_root)
+
+    with pytest.raises(Phase1GArtifactRefError, match="semantic closure"):
+        resolver.resolve(
+            input_ref(
+                kind=Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN,
+                semantic_hash=str(plan.plan_hash),
+                file_sha256=raw_sha256(raw),
             )
         )
 

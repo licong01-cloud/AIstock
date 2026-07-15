@@ -141,6 +141,8 @@ def phase1e_plan(*, artifact_store_policy_hash: str = h("e")) -> Phase1EExecutio
     scope_context = {
         "program_id": "program-a",
         "decision_trade_date": "2026-07-01",
+        "package_id": "package-a",
+        "manifest_sha256": h("9"),
         "admission_scope_id": "scope-a",
         "admission_scope_hash": h("2"),
         "batch_contract": {"artifact_store_policy_hash": artifact_store_policy_hash},
@@ -360,7 +362,7 @@ def capture_result() -> Phase1GCaptureResult:
             lineage_content_hash=h(chr(ord("a") + index)),
             stage_evidence_bundle_hash=h(chr(ord("c") + index)),
             source_revision_set_id="source-set-a",
-            source_revision_set_hash=h("e"),
+            source_revision_set_hash=h("5"),
             trace_outbox_id=f"outbox-{index}",
             trace_content_hash=h(chr(ord("f") - index)),
         )

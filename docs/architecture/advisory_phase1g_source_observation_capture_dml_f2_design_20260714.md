@@ -365,6 +365,14 @@ receipt store没有历史embedded policy字段，因此它的store policy hash�
 并要求root binding与ref一致。Phase 1G result store policy hash同样等于其layout policy hash。任何未注册
 kind、store policy或布局均明确失败，不按相似路径搜索。
 
+Phase 1G不得为了读取plan而import Phase 1E compiler/runtime模块。G1使用repo-owned pure consumer
+projection验证完整plan顶层字段、evidence binding、operation payload/hash以及canonical plan id/hash；
+projection只承担读取契约，不执行capacity probe、source resolver或数据库访问。`scope_key`、evidence
+binding、`SOURCE_RESOLUTION` complete request和`OBSERVATION_CAPTURE` semantic template中的
+program/date/package/manifest/admission scope id/hash必须逐项相等，两个operation各自必须显式携带与
+artifact ref相同的`artifact_store_policy_hash`。缺字段、跨operation漂移或只由另一operation补齐policy
+均明确失败，禁止跳过缺失字段后用集合“碰巧相等”来通过。
+
 ### 6.4 Immutable DSE/artifact/package projection
 
 `HistoricalDseTraceProjection` 在一个 `REPEATABLE READ READ ONLY` snapshot 中读取：
@@ -432,7 +440,8 @@ request_hash
 
 规则：
 
-- program/date/scope 必须与 Phase 1E plan 一致，调用方不能覆盖 plan semantic fields。
+- program/date/package/manifest/scope 必须在 Phase 1E plan顶层、evidence binding及source/observation
+  operation间完整闭包，调用方不能覆盖 plan semantic fields。
 - `requested_at` 仅用于审计，不参与 signal/observation identity。
 - `request_hash`明确排除`requested_at`，只覆盖semantic execution payload；相同target正常重跑必须得到
   相同request hash，不能因墙钟时间形成新业务身份。
@@ -487,6 +496,8 @@ Phase1GExecutionBatchPlan
 refs、source events、DSE/artifact/package identities、control-binding head、capture batch state和outbox
 identity。任一变化返回`ADVISORY_PHASE1G_PLAN_STALE`且当前target零DML；不得静默重新plan、采用latest、
 继续使用过时数据或只比较request hash。调用方应重新运行只读`plan`。
+`expected_source_events[]`按event identity唯一；同一identity即使携带不同content hash也属于冲突，不能
+被当成两个合法事件。
 
 ### 7.4 Capture policy registry
 
@@ -574,6 +585,8 @@ trace_outbox_id/hash
 稳定result只在batch `COMPLETE`、DB readback全部一致、plan set/membership/mapping hashes闭合时产生，
 并作为Phase 1H唯一消费的Phase 1G外部契约。相同target exact rerun必须返回同一
 `capture_result_hash`；result不含调用时间、是否本次执行DML或瞬态错误。
+每个`selected_observation_mappings[]`的`source_revision_set_id/hash`必须与result顶层exact source
+revision set一致，不能只校验trace mapping/count后接受跨source-set lineage。
 
 ### 7.6 Per-invocation attempt receipt
 
@@ -599,6 +612,10 @@ attempt_receipt_hash
 exact rerun的稳定result hash不变，但新的attempt receipt按真实时间、DML事实和恢复路径形成独立hash。
 失败attempt不得产出伪造result；若DB已COMPLETE而外部result写入失败，下次调用必须先由DB完整readback
 重建同一稳定result，再写新的attempt receipt。
+成功attempt的`capture_result_ref`必须使用已注册Phase 1G result store policy。`error_context`只允许
+去敏诊断字段；password/secret/token/DSN/database URL/connection string/model path/candidate payload
+字段或PostgreSQL credential URI直接使contract失败，不能静默删除后继续持久化，也不能在错误消息中
+回显原值。
 
 ### 7.7 Batch attempt receipt
 
@@ -606,13 +623,20 @@ batch attempt receipt只汇总本次调用有序target attempt refs，并独立�
 
 ```text
 target_count/succeeded_count/failed_count
-target_attempt_receipt_hashes[]
-successful_capture_result_hashes[]
+target_attempt_refs[] sorted by target_request_hash
+  target_request_hash
+  target_plan_hash
+  attempt_receipt_hash
+  operation_status = SUCCESS | FAILED
+  capture_result_hash optional and required exactly for SUCCESS
+target_attempt_receipt_hashes[] derived in the same target order
+successful_capture_result_hashes[] derived in the same target order
 batch_status = SUCCESS | PARTIAL_FAILURE | FAILED
 batch_attempt_receipt_hash
 ```
 
-任一 target 失败时 CLI 非零退出，但已成功 target 保持真实成功，不回滚、不隐藏。
+任一 target 失败时 CLI 非零退出，但已成功 target 保持真实成功，不回滚、不隐藏。batch不能仅按attempt
+hash字典序排序后丢失target到attempt/result的对应关系；冗余hash数组必须与typed refs的target顺序完全一致。
 
 ## 8. Control Binding And Capture Request Materialization
 
@@ -851,6 +875,7 @@ backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset
 backend/services/advisory_phase1/release_schema_contract.py        # v3 registry loading/predecessor closure
 backend/services/advisory_phase1/release_schema_verify_postgres.py # Phase 1F.2 exact catalog verify
 backend/services/advisory_phase1/phase1g_contract.py
+backend/services/advisory_phase1/phase1g_phase1e_projection.py
 backend/services/advisory_phase1/phase1g_schema_guard.py
 backend/services/advisory_phase1/phase1g_artifact_ref.py
 backend/services/advisory_phase1/historical_trace_projection_postgres.py
@@ -888,8 +913,9 @@ backend.services.advisory_phase1.release_schema_apply_postgres
 
 CLI必须用`--target-db`和`--env-file`复用Phase 1F已验证的DEV/production exact key resolver，构造
 `DatabaseConnectionConfig`并显式注入所有Phase 1G repositories；缺key、target不匹配或database identity
-不一致直接失败，不猜测、不回退共享pool。static transitive import与query spy必须验证上述边界，不能只
-扫描直接import。
+不一致直接失败，不猜测、不回退共享pool。G1读取Phase 1E plan只能经过
+`phase1g_phase1e_projection.py`，不得传递import `readiness_plan`/capacity probe/compiler。static
+transitive import与隔离进程runtime import测试必须验证上述边界，不能只扫描直接import。
 
 ## 16. CLI Contract
 
@@ -1086,17 +1112,19 @@ G0是已经完成的开发/数据库identity技术前置，不是运行审批；
 - L0/L1。
 
 G1已在`feature/advisory-phase1g-g1-foundation-20260715`实现并完成本批L0/L1、覆盖率与相邻回归；该状态不
-代表G2-G5或整个Phase 1G完成，也不满足下文“G0-G4完整实现”代码合入条件。
+代表G2-G5或整个Phase 1G完成。Phase 1G采用分批合入：当前G批次的acceptance matrix无缺口即可独立
+请求代码合入，整项功能完成和production/runtime readiness仍必须等待G0-G4及G5真实DEV证据。
 
 | G1 design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | G1-001 typed contracts/policy/hash | `phase1g_contract.py` | `test_phase1g_contract.py` | implemented_verified_in_branch | none |
-| G1-002 Phase 1E-derived target request | `build_phase1g_target_execution_request()` | exact program/date/scope/operation hash test | implemented_verified_in_branch | none |
-| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale tests | implemented_verified_in_branch | none |
+| G1-002 Phase 1E-derived target request | `phase1g_phase1e_projection.py`、`build_phase1g_target_execution_request()` | exact program/date/package/manifest/scope/policy/operation hash closure tests | implemented_verified_in_branch | none |
+| G1-003 exact target/schema guard | `phase1g_schema_guard.py` | env isolation/receipt/catalog stale/unexpected-error mapping tests | implemented_verified_in_branch | none |
 | G1-004 immutable input refs | `phase1g_artifact_ref.py` | containment/latest/hash/policy/reparse tests | implemented_verified_in_branch | none |
-| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper tests | implemented_verified_in_branch | none |
-| G1-006 module isolation | four `phase1g_*.py` modules | import denylist test | implemented_verified_in_branch | none |
-| G1-007 local quality | G1 test suite | 34 passed, 1 environment skip; statements 87.73%, branches 72.09% | implemented_verified_in_branch | none |
+| G1-005 external CAS stores | `phase1g_result_store.py` | canonical/idempotent/collision/tamper/non-silent temp-cleanup tests | implemented_verified_in_branch | none |
+| G1-006 module isolation | five G1 `phase1g_*.py` modules | static transitive + isolated runtime import denylist tests | implemented_verified_in_branch | none |
+| G1-007 result/attempt/batch closure | `phase1g_contract.py` | source-set lineage、redacted context、result policy、target-attempt order tests | implemented_verified_in_branch | none |
+| G1-008 local quality | G1 test suite | 41 passed, 1 environment skip; statements 88.30%, branches 70.88% | implemented_verified_in_branch | none |
 
 ### G2：Source Replay And Historical Trace Projection
 
@@ -1236,12 +1264,15 @@ Phase 1G业务代码开始条件已经满足：G0 Phase 1F.2独立设计、代�
 DEV/production plan/apply/new-verify/new-exact-reapply均已完成。可直接进入G1-G4，不需要角色、审批或
 人工业务门禁。真实persistent DEV DML仍要求Phase 1E形成single/multi Alpha immutable DSE/receipt。
 
-Phase 1G代码可请求合入的条件：
+Phase 1G分批代码可请求合入的条件：
 
-1. G0-G4完整实现，L0-L2与transactional DEV zero-residue验证通过。
-2. DESIGN-COMPLIANCE-001逐项具有实现/测试证据。
-3. 没有用fixture/in-memory-only结果冒充persistent real input完成。
+1. 当前G批次的设计条目完整实现，批次所需L0/L1或L2验证全部通过且acceptance matrix无缺口。
+2. 当前G批次的DESIGN-COMPLIANCE-001逐项具有实现/测试证据。
+3. 没有用fixture/in-memory-only结果冒充persistent real input完成或越级声明后续G批次完成。
 4. production state准确报告，代码合入不执行生产DDL/DML或runtime activation。
+
+Phase 1G整体代码完成条件仍为G0-G4完整实现、L0-L2与transactional DEV zero-residue验证通过；分批
+合入只是隔离已完成契约基础，不降低整个功能或persistent DEV验收标准。
 
 Phase 1G功能完成条件：真实single/multi Alpha persistent DEV L4均成功、exact rerun一致，并产生可供
 Phase 1H消费的immutable receipts。若真实输入仍缺失，只能报告

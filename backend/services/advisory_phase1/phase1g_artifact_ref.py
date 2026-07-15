@@ -26,11 +26,12 @@ from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GInputArtifactRef,
     Phase1GTargetExecutionRequest,
 )
-from backend.services.advisory_phase1.readiness_plan import (
-    OperationDisposition,
-    Phase1EExecutionPlan,
-    PlanUnitKind,
-    PlannedOperationType,
+from backend.services.advisory_phase1.phase1g_phase1e_projection import (
+    Phase1EExecutionPlanProjection,
+    Phase1EOperationDisposition,
+    Phase1EPlannedOperationProjection,
+    Phase1EPlannedOperationType,
+    Phase1EPlanUnitKind,
 )
 from backend.services.advisory_phase1.release_schema_contract import ReleaseSchemaReceipt, TargetLabel
 
@@ -67,7 +68,7 @@ class ResolvedPhase1GInputArtifact:
     ref: Phase1GInputArtifactRef
     path: Path
     document: dict[str, Any]
-    payload: ReleaseSchemaReceipt | Phase1EExecutionPlan
+    payload: ReleaseSchemaReceipt | Phase1EExecutionPlanProjection
 
 
 class Phase1GImmutableArtifactResolver:
@@ -121,7 +122,9 @@ class Phase1GImmutableArtifactResolver:
         return receipt
 
     @staticmethod
-    def _parse_phase1e_plan(*, ref: Phase1GInputArtifactRef, document: dict[str, Any]) -> Phase1EExecutionPlan:
+    def _parse_phase1e_plan(
+        *, ref: Phase1GInputArtifactRef, document: dict[str, Any]
+    ) -> Phase1EExecutionPlanProjection:
         semantic_document = {
             key: value for key, value in document.items() if key not in {"file_sha256", "materialization"}
         }
@@ -143,19 +146,17 @@ class Phase1GImmutableArtifactResolver:
         if not isinstance(raw_payload, dict):
             raise Phase1GArtifactRefError("Phase 1E plan artifact payload is missing")
         try:
-            plan = Phase1EExecutionPlan.model_validate(raw_payload)
+            plan = Phase1EExecutionPlanProjection.model_validate(raw_payload)
         except ValueError as exc:
             raise Phase1GArtifactRefError("Phase 1E execution plan contract is invalid") from exc
-        if plan.plan_unit_kind is not PlanUnitKind.ADMISSION_SCOPE:
+        if plan.plan_unit_kind is not Phase1EPlanUnitKind.ADMISSION_SCOPE:
             raise Phase1GArtifactRefError("Phase 1G only accepts Phase 1E ADMISSION_SCOPE plans")
         if plan.plan_hash != ref.semantic_content_hash or document.get("identity") != plan.plan_hash:
             raise Phase1GArtifactRefError("Phase 1E execution plan hash does not match its envelope")
-        policy_hashes = _phase1e_operation_store_policy_hashes(plan)
-        if policy_hashes != {ref.store_policy_hash}:
-            raise Phase1GArtifactRefError(
-                "Phase 1E plan operations do not bind the exact artifact store policy",
-                context={"policy_hash_count": len(policy_hashes)},
-            )
+        try:
+            _phase1e_semantic_closure(plan=plan, expected_store_policy_hash=ref.store_policy_hash)
+        except ValueError as exc:
+            raise Phase1GArtifactRefError("Phase 1E plan semantic closure is invalid") from exc
         return plan
 
 
@@ -164,61 +165,37 @@ def build_phase1g_target_execution_request(
     target_label: TargetLabel,
     release_schema_receipt_ref: Phase1GInputArtifactRef,
     phase1e_plan_ref: Phase1GInputArtifactRef,
-    phase1e_plan: Phase1EExecutionPlan,
+    phase1e_plan: Phase1EExecutionPlanProjection,
     requested_at: datetime,
     capture_policy: Phase1GCapturePolicyRegistry = DEFAULT_CAPTURE_POLICY_REGISTRY,
 ) -> Phase1GTargetExecutionRequest:
     """Derive every Phase 1E semantic field; callers cannot override it."""
 
-    if phase1e_plan.plan_unit_kind is not PlanUnitKind.ADMISSION_SCOPE or phase1e_plan.scope_key is None:
+    if phase1e_plan.plan_unit_kind is not Phase1EPlanUnitKind.ADMISSION_SCOPE or phase1e_plan.scope_key is None:
         raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1G request requires one ADMISSION_SCOPE plan")
     if phase1e_plan_ref.artifact_kind is not Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN:
         raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1E plan ref has the wrong artifact kind")
     if phase1e_plan.plan_hash != phase1e_plan_ref.semantic_content_hash:
         raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1E plan ref does not match the loaded plan")
-    operations = {item.operation_type: item for item in phase1e_plan.planned_operations}
-    source = operations.get(PlannedOperationType.SOURCE_RESOLUTION)
-    observation = operations.get(PlannedOperationType.OBSERVATION_CAPTURE)
-    if (
-        source is None
-        or source.operation_disposition is not OperationDisposition.COMPLETE_REQUEST
-        or source.complete_request_hash is None
-        or observation is None
-        or observation.operation_disposition is not OperationDisposition.SEMANTIC_TEMPLATE
-        or observation.request_template_hash is None
-    ):
-        raise Phase1GContractError(
-            REASON_PLAN_INVALID,
-            "Phase 1E plan does not expose executable source-resolution and observation operations",
-        )
-    scope_key = phase1e_plan.scope_key
-    program_id = str(scope_key.get("program_id") or "").strip()
-    admission_scope_id = str(scope_key.get("admission_scope_id") or "").strip()
-    raw_date = scope_key.get("decision_trade_date")
     try:
-        decision_trade_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
+        closure = _phase1e_semantic_closure(
+            plan=phase1e_plan,
+            expected_store_policy_hash=phase1e_plan_ref.store_policy_hash,
+        )
     except ValueError as exc:
-        raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1E plan decision trade date is invalid") from exc
-    binding = phase1e_plan.evidence_binding
-    if (
-        not program_id
-        or not admission_scope_id
-        or admission_scope_id != binding.admission_scope_id
-        or binding.admission_scope_hash is None
-    ):
-        raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1E plan scope identity is incomplete or inconsistent")
+        raise Phase1GContractError(REASON_PLAN_INVALID, "Phase 1E plan semantic closure is invalid") from exc
     return Phase1GTargetExecutionRequest(
         target_label=target_label,
         release_schema_receipt_ref=release_schema_receipt_ref,
         phase1e_plan_ref=phase1e_plan_ref,
         phase1e_plan_id=str(phase1e_plan.plan_id),
         phase1e_plan_hash=str(phase1e_plan.plan_hash),
-        source_operation_hash=source.complete_request_hash,
-        observation_template_hash=observation.request_template_hash,
-        program_id=program_id,
-        decision_trade_date=decision_trade_date,
-        admission_scope_id=admission_scope_id,
-        admission_scope_hash=binding.admission_scope_hash,
+        source_operation_hash=str(closure.source.complete_request_hash),
+        observation_template_hash=str(closure.observation.request_template_hash),
+        program_id=closure.program_id,
+        decision_trade_date=closure.decision_trade_date,
+        admission_scope_id=closure.admission_scope_id,
+        admission_scope_hash=closure.admission_scope_hash,
         capture_policy_registry_id=capture_policy.registry_id,
         capture_policy_registry_version=capture_policy.registry_version,
         capture_policy_registry_hash=str(capture_policy.registry_hash),
@@ -227,22 +204,126 @@ def build_phase1g_target_execution_request(
     )
 
 
-def _phase1e_operation_store_policy_hashes(plan: Phase1EExecutionPlan) -> set[str]:
-    values: set[str] = set()
-    for operation in plan.planned_operations:
+@dataclass(frozen=True)
+class _Phase1ESemanticClosure:
+    source: Phase1EPlannedOperationProjection
+    observation: Phase1EPlannedOperationProjection
+    program_id: str
+    decision_trade_date: date
+    admission_scope_id: str
+    admission_scope_hash: str
+
+
+def _phase1e_semantic_closure(
+    *,
+    plan: Phase1EExecutionPlanProjection,
+    expected_store_policy_hash: str,
+) -> _Phase1ESemanticClosure:
+    operations = {item.operation_type: item for item in plan.planned_operations}
+    source = operations.get(Phase1EPlannedOperationType.SOURCE_RESOLUTION)
+    observation = operations.get(Phase1EPlannedOperationType.OBSERVATION_CAPTURE)
+    if (
+        source is None
+        or source.operation_disposition is not Phase1EOperationDisposition.COMPLETE_REQUEST
+        or source.complete_request_hash is None
+        or observation is None
+        or observation.operation_disposition is not Phase1EOperationDisposition.SEMANTIC_TEMPLATE
+        or observation.request_template_hash is None
+    ):
+        raise ValueError("required Phase 1E operations are absent or not executable")
+
+    scope_key = _mapping(plan.scope_key, field_name="scope_key")
+    binding = plan.evidence_binding
+    expected = {
+        "program_id": _text(scope_key.get("program_id"), field_name="scope_key.program_id"),
+        "decision_trade_date": _trade_date(
+            scope_key.get("decision_trade_date"), field_name="scope_key.decision_trade_date"
+        ),
+        "package_id": _text(scope_key.get("package_id"), field_name="scope_key.package_id"),
+        "manifest_sha256": _closure_sha256(
+            str(scope_key.get("manifest_sha256") or ""), field_name="scope_key.manifest_sha256"
+        ),
+        "admission_scope_id": _text(scope_key.get("admission_scope_id"), field_name="scope_key.admission_scope_id"),
+        "admission_scope_hash": _closure_sha256(
+            str(binding.admission_scope_hash or ""), field_name="evidence_binding.admission_scope_hash"
+        ),
+    }
+    if (
+        binding.package_id != expected["package_id"]
+        or binding.manifest_sha256 != expected["manifest_sha256"]
+        or binding.admission_scope_id != expected["admission_scope_id"]
+    ):
+        raise ValueError("scope key and evidence binding identities differ")
+
+    policy_hash = _closure_sha256(expected_store_policy_hash, field_name="expected_store_policy_hash")
+    for operation in (source, observation):
         payload = operation.complete_request_payload or operation.request_template_payload
-        if not isinstance(payload, Mapping):
-            continue
-        scope_context = payload.get("scope_context")
-        if not isinstance(scope_context, Mapping):
-            continue
-        batch_contract = scope_context.get("batch_contract")
-        if not isinstance(batch_contract, Mapping):
-            continue
-        raw = batch_contract.get("artifact_store_policy_hash")
-        if isinstance(raw, str):
-            values.add(_sha256(raw, field_name="artifact_store_policy_hash"))
-    return values
+        scope_context = _mapping(
+            _mapping(payload, field_name=f"{operation.operation_type.value}.payload").get("scope_context"),
+            field_name=f"{operation.operation_type.value}.scope_context",
+        )
+        observed = {
+            "program_id": _text(scope_context.get("program_id"), field_name="scope_context.program_id"),
+            "decision_trade_date": _trade_date(
+                scope_context.get("decision_trade_date"), field_name="scope_context.decision_trade_date"
+            ),
+            "package_id": _text(scope_context.get("package_id"), field_name="scope_context.package_id"),
+            "manifest_sha256": _closure_sha256(
+                str(scope_context.get("manifest_sha256") or ""), field_name="scope_context.manifest_sha256"
+            ),
+            "admission_scope_id": _text(
+                scope_context.get("admission_scope_id"), field_name="scope_context.admission_scope_id"
+            ),
+            "admission_scope_hash": _closure_sha256(
+                str(scope_context.get("admission_scope_hash") or ""),
+                field_name="scope_context.admission_scope_hash",
+            ),
+        }
+        if observed != expected:
+            raise ValueError(f"{operation.operation_type.value} scope identity differs from the Phase 1E plan")
+        batch_contract = _mapping(scope_context.get("batch_contract"), field_name="scope_context.batch_contract")
+        operation_policy_hash = _closure_sha256(
+            str(batch_contract.get("artifact_store_policy_hash") or ""),
+            field_name="artifact_store_policy_hash",
+        )
+        if operation_policy_hash != policy_hash:
+            raise ValueError(f"{operation.operation_type.value} store policy differs from the immutable ref")
+
+    return _Phase1ESemanticClosure(
+        source=source,
+        observation=observation,
+        program_id=str(expected["program_id"]),
+        decision_trade_date=expected["decision_trade_date"],
+        admission_scope_id=str(expected["admission_scope_id"]),
+        admission_scope_hash=str(expected["admission_scope_hash"]),
+    )
+
+
+def _mapping(value: object, *, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a mapping")
+    return value
+
+
+def _text(value: object, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must be non-empty")
+    return normalized
+
+
+def _trade_date(value: object, *, field_name: str) -> date:
+    try:
+        return value if isinstance(value, date) else date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an ISO date") from exc
+
+
+def _closure_sha256(value: str, *, field_name: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+        raise ValueError(f"{field_name} must be lowercase sha256")
+    return normalized
 
 
 def _validate_relative_path(ref: Phase1GInputArtifactRef) -> PurePosixPath:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GBatchAttemptReceipt,
     Phase1GBatchStatus,
     Phase1GOutputArtifactRef,
+    Phase1GTargetAttemptRef,
 )
 from backend.services.advisory_phase1.phase1g_result_store import (
     Phase1GResultStore,
@@ -72,8 +74,15 @@ def test_result_store_separates_stable_result_attempt_and_batch_receipts(tmp_pat
         target_count=1,
         succeeded_count=1,
         failed_count=0,
-        target_attempt_receipt_hashes=(str(attempt.attempt_receipt_hash),),
-        successful_capture_result_hashes=(str(result.capture_result_hash),),
+        target_attempt_refs=(
+            Phase1GTargetAttemptRef(
+                target_request_hash=attempt.target_request_hash,
+                target_plan_hash=attempt.target_plan_hash,
+                attempt_receipt_hash=str(attempt.attempt_receipt_hash),
+                operation_status=attempt.operation_status,
+                capture_result_hash=str(result.capture_result_hash),
+            ),
+        ),
         batch_status=Phase1GBatchStatus.SUCCESS,
     )
     batch_artifact = store.publish_batch(batch)
@@ -150,3 +159,26 @@ def test_result_store_rejects_repository_root_and_creates_explicit_external_root
     store = Phase1GResultStore(root=missing)
     assert store.root == missing.resolve()
     assert missing.is_dir()
+
+
+def test_result_store_logs_temp_cleanup_failure_without_hiding_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    root = tmp_path / "phase1g-results"
+    root.mkdir()
+    store = Phase1GResultStore(root=root)
+
+    def fail_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        del self, missing_ok
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with caplog.at_level(logging.WARNING, logger="backend.services.advisory_phase1.phase1g_result_store"):
+        artifact = store.publish_result(capture_result())
+
+    assert artifact.path.is_file()
+    assert "temporary artifact cleanup failed" in caplog.text
+    assert "artifact_kind=CAPTURE_RESULT" in caplog.text
+    assert "errno=13" in caplog.text

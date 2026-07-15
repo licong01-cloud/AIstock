@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
 from backend.services.advisory_phase0a.policy import canonical_json_text
 from backend.services.advisory_phase1.phase1g_contract import (
     PHASE1G_RESULT_STORE_LAYOUT_POLICY,
@@ -24,6 +26,7 @@ from backend.services.advisory_phase1.phase1g_contract import (
 
 
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+logger = logging.getLogger(__name__)
 
 
 class Phase1GResultStoreError(Phase1GContractError):
@@ -130,8 +133,19 @@ class Phase1GResultStore:
             if temp_path is not None:
                 try:
                     temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.warning(
+                        "Phase 1G temporary artifact cleanup failed "
+                        "reason_code=%s artifact_kind=%s identity_prefix=%s errno=%s",
+                        (
+                            REASON_ATTEMPT_RECEIPT_STORE_FAILED
+                            if kind is Phase1GOutputArtifactKind.ATTEMPT_RECEIPT
+                            else REASON_RESULT_STORE_FAILED
+                        ),
+                        kind.value,
+                        identity[:12],
+                        exc.errno,
+                    )
 
     def _existing(
         self,

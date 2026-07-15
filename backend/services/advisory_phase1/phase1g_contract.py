@@ -490,8 +490,8 @@ class Phase1GTargetExecutionPlan(_StrictContract):
     @model_validator(mode="after")
     def _validate_plan(self) -> "Phase1GTargetExecutionPlan":
         source_events = tuple(sorted(self.expected_source_events, key=lambda item: (item.identity, item.content_hash)))
-        if len({(item.identity, item.content_hash) for item in source_events}) != len(source_events):
-            raise ValueError("expected source events must be unique")
+        if len({item.identity for item in source_events}) != len(source_events):
+            raise ValueError("expected source event identities must be unique")
         object.__setattr__(self, "expected_source_events", source_events)
         object.__setattr__(
             self,
@@ -687,6 +687,12 @@ class Phase1GCaptureResult(_StrictContract):
             for item in selected
         ):
             raise ValueError("selected observation mappings do not match trace outbox mappings")
+        if any(
+            item.source_revision_set_id != self.source_revision_set_id
+            or item.source_revision_set_hash != self.source_revision_set_hash
+            for item in selected
+        ):
+            raise ValueError("selected observation mappings do not match the result source revision set")
         if self.capture_plan_set_count != len(selected) or self.membership_count < len(selected):
             raise ValueError("capture result counts do not close over selected observations")
         object.__setattr__(self, "selected_observation_mappings", selected)
@@ -728,6 +734,15 @@ class Phase1GAttemptReceipt(_StrictContract):
     def _timestamps(cls, value: datetime | None, info) -> datetime | None:  # type: ignore[no-untyped-def]
         return _aware_utc(value, field_name=info.field_name) if value is not None else None
 
+    @field_validator("error_context")
+    @classmethod
+    def _redacted_error_context(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        normalized = canonicalize(value)
+        _assert_redacted_error_context(normalized)
+        return normalized
+
     def canonical_payload(self) -> dict[str, Any]:
         payload = self.model_dump(mode="json", exclude={"attempt_receipt_hash", "capture_result_ref"})
         payload["capture_result_ref"] = (
@@ -747,8 +762,6 @@ class Phase1GAttemptReceipt(_StrictContract):
             "committed_phases",
             _sorted_unique(self.committed_phases, field_name="committed_phases") if self.committed_phases else (),
         )
-        if self.error_context is not None:
-            object.__setattr__(self, "error_context", canonicalize(self.error_context))
         batch_values = (self.capture_batch_id, self.capture_attempt_no, self.capture_batch_status)
         if any(value is not None for value in batch_values) and not all(value is not None for value in batch_values):
             raise ValueError("capture batch attempt fields must be all present or all absent")
@@ -771,6 +784,8 @@ class Phase1GAttemptReceipt(_StrictContract):
                 raise ValueError("successful attempt requires one matching stable result reference")
             if self.capture_result_ref.artifact_kind is not Phase1GOutputArtifactKind.CAPTURE_RESULT:
                 raise ValueError("successful attempt result reference has the wrong artifact kind")
+            if self.capture_result_ref.store_policy_hash != PHASE1G_RESULT_STORE_LAYOUT_POLICY.layout_policy_hash:
+                raise ValueError("successful attempt result reference has an unregistered store policy")
         elif self.capture_result_ref is not None or self.capture_result_hash is not None:
             raise ValueError("non-successful attempt cannot expose a stable result")
         if self.operation_status is Phase1GAttemptStatus.FAILED and not self.reason_codes:
@@ -782,6 +797,27 @@ class Phase1GAttemptReceipt(_StrictContract):
         return self
 
 
+class Phase1GTargetAttemptRef(_StrictContract):
+    target_request_hash: str = Field(min_length=64, max_length=64)
+    target_plan_hash: str = Field(min_length=64, max_length=64)
+    attempt_receipt_hash: str = Field(min_length=64, max_length=64)
+    operation_status: Phase1GAttemptStatus
+    capture_result_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @field_validator("target_request_hash", "target_plan_hash", "attempt_receipt_hash", "capture_result_hash")
+    @classmethod
+    def _hashes(cls, value: str | None, info) -> str | None:  # type: ignore[no-untyped-def]
+        return _sha256(value, field_name=info.field_name) if value is not None else None
+
+    @model_validator(mode="after")
+    def _validate_terminal_ref(self) -> "Phase1GTargetAttemptRef":
+        if self.operation_status is Phase1GAttemptStatus.IN_PROGRESS:
+            raise ValueError("batch attempt refs must be terminal")
+        if (self.operation_status is Phase1GAttemptStatus.SUCCESS) != (self.capture_result_hash is not None):
+            raise ValueError("batch target success must carry exactly one stable result hash")
+        return self
+
+
 class Phase1GBatchAttemptReceipt(_StrictContract):
     schema_version: Literal[BATCH_RECEIPT_SCHEMA_VERSION] = BATCH_RECEIPT_SCHEMA_VERSION
     batch_request_hash: str = Field(min_length=64, max_length=64)
@@ -789,7 +825,8 @@ class Phase1GBatchAttemptReceipt(_StrictContract):
     target_count: int = Field(ge=1)
     succeeded_count: int = Field(ge=0)
     failed_count: int = Field(ge=0)
-    target_attempt_receipt_hashes: tuple[str, ...] = Field(min_length=1)
+    target_attempt_refs: tuple[Phase1GTargetAttemptRef, ...] = Field(min_length=1)
+    target_attempt_receipt_hashes: tuple[str, ...] = ()
     successful_capture_result_hashes: tuple[str, ...] = ()
     batch_status: Phase1GBatchStatus
     batch_attempt_receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -804,25 +841,33 @@ class Phase1GBatchAttemptReceipt(_StrictContract):
 
     @model_validator(mode="after")
     def _validate_receipt(self) -> "Phase1GBatchAttemptReceipt":
-        attempt_hashes = _sorted_unique(
-            self.target_attempt_receipt_hashes,
-            field_name="target_attempt_receipt_hashes",
-            sha256=True,
+        refs = tuple(sorted(self.target_attempt_refs, key=lambda item: item.target_request_hash))
+        if len({item.target_request_hash for item in refs}) != len(refs):
+            raise ValueError("batch target attempt refs must have unique target request hashes")
+        if len({item.target_plan_hash for item in refs}) != len(refs):
+            raise ValueError("batch target attempt refs must have unique target plan hashes")
+        if len({item.attempt_receipt_hash for item in refs}) != len(refs):
+            raise ValueError("batch target attempt refs must have unique attempt receipt hashes")
+        attempt_hashes = tuple(item.attempt_receipt_hash for item in refs)
+        result_hashes = tuple(
+            item.capture_result_hash
+            for item in refs
+            if item.operation_status is Phase1GAttemptStatus.SUCCESS and item.capture_result_hash is not None
         )
-        result_hashes = (
-            _sorted_unique(
-                self.successful_capture_result_hashes,
-                field_name="successful_capture_result_hashes",
-                sha256=True,
-            )
-            if self.successful_capture_result_hashes
-            else ()
-        )
+        if self.target_attempt_receipt_hashes and self.target_attempt_receipt_hashes != attempt_hashes:
+            raise ValueError("batch attempt receipt hashes do not preserve target request order")
+        if self.successful_capture_result_hashes and self.successful_capture_result_hashes != result_hashes:
+            raise ValueError("batch stable result hashes do not preserve target request order")
+        object.__setattr__(self, "target_attempt_refs", refs)
         object.__setattr__(self, "target_attempt_receipt_hashes", attempt_hashes)
         object.__setattr__(self, "successful_capture_result_hashes", result_hashes)
         if self.target_count != self.succeeded_count + self.failed_count or self.target_count != len(attempt_hashes):
             raise ValueError("batch receipt target counts do not match attempt receipts")
-        if self.succeeded_count != len(result_hashes):
+        actual_succeeded = sum(item.operation_status is Phase1GAttemptStatus.SUCCESS for item in refs)
+        actual_failed = sum(item.operation_status is Phase1GAttemptStatus.FAILED for item in refs)
+        if self.succeeded_count != actual_succeeded or self.failed_count != actual_failed:
+            raise ValueError("batch receipt outcome counts do not match target attempt refs")
+        if self.succeeded_count != len(result_hashes) or len(result_hashes) != len(set(result_hashes)):
             raise ValueError("batch receipt success count does not match stable results")
         expected_status = (
             Phase1GBatchStatus.SUCCESS
@@ -838,3 +883,44 @@ class Phase1GBatchAttemptReceipt(_StrictContract):
             raise ValueError("batch_attempt_receipt_hash does not match batch receipt")
         object.__setattr__(self, "batch_attempt_receipt_hash", digest)
         return self
+
+
+_REDACTED_CONTEXT_DENIED_KEYS = {
+    "api_key",
+    "authorization",
+    "candidate_payload",
+    "connection_string",
+    "database_url",
+    "dsn",
+    "model_path",
+    "password",
+    "passwd",
+    "refresh_token",
+    "secret",
+    "token",
+    "access_token",
+}
+
+_REDACTED_CONTEXT_DENIED_SUFFIXES = _REDACTED_CONTEXT_DENIED_KEYS - {"token"}
+
+
+def _assert_redacted_error_context(value: Any, *, path: str = "error_context") -> None:
+    if isinstance(value, dict):
+        for raw_key, child in value.items():
+            key = str(raw_key).strip().lower().replace("-", "_").replace(".", "_").replace(" ", "_")
+            if key in _REDACTED_CONTEXT_DENIED_KEYS or any(
+                key.endswith(f"_{denied}") for denied in _REDACTED_CONTEXT_DENIED_SUFFIXES
+            ):
+                raise ValueError(f"{path} contains a prohibited sensitive field")
+            _assert_redacted_error_context(child, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for child in value:
+            _assert_redacted_error_context(child, path=path)
+        return
+    if isinstance(value, str):
+        lowered = value.lower()
+        has_database_uri = any(f"{scheme}://" in lowered for scheme in ("postgres", "postgresql"))
+        has_password_assignment = "=".join(("password", "")) in lowered
+        if has_database_uri or has_password_assignment:
+            raise ValueError(f"{path} contains prohibited connection credentials")

@@ -9,6 +9,7 @@ from backend.services.advisory_phase1 import phase1g_schema_guard as guard_modul
 from backend.services.advisory_phase1.phase1g_contract import (
     REASON_SCHEMA_NOT_READY,
     REASON_SCHEMA_RECEIPT_INVALID,
+    REASON_UNEXPECTED_ERROR,
 )
 from backend.services.advisory_phase1.phase1g_schema_guard import (
     Phase1GExactTargetConnectionResolver,
@@ -201,3 +202,35 @@ def test_schema_guard_maps_connection_failure_and_environment_drift_to_explicit_
             connection_config=_config(environment_contract_hash=h("f")),
         )
     assert drift.value.reason_code == REASON_SCHEMA_RECEIPT_INVALID
+
+
+def test_schema_guard_wraps_unexpected_resolver_and_verifier_failures_without_leaking_messages(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "phase1g.env"
+    env_file.write_text("unused=true\n", encoding="utf-8")
+
+    def unexpected(**_):  # type: ignore[no-untyped-def]
+        raise RuntimeError("postgresql://user:password@host/database")
+
+    with pytest.raises(Phase1GSchemaGuardError) as resolver_error:
+        Phase1GExactTargetConnectionResolver(env_file=env_file, resolver=unexpected).resolve(
+            target_label=TargetLabel.DEV
+        )
+    assert resolver_error.value.reason_code == REASON_UNEXPECTED_ERROR
+    assert resolver_error.value.context == {"target_label": "DEV", "error_type": "RuntimeError"}
+    assert "postgresql" not in str(resolver_error.value)
+    assert isinstance(resolver_error.value.__cause__, RuntimeError)
+
+    receipt = release_receipt()
+    guard = Phase1GReleaseSchemaGuard(verifier=unexpected)
+    with pytest.raises(Phase1GSchemaGuardError) as verifier_error:
+        guard.verify(
+            receipt=receipt,
+            target_label=TargetLabel.DEV,
+            connection_config=_config(environment_contract_hash=receipt.database_identity.environment_contract_hash),
+        )
+    assert verifier_error.value.reason_code == REASON_UNEXPECTED_ERROR
+    assert verifier_error.value.context == {"target_label": "DEV", "error_type": "RuntimeError"}
+    assert "postgresql" not in str(verifier_error.value)
+    assert isinstance(verifier_error.value.__cause__, RuntimeError)
