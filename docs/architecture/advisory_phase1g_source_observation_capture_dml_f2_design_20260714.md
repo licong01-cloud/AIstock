@@ -416,9 +416,9 @@ replayed source_revision_set_id/hash == CapturePlan ids/hashes
 
 任一不一致返回 conflict，零 DML。G2 的 `plan` 路径只返回经过完整校验的
 `Phase1GSourceRevisionFreezeIntent`，不得调用 `PostgresSourceRevisionRepository.freeze()`、不得独立提交，
-也不得从 global pool 取得写连接。G3 在单 target caller-owned transaction 中先调用
-`freeze_in_transaction(conn, revision_set)`，exact retry 必须完整读取 header 与全部 members；随后校验已经
-提交且被 RUNNING capture batch 外键引用的 control binding，再写入 outbox、observation 和 membership。
+也不得从 global pool 取得写连接。G3 在单 target caller-owned transaction 中先锁定并校验 RUNNING batch、
+capture plan和其已提交的exact control binding，再调用`freeze_in_transaction(conn, revision_set)`；exact retry必须
+完整读取source header与全部members，随后写入outbox、observation和membership。
 Phase 1G 不追加 source availability event；没有 exact event 时保持 unavailable。详细契约见
 `advisory_phase1g_g2_source_replay_historical_trace_projection_f2_design_20260715.md`。
 
@@ -1151,11 +1151,18 @@ PR/merge commit 和合入后报告为准；`ddl_pending=none`，`dml_pending=non
 
 ### G3：Transactional PostgreSQL Writer
 
+- 详细设计：`advisory_phase1g_g3_transactional_postgresql_writer_f2_design_20260715.md`；
 - 在单target transaction内消费G2 freeze intent并完成source set exact freeze/readback；
-- control binding get-or-append；
+- control binding get-or-append和RUNNING batch为target transaction前已提交事实，G3提供caller-owned primitives，
+  G4负责顺序编排；
 - trace outbox exact read/recovery；
 - caller-owned outbox/capture/observation transaction primitives；
-- observation/version/lineage/stage/candidate/membership/delivery atomic writer。
+- observation semantic draft在事务外生成，revision/predecessor和最终identity在canonical signal锁内物化；
+- observation/version/lineage/stage/candidate/membership/delivery atomic writer；
+- 新连接full readback处理commit response loss；compatibility view只读，identity/payload基表为写入权威。
+
+G3详细设计已完成前后一致性复查，代码尚未开始。它不增加migration、DEV/production DML、runtime activation、
+角色、审批、授权或备份门禁；实现状态必须以未来独立代码PR和验收结果为准。
 
 ### G4：Service, CLI And Recovery
 
