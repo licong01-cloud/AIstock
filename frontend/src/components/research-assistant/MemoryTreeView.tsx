@@ -136,7 +136,7 @@ export function MemoryTreeView({ items, packs }: { items: AssistantMemory[]; pac
   const routeRows = packs.map(contextPackRoutes);
 
   if (!items.length) {
-    return <EmptyState title="Memory tree is empty" hint="The API returned no memory records; create approved memories before expecting tree recall." />;
+    return <EmptyState title="记忆树为空" hint="The API returned no memory records; create approved memories before expecting tree recall." />;
   }
 
   return (

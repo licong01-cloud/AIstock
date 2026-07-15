@@ -555,7 +555,7 @@ test("Research Assistant audit legacy routes redirect to the consolidated audit 
     ["/research-assistant/tasks", "tasks", "Task Ledger"],
     ["/research-assistant/trace", "trace", "Trace Events"],
     ["/research-assistant/agent-runs", "agent-runs", "Agent 运行审计"],
-    ["/research-assistant/external-agents", "external-agents", "External Agent Connector"],
+    ["/research-assistant/external-agents", "external-agents", "外部智能体连接器"],
   ] as const;
 
   for (const [legacyPath, tab, expectedText] of cases) {

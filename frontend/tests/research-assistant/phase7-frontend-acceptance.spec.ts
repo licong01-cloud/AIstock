@@ -269,7 +269,7 @@ test("Phase 7 Agent Teams view shows orchestrator, workers, reduce, evidence, an
   await expect(page.getByTestId("ra-agent-teams-view")).toContainText("risk_worker:approval_required");
   await expect(page.getByTestId("ra-agent-teams-view")).toContainText("Evidence visible; action remains gated.");
   await expect(page.getByTestId("ra-agent-teams-view")).toContainText("approval_required");
-  await expect(page.getByTestId("ra-agent-teams-view")).toContainText("Open worker trace");
+  await expect(page.getByTestId("ra-agent-teams-view")).toContainText("查看 worker 轨迹");
   await assertNoForbiddenUiText(await page.locator("body").innerText());
 });
 

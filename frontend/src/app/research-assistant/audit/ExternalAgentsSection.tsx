@@ -31,7 +31,7 @@ export function ExternalAgentsSection() {
   return (
     <>
       <ApiErrorBox error={error} />
-      <SectionCard title="External Agent Connector" eyebrow="real sessions / events">
+      <SectionCard title="外部智能体连接器" eyebrow="real sessions / events">
         <p className="pv2-muted">外部 Agent 只能通过后端登记的 session/event/API 边界进入；页面读取真实列表接口，空列表代表尚未接入，不用静态 JSON 冒充完成。</p>
         <PaperTable
           rows={sessions}
