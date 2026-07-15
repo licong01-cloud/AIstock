@@ -4598,7 +4598,7 @@ class ConfigComposer:
         lines.append("    if not contract.get('official_cache_hit'):")
         lines.append('        logger.info(f\'  {factor_name}: cache miss reasons={contract.get("miss_reasons")} top_errors={contract.get("top_level_errors")}\')')
         lines.append("        if contract.get('miss_reasons', {}).get('missing_meta_reconcile_required'):")
-        lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + _json.dumps(contract, ensure_ascii=False, default=str))")
+        lines.append("            raise RuntimeError('missing_meta_reconcile_required: ' + _json.dumps(contract, ensure_ascii=False))")
         lines.append('        return None')
         lines.append("    cache_path = os.path.join(FACTOR_CACHE_SINGLE_DIR, f'{factor_name}.parquet')")
         lines.append('    df = pd.read_parquet(cache_path)')

@@ -593,19 +593,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--factor-data-dir",
-        default="/home/lc999/data/factor_data",
-        help="immutable QE factor-data snapshot root",
+        default=os.getenv("QE_FACTOR_DATA_DIR") or os.getenv("RDAGENT_FACTOR_DATA_WSL"),
+        help="immutable QE factor-data snapshot root; or QE_FACTOR_DATA_DIR/RDAGENT_FACTOR_DATA_WSL",
     )
     parser.add_argument(
         "--output-root",
-        default="/mnt/f/Dev/AIstock/rdagent_assets/long_trend_evaluations",
-        help="QE-only result root",
+        default=os.getenv("QE_LONG_TREND_ARTIFACT_STORE_ROOT"),
+        help="QE-only result root; or QE_LONG_TREND_ARTIFACT_STORE_ROOT",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if not args.factor_data_dir:
+        raise RuntimeError(
+            "--factor-data-dir or QE_FACTOR_DATA_DIR/RDAGENT_FACTOR_DATA_WSL is required"
+        )
+    if not args.output_root:
+        raise RuntimeError(
+            "--output-root or QE_LONG_TREND_ARTIFACT_STORE_ROOT is required"
+        )
     evaluator_sha = _evaluator_source_sha256()
     artifacts = [resolve_recorder_artifacts(value) for value in args.workspace]
     run_ids = [item.run_id for item in artifacts]

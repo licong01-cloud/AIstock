@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import OrderedDict
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -192,6 +193,28 @@ def test_evaluate_run_rejects_source_identity_change(monkeypatch: pytest.MonkeyP
             evaluator_source_sha256="captured",
             output_root=Path("/tmp/out"),
         )
+
+
+def test_main_requires_explicit_factor_data_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runner,
+        "parse_args",
+        lambda: SimpleNamespace(workspace=[], factor_data_dir=None, output_root="/tmp/out"),
+    )
+
+    with pytest.raises(RuntimeError, match="factor-data-dir"):
+        runner.main()
+
+
+def test_main_requires_explicit_qe_artifact_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        runner,
+        "parse_args",
+        lambda: SimpleNamespace(workspace=[], factor_data_dir="/tmp/factors", output_root=None),
+    )
+
+    with pytest.raises(RuntimeError, match="output-root"):
+        runner.main()
 
 
 def _read_json(path: Path):
