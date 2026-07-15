@@ -1,6 +1,7 @@
 {
   "actual": "After DEV order 90 apply/verify/reapply completed, rollback-only test_trace_outbox_dev_db fails when appending the second admission scope: PostgresControlBindingRepository raises ADVISORY_PHASE1_CONTROL_BINDING_CONFLICT because the same binding_chain_key/revision receives different content. capture_foundation DEV L4 passes. The failed transaction rolls back. Resolve the scope/control-binding contract or test construction without skipping, silent fallback, new approval gate, production DDL, or changes outside Advisory.",
   "allowed_write_scope": [
+    "backend/tests/advisory_phase1/test_trace_outbox_dev_db.py",
     "tests/aistock_validation/bugs/20260715_BUG-656-phase-1f-2-trace-outbox-dev-l4-conflicts-on-second-admission-scope.json",
     "tests/aistock_validation/bugs/.bug_id_allocator.json"
   ],
