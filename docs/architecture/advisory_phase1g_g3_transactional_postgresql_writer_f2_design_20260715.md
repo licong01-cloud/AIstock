@@ -21,14 +21,15 @@ G3 只实现 PostgreSQL transaction primitives 和单 target 原子 writer，不
 
 ```text
 design_tier = F2
-design_status = implemented_pending_review
+design_status = implemented_and_merged
 design_review = passed_2026-07-15
-implementation_status = local_verified_2026_07_15_pending_review
-code_merge_state = none
+implementation_status = merged_pr_2178_2026_07_15
+code_merge_state = merge_commit_71d3486d1b7460262932f4f4f209e695c2b56dda
 ddl_pending = none
 dml_pending = none_for_g3
-local_validation = passed_pure_shared_and_disposable_postgresql
-dev_validation = not_run
+local_validation = 30_g3_passed_plus_59_shared_passed_1_skipped
+github_ci = passed
+dev_validation = not_required_for_g3_code_batch
 production_activation = none
 ```
 
@@ -874,8 +875,8 @@ G3 详细设计进入代码阶段前必须满足：
 3. transaction lock/order、retry/successor/recovery和commit uncertainty均有正反例。
 4. 所有保留技术条件在合法数据下可自动通过，不形成不可达门禁。
 5. 无migration、global pool、runtime activation、角色/RBAC/approval/backup/manual bypass。
-6. 用户已确认开始G3A-G3D代码实现；本地实现与 disposable PostgreSQL 验证已完成，提交、合入、DEV/production
-   数据库操作和 runtime activation 仍须分开报告。
+6. 用户已确认并完成G3A-G3D代码实现；PR #2178与merge commit `71d3486d`已经合入，DEV/production
+   数据库操作和 runtime activation 均未执行并继续分开报告。
 
-G3代码完整实现并通过L0-L2后，下一阶段是G4 Service、CLI And Recovery orchestration。G3设计或代码合入不代表
-G4/G5、DEV evidence、production DML或runtime activation完成。
+G3已经完整实现并通过L0-L2后合入。下一阶段是G4 Service、CLI And Recovery orchestration。G3合入不代表
+G4/G5、DEV evidence、production DML或runtime activation完成；G4必须在独立F2详细设计通过后实施。
