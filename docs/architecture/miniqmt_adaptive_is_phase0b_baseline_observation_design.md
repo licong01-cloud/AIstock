@@ -5,7 +5,9 @@
 > 任务等级：`T3 / P1 / design-driven`
 > 运行边界：`SIM only / MiniQMT only / B0_QUOTE_V2 only`
 > 日期：2026-07-15
-> 上游权威：
+> 唯一上位蓝图：
+> - `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`
+> 算法域与阶段下位输入：
 > - `docs/analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md`
 > - `docs/architecture/miniqmt_adaptive_is_phase0_tca_design.md`
 > - `docs/architecture/miniqmt_adaptive_is_phase1_quote_contract_design.md`
@@ -14,6 +16,8 @@
 ## 0. 结论与红线
 
 Phase 0B 的交付物不是新执行算法，也不是一次“看起来正常”的模拟盘运行；它是针对冻结的 `B0_QUOTE_V2` control，在运行前预注册完整观察窗口，使用 Phase 0A TCA 与 Phase 1 行情证据链形成可重复查询、可重建、可追溯且不可变的 B0 baseline receipt。Phase 0B 完成前，不允许进入 Phase 2/3 的 `ADAPTIVE_IS_L1` 代码或 dry-run，更不允许 B1 broker side effect、canary、activation 或 promotion。
+
+本文是唯一上位蓝图的 Phase 0B 下位阶段设计。Phase 0B 实施前，必须先证明上位蓝图中与 MiniQMT 唯一 runtime、`B0_QUOTE_V2` 冻结 revision、fail-loud health、测试隔离、生产状态分离和阶段顺序有关的适用条款已经满足。LocalSIM 的独立 P0 修复不改变本阶段统计口径，但共享 scheduler 隔离和平台 health 不能以 LocalSIM/MiniQMT 任一侧的错误为代价。每个 Phase 0B 功能或 BUG PR 必须同步更新上位蓝图当前进度账本。
 
 本设计固定以下 P0 约束：
 
@@ -906,9 +910,9 @@ mock/fixture 只能验证合同，不可替代以下真实证据：
 
 ## 14. Design Acceptance Index
 
-本节不创建新的 F 编号，严格复用主蓝图 §15 的稳定 `F-001`～`F-022` 语义。
+本节不创建新的 F 编号，严格复用算法域下位蓝图 §15 的稳定 `F-001`～`F-022` 语义；平台执行路径、durability、错误语义和进度状态始终服从唯一上位蓝图。
 
-### 14.1 本阶段承接的主蓝图条款
+### 14.1 本阶段承接的算法域下位蓝图条款
 
 - `F-001`：以 signed decision/arrival IS、尾部风险和 terminal residual 为权威目标；Phase 0B 负责冻结 B0 聚合与 residual=0 证据。
 - `F-003`：使用 Phase 1 强类型五档 quote、exchange/receive time、quote age 与 duplicate contract，不创建第二 schema。
@@ -925,7 +929,7 @@ mock/fixture 只能验证合同，不可替代以下真实证据：
 - `F-019`：消费 Phase 1 watermark、背压结果、事件优先级、单位和 clock/calendar failure evidence。
 - `F-020`：实现 Phase 0B logical persistence、service operations、migration、rollback 与 backward compatibility。
 
-### 14.2 本阶段明确不拥有的主蓝图条款
+### 14.2 本阶段明确不拥有的算法域下位蓝图条款
 
 - `F-002`：多 alpha broker 前唯一 parent、lineage、现金和 T+1 约束仍由 selection/runtime 既有路径与 Phase 3 拥有；Phase 0B 只读其冻结结果。
 - `F-005`、`F-006`、`F-007`：动作空间、depth/haircut child sizing 与不可绕过 hard constraints 属于 Phase 2/3；Phase 0B 不生成动作或重算约束。
@@ -969,6 +973,7 @@ mock/fixture 只能验证合同，不可替代以下真实证据：
 2. **无静默错误/假成功**：所有缺源、覆盖、时钟、identity、数据库、readback、late fact 均有 typed failure/assessment；明确禁止零值、默认值、缓存、内存/文件回执和 HTTP 200 空对象 fallback。
 3. **无业务逻辑漂移**：观察层对 MiniQMT broker call 为零，不修改 selection/package validation/localSIM/B0 event-loop/action/reconcile；BUG-599/600/604/614 与 LEGACY identity 保持不变。
 4. **无额外门禁审批**：没有 approval、RBAC、ack、人工 promote 状态。Production Gates 仅记录技术事实；生产写操作继续按用户当次授权执行，不把授权机制实现进产品。
+5. **权威与进度同步**：本文明确服从模拟盘平台唯一上位蓝图；实现、测试、merge、DDL/config/restart/binding 和真实 SIM 状态必须在同一 PR 更新上位蓝图进度账本，不能用本阶段局部完成替代平台完成。
 
 ## 17. Phase 0B Exit 与 Phase 2 handoff
 

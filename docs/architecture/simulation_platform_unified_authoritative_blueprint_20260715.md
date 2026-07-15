@@ -644,7 +644,7 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `SIM-P-011` | `F-022,024` | Phase 1 quote diagnostics/evidence 已存在，但平台级 LocalSIM/MiniQMT 聚合 health/runbook 尚未按本文统一 | Phase 1 diagnostics/runbook、当前 scheduler ops | REPAIR_REQUIRED | P0-D |
 | `SIM-P-012` | `F-024,025` | Phase 0A 专项文档只明确记录 0A-0..0A-3；当前源码已有 TCA read API/EOD/projector 组件，专项进度与代码证据尚未重新闭合 | Phase 0A 专项文档顶部状态、`simulation_runtime/tca_*` 当前源码 | EVIDENCE_REFRESH_REQUIRED | 在相关 TCA PR 前先按当前 main 刷新专项证据和本行 |
 | `SIM-P-013` | `F-016,017,022,024` | Phase 1 A-E、B0_V2 activation wiring 和 quote evidence/diagnostics 已合入；生产 DDL/config/restart/binding/真实 SIM 必须继续单独记录 | Phase 1 专项设计 §13、PR #1988/#1994/#2005/#2011/#2019/#2033 | IMPLEMENTED_VERIFIED | 按本蓝图 P0-C/D 收敛旧路径和平台 health |
-| `SIM-P-014` | `F-025` | Phase 0B 详细设计在 PR #2141，未合入；当前应受本文约束 | PR #2141 CI green，state OPEN（2026-07-15 readback） | DESIGN_ONLY | 本蓝图合入后更新其上位权威和前置映射 |
+| `SIM-P-014` | `F-025` | Phase 0B 详细设计在 PR #2141，已在该 PR 声明本文为唯一上位蓝图并映射适用 P0 前置；设计尚未合入 | PR #2141 authority-sync commit、F2 validator 与 CI；state OPEN（2026-07-15 readback） | DESIGN_ONLY | 合入状态、实现、DDL/spec DML、窗口启动和真实观察继续分别更新 |
 | `SIM-P-015` | `F-025` | `ADAPTIVE_IS_L1` 仅有算法域蓝图和 Phase 0A/1 基础，不存在经本文批准的可达新算法 broker submit | algorithm domain blueprint、Phase 0A/1 designs | DESIGN_ONLY | Phase 0B 可重建基线完成后再做阶段设计 |
 
 每次更新本表必须使用当时最新 `origin/main` 和可重复证据；不得把旧运行快照写成当前事实。若只完成代码而没有生产授权，状态说明必须明确 `source merged`，不能写成 runtime activated。
