@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-609",
-  "closed_at": null,
+  "closed_at": "2026-07-09T02:10:42Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
