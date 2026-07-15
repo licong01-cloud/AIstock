@@ -224,7 +224,7 @@ class QELongTrendProfile:
 QE_LONG_TREND_PROFILE_V1 = QELongTrendProfile(
     profile_id=PROFILE_ID_V1,
     schema_version=SCHEMA_VERSION_V1,
-    horizons=(20, 40, 60, 120, 180),
+    horizons=(20, 30, 40, 60, 120, 180),
     barriers=(0.30, 0.50, 0.70),
     calendar_slices=("all_oos", "last_252_signal_days", "last_126_signal_days"),
     fixed_k=(20, 50),

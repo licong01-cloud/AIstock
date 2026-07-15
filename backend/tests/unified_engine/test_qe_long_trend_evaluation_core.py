@@ -290,6 +290,35 @@ def test_missing_price_family_does_not_discard_authoritative_portfolio_report() 
     assert any(metric["metric_scope"] == "portfolio_result" for metric in result.metrics)
 
 
+def test_invalid_execution_activity_does_not_discard_authoritative_portfolio_report() -> None:
+    prices = _price_frame()
+    portfolio_report = pd.DataFrame(
+        {"return": [0.01, -0.005], "cost": [0.001, 0.001], "turnover": [0.2, 0.1]},
+        index=pd.date_range("2026-01-05", periods=2, freq="B"),
+    )
+    invalid_trades = pd.DataFrame(
+        {
+            "datetime": ["not-a-date"],
+            "instrument": ["000001.SZ"],
+            "quantity": [100.0],
+        }
+    )
+
+    result = QELongTrendEvaluationEngine().evaluate(
+        context=_evaluation_context(prices),
+        predictions=None,
+        prices=prices,
+        portfolio_report=portfolio_report,
+        execution_evidence=ExecutionEvidenceBundle(trades=invalid_trades),
+    )
+
+    portfolio = result.family_status["portfolio_result"]
+    assert portfolio.status == FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS
+    assert "valid_execution_activity_evidence" in portfolio.missing_inputs
+    assert QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED.value in portfolio.reason_codes
+    assert any(metric["metric_scope"] == "portfolio_result" for metric in result.metrics)
+
+
 def test_exit_reconciliation_error_preserves_valid_entry_execution_evidence() -> None:
     prices = _price_frame()
     dates = pd.DatetimeIndex(sorted(prices.index.get_level_values("datetime").unique()))
@@ -873,6 +902,39 @@ def test_position_history_uses_its_own_asof_and_marks_left_censoring() -> None:
     assert exc_info.value.reason_code == QELongTrendReason.EPISODE_RECONCILIATION_FAILED.value
 
 
+def test_episode_capture_ratio_is_undefined_when_mfe_is_not_positive() -> None:
+    dates = pd.date_range("2025-01-02", periods=190, freq="B")
+    closes = np.linspace(10.0, 5.0, len(dates))
+    prices = pd.DataFrame(
+        {
+            "datetime": dates,
+            "instrument": "000001.SZ",
+            "close_qfq": closes,
+            "high_qfq": closes + 0.001,
+            "low_qfq": closes - 0.001,
+        }
+    ).set_index(["datetime", "instrument"])
+    positions = pd.DataFrame(
+        {
+            "datetime": dates,
+            "instrument": "000001.SZ",
+            "amount": [0.0] + [1.0] * 20 + [0.0] * (len(dates) - 21),
+        }
+    )
+
+    episodes = reconstruct_holding_episodes(
+        positions=positions,
+        prices=prices,
+        evaluation_asof=dates[-1],
+    )
+    assert len(episodes) == 1
+    assert episodes.loc[0, "episode_mfe"] <= 0.0
+    assert pd.isna(episodes.loc[0, "episode_capture_ratio"])
+    assert "episode_capture_ratio_denominator_not_positive" in episodes.loc[
+        0, "episode_quality_flags"
+    ]
+
+
 def test_execution_cause_coverage_only_requires_reasons_for_failed_events() -> None:
     filled_observations = pd.DataFrame(
         {
@@ -1077,7 +1139,7 @@ def test_registered_profile_and_authoritative_portfolio_report_contract() -> Non
     prices = _price_frame()
     for invalid_parameters in (
         {"strategy_topk": 51},
-        {"label_horizon": 30},
+        {"label_horizon": 10},
     ):
         with pytest.raises(QELongTrendError) as exc_info:
             QELongTrendEvaluationEngine().evaluate(
@@ -1111,6 +1173,16 @@ def test_registered_profile_and_authoritative_portfolio_report_contract() -> Non
     )
     assert partial_result.family_status["portfolio_result"].status == FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS
     assert partial_result.family_status["portfolio_result"].coverage["cost_coverage"] == 0.0
+
+    zero_diagnostic_report = report.assign(cost=0.0, turnover=0.0)
+    conflicted = compute_portfolio_metrics(
+        zero_diagnostic_report,
+        executed_trade_count=3,
+    )[0]
+    assert conflicted["quality_flag"] == "computed_with_limitations"
+    assert conflicted["value_json"]["zero_diagnostics_conflict"] is True
+    assert conflicted["value_json"]["total_cost"] is None
+    assert conflicted["value_json"]["average_turnover"] is None
 
     empty = report.iloc[0:0]
     with pytest.raises(QELongTrendError) as exc_info:

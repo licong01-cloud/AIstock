@@ -1480,8 +1480,22 @@ class QELongTrendEvaluationEngine:
                 ),
             )
         else:
+            portfolio_execution_errors: list[QELongTrendError] = []
             try:
-                portfolio_metrics = compute_portfolio_metrics(portfolio_report)
+                executed_trade_count = _execution_evidence_trade_count(execution_evidence)
+            except QELongTrendError as exc:
+                if exc.reason_code != QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED.value:
+                    raise
+                # Execution evidence is supplemental to the authoritative portfolio
+                # return series.  Preserve the portfolio result while reporting that
+                # the zero-cost/zero-turnover cross-check could not be completed.
+                executed_trade_count = None
+                portfolio_execution_errors.append(exc)
+            try:
+                portfolio_metrics = compute_portfolio_metrics(
+                    portfolio_report,
+                    executed_trade_count=executed_trade_count,
+                )
             except QELongTrendError as exc:
                 if exc.reason_code != QELongTrendReason.PORTFOLIO_REPORT_INVALID.value:
                     raise
@@ -1500,7 +1514,43 @@ class QELongTrendEvaluationEngine:
                 )
             else:
                 portfolio_summary = portfolio_metrics[0]["value_json"]
-                diagnostics_limited = portfolio_metrics[0]["quality_flag"] == "computed_with_limitations"
+                report_diagnostics_limited = (
+                    portfolio_metrics[0]["quality_flag"] == "computed_with_limitations"
+                )
+                diagnostics_limited = report_diagnostics_limited or bool(portfolio_execution_errors)
+                missing_inputs: list[str] = []
+                limitations: list[str] = []
+                reason_codes: list[str] = []
+                data_actions: list[dict[str, Any]] = []
+                if report_diagnostics_limited:
+                    missing_inputs.append("complete_cost_and_turnover")
+                    limitations.append(
+                        "portfolio return is authoritative but cost or turnover diagnostics are incomplete"
+                    )
+                    reason_codes.append(QELongTrendReason.PORTFOLIO_DIAGNOSTICS_INCOMPLETE.value)
+                    data_actions.append(
+                        _family_data_action(
+                            "restore_portfolio_cost_and_turnover_diagnostics",
+                            "portfolio_result",
+                            required_fields=("cost", "turnover"),
+                            source_candidates=("qe_recorder_portfolio_report",),
+                        )
+                    )
+                for execution_error in portfolio_execution_errors:
+                    missing_inputs.append("valid_execution_activity_evidence")
+                    limitations.append(
+                        "portfolio return remains authoritative; execution activity cross-check failed: "
+                        f"{execution_error.message}"
+                    )
+                    reason_codes.append(execution_error.reason_code)
+                    data_actions.append(
+                        _family_data_action(
+                            "repair_qe_execution_activity_evidence",
+                            "portfolio_result",
+                            required_fields=("evidence_date", "instrument", "deal_amount_or_quantity"),
+                            source_candidates=("qe_recorder_indicator", "qe_recorder_trade"),
+                        )
+                    )
                 family_status["portfolio_result"] = FamilyEvidenceStatus(
                     status=(
                         FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS
@@ -1508,28 +1558,15 @@ class QELongTrendEvaluationEngine:
                         else FamilyComputationStatus.COMPUTED
                     ),
                     available_inputs=("portfolio_report",),
-                    missing_inputs=("complete_cost_and_turnover",) if diagnostics_limited else (),
+                    missing_inputs=tuple(dict.fromkeys(missing_inputs)),
                     coverage={
                         "trading_day_count": portfolio_summary["trading_day_count"],
                         "cost_coverage": portfolio_summary["cost_coverage"],
                         "turnover_coverage": portfolio_summary["turnover_coverage"],
                     },
-                    limitations=("portfolio return is authoritative but cost or turnover diagnostics are incomplete",)
-                    if diagnostics_limited
-                    else (),
-                    reason_codes=(QELongTrendReason.PORTFOLIO_DIAGNOSTICS_INCOMPLETE.value,)
-                    if diagnostics_limited
-                    else (),
-                    data_actions=(
-                        _family_data_action(
-                            "restore_portfolio_cost_and_turnover_diagnostics",
-                            "portfolio_result",
-                            required_fields=("cost", "turnover"),
-                            source_candidates=("qe_recorder_portfolio_report",),
-                        ),
-                    )
-                    if diagnostics_limited
-                    else (),
+                    limitations=tuple(dict.fromkeys(limitations)),
+                    reason_codes=tuple(dict.fromkeys(reason_codes)),
+                    data_actions=tuple(data_actions),
                 )
                 metrics.extend(portfolio_metrics)
 
@@ -1756,7 +1793,9 @@ class QELongTrendEvaluationEngine:
     def compute_sector_metrics(self, observations: pd.DataFrame) -> list[dict[str, Any]]:
         if observations.empty or "l2_code_id" not in observations:
             return []
-        valid = observations.loc[observations["l2_code_id"].notna()].copy()
+        sector_ids = pd.to_numeric(observations["l2_code_id"], errors="coerce")
+        valid_sector = sector_ids.notna() & sector_ids.ge(0)
+        valid = observations.loc[valid_sector].copy()
         if valid.empty:
             return []
         top50 = valid.loc[valid["stable_rank"] <= 50]
@@ -1782,7 +1821,7 @@ class QELongTrendEvaluationEngine:
                 "all_oos",
                 None,
                 value_json={
-                    "mapped_rate": float(observations["l2_code_id"].notna().mean()),
+                    "mapped_rate": float(valid_sector.mean()),
                     "daily_hhi_mean": _finite_mean(hhi),
                     "daily_top1_sector_share_mean": _finite_mean(top1),
                     "effective_sector_count_mean": _finite_mean(1.0 / hhi.replace(0.0, np.nan)),
@@ -1967,7 +2006,11 @@ class QELongTrendEvaluationEngine:
         )
 
     def _sector_family_status(self, observations: pd.DataFrame) -> FamilyEvidenceStatus:
-        coverage = float(observations["l2_code_id"].notna().mean()) if not observations.empty else 0.0
+        if observations.empty:
+            coverage = 0.0
+        else:
+            sector_ids = pd.to_numeric(observations["l2_code_id"], errors="coerce")
+            coverage = float((sector_ids.notna() & sector_ids.ge(0)).mean())
         limited = coverage < self.profile.sector_coverage_reference
         return FamilyEvidenceStatus(
             status=(FamilyComputationStatus.COMPUTED_WITH_LIMITATIONS if limited else FamilyComputationStatus.COMPUTED),
@@ -3138,9 +3181,15 @@ def _episode_record(
             extended_close_path_max = None
             flags.append("extended_path_incomplete")
         if episode_mfe is not None and episode_close_return is not None:
-            episode_capture_ratio = episode_close_return / max(episode_mfe, 1e-12)
+            if episode_mfe > 1e-8:
+                episode_capture_ratio = episode_close_return / episode_mfe
+            else:
+                flags.append("episode_capture_ratio_denominator_not_positive")
         if extended_mfe is not None and episode_close_return is not None:
-            extended_capture_ratio = episode_close_return / max(extended_mfe, 1e-12)
+            if extended_mfe > 1e-8:
+                extended_capture_ratio = episode_close_return / extended_mfe
+            else:
+                flags.append("extended_capture_ratio_denominator_not_positive")
         highest_at_exit = _stage_from_return(episode_close_path_max)
         full_180_mature = entry_position + max_horizon < len(calendar) and extended_path_coverage == 1.0
         highest_180 = _stage_from_return(extended_close_path_max) if full_180_mature else None
@@ -3697,7 +3746,31 @@ def normalize_portfolio_report(report: pd.DataFrame) -> pd.DataFrame:
     return frame.sort_values("report_date", kind="mergesort").reset_index(drop=True)
 
 
-def compute_portfolio_metrics(report: pd.DataFrame) -> list[dict[str, Any]]:
+def _execution_evidence_trade_count(evidence: ExecutionEvidenceBundle | None) -> int | None:
+    if evidence is None:
+        return None
+    if evidence.trades is not None:
+        trades = _normalize_evidence_frame(evidence.trades, kind="trade")
+        if trades is None:
+            return None
+        for column in ("quantity", "deal_amount", "amount"):
+            if column in trades:
+                return int(pd.to_numeric(trades[column], errors="coerce").abs().gt(0.0).sum())
+        return int(len(trades))
+    if evidence.indicator is not None:
+        indicator = _normalize_evidence_frame(evidence.indicator, kind="indicator")
+        if indicator is None:
+            return None
+        if "deal_amount" in indicator:
+            return int(pd.to_numeric(indicator["deal_amount"], errors="coerce").abs().gt(0.0).sum())
+    return None
+
+
+def compute_portfolio_metrics(
+    report: pd.DataFrame,
+    *,
+    executed_trade_count: int | None = None,
+) -> list[dict[str, Any]]:
     frame = normalize_portfolio_report(report)
     returns = frame["return"].to_numpy(dtype="float64")
     nav = np.cumprod(1.0 + returns)
@@ -3713,7 +3786,19 @@ def compute_portfolio_metrics(report: pd.DataFrame) -> list[dict[str, Any]]:
     cost_coverage = float(frame["cost"].notna().mean()) if "cost" in frame else 0.0
     turnover_column = "turnover" if "turnover" in frame else ("total_turnover" if "total_turnover" in frame else None)
     turnover_coverage = float(frame[turnover_column].notna().mean()) if turnover_column is not None else 0.0
-    complete_diagnostics = cost_coverage == 1.0 and turnover_coverage == 1.0
+    zero_diagnostics_conflict = bool(
+        executed_trade_count is not None
+        and executed_trade_count > 0
+        and cost_coverage == 1.0
+        and turnover_coverage == 1.0
+        and float(frame["cost"].abs().sum()) == 0.0
+        and float(frame[turnover_column].abs().sum()) == 0.0
+    )
+    complete_diagnostics = (
+        cost_coverage == 1.0
+        and turnover_coverage == 1.0
+        and not zero_diagnostics_conflict
+    )
     observed_cost_sum = float(frame["cost"].dropna().sum()) if "cost" in frame else None
     observed_turnover_mean = (
         float(frame[turnover_column].dropna().mean())
@@ -3738,9 +3823,19 @@ def compute_portfolio_metrics(report: pd.DataFrame) -> list[dict[str, Any]]:
                 "max_drawdown": float(drawdown.min()),
                 "cost_coverage": cost_coverage,
                 "turnover_coverage": turnover_coverage,
-                "total_cost": observed_cost_sum if cost_coverage == 1.0 else None,
+                "executed_trade_count": executed_trade_count,
+                "zero_diagnostics_conflict": zero_diagnostics_conflict,
+                "total_cost": (
+                    observed_cost_sum
+                    if cost_coverage == 1.0 and not zero_diagnostics_conflict
+                    else None
+                ),
                 "observed_cost_sum": observed_cost_sum,
-                "average_turnover": (observed_turnover_mean if turnover_coverage == 1.0 else None),
+                "average_turnover": (
+                    observed_turnover_mean
+                    if turnover_coverage == 1.0 and not zero_diagnostics_conflict
+                    else None
+                ),
                 "observed_average_turnover": observed_turnover_mean,
             },
             "quality_flag": "ok" if complete_diagnostics else "computed_with_limitations",

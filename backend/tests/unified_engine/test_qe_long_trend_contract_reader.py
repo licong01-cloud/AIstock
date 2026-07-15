@@ -89,7 +89,7 @@ def _prepare_reader_paths(tmp_path: Path) -> tuple[Path, Path, QEDatasetSnapshot
 def test_profile_and_evaluation_identity_are_versioned_and_null_explicit() -> None:
     profile = get_long_trend_profile("qe_long_trend_v1")
     assert profile is QE_LONG_TREND_PROFILE_V1
-    assert profile.horizons == (20, 40, 60, 120, 180)
+    assert profile.horizons == (20, 30, 40, 60, 120, 180)
     assert profile.barriers == (0.30, 0.50, 0.70)
     assert profile.profile_sha256 == canonical_sha256(profile.canonical_payload())
 
@@ -395,6 +395,7 @@ def test_reader_loads_only_qe_daily_and_sector_files(tmp_path: Path) -> None:
     assert calls == ["daily_pv.h5", "sector_data.h5"]
     assert snapshot_identity.lineage_parent_ids == ("qe-parent-snapshot",)
     assert list(loaded.prices.columns) == [
+        "open_qfq",
         "close_qfq",
         "high_qfq",
         "low_qfq",
@@ -402,6 +403,10 @@ def test_reader_loads_only_qe_daily_and_sector_files(tmp_path: Path) -> None:
     ]
     assert loaded.prices.index.get_level_values("instrument").unique().tolist() == ["000001.SZ"]
     assert str(loaded.sectors["l2_code_id"].dtype) == "Int16"
+
+    bindings = reader.verify_workspace_binding()
+    assert set(bindings) == {"daily_pv.h5", "sector_data.h5"}
+    assert calls == ["daily_pv.h5", "sector_data.h5"]
 
 
 def test_reader_rejects_non_qe_identity_and_invalid_sector_schema(tmp_path: Path) -> None:
