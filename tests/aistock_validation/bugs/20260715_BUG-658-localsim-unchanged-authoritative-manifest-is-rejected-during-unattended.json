@@ -32,8 +32,8 @@
   "expected": "An unchanged authoritative StrategyPackage manifest remains valid across daily immutable release/binding roll-forward; lineage proves the source and authoritative identities without revalidating the package or requiring an identity change.",
   "first_seen_at": "2026-07-15T05:38:01.836247Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "43ce19de40bacfeea780761175326a75fcf4ff27",
+  "fixed_at": "2026-07-15T06:54:18.454391Z",
   "github_issue_number": 2155,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2155",
   "last_seen_at": "2026-07-15T05:38:01.836247Z",
@@ -41,6 +41,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2157",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -51,7 +52,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -60,6 +61,9 @@
     "fingerprint": "8185307c43222dff98a33094",
     "source_event_id": "FE-20260715-8185307c4322"
   },
+  "validation_evidence": [
+    "PR #2157 rebased required CI checks passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
