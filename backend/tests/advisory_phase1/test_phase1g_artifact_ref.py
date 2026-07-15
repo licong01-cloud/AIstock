@@ -21,7 +21,11 @@ from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GInputArtifactKind,
 )
 from backend.services.advisory_phase1.phase1g_phase1e_projection import Phase1EPlannedOperationType
-from backend.services.advisory_phase1.readiness_plan import Phase1EExecutionPlan, PlannedOperationType
+from backend.services.advisory_phase1.readiness_plan import (
+    OperationDisposition,
+    Phase1EExecutionPlan,
+    PlannedOperationType,
+)
 from backend.tests.advisory_phase1.phase1g_test_support import (
     h,
     input_ref,
@@ -188,6 +192,44 @@ def test_phase1e_plan_requires_policy_closure_across_ref_envelope_and_plan(tmp_p
                 store_policy_hash=h("f"),
             )
         )
+
+
+def test_resolver_preserves_exact_deferred_disposition_for_service_classification(
+    tmp_path: Path,
+) -> None:
+    receipt_root = tmp_path / "receipts-root"
+    plan_root = tmp_path / "plans-root"
+    receipt_root.mkdir()
+    plan_root.mkdir()
+    payload = phase1e_plan().model_dump(
+        mode="python", exclude={"plan_hash", "plan_id"}
+    )
+    observation = next(
+        item
+        for item in payload["planned_operations"]
+        if item["operation_type"] is PlannedOperationType.OBSERVATION_CAPTURE
+    )
+    observation["operation_disposition"] = OperationDisposition.DEFERRED
+    plan = Phase1EExecutionPlan.model_validate(payload)
+    _, raw = write_phase1e_plan_artifact(
+        root=plan_root, plan=plan, store_policy_hash=h("e")
+    )
+    resolver = _resolver(receipt_root=receipt_root, plan_root=plan_root)
+
+    resolved = resolver.resolve(
+        input_ref(
+            kind=Phase1GInputArtifactKind.PHASE1E_EXECUTION_PLAN,
+            semantic_hash=str(plan.plan_hash),
+            file_sha256=raw_sha256(raw),
+        )
+    )
+
+    operation = next(
+        item
+        for item in resolved.payload.planned_operations
+        if item.operation_type is Phase1EPlannedOperationType.OBSERVATION_CAPTURE
+    )
+    assert operation.operation_disposition.value == "DEFERRED"
 
 
 def _mutate_operation_scope(

@@ -15,6 +15,7 @@ from backend.services.advisory_phase0a.policy import canonical_json_text
 from backend.services.advisory_phase1.phase1g_contract import (
     PHASE1G_RESULT_STORE_LAYOUT_POLICY,
     REASON_ATTEMPT_RECEIPT_STORE_FAILED,
+    REASON_BATCH_RECEIPT_STORE_FAILED,
     REASON_RESULT_STORE_FAILED,
     Phase1GAttemptReceipt,
     Phase1GBatchAttemptReceipt,
@@ -90,6 +91,14 @@ class Phase1GResultStore:
             raise self._error(ref.artifact_kind, "stored artifact raw file hash does not match its ref")
         return self._parse_model(kind=ref.artifact_kind, raw=raw, identity=ref.semantic_content_hash)
 
+    def load_by_identity(
+        self, *, kind: Phase1GOutputArtifactKind, identity: str
+    ) -> Phase1GStoredModel:
+        identity = _sha256(identity, field_name="artifact identity", kind=kind)
+        path = self._destination(kind=kind, identity=identity)
+        raw = self._read_exact(path=path, kind=kind)
+        return self._parse_model(kind=kind, raw=raw, identity=identity)
+
     def _publish(
         self,
         *,
@@ -137,11 +146,7 @@ class Phase1GResultStore:
                     logger.warning(
                         "Phase 1G temporary artifact cleanup failed "
                         "reason_code=%s artifact_kind=%s identity_prefix=%s errno=%s",
-                        (
-                            REASON_ATTEMPT_RECEIPT_STORE_FAILED
-                            if kind is Phase1GOutputArtifactKind.ATTEMPT_RECEIPT
-                            else REASON_RESULT_STORE_FAILED
-                        ),
+                        _store_reason(kind),
                         kind.value,
                         identity[:12],
                         exc.errno,
@@ -234,13 +239,16 @@ class Phase1GResultStore:
 
     @staticmethod
     def _error(kind: Phase1GOutputArtifactKind, message: str, *, errno: int | None = None) -> Phase1GResultStoreError:
-        reason = (
-            REASON_ATTEMPT_RECEIPT_STORE_FAILED
-            if kind is Phase1GOutputArtifactKind.ATTEMPT_RECEIPT
-            else REASON_RESULT_STORE_FAILED
-        )
         context = {"errno": errno} if errno is not None else None
-        return Phase1GResultStoreError(reason, message, context=context)
+        return Phase1GResultStoreError(_store_reason(kind), message, context=context)
+
+
+def _store_reason(kind: Phase1GOutputArtifactKind) -> str:
+    if kind is Phase1GOutputArtifactKind.ATTEMPT_RECEIPT:
+        return REASON_ATTEMPT_RECEIPT_STORE_FAILED
+    if kind is Phase1GOutputArtifactKind.BATCH_RECEIPT:
+        return REASON_BATCH_RECEIPT_STORE_FAILED
+    return REASON_RESULT_STORE_FAILED
 
 
 def _publish_no_replace(*, source: Path, target: Path) -> bool:
@@ -351,10 +359,7 @@ def _assert_existing_root_chain_has_no_reparse(path: Path) -> None:
 def _sha256(value: str, *, field_name: str, kind: Phase1GOutputArtifactKind) -> str:
     normalized = str(value or "").strip().lower()
     if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
-        reason = (
-            REASON_ATTEMPT_RECEIPT_STORE_FAILED
-            if kind is Phase1GOutputArtifactKind.ATTEMPT_RECEIPT
-            else REASON_RESULT_STORE_FAILED
+        raise Phase1GResultStoreError(
+            _store_reason(kind), f"{field_name} must be lowercase sha256"
         )
-        raise Phase1GResultStoreError(reason, f"{field_name} must be lowercase sha256")
     return normalized

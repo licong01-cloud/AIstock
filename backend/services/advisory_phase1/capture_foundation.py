@@ -1284,6 +1284,64 @@ class PostgresCaptureBatchRepository:
                 row = self._select_batch_locked(cur, capture_batch_id)
                 return self._load_locked(cur, row)
 
+    @classmethod
+    def read_request_chain_exact_readonly(
+        cls, cur: Any, capture_request_hash: str
+    ) -> tuple[CaptureBatch, ...]:
+        _require_sha256(capture_request_hash, field_name="capture_request_hash")
+        cur.execute(
+            f"""
+            SELECT {_CAPTURE_BATCH_COLUMNS}
+            FROM app.advisory_capture_batch
+            WHERE capture_request_hash = %s
+            ORDER BY capture_attempt_no, capture_batch_id
+            """,
+            (capture_request_hash,),
+        )
+        batches = tuple(cls._load_readonly(cur, dict(row)) for row in cur.fetchall())
+        active_count = 0
+        for index, batch in enumerate(batches, start=1):
+            if not isinstance(batch.request, CaptureBatchRequest):
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "Phase 1G request chain contains a non-observation batch",
+                )
+            expected_id = f"acb_{capture_request_hash[:20]}_a{index}"
+            expected_predecessor = (
+                batches[index - 2].request.capture_batch_id if index > 1 else None
+            )
+            if (
+                batch.capture_attempt_no != index
+                or batch.request.capture_batch_id != expected_id
+                or batch.predecessor_capture_batch_id != expected_predecessor
+                or str(batch.request.capture_request_hash) != capture_request_hash
+            ):
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "Phase 1G capture request chain is discontinuous",
+                )
+            if batch.status in {
+                CaptureBatchStatus.PLANNED,
+                CaptureBatchStatus.RUNNING,
+            }:
+                active_count += 1
+                if index != len(batches):
+                    raise SourceLedgerError(
+                        REASON_CAPTURE_BATCH_CONFLICT,
+                        "active capture batch is not the request-chain tail",
+                    )
+            if batch.status is CaptureBatchStatus.COMPLETE and index != len(batches):
+                raise SourceLedgerError(
+                    REASON_CAPTURE_BATCH_CONFLICT,
+                    "complete capture batch cannot have a successor",
+                )
+        if active_count > 1:
+            raise SourceLedgerError(
+                REASON_CAPTURE_BATCH_CONFLICT,
+                "capture request chain has multiple active batches",
+            )
+        return batches
+
     def lock_running_in_transaction(
         self,
         cur: Any,
@@ -1576,6 +1634,20 @@ class PostgresCaptureBatchRepository:
 
     @staticmethod
     def _load_locked(cur: Any, row: Mapping[str, Any]) -> CaptureBatch:
+        return PostgresCaptureBatchRepository._load_row(
+            cur, row, lock_children=True
+        )
+
+    @staticmethod
+    def _load_readonly(cur: Any, row: Mapping[str, Any]) -> CaptureBatch:
+        return PostgresCaptureBatchRepository._load_row(
+            cur, row, lock_children=False
+        )
+
+    @staticmethod
+    def _load_row(
+        cur: Any, row: Mapping[str, Any], *, lock_children: bool
+    ) -> CaptureBatch:
         schema_version = str(row["capture_request_schema_version"])
         purpose = str(row["capture_purpose"])
         payload = canonicalize(dict(row["request_payload_jsonb"]))
@@ -1584,10 +1656,11 @@ class PostgresCaptureBatchRepository:
             schema_version == CAPTURE_BATCH_SCHEMA_VERSION
             and purpose == OBSERVATION_CAPTURE_PURPOSE
         ):
+            lock_clause = " FOR KEY SHARE" if lock_children else ""
             cur.execute(
-                """
+                f"""
                 SELECT plan_payload_jsonb FROM app.advisory_capture_plan
-                WHERE capture_batch_id = %s ORDER BY plan_hash FOR KEY SHARE
+                WHERE capture_batch_id = %s ORDER BY plan_hash{lock_clause}
                 """,
                 (row["capture_batch_id"],),
             )
@@ -1612,8 +1685,10 @@ class PostgresCaptureBatchRepository:
             schema_version == LABEL_CAPTURE_BATCH_SCHEMA_VERSION
             and purpose == LABEL_CAPTURE_PURPOSE
         ):
+            lock_clause = " FOR KEY SHARE" if lock_children else ""
             cur.execute(
-                "SELECT 1 FROM app.advisory_capture_plan WHERE capture_batch_id = %s FOR KEY SHARE",
+                "SELECT 1 FROM app.advisory_capture_plan "
+                f"WHERE capture_batch_id = %s{lock_clause}",
                 (row["capture_batch_id"],),
             )
             if cur.fetchone() is not None:

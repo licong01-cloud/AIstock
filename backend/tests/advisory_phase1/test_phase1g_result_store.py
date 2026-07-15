@@ -10,12 +10,14 @@ import pytest
 
 from backend.services.advisory_phase1.phase1g_contract import (
     REASON_ATTEMPT_RECEIPT_STORE_FAILED,
+    REASON_BATCH_RECEIPT_STORE_FAILED,
     REASON_RESULT_STORE_FAILED,
     Phase1GAttemptReceipt,
     Phase1GAttemptStatus,
     Phase1GBatchAttemptReceipt,
     Phase1GBatchStatus,
     Phase1GOutputArtifactRef,
+    Phase1GOutputArtifactKind,
     Phase1GTargetAttemptRef,
 )
 from backend.services.advisory_phase1.phase1g_result_store import (
@@ -34,7 +36,7 @@ def _attempt(*, result_ref, result_hash: str) -> Phase1GAttemptReceipt:  # type:
         finished_at=datetime(2026, 7, 15, 2, 1, tzinfo=UTC),
         operation_status=Phase1GAttemptStatus.SUCCESS,
         dml_executed=True,
-        committed_phases=("CAPTURE_BATCH", "OBSERVATION"),
+        committed_phases=("BATCH_CREATED", "TARGET_EVIDENCE"),
         capture_batch_id="capture-a",
         capture_attempt_no=1,
         capture_batch_status="COMPLETE",
@@ -148,6 +150,22 @@ def test_attempt_store_failure_keeps_attempt_specific_reason_code(tmp_path: Path
     with pytest.raises(Phase1GResultStoreError) as error:
         store.publish_attempt(attempt)
     assert error.value.reason_code == REASON_ATTEMPT_RECEIPT_STORE_FAILED
+
+
+def test_batch_identity_validation_keeps_batch_specific_reason_code(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "result-store"
+    root.mkdir()
+    store = Phase1GResultStore(root=root)
+
+    with pytest.raises(Phase1GResultStoreError) as error:
+        store.load_by_identity(
+            kind=Phase1GOutputArtifactKind.BATCH_RECEIPT,
+            identity="not-a-sha256",
+        )
+
+    assert error.value.reason_code == REASON_BATCH_RECEIPT_STORE_FAILED
 
 
 def test_result_store_rejects_repository_root_and_creates_explicit_external_root(tmp_path: Path) -> None:

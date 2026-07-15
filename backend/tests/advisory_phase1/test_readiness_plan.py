@@ -62,6 +62,12 @@ from backend.services.advisory_phase1.readiness_plan import (
     SourceRequirementRegistry,
     SourceRequirementTemplate,
 )
+from backend.services.advisory_phase1.phase1g_phase1e_projection import (
+    Phase1EExecutionPlanProjection,
+    Phase1EPlanUnitKind,
+)
+from backend.services.advisory_phase1.phase1g_contract import REASON_TARGET_DIAGNOSTIC
+from backend.services.advisory_phase1.phase1g_service import Phase1GService
 from backend.services.advisory_phase1.source_capacity import (
     CapacityMeasurements,
     CapacityPlanningRequest,
@@ -411,6 +417,14 @@ def test_phase1e_keeps_no_admission_scope_as_target_diagnostic(monkeypatch) -> N
     assert plans[0].source_readiness is None
     assert batch_receipt.all_scope_workloads_covered is False
     assert batch_receipt.failed_input_scopes == ()
+
+    projection = Phase1EExecutionPlanProjection.model_validate(
+        plans[0].model_dump(mode="json")
+    )
+    assert projection.plan_unit_kind is Phase1EPlanUnitKind.TARGET_DIAGNOSTIC
+    with pytest.raises(Exception) as diagnostic_error:
+        Phase1GService._assert_executable_phase1e(projection)
+    assert diagnostic_error.value.reason_code == REASON_TARGET_DIAGNOSTIC
 
 
 def test_phase1e_reports_policy_registry_mismatch_without_compiling_a_plan() -> None:
@@ -898,6 +912,7 @@ def test_capture_plan_is_complete_only_when_all_authoritative_fields_exist() -> 
     assert missing == ()
     assert plan is not None
     assert plan.plan_hash
+    assert plan.evidence_bundle_hash == binding.phase1_handoff_bundle_hash
 
 
 def test_capacity_receipt_cannot_cover_a_larger_declared_workload() -> None:

@@ -30,6 +30,7 @@ from backend.services.advisory_phase1.phase1g_contract import (
     Phase1GStageEvidenceCommitRef,
     Phase1GTargetCommitProjection,
     Phase1GTransactionalWriteRequest,
+    REASON_CAPTURE_TIMEOUT,
     REASON_G3_BATCH_NOT_RUNNING,
     REASON_G3_BATCH_ROW_VERSION_CONFLICT,
     REASON_G3_CAPACITY_EXCEEDED,
@@ -114,9 +115,23 @@ class Phase1GTransactionalWriter:
         *,
         transaction_connection_factory: TransactionConnectionFactory,
         readonly_connection_factory: TransactionConnectionFactory,
+        statement_timeout_ms: int | None = None,
+        lock_timeout_ms: int | None = None,
     ) -> None:
+        if statement_timeout_ms is not None and statement_timeout_ms < 1:
+            raise ValueError("statement_timeout_ms must be positive")
+        if lock_timeout_ms is not None and lock_timeout_ms < 1:
+            raise ValueError("lock_timeout_ms must be positive")
+        if (
+            statement_timeout_ms is not None
+            and lock_timeout_ms is not None
+            and lock_timeout_ms > statement_timeout_ms
+        ):
+            raise ValueError("lock_timeout_ms cannot exceed statement_timeout_ms")
         self._transaction_connection_factory = transaction_connection_factory
         self._readonly_connection_factory = readonly_connection_factory
+        self._statement_timeout_ms = statement_timeout_ms
+        self._lock_timeout_ms = lock_timeout_ms
         self._capture_repository = PostgresCaptureBatchRepository()
         self._source_repository = PostgresSourceRevisionRepository()
         self._outbox_repository = PostgresTraceOutboxRepository()
@@ -162,6 +177,7 @@ class Phase1GTransactionalWriter:
                 )
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                self._apply_transaction_timeouts(cur)
                 self._write_in_transaction(cur, target)
             try:
                 conn.commit()
@@ -220,6 +236,14 @@ class Phase1GTransactionalWriter:
             },
         )
         return projection
+
+    def read_committed_target(
+        self, target: Phase1GTransactionalTargetInput
+    ) -> Phase1GTargetCommitProjection:
+        """Rebuild one committed target without executing any write."""
+
+        self._validate_input(target)
+        return self._read_committed_projection(target)
 
     def _write_in_transaction(
         self, cur: Any, target: Phase1GTransactionalTargetInput
@@ -517,15 +541,28 @@ class Phase1GTransactionalWriter:
         conn = self._readonly_connection_factory()
         try:
             if hasattr(conn, "set_session"):
-                conn.set_session(readonly=True, autocommit=True)
+                conn.set_session(
+                    readonly=True,
+                    autocommit=False,
+                    isolation_level="REPEATABLE READ",
+                )
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                self._apply_session_timeouts(cur)
                 facts = self._read_facts_in_transaction(
                     cur,
                     target,
                     target.semantic_draft.semantic_observation_key,
                     readonly=True,
                 )
-            return self._projection_from_facts(target, facts)
+            projection = self._projection_from_facts(target, facts)
+            conn.rollback()
+            return projection
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("phase1g g3 readback rollback failed")
+            raise
         finally:
             conn.close()
 
@@ -570,8 +607,13 @@ class Phase1GTransactionalWriter:
         conn = self._readonly_connection_factory()
         try:
             if hasattr(conn, "set_session"):
-                conn.set_session(readonly=True, autocommit=True)
+                conn.set_session(
+                    readonly=True,
+                    autocommit=False,
+                    isolation_level="REPEATABLE READ",
+                )
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                self._apply_session_timeouts(cur)
                 memberships = self._capture_repository.read_memberships_exact_readonly(
                     cur, target.request.capture_batch_id
                 )
@@ -591,12 +633,45 @@ class Phase1GTransactionalWriter:
                 if ("OBSERVATION_VERSION", observation_id) in keys
             )
             if matched == 0:
-                return "NOT_COMMITTED"
-            if matched == 3 and len(expected_observation_ids) == 1:
-                return "COMMITTED"
-            return "UNKNOWN"
+                state = "NOT_COMMITTED"
+            elif matched == 3 and len(expected_observation_ids) == 1:
+                state = "COMMITTED"
+            else:
+                state = "UNKNOWN"
+            conn.rollback()
+            return state
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("phase1g g3 commit probe rollback failed")
+            raise
         finally:
             conn.close()
+
+    def _apply_transaction_timeouts(self, cur: Any) -> None:
+        if self._statement_timeout_ms is not None:
+            cur.execute(
+                "SELECT set_config('statement_timeout', %s, true)",
+                (str(self._statement_timeout_ms),),
+            )
+        if self._lock_timeout_ms is not None:
+            cur.execute(
+                "SELECT set_config('lock_timeout', %s, true)",
+                (str(self._lock_timeout_ms),),
+            )
+
+    def _apply_session_timeouts(self, cur: Any) -> None:
+        if self._statement_timeout_ms is not None:
+            cur.execute(
+                "SELECT set_config('statement_timeout', %s, false)",
+                (str(self._statement_timeout_ms),),
+            )
+        if self._lock_timeout_ms is not None:
+            cur.execute(
+                "SELECT set_config('lock_timeout', %s, false)",
+                (str(self._lock_timeout_ms),),
+            )
 
     @staticmethod
     def _matching_observation_ids_readonly(
@@ -842,6 +917,15 @@ class Phase1GTransactionalWriter:
     def _map_error(exc: Exception) -> Phase1GTransactionalWriterError:
         if isinstance(exc, Phase1GTransactionalWriterError):
             return exc
+        if isinstance(
+            exc,
+            (psycopg2.errors.QueryCanceled, psycopg2.errors.LockNotAvailable),
+        ) or str(getattr(exc, "pgcode", "")) in {"57014", "55P03"}:
+            return Phase1GTransactionalWriterError(
+                REASON_CAPTURE_TIMEOUT,
+                "Phase 1G database operation exceeded its frozen timeout",
+                context={"exception_type": type(exc).__name__},
+            )
         if isinstance(
             exc,
             (

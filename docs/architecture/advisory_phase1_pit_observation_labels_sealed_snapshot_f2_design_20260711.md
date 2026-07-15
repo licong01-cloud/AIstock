@@ -496,7 +496,7 @@ Label as-of terminal resolution：
 | `supersedes_observation_version_id` | 同 signal 前一版本，可空且唯一 |
 | `signal_source_revision_set_id/hash` | T cutoff 前 signal/source evidence |
 | `phase0a_signal_context_hash` | evidence-rich Phase 0A context，进入 version 而非 stable signal |
-| `evidence_bundle_hash` | DSE/run/runtime/HMM/risk/trace closure |
+| `evidence_bundle_hash` | Phase 0A审计handoff evidence bundle的冻结hash；不得在G4中重解释或改写 |
 | `stage_evidence_bundle_hash` | 全 stage summary/candidate hashes |
 | `selection_evidence_id/hash` | immutable DSE 引用 |
 | `selection_run_id/content_hash` | immutable run evidence |
@@ -513,6 +513,12 @@ Label as-of terminal resolution：
 | `reason_codes` | normalized codes |
 | `created_by_capture_batch_id` | 首次持久化该 version 的 capture batch |
 | `created_at` | audit timestamp |
+
+`trace_content_hash`由immutable outbox/envelope单独闭合，并与`stage_evidence_bundle_hash`、
+`evidence_bundle_hash`一起进入`observation_content_hash`。`CapturePlan.evidence_bundle_hash`在Phase 1E
+编译时已经冻结，而G4的`capture_batch_id`在该计划之后才产生；因此禁止用包含batch/event/fencing的
+trace hash反向重算该字段，否则会形成`plan hash -> request hash -> batch id -> trace hash -> plan hash`
+循环依赖。该拆分不减少trace证据，完整trace仍由outbox、observation payload和selected mapping逐项闭合。
 
 唯一约束为 `(canonical_signal_id, observation_revision_no)`、`supersedes_observation_version_id` 唯一和 `observation_content_hash` 唯一。predecessor 必须属于同一 signal 且 revision 恰好小 1。
 
