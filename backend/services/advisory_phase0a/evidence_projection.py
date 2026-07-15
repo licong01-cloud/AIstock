@@ -11,13 +11,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import Enum
+from copy import deepcopy
 import hashlib
 import json
 import math
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from backend.execution_algos.board_lot import board_lot_rule
 
@@ -26,6 +34,18 @@ from .policy import canonicalize
 
 class AdvisoryEvidenceProjectionError(RuntimeError):
     """A persisted evidence row cannot be consumed as immutable Advisory input."""
+
+
+REASON_PROJECTED_DSE_V2_INVALID = "ADVISORY_PHASE0A_PROJECTED_DSE_V2_INVALID"
+
+
+class ProjectedHistoricalEvidenceV2ValidationError(AdvisoryEvidenceProjectionError):
+    """Strict DSE v2 validation failed without exposing the persisted payload."""
+
+    def __init__(self, *, context: dict[str, Any]) -> None:
+        super().__init__(REASON_PROJECTED_DSE_V2_INVALID)
+        self.reason_code = REASON_PROJECTED_DSE_V2_INVALID
+        self.context = canonicalize(context)
 
 
 class ProjectedAlphaMode(str, Enum):
@@ -223,9 +243,13 @@ class ProjectedSelectionRun(BaseModel):
     package_ids: list[str]
     runtime_config: dict[str, Any] = Field(default_factory=dict)
     status: ProjectedSelectionRunStatus = ProjectedSelectionRunStatus.RUNNING
-    package_results: dict[str, list[ProjectedSelectionCandidate]] = Field(default_factory=dict)
+    package_results: dict[str, list[ProjectedSelectionCandidate]] = Field(
+        default_factory=dict
+    )
     aggregate_results: list[ProjectedSelectionCandidate] = Field(default_factory=list)
-    excluded_results: dict[str, list[ProjectedSelectionExclusion]] = Field(default_factory=dict)
+    excluded_results: dict[str, list[ProjectedSelectionExclusion]] = Field(
+        default_factory=dict
+    )
     manifest_sha256_by_package: dict[str, str] = Field(default_factory=dict)
     valid_no_candidate: bool = False
     no_candidate_reason: str | None = None
@@ -295,7 +319,9 @@ class ProjectedSelectionScoreArtifact:
             "trade_date": self.trade_date,
             "data_source": self.data_source,
             "runtime_config_hash": self.runtime_config_hash,
-            "artifact_sha256": score_hash or self.artifact_sha256 or canonical_evidence_json_sha256(self.scores_json),
+            "artifact_sha256": score_hash
+            or self.artifact_sha256
+            or canonical_evidence_json_sha256(self.scores_json),
             "score_count": self.score_count,
             "universe_count": self.universe_count,
             "top_score_symbol": self.top_score_symbol,
@@ -307,7 +333,9 @@ class ProjectedSelectionScoreArtifact:
             "asset_closure_hash": self.asset_closure_hash,
             "provider_semantics_id": self.metadata.get("provider_semantics_id"),
             "provider_semantics_hash": self.metadata.get("provider_semantics_hash"),
-            "multi_alpha_parent_parity_hash": self.metadata.get("multi_alpha_parent_parity_hash"),
+            "multi_alpha_parent_parity_hash": self.metadata.get(
+                "multi_alpha_parent_parity_hash"
+            ),
         }
 
 
@@ -337,17 +365,23 @@ class ProjectedHistoricalEvidenceV2:
 class AdvisoryProgramProjectionReader(Protocol):
     def get_program(self, program_id: str) -> ProjectedAdvisoryProgram: ...
 
-    def list_binding_versions(self, program_id: str) -> list[ProjectedBindingVersion]: ...
+    def list_binding_versions(
+        self, program_id: str
+    ) -> list[ProjectedBindingVersion]: ...
 
 
 class StrategyPackageProjectionReader(Protocol):
     def get(self, package_id: str) -> ProjectedPackage: ...
 
-    def list_package_assets(self, package_id: str, *, protected_only: bool = False) -> list[ProjectedPackageAsset]: ...
+    def list_package_assets(
+        self, package_id: str, *, protected_only: bool = False
+    ) -> list[ProjectedPackageAsset]: ...
 
 
 class DailySelectionEvidenceProjectionReader(Protocol):
-    def get_daily_selection_evidence(self, evidence_id: str) -> ProjectedDailySelectionEvidence: ...
+    def get_daily_selection_evidence(
+        self, evidence_id: str
+    ) -> ProjectedDailySelectionEvidence: ...
 
 
 class SelectionScoreArtifactProjectionReader(Protocol):
@@ -372,27 +406,96 @@ def canonical_evidence_json_sha256(payload: Any) -> str:
             return normalize(value.model_dump(mode="python"))
         if isinstance(value, datetime):
             if value.tzinfo is None:
-                raise AdvisoryEvidenceProjectionError("evidence timestamps must be timezone-aware")
+                raise AdvisoryEvidenceProjectionError(
+                    "evidence timestamps must be timezone-aware"
+                )
             return value.isoformat()
         if isinstance(value, date):
             return value.isoformat()
         if isinstance(value, Mapping):
-            return {str(key): normalize(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+            return {
+                str(key): normalize(item)
+                for key, item in sorted(value.items(), key=lambda item: str(item[0]))
+            }
         if isinstance(value, tuple | list):
             return [normalize(item) for item in value]
         if isinstance(value, float):
             if not math.isfinite(value):
-                raise AdvisoryEvidenceProjectionError("evidence payload cannot contain non-finite floats")
+                raise AdvisoryEvidenceProjectionError(
+                    "evidence payload cannot contain non-finite floats"
+                )
             return value
         return value
 
-    encoded = json.dumps(normalize(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    encoded = json.dumps(
+        normalize(payload),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def projected_manifest_json_sha256(manifest_json: Mapping[str, Any]) -> str:
+    """Hash persisted manifest JSON without importing StrategyPackage runtime modules."""
+
+    payload = deepcopy(dict(manifest_json))
+    payload["manifest_sha256"] = None
+    payload["package_status"] = None
+    payload = _drop_projected_empty_asset_fields(payload)
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _drop_projected_empty_asset_fields(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "factor_set" and isinstance(item, list):
+            cleaned[key] = [
+                _drop_projected_empty_asset_defaults(asset) for asset in item
+            ]
+        elif key == "model_asset" and isinstance(item, list):
+            cleaned[key] = [
+                _drop_projected_empty_asset_defaults(asset) for asset in item
+            ]
+        elif key == "model_asset" and isinstance(item, dict):
+            cleaned[key] = _drop_projected_empty_asset_defaults(item)
+        elif key == "runtime_assets" and item in (None, {}, []):
+            continue
+        else:
+            cleaned[key] = item
+    return cleaned
+
+
+def _drop_projected_empty_asset_defaults(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    empty_asset_keys = {"asset_ref", "sha256", "size_bytes", "source_uri"}
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if key in empty_asset_keys and item in (None, "", [], {}):
+            continue
+        if key == "model_code_assets" and item in (None, [], {}):
+            continue
+        if key == "model_code_required" and item is False:
+            continue
+        cleaned[key] = item
+    return cleaned
 
 
 def _require_sha256(value: str, *, field_name: str) -> str:
     normalized = str(value or "").strip().lower()
-    if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+    if len(normalized) != 64 or any(
+        character not in "0123456789abcdef" for character in normalized
+    ):
         raise ValueError(f"{field_name} must be a lowercase 64-character sha256 digest")
     return normalized
 
@@ -428,7 +531,9 @@ class _StageReceiptStatus(str, Enum):
 class _EvidenceContractV2(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    contract_version: Literal["daily_selection_evidence_v2"] = "daily_selection_evidence_v2"
+    contract_version: Literal["daily_selection_evidence_v2"] = (
+        "daily_selection_evidence_v2"
+    )
     capture_mode: _EvidenceCaptureMode
     capture_status: Literal["COMPLETE"] = "COMPLETE"
     execution_origin: _ProspectiveExecutionOrigin
@@ -467,12 +572,18 @@ class _EvidenceContractV2(BaseModel):
         if self.capture_mode != _EvidenceCaptureMode.PROSPECTIVE:
             raise ValueError("v2 evidence contract requires prospective capture mode")
         if self.reason_codes:
-            raise ValueError("complete v2 evidence contract cannot contain reason_codes")
-        expected_eligibility = self.execution_origin == _ProspectiveExecutionOrigin.ADVISORY_RUN
+            raise ValueError(
+                "complete v2 evidence contract cannot contain reason_codes"
+            )
+        expected_eligibility = (
+            self.execution_origin == _ProspectiveExecutionOrigin.ADVISORY_RUN
+        )
         if self.prospective_eligible != expected_eligibility:
             raise ValueError("prospective_eligible must match execution_origin")
         if self.execution_origin != _ProspectiveExecutionOrigin.ADVISORY_RUN:
-            raise ValueError("v2 prospective evidence is restricted to historical ADVISORY_RUN research")
+            raise ValueError(
+                "v2 prospective evidence is restricted to historical ADVISORY_RUN research"
+            )
         return self
 
 
@@ -531,24 +642,38 @@ class _DecisionClockEvidenceV2(BaseModel):
         if self.score_trade_date != self.decision_as_of_trade_date:
             raise ValueError("score_trade_date must match decision_as_of_trade_date")
         if self.reference_price_trade_date != self.decision_as_of_trade_date:
-            raise ValueError("reference_price_trade_date must match decision_as_of_trade_date")
+            raise ValueError(
+                "reference_price_trade_date must match decision_as_of_trade_date"
+            )
         if self.effective_cutoff_date != self.decision_as_of_trade_date:
-            raise ValueError("effective_cutoff_date must match decision_as_of_trade_date")
+            raise ValueError(
+                "effective_cutoff_date must match decision_as_of_trade_date"
+            )
         if self.requested_cutoff_date > self.effective_cutoff_date:
-            raise ValueError("requested_cutoff_date cannot be after effective_cutoff_date")
+            raise ValueError(
+                "requested_cutoff_date cannot be after effective_cutoff_date"
+            )
         if self.target_trade_date <= self.decision_as_of_trade_date:
-            raise ValueError("target_trade_date must be after decision_as_of_trade_date")
+            raise ValueError(
+                "target_trade_date must be after decision_as_of_trade_date"
+            )
         if self.effective_entry_trade_date != self.target_trade_date:
             raise ValueError("effective_entry_trade_date must match target_trade_date")
         if not self.is_immediately_previous_trade_date:
-            raise ValueError("decision clock requires immediate next-trading-day relation")
+            raise ValueError(
+                "decision clock requires immediate next-trading-day relation"
+            )
         if self.data_available_at > self.decision_cutoff_ts:
             raise ValueError("data_available_at cannot be after decision_cutoff_ts")
         if self.decision_generated_at < self.decision_cutoff_ts:
-            raise ValueError("decision_generated_at cannot be before decision_cutoff_ts")
+            raise ValueError(
+                "decision_generated_at cannot be before decision_cutoff_ts"
+            )
         digest = canonical_evidence_json_sha256(self.canonical_payload())
         if self.decision_clock_hash is not None and self.decision_clock_hash != digest:
-            raise ValueError("decision_clock_hash does not match canonical decision clock")
+            raise ValueError(
+                "decision_clock_hash does not match canonical decision clock"
+            )
         object.__setattr__(self, "decision_clock_hash", digest)
         return self
 
@@ -639,10 +764,17 @@ class _EffectiveConfigChainV2(BaseModel):
             ("selection_normalized_config", "selection_normalized_config_hash"),
             ("package_effective_config", "package_effective_config_hash"),
         ):
-            if canonical_evidence_json_sha256(getattr(self, config_field)) != getattr(self, hash_field):
+            if canonical_evidence_json_sha256(getattr(self, config_field)) != getattr(
+                self, hash_field
+            ):
                 raise ValueError(f"{hash_field} does not match {config_field}")
-        if canonical_evidence_json_sha256(self.package_effective_config) != self.final_effective_config_hash:
-            raise ValueError("final_effective_config_hash does not match package_effective_config")
+        if (
+            canonical_evidence_json_sha256(self.package_effective_config)
+            != self.final_effective_config_hash
+        ):
+            raise ValueError(
+                "final_effective_config_hash does not match package_effective_config"
+            )
         digest = canonical_evidence_json_sha256(self.canonical_payload())
         if self.chain_hash is not None and self.chain_hash != digest:
             raise ValueError("chain_hash does not match effective config chain")
@@ -690,7 +822,12 @@ class _UniverseLayerReceiptV2(BaseModel):
             raise ValueError("unsupported universe layer")
         return normalized
 
-    @field_validator("policy_hash", "input_symbol_set_hash", "output_symbol_set_hash", "source_revision_set_hash")
+    @field_validator(
+        "policy_hash",
+        "input_symbol_set_hash",
+        "output_symbol_set_hash",
+        "source_revision_set_hash",
+    )
     @classmethod
     def _optional_hash(cls, value: str | None, info: Any) -> str | None:
         if value is None:
@@ -711,7 +848,9 @@ class _UniverseLayerReceiptV2(BaseModel):
         if any(value < 0 for value in self.exclusion_reason_counts.values()):
             raise ValueError("universe exclusion reason counts must be non-negative")
         if sum(self.exclusion_reason_counts.values()) != self.excluded_count:
-            raise ValueError("universe exclusion reason counts must match excluded_count")
+            raise ValueError(
+                "universe exclusion reason counts must match excluded_count"
+            )
         if self.status != "NOT_APPLICABLE":
             required = (
                 self.policy_id,
@@ -724,7 +863,9 @@ class _UniverseLayerReceiptV2(BaseModel):
                 self.available_at,
             )
             if not all(value not in (None, "") for value in required):
-                raise ValueError("executed universe layer is missing mandatory provenance")
+                raise ValueError(
+                    "executed universe layer is missing mandatory provenance"
+                )
         return self
 
 
@@ -774,8 +915,13 @@ class _SourceReadReceipt(BaseModel):
     @model_validator(mode="after")
     def _availability_is_explicit(self) -> "_SourceReadReceipt":
         if self.available_at is None and self.first_observed_at is None:
-            raise ValueError("source receipt requires available_at or first_observed_at")
-        for field_name, timestamp in (("available_at", self.available_at), ("first_observed_at", self.first_observed_at)):
+            raise ValueError(
+                "source receipt requires available_at or first_observed_at"
+            )
+        for field_name, timestamp in (
+            ("available_at", self.available_at),
+            ("first_observed_at", self.first_observed_at),
+        ):
             if timestamp is not None and timestamp.tzinfo is None:
                 raise ValueError(f"source receipt {field_name} must be timezone-aware")
         if not str(self.admissibility or "").strip():
@@ -798,18 +944,29 @@ class _StageEvidenceReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _counts_match_rows(self) -> "_StageEvidenceReceipt":
-        if self.status == _StageReceiptStatus.COMPLETE and self.output_count != len(self.candidates):
+        if self.status == _StageReceiptStatus.COMPLETE and self.output_count != len(
+            self.candidates
+        ):
             raise ValueError("complete stage output_count must match candidate rows")
-        if self.status == _StageReceiptStatus.COMPLETE and self.input_count != self.output_count + self.excluded_count:
-            raise ValueError("complete stage input_count must reconcile output_count and excluded_count")
+        if (
+            self.status == _StageReceiptStatus.COMPLETE
+            and self.input_count != self.output_count + self.excluded_count
+        ):
+            raise ValueError(
+                "complete stage input_count must reconcile output_count and excluded_count"
+            )
         if self.status == _StageReceiptStatus.NOT_APPLICABLE and self.candidates:
             raise ValueError("not-applicable stage cannot contain candidate rows")
-        if self.status == _StageReceiptStatus.NOT_APPLICABLE and (self.output_count or self.excluded_count or self.exclusions):
+        if self.status == _StageReceiptStatus.NOT_APPLICABLE and (
+            self.output_count or self.excluded_count or self.exclusions
+        ):
             raise ValueError("not-applicable stage cannot contain output or exclusions")
         return self
 
 
-def _canonical_candidate_rows(candidates: list[ProjectedSelectionCandidate]) -> list[dict[str, Any]]:
+def _canonical_candidate_rows(
+    candidates: list[ProjectedSelectionCandidate],
+) -> list[dict[str, Any]]:
     rows = [
         {
             "symbol": candidate.symbol,
@@ -828,7 +985,9 @@ class _DailySelectionEvidenceV2Payload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["daily_selection_evidence_v2"] = "daily_selection_evidence_v2"
+    schema_version: Literal["daily_selection_evidence_v2"] = (
+        "daily_selection_evidence_v2"
+    )
     evidence_contract: _EvidenceContractV2
     decision_clock: _DecisionClockEvidenceV2
     point_in_time_context: dict[str, Any]
@@ -852,19 +1011,28 @@ class _DailySelectionEvidenceV2Payload(BaseModel):
     def _payload_is_consistent(self) -> "_DailySelectionEvidenceV2Payload":
         required_stages = {item.value for item in _CandidateStageName}
         if set(self.phase0a_stage_evidence) != required_stages:
-            raise ValueError("phase0a_stage_evidence must contain exactly five canonical stages")
+            raise ValueError(
+                "phase0a_stage_evidence must contain exactly five canonical stages"
+            )
         for stage_name, receipt in self.phase0a_stage_evidence.items():
             if receipt.stage.value != stage_name:
                 raise ValueError("stage receipt key does not match stage value")
         advisory = self.phase0a_stage_evidence[_CandidateStageName.ADVISORY_MODEL.value]
         if advisory.status != _StageReceiptStatus.NOT_APPLICABLE:
             raise ValueError("advisory_model must be not applicable in Phase 0A.2C")
-        effective = self.phase0a_stage_evidence[_CandidateStageName.SELECTION_EFFECTIVE.value]
-        selected_models = [ProjectedSelectionCandidate.model_validate(item) for item in self.selected_candidates]
+        effective = self.phase0a_stage_evidence[
+            _CandidateStageName.SELECTION_EFFECTIVE.value
+        ]
+        selected_models = [
+            ProjectedSelectionCandidate.model_validate(item)
+            for item in self.selected_candidates
+        ]
         if effective.status != _StageReceiptStatus.COMPLETE:
             raise ValueError("selection_effective stage must be complete")
         if effective.candidates != _canonical_candidate_rows(selected_models):
-            raise ValueError("selection_effective candidates do not match selected_candidates")
+            raise ValueError(
+                "selection_effective candidates do not match selected_candidates"
+            )
         all_exclusions: list[dict[str, Any]] = []
         for stage_name in (
             _CandidateStageName.HMM_ADJUSTED.value,
@@ -883,21 +1051,67 @@ class _DailySelectionEvidenceV2Payload(BaseModel):
         )
         if all_exclusions != canonical_excluded:
             raise ValueError("stage exclusions do not match excluded_candidates")
-        if self.candidate_outcome == "CANDIDATES_PRESENT" and not self.selected_candidates:
+        if (
+            self.candidate_outcome == "CANDIDATES_PRESENT"
+            and not self.selected_candidates
+        ):
             raise ValueError("CANDIDATES_PRESENT requires selected candidates")
         if self.candidate_outcome == "VALID_NO_CANDIDATE" and self.selected_candidates:
             raise ValueError("VALID_NO_CANDIDATE cannot contain selected candidates")
         return self
 
 
-def _parse_projected_dse_v2(payload: dict[str, Any]) -> _DailySelectionEvidenceV2Payload | None:
+class ProjectedHistoricalEvidenceV2Strict(_DailySelectionEvidenceV2Payload):
+    """Public immutable form of the complete persisted DSE v2 contract."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def _parse_projected_dse_v2(
+    payload: dict[str, Any],
+) -> _DailySelectionEvidenceV2Payload | None:
     try:
         return _DailySelectionEvidenceV2Payload.model_validate(payload)
     except Exception:
         return None
 
 
-def validate_projected_daily_evidence_v2(payload: dict[str, Any]) -> ProjectedDailyEvidenceV2 | None:
+def parse_projected_historical_evidence_v2_strict(
+    payload: dict[str, Any],
+) -> ProjectedHistoricalEvidenceV2Strict:
+    """Validate the complete DSE v2 payload and preserve structured diagnostics."""
+
+    try:
+        return ProjectedHistoricalEvidenceV2Strict.model_validate(payload)
+    except ValidationError as exc:
+        errors = []
+        for item in exc.errors(
+            include_url=False, include_context=False, include_input=False
+        ):
+            errors.append(
+                {
+                    "field_path": list(map(str, item.get("loc", ()))),
+                    "validation_type": str(item.get("type") or "validation_error"),
+                }
+            )
+            if len(errors) == 20:
+                break
+        raise ProjectedHistoricalEvidenceV2ValidationError(
+            context={
+                "contract_version": (
+                    str(payload.get("schema_version") or "missing")
+                    if isinstance(payload, dict)
+                    else "invalid_type"
+                ),
+                "error_count": exc.error_count(),
+                "errors": errors,
+            }
+        ) from exc
+
+
+def validate_projected_daily_evidence_v2(
+    payload: dict[str, Any],
+) -> ProjectedDailyEvidenceV2 | None:
     """Validate the complete DSE v2 contract, then expose the Advisory projection."""
 
     parsed = _parse_projected_dse_v2(payload)
@@ -919,7 +1133,9 @@ def validate_projected_daily_evidence_v2(payload: dict[str, Any]) -> ProjectedDa
     )
 
 
-def validate_projected_historical_evidence_v2(payload: dict[str, Any]) -> ProjectedHistoricalEvidenceV2 | None:
+def validate_projected_historical_evidence_v2(
+    payload: dict[str, Any],
+) -> ProjectedHistoricalEvidenceV2 | None:
     """Validate the complete DSE v2 contract and expose historical research fields."""
 
     parsed = _parse_projected_dse_v2(payload)
@@ -927,7 +1143,9 @@ def validate_projected_historical_evidence_v2(payload: dict[str, Any]) -> Projec
     if parsed is None or base is None or not parsed.phase0a_package_lineage:
         return None
     return ProjectedHistoricalEvidenceV2(
-        evidence_contract=canonicalize(parsed.evidence_contract.model_dump(mode="json")),
+        evidence_contract=canonicalize(
+            parsed.evidence_contract.model_dump(mode="json")
+        ),
         phase0a_candidate_lineage=canonicalize(base.phase0a_candidate_lineage),
         phase0a_package_lineage=canonicalize(parsed.phase0a_package_lineage),
         phase0a_effective_config_chain=canonicalize(
@@ -954,7 +1172,8 @@ def projected_manifest_asset_keys(manifest: Any) -> set[tuple[str, str, str]]:
         return {
             (str(item.asset_type), str(item.asset_ref), str(item.asset_sha256))
             for item in declared
-            if str(item.asset_ref or "").strip() and str(item.asset_sha256 or "").strip()
+            if str(item.asset_ref or "").strip()
+            and str(item.asset_sha256 or "").strip()
         }
 
     expected: set[tuple[str, str, str]] = set()
@@ -962,7 +1181,9 @@ def projected_manifest_asset_keys(manifest: Any) -> set[tuple[str, str, str]]:
         asset_ref = str(getattr(factor, "asset_ref", "") or "")
         sha256 = str(getattr(factor, "sha256", "") or "")
         if not asset_ref or not sha256:
-            raise AdvisoryEvidenceProjectionError("manifest factor closure member is missing")
+            raise AdvisoryEvidenceProjectionError(
+                "manifest factor closure member is missing"
+            )
         expected.add((ProjectedPackageAssetType.FACTOR_CODE.value, asset_ref, sha256))
     model_asset = getattr(manifest, "model_asset", None)
     model_assets = model_asset if isinstance(model_asset, list) else [model_asset]
@@ -970,22 +1191,36 @@ def projected_manifest_asset_keys(manifest: Any) -> set[tuple[str, str, str]]:
         asset_ref = str(getattr(model, "asset_ref", "") or "")
         sha256 = str(getattr(model, "sha256", "") or "")
         if not asset_ref or not sha256:
-            raise AdvisoryEvidenceProjectionError("manifest model closure member is missing")
+            raise AdvisoryEvidenceProjectionError(
+                "manifest model closure member is missing"
+            )
         expected.add((ProjectedPackageAssetType.MODEL_WEIGHT.value, asset_ref, sha256))
         for code_asset in list(getattr(model, "model_code_assets", []) or []):
             code_ref = str(getattr(code_asset, "asset_ref", "") or "")
             code_sha = str(getattr(code_asset, "sha256", "") or "")
             if not code_ref or not code_sha:
-                raise AdvisoryEvidenceProjectionError("manifest model-code closure member is missing")
-            expected.add((ProjectedPackageAssetType.MODEL_CODE.value, code_ref, code_sha))
+                raise AdvisoryEvidenceProjectionError(
+                    "manifest model-code closure member is missing"
+                )
+            expected.add(
+                (ProjectedPackageAssetType.MODEL_CODE.value, code_ref, code_sha)
+            )
     runtime_assets = getattr(manifest, "runtime_assets", None)
-    alpha158 = getattr(runtime_assets, "alpha158", None) if runtime_assets is not None else None
+    alpha158 = (
+        getattr(runtime_assets, "alpha158", None)
+        if runtime_assets is not None
+        else None
+    )
     if alpha158 is not None and bool(getattr(alpha158, "enabled", False)):
         asset_ref = str(getattr(alpha158, "asset_ref", "") or "")
         sha256 = str(getattr(alpha158, "sha256", "") or "")
         if not asset_ref or not sha256:
-            raise AdvisoryEvidenceProjectionError("manifest alpha158 closure member is missing")
+            raise AdvisoryEvidenceProjectionError(
+                "manifest alpha158 closure member is missing"
+            )
         expected.add((ProjectedPackageAssetType.FACTOR_SCHEMA.value, asset_ref, sha256))
     if not expected:
-        raise AdvisoryEvidenceProjectionError("manifest does not expose a persisted runtime closure")
+        raise AdvisoryEvidenceProjectionError(
+            "manifest does not expose a persisted runtime closure"
+        )
     return expected
