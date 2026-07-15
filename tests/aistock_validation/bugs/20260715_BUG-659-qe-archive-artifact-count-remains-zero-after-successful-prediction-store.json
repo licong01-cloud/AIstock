@@ -40,8 +40,8 @@
   "expected": "Newly archived QE loops automatically receive correct run_artifact associations after archive identity creation. A dry-run/apply historical command can backfill prior QE Archive runs from existing Prediction Store manifests and, when selected, existing QE workspaces; repeated execution is idempotent; receipts report scanned, linked, already-linked, missing, corrupt and failed counts; artifact_count and pointer lookup become consistent without rewriting statistical results.",
   "first_seen_at": "2026-07-15T08:50:34.151495Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "911df9a863767b55a785240c2763f1482364114b",
+  "fixed_at": "2026-07-15T09:23:11.297213Z",
   "github_issue_number": 2165,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2165",
   "last_seen_at": "2026-07-15T08:50:34.151495Z",
@@ -49,6 +49,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2166",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -60,7 +61,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "qe_archive"
   ],
@@ -69,6 +70,9 @@
     "fingerprint": "99bd6b1107a523acae5d41cb",
     "source_event_id": "FE-20260715-99bd6b1107a5"
   },
+  "validation_evidence": [
+    "PR #2166 required CI checks -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {
