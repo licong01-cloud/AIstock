@@ -32,6 +32,7 @@ from backend.execution_algos.adaptive_is.reasons import (
     QuoteContractStage,
     quote_contract_error,
 )
+from backend.execution_algos.board_lot import board_lot_rule
 from backend.miniqmt_quote_contract_config import QuoteContractPolicy
 from backend.services.miniqmt_execution_runtime.quote_eligibility import (
     A_SHARE_EQUITY_PHASE_SCHEDULE_VERSION,
@@ -55,6 +56,7 @@ from backend.services.trading_calendar_status import TradingCalendarStatusServic
 MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION = (
     f"xtquant_whole_quote_bidVol_askVol_shares_v1:{MINIQMT_NORMALIZER_MAP_VERSION}"
 )
+A_SHARE_BOARD_LOT_AUTHORITY_VERSION = "backend.execution_algos.board_lot:a_share_board_lot_v20260504"
 
 
 @dataclass(frozen=True)
@@ -166,14 +168,18 @@ class MiniQMTInstrumentQuoteSpecProvider:
                 },
             )
         price_tick = _required_positive_decimal(raw.get("PriceTick"), field_name="PriceTick", symbol=normalized_symbol)
-        lot_size = _required_positive_int(
+        qmt_min_limit_order_volume = _required_nonnegative_int(
             raw.get("MinLimitOrderVolume"),
             field_name="MinLimitOrderVolume",
             symbol=normalized_symbol,
         )
         is_trading = raw.get("IsTrading")
-        instrument_status = raw.get("InstrumentStatus")
-        if not isinstance(is_trading, bool) or instrument_status is None:
+        instrument_status = _required_nonnegative_int(
+            raw.get("InstrumentStatus"),
+            field_name="InstrumentStatus",
+            symbol=normalized_symbol,
+        )
+        if not isinstance(is_trading, bool):
             raise quote_contract_error(
                 QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
                 "MiniQMT instrument-detail trading status is incomplete",
@@ -181,7 +187,33 @@ class MiniQMTInstrumentQuoteSpecProvider:
                 context={
                     "symbol": normalized_symbol,
                     "is_trading_type": type(is_trading).__name__,
-                    "instrument_status_present": instrument_status is not None,
+                    "instrument_status": instrument_status,
+                },
+            )
+        try:
+            board_min_qty, board_increment = board_lot_rule(normalized_symbol)
+        except ValueError as exc:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "canonical A-share board-lot authority does not recognize the exact MiniQMT symbol",
+                stage=QuoteContractStage.TRADABILITY,
+                context={
+                    "symbol": normalized_symbol,
+                    "authority_version": A_SHARE_BOARD_LOT_AUTHORITY_VERSION,
+                    "error": str(exc),
+                },
+            ) from exc
+        if qmt_min_limit_order_volume > 0 and qmt_min_limit_order_volume != board_min_qty:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "MiniQMT instrument-detail minimum order volume conflicts with canonical A-share board-lot authority",
+                stage=QuoteContractStage.TRADABILITY,
+                context={
+                    "symbol": normalized_symbol,
+                    "qmt_min_limit_order_volume": qmt_min_limit_order_volume,
+                    "canonical_board_min_qty": board_min_qty,
+                    "canonical_board_increment": board_increment,
+                    "authority_version": A_SHARE_BOARD_LOT_AUTHORITY_VERSION,
                 },
             )
         authority_payload = {
@@ -189,9 +221,17 @@ class MiniQMTInstrumentQuoteSpecProvider:
             "instrument_id": code,
             "exchange_id": exchange,
             "price_tick": price_tick,
-            "lot_size": lot_size,
+            "lot_size": board_min_qty,
+            "board_lot_increment": board_increment,
+            "board_lot_authority_version": A_SHARE_BOARD_LOT_AUTHORITY_VERSION,
+            "qmt_min_limit_order_volume": qmt_min_limit_order_volume,
+            "qmt_min_limit_order_volume_state": (
+                "CONSISTENT_POSITIVE_AUTHORITY" if qmt_min_limit_order_volume > 0 else "UNAVAILABLE_ZERO_SENTINEL"
+            ),
             "is_trading": is_trading,
             "instrument_status": instrument_status,
+            "intraday_halt": instrument_status >= 1,
+            "intraday_halt_semantics": "xtquant.InstrumentStatus>=1",
             "depth_unit_evidence_version": MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION,
         }
         authority_sha256 = canonical_sha256(authority_payload)
@@ -202,9 +242,9 @@ class MiniQMTInstrumentQuoteSpecProvider:
                 f"{MINIQMT_WHOLE_QUOTE_DEPTH_UNIT_EVIDENCE_VERSION}:{authority_sha256}"
             ),
             price_tick=price_tick,
-            lot_size=lot_size,
-            intraday_halt=not is_trading,
-            intraday_halt_source=f"xtquant.get_instrument_detail:{authority_sha256}",
+            lot_size=board_min_qty,
+            intraday_halt=instrument_status >= 1,
+            intraday_halt_source=f"xtquant.get_instrument_detail.InstrumentStatus>=1:{authority_sha256}",
         )
 
 
@@ -609,7 +649,7 @@ def _required_positive_decimal(value: Any, *, field_name: str, symbol: str) -> D
     return parsed
 
 
-def _required_positive_int(value: Any, *, field_name: str, symbol: str) -> int:
+def _required_nonnegative_int(value: Any, *, field_name: str, symbol: str) -> int:
     if isinstance(value, bool):
         parsed = None
     else:
@@ -618,10 +658,10 @@ def _required_positive_int(value: Any, *, field_name: str, symbol: str) -> int:
             parsed = int(decimal_value) if decimal_value == decimal_value.to_integral_value() else None
         except (ArithmeticError, TypeError, ValueError):
             parsed = None
-    if parsed is None or parsed <= 0:
+    if parsed is None or parsed < 0:
         raise quote_contract_error(
             QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
-            "instrument authority requires a positive integral field",
+            "instrument authority requires a non-negative integral field",
             stage=QuoteContractStage.TRADABILITY,
             context={"symbol": symbol, "field": field_name, "value": value},
         )

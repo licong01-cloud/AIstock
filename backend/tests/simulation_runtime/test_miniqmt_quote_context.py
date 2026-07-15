@@ -284,8 +284,8 @@ def test_instrument_quote_spec_provider_requires_exact_authority_without_default
             "InstrumentID": "000001",
             "ExchangeID": "SZSE",
             "PriceTick": "0.0100",
-            "MinLimitOrderVolume": "100.00",
-            "IsTrading": True,
+            "MinLimitOrderVolume": 0,
+            "IsTrading": False,
             "InstrumentStatus": 0,
         }
     }
@@ -296,6 +296,8 @@ def test_instrument_quote_spec_provider_requires_exact_authority_without_default
     assert spec.symbol == "000001.SZ"
     assert spec.price_tick == Decimal("0.0100")
     assert spec.lot_size == 100
+    assert spec.intraday_halt is False
+    assert "InstrumentStatus>=1" in spec.intraday_halt_source
     assert spec.depth_quantity_unit == DepthQuantityUnit.SHARES
     assert "xtquant_whole_quote_bidVol_askVol_shares_v1" in spec.unit_evidence_version
 
@@ -309,6 +311,43 @@ def test_instrument_quote_spec_provider_requires_exact_authority_without_default
     with pytest.raises(QuoteContractError) as exc_info:
         MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: wrong_identity).get_symbol_spec("000001.SZ")
     assert exc_info.value.reason_code.value == "ADAPTIVE_IS_QUOTE_SYMBOL_INVALID"
+
+
+def test_instrument_quote_spec_provider_cross_checks_positive_qmt_lot_authority() -> None:
+    consistent = {
+        "InstrumentID": "688001",
+        "ExchangeID": "SSE",
+        "PriceTick": "0.01",
+        "MinLimitOrderVolume": 200,
+        "IsTrading": True,
+        "InstrumentStatus": 0,
+    }
+    spec = MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: consistent).get_symbol_spec("688001.SH")
+    assert spec.lot_size == 200
+    assert spec.intraday_halt is False
+
+    conflicting = {**consistent, "MinLimitOrderVolume": 100}
+    with pytest.raises(QuoteContractError, match="conflicts with canonical A-share board-lot authority") as exc_info:
+        MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: conflicting).get_symbol_spec("688001.SH")
+    assert exc_info.value.context["qmt_min_limit_order_volume"] == 100
+    assert exc_info.value.context["canonical_board_min_qty"] == 200
+
+
+def test_instrument_quote_spec_provider_uses_instrument_status_for_intraday_halt() -> None:
+    record = {
+        "InstrumentID": "000001",
+        "ExchangeID": "SZSE",
+        "PriceTick": "0.01",
+        "MinLimitOrderVolume": 0,
+        "IsTrading": True,
+        "InstrumentStatus": 2,
+    }
+    spec = MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: record).get_symbol_spec("000001.SZ")
+    assert spec.intraday_halt is True
+
+    invalid_status = {**record, "InstrumentStatus": True}
+    with pytest.raises(QuoteContractError):
+        MiniQMTInstrumentQuoteSpecProvider(lambda _symbol: invalid_status).get_symbol_spec("000001.SZ")
 
 
 def test_runtime_context_registration_is_atomic_idempotent_and_rejects_policy_drift() -> None:

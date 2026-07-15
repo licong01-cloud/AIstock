@@ -11,6 +11,11 @@ from typing import Any
 import pytest
 import backend.services.simulation_runtime.bridges as simulation_bridges
 
+from backend.execution_algos.adaptive_is.reasons import (
+    QuoteContractError,
+    QuoteContractReasonCode,
+    quote_contract_error,
+)
 from backend.services.paper_trading_v2.models import PaperPortfolio
 from backend.services.paper_trading_v2.market_data import DailyStStatus, MinuteDataSource, MinuteExecutionMarketInput
 from backend.services.paper_trading_v2.broker.localsim import LocalSimBackend
@@ -5379,6 +5384,80 @@ def test_scheduler_publishes_b0_context_before_miniqmt_submit_callable() -> None
     assert order == ["context", "submit"]
 
 
+def test_scheduler_persists_b0_context_prepare_failure_before_broker_callable() -> None:
+    release, _, qmt_binding, repo = _release_and_bindings(qmt_only=True)
+
+    class _FailingActivation:
+        controller_factory = None
+        quote_context_adapter = None
+
+        def begin_lifecycle_epoch(self) -> None:
+            return None
+
+        def prepare_runtime_context(self, **_kwargs: Any) -> dict[str, object]:
+            raise quote_contract_error(
+                QuoteContractReasonCode.TRADABILITY_DATA_INVALID,
+                "authoritative MiniQMT context unavailable",
+                context={"reason_code": "ADAPTIVE_IS_TRADABILITY_DATA_INVALID", "stage": "TRADABILITY"},
+            )
+
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={qmt_binding.binding_id: _position_context(portfolio_id="portfolio_context_failure")}
+        ),
+        miniqmt_quote_ingress_activation=_FailingActivation(),  # type: ignore[arg-type]
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    plan = planned.results[0].execution_plan
+    assert run is not None
+    assert plan is not None
+    plan = plan.model_copy(
+        update={
+            "plan_payload_json": {
+                **plan.plan_payload_json,
+                "quote_control": {"binding": {}, "revision": {}, "assignments": []},
+            }
+        }
+    )
+    repo.execution_plans[plan.plan_id] = plan
+    submit_called = False
+
+    def submit_callable() -> Any:
+        nonlocal submit_called
+        submit_called = True
+        raise AssertionError("broker callable must not run after context preparation failure")
+
+    with pytest.raises(QuoteContractError, match="authoritative MiniQMT context unavailable"):
+        scheduler._submit_execution_plan_with_timeout(
+            build_result=None,
+            binding=qmt_binding,
+            run=run,
+            plan=plan,
+            context=SimpleNamespace(),
+            mode="SIM",
+            as_of_time=datetime(2026, 5, 21, 10, 0, tzinfo=UTC),
+            submit_callable=submit_callable,
+        )
+
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert submit_called is False
+    assert latest.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest.run_payload_json["last_stage"] == "MINIQMT_QUOTE_CONTEXT_PREPARE_FAILED"
+    diagnostic = latest.run_payload_json["miniqmt_quote_context_prepare_failure"]
+    assert diagnostic["broker_callable_invoked"] is False
+    assert diagnostic["broker_side_effect_evidence_before_attempt"] is False
+    assert diagnostic["exception"]["reason_code"] == "ADAPTIVE_IS_TRADABILITY_DATA_INVALID"
+    assert latest.run_payload_json["submit_failure"]["stage"] == "MINIQMT_QUOTE_CONTEXT_PREPARE_FAILED"
+
+
 def test_scheduler_recovery_isolates_one_bad_durable_run_and_continues_peer_runs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8187,6 +8266,11 @@ def test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children(
     assert submitted.results[0].status == "MINIQMT_EVENT_LOOP_PENDING"
     assert broker.place_order_payloads == []
     assert repo.get_simulation_daily_run(run.run_id).status == SimulationDailyRunStatus.INTRADAY_RUNNING
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={"last_stage": "RECONCILING"},
+    )
 
     broker.quotes.update(
         {
@@ -8247,6 +8331,92 @@ def test_scheduler_event_loop_tick_driver_triggers_pending_sniper_children(
     assert batch["succeeded"] == len(plan.intents)
     assert batch["failed"] == 0
     assert batch["pending"] == 0
+
+
+def test_scheduler_automatically_recovers_exact_legacy_b0_context_failure_without_side_effects() -> None:
+    scheduler, repo, broker, _qmt_binding = _miniqmt_event_loop_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    plan = planned.results[0].execution_plan
+    assert run is not None
+    assert plan is not None
+    repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={
+            "last_stage": "RECONCILING",
+            "broker_called": False,
+            "submitted_intents": 0,
+            "failed_intents": 0,
+            "submit_failure": {
+                "type": "QuoteContractError",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_FAILED",
+                "context": None,
+                "message": "B0_QUOTE_V2 controller requires scheduler-published context",
+                "outer_stage": "MINIQMT_EVENT_LOOP_SUBMIT_FAILED",
+            },
+        },
+    )
+
+    retried = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=True,
+    )
+
+    latest = repo.get_simulation_daily_run(run.run_id)
+    assert retried.results[0].status != "REUSED_EXISTING_PLAN"
+    assert latest.run_payload_json["miniqmt_legacy_b0_context_missing_recovery"]["runtime_execution_evidence"] is False
+    assert latest.run_payload_json["miniqmt_legacy_b0_context_missing_recovery"]["broker_side_effect_evidence"] is False
+    assert latest.status in {SimulationDailyRunStatus.INTRADAY_RUNNING, SimulationDailyRunStatus.SUCCEEDED}
+    assert latest.run_payload_json["broker_called"] is True
+    assert broker.place_order_payloads
+
+
+def test_scheduler_does_not_auto_recover_legacy_context_failure_with_runtime_evidence() -> None:
+    scheduler, repo, _broker, qmt_binding = _miniqmt_event_loop_test_scheduler()
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.MINIQMT_SIM,
+        submit=False,
+    )
+    run = planned.results[0].run
+    plan = planned.results[0].execution_plan
+    assert run is not None
+    assert plan is not None
+    stuck = repo.update_simulation_daily_run(
+        run.run_id,
+        status=SimulationDailyRunStatus.RECONCILING,
+        payload_patch={
+            "last_stage": "RECONCILING",
+            "broker_called": False,
+            "submitted_intents": 0,
+            "qmt_batch_result": {"status": "SUBMITTING", "pending": 0},
+            "submit_failure": {
+                "type": "QuoteContractError",
+                "stage": "MINIQMT_EVENT_LOOP_SUBMIT_FAILED",
+                "context": None,
+                "message": "B0_QUOTE_V2 controller requires scheduler-published context",
+            },
+        },
+    )
+
+    unchanged = scheduler._recover_legacy_b0_context_missing_run_if_safe(
+        binding=qmt_binding,
+        run=stuck,
+        plan=plan,
+        submit=True,
+    )
+
+    assert unchanged.status == SimulationDailyRunStatus.RECONCILING
+    assert "miniqmt_legacy_b0_context_missing_recovery" not in unchanged.run_payload_json
 
 
 def test_scheduler_converts_no_side_effect_reconciling_after_runtime_only_cleanup_and_retries() -> None:
