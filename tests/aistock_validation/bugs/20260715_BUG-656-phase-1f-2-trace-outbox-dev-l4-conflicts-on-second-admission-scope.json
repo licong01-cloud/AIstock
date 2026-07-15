@@ -27,8 +27,8 @@
   "expected": "Expected behavior should be restored.",
   "first_seen_at": "2026-07-15T03:54:08.733288Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3b92f02392e36aa5ee88e1365410d39cbb603ec3",
+  "fixed_at": "2026-07-15T04:06:53.969806Z",
   "github_issue_number": 2149,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2149",
   "last_seen_at": "2026-07-15T03:54:08.733288Z",
@@ -36,6 +36,7 @@
   "non_goals": [
     "Do not restart production runtime services without explicit approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/2150",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -46,7 +47,7 @@
   "risk_area": "bug",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "advisory"
   ],
@@ -55,6 +56,9 @@
     "fingerprint": "0adfb5a7113729cdff2c311d",
     "source_event_id": "FE-20260715-0adfb5a71137"
   },
+  "validation_evidence": [
+    "AISTOCK_DEV_DB_E2E=1 pytest trace_outbox DEV L4 node -> 1 passed with rollback; ruff check changed test -> passed; py_compile changed test -> passed; git diff --check -> passed; nox -s l0 validation_module_registry_l0 -> 2 sessions passed; PR #2150 CI -> 17 passed, 0 failed"
+  ],
   "verification_budget": {
     "budget": "deep",
     "deferred_nightly_verification": {
