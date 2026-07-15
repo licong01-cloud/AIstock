@@ -70,6 +70,11 @@ _EPISODE_COLUMNS = (
     "exit_close_qfq",
     "entry_execution_status",
     "entry_execution_evidence_level",
+    "entry_target_amount",
+    "entry_inner_target_amount",
+    "entry_deal_amount",
+    "entry_fill_ratio",
+    "entry_overfill_amount",
     "actual_entry_date",
     "actual_entry_price",
     "entry_delay_days",
@@ -79,6 +84,11 @@ _EPISODE_COLUMNS = (
     "actual_exit_price",
     "exit_execution_status",
     "exit_execution_evidence_level",
+    "exit_target_amount",
+    "exit_inner_target_amount",
+    "exit_deal_amount",
+    "exit_fill_ratio",
+    "exit_overfill_amount",
     "exit_delay_days",
     "exit_block_reason",
     "post_exit_signal_mae",
@@ -2423,7 +2433,7 @@ def _normalize_evidence_frame(frame: pd.DataFrame | None, *, kind: str) -> pd.Da
             QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED,
             str(exc),
         ) from exc
-    for column in ("amount", "deal_amount", "ffr", "quantity", "price", "fees"):
+    for column in ("amount", "inner_amount", "deal_amount", "ffr", "quantity", "price", "fees"):
         if column in normalized.columns:
             original_non_null = normalized[column].notna()
             numeric = pd.to_numeric(normalized[column], errors="coerce")
@@ -2478,7 +2488,7 @@ def _filter_order_like_side(
     elif side == "sell" or not allow_unspecified_for_entry:
         return selected.iloc[0:0].copy()
     if side == "sell":
-        for column in ("amount", "deal_amount", "quantity"):
+        for column in ("amount", "inner_amount", "deal_amount", "quantity"):
             if column in selected:
                 selected[column] = selected[column].abs()
     return selected
@@ -2635,6 +2645,11 @@ def attach_entry_execution_evidence(
         for column in (
             "entry_execution_status",
             "entry_execution_evidence_level",
+            "entry_target_amount",
+            "entry_inner_target_amount",
+            "entry_deal_amount",
+            "entry_fill_ratio",
+            "entry_overfill_amount",
             "actual_entry_date",
             "actual_entry_price",
             "entry_delay_days",
@@ -2652,6 +2667,11 @@ def attach_entry_execution_evidence(
     actual_price = np.full(row_count, np.nan, dtype="float64")
     delay_days = np.full(row_count, np.nan, dtype="float64")
     block_reason = np.full(row_count, None, dtype=object)
+    target_amount = np.full(row_count, np.nan, dtype="float64")
+    inner_target_amount = np.full(row_count, np.nan, dtype="float64")
+    deal_amount = np.full(row_count, np.nan, dtype="float64")
+    fill_ratio = np.full(row_count, np.nan, dtype="float64")
+    overfill_amount = np.full(row_count, np.nan, dtype="float64")
 
     if evidence is not None:
         indicator = _filter_order_like_side(
@@ -2713,8 +2733,18 @@ def attach_entry_execution_evidence(
 
         if indicator_lookup is not None:
             amount = pd.to_numeric(indicator_lookup.get("amount"), errors="coerce").to_numpy(dtype="float64")
+            inner_amount = pd.to_numeric(indicator_lookup.get("inner_amount"), errors="coerce").to_numpy(
+                dtype="float64"
+            )
             deal = pd.to_numeric(indicator_lookup.get("deal_amount"), errors="coerce").to_numpy(dtype="float64")
             ffr = pd.to_numeric(indicator_lookup.get("ffr"), errors="coerce").to_numpy(dtype="float64")
+            target_amount[:] = amount
+            inner_target_amount[:] = inner_amount
+            deal_amount[:] = deal
+            fill_ratio[:] = ffr
+            comparable = np.isfinite(amount) & np.isfinite(deal)
+            overfill_delta = deal[comparable] - amount[comparable]
+            overfill_amount[comparable] = np.where(overfill_delta > 1e-9, overfill_delta, 0.0)
             attempted = np.isfinite(amount) & (amount > 0.0)
             partial = attempted & (
                 (np.isfinite(deal) & (deal > 0.0) & (deal < amount)) | (np.isfinite(ffr) & (ffr > 0.0) & (ffr < 1.0))
@@ -2820,6 +2850,11 @@ def attach_entry_execution_evidence(
 
     result["entry_execution_status"] = status
     result["entry_execution_evidence_level"] = evidence_level
+    result["entry_target_amount"] = target_amount
+    result["entry_inner_target_amount"] = inner_target_amount
+    result["entry_deal_amount"] = deal_amount
+    result["entry_fill_ratio"] = fill_ratio
+    result["entry_overfill_amount"] = overfill_amount
     result["actual_entry_date"] = pd.to_datetime(actual_date)
     result["actual_entry_price"] = actual_price
     result["entry_delay_days"] = pd.array(delay_days, dtype="Float64")
@@ -2861,26 +2896,47 @@ def _aggregate_indicator(frame: pd.DataFrame) -> pd.DataFrame:
         sort=True,
     ):
         amount = pd.to_numeric(group["amount"], errors="coerce")
+        inner_amount = (
+            pd.to_numeric(group["inner_amount"], errors="coerce")
+            if "inner_amount" in group
+            else pd.Series(np.nan, index=group.index, dtype="float64")
+        )
         deal = pd.to_numeric(group["deal_amount"], errors="coerce")
         ffr = pd.to_numeric(group["ffr"], errors="coerce")
-        if (amount.dropna() < 0.0).any() or (deal.dropna() < 0.0).any():
+        if (
+            (amount.dropna() < 0.0).any()
+            or (inner_amount.dropna() < 0.0).any()
+            or (deal.dropna() < 0.0).any()
+        ):
             raise QELongTrendError(
                 QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED,
-                "entry indicator amount/deal_amount must be non-negative",
+                "entry indicator amount/inner_amount/deal_amount must be non-negative",
             )
         total_amount = float(amount.sum(min_count=1)) if amount.notna().any() else np.nan
+        total_inner_amount = (
+            float(inner_amount.sum(min_count=1)) if inner_amount.notna().any() else np.nan
+        )
         total_deal = float(deal.sum(min_count=1)) if deal.notna().any() else np.nan
-        if np.isfinite(total_amount) and np.isfinite(total_deal) and total_deal > total_amount + 1e-9:
+        if np.isfinite(total_amount) and total_amount == 0.0 and np.isfinite(total_deal) and total_deal > 0.0:
             raise QELongTrendError(
                 QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED,
-                "entry indicator deal_amount exceeds target amount",
+                "entry indicator records a positive deal_amount for a zero outer target amount",
+            )
+        if (
+            np.isfinite(total_inner_amount)
+            and np.isfinite(total_deal)
+            and total_deal > total_inner_amount + 1e-9
+        ):
+            raise QELongTrendError(
+                QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED,
+                "entry indicator deal_amount exceeds the inner strategy target amount",
             )
         derived_ffr = total_deal / total_amount if total_amount > 0.0 and np.isfinite(total_deal) else np.nan
         finite_ffr = ffr.dropna()
-        if (finite_ffr < 0.0).any() or (finite_ffr > 1.0).any():
+        if (finite_ffr < 0.0).any():
             raise QELongTrendError(
                 QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED,
-                "entry indicator ffr must be within [0, 1]",
+                "entry indicator ffr must be non-negative",
             )
         if np.isfinite(derived_ffr) and not finite_ffr.empty:
             weighted_ffr = (
@@ -2904,6 +2960,7 @@ def _aggregate_indicator(frame: pd.DataFrame) -> pd.DataFrame:
                 "evidence_date": evidence_date,
                 "instrument": instrument,
                 "amount": total_amount,
+                "inner_amount": total_inner_amount,
                 "deal_amount": total_deal,
                 "ffr": derived_ffr
                 if np.isfinite(derived_ffr)
@@ -3240,6 +3297,11 @@ def _episode_record(
         "exit_close_qfq": exit_close,
         "entry_execution_status": "not_verifiable",
         "entry_execution_evidence_level": "position_transition_only",
+        "entry_target_amount": None,
+        "entry_inner_target_amount": None,
+        "entry_deal_amount": None,
+        "entry_fill_ratio": None,
+        "entry_overfill_amount": None,
         "actual_entry_date": None,
         "actual_entry_price": None,
         "entry_delay_days": None,
@@ -3249,6 +3311,11 @@ def _episode_record(
         "actual_exit_price": None,
         "exit_execution_status": "not_verifiable",
         "exit_execution_evidence_level": "position_transition_only" if closed else "none",
+        "exit_target_amount": None,
+        "exit_inner_target_amount": None,
+        "exit_deal_amount": None,
+        "exit_fill_ratio": None,
+        "exit_overfill_amount": None,
         "exit_delay_days": None,
         "exit_block_reason": None,
         "post_exit_signal_mae": None,
@@ -3354,6 +3421,11 @@ def attach_episode_entry_evidence(
         best = observation_frame.loc[observation_index]
         result.at[episode_index, "entry_execution_status"] = best["entry_execution_status"]
         result.at[episode_index, "entry_execution_evidence_level"] = best.get("entry_execution_evidence_level")
+        result.at[episode_index, "entry_target_amount"] = best.get("entry_target_amount")
+        result.at[episode_index, "entry_inner_target_amount"] = best.get("entry_inner_target_amount")
+        result.at[episode_index, "entry_deal_amount"] = best.get("entry_deal_amount")
+        result.at[episode_index, "entry_fill_ratio"] = best.get("entry_fill_ratio")
+        result.at[episode_index, "entry_overfill_amount"] = best.get("entry_overfill_amount")
         result.at[episode_index, "actual_entry_date"] = best.get("actual_entry_date")
         result.at[episode_index, "actual_entry_price"] = best.get("actual_entry_price")
         result.at[episode_index, "entry_delay_days"] = best.get("entry_delay_days")
@@ -3379,6 +3451,11 @@ def attach_exit_execution_evidence(
     result["actual_exit_price"] = np.nan
     result["exit_execution_status"] = "not_verifiable"
     result["exit_execution_evidence_level"] = "none"
+    result["exit_target_amount"] = np.nan
+    result["exit_inner_target_amount"] = np.nan
+    result["exit_deal_amount"] = np.nan
+    result["exit_fill_ratio"] = np.nan
+    result["exit_overfill_amount"] = np.nan
     result["exit_delay_days"] = pd.array([pd.NA] * len(result), dtype="Float64")
     result["exit_block_reason"] = None
     result["post_exit_signal_mae"] = np.nan
@@ -3495,7 +3572,18 @@ def attach_exit_execution_evidence(
         indicator_filled = False
         if indicator_row is not None and pd.notna(indicator_row.get("amount")):
             amount = float(indicator_row["amount"])
+            inner_amount = (
+                float(indicator_row["inner_amount"])
+                if pd.notna(indicator_row.get("inner_amount"))
+                else np.nan
+            )
             deal = float(indicator_row["deal_amount"]) if pd.notna(indicator_row.get("deal_amount")) else 0.0
+            fill = float(indicator_row["ffr"]) if pd.notna(indicator_row.get("ffr")) else np.nan
+            result.at[episode_index, "exit_target_amount"] = amount
+            result.at[episode_index, "exit_inner_target_amount"] = inner_amount
+            result.at[episode_index, "exit_deal_amount"] = deal
+            result.at[episode_index, "exit_fill_ratio"] = fill
+            result.at[episode_index, "exit_overfill_amount"] = deal - amount if deal > amount + 1e-9 else 0.0
             indicator_attempted = amount > 0.0
             indicator_filled = deal > 0.0
             if actual_exit == signal_date and indicator_attempted and deal == 0.0:
@@ -3872,6 +3960,16 @@ def _execution_family_statuses(
         coverage={
             "verifiable_entry_rate": float(entry_verifiable.mean()) if len(entry_verifiable) else None,
             "verifiable_exit_rate": float(exit_verifiable.mean()) if len(exit_verifiable) else None,
+            "entry_overfill_count": (
+                int(pd.to_numeric(observations["entry_overfill_amount"], errors="coerce").gt(0.0).sum())
+                if "entry_overfill_amount" in observations
+                else 0
+            ),
+            "exit_overfill_count": (
+                int(pd.to_numeric(episodes["exit_overfill_amount"], errors="coerce").gt(0.0).sum())
+                if "exit_overfill_amount" in episodes
+                else 0
+            ),
         },
         limitations=("some entry or exit events lack authoritative fill evidence",)
         if not (len(all_verifiable) and bool(all_verifiable.all()))
@@ -3990,6 +4088,26 @@ def compute_execution_metrics(
         if "exit_delay_days" in episodes
         else pd.Series(dtype="float64")
     )
+    entry_fill_ratio = (
+        pd.to_numeric(observations["entry_fill_ratio"], errors="coerce")
+        if "entry_fill_ratio" in observations
+        else pd.Series(dtype="float64")
+    )
+    exit_fill_ratio = (
+        pd.to_numeric(episodes["exit_fill_ratio"], errors="coerce")
+        if "exit_fill_ratio" in episodes
+        else pd.Series(dtype="float64")
+    )
+    entry_overfill = (
+        pd.to_numeric(observations["entry_overfill_amount"], errors="coerce")
+        if "entry_overfill_amount" in observations
+        else pd.Series(dtype="float64")
+    )
+    exit_overfill = (
+        pd.to_numeric(episodes["exit_overfill_amount"], errors="coerce")
+        if "exit_overfill_amount" in episodes
+        else pd.Series(dtype="float64")
+    )
     return [
         {
             "metric_scope": "order_fill",
@@ -4004,6 +4122,12 @@ def compute_execution_metrics(
                 "exit_status_counts": {str(key): int(value) for key, value in exit_counts.items()},
                 "entry_delay_days": _distribution(entry_delay),
                 "exit_delay_days": _distribution(exit_delay),
+                "entry_fill_ratio": _distribution(entry_fill_ratio),
+                "exit_fill_ratio": _distribution(exit_fill_ratio),
+                "entry_overfill_amount": _distribution(entry_overfill.loc[entry_overfill > 0.0]),
+                "exit_overfill_amount": _distribution(exit_overfill.loc[exit_overfill > 0.0]),
+                "entry_overfill_count": int(entry_overfill.gt(0.0).sum()),
+                "exit_overfill_count": int(exit_overfill.gt(0.0).sum()),
                 "direct_entry_block_reason_count": (
                     int(observations["entry_block_reason"].notna().sum()) if "entry_block_reason" in observations else 0
                 ),

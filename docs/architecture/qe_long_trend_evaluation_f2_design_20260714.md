@@ -123,7 +123,7 @@ label_h = close[T+h+1] / close[T+1] - 1
 | F-019 | 默认对既有任务关闭；仅 QE task/Loop 的显式 profile 生效，无 startup side effect，不改变既有模型输出和回测结果。 |
 | F-020 | DESIGN-COMPLIANCE-001、真实制品 E2E、DEV DB E2E、UI E2E、重启恢复和 extension snapshot oracle 作为平台交付质量记录；未完成项必须可见，但不限制已计算科研结果的分析和后续研究。 |
 | F-021 | 代码所有权和运行依赖执行 QE-only allowlist；静态 import/route/schema 回归证明 Selection、Advisory、Paper、模拟盘、QMT、StrategyPackage 和通用 Prediction Store 零变化。 |
-| F-022 | 理论机会与实际可成交结果分层：Qlib `indicators_normal_{freq}_obj.pkl` 的 `amount/deal_amount/ffr` 与 reconciled trade/position 提供下单目标和成交证据；entry/exit 使用同一 authority、逐信号 trade 一对一归属及数量/时点矛盾 fail-fast；日线触板不直接推断原因；缺队列或原因码时仅 `execution_cause` 为 `NOT_VERIFIABLE`。 |
+| F-022 | 理论机会与实际可成交结果分层：Qlib `indicators_normal_{freq}_obj.pkl` 的 `amount/inner_amount/deal_amount/ffr` 与 reconciled trade/position 提供外层目标、内层执行目标和成交证据；entry/exit 使用同一 authority、逐信号 trade 一对一归属及真实数量/时点矛盾 fail-fast；Qlib 分层执行下 `deal_amount>amount`、`ffr>1` 是可记录的 overfill，不得误判为损坏，只有 `deal_amount>inner_amount`、`ffr` 与 `deal_amount/amount` 不一致等才属于数量冲突；日线触板不直接推断原因；缺队列或原因码时仅 `execution_cause` 为 `NOT_VERIFIABLE`。 |
 | F-023 | 六个指标族独立计算和定级；缺 position/order/trade/maturity/价格/板块数据只影响依赖它的指标，不传播为全局失败，并输出结构化数据获取、补归档或补算计划。 |
 | F-024 | CAS、DDL、API、MCP、UI、历史补算和 E2E 只形成 `platform_delivery_status`；不得解锁或阻断期限选择、R8B2、R8M、R8C、oracle、两层模型或任何研究方向。 |
 
@@ -287,18 +287,18 @@ return_h = close_qfq[terminal_date(h)] / entry_price - 1
 
 `return_h` 与 Qlib `label_h` 逐点对比，目标浮点误差为 `1e-6`。若已有同 horizon `label.pkl`，同时保存抽样和全量 parity；不一致时保留双方数值、差异分布和公式身份，将受影响的 `signal_path` 指标标为 `COMPUTED_WITH_LIMITATIONS`，不得静默选边，也不得使整次评价或其他指标族失败。
 
-上述 entry 是“若能在 S 日收盘建立仓位”的理论机会锚点，不表示策略实际成交。实际桥接优先解析 Qlib Recorder 的 `indicators_normal_{freq}_obj.pkl`：`amount` 表示聚合记录中的目标/尝试交易量，`deal_amount` 表示实际撮合量，`ffr` 表示填充率；再与可得的 trade/position artifact 交叉核对，并按以下稳定状态输出：
+上述 entry 是“若能在 S 日收盘建立仓位”的理论机会锚点，不表示策略实际成交。实际桥接优先解析 Qlib Recorder 的 `indicators_normal_{freq}_obj.pkl`：`amount` 是外层策略目标量，`inner_amount` 是内层执行策略累计目标量，`deal_amount` 是实际撮合量，`ffr=deal_amount/amount` 是相对外层目标的填充率。分层执行、合法整手处理或执行策略再分配可能使 `inner_amount>=deal_amount>amount`，此时 `ffr>1` 是可解释的 overfill，而不是数据损坏。评价器必须同时保存 target/inner-target/deal/fill-ratio/overfill，并与可得的 trade/position artifact 交叉核对，再按以下稳定状态输出：
 
 | `entry_execution_status` | 判定 |
 |---|---|
-| `filled_t1` | S 日存在经 reconciliation 的首次买入成交 |
+| `filled_t1` | S 日存在经 reconciliation 的首次买入成交；`deal_amount>=amount` 时为全额成交，若大于外层目标则另存 `overfill_amount` 和 `fill_ratio>1` |
 | `partial_fill_t1` | S 日 `amount>deal_amount>0` 或 `0<ffr<1`，保存未成交量与填充率 |
 | `delayed_fill` | S 日后才首次成交，并保存 `entry_delay_days` |
 | `never_filled` | indicator object 或真实订单制品显示 `amount>0`，但评价窗口内 `deal_amount=0` 且无成交 |
 | `not_attempted_by_strategy` | 权威订单/组合决策证明未尝试建仓，不归因于市场阻断 |
 | `not_verifiable` | 缺下单意图、订单队列或足够 reconciliation 证据，禁止猜测 |
 
-`amount/deal_amount/ffr` 足以支持 `order_fill` 的尝试、成交、部分成交和零成交统计，但通常不包含队列位置、撤单轨迹和稳定原因码。`entry_block_reason` 只在直接证据足够时取 `blocked_limit_up`、`blocked_suspension` 或其他注册原因；否则只将 `execution_cause` 标为 `NOT_VERIFIABLE`。日线涨停/停牌状态只能辅助解释，不能单独把无成交归因成阻断；派生的 stock-level trade 汇总可用于收益归因，但不能伪装为精确 child-order ledger。原因不可验证不影响 `order_fill`、信号路径、持仓或组合结果的分析。
+`amount/inner_amount/deal_amount/ffr` 足以支持 `order_fill` 的尝试、成交、部分成交、零成交和 overfill 统计，但通常不包含队列位置、撤单轨迹和稳定原因码。`entry_block_reason` 只在直接证据足够时取 `blocked_limit_up`、`blocked_suspension` 或其他注册原因；否则只将 `execution_cause` 标为 `NOT_VERIFIABLE`。日线涨停/停牌状态只能辅助解释，不能单独把无成交归因成阻断；派生的 stock-level trade 汇总可用于收益归因，但不能伪装为精确 child-order ledger。原因不可验证不影响 `order_fill`、信号路径、持仓或组合结果的分析。
 
 因为 entry 使用 `S` 日收盘价，MFE/MAE 和 barrier 的未来路径从 `S+1` 开始，不能使用 `S` 日已经发生的 high/low：
 
@@ -764,7 +764,7 @@ A、B、C 分别维护 `platform_delivery_status`，不再产生任何全局 res
 - 首个 position 快照已持仓的左删失、position 自身 as-of 与 outcome 扩展分离、全零持仓 schema；
 - `filled_t1/delayed_fill/never_filled/not_attempted_by_strategy/not_verifiable` 入场状态与 delay；
 - 涨停买入、跌停/停牌退出阻断的对称 fixture；仅日线触板时必须保持 `not_verifiable`；
-- order/trade/position reconciliation 的一对一归属、数量/时点/原因冲突 fail-fast，不回退到价格猜测；
+- order/trade/position reconciliation 的一对一归属、数量/时点/原因冲突 fail-fast，不回退到价格猜测；数量 oracle 明确覆盖合法 `ffr>1` overfill、`deal<=inner_amount`、`ffr=deal/amount`，不得把 Qlib 分层目标差异误报为冲突；
 - barrier nesting、time-to-hit、AUCPR、禁止普通 score Brier；
 - stable tie rank；
 - episode open/close/add/reduce/re-entry；

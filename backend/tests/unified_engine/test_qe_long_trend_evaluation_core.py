@@ -19,6 +19,7 @@ from backend.services.quantevolver.long_trend_evaluation import (
     attach_exit_execution_evidence,
     benjamini_hochberg,
     compute_episode_metrics,
+    compute_execution_metrics,
     compute_portfolio_metrics,
     moving_block_bootstrap_mean,
     newey_west_mean_test,
@@ -578,6 +579,136 @@ def test_entry_execution_status_uses_archived_evidence_without_daily_guessing() 
             calendar=pd.date_range("2026-01-05", periods=4, freq="B"),
         )
     assert exc_info.value.reason_code == "QELT_EXECUTION_BRIDGE_RECONCILIATION_FAILED"
+
+
+def test_hierarchical_indicator_overfill_preserves_qlib_execution_semantics() -> None:
+    """Qlib ffr is measured against the outer target and may legitimately exceed one."""
+
+    dates = pd.date_range("2026-01-05", periods=4, freq="B")
+    observations = pd.DataFrame(
+        {
+            "signal_date": [dates[0]],
+            "instrument": ["600510.SH"],
+            "entry_date": [dates[1]],
+        }
+    )
+    indicator = pd.DataFrame(
+        {
+            "datetime": [dates[1]],
+            "instrument": ["600510.SH"],
+            "amount": [420_300.0],
+            "inner_amount": [429_800.0],
+            "deal_amount": [429_800.0],
+            "ffr": [429_800.0 / 420_300.0],
+        }
+    )
+    trade = pd.DataFrame(
+        {
+            "datetime": [dates[1]],
+            "instrument": ["600510.SH"],
+            "side": ["buy"],
+            "quantity": [429_800.0],
+            "price": [6.70],
+        }
+    )
+
+    enriched = attach_entry_execution_evidence(
+        observations,
+        evidence=ExecutionEvidenceBundle(indicator=indicator, trades=trade),
+        calendar=dates,
+    )
+
+    assert enriched.loc[0, "entry_execution_status"] == "filled_t1"
+    assert enriched.loc[0, "entry_execution_evidence_level"] == "indicator_and_trade_reconciled"
+    assert enriched.loc[0, "entry_target_amount"] == 420_300.0
+    assert enriched.loc[0, "entry_inner_target_amount"] == 429_800.0
+    assert enriched.loc[0, "entry_deal_amount"] == 429_800.0
+    assert enriched.loc[0, "entry_fill_ratio"] == pytest.approx(429_800.0 / 420_300.0)
+    assert enriched.loc[0, "entry_overfill_amount"] == 9_500.0
+
+    execution_metric = compute_execution_metrics(enriched, pd.DataFrame())[0]
+    assert execution_metric["value_json"]["entry_overfill_count"] == 1
+    assert execution_metric["value_json"]["entry_fill_ratio"]["mean"] > 1.0
+
+    impossible_inner_target = indicator.assign(inner_amount=429_700.0)
+    with pytest.raises(QELongTrendError) as exc_info:
+        attach_entry_execution_evidence(
+            observations,
+            evidence=ExecutionEvidenceBundle(indicator=impossible_inner_target),
+            calendar=dates,
+        )
+    assert exc_info.value.reason_code == QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED.value
+
+    inconsistent_ffr = indicator.assign(ffr=1.0)
+    with pytest.raises(QELongTrendError) as exc_info:
+        attach_entry_execution_evidence(
+            observations,
+            evidence=ExecutionEvidenceBundle(indicator=inconsistent_ffr),
+            calendar=dates,
+        )
+    assert exc_info.value.reason_code == QELongTrendReason.EXECUTION_BRIDGE_RECONCILIATION_FAILED.value
+
+
+def test_hierarchical_indicator_overfill_is_preserved_for_exit_evidence() -> None:
+    dates = pd.date_range("2026-01-05", periods=4, freq="B")
+    instrument = "600510.SH"
+    episodes = pd.DataFrame(
+        {
+            "instrument": [instrument],
+            "entry_date": [dates[0]],
+            "exit_date": [dates[2]],
+        }
+    )
+    prices = pd.DataFrame(
+        {
+            "datetime": dates,
+            "instrument": instrument,
+            "close_qfq": [10.0, 10.5, 11.0, 10.8],
+            "high_qfq": [10.2, 10.7, 11.2, 11.0],
+            "low_qfq": [9.8, 10.3, 10.8, 10.6],
+        }
+    ).set_index(["datetime", "instrument"])
+    indicator = pd.DataFrame(
+        {
+            "datetime": [dates[2]],
+            "instrument": [instrument],
+            "side": ["sell"],
+            "amount": [100.0],
+            "inner_amount": [105.0],
+            "deal_amount": [105.0],
+            "ffr": [1.05],
+        }
+    )
+    trade = pd.DataFrame(
+        {
+            "datetime": [dates[2]],
+            "instrument": [instrument],
+            "side": ["sell"],
+            "quantity": [105.0],
+            "price": [11.0],
+        }
+    )
+    exit_signal = pd.DataFrame({"datetime": [dates[2]], "instrument": [instrument]})
+
+    enriched = attach_exit_execution_evidence(
+        episodes,
+        evidence=ExecutionEvidenceBundle(
+            indicator=indicator,
+            trades=trade,
+            exit_signals=exit_signal,
+        ),
+        prices=prices,
+        calendar=dates,
+        evaluation_asof=dates[-1],
+    )
+
+    assert enriched.loc[0, "exit_execution_status"] == "filled_on_exit_signal_day"
+    assert enriched.loc[0, "exit_execution_evidence_level"] == "indicator_and_exit_reconciled"
+    assert enriched.loc[0, "exit_target_amount"] == 100.0
+    assert enriched.loc[0, "exit_inner_target_amount"] == 105.0
+    assert enriched.loc[0, "exit_deal_amount"] == 105.0
+    assert enriched.loc[0, "exit_fill_ratio"] == 1.05
+    assert enriched.loc[0, "exit_overfill_amount"] == 5.0
 
 
 def test_episode_reconstruction_handles_exit_reentry_open_and_false_exit() -> None:
