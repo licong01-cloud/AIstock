@@ -1,17 +1,19 @@
 # MiniQMT `ADAPTIVE_IS_L1` 日内执行设计蓝图
 
+> 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](../architecture/simulation_platform_unified_authoritative_blueprint_20260715.md) 的 `ADAPTIVE_IS_L1` 算法域下位蓝图，只拥有算法研究目标和阶段验收；不拥有模拟盘平台执行路径、runtime、准入、durability、生产迁移或整体进度的上位权威。
+
 - 日期：2026-07-10
-- 状态：F2 Master Blueprint v1.0，主设计可进入分阶段详细设计；任何运行时实现与激活仍须通过对应阶段设计验收
+- 状态：F2 Algorithm Domain Blueprint v1.0；算法设计可进入分阶段详细设计，任何平台运行时实现与激活仍须同时通过唯一上位蓝图和对应阶段设计验收
 - 范围：Path S / MiniQMT SIM `event_loop` A 路线，多 alpha top-k 日内换仓执行
 - 目标算法代码：`ADAPTIVE_IS_L1`
 - 当前控制组：BUG-614 protected marketable-limit（下文称 B0）
 - 关联生产 SIM：`pkg_ma_8ec5e389fa2c5e484a1ac7e9`，binding slot `ma_8ec5e389_sim_20260703`
 - 已合入的可靠性基线：BUG-599、BUG-600、BUG-604、BUG-614
 - 设计等级：F2，跨 `simulation_runtime`、`miniqmt_execution_runtime`、`execution_algos`、TCA/ledger 与后续策略资产
-- 工作流分级：T3 design-driven；risk level=P1；phase=Master Blueprint
-- 目录授权：用户明确要求更新现有 `docs/analysis/` 文档；本文据此使用 FEATURE-WORKFLOW-001 的任务批准目录例外，不建立第二份竞争性蓝图
+- 工作流分级：T3 design-driven；risk level=P1；phase=Algorithm Domain Blueprint
+- 目录授权：用户明确要求更新现有 `docs/analysis/` 文档；本文据此使用 FEATURE-WORKFLOW-001 的任务批准目录例外，并作为算法域下位设计，不建立第二份平台级竞争性蓝图
 
-本文是后续开发的权威蓝图。每个实施阶段必须基于本文稳定的 Design Acceptance Index 生成独立详细设计、实现 PR 和验收矩阵；不得把某一阶段的通过描述为整套能力已经完成。
+本文是 `ADAPTIVE_IS_L1` 算法域的下位蓝图。每个实施阶段必须同时映射模拟盘平台唯一上位蓝图和本文稳定的 Design Acceptance Index，生成独立详细设计、实现 PR 和验收矩阵，并同步更新上位蓝图 §15；不得把某一阶段的通过描述为整套能力已经完成。
 
 ---
 

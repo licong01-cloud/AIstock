@@ -1,8 +1,10 @@
 # AIstock MiniQMT Adaptive IS Phase 1：五档行情、执行时钟与收盘竞价契约 F2 详细设计
 
-> 文档类型：F2 详细设计；Phase 1 的唯一设计蓝图
+> 文档类型：F2 下位详细设计；Phase 1 quote/control/evidence 的唯一专项契约
 >
-> 上位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
+> 唯一上位蓝图：[AIstock LocalSIM / MiniQMT 模拟盘统一权威蓝图](simulation_platform_unified_authoritative_blueprint_20260715.md)
+>
+> 算法域下位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
 >
 > Feature Tier：F2；风险级别：P1；运行范围：SIM-first、先观测后启用 `B0_QUOTE_V2`
 >
@@ -59,7 +61,7 @@ Phase 1 不实现或激活 `ADAPTIVE_IS_L1`。有效 quote 下产生的 broker s
 
 ### 1.1 阶段目标与上游边界
 
-上位蓝图已选择“组合级净额化 + Arrival-Price / Implementation Shortfall 目标 + 约束型滚动控制器 + 五档深度感知 micro executor + 独立 Completion Governor”作为不受 V25 遗留资产限制时的目标路线。本 Phase 1 只补齐该路线的**行情输入、时钟和市场阶段契约**，不实现新的下单策略、parent 净额化或 Completion Governor。
+算法域下位蓝图已选择“组合级净额化 + Arrival-Price / Implementation Shortfall 目标 + 约束型滚动控制器 + 五档深度感知 micro executor + 独立 Completion Governor”作为不受 V25 遗留资产限制时的目标路线。本 Phase 1 只补齐该路线的**行情输入、时钟和市场阶段契约**，不实现新的下单策略、parent 净额化或 Completion Governor。
 
 它承接蓝图中的 `F-003`、`F-008`、`F-009`、`F-011`、`F-015`、`F-016`、`F-017`、`F-019`、`F-020`。其中 LEGACY_B0 是已合入的可靠控制组，B0_QUOTE_V2 是 Phase 1 必须产生的新 control revision；`ADAPTIVE_IS_L1` 在本阶段没有可达的 broker submit 路径。
 
@@ -1860,7 +1862,7 @@ DESIGN-COMPLIANCE-001 四项结论：
 - F2 Feature Workflow validator 通过，Design Acceptance Matrix 无未批准缺口。
 - `git diff --check` 通过，文档仅位于本任务 worktree，未污染运行根目录。
 - 对现有订阅/五档/时钟/B0 source guard 的代码事实和官方 xtquant 能力边界已经记录。
-- 与主蓝图 Phase 1 mandatory B0 revision、Phase 0A market_data_id/markout handoff 和 Phase 0B baseline query 一致。
+- 与唯一上位蓝图的 MiniQMT 单路径约束，以及算法域下位蓝图的 Phase 1 mandatory B0 revision、Phase 0A market_data_id/markout handoff 和 Phase 0B baseline query 一致。
 - 每个实施切片都有 ownership、完整范围、测试、metrics/alerts/runbook、B0 不变式与运行验证边界。
 - P1-E 的 binding/revision/assignment exact schema、scheduler lifecycle、strict `VnpyTick` projection、durable-before-submit、restart/no-duplicate、Phase 0B v2 export 与直接 nodeids 已闭合。
 - 不得把静态、占位、简化或 mock-only 产物写成已完成。
@@ -1872,7 +1874,8 @@ P1-A～P1-E 已完成实现与合入；P1-E 的权威实现记录为 §13.5 / PR
 
 ## 15. 参考资料
 
-- 上位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
+- 唯一上位蓝图：[AIstock LocalSIM / MiniQMT 模拟盘统一权威蓝图](simulation_platform_unified_authoritative_blueprint_20260715.md)
+- 算法域下位蓝图：[MiniQMT 日内执行策略分析与实施蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
 - 上游交接：[MiniQMT Adaptive IS Phase 0A TCA 详细设计](./miniqmt_adaptive_is_phase0_tca_design.md)
 - 迅投知识库：[股票数据与 `get_full_tick` / `subscribe_whole_quote`](https://dict.thinktrader.net/dictionary/stock.html)
 - 迅投知识库：[行情相关常见问题：全推、五档与行情源能力](https://dict.thinktrader.net/innerApi/question_answer.html)

@@ -1,7 +1,7 @@
 # QE SOTA 殿堂、StrategyPackage 资产治理、Seed 可复现性与模型库设计
 
-> **2026-05-21 作废/取代声明**：本文已不再作为 LocalSim / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。最新权威方案为 `docs/architecture/simulation_remediation_project_design_20260521.md`，并以 `StrategyPackage alpha core + StrategyRuntimeRelease（策略包运行版本）+ SimulationReleaseBinding` 为唯一边界。本文仅保留 QE / SOTA / alpha core 治理方向；凡把执行、风控、HMM 或 runtime variant 作为 StrategyPackage 内容的描述，均已作废。
-> 若本文与最新方案不一致，以 `simulation_remediation_project_design_20260521.md` 为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
+> **2026-07-15 作废/取代声明**：本文已不再作为 LocalSIM / MiniQMT 模拟盘、Selection Center、Paper Trading v2 或未来实盘运行边界的实现依据。模拟盘平台唯一上位蓝图为 `docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md`。本文仅保留 QE / SOTA / alpha core 治理方向；凡把执行、风控、HMM 或 runtime variant 作为 StrategyPackage 内容的描述，均已作废。
+> 若本文与唯一上位蓝图不一致，以上位蓝图为准；旧描述只能作为历史背景或迁移参考，不能指导新开发。
 
 > **2026-05-20 边界更新**：本文中“不可变 Alpha Core”的定义仍保留；但关于 StrategyPackage 吸收组合策略、风控策略、执行策略、HMM runtime variant 的描述已被 `docs/architecture/strategy_package_platform_boundary_contract_20260520.md` 取代。新版边界要求 StrategyPackage 只绑定因子和模型 alpha core；日频/分钟/尾盘/HMM/ST PIT/event/risk/broker 通过平台 profile/policy/version/activation 管理。
 

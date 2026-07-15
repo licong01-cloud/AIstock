@@ -1,11 +1,14 @@
 # MiniQMT `ADAPTIVE_IS_L1` Phase 0A：Benchmark、TCA Schema 与 Ledger Join 详细设计
 
+> 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的 Phase 0A TCA 下位专项契约；`miniqmt_intraday_execution_strategy_analysis_20260710.md` 是算法域下位蓝图。TCA 事实和实现进度必须同步回写上位蓝图 §15，不得以 TCA 完成替代平台运行链完成。
+
 - 文档日期：2026-07-11
 - 文档状态：F2 详细设计蓝图；Batch 0A-0 已完成只读基线，Batch 0A-1 已由 PR #1957 合入，Batch 0A-2 已由 PR #1960 合入且生产 DDL 已应用验证，Batch 0A-3 已由 PR #1963 合入；Phase 0A 其余的 0A-4 API/EOD hook、生产配置、projector 与运行时激活仍未完成
 - 风险等级：P1 / T3 design-driven
 - 目标环境：MiniQMT SIM，Path S `event_loop`
 - 当前控制组：BUG-614 protected marketable-limit，本文简称 B0
-- 主蓝图：[MiniQMT 日内执行策略分析与 ADAPTIVE_IS_L1 蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
+- 唯一上位蓝图：[AIstock LocalSIM / MiniQMT 模拟盘统一权威蓝图](simulation_platform_unified_authoritative_blueprint_20260715.md)
+- 算法域下位蓝图：[MiniQMT 日内执行策略分析与 ADAPTIVE_IS_L1 蓝图](../analysis/miniqmt_intraday_execution_strategy_analysis_20260710.md)
 - 主要模块：`simulation_runtime`、`miniqmt_execution_runtime`、`qmt_strategy_ledger`
 - 建议实现 migration：`backend/migrations/miniqmt_execution_tca_phase0a_20260711.sql` 及 companion rollback
 
@@ -210,7 +213,7 @@ read-only service / evidence export
 
 当前 `trade_ledger` 可由broker callback或snapshot sync填充；reconciliation只提供finality attestation，不是ingest mode。每条prospective trade在ledger记录`first_ingest_source`与canonical trade fact hash，并在append-only observation表逐次记录`BROKER_CALLBACK|BROKER_SNAPSHOT_SYNC`；legacy provenance缺失为`UNKNOWN_LEGACY`。同步下单返回只证明 broker 接受请求，不证明成交。
 
-Phase 0A 的fill authority是“带broker trade ID与canonical economic hash的`trade_ledger` fact + 保留每次raw/source provenance的observation”，无论它由snapshot还是未来callback进入。这只完成主蓝图F-004的TCA evidence切片；callback驱动runtime quantity state仍属于Phase 2/3。
+Phase 0A 的fill authority是“带broker trade ID与canonical economic hash的`trade_ledger` fact + 保留每次raw/source provenance的observation”，无论它由snapshot还是未来callback进入。这只完成算法域下位蓝图 F-004 的 TCA evidence 切片；callback 驱动 runtime quantity state 仍属于 Phase 2/3，并受唯一上位蓝图约束。
 
 ### 4.3 Stable identity 与 revision
 
@@ -1587,7 +1590,7 @@ canonicalization：
 
 ### 5.13 Read-only service/API
 
-主蓝图 Phase 0A operations 映射为：
+算法域下位蓝图 Phase 0A operations 映射为：
 
 | Service operation | REST adapter | 说明 |
 |---|---|---|
@@ -1749,7 +1752,7 @@ Phase 1 不得覆盖 Phase 0A 已冻结 decision/arrival；只能追加 evidence
 
 ## 7. Design Acceptance Index / 设计验收索引
 
-本阶段直接承接主蓝图的以下稳定条目，只验收 Phase 0A 所属切片，不提前宣称其他阶段完成：
+本阶段直接承接算法域下位蓝图的以下稳定条目，并映射唯一上位蓝图；只验收 Phase 0A 所属切片，不提前宣称其他阶段完成：
 
 | id | Phase 0A obligation | 本文位置 |
 |---|---|---|
@@ -2283,4 +2286,4 @@ Phase 0A 通过后仍不得声称：
 
 ## 15. 下一阶段入口
 
-Phase 0A 详细设计审查通过后，从 `Batch 0A-0` 开始只读 inventory；不得直接跳到算法实现。Phase 0A 与 Phase 1 的 evidence gates 全部完成后，才能按主蓝图进入 Phase 0B B0 观察窗口，再决定 `ADAPTIVE_IS_L1` B1 的实现与实验。
+Phase 0A 详细设计审查通过后，从 `Batch 0A-0` 开始只读 inventory；不得直接跳到算法实现。Phase 0A、Phase 1 与唯一上位蓝图的 P0 执行平台条款全部满足后，才能按算法域下位蓝图进入 Phase 0B B0 观察窗口，再决定 `ADAPTIVE_IS_L1` B1 的实现与实验。

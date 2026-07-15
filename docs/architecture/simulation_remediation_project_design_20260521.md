@@ -1,5 +1,7 @@
 # AIstock LocalSim / MiniQMT 模拟盘整改项目详细设计（2026-05-21）
 
+> 权威状态：`historical_superseded`。本文保留为 2026-05-21 整改背景和历史决策记录；自 2026-07-15 起，模拟盘平台唯一上位蓝图为 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md)。本文与新蓝图冲突时以新蓝图为准，不得据本文恢复旧 Paper v2/MiniQMT 路径、人工审批或历史门禁。
+
 > 状态：整改项目设计草案 v1.1
 > 分支：`docs/sim-remediation-design-20260521`
 > 适用范围：StrategyPackage、Selection Center、Paper Trading v2、LocalSim、MiniQMT SIM、多策略分仓、运行调度、验证流水线
@@ -843,7 +845,7 @@ L5 不作为普通 CI 默认项，但作为合入前人工验收或实盘前审�
 
 - 本文档评审通过。
 - 建立 acceptance matrix 到 issue/project checklist。
-- 确认所有旧文档中冲突描述以 2026-05-20 边界契约和本文为准；本文是 LocalSim / MiniQMT 模拟盘整改项目的最新权威方案。
+- 2026-05-21 当时的冲突描述以 2026-05-20 边界契约和本文记录为准；当前实现和后续设计统一以 2026-07-15 模拟盘平台唯一上位蓝图为准。
 - 明确 `StrategyRuntimeRelease` 与 StrategyPackage、RuntimeProfileVersion、SimulationReleaseBinding 的命名和字段边界，旧文档如有未版本化 `runtime_config` 或策略包绑定平台能力的描述必须废弃或改写。
 - 以下旧文档必须在顶部标注“作废/取代声明”；只保留历史背景或部分可复用设计，不得作为新实现依据：
   - `docs/architecture/paper_v2_qe_candidate_strategy_warehouse_design_20260512.md`

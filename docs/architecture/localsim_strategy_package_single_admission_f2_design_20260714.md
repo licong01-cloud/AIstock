@@ -1,5 +1,7 @@
 # LocalSIM StrategyPackage 单次准入与双类型运行 F2 设计
 
+> 权威关系：本文是 [`simulation_platform_unified_authoritative_blueprint_20260715.md`](simulation_platform_unified_authoritative_blueprint_20260715.md) 的 StrategyPackage single-admission 下位专项契约。本文只拥有一次准入与 package/model type 兼容语义；LocalSIM 日内事件执行、durability、估值、恢复和整体进度以上位蓝图为准。相关功能或 BUG PR 必须同步更新上位蓝图 §15。
+
 设计日期：2026-07-14  
 层级：T3 / F2  
 模块：StrategyPackage、Selection Center、Paper Trading v2 LocalSIM、MiniQMT SIM、QMT strategy ledger  
