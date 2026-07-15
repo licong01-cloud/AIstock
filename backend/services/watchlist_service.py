@@ -434,9 +434,15 @@ def list_items_with_quotes(
     enriched: List[Dict[str, Any]] = []
     for it in items:
         code = str(it.get("code"))
-        entry_price = it.get("entry_price")
+
+        # 优先使用分类级别的加入价格，如果没有则回退到股票级别
+        category_entry_price = it.get("category_entry_price")
+        stock_entry_price = it.get("entry_price")
+        entry_price = category_entry_price if category_entry_price is not None else stock_entry_price
+
         entry_adjustment = entry_adjustments.get(code) or {}
         entry_price_for_return = entry_adjustment.get("entry_price_adjusted")
+
         q = quotes_raw.get(code, {})
         rt = _compute_realtime_fields(q, entry_price=entry_price, entry_price_for_return=entry_price_for_return)
         row = dict(it)
@@ -451,6 +457,10 @@ def list_items_with_quotes(
         row["entry_price_basis_source"] = entry_adjustment.get("entry_price_basis_source")
         row["entry_adj_factor_date"] = entry_adjustment.get("entry_adj_factor_date")
         row["latest_adj_factor_date"] = entry_adjustment.get("latest_adj_factor_date")
+
+        # 添加分类级别的信息到返回结果
+        row["effective_entry_price_source"] = "category" if category_entry_price is not None else "stock"
+
         enriched.append(row)
 
     return {"total": base.get("total", len(enriched)), "items": enriched}

@@ -358,6 +358,10 @@ class WatchlistRepoPG:
                 if not item_ids:
                     return {"added": 0, "skipped": len(codes), "moved": 0, "item_ids_by_code": {}}
 
+                # 构造关联表插入数据，包含分类级别的价格快照和日期
+                # 创建 item_id -> code 的反向映射
+                id_to_code = {v: k for k, v in code_to_id.items()}
+
                 if on_conflict == "move":
                     cur.execute(
                         "SELECT COUNT(DISTINCT item_id) FROM app.watchlist_item_categories "
@@ -370,20 +374,49 @@ class WatchlistRepoPG:
                         (item_ids,),
                     )
                     moved = had_mappings
-                    map_rows = [(iid, category_id) for iid in item_ids]
+
+                    # 构造带价格快照的插入数据
+                    map_rows = []
+                    for iid in item_ids:
+                        code = id_to_code.get(iid)
+                        it = norm_map.get(code, {})
+                        entry_date = it.get("entry_as_of") or it.get("actual_entry_date")
+                        entry_price = it.get("entry_price") or it.get("actual_entry_price")
+                        map_rows.append((iid, category_id, entry_date, entry_price))
+
                     pg_extras.execute_values(
                         cur,
-                        "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                        """
+                        INSERT INTO app.watchlist_item_categories(
+                            item_id, category_id, entry_date_snapshot, entry_price_snapshot
+                        )
+                        VALUES %s
+                        ON CONFLICT (item_id, category_id) DO NOTHING
+                        """,
                         map_rows,
                         page_size=1000,
                     )
                     added = len(item_ids)
                     skipped = 0
                 else:
-                    map_rows = [(iid, category_id) for iid in item_ids]
+                    # 构造带价格快照的插入数据
+                    map_rows = []
+                    for iid in item_ids:
+                        code = id_to_code.get(iid)
+                        it = norm_map.get(code, {})
+                        entry_date = it.get("entry_as_of") or it.get("actual_entry_date")
+                        entry_price = it.get("entry_price") or it.get("actual_entry_price")
+                        map_rows.append((iid, category_id, entry_date, entry_price))
+
                     pg_extras.execute_values(
                         cur,
-                        "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                        """
+                        INSERT INTO app.watchlist_item_categories(
+                            item_id, category_id, entry_date_snapshot, entry_price_snapshot
+                        )
+                        VALUES %s
+                        ON CONFLICT (item_id, category_id) DO NOTHING
+                        """,
                         map_rows,
                         page_size=1000,
                     )
@@ -415,10 +448,34 @@ class WatchlistRepoPG:
                     (ids,),
                 )
                 if ids:
-                    rows = [(iid, new_category_id) for iid in ids]
+                    # 获取每个 item 的价格和日期快照
+                    cur.execute(
+                        """
+                        SELECT id,
+                               COALESCE(actual_entry_price, entry_price) as price,
+                               COALESCE(actual_entry_date, entry_as_of) as date
+                        FROM app.watchlist_items
+                        WHERE id = ANY(%s)
+                        """,
+                        (ids,),
+                    )
+                    item_snapshots = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+                    # 构造带价格快照的插入数据
+                    rows = []
+                    for iid in ids:
+                        price, date = item_snapshots.get(iid, (None, None))
+                        rows.append((iid, new_category_id, date, price))
+
                     pg_extras.execute_values(
                         cur,
-                        "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                        """
+                        INSERT INTO app.watchlist_item_categories(
+                            item_id, category_id, entry_date_snapshot, entry_price_snapshot
+                        )
+                        VALUES %s
+                        ON CONFLICT (item_id, category_id) DO NOTHING
+                        """,
                         rows,
                         page_size=1000,
                     )
@@ -581,6 +638,13 @@ class WatchlistRepoPG:
                 total = int(cur.fetchone()[0])
                 offset = max(0, (int(page) - 1) * int(page_size))
                 limit = int(page_size)
+
+                # 构建查询参数列表
+                query_params = list(params)  # 复制 where 条件的参数
+                if category_id:
+                    query_params.append(category_id)  # JOIN 条件中的 category_id
+                query_params.extend([offset, limit])  # 分页参数
+
                 sql = f"""
                     SELECT i.id, i.code, i.name, i.note, i.created_at, i.updated_at,
                            COALESCE(string_agg(DISTINCT c.name, ',' ORDER BY c.name), '') AS cat_names,
@@ -600,9 +664,12 @@ class WatchlistRepoPG:
                             i.actual_entry_date,
                             i.exited_at,
                             i.exit_reason,
-                            i.advisory_enabled
+                            i.advisory_enabled,
+                            w.added_at AS category_added_at,
+                            w.entry_price_snapshot AS category_entry_price,
+                            w.entry_date_snapshot AS category_entry_date
                       FROM app.watchlist_items i
-                 LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id
+                 LEFT JOIN app.watchlist_item_categories w ON w.item_id = i.id {'AND w.category_id = %s' if category_id else ''}
                  LEFT JOIN app.watchlist_categories c ON c.id = w.category_id
                  LEFT JOIN LATERAL (
                         SELECT ar.analysis_date,
@@ -614,11 +681,11 @@ class WatchlistRepoPG:
                          LIMIT 1
                    ) a ON TRUE
                    {where}
-                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of, i.lifecycle_status, i.planned_entry_price, i.actual_entry_price, i.actual_entry_date, i.exited_at, i.exit_reason, i.advisory_enabled
+                  GROUP BY i.id, i.code, i.name, i.note, i.created_at, i.updated_at, a.analysis_date, a.rating, a.conclusion, i.entry_price, i.entry_rank, i.entry_source, i.entry_task_id, i.entry_loop_id, i.entry_as_of, i.lifecycle_status, i.planned_entry_price, i.actual_entry_price, i.actual_entry_date, i.exited_at, i.exit_reason, i.advisory_enabled, w.added_at, w.entry_price_snapshot, w.entry_date_snapshot
                   ORDER BY {order_expr} {dir_kw} NULLS LAST, i.code ASC
                   OFFSET %s LIMIT %s
                 """
-                cur.execute(sql, params + [offset, limit])
+                cur.execute(sql, query_params)
                 items: List[Dict[str, Any]] = []
                 for r in cur.fetchall():
                     items.append(
@@ -647,6 +714,9 @@ class WatchlistRepoPG:
                             "exited_at": r[21].isoformat() if r[21] else None,
                             "exit_reason": r[22],
                             "advisory_enabled": bool(r[23]),
+                            "category_added_at": r[24].isoformat() if r[24] else None,
+                            "category_entry_price": float(r[25]) if r[25] is not None else None,
+                            "category_entry_date": r[26].isoformat() if r[26] else None,
                         }
                     )
         return {"total": total, "items": items}
@@ -658,12 +728,38 @@ class WatchlistRepoPG:
     ) -> int:
         if not item_ids or not category_ids:
             return 0
-        rows = [(iid, cid) for iid in item_ids for cid in category_ids]
+
         with get_conn() as conn:
             with conn.cursor() as cur:
+                # 获取每个 item 的价格和日期快照
+                cur.execute(
+                    """
+                    SELECT id,
+                           COALESCE(actual_entry_price, entry_price) as price,
+                           COALESCE(actual_entry_date, entry_as_of) as date
+                    FROM app.watchlist_items
+                    WHERE id = ANY(%s)
+                    """,
+                    (item_ids,),
+                )
+                item_snapshots = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+
+                # 构造带价格快照的插入数据
+                rows = []
+                for iid in item_ids:
+                    for cid in category_ids:
+                        price, date = item_snapshots.get(iid, (None, None))
+                        rows.append((iid, cid, date, price))
+
                 pg_extras.execute_values(
                     cur,
-                    "INSERT INTO app.watchlist_item_categories(item_id, category_id) VALUES %s ON CONFLICT DO NOTHING",
+                    """
+                    INSERT INTO app.watchlist_item_categories(
+                        item_id, category_id, entry_date_snapshot, entry_price_snapshot
+                    )
+                    VALUES %s
+                    ON CONFLICT (item_id, category_id) DO NOTHING
+                    """,
                     rows,
                     page_size=1000,
                 )

@@ -36,6 +36,10 @@ interface WatchlistItem {
   volume_hand?: number | null;
   amount?: number | null;
   rating?: string | null;
+  category_added_at?: string | null;
+  category_entry_price?: number | null;
+  category_entry_date?: string | null;
+  effective_entry_price_source?: "category" | "stock" | null;
 }
 
 interface ListItemsResponse {
