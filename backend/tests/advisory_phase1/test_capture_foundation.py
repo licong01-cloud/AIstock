@@ -18,8 +18,15 @@ from backend.services.advisory_phase1.capture_foundation import (
     InMemoryCaptureBatchRepository,
     InMemoryTraceAdmissionValidator,
     InMemoryTraceCaptureGapRepository,
+    REASON_PHASE1F2_GAP_SCOPE_PAIR_INVALID,
+    REASON_PHASE1F2_LEGACY_GAP_HASH_MISMATCH,
+    REASON_PHASE1F2_SCHEMA_NOT_READY,
+    REASON_PHASE1F2_SCOPE_GAP_HASH_MISMATCH,
     REASON_CAPTURE_BATCH_CONFLICT,
     REASON_CAPTURE_BATCH_FENCING_INVALID,
+    TraceCaptureGap,
+    _gap_from_row,
+    _require_scope_aware_gap_schema,
     capture_request_purpose,
     capture_request_schema,
     parse_capture_batch_request_payload,
@@ -42,7 +49,12 @@ from backend.services.advisory_phase1.stage_trace import (
 from backend.services.advisory_phase1.trace_outbox import (
     ExpectedTraceIdentity,
     InMemoryTraceOutboxRepository,
+    LegacyExpectedTraceIdentityV1,
+    REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
+    ScopeAwareExpectedTraceIdentityV2,
+    TRACE_IDENTITY_SCHEMA_VERSION_V2,
     TraceCaptureReconciler,
+    _require_scope_aware_outbox_schema,
 )
 
 
@@ -375,6 +387,144 @@ def test_reconciler_records_only_capture_lost_gap_and_is_idempotent() -> None:
     assert reconciler.reconcile((identity,)) == (identity,)
     stored = gaps.record(identity=identity, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST")
     assert stored.reason_code == "ADVISORY_PHASE1_TRACE_CAPTURE_LOST"
+
+
+def test_phase1f2_public_identity_is_scope_aware_and_has_explicit_lookup_key() -> None:
+    import backend.services.advisory_phase1 as advisory_phase1
+
+    binding = _binding()
+    identity = ExpectedTraceIdentity.from_envelope(_envelope(binding), binding=binding)
+
+    assert ExpectedTraceIdentity is ScopeAwareExpectedTraceIdentityV2
+    assert identity.schema_version == TRACE_IDENTITY_SCHEMA_VERSION_V2
+    assert identity.selection_lookup_key == (
+        SELECTION_RUN_ID,
+        PACKAGE_ID,
+        MANIFEST_SHA256,
+        DECISION_DATE.isoformat(),
+    )
+    assert identity.natural_key == (
+        *identity.selection_lookup_key,
+        binding.capture_policy.policy_hash,
+        binding.admission_scope_hash,
+    )
+    payload = identity.model_dump(mode="python")
+    payload.pop("admission_scope_id")
+    with pytest.raises(ValueError):
+        ExpectedTraceIdentity(**payload)
+    assert "LegacyExpectedTraceIdentityV1" not in advisory_phase1.__all__
+    with pytest.raises(AttributeError):
+        getattr(advisory_phase1, "LegacyExpectedTraceIdentityV1")
+
+
+def test_phase1f2_legacy_gap_payload_and_hash_remain_byte_compatible() -> None:
+    legacy = LegacyExpectedTraceIdentityV1(
+        selection_run_id="selection-run",
+        package_id="package",
+        manifest_sha256="a" * 64,
+        decision_as_of_trade_date=DECISION_DATE,
+        capture_policy_hash="b" * 64,
+    )
+    assert legacy.model_dump(mode="json") == {
+        "selection_run_id": "selection-run",
+        "package_id": "package",
+        "manifest_sha256": "a" * 64,
+        "decision_as_of_trade_date": "2026-07-10",
+        "capture_policy_hash": "b" * 64,
+    }
+    gap = TraceCaptureGap(identity=legacy, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST")
+    assert gap.gap_content_hash == "f46d61f537f0a937bccee459824560b633276bdbf14c617a7487009550463078"
+
+    row = {
+        **legacy.model_dump(mode="python"),
+        "admission_scope_id": None,
+        "admission_scope_hash": None,
+        "reason_code": gap.reason_code,
+        "gap_content_hash": gap.gap_content_hash,
+    }
+    parsed = _gap_from_row(row)
+    assert isinstance(parsed.identity, LegacyExpectedTraceIdentityV1)
+    assert parsed == gap
+
+    row["gap_content_hash"] = "0" * 64
+    with pytest.raises(SourceLedgerError) as excinfo:
+        _gap_from_row(row)
+    assert excinfo.value.reason_code == REASON_PHASE1F2_LEGACY_GAP_HASH_MISMATCH
+
+    with pytest.raises(SourceLedgerError) as excinfo:
+        InMemoryTraceCaptureGapRepository().record(  # type: ignore[arg-type] - legacy write must fail at runtime.
+            identity=legacy,
+            reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST",
+        )
+    assert excinfo.value.reason_code == REASON_PHASE1F2_TRACE_IDENTITY_INVALID
+    with pytest.raises(SourceLedgerError) as excinfo:
+        InMemoryTraceOutboxRepository().contains_identity(legacy)  # type: ignore[arg-type]
+    assert excinfo.value.reason_code == REASON_PHASE1F2_TRACE_IDENTITY_INVALID
+
+
+def test_phase1f2_scope_gap_parser_rejects_partial_scope_and_hash_tamper() -> None:
+    binding = _binding()
+    identity = ExpectedTraceIdentity.from_envelope(_envelope(binding), binding=binding)
+    gap = TraceCaptureGap(identity=identity, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST")
+    row = {
+        "selection_run_id": identity.selection_run_id,
+        "package_id": identity.package_id,
+        "manifest_sha256": identity.manifest_sha256,
+        "decision_as_of_trade_date": identity.decision_as_of_trade_date,
+        "capture_policy_hash": identity.capture_policy_hash,
+        "admission_scope_id": identity.admission_scope_id,
+        "admission_scope_hash": identity.admission_scope_hash,
+        "reason_code": gap.reason_code,
+        "gap_content_hash": gap.gap_content_hash,
+    }
+    parsed = _gap_from_row(row)
+    assert isinstance(parsed.identity, ScopeAwareExpectedTraceIdentityV2)
+    assert parsed == gap
+
+    partial = dict(row)
+    partial["admission_scope_hash"] = None
+    with pytest.raises(SourceLedgerError) as excinfo:
+        _gap_from_row(partial)
+    assert excinfo.value.reason_code == REASON_PHASE1F2_GAP_SCOPE_PAIR_INVALID
+
+    tampered = dict(row)
+    tampered["gap_content_hash"] = "0" * 64
+    with pytest.raises(SourceLedgerError) as excinfo:
+        _gap_from_row(tampered)
+    assert excinfo.value.reason_code == REASON_PHASE1F2_SCOPE_GAP_HASH_MISMATCH
+
+
+class _SchemaCursor:
+    def __init__(self, row: dict | None) -> None:
+        self.row = row
+        self.queries: list[str] = []
+
+    def execute(self, query: str) -> None:
+        self.queries.append(query)
+
+    def fetchone(self):  # type: ignore[no-untyped-def]
+        return self.row
+
+
+def test_phase1f2_schema_readiness_checks_have_positive_and_explicit_failure_paths() -> None:
+    outbox_ready = _SchemaCursor({"exists": 1})
+    _require_scope_aware_outbox_schema(outbox_ready)
+    gap_ready = _SchemaCursor(
+        {"scope_columns_ready": True, "scope_pair_ready": True, "scope_indexes_ready": True}
+    )
+    _require_scope_aware_gap_schema(gap_ready)
+    assert outbox_ready.queries and gap_ready.queries
+
+    with pytest.raises(SourceLedgerError) as excinfo:
+        _require_scope_aware_outbox_schema(_SchemaCursor(None))
+    assert excinfo.value.reason_code == REASON_PHASE1F2_SCHEMA_NOT_READY
+    with pytest.raises(SourceLedgerError) as excinfo:
+        _require_scope_aware_gap_schema(
+            _SchemaCursor(
+                {"scope_columns_ready": True, "scope_pair_ready": False, "scope_indexes_ready": True}
+            )
+        )
+    assert excinfo.value.reason_code == REASON_PHASE1F2_SCHEMA_NOT_READY
 
 
 def _complete_stage_trace() -> list[dict]:

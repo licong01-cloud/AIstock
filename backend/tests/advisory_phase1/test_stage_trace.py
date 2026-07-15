@@ -37,6 +37,7 @@ from backend.services.advisory_phase1.trace_outbox import (
     REASON_TRACE_CAPTURE_LOST,
     REASON_TRACE_DISPATCH_QUEUE_FULL,
     REASON_TRACE_ADMISSION_UNAVAILABLE,
+    REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
     REASON_TRACE_OUTBOX_CHAIN_INVALID,
     REASON_TRACE_WRITE_FAILED,
     TraceCaptureReconciler,
@@ -117,15 +118,20 @@ class _RecordingCaptureService:
 
 
 def _binding(
-    *, max_candidates: int = 10, max_bytes: int = 100_000, max_capture_ms: int = 10_000
+    *,
+    max_candidates: int = 10,
+    max_bytes: int = 100_000,
+    max_capture_ms: int = 10_000,
+    admission_scope_id: str = "scope-1",
+    admission_scope_hash: str = "6" * 64,
 ) -> TraceCaptureBinding:
     return TraceCaptureBinding(
         control_binding_event_hash="7" * 64,
         binding_id="trace-binding",
         binding_version="1",
         handoff_readiness_hash="5" * 64,
-        admission_scope_id="scope-1",
-        admission_scope_hash="6" * 64,
+        admission_scope_id=admission_scope_id,
+        admission_scope_hash=admission_scope_hash,
         capture_batch_id="batch-1",
         capture_fencing_token=7,
         capture_policy=TraceCapturePolicy(
@@ -526,6 +532,66 @@ def test_outbox_exact_retry_does_not_require_a_still_running_capture_lease() -> 
     validator.enabled = False
 
     assert repository.append(sink_result.envelope, binding=binding) == first
+
+
+def test_phase1f2_outbox_natural_identity_allows_two_scopes_without_cross_scope_conflict() -> None:
+    candidate = _candidate()
+    binding_a = _binding()
+    binding_b = _binding(admission_scope_id="scope-2", admission_scope_hash="8" * 64)
+    sink = BoundedSelectionStageTraceSink()
+    result_a = sink.capture(
+        context=_context(binding_a),
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        stage_trace=_stage_trace(candidate),
+        runtime_config={},
+    )
+    result_b = sink.capture(
+        context=_context(binding_b),
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        stage_trace=_stage_trace(candidate),
+        runtime_config={},
+    )
+    sink.shutdown(wait=True)
+    assert result_a.envelope is not None and result_b.envelope is not None
+    repository = InMemoryTraceOutboxRepository(admission_validator=_FixtureAdmissionValidator())
+
+    record_a = repository.append(result_a.envelope, binding=binding_a)
+    record_b = repository.append(result_b.envelope, binding=binding_b)
+
+    assert record_a.trace_outbox_id != record_b.trace_outbox_id
+    assert repository.contains_identity(ExpectedTraceIdentity.from_envelope(result_a.envelope, binding=binding_a))
+    assert repository.contains_identity(ExpectedTraceIdentity.from_envelope(result_b.envelope, binding=binding_b))
+
+
+def test_phase1f2_outbox_rejects_different_payload_for_same_scope_identity() -> None:
+    binding = _binding()
+    candidate = _candidate()
+    changed = candidate.model_copy(update={"score": candidate.score + 0.01})
+    sink = BoundedSelectionStageTraceSink()
+    first = sink.capture(
+        context=_context(binding),
+        manifest=_manifest(),
+        artifact=_artifact(candidate=candidate),
+        stage_trace=_stage_trace(candidate),
+        runtime_config={},
+    )
+    second = sink.capture(
+        context=_context(binding),
+        manifest=_manifest(),
+        artifact=_artifact(candidate=changed),
+        stage_trace=_stage_trace(changed),
+        runtime_config={},
+    )
+    sink.shutdown(wait=True)
+    assert first.envelope is not None and second.envelope is not None
+    repository = InMemoryTraceOutboxRepository(admission_validator=_FixtureAdmissionValidator())
+    repository.append(first.envelope, binding=binding)
+
+    with pytest.raises(SourceLedgerError) as excinfo:
+        repository.append(second.envelope, binding=binding)
+    assert excinfo.value.reason_code == REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT
 
 
 def test_capture_service_never_raises_when_outbox_writer_is_absent() -> None:

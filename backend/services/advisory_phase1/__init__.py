@@ -32,6 +32,7 @@ _EXPORTS = {
     "PostgresTraceOutboxRepository": ".trace_outbox",
     "BoundedTraceOutboxDispatcher": ".trace_outbox",
     "ExpectedTraceIdentity": ".trace_outbox",
+    "ScopeAwareExpectedTraceIdentityV2": ".trace_outbox",
     "TraceCaptureReconciler": ".trace_outbox",
     "TraceDeliveryEvent": ".trace_outbox",
     "TraceDeliveryEventRequest": ".trace_outbox",

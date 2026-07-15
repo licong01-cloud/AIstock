@@ -44,17 +44,18 @@ from backend.services.advisory_phase1.release_schema_apply_postgres import _pend
 from scripts.advisory_phase1_release_schema import EXIT_DDL, EXIT_POST_VERIFY_STORE, _exit_for_reason, _parser
 
 
-def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cutover_steps() -> None:
+def test_registry_is_full_frozen_contract_with_phase1f2_scope_identity_step() -> None:
     contract = load_release_schema_contract()
-    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v2"
+    assert contract.schema_version == "advisory_phase1f_release_schema_contract_v2"
+    assert contract.release_schema_version == "advisory_phase1_dataset_foundation_v3"
     assert len(contract.required_relations) == 35
-    assert len(contract.required_columns) == 635
+    assert len(contract.required_columns) == 637
     assert len(contract.required_constraints) == 274
-    assert len(contract.required_indexes) == 101
+    assert len(contract.required_indexes) == 102
     assert len(contract.required_functions) == 33
     assert len(contract.required_triggers) == 63
-    assert len(contract.required_comments) == 149
-    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 55, 60, 70, 80]
+    assert len(contract.required_comments) == 151
+    assert [item.order for item in contract.managed_migrations] == [10, 20, 30, 40, 50, 55, 60, 70, 80, 90]
     assert [item.transaction_mode.value for item in contract.managed_migrations] == [
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
@@ -63,6 +64,7 @@ def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cuto
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
         "FILE_WRAPPED",
+        "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
         "EXECUTOR_MANAGED",
     ]
@@ -76,6 +78,7 @@ def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cuto
         "SQL_FILE",
         "CREATE_PARTITIONS",
         "CUTOVER",
+        "SQL_FILE",
     ]
     assert [item.parent_relation for item in contract.partition_contracts] == [
         "advisory_outcome_label_payload",
@@ -88,18 +91,23 @@ def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cuto
     }
     assert declared_objects == contract.object_ids()
     assert [(item.object_id, item.repairable_by_orders) for item in contract.repairable_drift_variants] == [
+        ("comment:app.advisory_capture_gap.__table__", (90,)),
+        ("comment:app.advisory_selection_stage_trace_outbox.__table__", (90,)),
         ("constraint:app.advisory_source_revision_member.advisory_source_revision_member_check2", (55,)),
         ("function:app.verify_advisory_source_revision_member_event()", (20,)),
     ]
     assert contract.predecessor_contract is not None
     assert contract.predecessor_contract.exact_relations == (
-        "app.advisory_signal_observation_lineage",
-        "app.advisory_signal_stage_candidate",
-        "app.advisory_signal_stage_evidence",
+        "app.advisory_capture_gap",
+        "app.advisory_selection_stage_trace_outbox",
     )
     predecessor = load_predecessor_release_schema_contract(contract)
     assert predecessor is not None
+    assert predecessor.release_schema_version == "advisory_phase1_dataset_foundation_v2"
     assert predecessor.contract_content_hash == contract.predecessor_contract.contract_content_hash
+    predecessor_v1 = load_predecessor_release_schema_contract(predecessor)
+    assert predecessor_v1 is not None
+    assert predecessor_v1.release_schema_version == "advisory_phase1_dataset_foundation_v1"
     for migration in contract.managed_migrations:
         if migration.executor_action.value == "CREATE_PARTITIONS":
             assert migration.relative_path is None
@@ -121,13 +129,77 @@ def test_registry_is_full_frozen_contract_with_phase1f1_typed_partition_and_cuto
         automatic_retry=False,
     )
 
+    order_90 = contract.managed_migrations[-1]
+    assert order_90.depends_on_orders == (80,)
+    assert order_90.transaction_group == "trace_identity_scope"
+    assert order_90.declared_object_ids == (
+        "column:app.advisory_capture_gap.admission_scope_hash",
+        "column:app.advisory_capture_gap.admission_scope_id",
+        "comment:app.advisory_capture_gap.__table__",
+        "comment:app.advisory_capture_gap.admission_scope_hash",
+        "comment:app.advisory_capture_gap.admission_scope_id",
+        "comment:app.advisory_selection_stage_trace_outbox.__table__",
+        "constraint:app.advisory_capture_gap.ck_advisory_capture_gap_scope_pair",
+        "constraint:app.advisory_selection_stage_trace_outbox.uq_advisory_stage_trace_outbox_scope_identity",
+        "index:app.advisory_capture_gap.ux_advisory_capture_gap_legacy_identity",
+        "index:app.advisory_capture_gap.ux_advisory_capture_gap_scope_v2_identity",
+        "index:app.advisory_selection_stage_trace_outbox.uq_advisory_stage_trace_outbox_scope_identity",
+    )
+    assert all(
+        [migration.order for migration in contract.managed_migrations if object_id in migration.declared_object_ids]
+        == [90]
+        for object_id in order_90.declared_object_ids
+    )
+    old_objects = {
+        "constraint:app.advisory_capture_gap.advisory_capture_gap_selection_run_id_package_id_manifest_s_key",
+        "constraint:app.advisory_selection_stage_trace_outbox.advisory_selection_stage_trac_selection_run_id_package_id_m_key",
+        "index:app.advisory_capture_gap.advisory_capture_gap_selection_run_id_package_id_manifest_s_key",
+        "index:app.advisory_selection_stage_trace_outbox.advisory_selection_stage_trac_selection_run_id_package_id_m_key",
+    }
+    assert old_objects.isdisjoint(contract.object_ids())
+    assert {
+        item.object_id for item in contract.repairable_unexpected_objects if item.repairable_by_orders == (90,)
+    } == old_objects
+
 
 def test_registry_hash_rejects_any_mutated_object_contract() -> None:
-    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v2.json")
+    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v3.json")
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["required_columns"][0]["data_type"] = "integer"
     with pytest.raises(Exception, match="contract_content_hash"):
         ReleaseSchemaContract.model_validate(payload)
+
+
+def test_phase1f2_predecessor_contract_rejects_path_hash_version_and_relation_tamper() -> None:
+    path = Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v3.json")
+
+    def contract_with(mutator):  # type: ignore[no-untyped-def]
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("contract_content_hash")
+        mutator(payload)
+        payload["contract_content_hash"] = canonical_json_sha256(payload)
+        return ReleaseSchemaContract.model_validate(payload)
+
+    with pytest.raises(Exception, match="one registry JSON filename"):
+        contract_with(lambda payload: payload["predecessor_contract"].update(relative_path="../escape.json"))
+
+    wrong_hash = contract_with(
+        lambda payload: payload["predecessor_contract"].update(contract_content_hash="0" * 64)
+    )
+    with pytest.raises(Exception, match="content hash differs"):
+        load_predecessor_release_schema_contract(wrong_hash)
+
+    same_version = contract_with(
+        lambda payload: payload.update(release_schema_version="advisory_phase1_dataset_foundation_v2")
+    )
+    with pytest.raises(Exception, match="release schema version must differ"):
+        load_predecessor_release_schema_contract(same_version)
+
+    missing_relation = contract_with(
+        lambda payload: payload["predecessor_contract"].update(exact_relations=["app.not_present_in_v2"])
+    )
+    with pytest.raises(Exception, match="exact relation scope is not present"):
+        load_predecessor_release_schema_contract(missing_relation)
 
 
 def test_historical_v1_contract_remains_parseable_but_cannot_declare_v2_executor_semantics() -> None:

@@ -6,6 +6,8 @@ AIstock ``.env`` file and destroys every test database plus the whole container.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import json
 import logging
 import os
 import shutil
@@ -25,6 +27,13 @@ import psycopg2.sql
 import pytest
 
 import backend.services.advisory_phase1.release_schema_apply_postgres as apply_module
+from backend.services.advisory_phase0a.policy import canonicalize
+from backend.services.advisory_phase1.capture_foundation import PostgresTraceCaptureGapRepository
+from backend.services.advisory_phase1.control_binding import (
+    ControlBindingRequest,
+    ControlType,
+    PostgresControlBindingRepository,
+)
 from backend.services.advisory_phase1.release_schema_apply_postgres import (
     REASON_DDL_EXECUTION_FAILED,
     REASON_DDL_LOCK_TIMEOUT,
@@ -52,6 +61,19 @@ from backend.services.advisory_phase1.release_schema_contract import (
     load_release_schema_contract,
     make_release_plan_request,
     plan_month_partitions,
+)
+from backend.services.advisory_phase1.source_ledger import SourceLedgerError
+from backend.services.advisory_phase1.stage_trace import (
+    PHASE1_STAGE_TRACE_SCHEMA_VERSION,
+    StageTraceEnvelope,
+    TraceCaptureBinding,
+    TraceCapturePolicy,
+)
+from backend.services.advisory_phase1.trace_outbox import (
+    ExpectedTraceIdentity,
+    PostgresTraceOutboxRepository,
+    REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT,
+    REASON_PHASE1F2_SCHEMA_NOT_READY,
 )
 from backend.services.advisory_phase1.release_schema_verify_postgres import (
     DatabaseConnectionConfig,
@@ -255,6 +277,108 @@ def _apply_v1_predecessor(config: DatabaseConnectionConfig):
     return contract
 
 
+def _apply_v2_predecessor(config: DatabaseConnectionConfig):
+    contract = load_release_schema_contract(
+        Path("backend/services/advisory_phase1/release_schema_registry/advisory_phase1_dataset_foundation_v2.json")
+    )
+    request = make_release_plan_request(
+        contract=contract,
+        target_label=config.target_label,
+        history_start_trade_date=date(2026, 6, 1),
+        history_end_trade_date=date(2026, 8, 31),
+        capacity_request_hash="1" * 64,
+        capacity_receipt_hash=None,
+        phase1e_plan_hashes=(),
+        requested_operation=RequestedOperation.APPLY,
+    )
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert receipt.operation_status.value == "SUCCESS"
+    assert receipt.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
+    return contract
+
+
+class _Phase1F2FixtureAdmissionValidator:
+    def validate(self, *, envelope: StageTraceEnvelope, binding: TraceCaptureBinding, conn: Any = None) -> None:
+        assert conn is not None
+        assert envelope.trace_content["trace_capture_binding"]["binding_hash"] == binding.binding_hash
+
+
+def _phase1f2_binding(
+    *,
+    scope_id: str,
+    scope_hash: str,
+    control_binding_event_hash: str = "7" * 64,
+) -> TraceCaptureBinding:
+    return TraceCaptureBinding(
+        control_binding_event_hash=control_binding_event_hash,
+        binding_id=f"phase1f2-{scope_id}",
+        binding_version="1",
+        handoff_readiness_hash="5" * 64,
+        admission_scope_id=scope_id,
+        admission_scope_hash=scope_hash,
+        capture_batch_id=f"phase1f2-batch-{scope_id}",
+        capture_fencing_token=1,
+        capture_policy=TraceCapturePolicy(
+            policy_id="phase1f2-policy",
+            policy_version="1",
+            max_candidates=10,
+            max_bytes=100_000,
+            max_capture_ms=1_000,
+        ),
+    )
+
+
+def _phase1f2_control_request(binding: TraceCaptureBinding) -> ControlBindingRequest:
+    config_payload = binding.model_dump(mode="json", exclude={"control_binding_event_hash"})
+    return ControlBindingRequest(
+        control_type=ControlType.TRACE_CAPTURE,
+        environment="DEV",
+        admission_scope_set_hash=binding.admission_scope_hash,
+        config_source="phase1f2-disposable",
+        config_payload=config_payload,
+        config_or_store_backend_hash=canonical_json_sha256(config_payload),
+        enabled=True,
+        binding_event_revision_no=1,
+        created_by_service_principal="phase1f2-disposable",
+    )
+
+
+def _phase1f2_envelope(binding: TraceCaptureBinding, *, artifact_hash: str = "d" * 64) -> StageTraceEnvelope:
+    content = canonicalize(
+        {
+            "schema_version": PHASE1_STAGE_TRACE_SCHEMA_VERSION,
+            "selection_identity": {
+                "selection_run_id": "phase1f2-selection-run",
+                "package_id": "phase1f2-package",
+                "manifest_sha256": "c" * 64,
+                "decision_as_of_trade_date": "2026-07-10",
+                "data_source": "DB_HISTORICAL",
+                "execution_origin": "ADVISORY_RUN",
+                "research_scope": "HISTORICAL_RESEARCH_ONLY",
+                "execution_prohibited": True,
+            },
+            "trace_capture_binding": binding.model_dump(mode="json"),
+            "raw_score_artifact": {"artifact_payload_sha256": artifact_hash, "scores_json": []},
+            "stage_trace": [],
+            "hmm_metadata": {},
+            "risk_metadata": {},
+            "universe_metadata": {},
+            "component_capability": "NOT_APPLICABLE",
+        }
+    )
+    digest = canonical_json_sha256(content)
+    return StageTraceEnvelope(
+        trace_outbox_id=f"sto_{digest[:20]}",
+        trace_content_hash=digest,
+        trace_content=content,
+        candidate_count=0,
+        size_bytes=len(
+            json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+                "utf-8"
+            )
+        ),
+    )
 def _seed_v1_cross_month_lineage_and_candidates(config: DatabaseConnectionConfig) -> None:
     _execute(
         config,
@@ -338,12 +462,12 @@ def _seed_v1_cross_month_lineage_and_candidates(config: DatabaseConnectionConfig
     )
 
 
-def _execute(config: DatabaseConnectionConfig, sql_text: str) -> None:
+def _execute(config: DatabaseConnectionConfig, sql_text: str, params: tuple[Any, ...] | None = None) -> None:
     connection = psycopg2.connect(**config.connect_kwargs())
     connection.autocommit = True
     try:
         with connection.cursor() as cursor:
-            cursor.execute(sql_text)
+            cursor.execute(sql_text, params)
     finally:
         connection.close()
 
@@ -442,6 +566,366 @@ def test_full_frozen_apply_verify_reapply_and_evidence(
     assert reapply.post_catalog_fingerprint == first.post_catalog_fingerprint
 
 
+def test_phase1f2_exact_v2_plan_applies_only_order_90_and_preserves_legacy_gap(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v2_predecessor(config)
+    legacy_identity = {
+        "selection_run_id": "phase1f2-legacy-run",
+        "package_id": "phase1f2-legacy-package",
+        "manifest_sha256": "a" * 64,
+        "decision_as_of_trade_date": "2026-07-10",
+        "capture_policy_hash": "b" * 64,
+    }
+    reason_code = "ADVISORY_PHASE1_TRACE_CAPTURE_LOST"
+    gap_hash = canonical_json_sha256({"identity": legacy_identity, "reason_code": reason_code})
+    _execute(
+        config,
+        """
+        INSERT INTO app.advisory_capture_gap (
+            capture_gap_id, selection_run_id, package_id, manifest_sha256,
+            decision_as_of_trade_date, capture_policy_hash, reason_code, gap_content_hash
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            "phase1f2-legacy-gap",
+            legacy_identity["selection_run_id"],
+            legacy_identity["package_id"],
+            legacy_identity["manifest_sha256"],
+            legacy_identity["decision_as_of_trade_date"],
+            legacy_identity["capture_policy_hash"],
+            reason_code,
+            gap_hash,
+        ),
+    )
+
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    assert plan.managed_schema_status is ManagedSchemaStatus.PARTIAL_ADDITIVE, [
+        (item.object_id, item.category, item.repairable_by_orders) for item in plan.managed_differences
+    ]
+    assert [item.migration_order for item in plan.pending_ddl_operations if item.kind == "MIGRATION"] == [90]
+    assert plan.managed_differences
+    assert all(item.repairable_by_orders == (90,) for item in plan.managed_differences)
+
+    receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert receipt.operation_status.value == "SUCCESS"
+    assert receipt.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
+    assert [
+        item.order for item in receipt.per_migration_results if item.status is MigrationExecutionStatus.COMMITTED
+    ] == [90]
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT capture_gap_id, selection_run_id, package_id, manifest_sha256,
+                       decision_as_of_trade_date, capture_policy_hash, reason_code,
+                       gap_content_hash, admission_scope_id, admission_scope_hash
+                  FROM app.advisory_capture_gap
+                 WHERE capture_gap_id = %s
+                """,
+                ("phase1f2-legacy-gap",),
+            )
+            assert cursor.fetchone() == (
+                "phase1f2-legacy-gap",
+                legacy_identity["selection_run_id"],
+                legacy_identity["package_id"],
+                legacy_identity["manifest_sha256"],
+                date(2026, 7, 10),
+                legacy_identity["capture_policy_hash"],
+                reason_code,
+                gap_hash,
+                None,
+                None,
+            )
+    finally:
+        connection.close()
+
+    _, reapply_request = _request(config)
+    reapply_plan = build_release_schema_plan(config=config, contract=contract, request=reapply_request)
+    reapply = apply_release_schema_plan(plan=reapply_plan, config=config, contract=contract)
+    assert reapply.operation_status.value == "SUCCESS"
+    assert not reapply.ddl_executed
+    assert reapply.post_catalog_fingerprint == receipt.post_catalog_fingerprint
+
+
+def test_phase1f2_order_90_mid_migration_failure_rolls_back_to_exact_v2(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v2_predecessor(config)
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    assert [item.migration_order for item in plan.pending_ddl_operations if item.kind == "MIGRATION"] == [90]
+    _execute(
+        config,
+        """
+        CREATE SEQUENCE public.phase1f2_ddl_counter;
+        CREATE FUNCTION public.phase1f2_fail_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF nextval('public.phase1f2_ddl_counter') = 3 THEN
+                RAISE EXCEPTION 'PHASE1F2_TEST_INJECTED_DDL_FAILURE';
+            END IF;
+        END;
+        $$;
+        CREATE EVENT TRIGGER phase1f2_fail_ddl ON ddl_command_start EXECUTE FUNCTION public.phase1f2_fail_ddl();
+        """,
+    )
+    try:
+        receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+        assert receipt.operation_status.value == "FAILED"
+        failed = next(item for item in receipt.per_migration_results if item.order == 90)
+        assert failed.status is MigrationExecutionStatus.FAILED
+    finally:
+        _execute(
+            config,
+            "DROP EVENT TRIGGER IF EXISTS phase1f2_fail_ddl; "
+            "DROP FUNCTION IF EXISTS public.phase1f2_fail_ddl(); "
+            "DROP SEQUENCE IF EXISTS public.phase1f2_ddl_counter",
+        )
+
+    connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*)
+                  FROM pg_attribute
+                 WHERE attrelid = 'app.advisory_capture_gap'::regclass
+                   AND attname IN ('admission_scope_id', 'admission_scope_hash')
+                   AND attnum > 0
+                   AND NOT attisdropped
+                """
+            )
+            assert cursor.fetchone() == (0,)
+            cursor.execute(
+                """
+                SELECT count(*)
+                  FROM pg_constraint
+                 WHERE conrelid IN (
+                     'app.advisory_capture_gap'::regclass,
+                     'app.advisory_selection_stage_trace_outbox'::regclass
+                 )
+                   AND conname IN (
+                     'advisory_capture_gap_selection_run_id_package_id_manifest_s_key',
+                     'advisory_selection_stage_trac_selection_run_id_package_id_m_key'
+                 )
+                """
+            )
+            assert cursor.fetchone() == (2,)
+    finally:
+        connection.close()
+
+    _, retry_request = _request(config)
+    retry_plan = build_release_schema_plan(config=config, contract=contract, request=retry_request)
+    assert retry_plan.managed_schema_status is ManagedSchemaStatus.PARTIAL_ADDITIVE
+    assert [item.migration_order for item in retry_plan.pending_ddl_operations if item.kind == "MIGRATION"] == [90]
+
+
+def test_phase1f2_scope_aware_repositories_allow_cross_scope_and_reject_legacy_schema(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v2_predecessor(config)
+    connection = psycopg2.connect(**config.connect_kwargs())
+    connection.autocommit = False
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT to_regclass('app.advisory_selection_stage_trace_outbox')")
+        assert cursor.fetchone()[0] is not None
+
+    @contextmanager
+    def conn_factory() -> Iterator[Any]:
+        yield connection
+
+    provisional_a = _phase1f2_binding(scope_id="scope-a", scope_hash="a" * 64)
+    envelope_a = _phase1f2_envelope(provisional_a)
+    pre_migration_outbox = PostgresTraceOutboxRepository(
+        conn_factory=conn_factory,
+        admission_validator=_Phase1F2FixtureAdmissionValidator(),
+    )
+    with pytest.raises(SourceLedgerError) as excinfo:
+        pre_migration_outbox.append(envelope_a, binding=provisional_a)
+    assert excinfo.value.reason_code == REASON_PHASE1F2_SCHEMA_NOT_READY
+    connection.rollback()
+    connection.close()
+    check_connection = psycopg2.connect(**config.connect_kwargs())
+    try:
+        with check_connection.cursor() as cursor:
+            cursor.execute("SELECT count(*) FROM app.advisory_selection_stage_trace_outbox")
+            assert cursor.fetchone() == (0,)
+    finally:
+        check_connection.close()
+
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+    applied = apply_release_schema_plan(plan=plan, config=config, contract=contract)
+    assert applied.operation_status.value == "SUCCESS"
+
+    connection = psycopg2.connect(**config.connect_kwargs())
+    connection.autocommit = False
+
+    @contextmanager
+    def v3_conn_factory() -> Iterator[Any]:
+        yield connection
+
+    try:
+        controls = PostgresControlBindingRepository(conn_factory=v3_conn_factory)
+        event_a = controls.append(_phase1f2_control_request(provisional_a))
+        binding_a = _phase1f2_binding(
+            scope_id="scope-a",
+            scope_hash="a" * 64,
+            control_binding_event_hash=event_a.binding_event_hash,
+        )
+        provisional_b = _phase1f2_binding(scope_id="scope-b", scope_hash="b" * 64)
+        event_b = controls.append(_phase1f2_control_request(provisional_b))
+        binding_b = _phase1f2_binding(
+            scope_id="scope-b",
+            scope_hash="b" * 64,
+            control_binding_event_hash=event_b.binding_event_hash,
+        )
+        envelope_a = _phase1f2_envelope(binding_a)
+        envelope_b = _phase1f2_envelope(binding_b)
+        outbox = PostgresTraceOutboxRepository(
+            conn_factory=v3_conn_factory,
+            admission_validator=_Phase1F2FixtureAdmissionValidator(),
+        )
+        first_a = outbox.append(envelope_a, binding=binding_a)
+        first_b = outbox.append(envelope_b, binding=binding_b)
+        assert first_a.trace_outbox_id != first_b.trace_outbox_id
+        assert outbox.append(envelope_a, binding=binding_a) == first_a
+        with pytest.raises(SourceLedgerError) as excinfo:
+            outbox.append(_phase1f2_envelope(binding_a, artifact_hash="e" * 64), binding=binding_a)
+        assert excinfo.value.reason_code == REASON_PHASE1F2_OUTBOX_SCOPE_CONFLICT
+
+        identity_a = ExpectedTraceIdentity.from_envelope(envelope_a, binding=binding_a)
+        identity_b = ExpectedTraceIdentity.from_envelope(envelope_b, binding=binding_b)
+        gaps = PostgresTraceCaptureGapRepository(conn_factory=v3_conn_factory)
+        gap_a = gaps.record(identity=identity_a, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST")
+        gap_b = gaps.record(identity=identity_b, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST")
+        assert gap_a.gap_content_hash != gap_b.gap_content_hash
+        assert gaps.record(identity=identity_a, reason_code="ADVISORY_PHASE1_TRACE_CAPTURE_LOST") == gap_a
+
+        with connection.cursor() as cursor:
+            cursor.execute("SAVEPOINT phase1f2_partial_scope")
+            with pytest.raises(psycopg2.Error):
+                cursor.execute(
+                    """
+                    INSERT INTO app.advisory_capture_gap (
+                        capture_gap_id, selection_run_id, package_id, manifest_sha256,
+                        decision_as_of_trade_date, capture_policy_hash, reason_code,
+                        gap_content_hash, admission_scope_id, admission_scope_hash
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NULL)
+                    """,
+                    (
+                        "phase1f2-partial-gap",
+                        "phase1f2-partial-run",
+                        "phase1f2-package",
+                        "f" * 64,
+                        date(2026, 7, 10),
+                        "e" * 64,
+                        "ADVISORY_PHASE1_TRACE_CAPTURE_LOST",
+                        "d" * 64,
+                        "partial-scope",
+                    ),
+                )
+            cursor.execute("ROLLBACK TO SAVEPOINT phase1f2_partial_scope")
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def test_phase1f2_unknown_predecessor_scope_drift_disables_order_90_repair(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    config = database_factory()
+    _apply_v2_predecessor(config)
+    _execute(
+        config,
+        "ALTER TABLE app.advisory_capture_gap "
+        "ADD CONSTRAINT phase1f2_unknown_gap_check CHECK (selection_run_id <> '')",
+    )
+    contract, request = _request(config)
+    plan = build_release_schema_plan(config=config, contract=contract, request=request)
+
+    assert plan.managed_schema_status is ManagedSchemaStatus.DRIFTED
+    assert not plan.pending_ddl_operations
+    unknown = next(
+        item
+        for item in plan.managed_differences
+        if item.object_id == "constraint:app.advisory_capture_gap.phase1f2_unknown_gap_check"
+    )
+    assert unknown.category == "UNEXPECTED"
+    assert unknown.repairable_by_orders == ()
+
+
+def test_phase1f2_wrong_scope_index_and_post_v3_old_constraint_are_not_repairable(
+    database_factory: Callable[..., DatabaseConnectionConfig],
+) -> None:
+    wrong_index_config = database_factory()
+    _fresh_apply(wrong_index_config)
+    _execute(
+        wrong_index_config,
+        """
+        DROP INDEX app.ux_advisory_capture_gap_scope_v2_identity;
+        CREATE UNIQUE INDEX ux_advisory_capture_gap_scope_v2_identity
+            ON app.advisory_capture_gap (
+                selection_run_id, package_id, manifest_sha256,
+                decision_as_of_trade_date, capture_policy_hash,
+                reason_code, admission_scope_hash
+            )
+            WHERE admission_scope_hash IS NULL
+        """,
+    )
+    contract, request = _request(wrong_index_config)
+    wrong_index_plan = build_release_schema_plan(
+        config=wrong_index_config,
+        contract=contract,
+        request=request,
+    )
+    wrong_index = next(
+        item
+        for item in wrong_index_plan.managed_differences
+        if item.object_id == "index:app.advisory_capture_gap.ux_advisory_capture_gap_scope_v2_identity"
+    )
+    assert wrong_index_plan.managed_schema_status is ManagedSchemaStatus.DRIFTED
+    assert wrong_index.category == "DRIFTED"
+    assert wrong_index.repairable_by_orders == ()
+    assert not wrong_index_plan.pending_ddl_operations
+
+    old_constraint_config = database_factory()
+    _fresh_apply(old_constraint_config)
+    _execute(
+        old_constraint_config,
+        """
+        ALTER TABLE app.advisory_selection_stage_trace_outbox
+            ADD CONSTRAINT advisory_selection_stage_trac_selection_run_id_package_id_m_key
+            UNIQUE (
+                selection_run_id, package_id, manifest_sha256,
+                decision_as_of_trade_date, capture_policy_hash
+            )
+        """,
+    )
+    contract, request = _request(old_constraint_config)
+    old_constraint_plan = build_release_schema_plan(
+        config=old_constraint_config,
+        contract=contract,
+        request=request,
+    )
+    old_constraint = next(
+        item
+        for item in old_constraint_plan.managed_differences
+        if item.object_id
+        == "constraint:app.advisory_selection_stage_trace_outbox."
+        "advisory_selection_stage_trac_selection_run_id_package_id_m_key"
+    )
+    assert old_constraint_plan.managed_schema_status is ManagedSchemaStatus.DRIFTED
+    assert old_constraint.category == "UNEXPECTED"
+    assert old_constraint.repairable_by_orders == ()
+    assert not old_constraint_plan.pending_ddl_operations
+
+
 def test_phase1f1_v1_rows_migrate_across_months_preserve_views_and_allow_scoped_duplicate_hashes(
     database_factory: Callable[..., DatabaseConnectionConfig],
     tmp_path: Path,
@@ -470,7 +954,12 @@ def test_phase1f1_v1_rows_migrate_across_months_preserve_views_and_allow_scoped_
     assert plan.legacy_inventory.lineage_row_count == 2
     assert plan.legacy_inventory.candidate_row_count == 2
     assert plan.legacy_inventory.legacy_months == (date(2026, 6, 1), date(2026, 7, 1))
-    assert [item.migration_order for item in plan.pending_ddl_operations if item.kind == "MIGRATION"] == [60, 70, 80]
+    assert [item.migration_order for item in plan.pending_ddl_operations if item.kind == "MIGRATION"] == [
+        60,
+        70,
+        80,
+        90,
+    ]
 
     receipt = apply_release_schema_plan(plan=plan, config=config, contract=contract)
     assert receipt.operation_status.value == "SUCCESS"
@@ -665,7 +1154,10 @@ def test_phase1f1_cutover_failure_rolls_back_copy_and_resumes_from_prepared_stat
     _, resume_request = _request(config)
     resume_plan = build_release_schema_plan(config=config, contract=contract, request=resume_request)
     assert resume_plan.managed_schema_status is ManagedSchemaStatus.PARTIAL_ADDITIVE
-    assert [item.migration_order for item in resume_plan.pending_ddl_operations if item.kind == "MIGRATION"] == [80]
+    assert [item.migration_order for item in resume_plan.pending_ddl_operations if item.kind == "MIGRATION"] == [
+        80,
+        90,
+    ]
     resumed = apply_release_schema_plan(plan=resume_plan, config=config, contract=contract)
     assert resumed.operation_status.value == "SUCCESS"
     assert resumed.managed_schema_status is ManagedSchemaStatus.COMPATIBLE
@@ -1000,7 +1492,7 @@ def test_partial_failure_receipt_and_exact_resume(
     _, resume_request = _request(config)
     resume_plan = build_release_schema_plan(config=config, contract=contract, request=resume_request)
     pending_orders = [item.migration_order for item in resume_plan.pending_ddl_operations if item.kind == "MIGRATION"]
-    assert pending_orders == [30, 40, 50, 55, 60, 70, 80]
+    assert pending_orders == [30, 40, 50, 55, 60, 70, 80, 90]
     resumed = apply_release_schema_plan(plan=resume_plan, config=config, contract=contract)
     assert resumed.operation_status.value == "SUCCESS"
     assert resumed.managed_schema_status is ManagedSchemaStatus.COMPATIBLE

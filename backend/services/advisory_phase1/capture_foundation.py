@@ -24,7 +24,11 @@ from backend.services.advisory_phase1.label_capture import (
 )
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import StageTraceEnvelope, TraceCaptureBinding
-from backend.services.advisory_phase1.trace_outbox import ExpectedTraceIdentity
+from backend.services.advisory_phase1.trace_outbox import (
+    LegacyExpectedTraceIdentityV1,
+    REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
+    ScopeAwareExpectedTraceIdentityV2,
+)
 
 
 CAPTURE_BATCH_SCHEMA_VERSION = "advisory_phase1_capture_batch_v1"
@@ -37,6 +41,10 @@ REASON_CAPTURE_BATCH_MEMBERSHIP_INVALID = "ADVISORY_PHASE1_CAPTURE_BATCH_MEMBERS
 REASON_TRACE_ADMISSION_BINDING_INVALID = "ADVISORY_PHASE1_TRACE_ADMISSION_BINDING_INVALID"
 REASON_TRACE_ADMISSION_BATCH_INVALID = "ADVISORY_PHASE1_TRACE_ADMISSION_BATCH_INVALID"
 REASON_TRACE_GAP_CONFLICT = "ADVISORY_PHASE1_TRACE_GAP_CONFLICT"
+REASON_PHASE1F2_SCHEMA_NOT_READY = "ADVISORY_PHASE1F2_SCHEMA_NOT_READY"
+REASON_PHASE1F2_GAP_SCOPE_PAIR_INVALID = "ADVISORY_PHASE1F2_GAP_SCOPE_PAIR_INVALID"
+REASON_PHASE1F2_LEGACY_GAP_HASH_MISMATCH = "ADVISORY_PHASE1F2_LEGACY_GAP_HASH_MISMATCH"
+REASON_PHASE1F2_SCOPE_GAP_HASH_MISMATCH = "ADVISORY_PHASE1F2_SCOPE_GAP_HASH_MISMATCH"
 
 
 def _require_sha256(value: str, *, field_name: str) -> str:
@@ -384,7 +392,7 @@ class CaptureBatch(BaseModel):
 class TraceCaptureGap(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    identity: ExpectedTraceIdentity
+    identity: LegacyExpectedTraceIdentityV1 | ScopeAwareExpectedTraceIdentityV2
     reason_code: str = Field(min_length=1, max_length=160)
     gap_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
@@ -706,7 +714,7 @@ class InMemoryTraceAdmissionValidator:
     def validate(self, *, envelope: StageTraceEnvelope, binding: TraceCaptureBinding, conn: Any | None = None) -> None:
         del conn
         _require_historical_trace_identity(envelope)
-        identity = ExpectedTraceIdentity.from_envelope(envelope, binding=binding)
+        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(envelope, binding=binding)
         batch = self._batches.get(binding.capture_batch_id)
         if batch.request.binding != binding:
             raise SourceLedgerError(REASON_TRACE_ADMISSION_BINDING_INVALID, "capture binding does not match batch request")
@@ -718,7 +726,7 @@ class InMemoryTraceAdmissionValidator:
             plan
             for plan in batch.request.plans
             if (plan.selection_run_id, plan.package_id, plan.manifest_sha256, plan.decision_as_of_trade_date)
-            == (*identity.natural_key[:4],)
+            == identity.selection_lookup_key
         ]
         if len(matching) != 1:
             raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch has no matching frozen plan")
@@ -733,7 +741,8 @@ class InMemoryTraceCaptureGapRepository:
     def __init__(self) -> None:
         self._gaps: dict[str, TraceCaptureGap] = {}
 
-    def record(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> TraceCaptureGap:
+    def record(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> TraceCaptureGap:
+        _require_scope_aware_gap_write_identity(identity)
         gap = TraceCaptureGap(identity=identity, reason_code=reason_code)
         existing = self._gaps.get(str(gap.gap_content_hash))
         if existing is not None:
@@ -743,7 +752,7 @@ class InMemoryTraceCaptureGapRepository:
         self._gaps[str(gap.gap_content_hash)] = gap
         return gap
 
-    def __call__(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> None:
+    def __call__(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> None:
         self.record(identity=identity, reason_code=reason_code)
 
     def list(self) -> tuple[TraceCaptureGap, ...]:
@@ -1191,7 +1200,7 @@ class PostgresTraceAdmissionValidator:
         if conn is None:
             raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "PostgreSQL admission requires an active transaction")
         _require_historical_trace_identity(envelope)
-        identity = ExpectedTraceIdentity.from_envelope(envelope, binding=binding)
+        identity = ScopeAwareExpectedTraceIdentityV2.from_envelope(envelope, binding=binding)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT * FROM app.advisory_phase1_control_binding_event WHERE binding_event_hash = %s FOR KEY SHARE",
@@ -1233,7 +1242,7 @@ class PostgresTraceAdmissionValidator:
                   AND manifest_sha256 = %s AND decision_as_of_trade_date = %s
                 FOR KEY SHARE
                 """,
-                (binding.capture_batch_id, *identity.natural_key[:4]),
+                (binding.capture_batch_id, *identity.selection_lookup_key),
             )
             if cur.fetchone() is None:
                 raise SourceLedgerError(REASON_TRACE_ADMISSION_BATCH_INVALID, "capture batch has no matching frozen plan")
@@ -1243,10 +1252,28 @@ class PostgresTraceCaptureGapRepository:
     def __init__(self, conn_factory: ConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or _transactional_conn_factory
 
-    def record(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> TraceCaptureGap:
+    def record(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> TraceCaptureGap:
+        try:
+            return self._record_scope_aware(identity=identity, reason_code=reason_code)
+        except SourceLedgerError:
+            raise
+        except (psycopg2.errors.UndefinedColumn, psycopg2.errors.UndefinedObject, psycopg2.errors.UndefinedTable) as exc:
+            raise SourceLedgerError(
+                REASON_PHASE1F2_SCHEMA_NOT_READY,
+                "scope-aware trace gap schema is incomplete",
+            ) from exc
+
+    def _record_scope_aware(
+        self,
+        *,
+        identity: ScopeAwareExpectedTraceIdentityV2,
+        reason_code: str,
+    ) -> TraceCaptureGap:
+        _require_scope_aware_gap_write_identity(identity)
         gap = TraceCaptureGap(identity=identity, reason_code=reason_code)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                _require_scope_aware_gap_schema(cur)
                 cur.execute(
                     "SELECT * FROM app.advisory_capture_gap WHERE gap_content_hash = %s FOR UPDATE",
                     (gap.gap_content_hash,),
@@ -1262,8 +1289,9 @@ class PostgresTraceCaptureGapRepository:
                         """
                         INSERT INTO app.advisory_capture_gap (
                             capture_gap_id, selection_run_id, package_id, manifest_sha256,
-                            decision_as_of_trade_date, capture_policy_hash, reason_code, gap_content_hash
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            decision_as_of_trade_date, capture_policy_hash, reason_code, gap_content_hash,
+                            admission_scope_id, admission_scope_hash
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING *
                         """,
                         (
@@ -1275,28 +1303,111 @@ class PostgresTraceCaptureGapRepository:
                             identity.capture_policy_hash,
                             reason_code,
                             gap.gap_content_hash,
+                            identity.admission_scope_id,
+                            identity.admission_scope_hash,
                         ),
                     )
                 except psycopg2.IntegrityError as exc:
                     raise SourceLedgerError(REASON_TRACE_GAP_CONFLICT, "database rejected trace gap identity") from exc
                 return _gap_from_row(dict(cur.fetchone()))
 
-    def __call__(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> None:
+    def __call__(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> None:
         self.record(identity=identity, reason_code=reason_code)
 
 
 def _gap_from_row(row: Mapping[str, Any]) -> TraceCaptureGap:
-    return TraceCaptureGap(
-        identity=ExpectedTraceIdentity(
-            selection_run_id=str(row["selection_run_id"]),
-            package_id=str(row["package_id"]),
-            manifest_sha256=str(row["manifest_sha256"]),
-            decision_as_of_trade_date=row["decision_as_of_trade_date"],
-            capture_policy_hash=str(row["capture_policy_hash"]),
-        ),
-        reason_code=str(row["reason_code"]),
-        gap_content_hash=str(row["gap_content_hash"]),
+    scope_id = row.get("admission_scope_id")
+    scope_hash = row.get("admission_scope_hash")
+    if (scope_id is None) != (scope_hash is None):
+        raise SourceLedgerError(
+            REASON_PHASE1F2_GAP_SCOPE_PAIR_INVALID,
+            "persisted trace gap has a partial admission scope identity",
+        )
+    identity_fields = {
+        "selection_run_id": str(row["selection_run_id"]),
+        "package_id": str(row["package_id"]),
+        "manifest_sha256": str(row["manifest_sha256"]),
+        "decision_as_of_trade_date": row["decision_as_of_trade_date"],
+        "capture_policy_hash": str(row["capture_policy_hash"]),
+    }
+    mismatch_reason = (
+        REASON_PHASE1F2_LEGACY_GAP_HASH_MISMATCH
+        if scope_id is None
+        else REASON_PHASE1F2_SCOPE_GAP_HASH_MISMATCH
     )
+    try:
+        if scope_id is None:
+            identity: LegacyExpectedTraceIdentityV1 | ScopeAwareExpectedTraceIdentityV2 = (
+                LegacyExpectedTraceIdentityV1(**identity_fields)
+            )
+        else:
+            identity = ScopeAwareExpectedTraceIdentityV2(
+                **identity_fields,
+                admission_scope_id=str(scope_id),
+                admission_scope_hash=str(scope_hash),
+            )
+        return TraceCaptureGap(
+            identity=identity,
+            reason_code=str(row["reason_code"]),
+            gap_content_hash=str(row["gap_content_hash"]),
+        )
+    except ValueError as exc:
+        raise SourceLedgerError(mismatch_reason, "persisted trace gap hash does not match its identity") from exc
+
+
+def _require_scope_aware_gap_write_identity(identity: Any) -> ScopeAwareExpectedTraceIdentityV2:
+    if not isinstance(identity, ScopeAwareExpectedTraceIdentityV2):
+        raise SourceLedgerError(
+            REASON_PHASE1F2_TRACE_IDENTITY_INVALID,
+            "new trace gap writes require the scope-aware v2 identity contract",
+        )
+    return identity
+
+
+def _require_scope_aware_gap_schema(cur: Any) -> None:
+    cur.execute(
+        """
+        SELECT
+            (
+                SELECT count(*) = 2
+                FROM pg_attribute a
+                JOIN pg_class r ON r.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = r.relnamespace
+                WHERE n.nspname = 'app'
+                  AND r.relname = 'advisory_capture_gap'
+                  AND a.attname IN ('admission_scope_id', 'admission_scope_hash')
+                  AND a.attnum > 0
+                  AND NOT a.attisdropped
+            ) AS scope_columns_ready,
+            EXISTS (
+                SELECT 1
+                FROM pg_constraint c
+                JOIN pg_class r ON r.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = r.relnamespace
+                WHERE n.nspname = 'app'
+                  AND r.relname = 'advisory_capture_gap'
+                  AND c.conname = 'ck_advisory_capture_gap_scope_pair'
+            ) AS scope_pair_ready,
+            (
+                SELECT count(*) = 2
+                FROM pg_indexes
+                WHERE schemaname = 'app'
+                  AND tablename = 'advisory_capture_gap'
+                  AND indexname IN (
+                      'ux_advisory_capture_gap_legacy_identity',
+                      'ux_advisory_capture_gap_scope_v2_identity'
+                  )
+            ) AS scope_indexes_ready
+        """
+    )
+    readiness = cur.fetchone()
+    if readiness is None or not all(
+        bool(readiness[key]) for key in ("scope_columns_ready", "scope_pair_ready", "scope_indexes_ready")
+    ):
+        raise SourceLedgerError(
+            REASON_PHASE1F2_SCHEMA_NOT_READY,
+            "scope-aware trace gap schema has not been applied",
+        )
 
 
 def _require_historical_trace_identity(envelope: StageTraceEnvelope) -> None:

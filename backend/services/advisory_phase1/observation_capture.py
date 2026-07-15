@@ -11,7 +11,7 @@ from backend.services.advisory_phase0a.policy import canonical_json_sha256, cano
 from backend.services.advisory_phase1.capture_foundation import CapturePlan, TraceCaptureGap
 from backend.services.advisory_phase1.source_ledger import SourceLedgerError
 from backend.services.advisory_phase1.stage_trace import StageTraceEnvelope, TraceCaptureBinding
-from backend.services.advisory_phase1.trace_outbox import ExpectedTraceIdentity
+from backend.services.advisory_phase1.trace_outbox import ScopeAwareExpectedTraceIdentityV2
 
 
 REASON_OBSERVATION_PLAN_MISMATCH = "ADVISORY_PHASE1_OBSERVATION_PLAN_MISMATCH"
@@ -48,7 +48,7 @@ def canonical_signal_id_for_plan(plan: CapturePlan) -> str:
 
 
 class TraceGapRepository(Protocol):
-    def record(self, *, identity: ExpectedTraceIdentity, reason_code: str) -> TraceCaptureGap: ...
+    def record(self, *, identity: ScopeAwareExpectedTraceIdentityV2, reason_code: str) -> TraceCaptureGap: ...
 
 
 @dataclass(frozen=True)
@@ -103,12 +103,14 @@ class InMemoryObservationCaptureRepository:
             return self._append_validated(plan=plan, envelope=envelope, binding=binding)
         except SourceLedgerError as exc:
             self._gap_repository.record(
-                identity=ExpectedTraceIdentity(
+                identity=ScopeAwareExpectedTraceIdentityV2(
                     selection_run_id=plan.selection_run_id,
                     package_id=plan.package_id,
                     manifest_sha256=plan.manifest_sha256,
                     decision_as_of_trade_date=date.fromisoformat(plan.decision_as_of_trade_date),
                     capture_policy_hash=str(binding.capture_policy.policy_hash),
+                    admission_scope_id=binding.admission_scope_id,
+                    admission_scope_hash=binding.admission_scope_hash,
                 ),
                 reason_code=exc.reason_code,
             )
