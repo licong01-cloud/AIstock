@@ -1,0 +1,190 @@
+{
+  "actual": "LEGACY_B0、Paper MiniQMTSimBackend 和 raw QMT direct order/batch/cancel 仍存在可达 broker side effect，尚未证明 active/open-order 安全迁移和唯一路径。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260715_BUG-662-miniqmt-b0-quote-v2-tick-broker.json",
+    "tests/aistock_validation/bugs/.bug_id_allocator.json",
+    "backend/routers/qmt.py",
+    "backend/services/miniqmt_execution_runtime/__init__.py",
+    "backend/services/miniqmt_execution_runtime/b0_quote_v2.py",
+    "backend/services/miniqmt_execution_runtime/client.py",
+    "backend/services/miniqmt_execution_runtime/repository.py",
+    "backend/services/paper_trading_v2/broker/__init__.py",
+    "backend/services/paper_trading_v2/broker/minqmtsim.py",
+    "backend/services/paper_trading_v2/day_runner.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/services/simulation_runtime/__init__.py",
+    "backend/services/simulation_runtime/decision.py",
+    "backend/services/simulation_runtime/lifecycle.py",
+    "backend/services/simulation_runtime/miniqmt_quote_activation.py",
+    "backend/services/simulation_runtime/miniqmt_route_migration.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/services/simulation_runtime/service.py",
+    "backend/tests/miniqmt_execution_runtime/test_b0_quote_v2_lifecycle.py",
+    "backend/tests/miniqmt_execution_runtime/test_miniqmt_single_multi_same_runtime.py",
+    "backend/tests/paper_trading_v2/test_minqmt_vnpy_execution_adapter.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+    "backend/tests/qmt_strategy_ledger/test_router_summary.py",
+    "backend/tests/routers/test_qmt_route_retirement.py",
+    "backend/tests/scripts/test_miniqmt_b0_quote_v2_pilot.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_miniqmt_path_uniqueness.py",
+    "backend/tests/simulation_runtime/test_miniqmt_route_migration.py",
+    "backend/tests/simulation_runtime/test_ops_api.py",
+    "backend/tests/simulation_runtime/test_strategy_runtime_release.py",
+    "backend/tests/simulation_runtime/test_target_rebalance_shared.py",
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md",
+    "scripts/miniqmt_b0_quote_v2_route_migration.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-662",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-07-15T16:17:40.159948Z",
+  "description": "LEGACY_B0、Paper MiniQMTSimBackend 和 raw QMT direct order/batch/cancel 仍存在可达 broker side effect，尚未证明 active/open-order 安全迁移和唯一路径。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260715-3ae8e02e959d",
+      "timestamp": "2026-07-15T16:17:40.159944Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/simulation_platform_unified_authoritative_blueprint_20260715.md#p0-cminiqmt-b0_v2-单一路径和旧路径退役"
+  ],
+  "expected": "所有产品下单、撤单、replace、reconcile 仅经 SimulationLifecycleScheduler -> MiniQMTExecutionRuntime -> OMS/Gateway；LEGACY_B0 仅历史读取及既有 active parent 原 revision drain；非法旁路 fail loud，迁移幂等且可独立 readback。",
+  "first_seen_at": "2026-07-15T16:17:40.159948Z",
+  "fix_branch": "bug/BUG-662-miniqmt-b0-quote-v2-tick-broker-20260715",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 2190,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/2190",
+  "last_seen_at": "2026-07-15T16:17:40.159948Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not restart production runtime services without explicit approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P0",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "MiniQMT 必须收敛为 B0_QUOTE_V2 tick 单一路径并退役旧 broker 旁路",
+  "trigger_condition": {
+    "fingerprint": "3ae8e02e959dc21c43cb802a",
+    "source_event_id": "FE-20260715-3ae8e02e959d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime"
+      ],
+      "plans": [],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime"
+        ],
+        "plans": [],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "ready_for_pr"
+}

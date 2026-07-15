@@ -42,28 +42,27 @@ def _verify_trade_password(password: str | None) -> None:
         raise HTTPException(status_code=403, detail="交易密码错误")
 
 
-RAW_ORDER_DIAGNOSTIC_ENV = "AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS"
 RAW_ORDER_DIAGNOSTIC_WARNING = (
-    "raw MiniQMT order APIs are administrator/POC diagnostics only; normal "
-    "multi-strategy execution must enter MiniQMTExecutionRuntime; operator "
-    "cancel/flatten/reset actions must use /api/v1/simulation-runtime/miniqmt/operator-commands "
-    "so AIstock can preserve runtime, OMS, slot-ledger, and attribution records"
+    "raw MiniQMT broker write APIs are retired; all product execution must enter "
+    "MiniQMTExecutionRuntime"
 )
+RAW_ORDER_ROUTE_RETIRED_REASON_CODE = "MINIQMT_RAW_BROKER_ROUTE_RETIRED"
 
 
-def _raw_order_diagnostics_enabled() -> bool:
-    return (os.getenv(RAW_ORDER_DIAGNOSTIC_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _require_raw_order_diagnostics_enabled() -> None:
-    if not _raw_order_diagnostics_enabled():
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"{RAW_ORDER_DIAGNOSTIC_WARNING}; set {RAW_ORDER_DIAGNOSTIC_ENV}=1 "
-                "explicitly only for controlled administrator/POC diagnostics"
-            ),
-        )
+def _raise_raw_broker_route_retired(*, endpoint: str) -> None:
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error_code": "EXECUTION_PATH_NOT_CANONICAL",
+            "reason_code": RAW_ORDER_ROUTE_RETIRED_REASON_CODE,
+            "message": RAW_ORDER_DIAGNOSTIC_WARNING,
+            "endpoint": endpoint,
+            "required_runtime_owner": "MiniQMTExecutionRuntime",
+            "replacement": "/api/v1/simulation-runtime",
+            "broker_called": False,
+            "legacy_fallback": False,
+        },
+    )
 
 
 def get_dataset_stats_service() -> DatasetStatsService:
@@ -219,69 +218,10 @@ def get_trades() -> List[Dict[str, Any]]:
 
 @router.post("/order", summary="Admin/POC raw MiniQMT order diagnostic")
 def place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Raw administrator/POC order endpoint.
+    """Retired raw broker write route; retained only for an explicit 410 contract."""
 
-    Normal multi-strategy execution must enter MiniQMTExecutionRuntime; this
-    route is diagnostics-only and is disabled by default.
-    This route is disabled by default and only opens when
-    AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
-    
-    参数：
-    - stock_code: 股票代码，如 '600000.SH' 或 '000001.SZ'
-    - order_type: 委托类型，23=买入，24=卖出
-    - order_volume: 委托数量（股）
-    - price_type: 报价类型，详见文档
-    - price: 委托价格（限价时填写，市价时填0）
-    - strategy_name: 策略名称（可选）
-    - order_remark: 委托备注（可选）
-    """
-    try:
-        _verify_trade_password(payload.get("trade_password"))
-        _require_raw_order_diagnostics_enabled()
-
-        stock_code = payload.get("stock_code", "").strip()
-        order_type = payload.get("order_type")
-        order_volume = payload.get("order_volume")
-        price_type = payload.get("price_type")
-        price = float(payload.get("price", 0.0))
-        strategy_name = payload.get("strategy_name", "").strip()
-        order_remark = payload.get("order_remark", "").strip()
-
-        if not stock_code:
-            raise HTTPException(status_code=400, detail="股票代码不能为空")
-        if order_type not in [23, 24]:
-            raise HTTPException(status_code=400, detail="委托类型错误，23=买入，24=卖出")
-        if not order_volume or order_volume <= 0:
-            raise HTTPException(status_code=400, detail="委托数量必须大于0")
-        if price_type is None:
-            raise HTTPException(status_code=400, detail="报价类型不能为空")
-
-        client = _get_client()
-        order_id, message = client.place_order(
-            stock_code=stock_code,
-            order_type=int(order_type),
-            order_volume=int(order_volume),
-            price_type=int(price_type),
-            price=price,
-            strategy_name=strategy_name,
-            order_remark=order_remark,
-        )
-        diagnostic_getter = getattr(client, "get_last_order_diagnostic", None)
-        diagnostic = diagnostic_getter() if callable(diagnostic_getter) else None
-
-        return {
-            "success": order_id > 0,
-            "order_id": order_id,
-            "message": message,
-            "diagnostic": diagnostic,
-            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
-        }
-    except HTTPException:
-        raise
-    except QMTNotAvailableError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"下单失败: {e!r}") from e
+    del payload
+    _raise_raw_broker_route_retired(endpoint="/api/v1/qmt/order")
 
 
 @router.get("/monitor/config", summary="获取 QMT 持仓监控配置")
@@ -353,123 +293,18 @@ def get_qmt_monitor_strategy_summary(strategy_id: str) -> Dict[str, Any]:
 
 @router.post("/cancel", summary="撤单")
 def cancel_order(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """撤单接口
-    
-    参数（二选一）：
-    - order_id: 订单编号
-    或
-    - market: 交易市场（0=上海，1=深圳）
-    - order_sysid: 柜台合同编号
-    """
-    try:
-        _verify_trade_password(payload.get("trade_password"))
-        _require_raw_order_diagnostics_enabled()
+    """Retired raw broker write route; retained only for an explicit 410 contract."""
 
-        order_id = payload.get("order_id")
-        market = payload.get("market")
-        order_sysid = payload.get("order_sysid")
-
-        client = _get_client()
-        if order_id:
-            success, message = client.cancel_order(str(order_id))
-        elif market is not None and order_sysid:
-            success, message = client.cancel_order_by_sysid(int(market), str(order_sysid))
-        else:
-            raise HTTPException(status_code=400, detail="请提供 order_id 或 (market, order_sysid)")
-        diagnostic_getter = getattr(client, "get_last_cancel_diagnostic", None)
-        diagnostic = diagnostic_getter() if callable(diagnostic_getter) else None
-
-        return {
-            "success": success,
-            "message": message,
-            "diagnostic": diagnostic,
-            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
-        }
-    except HTTPException:
-        raise
-    except QMTNotAvailableError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"撤单失败: {e!r}") from e
+    del payload
+    _raise_raw_broker_route_retired(endpoint="/api/v1/qmt/cancel")
 
 
 @router.post("/order/batch", summary="Admin/POC raw MiniQMT batch order diagnostic")
 def batch_place_order(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Raw administrator/POC batch order endpoint.
+    """Retired raw broker write route; retained only for an explicit 410 contract."""
 
-    Normal multi-strategy execution must enter MiniQMTExecutionRuntime; this
-    route is diagnostics-only and is disabled by default.
-    This route is disabled by default and only opens when
-    AISTOCK_ALLOW_QMT_RAW_ORDER_DIAGNOSTICS=1 is set explicitly.
-    
-    参数：
-    - orders: 订单列表，每个订单包含下单接口的所有参数
-    """
-    try:
-        _verify_trade_password(payload.get("trade_password"))
-        _require_raw_order_diagnostics_enabled()
-
-        orders = payload.get("orders", [])
-        if not isinstance(orders, list) or len(orders) == 0:
-            raise HTTPException(status_code=400, detail="订单列表不能为空")
-
-        results = []
-        for order_payload in orders:
-            try:
-                stock_code = order_payload.get("stock_code", "").strip()
-                order_type = order_payload.get("order_type")
-                order_volume = order_payload.get("order_volume")
-                price_type = order_payload.get("price_type")
-                price = float(order_payload.get("price", 0.0))
-                strategy_name = order_payload.get("strategy_name", "").strip()
-                order_remark = order_payload.get("order_remark", "").strip()
-
-                if not stock_code or order_type not in [23, 24] or not order_volume or price_type is None:
-                    results.append({
-                        "success": False,
-                        "stock_code": stock_code,
-                        "message": "参数错误",
-                    })
-                    continue
-
-                order_id, message = _get_client().place_order(
-                    stock_code=stock_code,
-                    order_type=int(order_type),
-                    order_volume=int(order_volume),
-                    price_type=int(price_type),
-                    price=price,
-                    strategy_name=strategy_name,
-                    order_remark=order_remark,
-                )
-
-                results.append({
-                    "success": order_id > 0,
-                    "stock_code": stock_code,
-                    "order_id": order_id,
-                    "message": message,
-                })
-            except Exception as e:
-                results.append({
-                    "success": False,
-                    "stock_code": order_payload.get("stock_code", ""),
-                    "message": f"下单失败: {e!r}",
-                })
-
-        success_count = sum(1 for r in results if r.get("success"))
-        return {
-            "success": True,
-            "total": len(results),
-            "succeeded": success_count,
-            "failed": len(results) - success_count,
-            "results": results,
-            "diagnostic_warning": RAW_ORDER_DIAGNOSTIC_WARNING,
-        }
-    except HTTPException:
-        raise
-    except QMTNotAvailableError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"批量下单失败: {e!r}") from e
+    del payload
+    _raise_raw_broker_route_retired(endpoint="/api/v1/qmt/order/batch")
 
 
 @router.get("/ipo/limit", summary="查询新股申购额度")

@@ -7,6 +7,7 @@ recompute strategy targets or re-implement A-share board-lot rules.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -32,8 +33,10 @@ from backend.services.trading_core.models import OrderIntent, OrderSide, OrderTy
 
 from .models import (
     DailySelectionEvidence,
+    ExecutionPathNotCanonicalError,
     ExecutionPlan,
     ExecutionPlanIntent,
+    SimulationBrokerBackend,
     SimulationReleaseBinding,
     StrategyRuntimeRelease,
     TradingRuleDecision,
@@ -337,6 +340,7 @@ class RebalanceIntentService:
         trade_date: date,
         current_positions: dict[str, PositionLot],
         target_positions: list[TargetPosition],
+        current_prices: dict[str, float] | None = None,
         pre_trade_tradability: dict[str, dict[str, Any]] | None = None,
     ) -> RebalanceIntentResult:
         if not target_positions and not current_positions:
@@ -378,6 +382,17 @@ class RebalanceIntentService:
                 continue
 
             rebalance_reason = target.reason if target is not None else "DROPPED_FROM_SELECTION"
+            frozen_reference_price = self._frozen_reference_price(
+                target=target,
+                current_price=(current_prices or {}).get(symbol),
+            )
+            reference_price_source = (
+                "TARGET_POSITION"
+                if target is not None and frozen_reference_price is not None
+                else "CURRENT_MARK"
+                if frozen_reference_price is not None
+                else None
+            )
             intent_payload = {
                 "schema_version": "shared_rebalance_intent_v1",
                 "package_id": package_id,
@@ -393,6 +408,8 @@ class RebalanceIntentService:
                 "requested_quantity": requested_quantity,
                 "trading_rule_decision_id": decision.decision_id,
                 "rebalance_reason": rebalance_reason,
+                "reference_price": frozen_reference_price,
+                "reference_price_source": reference_price_source,
             }
             intent_hash = canonical_json_sha256(intent_payload)
             order_intents.append(
@@ -414,6 +431,8 @@ class RebalanceIntentService:
                         "delta_quantity": delta_quantity,
                         "target_weight": target.target_weight if target is not None else None,
                         "target_reference_price": target.reference_price if target is not None else None,
+                        "reference_price": frozen_reference_price,
+                        "reference_price_source": reference_price_source,
                         "rebalance_reason": rebalance_reason,
                         "target_metadata": target.metadata if target is not None else {},
                         "trading_rule_decision_id": decision.decision_id,
@@ -424,6 +443,20 @@ class RebalanceIntentService:
                 )
             )
         return RebalanceIntentResult(order_intents=order_intents, trading_rule_decisions=trading_rule_decisions)
+
+    @staticmethod
+    def _frozen_reference_price(*, target: TargetPosition | None, current_price: float | None) -> float | None:
+        candidates = (target.reference_price if target is not None else None, current_price)
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                value = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value > 0:
+                return value
+        return None
 
 
 class ExecutionPlanCompiler:
@@ -468,6 +501,22 @@ class ExecutionPlanCompiler:
             schedule_window = {"mode": "full_day", "source": runtime_release.execution_policy_version_id}
         risk_context = execution_policy.get("risk_context") if isinstance(execution_policy.get("risk_context"), dict) else {}
         quote_control = QuoteControlBindingV1.from_binding_config(binding.binding_config_json)
+        if (
+            binding.broker_backend is SimulationBrokerBackend.MINIQMT_SIM
+            and quote_control.control_revision is not ControlRevision.B0_QUOTE_V2
+        ):
+            raise ExecutionPathNotCanonicalError(
+                "LEGACY_B0 MiniQMT bindings cannot compile a new execution plan or parent intent",
+                context={
+                    "reason_code": "MINIQMT_LEGACY_B0_NEW_PARENT_FORBIDDEN",
+                    "binding_id": binding.binding_id,
+                    "binding_hash": binding.binding_hash,
+                    "control_revision": quote_control.control_revision.value,
+                    "required_control_revision": ControlRevision.B0_QUOTE_V2.value,
+                    "broker_called": False,
+                    "legacy_fallback": False,
+                },
+            )
         quote_revision: B0QuoteV2RevisionV1 | None = None
         if quote_control.control_revision == ControlRevision.B0_QUOTE_V2:
             quote_policy = _immutable_execution_policy_json(execution_policy)
@@ -502,10 +551,12 @@ class ExecutionPlanCompiler:
                     revision=quote_revision,
                 )
                 quote_assignments.append(quote_assignment.canonical_payload())
+            frozen_reference_price = intent.metadata.get("reference_price")
             price_policy = {
                 "order_type": intent.order_type.value,
                 "limit_price": intent.limit_price,
-                "reference_price": intent.metadata.get("target_reference_price"),
+                "reference_price": frozen_reference_price,
+                "reference_price_source": intent.metadata.get("reference_price_source"),
             }
             seed_intents.append(
                 {
@@ -516,7 +567,7 @@ class ExecutionPlanCompiler:
                     "delta_quantity": int(intent.metadata.get("delta_quantity") or 0),
                     "order_quantity": intent.quantity,
                     "target_weight": intent.metadata.get("target_weight"),
-                    "reference_price": intent.metadata.get("target_reference_price"),
+                    "reference_price": frozen_reference_price,
                     "current_quantity": int(intent.metadata.get("current_quantity") or 0),
                     "current_available_quantity": intent.metadata.get("current_available_quantity"),
                     "rebalance_reason": str(intent.metadata.get("rebalance_reason") or ""),
@@ -528,6 +579,7 @@ class ExecutionPlanCompiler:
                     "risk_context": risk_context,
                     "metadata": {
                         "source_order_intent_id": intent.intent_id,
+                        "reference_price_source": intent.metadata.get("reference_price_source"),
                         **(
                             {"quote_control_assignment": quote_assignment.canonical_payload()}
                             if quote_assignment is not None

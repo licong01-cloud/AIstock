@@ -410,6 +410,94 @@ SimulationLifecycleScheduler
 - 修复后从 durable state 恢复；
 - 不重新启用旧产品旁路。
 
+### 6.4 新 binding 与新 parent 的唯一准入契约
+
+`StrategyRuntimeReleaseService.create_binding` 创建 `minqmt_sim` binding 时必须收到 exact
+`miniqmt_quote_control_binding_v1/B0_QUOTE_V2`；省略、显式 `LEGACY_B0`、未知字段或未知 revision
+均以 typed `MINIQMT_B0_QUOTE_V2_BINDING_REQUIRED` 拒绝。这里不允许把省略值默认升级成 B0，
+也不允许把非法值解释为 LEGACY。`QuoteControlBindingV1.from_binding_config({})` 只为历史事实
+解码保留 omitted -> LEGACY 规则，不是新 binding 的默认值。
+
+`ExecutionPlanCompiler` 对 `minqmt_sim + LEGACY_B0` 禁止编译新 plan/parent，返回
+`MINIQMT_LEGACY_B0_NEW_PARENT_FORBIDDEN` 且 `broker_called=false`。已经持久化的 LEGACY plan、
+runtime、parent、child 和 broker fact 仍按冻结 revision 读回、恢复、reconcile 至 terminal；恢复路径
+不得重新调用 compiler 创建 parent，也不得转换其 binding/revision/hash。
+
+### 6.5 `MiniQMTRouteMigrationInventoryV1`
+
+迁移只接受定向 source binding，不进行全表业务扫描。inventory 的 exact canonical fields 为：
+
+| field | contract |
+| --- | --- |
+| `schema_version` | 固定 `miniqmt_route_migration_inventory_v1` |
+| `source_binding_id/source_binding_hash` | 历史 LEGACY binding immutable identity |
+| `target_release_id/target_release_hash` | 已具备 exact B0 policy/revision 的 immutable release |
+| `effective_trade_date` | 新 B0 binding 生效日；source `effective_to = effective_trade_date - 1` |
+| `runtime_ids_examined` | 同 account group 的 bounded durable runtime ids |
+| `active_parent_ids` | source binding 的 active algo/parent ids |
+| `active_child_order_ids` | source binding 的 active child ids |
+| `broker_open_order_ids` | 通过 child broker id 或 strategy/order-remark attribution 归属 source 的可撤 broker orders |
+| `broker_attribution_conflicts` | 同 strategy/prefix 但无法唯一关联 durable child 的 broker facts |
+| `observed_at_utc` | timezone-aware inventory anchor；不得使用 DB write time 代替 |
+| `inventory_sha256` | 对以上除自身外 canonical payload 的 lowercase sha256 |
+
+只要 active parent、active child、open broker order 或 attribution conflict 任一非空，迁移必须
+typed terminal/block，写入次数为零；不得取消旧订单、切换 active parent、静默忽略未知 broker fact，
+也不得阻塞可明确归属其它 binding/slot 的订单。runtime repository 查询必须按 account group 和
+非 terminal runtime 定向且有显式上限；超过上限返回 `MINIQMT_ROUTE_MIGRATION_INVENTORY_LIMIT`，
+不截断后继续。
+
+### 6.6 target marker、identity 与可重建 receipt
+
+成功迁移在新 target binding 的 `binding_config_json.metadata.miniqmt_route_migration` 中持久化 exact
+`MiniQMTRouteMigrationMarkerV1`：schema、source binding id/hash、target release id/hash、effective date、
+source effective-to、inventory hash/observed-at、operator、applied-at 和 `marker_sha256`。marker 不包含
+target binding hash，避免自引用；target binding hash 覆盖完整 marker。
+
+独立 readback 从 source row、target row 和 target marker 重建 `MiniQMTRouteMigrationReceiptV1`，包含
+`migration_id = mqrm_<canonical sha256 前 24 位>`、source/target binding id/hash、target release id/hash、
+effective date、inventory/marker hash、`runtime_owner=MiniQMTExecutionRuntime`、
+`source_control_revision=LEGACY_B0`、`target_control_revision=B0_QUOTE_V2`、applied-at 及
+`receipt_sha256`。marker、binding hash、effective window、identity/equivalence 或 receipt 任一不一致均
+fail loud；不得用内存对象或 apply 返回值冒充 readback。
+
+source/target 必须保持 strategy、package、manifest、broker backend/account、account group、slot、capital、
+strategy name、order remark prefix 和 approval state 等价；release id/hash 可因 B0 immutable policy 不同。
+任何其它业务字段变化均为 `MINIQMT_ROUTE_MIGRATION_IDENTITY_CONFLICT`。
+
+### 6.7 repository transaction、幂等、重试与失败语义
+
+PostgreSQL apply 使用一个 connection/transaction：`SELECT source FOR UPDATE`、CAS 校验 source hash/window、
+插入 immutable target binding、把 source `effective_to` 收口为生效日前一日、事务内 exact readback；
+不修改 source `binding_config_json`、`binding_hash`、历史 plan/run/event/order/trade。InMemory repository
+必须提供等价 snapshot rollback。target hash 已存在且 source window/marker 完全一致时返回同一 receipt；
+同 source/effective date 指向不同 target 或不同 marker 时 terminal conflict。
+
+只有连接、serialization、deadlock、lock-timeout 类错误允许最多 3 次完整事务重试；schema、identity、
+inventory、CAS、hash、broker attribution 和 readback mismatch 不重试。commit 后必须使用新 connection
+独立 readback；若 commit outcome 未知，只按 deterministic target hash/source window 查询，不重放写入，
+直到读回同一 receipt 或产生 typed unknown-outcome failure。
+
+### 6.8 产品旁路退役契约
+
+- `/api/v1/qmt/order`、`/order/batch`、`/cancel` 永久返回 HTTP 410 和
+  `MINIQMT_RAW_BROKER_ROUTE_RETIRED`，即使旧 diagnostics 环境变量或 trade password 存在也不得调用 QMT；
+- Paper v2 `run-day` 遇到 `minqmt_sim` 返回
+  `MINIQMT_PAPER_DAY_RUNNER_ROUTE_RETIRED`，指向 simulation lifecycle/runtime；
+- `MiniQMTSimBackend` 仅保留 account/position/order/trade 历史 read model；其 submit/cancel 方法固定 typed
+  `MINIQMT_PAPER_BROKER_SIDE_EFFECT_RETIRED`，不得调用 `place_order/cancel_order`；
+- 真正 broker side effect 只允许 `MiniQMTExecutionRuntime -> QmtClientMiniQMTEventLoopGateway -> OMS/Gateway`。
+
+这些是自动路由边界，不是人工审批、RBAC、acknowledge 或 confirm-run 门禁。read-only QMT status、account、
+position、order、trade 与历史 diagnostics 保持可用。
+
+### 6.9 生产工具与状态分离
+
+迁移工具默认只读 dry-run，`--apply` 只执行上述 repository transaction；它不得创建/修改 StrategyPackage、
+调用下单/撤单、重启服务或写配置。apply 前后的 broker 访问仅允许读取 cancelable orders 用于 inventory；
+生产 DML 必须另获用户授权，且不以数据库导出/快照为前置条件。source merge、production DDL、production
+config、restart、binding migration 和真实 SIM observation 六类状态继续独立记录。
+
 ## 7. Diagnostics、Metrics、Alerts 与 Runbook
 
 ### 7.1 Read-only diagnostics
@@ -506,6 +594,25 @@ runbook 固定顺序：process → lifecycle → binding → data/backend → du
 
 承接 `F-016` 至 `F-019`：冻结 B0_V2 assignment、迁移 LEGACY binding、移除 Paper v2/direct raw broker side effect、保留历史 read model。必须先证明 active/open-order 安全边界，再执行生产 DML。
 
+实施必须同时交付：new-binding/new-parent fail-closed、`MiniQMTRouteMigrationInventoryV1`、target marker 与
+可重建 receipt、PostgreSQL/InMemory 原子迁移和独立 readback、dry-run/apply operator、raw/Paper broker
+旁路 410/typed retirement，以及静态 route uniqueness。任一部分未完成时只能报告对应 slice，不能把
+P0-C 标为完成；本项代码 PR 不执行 production DML、不调用 broker、不重启服务。
+
+`B0_QUOTE_V2` parent 的初始参考价必须在 broker-neutral plan 构建时冻结：目标仍在当日 authoritative
+selection 中时使用 target `reference_price`；仅对 `DROPPED_FROM_SELECTION` 的既有持仓使用同一
+`SimulationRunContext.current_prices` 中的权威 current mark，并把 `reference_price`、
+`reference_price_source` 纳入 intent/plan identity。运行时不得从普通 quote、broker cache、分钟线或
+默认值合成该字段；冻结值缺失/非法必须在 broker call 前 fail loud，且不得改变方向、数量、T+1、lot、
+limit/suspend 或选股语义。
+
+同一 binding/trade-date 发生 side-effect-free plan rebuild 时，assignment transition 必须先于新 quote
+context 对 callback consumer 可见。factory 仅可自动释放“无 active algo、无任何 child order”的旧
+controller/lease；必须同时覆盖 runtime_id 相同和 plan identity 导致 runtime_id 变化两种情况。若旧
+runtime 存在 active algo、pending action 或任一 child fact，则 typed assignment conflict、broker call=0、
+不释放 lease、不切换 assignment，也不得回退 LEGACY 或要求人工 acknowledge。client 在 context 发布后
+仍须做第二道 exact assignment/readback 防线，防止并发漂移。
+
 ### P0-D：Fail-loud health、diagnostics 和 test isolation
 
 承接 `F-020` 至 `F-023`：移除 silent count/price/time parse、raw batch 假成功、scheduler false green；修复 repository fixture 泄漏；补齐 read-only diagnostics、metrics、alerts、runbook。
@@ -553,6 +660,14 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 - router/Paper v2/day runner 无 broker side effect；
 - MiniQMT quote 来源没有 minute-bar adapter；
 - `LEGACY_B0` 不接纳新 parent；
+- 新 `minqmt_sim` binding 省略/显式 LEGACY/非法 control 均 fail loud，历史 omitted binding 仍可只读解码；
+- legacy plan compiler 新建 parent 在任何 gateway/QMT 调用前拒绝；durable active legacy parent 仍可原 revision 恢复；
+- migration inventory 对 active parent/child、归属 open order、attribution conflict、bounded overflow 分别拒绝且 write=0；
+- PostgreSQL 单连接 commit/rollback/CAS、InMemory rollback、同 receipt 幂等、冲突 marker、commit-unknown 独立 readback；
+- source/target package/account/capital/slot/policy identity 等价与篡改反例；
+- target/dropped-position 冻结参考价、source/hash identity、缺价 broker-call=0 反例；
+- assignment transition 在新 context 前释放 empty old runtime，并对 active algo/child runtime fail loud；
+- raw order/batch/cancel 即使旧 env/password 有效也返回 410 且 QMT call=0；MiniQMTSim submit/cancel call=0；
 - raw batch 任一失败时顶层状态准确；
 - retired route 调用 loud failure，无 compatibility no-op。
 
@@ -644,10 +759,10 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `F-013` | §5.5；`PaperTradingV2Repository.local_sim_economic_transaction`；`SimulationRuntimeRepository.stage_local_sim_economic_commit` | PostgreSQL single-connection commit/rollback、InMemory cross-repository rollback、economic receipt/state/outbox readback tests | implemented_verified | none |
 | `F-014` | §5.2、§5.5；`LocalSimEconomicReceiptV1`、`LocalSimProjectionOutboxV1`、`LocalSimProjectionReceiptV1` | same-bar restart dedupe、CAS、connection retry max-3、business-conflict terminal、projection readback recovery、tamper/schema fail-loud tests | implemented_verified | none |
 | `F-015` | §5.6；`LocalSimMarketMarkV1`；`LocalSimBackend.load_authoritative_position_marks`；`_local_sim_position_marks` | generic price/plan fallback rejection、realtime/historical/suspended as-of/source/provenance/hash validation tests | implemented_verified | none |
-| `F-016` | §4.4、§5.8 | XtQuant callback source and route owner tests | design_ready | none |
-| `F-017` | §5.7 | B0_V2 frozen assignment and no LEGACY fallback tests | design_ready | none |
-| `F-018` | §6.2 migration sequence | active/open-order migration and historical readback tests | design_ready | none |
-| `F-019` | §5.8、§6 | Paper/day-runner/raw-router direct broker static guards | design_ready | none |
+| `F-016` | §4.4、§5.8；`B0QuoteV2ControllerFactory.prepare_assignment_transition` | real `WHOLE_QUOTE_CALLBACK` scheduler integration、empty/non-empty assignment transition、route owner tests | implemented_verified | 正常交易日 production runtime evidence 仍按 `F-024` 单独记录 |
+| `F-017` | §5.7、§9 P0-C；`RebalanceIntentService`、`ExecutionPlanCompiler`、`PaperTradingV2Service.create_live_approval_candidate` | frozen target/dropped-position reference identity、new/live-candidate binding、new parent、no LEGACY fallback tests | implemented_verified | production binding migration DML 尚未执行 |
+| `F-018` | §6.2、§6.4..6.9 migration sequence；`MiniQMTRouteMigrationService` | active parent/child/open-order/conflict/overflow zero-write、transaction/rollback/retry/readback/idempotency tests | implemented_verified | operator 仅完成 source；production dry-run/apply/readback 尚未执行 |
+| `F-019` | §5.8、§6；retired router/Paper/day-runner/client paths | direct broker static guards、410/typed retirement、historical read-model tests | implemented_verified | source merge 后仍需正常交易日唯一路径观察 |
 | `F-020` | §5.9 | malformed count/time/price/status fail-loud tests | design_ready | none |
 | `F-021` | §5.10 | process/binding/backend/durability/business false-green tests | design_ready | none |
 | `F-022` | §7 | diagnostics no-side-effect and bounded metrics/auto-clear alert tests | design_ready | none |
@@ -659,16 +774,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 
 状态枚举：`IMPLEMENTED_VERIFIED`、`REPAIR_REQUIRED`、`EVIDENCE_REFRESH_REQUIRED`、`DESIGN_ONLY`、`HISTORICAL_RETIRED`。本表记录当前摘要；详细历史以 Git/PR/BUG/CI 为准。
 
-| Progress ID | Acceptance IDs | Current state at `main@0a264b99` | Evidence | Status | Next implementation slice |
+| Progress ID | Acceptance IDs | Current state after this PR（base `main@5466d8d0`） | Evidence | Status | Next implementation slice |
 | --- | --- | --- | --- | --- | --- |
 | `SIM-P-001` | `F-004..006` | 单/多 Alpha 策略包一次准入、冻结 identity 和 broker-neutral selection/target 已建立 | `localsim_strategy_package_single_admission_f2_design_20260714.md`、PR #2103 | IMPLEMENTED_VERIFIED | 持续防止 runtime 二次 package 校验 |
 | `SIM-P-002` | `F-005,016,017` | BUG-654/657 已修复 B0 context 发布、lot/tradability authority、失败持久化和安全恢复 | commits `02e73de6`、`f4392711`；本设计核对 2026-07-15 相关 direct tests 7 passed | IMPLEMENTED_VERIFIED | 纳入唯一路径退役验证 |
 | `SIM-P-003` | `F-005` | BUG-658 已允许 unchanged authoritative manifest roll-forward 且拒绝虚假变更 | commit `43ce19de`；本设计核对 2 direct tests passed | IMPLEMENTED_VERIFIED | 保持 frozen identity contract |
 | `SIM-P-004` | `F-007..012` | BUG-660 已实现 durable per-intent state、batch CAS/readback、realtime incremental minute loop、partial continuation、restart cursor/bar-hash 去重和 close residual；历史闭市日同步路径保持不变 | PR #2174、merge `02cc8bde`；direct LocalSIM/scheduler tests | IMPLEMENTED_VERIFIED | P0-B source merge 后由用户重启并补正常交易日 runtime evidence |
-| `SIM-P-005` | `F-013,014` | BUG-661 已实现 Paper facts/state/run/outbox 同连接事务、single-writer、canonical receipt/hash、projection replay、same-bar dedupe、commit/readback 分离恢复；仅连接类错误执行最多 3 次 projection attempt，business/schema/CAS 冲突立即 terminal，readback 独立有界复核 | `paper_trading_v2/repository.py`、`simulation_runtime/models.py/repository.py/scheduler.py`；direct transaction/restart/retry-exhaustion/nonretryable/readback tests | IMPLEMENTED_VERIFIED（source pending merge） | 完成 BUG-661 PR/CI/merge 后补正常交易日 runtime evidence |
-| `SIM-P-006` | `F-015` | BUG-661 已删除计划价和通用 price map 的 mark fallback；broker 从执行使用的同一 minute provider 读取最后一个 causal close，`LocalSimMarketMarkV1` 强制真实 source/as-of/provenance/hash 与 authoritative previous-close 停牌证明 | generic-price negative test、realtime/historical/suspended provenance test、LocalSIM partial/restart test | IMPLEMENTED_VERIFIED（source pending merge） | source merge 后核对真实历史日/当日 mark provenance |
+| `SIM-P-005` | `F-013,014` | BUG-661 已实现 Paper facts/state/run/outbox 同连接事务、single-writer、canonical receipt/hash、projection replay、same-bar dedupe、commit/readback 分离恢复；仅连接类错误执行最多 3 次 projection attempt，business/schema/CAS 冲突立即 terminal，readback 独立有界复核 | PR #2187、merge `f74fdf3b`；close-sync PR #2189、merge `7d7d1434`；direct transaction/restart/retry-exhaustion/nonretryable/readback tests | IMPLEMENTED_VERIFIED | source 已合入；production DDL/config 为 noop，restart/runtime observation 尚未核验；补正常交易日 runtime evidence |
+| `SIM-P-006` | `F-015` | BUG-661 已删除计划价和通用 price map 的 mark fallback；broker 从执行使用的同一 minute provider 读取最后一个 causal close，`LocalSimMarketMarkV1` 强制真实 source/as-of/provenance/hash 与 authoritative previous-close 停牌证明 | PR #2187、merge `f74fdf3b`；close-sync PR #2189、merge `7d7d1434`；generic-price negative、realtime/historical/suspended provenance、LocalSIM partial/restart tests | IMPLEMENTED_VERIFIED | source 已合入；restart/runtime observation 尚未核验；核对真实历史日/当日 mark provenance |
 | `SIM-P-007` | `F-016` | MiniQMT canonical runtime 已有真实 tick callback、bootstrap、durable event loop | Phase 1 design/PR #2019、BUG-604/614 tests | IMPLEMENTED_VERIFIED | 唯一路径静态与真实 SIM 持续验证 |
-| `SIM-P-008` | `F-017..019` | LEGACY_B0、Paper `MiniQMTSimBackend`、raw QMT direct order/batch 仍存在 | `paper_trading_v2/broker/minqmtsim.py:247`、`routers/qmt.py:220-466` | REPAIR_REQUIRED | P0-C |
+| `SIM-P-008` | `F-016..019` | BUG-662 将 MiniQMT 新 binding/new parent 收敛到 exact `B0_QUOTE_V2`，补齐 LEGACY binding 原子迁移/readback operator，永久退役 Paper/day-runner/raw-router/client broker side-effect，并以真实 callback 驱动 scheduler 回归；production DML/config/restart/broker 均未执行 | BUG-662 / issue #2190；migration 13 tests、route/Paper core 50 tests、scheduler 158 passed + 6 exact-main baseline failures、assignment transition 5 tests | IMPLEMENTED_VERIFIED | source merge/close-sync 后，单独执行 production migration dry-run/readback；用户授权 DML 与重启后再做正常交易日证据 |
 | `SIM-P-009` | `F-020,021` | MiniQMT recovery/pending/submitted 解析仍有 pass/归零；raw batch 顶层恒真 | `scheduler.py:7776-7794,7897-7914`、`routers/qmt.py:458-464` | REPAIR_REQUIRED | P0-D |
 | `SIM-P-010` | `F-023` | roll-forward fixture 泄漏到生产 StrategyPackage repository；无 DB 密码时失败 | 2026-07-15 targeted matrix：9 passed, 1 failed；失败 nodeid `test_unattended_roll_forward_preserves_b0_quote_control_without_revision_drift` | REPAIR_REQUIRED | P0-D |
 | `SIM-P-011` | `F-022,024` | Phase 1 quote diagnostics/evidence 已存在，但平台级 LocalSIM/MiniQMT 聚合 health/runbook 尚未按本文统一 | Phase 1 diagnostics/runbook、当前 scheduler ops | REPAIR_REQUIRED | P0-D |
@@ -698,6 +813,16 @@ Phase 0B 可重建基线完成后，`ADAPTIVE_IS_L1` 才按下位算法蓝图和
 | `no_silent_error` | pass | schema/hash/identity/CAS/readback/mark/retry exhaustion 均抛 typed reason code；失败状态写回，未增加 `pass`、空集合成功或异常吞噬 |
 | `no_business_semantic_drift` | pass | 仅改变 LocalSIM persistence/projection/mark authority；Selection、target、V25/T+1/limit/suspend 决策和 MiniQMT broker route 未改写 |
 | `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、人工 ack、审批、confirm-run 或业务开关；恢复由 outbox 自动执行并受技术性 retry budget 约束 |
+
+`BUG-662` source implementation 的逐项复核：
+
+| Control | Review result | Implementation evidence |
+| --- | --- | --- |
+| `no_simplified_delivery` | pass | new binding/parent、LEGACY migration inventory/marker/receipt、PostgreSQL/InMemory transaction/readback、callback-driven B0 scheduler、Paper/raw/client route retirement和 operator 均为完整产品路径；未以 mock-only、no-op 或尾部占位替代 |
+| `no_silent_error` | pass | 非法 control/reference/assignment/hash/CAS/readback/route 均 typed fail loud；side-effect 后无 broker 成交/订单证明时保持 `FAILED_RETRYABLE`/reconciliation warning，不把 broker call 伪装成业务成功 |
+| `no_business_semantic_drift` | pass | Selection/target、方向、数量、T+1、lot、limit/suspend 不变；仅冻结 dropped holding 的权威 current mark 作为 B0 parent reference，并纳入 identity；真实 broker side effect 仍仅由 tick callback → runtime → gateway 产生 |
+| `no_unrequested_gate_or_approval` | pass | 未新增 RBAC、审批、人工 acknowledge、confirm-run 或产品业务开关；assignment transition 对 empty runtime 自动执行，对存在 durable side effect 的 runtime 仅以技术一致性冲突 fail loud |
+| `production state separation` | pass | 本 PR 不执行 DDL/DML/config、不调用生产 broker、不重启服务；source merge、production route migration、用户重启和正常交易日 runtime evidence 分开记录 |
 
 ## 17. Definition of Done
 

@@ -1676,6 +1676,83 @@ class B0QuoteV2ControllerFactory:
     def get(self, runtime_id: str) -> B0QuoteV2Controller | None:
         return self._controllers.get((self.data_session_key, str(runtime_id)))
 
+    def prepare_assignment_transition(
+        self,
+        *,
+        runtime_id: str,
+        assignments: Mapping[str, ParentQuoteControlAssignmentV1],
+    ) -> None:
+        """Release an empty stale controller before a new context becomes observable."""
+
+        exact_runtime_id = _required_text(runtime_id, field_name="runtime_id")
+        if not assignments or set(assignments) != {
+            assignment.parent_intent_id for assignment in assignments.values()
+        }:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 assignment transition requires an exact non-empty parent mapping",
+                context={"runtime_id": exact_runtime_id, "broker_called": False, "legacy_fallback": False},
+            )
+        incoming_payload = {
+            parent_id: assignment.canonical_payload()
+            for parent_id, assignment in assignments.items()
+        }
+        incoming_scopes = {
+            (assignment.binding_id, assignment.trade_date)
+            for assignment in assignments.values()
+        }
+        if len(incoming_scopes) != 1:
+            raise quote_contract_error(
+                QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                "B0_QUOTE_V2 assignment transition cannot mix binding or trade-date scopes",
+                context={
+                    "runtime_id": exact_runtime_id,
+                    "assignment_scopes": sorted(
+                        (binding_id, trade_date.isoformat())
+                        for binding_id, trade_date in incoming_scopes
+                    ),
+                    "broker_called": False,
+                    "legacy_fallback": False,
+                },
+            )
+        for (_, existing_runtime_id), controller in tuple(self._controllers.items()):
+            existing_scopes = {
+                (assignment.binding_id, assignment.trade_date)
+                for assignment in controller.assignments.values()
+            }
+            if existing_runtime_id != exact_runtime_id and incoming_scopes.isdisjoint(existing_scopes):
+                continue
+            existing_payload = {
+                parent_id: assignment.canonical_payload()
+                for parent_id, assignment in controller.assignments.items()
+            }
+            if existing_runtime_id == exact_runtime_id and existing_payload == incoming_payload:
+                continue
+            active_algos = controller.runtime.repository.list_algo_instances(
+                existing_runtime_id,
+                active_only=True,
+            )
+            child_orders = controller.runtime.repository.list_child_orders(
+                existing_runtime_id,
+                active_only=False,
+            )
+            if active_algos or child_orders:
+                raise quote_contract_error(
+                    QuoteContractReasonCode.B0_QUOTE_V2_ASSIGNMENT_CONFLICT,
+                    "B0_QUOTE_V2 assignment transition cannot replace non-empty durable runtime state",
+                    context={
+                        "runtime_id": exact_runtime_id,
+                        "existing_runtime_id": existing_runtime_id,
+                        "existing_parent_intent_ids": sorted(existing_payload),
+                        "incoming_parent_intent_ids": sorted(incoming_payload),
+                        "active_algo_count": len(active_algos),
+                        "child_order_count": len(child_orders),
+                        "broker_called": False,
+                        "legacy_fallback": False,
+                    },
+                )
+            controller.close()
+
     def set_accept_new_assignments(self, enabled: bool) -> None:
         """Apply the process switch without interrupting durable active runtimes."""
 

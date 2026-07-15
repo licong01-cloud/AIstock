@@ -201,7 +201,7 @@ def _runtime_repo_with_miniqmt_plan() -> tuple[InMemorySimulationRuntimeReposito
         runtime_profile_sha256="runtime_profile_hash_shared",
         daily_strategy_profile_version_id=DEFAULT_DAILY_STRATEGY_PROFILE_VERSION_ID,
         execution_policy_version_id="exec_policy_v25_1_small_cap",
-        execution_policy_sha256="exec_policy_hash_v25_1_small_cap",
+        execution_policy_sha256="a" * 64,
         tail_policy_version_id="tail_policy_close_v1",
         tail_policy_sha256="tail_policy_hash_close_v1",
         created_by="unit-test",
@@ -215,6 +215,10 @@ def _runtime_repo_with_miniqmt_plan() -> tuple[InMemorySimulationRuntimeReposito
         broker_account_id=ACCOUNT_ID,
         strategy_name="poc_strategy_a",
         order_remark_prefix="shared-plan",
+        miniqmt_quote_control={
+            "schema_version": "miniqmt_quote_control_binding_v1",
+            "control_revision": "B0_QUOTE_V2",
+        },
         created_by="unit-test",
         created_reason="qmt router shared execution plan preview",
     )
@@ -306,7 +310,46 @@ def _runtime_repo_with_miniqmt_plan() -> tuple[InMemorySimulationRuntimeReposito
         order_intents=rebalance.order_intents,
         trading_rule_decisions=rebalance.trading_rule_decisions,
         portfolio_id="strat_a",
-        execution_policy_payload={"algo_code": "V25_1_SMALL_CAP", "schedule_window": {"mode": "open_to_close"}},
+        execution_policy_payload={
+            "algo_code": "SNIPER_MINIQMT",
+            "algo_config": {
+                "tca": {
+                    "benchmark_policy": {
+                        "benchmark_max_age_ms": 10_000,
+                        "arrival_forward_window_ms": 2_000,
+                        "clock_skew_tolerance_ms": 1_000,
+                        "benchmark_max_transport_latency_ms": 3_000,
+                        "policy_version": "miniqmt_execution_tca_benchmark_v1",
+                    }
+                }
+            },
+            "quote_contract": {
+                "schema_version": "miniqmt_quote_contract_policy_v2",
+                "control_revision": "B0_QUOTE_V2",
+                "required_capabilities": [
+                    "CALENDAR",
+                    "DEPTH_UNIT_SHARES",
+                    "EXCHANGE_TIMESTAMP",
+                    "FIVE_LEVEL_DEPTH",
+                    "RAW_PRICE_BASIS",
+                    "TRADABILITY",
+                ],
+                "max_receive_age_ms": 20_000,
+                "max_source_lag_ms": 20_000,
+                "max_exchange_age_ms": 20_000,
+                "max_negative_skew_ms": 1_000,
+                "max_clock_age_divergence_ms": 1_000,
+                "max_dependency_group_skew_ms": 20_000,
+                "auction_mode": "OBSERVE_ONLY",
+            },
+            "quote_evidence": {
+                "schema_version": "miniqmt_quote_evidence_policy_v1",
+                "benchmark_policy_version": "miniqmt_execution_tca_benchmark_v1",
+                "mark_policy_version": "miniqmt_execution_tca_mark_selector_v1",
+                "markout_max_lag_ms": 10_000,
+            },
+            "schedule_window": {"mode": "open_to_close"},
+        },
     )
     return runtime_repo, runtime_repo.save_execution_plan(plan).plan_id
 
@@ -391,7 +434,7 @@ def test_package_binding_order_preview_fails_fast_until_minqmt_execution_bridge_
     assert "validated execution policy" in detail["context"]["required_path"]
 
 
-def test_execution_plan_order_preview_uses_shared_miniqmt_bridge() -> None:
+def test_execution_plan_order_preview_does_not_reopen_retired_miniqmt_compiler_route() -> None:
     qmt_repo = _repo()
     runtime_repo, plan_id = _runtime_repo_with_miniqmt_plan()
     qmt_strategy_ledger.configure_dependencies(
@@ -405,8 +448,6 @@ def test_execution_plan_order_preview_uses_shared_miniqmt_bridge() -> None:
     response = TestClient(app).post(f"/api/v1/qmt/virtual-strategies/execution-plans/{plan_id}/orders/preview", json={})
 
     body = response.json()
-    assert response.status_code == 200
-    assert body["execution_plan"]["plan_id"] == plan_id
-    assert body["requests"][0]["metadata"]["source"] == "shared_execution_plan"
-    assert body["requests"][0]["order_remark"].startswith("shared-plan")
-    assert body["preflights"][0]["allowed"] is True
+    assert response.status_code == 400, body
+    assert body["detail"]["context"]["reason_code"] == "MINIQMT_EVENT_LOOP_REQUIRES_REAL_CALLBACKS"
+    assert body["detail"]["context"]["operation"] == "build_managed_vnpy_order_requests"
