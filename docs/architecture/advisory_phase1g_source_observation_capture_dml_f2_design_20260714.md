@@ -1143,6 +1143,12 @@ G1已通过PR #2158（merge commit `a13b2604`）合入并完成本批L0/L1、覆
 - immutable DSE/stage/artifact/package exact projection；
 - single/multi Alpha、valid-no-candidate、不可用和完整hash parity测试。
 
+G2A-G2D 已于 2026-07-15 在独立实现分支完成本地验收：source replay、strict DSE/artifact/manifest
+projection、single/native multi Alpha component evidence、只读 snapshot 和 caller-owned source freeze primitive
+均按子设计实现；pure/共享回归及 pinned PostgreSQL 16 disposable matrix 通过。代码合入状态以对应 GitHub
+PR/merge commit 和合入后报告为准；`ddl_pending=none`，`dml_pending=none_for_g2`，
+`dev_validation=not_required_for_g2`，`production_activation=none`。该状态不代表 G3-G5 完成。
+
 ### G3：Transactional PostgreSQL Writer
 
 - 在单target transaction内消费G2 freeze intent并完成source set exact freeze/readback；

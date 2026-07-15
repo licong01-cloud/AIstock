@@ -293,6 +293,9 @@ expected event refs == events selected by exact replay
 ```
 
 逐字段 canonical equality 优先于只比较一个顶层 hash；顶层 hash 相同但子项读取不完整仍失败。
+`Phase1GSourceReplayResult` 每次构造或反序列化时都必须重新计算 member hash，并核对 embedded/replayed
+receipt、requirement set、source set、freeze intent 和 expected event refs 的逐字段闭环。禁止仅把被修改后的
+DTO 顶层 hash 重算后视为合法。
 
 ### 7.3 `Phase1GSourceRevisionFreezeIntent`
 
@@ -496,11 +499,21 @@ projection 一致。生产调用只能由 G3 在真实 binding/capture batch 已
 DSE selected_candidates == selection_effective candidates
 artifact scores_json == alpha_raw candidates
 candidate symbol/rank/score/component scores exact equality within the corresponding stage
-each stage candidate + exclusion count == stage input universe represented by the receipt
+alpha_raw symbol set == HMM input symbol set
+HMM COMPLETE: candidates union exclusions == alpha_raw symbols, disjoint and unique
+HMM NOT_APPLICABLE: input_count == alpha_raw output_count and effective output is exact pass-through
+risk candidates union exclusions == effective HMM output symbols, disjoint and unique
+selection candidates union exclusions == exact inspected prefix of risk output symbols
 exclusion reason/count/hash == DSE receipt
 selection_effective output count == DSE candidate_count
 alpha_raw output count == artifact score_count
 ```
+
+`selection_effective` 的 `input_count` 是实际 inspected rows，不必等于整个 risk candidate pool。若
+`input_count < risk output_count`，`semantic_payload.candidate_pool_count / inspected_count /
+unprocessed_tail_count` 必须完整存在并分别等于 risk pool、stage input 和两者差值；实际 candidate/exclusion
+symbols 必须等于按权威 `(rank, -score, symbol)` 顺序得到的 inspected prefix。未检查 top-k tail 是显式容量事实，
+不是 exclusion；除此之外任何无 exclusion 的跨阶段消失、下游新增或同一 symbol 重复排除均失败。
 
 比较前只允许执行契约声明的 canonical normalization；不得按 symbol 去重、重新排序、重新排名或容忍浮点
 近似。如果 persisted contract 使用 decimal/string canonical form，projection 必须复用相同 canonical form。
@@ -527,6 +540,11 @@ projection_content_hash
 二者都不能超过 capture policy 并且都不得截断。projection content hash 不含数据库 row physical id、读取
 时间或连接信息。
 
+projection 在构造和反序列化时必须从 nested DSE/stages/component evidence 重新推导 outcome、candidate count、
+stage candidate/exclusion counts 和 component capability；不得信任 caller 提供的重复摘要字段。所有嵌套
+list/dict 使用 JSON-compatible deep-frozen collection，`frozen=true` 不得只冻结顶层属性而允许内容原地变化后
+继续携带旧 hash。
+
 ### 9.4 `Phase1GTargetProjectionSnapshot`
 
 ```text
@@ -543,6 +561,9 @@ target_projection_snapshot_hash
 
 它是 G2 唯一成功输出，并作为后续 G4 plan compiler 填充 G1 typed execution plan 的输入。snapshot 成功不表示
 source set 已持久化，也不表示 observation 已写入。
+snapshot 每次构造或反序列化都必须重新核对 plan/source/receipt/freeze/historical identities、capture plan
+count/hash、projected candidate/stage rows 和 bytes；任何内部事实与重复摘要不一致都必须失败，不能通过重算
+`target_projection_snapshot_hash` 掩盖。
 
 ## 10. Single And Multi Alpha Semantics / 单与多 Alpha 语义
 
@@ -596,6 +617,7 @@ artifact metadata.candidate_outcome = VALID_NO_CANDIDATE
 artifact metadata.empty_stage = alpha_raw
 artifact scores_json = [] and score_count = 0 and universe_count > 0
 alpha_raw output_count = 0
+HMM 不得产生候选；NOT_APPLICABLE 时必须是 input_count=0 的空透传
 risk_policy_adjusted input/output/excluded counts = 0/0/0
 selection_effective input/output/excluded counts = 0/0/0
 ```
@@ -779,14 +801,16 @@ pending，不能用 fixture-only 或 in-memory-only evidence 代替 PostgreSQL �
 4. missing chain、broken predecessor、duplicate revision、quality unavailable 和 source conflict 显式失败。
 5. DSE strict parser 成功、field error、cross-field invariant 和 artifact hash tamper。
 6. artifact score/header hash、package manifest hash、runtime/source/asset closure mismatch。
-7. 四层 stage candidates/exclusions 与 selection-effective exact parity。
+7. 四层 stage candidates/exclusions 集合守恒；覆盖无 exclusion 静默丢股、下游凭空新增、重复排除反例，以及
+   HMM NOT_APPLICABLE 透传和带显式 pool/inspected/tail 的 top-k 正例。
 8. single Alpha `NOT_APPLICABLE`。
 9. 原生 multi Alpha `FULL`；缺腿为 explicit `PARTIAL/UNAVAILABLE` 且 parent candidate 不变。
 10. 完整合法 `TraceCaptureContext` 下，G2 adapter 与直接 pure envelope builder 的 hash/bytes parity；缺少真实
     binding/capture/fencing 任一字段时拒绝 materialize。
 11. valid-no-candidate raw-empty 与 filtered-empty 完整正例；非法 transition 和 source/data unavailable
     不得变成零候选。
-12. deterministic ordering/hash/UTF-8 bytes、无截断/抽样。
+12. deterministic ordering/hash/UTF-8 bytes、无截断/抽样；历史 projection、target snapshot 和 replay DTO
+    重载时对重复摘要漂移 fail-closed，nested collection 原地修改失败。
 13. stable reason/context、exception chaining、secret/payload redaction。
 
 ### 17.3 L2 disposable PostgreSQL 16
@@ -818,6 +842,8 @@ Alpha persistent inputs 属于 Phase 1G G5；当前 G2 设计任务不连接 DEV
 | 原生多 Alpha component 缺口 | parent evidence有效，腿证据缺失可解释 | success with explicit degraded capability |
 | raw-empty合法零候选 | positive universe + empty artifact + exact zero downstream | zero-candidate snapshot success，component N/A |
 | filtered-empty合法零候选 | non-empty artifact + formal risk/effective exclusion to zero | zero-candidate snapshot success，保留真实component能力 |
+| HMM关闭且有候选 | NOT_APPLICABLE receipt + exact alpha input count | candidates原样透传到risk，不形成额外门禁 |
+| top-k保留未检查尾部 | exact risk pool + inspected prefix + tail summary | target snapshot success，tail不伪装exclusion |
 | late source event | event available after frozen cutoff | ignored by cutoff replay，hash parity success |
 | exact source set已存在 | 全 header/member一致 | G3 primitive exact reuse |
 | 一个target非法 | target-scoped hash/contract conflict | 该target失败，其他target继续独立规划 |
@@ -873,10 +899,11 @@ G2 无数据库 migration 和 runtime activation。代码发布顺序：
 
 ```text
 design_ready = validated_2026_07_15
-code_merged = false
+implementation_status = local_verified_2026_07_15
+code_merge_state = external_pr_and_merge_record
 ddl_pending = none
 dml_pending = none_for_g2_design_and_plan
-dev_validation = not_started
+dev_validation = not_required_for_g2
 production_activation = none
 selection_simulation_paper_impact = none
 ```
@@ -924,38 +951,38 @@ selection_simulation_paper_impact = none
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-736 | §3.2、§5.2、§15 | import/call/write-scope oracle | design_ready | none |
-| F-737 | §6.1 | source operation parse/hash matrix | design_ready | none |
-| F-738 | §7.1-7.2 | same-cutoff replay parity tests | design_ready | none |
-| F-739 | §7.2-7.4 | set/member/capture-plan parity tests | design_ready | none |
-| F-740 | §7.1、§17.2 | late-event and zero-event-write tests | design_ready | none |
-| F-741 | §5.1、§13.1 | read-only transaction query spy | design_ready | none |
-| F-742 | §5.1、§7.3-7.4 | intent/persistence separation tests | design_ready | none |
-| F-743 | §7.4 | injected cursor/no-commit/no-pool tests | design_ready | none |
-| F-744 | §7.4、§17.3 | exact retry/conflict/concurrency tests | design_ready | none |
-| F-745 | §8.1 | strict/nullable compatibility tests | design_ready | none |
-| F-746 | §8.2、§9.1 | DSE canonical hash/tamper tests | design_ready | none |
-| F-747 | §8.3、§9.1-9.2 | artifact header/rows/lineage tests | design_ready | none |
-| F-748 | §8.4、§9.1 | manifest/components/assets tests | design_ready | none |
-| F-749 | §9.1 | cross-projection identity matrix | design_ready | none |
-| F-750 | §9.2 | alpha/artifact and effective/DSE candidate parity tests | design_ready | none |
-| F-751 | §5.2、§8.5、§9.1 | component/envelope pure-builder parity and import spy | design_ready | none |
-| F-752 | §10.1 | single Alpha component tests | design_ready | none |
-| F-753 | §10.2 | multi Alpha full/degraded tests | design_ready | none |
-| F-754 | §3.2、§10.2 | manual-combination and guessed-field negatives | design_ready | none |
-| F-755 | §11 | raw-empty/filtered-empty/unavailable matrix | design_ready | none |
-| F-756 | §9.2-9.3、§14 | count/bytes/no-truncation tests | design_ready | none |
-| F-757 | §6.2、§9.3-9.4、§14 | repeat/cross-process golden hashes | design_ready | none |
-| F-758 | §12 | reason/context/caplog/redaction tests | design_ready | none |
-| F-759 | §13.2 | SQL registry/static/runtime query spy | design_ready | none |
-| F-760 | §5.3、§17.3 | dual-target isolation tests | design_ready | none |
-| F-761 | §3.2、§13.3、§15 | changed-path/dependency/runtime scan | design_ready | none |
-| F-762 | §3.2、§18、§21 | approval/RBAC/backup scan | design_ready | none |
-| F-763 | §13.1 | connection injection/fallback negatives | design_ready | none |
-| F-764 | §17.3 | disposable PostgreSQL full matrix | design_ready | none |
-| F-765 | §18 | positive-path reachability matrix | design_ready | none |
-| F-766 | §1、§17.4、§20-21 | separated-state report review | design_ready | none |
-| F-767 | parent §6.5、§10、§21 G2-G3 | parent-child reference/diff review | design_ready | none |
+| F-736 | G2 modules + import boundary | direct/transitive runtime denylist | implemented_local_verified | none |
+| F-737 | `phase1g_source_replay.py` | source operation parse/hash matrix | implemented_local_verified | none |
+| F-738 | `replay_phase1g_source_operation()` | same-cutoff replay parity | implemented_local_verified | none |
+| F-739 | source replay result/freeze intent | member-hash/receipt/set/ref重载漂移反例 | implemented_local_verified | none |
+| F-740 | source replay + PostgreSQL reader | late-event snapshot and zero-event-write | implemented_local_verified | none |
+| F-741 | `historical_trace_projection_postgres.py` | read-only snapshot query spy + PostgreSQL 16 | implemented_local_verified | none |
+| F-742 | typed freeze intent | intent/persistence separation + zero-residue | implemented_local_verified | none |
+| F-743 | source revision transaction primitives | injected cursor/no-commit/no-pool | implemented_local_verified | none |
+| F-744 | exact source revision readback | retry/conflict/two-writer concurrency | implemented_local_verified | none |
+| F-745 | additive strict DSE parser | strict/nullable compatibility regression | implemented_local_verified | none |
+| F-746 | `Phase1GDseProjection` | canonical payload hash/tamper | implemented_local_verified | none |
+| F-747 | `Phase1GSelectionArtifactProjection` | header/score/rank/lineage tamper | implemented_local_verified | none |
+| F-748 | `Phase1GPackageManifestProjection` | raw manifest parity/components/assets | implemented_local_verified | none |
+| F-749 | historical trace closure | DSE/artifact/package/runtime/source/asset matrix | implemented_local_verified | none |
+| F-750 | stage input projection | silent-drop/fabrication negatives + HMM pass-through/top-k positives | implemented_local_verified | none |
+| F-751 | pure component/envelope adapter | direct builder parity + runtime import spy | implemented_local_verified | none |
+| F-752 | single Alpha projection | all component capability `NOT_APPLICABLE` | implemented_local_verified | none |
+| F-753 | native multi Alpha projection | `FULL` and explicit degraded capability | implemented_local_verified | none |
+| F-754 | binding/manifest closure | manual multi-package negative | implemented_local_verified | none |
+| F-755 | candidate transition closure | raw/filtered empty + fabricated-HMM/invalid-tail negatives | implemented_local_verified | none |
+| F-756 | complete stage projection | 128-candidate no-truncation + derived-count drift negative | implemented_local_verified | none |
+| F-757 | projection/snapshot hashes | repeat hash/bytes + deep-freeze/rehydration drift negatives | implemented_local_verified | none |
+| F-758 | typed errors + redacted logger | reason/context/caplog/traceback redaction | implemented_local_verified | none |
+| F-759 | fixed SQL registries | static/query-spy/exact-identity tests | implemented_local_verified | none |
+| F-760 | pure target projection | failure isolation and retry determinism | implemented_local_verified | none |
+| F-761 | changed-path/import tests | no runtime/API/UI/scheduler/DDL activation | implemented_local_verified | none |
+| F-762 | source/static scan | no approval/RBAC/manual bypass/backup | implemented_local_verified | none |
+| F-763 | injected connection factory | no `.env`/global-pool/fallback | implemented_local_verified | none |
+| F-764 | disposable PostgreSQL 16 | snapshot/concurrency/rollback/readback/zero residue | implemented_local_verified | none |
+| F-765 | pure + PostgreSQL positive matrix | single/multi/empty/late/exact retry reachable | implemented_local_verified | none |
+| F-766 | §1、§17.4、§20-21 | local/merge/DDL/DML/DEV/runtime states separated | implemented_local_verified | none |
+| F-767 | parent §6.5、§10、§21 G2-G3 | parent-child implementation boundary review | implemented_local_verified | none |
 
 ## 24. DESIGN-COMPLIANCE-001
 
@@ -975,13 +1002,8 @@ selection_simulation_paper_impact = none
 
 ## 25. Exit Criteria And Next Phase / 退出条件与下一阶段
 
-本详细设计可进入代码阶段的条件：
-
-1. F2 validator 通过，32 项 acceptance matrix 无未批准缺口。
-2. 父级 §6.5、§10、G2/G3 边界同步完成。
-3. static review 确认无共享 Selection/模拟盘/Paper 运行链影响。
-4. 方案中无额外审批、角色、备份或人工数据库门禁。
-5. 用户确认后才开始 G2A-G2D 代码实现。
-
-G2 代码完成后的下一阶段是 G3 Transactional PostgreSQL Writer；在 G2 acceptance 未闭合前不得提前接入
-G3/G4 或执行 DEV/production DML。
+G2A-G2D 的交付条件是：32 项 acceptance matrix 无缺口，pure/共享回归和 pinned PostgreSQL 16 disposable
+matrix 通过；不连接 DEV/production，不执行 DDL/DML，不接入现有 Selection、荐股、模拟盘或 Paper 运行链。
+具体代码合入状态以对应 GitHub PR/merge commit 和合入后报告为准，本文不保存会在 PR 合入时立即过期的
+`code_merged=false` 快照。G2 合入不代表 G3/G4/G5、DEV evidence 或生产激活完成；G3 Transactional
+PostgreSQL Writer 必须作为后续独立设计与实现批次执行。
